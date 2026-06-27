@@ -2947,6 +2947,10 @@ async fn run_collab_task(
     let mut op_sets: HashMap<String, Vec<u8>> = HashMap::new();
     let mut node_to_kb: HashMap<String, String> = HashMap::new();
     let mut seen_ops: HashMap<String, std::collections::BTreeSet<String>> = HashMap::new();
+    // #173: kb_id → full collection replica, seeded at join/share/enable and advanced by
+    // inbound `kbc:` deltas, so the content key is RE-DERIVED on any membership change
+    // (rotation / post-join wrap) instead of being frozen at first derive.
+    let mut kb_collections: HashMap<String, Vec<u8>> = HashMap::new();
     // WU6: Transport health counter for periodic diagnostics.
     let mut messages_received: u64 = 0;
     // WU2: Heartbeat interval (from collab_heartbeat_interval option, disabled if 0).
@@ -3592,20 +3596,33 @@ async fn run_collab_task(
                                                     let _ = write_framed(w, &body, write_timeout).await;
                                                 }
                                             }
-                                            // Persist k' + register it so the owner's next edits seal
-                                            // under the rotated key.
+                                            // #169 M2 + #173: register the key
+                                            // `find_wrapped_content_key` resolves from the
+                                            // post-rotation collection (the causal-order
+                                            // winner), NOT the locally-generated k2 — so the
+                                            // owner's seal key matches what every receiver
+                                            // derives. Seed the collection replica with the
+                                            // post-rotation state so subsequent membership
+                                            // deltas re-derive correctly (#173).
+                                            kb_collections
+                                                .insert(kb_id.clone(), coll.encode_state());
+                                            let winner = derive_kb_content_key(
+                                                &coll.encode_state(),
+                                                id,
+                                            )
+                                            .unwrap_or_else(|| k2.clone());
                                             if let Some(d) =
                                                 mae_mcp::content_key_store::content_keys_dir().as_ref()
                                             {
                                                 if let Err(e) = mae_mcp::content_key_store::save(
                                                     d,
                                                     &kb_id,
-                                                    k2.as_bytes(),
+                                                    winner.as_bytes(),
                                                 ) {
                                                     warn!(kb = %kb_id, error = %e, "kb/remove (E2e): failed to persist rotated content key");
                                                 }
                                             }
-                                            content_keys.insert(kb_id.clone(), k2);
+                                            content_keys.insert(kb_id.clone(), winner);
                                             shipped_e2e = true;
                                             info!(kb = %kb_id, member = %member, remaining = rewraps.len(), "ADR-037 §D3: removed member + rotated content key to remaining members");
                                         }
@@ -3804,6 +3821,10 @@ async fn run_collab_task(
                                                     }
                                                     // Register the key so the owner's edits now seal (Phase 2b).
                                                     content_keys.insert(kb_id.clone(), key);
+                                                    // #173: seed/refresh the collection replica with the
+                                                    // post-genesis state so later membership deltas re-derive.
+                                                    kb_collections
+                                                        .insert(kb_id.clone(), coll.encode_state());
                                                     info!(kb = %kb_id, "ADR-037: E2E enabled — content key generated + self-wrapped, signed genesis authored");
                                                 }
                                                 Err(e) => warn!(kb = %kb_id, error = ?e, "kb/set_encryption: self-wrap failed"),
@@ -3860,6 +3881,7 @@ async fn run_collab_task(
                                     op_sets: &mut op_sets,
                                     node_to_kb: &mut node_to_kb,
                                     seen_ops: &mut seen_ops,
+                                    kb_collections: &mut kb_collections,
                                     signing_identity: signing_identity.as_ref(),
                                 },
                             );
@@ -4080,7 +4102,66 @@ pub(crate) struct KbCryptoCtx<'a> {
     pub op_sets: &'a mut std::collections::HashMap<String, Vec<u8>>,
     pub node_to_kb: &'a mut std::collections::HashMap<String, String>,
     pub seen_ops: &'a mut std::collections::HashMap<String, std::collections::BTreeSet<String>>,
+    /// #173: per-KB full collection replicas (seeded at join/share/enable), advanced by
+    /// inbound `kbc:` deltas so the content key can be **re-derived** on any membership
+    /// change (rotation, post-join wrap) — without this, a member's key is frozen at first
+    /// derive and 3c rotation never reaches it.
+    pub kb_collections: &'a mut std::collections::HashMap<String, Vec<u8>>,
     pub signing_identity: Option<&'a std::sync::Arc<mae_mcp::identity::Identity>>,
+}
+
+/// #173: a `kbc:` collection delta arrived — advance this peer's collection replica and
+/// **re-derive** its content key, so a membership change (3c rotation, post-join
+/// wrap-on-admit) reaches the seal/open path live instead of leaving the member frozen on a
+/// stale key. Persists the refreshed key. No-op for a non-`kbc:` doc, an unseeded KB (we
+/// never joined it), an undecodable delta, or when no key derives (unencrypted / not a
+/// member / not yet wrapped to us — so a plain KB is never disturbed).
+pub(crate) fn refresh_kb_content_key_on_collection_delta(
+    kb: &mut KbCryptoCtx,
+    doc_id: &str,
+    delta: &[u8],
+) {
+    let Some(kb_id) = doc_id.strip_prefix("kbc:") else {
+        return;
+    };
+    let Some(id) = kb.signing_identity else {
+        return;
+    };
+    let Some(base) = kb.kb_collections.get(kb_id) else {
+        return; // a KB we never seeded (never joined/shared/enabled here)
+    };
+    // Advance the local collection replica by the delta.
+    let merged = match mae_sync::kb::KbCollectionDoc::from_bytes(base) {
+        Ok(mut coll) => match coll.apply_update(delta) {
+            Ok(()) => coll.encode_state(),
+            Err(e) => {
+                warn!(kb = %kb_id, error = %e, "#173: kbc delta apply failed — content key not refreshed");
+                return;
+            }
+        },
+        Err(e) => {
+            warn!(kb = %kb_id, error = %e, "#173: collection replica decode failed");
+            return;
+        }
+    };
+    kb.kb_collections.insert(kb_id.to_string(), merged.clone());
+    // Re-derive the (possibly rotated) key from the advanced collection.
+    if let Some(new_key) = derive_kb_content_key(&merged, id) {
+        let changed = kb
+            .content_keys
+            .get(kb_id)
+            .map(|k| k.as_bytes() != new_key.as_bytes())
+            .unwrap_or(true);
+        if changed {
+            if let Some(d) = mae_mcp::content_key_store::content_keys_dir() {
+                if let Err(e) = mae_mcp::content_key_store::save(&d, kb_id, new_key.as_bytes()) {
+                    warn!(kb = %kb_id, error = %e, "#173: failed to persist re-derived content key");
+                }
+            }
+            info!(kb = %kb_id, "#173: re-derived content key after a collection update (rotation/admit)");
+        }
+        kb.content_keys.insert(kb_id.to_string(), new_key);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4172,6 +4253,14 @@ pub(crate) fn handle_incoming_message(
                                         evt_tx,
                                     );
                                 } else {
+                                    // #173: a `kbc:` collection delta — refresh this peer's
+                                    // content key live (rotation / post-join wrap) BEFORE the
+                                    // bytes are moved into the event (no-op for non-kbc docs).
+                                    refresh_kb_content_key_on_collection_delta(
+                                        kb,
+                                        &buffer_name,
+                                        &bytes,
+                                    );
                                     try_send_evt(
                                         evt_tx,
                                         CollabEvent::RemoteUpdate {
@@ -4221,6 +4310,9 @@ pub(crate) fn handle_incoming_message(
                                     evt_tx,
                                 );
                             } else {
+                                // #173: refresh content key on a `kbc:` collection delta
+                                // (rotation / post-join wrap) before the bytes are moved.
+                                refresh_kb_content_key_on_collection_delta(kb, &doc_id, &bytes);
                                 try_send_evt(
                                     evt_tx,
                                     CollabEvent::RemoteUpdate {
@@ -4605,6 +4697,10 @@ fn handle_response(
                 // registered lazily on the first push (the send arm). `None` until the
                 // owner has generated + self-wrapped a key (Phase 3 lifecycle).
                 if let Some(id) = kb.signing_identity {
+                    // #173: seed the collection replica so a later membership change
+                    // (rotation / admit) re-derives the key live.
+                    kb.kb_collections
+                        .insert(kb_id.clone(), collection_state.clone());
                     if let Some(content_key) = derive_kb_content_key(&collection_state, id) {
                         kb.content_keys.insert(kb_id.clone(), content_key);
                         debug!(kb = %kb_id, "ADR-037: derived owner content key on share");
@@ -4750,6 +4846,10 @@ fn handle_response(
                 // inbound op-set updates select the right key. `None` ⇒ unencrypted /
                 // not a member / not yet wrapped to me ⇒ plaintext path (unchanged).
                 if let Some(id) = kb.signing_identity {
+                    // #173: seed the collection replica so a later rotation / admit
+                    // re-derives the (rotated) key live for this member.
+                    kb.kb_collections
+                        .insert(kb_id.clone(), collection_state.clone());
                     if let Some(content_key) = derive_kb_content_key(&collection_state, id) {
                         kb.content_keys.insert(kb_id.clone(), content_key);
                         for n in &nodes {
