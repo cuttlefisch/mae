@@ -417,7 +417,7 @@ pub(crate) fn drain_hook_evals(editor: &mut Editor, scheme: &mut SchemeRuntime) 
     if editor.pending_hook_evals.is_empty() {
         return;
     }
-    let hooks: Vec<(String, String)> = editor.pending_hook_evals.drain(..).collect();
+    let hooks: Vec<(String, String)> = std::mem::take(&mut editor.pending_hook_evals);
     for (hook_name, fn_name) in hooks {
         // Try builtin command dispatch first — it's cheaper than a Scheme eval
         // and avoids triggering VM error-handling paths that can corrupt global

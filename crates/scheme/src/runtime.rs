@@ -4260,7 +4260,7 @@ impl SchemeRuntime {
         // which must run before drain_and_broadcast in the test runner.
 
         // (buffer-apply-update BUFFER-NAME UPDATE-BYTES)
-        let sync_applies: Vec<(String, Vec<u8>)> = state.pending_sync_applies.drain(..).collect();
+        let sync_applies: Vec<(String, Vec<u8>)> = std::mem::take(&mut state.pending_sync_applies);
         for (buf_name, update_bytes) in sync_applies {
             if let Some(idx) = editor.buffers.iter().position(|b| b.name == buf_name) {
                 match editor.buffers[idx].apply_sync_update(&update_bytes) {
@@ -4377,10 +4377,10 @@ impl SchemeRuntime {
         // (run-command NAME) — dispatch each queued command.
         // We drain them outside the lock since dispatch_builtin
         // may re-enter shared state.
-        let commands: Vec<String> = state.pending_commands.drain(..).collect();
+        let commands: Vec<String> = std::mem::take(&mut state.pending_commands);
 
         // (execute-ex CMD) — dispatch through ex-command parser (supports args).
-        let ex_commands: Vec<String> = state.pending_ex_commands.drain(..).collect();
+        let ex_commands: Vec<String> = std::mem::take(&mut state.pending_ex_commands);
 
         // (message TEXT) — append to message log
         for msg in state.pending_messages.drain(..) {
@@ -4503,7 +4503,8 @@ impl SchemeRuntime {
         }
 
         // Scheme-registered AI tools
-        let mut ai_tools: Vec<mae_core::SchemeToolDef> = state.pending_ai_tools.drain(..).collect();
+        let mut ai_tools: Vec<mae_core::SchemeToolDef> =
+            std::mem::take(&mut state.pending_ai_tools);
         for tool in &mut ai_tools {
             // Merge any late-registered params (ai-tool-param! called after register-ai-tool!)
             if let Some(extra) = state.pending_ai_tool_params.remove(&tool.name) {
@@ -4654,7 +4655,7 @@ impl SchemeRuntime {
     pub fn process_requires(&mut self) -> Vec<String> {
         let requires: Vec<String> = {
             let mut state = self.shared.lock().unwrap();
-            state.pending_requires.drain(..).collect()
+            std::mem::take(&mut state.pending_requires)
         };
 
         // Sync load_path from SharedState (add-to-load-path! may have modified it).

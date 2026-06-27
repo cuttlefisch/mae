@@ -45,7 +45,7 @@ pub fn drain_and_broadcast(
             continue;
         }
 
-        let updates: Vec<Vec<u8>> = buf.pending_sync_updates.drain(..).collect();
+        let updates: Vec<Vec<u8>> = std::mem::take(&mut buf.pending_sync_updates);
         info!(buffer = %buffer_name, doc = %doc_id, update_count = updates.len(), is_collab_synced, "draining sync updates");
 
         let mut bc = broadcaster.lock().unwrap();

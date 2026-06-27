@@ -607,7 +607,7 @@ fn revert_buffer_fires_hooks() {
     editor.buffers[0] = Buffer::from_file(&path).unwrap();
     // Revert — hooks should fire (pending_hook_evals populated).
     editor.dispatch_builtin("revert-buffer");
-    let evals: Vec<_> = editor.pending_hook_evals.drain(..).collect();
+    let evals: Vec<_> = std::mem::take(&mut editor.pending_hook_evals);
     assert!(
         evals
             .iter()
@@ -628,7 +628,7 @@ fn split_fires_window_split_hook() {
     let mut editor = Editor::new();
     editor.hooks.add("window-split", "test-split-fn");
     editor.dispatch_builtin("split-vertical");
-    let evals: Vec<_> = editor.pending_hook_evals.drain(..).collect();
+    let evals: Vec<_> = std::mem::take(&mut editor.pending_hook_evals);
     assert!(
         evals
             .iter()
@@ -645,7 +645,7 @@ fn close_window_fires_window_close_hook() {
     editor.pending_hook_evals.clear(); // clear split hook
     editor.hooks.add("window-close", "test-close-fn");
     editor.dispatch_builtin("close-window");
-    let evals: Vec<_> = editor.pending_hook_evals.drain(..).collect();
+    let evals: Vec<_> = std::mem::take(&mut editor.pending_hook_evals);
     assert!(
         evals
             .iter()
