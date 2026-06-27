@@ -554,6 +554,7 @@ const MEMBER_LABEL_KEY: &str = "label";
 /// role change rotates it and the daemon can fence pre-grant (stale-epoch) ops.
 /// Stored as a decimal string (mirrors the role/label string fields).
 const MEMBER_EPOCH_KEY: &str = "epoch";
+const MEMBER_PUBKEY_KEY: &str = "pubkey"; // hex Ed25519, for E2e re-wrap on rotation (ADR-038)
 const PENDING_AT_KEY: &str = "requested_at";
 const PENDING_PUBKEY_KEY: &str = "pubkey"; // hex Ed25519 (ADR-038, optional)
 
@@ -1664,6 +1665,79 @@ impl KbCollectionDoc {
         txn.encode_state_as_update_v1(&sv_d)
     }
 
+    /// ADR-038: author a signed `Admit` of `subject` at `role`, carrying the content key
+    /// `wrapped_key` (ADR-037, wrapped to `subject_pubkey`), AND mirror the member into
+    /// `member_roles` (role + epoch + the pubkey) — all in ONE combined collection delta.
+    /// The op's epoch == the `member_roles` epoch, so the ADR-023 fence stays consistent
+    /// (the dual-write). `subject_pubkey` is also stored for later re-wrap on rotation.
+    /// Returns the delta to ship via `kb/collection_op`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn author_member_admit(
+        &mut self,
+        kb_id: &str,
+        subject_fp: &str,
+        subject_pubkey: &[u8; 32],
+        role: Role,
+        label: &str,
+        wrapped_key: Vec<u8>,
+        owner_fp: &str,
+        owner_secret: &[u8; 32],
+        owner_pubkey: &[u8; 32],
+        now: u64,
+    ) -> Vec<u8> {
+        let sv = self.state_vector();
+        // Mirror into member_roles (sets role + advances epoch) + store the pubkey.
+        self.upsert_member(subject_fp, label, role);
+        self.store_member_pubkey(subject_fp, subject_pubkey);
+        // Author the signed Admit at the SAME epoch member_roles just assigned.
+        let epoch = self.epoch_of(subject_fp);
+        let mut op = self.build_membership_op(
+            kb_id,
+            MembershipAction::Admit,
+            subject_fp,
+            Some(role),
+            false,
+            owner_fp,
+            now,
+            None,
+            epoch,
+        );
+        op.wrapped_key = Some(wrapped_key);
+        let sig = op.sign(owner_secret);
+        self.append_signed_op(&op, &sig, owner_pubkey);
+        let sv_d = yrs::StateVector::decode_v1(&sv).unwrap_or_default();
+        let txn = self.doc.transact();
+        txn.encode_state_as_update_v1(&sv_d)
+    }
+
+    /// Store a member's Ed25519 pubkey in their `member_roles` entry (for re-wrap on
+    /// rotation). No-op if the member entry doesn't exist yet.
+    fn store_member_pubkey(&mut self, principal: &str, pubkey: &[u8; 32]) {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        if let Some(Out::YMap(m)) = root.get(&txn, COLL_MEMBER_ROLES_KEY) {
+            if let Some(Out::YMap(entry)) = m.get(&txn, principal) {
+                entry.insert(&mut txn, MEMBER_PUBKEY_KEY, hex::encode(pubkey));
+            }
+        }
+    }
+
+    /// A member's stored Ed25519 pubkey (ADR-038), if recorded — for re-wrap on rotation.
+    pub fn member_pubkey(&self, principal: &str) -> Option<[u8; 32]> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        if let Some(Out::YMap(m)) = root.get(&txn, COLL_MEMBER_ROLES_KEY) {
+            if let Some(Out::YMap(entry)) = m.get(&txn, principal) {
+                return entry
+                    .get(&txn, MEMBER_PUBKEY_KEY)
+                    .map(|p| p.to_string(&txn))
+                    .and_then(|h| hex::decode(h).ok())
+                    .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok());
+            }
+        }
+        None
+    }
+
     /// Legacy v1 members (the read-only `members` YArray of labels), for migration.
     pub fn legacy_members(&self) -> Vec<String> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
@@ -2701,6 +2775,80 @@ mod tests {
             derive_encryption(&coll.oplog_ops(), &pubkey),
             Encryption::E2e,
             "still e2e after re-enable"
+        );
+    }
+
+    #[test]
+    fn author_member_admit_delivers_the_key_stores_pubkey_and_keeps_epoch_consistent() {
+        use crate::content_crypto::{wrap_to_member, ContentKey};
+        use crate::membership::derive_content_key;
+        let (osec, opk, ofp) = oplog_keypair(1);
+        let (msec, mpk, mfp) = oplog_keypair(2);
+        let (_xsec, _xpk, xfp) = oplog_keypair(3); // a non-member
+        let mut coll = KbCollectionDoc::new_owned("KB", &ofp, "owner");
+        let k = ContentKey::generate();
+        // Owner enables (genesis + self-wrap).
+        let self_wrap = wrap_to_member(&k, &opk).unwrap();
+        coll.author_e2e_genesis("KB", &ofp, &osec, &opk, self_wrap, 1000);
+
+        // Owner admits a member, wrapping the content key to THEM.
+        let member_wrap = wrap_to_member(&k, &mpk).unwrap();
+        let delta = coll.author_member_admit(
+            "KB",
+            &mfp,
+            &mpk,
+            Role::Editor,
+            "m",
+            member_wrap,
+            &ofp,
+            &osec,
+            &opk,
+            1001,
+        );
+
+        // The member is now Editor, recovers the SAME content key, and their pubkey is
+        // stored (for re-wrap on rotation, 3c).
+        assert_eq!(coll.role_of(&mfp), Some(Role::Editor));
+        assert_eq!(
+            derive_content_key(&coll.oplog_ops(), &opk, &mfp, &msec).map(|c| *c.as_bytes()),
+            Some(*k.as_bytes()),
+            "the admitted member recovers the content key"
+        );
+        assert_eq!(
+            coll.member_pubkey(&mfp),
+            Some(mpk),
+            "member pubkey stored for re-wrap"
+        );
+
+        // Epoch consistency (the dual-write): the member's signed Admit op carries the SAME
+        // epoch as the member_roles entry the daemon's fence reads.
+        let admit = coll
+            .oplog_ops()
+            .into_iter()
+            .find(|o| o.op.subject == mfp && o.op.action == MembershipAction::Admit)
+            .unwrap();
+        assert_eq!(
+            admit.op.epoch,
+            coll.epoch_of(&mfp),
+            "op epoch == member_roles epoch"
+        );
+
+        // A peer with the relayed collection agrees (the admit delta is incremental on
+        // top of the genesis a peer already holds; a member with the full collection
+        // derives the key). `delta` is non-empty (it carries the admit).
+        assert!(
+            !delta.is_empty(),
+            "the admit produces a non-empty delta to ship"
+        );
+        let peer = KbCollectionDoc::from_bytes(&coll.encode_state()).unwrap();
+        assert_eq!(
+            derive_content_key(&peer.oplog_ops(), &opk, &mfp, &msec).map(|c| *c.as_bytes()),
+            Some(*k.as_bytes()),
+            "the member recovers the key on a peer replica too"
+        );
+        assert!(
+            derive_content_key(&coll.oplog_ops(), &opk, &xfp, &_xsec).is_none(),
+            "a non-member recovers no key"
         );
     }
 
