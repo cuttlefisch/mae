@@ -1579,6 +1579,68 @@ impl KbCollectionDoc {
         txn.encode_update_v1()
     }
 
+    /// ADR-037/039: enable E2E encryption on an owned KB. Authors, in ONE combined
+    /// collection delta (a state-vector diff), all of:
+    /// - the **genesis owner self-admit** (the trust anchor `derive_*` require), carrying
+    ///   the owner's **self-wrapped** content key so the owner can recover it (skipped if
+    ///   the op-log already has a genesis — idempotent);
+    /// - the signed **`SetEncryption("e2e")`** op — the monotonic, anti-downgrade mode
+    ///   source read by [`crate::membership::derive_encryption`] (ADR-039 F2);
+    /// - the unsigned `Encryption::E2e` flag, for backward-compat display only (the
+    ///   authoritative mode is the signed op).
+    ///
+    /// Returns the delta to ship via `kb/collection_op`; the daemon stores it key-blind
+    /// (ADR-038). `owner_fp` MUST be `fingerprint_of(owner_pubkey)` (the signature binds
+    /// author↔key↔fingerprint).
+    pub fn author_e2e_genesis(
+        &mut self,
+        kb_id: &str,
+        owner_fp: &str,
+        owner_secret: &[u8; 32],
+        owner_pubkey: &[u8; 32],
+        self_wrapped_key: Vec<u8>,
+        now: u64,
+    ) -> Vec<u8> {
+        let sv = self.state_vector();
+        // Genesis self-admit (anchor) carrying the owner's wrapped key — only if absent.
+        if self.oplog_head().is_none() {
+            let mut g = self.build_membership_op(
+                kb_id,
+                MembershipAction::Admit,
+                owner_fp,
+                Some(Role::Owner),
+                true,
+                owner_fp,
+                now,
+                None,
+                0,
+            );
+            g.wrapped_key = Some(self_wrapped_key);
+            let sig = g.sign(owner_secret);
+            self.append_signed_op(&g, &sig, owner_pubkey);
+        }
+        // Signed SetEncryption(e2e); `build_membership_op` chains it onto the current head.
+        let se = self.build_membership_op(
+            kb_id,
+            MembershipAction::SetEncryption,
+            "e2e",
+            None,
+            false,
+            owner_fp,
+            now,
+            None,
+            0,
+        );
+        let sig = se.sign(owner_secret);
+        self.append_signed_op(&se, &sig, owner_pubkey);
+        // Backward-compat unsigned flag (authoritative mode = derive_encryption).
+        self.set_encryption(Encryption::E2e);
+        // ONE combined delta capturing the genesis + SetEncryption + flag.
+        let sv_d = yrs::StateVector::decode_v1(&sv).unwrap_or_default();
+        let txn = self.doc.transact();
+        txn.encode_state_as_update_v1(&sv_d)
+    }
+
     /// Legacy v1 members (the read-only `members` YArray of labels), for migration.
     pub fn legacy_members(&self) -> Vec<String> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
@@ -2517,6 +2579,76 @@ mod tests {
             coll.oplog_len(),
             1,
             "same op re-append is a no-op set insert"
+        );
+    }
+
+    #[test]
+    fn author_e2e_genesis_signs_encryption_self_wraps_and_relays_to_peers() {
+        use crate::content_crypto::{wrap_to_member, ContentKey};
+        use crate::membership::{derive_content_key, derive_encryption};
+        let (secret, pubkey, owner_fp) = oplog_keypair(1);
+        let mut coll = KbCollectionDoc::new_owned("KB", &owner_fp, "alice");
+        assert_eq!(
+            derive_encryption(&coll.oplog_ops(), &pubkey),
+            Encryption::None,
+            "unencrypted before enable"
+        );
+
+        let k = ContentKey::generate();
+        let self_wrap = wrap_to_member(&k, &pubkey).unwrap();
+        let delta = coll.author_e2e_genesis("KB", &owner_fp, &secret, &pubkey, self_wrap, 1000);
+
+        // Authoritative mode is the SIGNED op-log; the unsigned flag mirrors it; and the
+        // owner recovers its OWN self-wrapped content key from the log.
+        assert_eq!(
+            derive_encryption(&coll.oplog_ops(), &pubkey),
+            Encryption::E2e,
+            "signed SetEncryption(e2e) latched"
+        );
+        assert_eq!(
+            coll.encryption(),
+            Encryption::E2e,
+            "unsigned flag set for display"
+        );
+        assert_eq!(
+            derive_content_key(&coll.oplog_ops(), &pubkey, &owner_fp, &secret)
+                .map(|c| *c.as_bytes()),
+            Some(*k.as_bytes()),
+            "owner recovers its self-wrapped key"
+        );
+
+        // A peer applying the shipped delta to a fresh replica derives the SAME signed
+        // state (the daemon relays this delta key-blind).
+        let mut peer = KbCollectionDoc::new_owned("KB", &owner_fp, "alice");
+        peer.apply_update(&delta).unwrap();
+        assert_eq!(
+            derive_encryption(&peer.oplog_ops(), &pubkey),
+            Encryption::E2e,
+            "peer derives e2e from the relayed delta"
+        );
+        assert_eq!(
+            derive_content_key(&peer.oplog_ops(), &pubkey, &owner_fp, &secret)
+                .map(|c| *c.as_bytes()),
+            Some(*k.as_bytes()),
+            "the owner on a fresh replica still recovers the key"
+        );
+
+        // A different identity (a non-member) recovers nothing — no wrap targets them.
+        let (other_secret, _other_pubkey, other_fp) = oplog_keypair(2);
+        assert!(
+            derive_content_key(&coll.oplog_ops(), &pubkey, &other_fp, &other_secret).is_none(),
+            "a non-member recovers no content key"
+        );
+
+        // Idempotent: a second enable on the already-genesis'd KB adds no second genesis.
+        let len_before = coll.oplog_len();
+        let k2_wrap = wrap_to_member(&k, &pubkey).unwrap();
+        coll.author_e2e_genesis("KB", &owner_fp, &secret, &pubkey, k2_wrap, 1001);
+        assert!(coll.oplog_len() >= len_before, "re-enable never DROPS ops");
+        assert_eq!(
+            derive_encryption(&coll.oplog_ops(), &pubkey),
+            Encryption::E2e,
+            "still e2e after re-enable"
         );
     }
 
