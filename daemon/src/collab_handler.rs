@@ -894,6 +894,38 @@ async fn append_signed_revoke(
 }
 
 /// ADR-018 complete-mediation access engine: every KB operation routes through
+/// ADR-039 D1 (A1, #157): the AUTHORITATIVE epoch for `principal` — the ADR-023
+/// write-fence input. For an **anchored** KB it is derived from the SIGNED op-log
+/// (`ValidMember.epoch`), mirroring how `kb_access` derives the *role*, so role and epoch
+/// come from ONE authority. The legacy `epoch_of` (member_roles) was wrong for a
+/// mesh-admitted member: that map is frozen on join (B-12) so `epoch_of`→0, and the fence
+/// then rejected every valid edit by any non-epoch-0 member. Un-anchored/owned KBs keep
+/// the legacy `member_roles` epoch (the daemon owns that state). Absent member ⇒ 0.
+async fn kb_member_epoch(
+    doc_store: &DocStore,
+    kb_id: &str,
+    coll: &KbCollectionDoc,
+    principal: &str,
+) -> u64 {
+    match doc_store.kb_anchor(kb_id).await {
+        Some(anchor) if coll.oplog_head().is_some() => {
+            let ops = coll.oplog_ops();
+            let governance = derive_governance(&ops, &anchor);
+            derive_valid_members_governed(
+                &ops,
+                &anchor,
+                now_unix(),
+                governance,
+                &MembershipView::default(),
+            )
+            .get(principal)
+            .map(|m| m.epoch)
+            .unwrap_or(0)
+        }
+        _ => coll.epoch_of(principal),
+    }
+}
+
 /// here. Resolves the caller's role from its cryptographic **principal** (key
 /// fingerprint — never a label), then decides by hierarchical RBAC role × the
 /// KB's join policy × the operation. `principal == None` (the `none`/loopback
@@ -2190,7 +2222,9 @@ async fn handle_doc_request_inner(
             // `none`/loopback has no per-identity principal to derive an epoch from.
             if let Some(principal) = auth_principal {
                 let epoch_now = match load_collection(doc_store, &kb_id).await {
-                    Ok(coll) => coll.epoch_of(principal),
+                    // A1 (#157): derive the epoch from the SAME authority as the role —
+                    // the signed op-log for anchored KBs, not the legacy member_roles map.
+                    Ok(coll) => kb_member_epoch(doc_store, &kb_id, &coll, principal).await,
                     Err(e) => {
                         warn!(session = session_id, kb_id = %kb_id, reason = %e, "kb/node_update: epoch lookup failed");
                         return JsonRpcResponse::error(

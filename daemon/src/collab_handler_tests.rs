@@ -3288,3 +3288,72 @@ async fn verify_relayed_content_op_owned_kb_branches() {
         "non-KB doc passes through"
     );
 }
+
+/// ADR-039 A1 (#157): for an ANCHORED KB the ADR-023 epoch fence must read a member's
+/// epoch from the SIGNED op-log (the same authority as the role), not the legacy
+/// `member_roles` map — which is frozen on a mesh join (B-12), so an op-log-only member
+/// would read epoch 0 and have every valid (non-epoch-0) edit wrongly fenced.
+#[tokio::test]
+async fn kb_member_epoch_reads_oplog_not_legacy_for_anchored_kb() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::kb::{KbCollectionDoc, Role};
+    use mae_sync::membership::MembershipAction;
+
+    let store = test_doc_store();
+    let owner = Identity::generate("owner");
+    let ofp = owner.fingerprint();
+    let opk = owner.public().to_bytes();
+    let osec = owner.secret_bytes();
+    let mfp = fp("member"); // op-log-only (never written to member_roles, as on a mesh join)
+
+    let mut coll = KbCollectionDoc::new_owned("kbe", &ofp, "owner");
+    let g = coll.build_membership_op(
+        "kbe",
+        MembershipAction::Admit,
+        &ofp,
+        Some(Role::Owner),
+        true,
+        &ofp,
+        0,
+        None,
+        0,
+    );
+    let gsig = g.sign(&osec);
+    coll.append_signed_op(&g, &gsig, &opk);
+    // Admit the member at a NON-ZERO epoch (a re-grant carries a fresh epoch in reality).
+    let a = coll.build_membership_op(
+        "kbe",
+        MembershipAction::Admit,
+        &mfp,
+        Some(Role::Editor),
+        false,
+        &ofp,
+        0,
+        None,
+        7,
+    );
+    let asig = a.sign(&osec);
+    coll.append_signed_op(&a, &asig, &opk);
+
+    // The bug's precondition: legacy member_roles has no entry ⇒ epoch_of → 0.
+    assert_eq!(
+        coll.epoch_of(&mfp),
+        0,
+        "member_roles is empty for an op-log-only member"
+    );
+
+    // Anchored ⇒ kb_member_epoch derives the NON-ZERO epoch from the signed op-log (the fix).
+    store.set_kb_anchor("kbe", opk).await;
+    assert_eq!(
+        kb_member_epoch(&store, "kbe", &coll, &mfp).await,
+        7,
+        "epoch comes from the signed op-log, not the frozen member_roles"
+    );
+    // Un-anchored (owned KB) ⇒ falls back to the legacy member_roles epoch (0 here).
+    let store2 = test_doc_store();
+    assert_eq!(
+        kb_member_epoch(&store2, "kbe", &coll, &mfp).await,
+        0,
+        "an un-anchored KB keeps the legacy member_roles epoch"
+    );
+}
