@@ -1158,6 +1158,10 @@ impl CommandRegistry {
             "kb-create",
             "Find or create a note — type title, auto-generates ID (SPC n c)",
         );
+        reg.register_builtin(
+            "kb-update",
+            "Replace a KB node's body: :kb-update <id> <body> (scriptable content edit)",
+        );
         reg.register_builtin("kb-delete", "Delete a KB node by ID (SPC n D)");
         reg.register_builtin(
             "daily-goto-today",
