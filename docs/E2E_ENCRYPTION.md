@@ -125,17 +125,20 @@ Sources: [RFC 9420 (MLS)](https://www.rfc-editor.org/rfc/rfc9420.html) ·
    ordering is load-bearing.
 7. **Unbounded growth:** the op-set + membership log are grow-only (no compaction yet — ADR-028); long-lived
    heavily-edited KBs accumulate all historical ciphertext.
-8. **Enabling E2e is forward-only — it does NOT retroactively un-send already-transmitted plaintext (#171).**
+8. **Enabling E2e re-seals AND purges the pre-enable plaintext base (#171, shipped — reseal-as-replace).**
    The natural flow — share a KB with content, *then* `kb-set-encryption e2e` — transmits that content as
-   plaintext while the KB is still unencrypted, so the daemon already holds plaintext `kb:{node}` docs. Enabling
-   now **re-seals** every already-shared node (#171, shipped): the owner seals each node's current content as
-   op 0 of a sealed op-set that continues the node's lineage, so a member who *joins after enable* reads the
-   sealed content (and all subsequent edits seal) — the join-decrypt path works. **What enabling cannot do is
-   retract the plaintext copy the daemon received before enable:** that pre-enable `kb:{node}` snapshot remains
-   on the key-blind daemon at rest. So confidentiality for shared-then-encrypted content is *forward* (future
-   reads + edits are sealed), not *retroactive*. Workaround for full confidentiality: enable E2e on an empty KB
-   **before** adding content. Purging the residual pre-enable plaintext base (needs a fresh on-daemon node
-   lineage) is the remaining work tracked under #171.
+   plaintext while the KB is still unencrypted, so the daemon momentarily holds plaintext `kb:{node}` docs.
+   Enabling **re-seals** every already-shared node: the owner seals each node's current content as op 0 of a
+   FRESH sealed op-set (clock 0, self-contained) and ships it `reseal:true`, so the daemon `share_doc`-**REPLACES**
+   the node doc — owner-gated (Manage), epoch-fence-skipped — **deleting the pre-enable plaintext snapshot+WAL**
+   rather than stacking the op-set on top of it. Combined with `PRAGMA secure_delete=ON` + a TRUNCATE checkpoint
+   on delete, the pre-enable plaintext bytes are **scrubbed from the DB file at rest**, not just unlinked. A
+   member who *joins after enable* reads only ciphertext (the join-decrypt path), and the key-blind daemon
+   retains no recoverable plaintext. Guarded by the encrypted e2e gate (a pre-enable `PRECANARY` must be ABSENT
+   from the daemon store after enable — teeth-checked: it LEAKS on the old merge path) + the storage unit test
+   `delete_document_scrubs_plaintext_from_the_db_file_at_rest`. *Residual limitation:* a member who legitimately
+   pulled the plaintext **before** enable keeps their own local copy (like §D3 history) — enable protects the
+   relay + future joiners, not peers who already read in the clear; for that, enable E2e **before** sharing.
 
 > **Fail-closed seal (the operational guardrail, §7.6, is now enforced in code — #168/#170).** Both write paths
 > refuse to emit plaintext on an E2e KB: `kb/node_update` (`build_kb_node_update_request` returns *refuse* and

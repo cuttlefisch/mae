@@ -101,8 +101,16 @@ impl SqlitePool {
             conn.execute(
                 "PRAGMA journal_mode=WAL;
                  PRAGMA synchronous=NORMAL;
-                 PRAGMA busy_timeout=5000;",
+                 PRAGMA busy_timeout=5000;
+                 PRAGMA secure_delete=ON;",
             )?;
+            // ADR-037 (#171): a key-blind daemon must not retain RECOVERABLE plaintext
+            // at rest. `secure_delete=ON` zeroes freed pages on DELETE, so when E2E is
+            // enabled on a previously-plaintext KB and the node docs are reseal-replaced
+            // (delete + recreate as ciphertext, see `delete_document` + `share_doc`), the
+            // pre-enable plaintext bytes are overwritten in the main DB file rather than
+            // lingering in free pages. The WAL sidecar is TRUNCATE-checkpointed after the
+            // delete so an uncheckpointed pre-image can't linger there either.
             // Only the first connection creates tables (idempotent via IF NOT EXISTS).
             if i == 0 {
                 conn.execute(
@@ -385,6 +393,13 @@ impl StorageBackend for SqliteBackend {
         stmt2.bind((1, doc_name))?;
         stmt2.next()?;
 
+        // ADR-037 (#171): with `secure_delete=ON` the rows above are zeroed in the main
+        // DB, but the zeroing is journalled through the WAL sidecar. TRUNCATE-checkpoint
+        // so the sidecar can't retain a pre-image of the just-purged plaintext at rest.
+        // Best-effort: downgrades to PASSIVE if another shard holds a read mark — the
+        // zeroed pages still land on the next checkpoint; we never block the delete on it.
+        let _ = conn.execute("PRAGMA wal_checkpoint(TRUNCATE);");
+
         info!(doc = doc_name, "deleted document from storage");
         Ok(())
     }
@@ -497,6 +512,62 @@ mod tests {
 
         assert!(backend.load_document("doc1").await.unwrap().is_none());
         assert!(backend.list_documents().await.unwrap().is_empty());
+    }
+
+    /// ADR-037 (#171) — the AT-REST confidentiality oracle (the attacker's test). A
+    /// key-blind daemon must not retain RECOVERABLE plaintext after a doc is purged. With
+    /// `secure_delete=ON` + a TRUNCATE checkpoint, `delete_document` must scrub the bytes
+    /// from the DB FILE itself — not merely unlink the rows (SQLite leaves deleted content
+    /// legible in free pages / the WAL sidecar otherwise). This is what makes reseal-as-
+    /// replace (delete plaintext lineage → recreate as ciphertext) an actual purge.
+    #[tokio::test]
+    async fn delete_document_scrubs_plaintext_from_the_db_file_at_rest() {
+        use std::io::Read;
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("collab.sqlite");
+        // A unique, recognizable plaintext "canary" — what a pre-enable plaintext share
+        // would have written to the daemon before E2E was turned on.
+        let canary = b"PLAINTEXT-CANARY-7f3a9e21-must-not-survive-purge";
+
+        let raw_contains_canary = |p: &std::path::Path| -> bool {
+            // Scan the DB file AND any -wal/-shm sidecars in the dir (an attacker reads
+            // the whole on-disk footprint, not just the main file).
+            let mut hit = false;
+            for entry in std::fs::read_dir(p.parent().unwrap()).unwrap() {
+                let path = entry.unwrap().path();
+                let mut buf = Vec::new();
+                if std::fs::File::open(&path)
+                    .and_then(|mut f| f.read_to_end(&mut buf))
+                    .is_ok()
+                    && buf.windows(canary.len()).any(|w| w == canary.as_slice())
+                {
+                    hit = true;
+                }
+            }
+            hit
+        };
+
+        {
+            let backend = SqliteBackend::open(&db_path).unwrap();
+            // Write the plaintext canary as a node's content, then compact it into the
+            // snapshot (mirrors a plaintext share that has been checkpointed to disk).
+            let id = backend.wal_append("kb:n1", canary, None).await.unwrap();
+            backend.compact("kb:n1", canary, id).await.unwrap();
+            // Also leave a fresh WAL-tail copy (mirrors a not-yet-compacted plaintext edit).
+            backend.wal_append("kb:n1", canary, None).await.unwrap();
+            assert!(
+                raw_contains_canary(&db_path),
+                "precondition: the plaintext canary is on disk before purge (else the test is vacuous)"
+            );
+
+            // The purge (what reseal-as-replace's share_doc triggers).
+            backend.delete_document("kb:n1").await.unwrap();
+
+            assert!(
+                !raw_contains_canary(&db_path),
+                "the plaintext canary MUST be scrubbed from the DB file at rest after delete_document (secure_delete + checkpoint)"
+            );
+        }
     }
 
     #[tokio::test]
