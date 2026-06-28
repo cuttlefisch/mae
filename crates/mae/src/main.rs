@@ -839,6 +839,17 @@ fn main() -> io::Result<()> {
         // expected `derive_kb_client_id(fp, 0)` and don't trip the epoch fence.
         init_collab_kb_client_id(&mut editor);
 
+        // Joined KBs persist to a durable per-instance store under the KB data dir
+        // (`kb_register_joined_instance` creates it on demand from `kb.data_dir`). The
+        // interactive path sets this during full startup; the `--test` path must too,
+        // else a scenario that JOINs a shared KB keeps the synced/decrypted nodes
+        // in-memory only and they never reach disk (the collab-e2e oracle reads disk).
+        if let Some(dd) = editor.mae_data_dir() {
+            if let Ok(kb_dd) = mae_kb::data_dir::KbDataDir::new(&dd) {
+                editor.kb.data_dir = Some(kb_dd);
+            }
+        }
+
         // Build a minimal tokio runtime for the collab bridge.
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()

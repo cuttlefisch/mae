@@ -286,6 +286,11 @@ pub enum CollabCommand {
         kb_id: String,
         mode: String,
         collection_state: Vec<u8>,
+        /// #171: plaintext `(node_id, encode_state)` for every shared node, so the network
+        /// task can RE-SEAL them under the new content key — sealed edits then graft onto
+        /// the op-set + joiners can read sealed content (a node shared plaintext THEN
+        /// encrypted otherwise keeps a plaintext daemon lineage that swallows sealed ops).
+        node_states: Vec<(String, Vec<u8>)>,
     },
     /// Ship an owner-signed, opaque collection delta to the daemon's key-blind
     /// `kb/collection_op` RPC (ADR-038). The send + disconnect handling is ready here;
@@ -791,10 +796,14 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
                 .get(&kb_id)
                 .cloned()
                 .unwrap_or_default();
+            // #171: also carry each shared node's plaintext state so the network task can
+            // RE-SEAL them under the new content key (it holds the key + the secret).
+            let node_states = editor.kb_share_node_states(&kb_id);
             CollabCommand::KbSetEncryption {
                 kb_id,
                 mode,
                 collection_state,
+                node_states,
             }
         }
         CollabIntent::KbNodeUpdate {
@@ -3784,7 +3793,7 @@ async fn run_collab_task(
                                 }
                             }
                         }
-                        CollabCommand::KbSetEncryption { kb_id, mode, collection_state } => {
+                        CollabCommand::KbSetEncryption { kb_id, mode, collection_state, node_states } => {
                             // ADR-037/038/039: enable E2E. ALL key crypto stays in this
                             // network task (it holds the secret); the daemon stays key-blind
                             // (it only stores the owner-signed delta via kb/collection_op).
@@ -3837,13 +3846,62 @@ async fn run_collab_task(
                                                             let _ = write_framed(w, &body, write_timeout).await;
                                                         }
                                                     }
+                                                    // #171: RE-SEAL every already-shared node under the new
+                                                    // key. A node shared PLAINTEXT before enable has a
+                                                    // plaintext daemon lineage under the owner's content
+                                                    // client_id; the ADR-023 fence pins the seal client_id to
+                                                    // that SAME id, so a naive first seal (fresh op-set at
+                                                    // clock 0) OVERLAPS the plaintext clocks and yrs drops it
+                                                    // — joiners then never see sealed content. Seeding
+                                                    // `build_kb_node_update_request` with the node's CURRENT
+                                                    // state makes op 0 CONTINUE the lineage (clock K+1): it
+                                                    // grafts, later sealed edits chain onto it, and a joiner
+                                                    // opens the sealed content. (The pre-enable plaintext base
+                                                    // stays on the key-blind daemon — it was already shared;
+                                                    // purging it needs a fresh node lineage, tracked in #171.)
+                                                    let owner_epoch = coll.epoch_of(&owner_fp);
+                                                    for (node_id, plaintext_state) in &node_states {
+                                                        let seed = op_sets
+                                                            .get(node_id)
+                                                            .cloned()
+                                                            .unwrap_or_else(|| plaintext_state.clone());
+                                                        if let Some((req, new_op_set_state, sealed_id)) =
+                                                            build_kb_node_update_request(
+                                                                next_request_id,
+                                                                &kb_id,
+                                                                node_id,
+                                                                plaintext_state,
+                                                                owner_epoch,
+                                                                Some(id),
+                                                                Some(&key),
+                                                                true,
+                                                                &seed,
+                                                            )
+                                                        {
+                                                            next_request_id += 1;
+                                                            if let Some(ref mut w) = writer {
+                                                                if let Ok(body) = serde_json::to_vec(&req) {
+                                                                    let _ = write_framed(w, &body, write_timeout).await;
+                                                                }
+                                                            }
+                                                            op_sets.insert(node_id.clone(), new_op_set_state);
+                                                            if let Some(sid) = sealed_id {
+                                                                seen_ops
+                                                                    .entry(node_id.clone())
+                                                                    .or_default()
+                                                                    .insert(sid);
+                                                            }
+                                                            node_to_kb
+                                                                .insert(node_id.clone(), kb_id.clone());
+                                                        }
+                                                    }
                                                     // Register the key so the owner's edits now seal (Phase 2b).
                                                     content_keys.insert(kb_id.clone(), key);
                                                     // #173: seed/refresh the collection replica with the
                                                     // post-genesis state so later membership deltas re-derive.
                                                     kb_collections
                                                         .insert(kb_id.clone(), coll.encode_state());
-                                                    info!(kb = %kb_id, "ADR-037: E2E enabled — content key generated + self-wrapped, signed genesis authored");
+                                                    info!(kb = %kb_id, resealed_nodes = node_states.len(), "ADR-037: E2E enabled — content key generated + self-wrapped, signed genesis authored, nodes re-sealed");
                                                 }
                                                 Err(e) => warn!(kb = %kb_id, error = ?e, "kb/set_encryption: self-wrap failed"),
                                             }

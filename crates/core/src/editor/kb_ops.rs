@@ -1202,6 +1202,26 @@ impl Editor {
     /// divergent doc. Here we `upsert_with_crdt` each such node with THIS peer's
     /// stable client_id (persisting the lineage onto the node) and write it through
     /// to the durable store, so the owner's local doc IS the shared lineage.
+    /// Plaintext CRDT state per shared node `(node_id, encode_state)` — the canonical
+    /// lineage the daemon already holds (established by [`Self::kb_prepare_share_lineage`]
+    /// at share). Read-only. Used to RE-SEAL nodes when E2e is enabled on an
+    /// already-shared KB (#171): the network task seeds `seal_op` with each node's
+    /// current state so the sealed op-set CONTINUES the node's client-id lineage (no
+    /// clock collision with the plaintext base) and joiners can open the sealed content.
+    pub fn kb_share_node_states(&self, kb_name: &str) -> Vec<(String, Vec<u8>)> {
+        let is_primary = kb_name == crate::editor::KB_DEFAULT_NAME || kb_name == "primary";
+        let kb = if is_primary {
+            Some(&self.kb.primary)
+        } else {
+            let uuid = self.kb.registry.find(kb_name).map(|i| i.uuid.clone());
+            uuid.and_then(|u| self.kb.instances.get(&u))
+                .or_else(|| self.kb.instances.get(kb_name))
+        };
+        kb.and_then(|kb| kb.to_collection(kb_name, "", &[]).ok())
+            .map(|(_coll, node_states)| node_states)
+            .unwrap_or_default()
+    }
+
     pub fn kb_prepare_share_lineage(&mut self, kb_name: &str, node_ids: &[String]) {
         let cid = self.kb_local_client_id();
         let is_primary = kb_name == crate::editor::KB_DEFAULT_NAME || kb_name == "primary";
