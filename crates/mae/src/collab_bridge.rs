@@ -240,16 +240,17 @@ pub enum CollabCommand {
         pending_rowid: Option<i64>,
     },
     /// Add or remove a peer (by principal) from a KB's members (owner-only). For a
-    /// REMOVE from an E2e KB, `collection_state` carries the main thread's cached
-    /// collection replica so the network task (which holds the identity secret + the
-    /// content key) can author the §D3 rotation (signed Remove + re-key the remaining
-    /// members) and ship it key-blind via `kb/collection_op`. Empty for adds / legacy.
+    /// REMOVE from an E2e KB the network task authors the §D3 rotation (signed Remove +
+    /// re-key the remaining members) against its OWN `kb_collections` replica — the
+    /// daemon's lineage — never a main-thread snapshot (which is stale for an owner who
+    /// enabled on the network task, and whose independent reconstruction would tombstone
+    /// the op-log; see the kb/approve #179 fail-closed rule). Shipped key-blind via
+    /// `kb/collection_op`. Adds + legacy removes go through the daemon-authored RPC.
     KbMember {
         kb_id: String,
         member: String,
         role: String,
         add: bool,
-        collection_state: Vec<u8>,
     },
     /// Phase D1.1 (ADR-029): add/remove a node in a KB's collection manifest so the
     /// daemon's projector materializes the create/removes the delete. The node doc
@@ -747,24 +748,16 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
             member,
             role,
             add: true,
-            collection_state: Vec::new(),
         },
         CollabIntent::KbRemoveMember { kb_id, member } => {
-            // Carry the cached collection replica so the network task can author the
-            // §D3 content-key rotation if this KB is E2e (else it's ignored — legacy
-            // daemon-authored remove). Mirrors KbApprove / KbSetEncryption.
-            let collection_state = editor
-                .collab
-                .kb_collection_state
-                .get(&kb_id)
-                .cloned()
-                .unwrap_or_default();
+            // The §D3 rotation (if E2e) is authored on the network task against ITS
+            // `kb_collections` replica — not a main-thread snapshot — so no collection
+            // bytes ride along (the kb/approve #179 fail-closed rule).
             CollabCommand::KbMember {
                 kb_id,
                 member,
                 role: String::new(),
                 add: false,
-                collection_state,
             }
         }
         CollabIntent::KbApprove {
@@ -3516,7 +3509,7 @@ async fn run_collab_task(
                                 try_send_evt(&evt_tx, CollabEvent::KbUpdateRequeue { kb_id, node_id, update, pending_rowid });
                             }
                         }
-                        CollabCommand::KbMember { kb_id, member, role, add, collection_state } => {
+                        CollabCommand::KbMember { kb_id, member, role, add } => {
                             // ADR-037 §D3: removing a member from an E2e KB ROTATES the content
                             // key — the owner authors a signed Remove + a fresh-key re-wrap to
                             // each remaining member, shipped key-blind via kb/collection_op. The
@@ -3527,8 +3520,25 @@ async fn run_collab_task(
                                 if let (Some(_old_key), Some(id)) =
                                     (content_keys.get(&kb_id).cloned(), signing_identity.as_ref())
                                 {
+                                    // Fail-CLOSED on the network task's OWN replica
+                                    // (`kb_collections` — the daemon's lineage, CRDT-merged from
+                                    // the ops WE authored + every broadcast). NEVER author against
+                                    // a main-thread snapshot: it's stale for an owner who enabled
+                                    // here, and an independent `from_bytes` reconstruction mints a
+                                    // divergent yrs client_id whose merge tombstones the op-log
+                                    // (the kb/approve #179 rule). Absent replica (post-restart,
+                                    // before a kbc: broadcast re-seeds it) → empty base → decode
+                                    // fails → legacy daemon remove (no rotation; the removed member
+                                    // is re-stranded on a later re-share).
+                                    let base_state = match kb_collections.get(&kb_id) {
+                                        Some(s) => s.clone(),
+                                        None => {
+                                            warn!(kb = %kb_id, member = %member, "kb/remove: E2e KB but no local collection replica yet (post-restart?) — deferring to the legacy daemon remove (no key rotation)");
+                                            Vec::new()
+                                        }
+                                    };
                                     if let Ok(mut coll) =
-                                        mae_sync::kb::KbCollectionDoc::from_bytes(&collection_state)
+                                        mae_sync::kb::KbCollectionDoc::from_bytes(&base_state)
                                     {
                                         let owner_fp = id.fingerprint();
                                         if coll.owner() == owner_fp {
