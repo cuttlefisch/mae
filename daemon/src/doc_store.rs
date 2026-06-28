@@ -237,6 +237,20 @@ impl DocStore {
             .unwrap_or_default()
     }
 
+    /// The full local blocklist as `kb_id → sorted principals` (ADR-039 A2, #162), for
+    /// the `kb/blocklist` introspection RPC (the editor's `*KB Sharing*` Blocked view).
+    /// Empty sets are omitted. Local-only state — this is the ONLY way a client learns
+    /// it, since the blocklist is never in the synced `kbc:` collection.
+    pub async fn all_kb_blocklists(&self) -> HashMap<String, Vec<String>> {
+        self.kb_blocklists
+            .read()
+            .await
+            .iter()
+            .filter(|(_, set)| !set.is_empty())
+            .map(|(kb, set)| (kb.clone(), set.iter().cloned().collect()))
+            .collect()
+    }
+
     /// The [`MembershipView`] to use when deriving members for `kb_id` — carries this
     /// daemon's local blocklist so a blocked principal is dropped at EVERY derivation
     /// site (complete mediation: the gate, the content paths, and the removal

@@ -59,6 +59,10 @@ pub struct KbSharingEntry {
     pub sync_state: SyncState,
     pub members: Vec<MemberView>,
     pub pending: Vec<PendingView>,
+    /// Principals on THIS daemon's LOCAL self-protection blocklist (ADR-039 A2, #162).
+    /// Fetched from the daemon (`kb/blocklist`) — local-only, never propagated; distinct
+    /// from a membership removal. A blocked principal is fenced at every membership check.
+    pub blocked: Vec<BlockedView>,
 }
 
 /// A member of a shared KB.
@@ -79,6 +83,16 @@ pub struct PendingView {
     pub fingerprint: String,
     pub label: String,
     pub requested_at: String,
+    pub display: String,
+}
+
+/// A principal on the LOCAL self-protection blocklist (ADR-039 A2, #162). `label` is
+/// best-effort from the member replica (a blocked principal need not be a member, so it
+/// may be empty → the display falls back to the short fingerprint).
+#[derive(Debug, Clone, Serialize)]
+pub struct BlockedView {
+    pub fingerprint: String,
+    pub label: String,
     pub display: String,
 }
 
@@ -116,6 +130,31 @@ pub fn format_peer(label: &str, fingerprint: &str) -> String {
     } else {
         format!("{label} ({short})")
     }
+}
+
+/// Build the `BlockedView`s for a KB from the cached local blocklist (ADR-039 A2,
+/// #162), resolving each blocked fingerprint's label from the member replica when it
+/// happens to be a (still-listed) member — otherwise the label is empty and the display
+/// falls back to the short fingerprint. Sorted for a stable view.
+fn blocked_views(fps: Option<&Vec<String>>, members: &[MemberView]) -> Vec<BlockedView> {
+    let mut out: Vec<BlockedView> = fps
+        .into_iter()
+        .flatten()
+        .map(|fp| {
+            let label = members
+                .iter()
+                .find(|m| &m.fingerprint == fp)
+                .map(|m| m.label.clone())
+                .unwrap_or_default();
+            BlockedView {
+                display: format_peer(&label, fp),
+                fingerprint: fp.clone(),
+                label,
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| a.fingerprint.cmp(&b.fingerprint));
+    out
 }
 
 /// Build the KB-sharing snapshot from this peer's local collaborative state.
@@ -177,7 +216,7 @@ pub fn build_snapshot(collab: &CollabState) -> KbSharingSnapshot {
                     .copied()
                     .unwrap_or_else(|| coll.epoch_of(me));
 
-                let members = coll
+                let members: Vec<MemberView> = coll
                     .member_roles()
                     .into_iter()
                     .map(|m| MemberView {
@@ -201,6 +240,10 @@ pub fn build_snapshot(collab: &CollabState) -> KbSharingSnapshot {
                     })
                     .collect();
 
+                // Local blocklist (ADR-039 A2): label is best-effort from the member
+                // replica (a blocked principal need not be a member → may be empty).
+                let blocked = blocked_views(collab.kb_blocklists.get(&id), &members);
+
                 KbSharingEntry {
                     id: id.clone(),
                     name,
@@ -212,9 +255,11 @@ pub fn build_snapshot(collab: &CollabState) -> KbSharingSnapshot {
                     sync_state,
                     members,
                     pending,
+                    blocked,
                 }
             }
             None => KbSharingEntry {
+                blocked: blocked_views(collab.kb_blocklists.get(&id), &[]),
                 name: id.clone(),
                 id,
                 role_of_me: None,
@@ -280,6 +325,10 @@ pub enum KbSharingLineKind {
     PendingHeader { kb_id: String },
     /// A pending-request row (owner actions: approve/deny).
     Pending { kb_id: String, fingerprint: String },
+    /// "Blocked (N):" subheading (local self-protection, ADR-039 A2).
+    BlockedHeader { kb_id: String },
+    /// A blocked-principal row (action: unblock; not owner-gated).
+    Blocked { kb_id: String, fingerprint: String },
     /// Blank separator / non-actionable info.
     Blank,
 }
@@ -308,16 +357,19 @@ impl KbSharingLine {
             | KbSharingLineKind::MembersHeader { kb_id }
             | KbSharingLineKind::Member { kb_id, .. }
             | KbSharingLineKind::PendingHeader { kb_id }
-            | KbSharingLineKind::Pending { kb_id, .. } => Some(kb_id),
+            | KbSharingLineKind::Pending { kb_id, .. }
+            | KbSharingLineKind::BlockedHeader { kb_id }
+            | KbSharingLineKind::Blocked { kb_id, .. } => Some(kb_id),
             _ => None,
         }
     }
 
-    /// The member/pending fingerprint this line acts on, if any.
+    /// The member/pending/blocked fingerprint this line acts on, if any.
     pub fn fingerprint(&self) -> Option<&str> {
         match &self.kind {
             KbSharingLineKind::Member { fingerprint, .. }
-            | KbSharingLineKind::Pending { fingerprint, .. } => Some(fingerprint),
+            | KbSharingLineKind::Pending { fingerprint, .. }
+            | KbSharingLineKind::Blocked { fingerprint, .. } => Some(fingerprint),
             _ => None,
         }
     }
@@ -330,6 +382,7 @@ pub enum CollapseKey {
     Kb(String),
     Members(String),
     Pending(String),
+    Blocked(String),
 }
 
 /// Structured state for the `*KB Sharing*` buffer. Carries the [`KbSharingSnapshot`]
@@ -368,6 +421,7 @@ impl KbSharingView {
             KbSharingLineKind::KbHeader { kb_id } => Some(CollapseKey::Kb(kb_id.clone())),
             KbSharingLineKind::MembersHeader { kb_id } => Some(CollapseKey::Members(kb_id.clone())),
             KbSharingLineKind::PendingHeader { kb_id } => Some(CollapseKey::Pending(kb_id.clone())),
+            KbSharingLineKind::BlockedHeader { kb_id } => Some(CollapseKey::Blocked(kb_id.clone())),
             _ => None,
         }
     }
@@ -550,6 +604,39 @@ pub fn build_view(
                 }
             }
         }
+
+        // Blocked section (local self-protection, ADR-039 A2) — only when non-empty.
+        if !kb.blocked.is_empty() {
+            let blocked_collapsed = view.is_collapsed(&CollapseKey::Blocked(kb.id.clone()));
+            let b_marker = if blocked_collapsed {
+                '\u{25B8}'
+            } else {
+                '\u{25BE}'
+            };
+            push(
+                &mut view,
+                KbSharingLine {
+                    text: format!("  {b_marker} Blocked ({}):", kb.blocked.len()),
+                    kind: KbSharingLineKind::BlockedHeader {
+                        kb_id: kb.id.clone(),
+                    },
+                },
+            );
+            if !blocked_collapsed {
+                for b in &kb.blocked {
+                    push(
+                        &mut view,
+                        KbSharingLine {
+                            text: format!("      {} — blocked locally (B = unblock)", b.display),
+                            kind: KbSharingLineKind::Blocked {
+                                kb_id: kb.id.clone(),
+                                fingerprint: b.fingerprint.clone(),
+                            },
+                        },
+                    );
+                }
+            }
+        }
         push(&mut view, KbSharingLine::blank());
     }
 
@@ -570,6 +657,51 @@ mod tests {
         s.kb_collection_state
             .insert(kb_id.to_string(), coll.encode_state());
         s
+    }
+
+    #[test]
+    fn blocklist_renders_blocked_view_with_member_label() {
+        // alice (owner) blocks bob (a member) and a non-member stranger fingerprint.
+        let mut coll = KbCollectionDoc::new_owned("Team", "alicefp", "alice");
+        let _ = coll.upsert_member("bobfp", "bob", Role::Editor);
+        let mut state = state_with("alicefp", "team", &coll);
+        state.kb_blocklists.insert(
+            "team".to_string(),
+            vec!["bobfp".to_string(), "SHA256:stranger".to_string()],
+        );
+
+        let snap = build_snapshot(&state);
+        let kb = &snap.kbs[0];
+        // Bob remains a MEMBER (the local block is not a removal) AND is listed Blocked.
+        assert!(kb.members.iter().any(|m| m.fingerprint == "bobfp"));
+        assert_eq!(kb.blocked.len(), 2);
+        let bob = kb
+            .blocked
+            .iter()
+            .find(|b| b.fingerprint == "bobfp")
+            .expect("bob blocked");
+        assert_eq!(bob.label, "bob", "label resolved from the member replica");
+        let stranger = kb
+            .blocked
+            .iter()
+            .find(|b| b.fingerprint == "SHA256:stranger")
+            .expect("stranger blocked");
+        assert_eq!(
+            stranger.label, "",
+            "a non-member block has no label → display falls back to the fingerprint"
+        );
+
+        // The buffer view renders a foldable Blocked section with a row per principal.
+        let (view, _text) = build_view(&snap, &HashMap::new());
+        assert!(view.lines.iter().any(
+            |l| matches!(&l.kind, KbSharingLineKind::BlockedHeader { kb_id } if kb_id == "team")
+        ));
+        let blocked_rows = view
+            .lines
+            .iter()
+            .filter(|l| matches!(&l.kind, KbSharingLineKind::Blocked { .. }))
+            .count();
+        assert_eq!(blocked_rows, 2);
     }
 
     #[test]

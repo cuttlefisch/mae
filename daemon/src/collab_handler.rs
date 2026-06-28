@@ -547,6 +547,7 @@ async fn handle_doc_notification_inner(
         | "kb/set_governance"
         | "kb/block_principal"
         | "kb/unblock_principal"
+        | "kb/blocklist"
         | "kb/revoke" => {
             warn!(
                 session = session_id,
@@ -2755,6 +2756,22 @@ async fn handle_doc_request_inner(
                     McpError::internal_error(format!("blocklist update failed: {e}")),
                 ),
             }
+        }
+
+        // ADR-039 A2 (#162): read this daemon's LOCAL blocklist. Read-only introspection
+        // for the operator's `*KB Sharing*` Blocked view — the ONLY way a client learns
+        // the local blocklist, since it is never in the synced `kbc:` collection. Returns
+        // `{ blocklist: { kb_id: [fingerprint, ...] } }`; with `kb_id` it scopes to one.
+        "kb/blocklist" => {
+            let all = doc_store.all_kb_blocklists().await;
+            let payload = match params["kb_id"].as_str() {
+                Some(kb_id) => {
+                    let one = all.get(kb_id).cloned().unwrap_or_default();
+                    serde_json::json!({ "blocklist": { kb_id: one } })
+                }
+                None => serde_json::json!({ "blocklist": all }),
+            };
+            JsonRpcResponse::success(id, payload)
         }
 
         // ADR-026 §A4: set the KB's governance rule (`single-owner` | `quorum:N`),
