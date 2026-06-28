@@ -219,6 +219,68 @@ mod tests {
     }
 
     #[test]
+    fn reseal_on_enable_grafts_onto_a_plaintext_shared_node_then_edits_chain() {
+        // #171 re-encryption-on-enable: a node SHARED PLAINTEXT before E2e is enabled has a
+        // plaintext daemon lineage under the owner's content client_id. The seal path is
+        // pinned to that SAME client_id by the ADR-023 fence, so a naive first seal (fresh
+        // op-set at clock 0) OVERLAPS the plaintext clocks and yrs drops it. The fix re-seals
+        // op 0 with the op-set SEEDED by the plaintext state, so the OPS_MAP CONTINUES the
+        // lineage (clock K+1) and grafts. This pins that property end-to-end.
+        use crate::kb::{derive_kb_client_id, KbNodeDoc};
+        let owner_cid = derive_kb_client_id("SHA256:owner-fp", 0);
+
+        // 1) The plaintext node the daemon already holds (shared before enable).
+        let mut node =
+            KbNodeDoc::new_with_client_id("n1", "Original Title", "original body", &[], owner_cid);
+        let plaintext_state = node.encode_state();
+        let mut daemon = KbNodeDoc::from_bytes(&plaintext_state).unwrap();
+
+        // 2) RE-SEAL ON ENABLE — seed `seal_op` with the plaintext state (same client_id).
+        let key = ContentKey::generate();
+        let (op0_id, reseal) =
+            seal_op(&plaintext_state, &key, &plaintext_state, owner_cid).unwrap();
+        daemon.apply_update(&reseal).unwrap();
+        assert!(
+            op_ids(&daemon.encode_state()).contains(&op0_id),
+            "re-seal op 0 grafts onto the daemon's plaintext lineage (no clock collision)"
+        );
+
+        // 3) A sealed EDIT after enable chains onto the re-sealed op-set.
+        let op_set_after_reseal = merge(&plaintext_state, &reseal).unwrap();
+        let edit = node.set_body("CANARY body");
+        let (op1_id, sealed_edit) = seal_op(&op_set_after_reseal, &key, &edit, owner_cid).unwrap();
+        daemon.apply_update(&sealed_edit).unwrap();
+        assert!(
+            op_ids(&daemon.encode_state()).contains(&op1_id),
+            "the sealed edit chains onto the re-sealed op-set on the daemon"
+        );
+
+        // 4) A JOINER pulling the daemon's full node state materializes BOTH ops and reads the
+        //    sealed content — incl. the post-enable edit (the user-visible #171 success).
+        let joined = materialize(&daemon.encode_state(), &key);
+        assert_eq!(
+            joined.body(),
+            "CANARY body",
+            "joiner reads the sealed post-enable edit"
+        );
+        assert_eq!(
+            joined.title(),
+            "Original Title",
+            "joiner reads the pre-enable content through op 0"
+        );
+        // A wrong key still opens nothing from the merged daemon state.
+        assert!(
+            open_new_ops(
+                &daemon.encode_state(),
+                &ContentKey::generate(),
+                &BTreeSet::new()
+            )
+            .is_empty(),
+            "a non-member key opens no ops even after re-seal"
+        );
+    }
+
+    #[test]
     fn a_non_member_or_wrong_key_materializes_nothing() {
         let key = ContentKey::generate();
         let (state, _t, _b) = author_session(&key, 7);

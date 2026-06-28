@@ -2935,6 +2935,136 @@ mod tests {
         );
     }
 
+    // Regression for the join-decrypt bug (branch `fix/joiner-content-sync`): the OWNER must
+    // author the member `Admit` against the CURRENT collection lineage (the network task's fresh
+    // replica that already holds the genesis + SetEncryption it authored at enable) — NOT a STALE
+    // pre-enable snapshot. Authoring against a stale base (which has no oplog map) re-creates the
+    // oplog `MapPrelim` root; when the key-blind daemon merges that delta it TOMBSTONES the live
+    // genesis/SetEncryption ops, the admit becomes a phantom second-genesis (empty `prev_hash`),
+    // and the joiner gets a corrupt op-log it can't derive a key from. This pins the FIX (chain
+    // cleanly, converge, member derives) and the precise root-cause property (the admit CHAINS
+    // onto the SetEncryption head rather than masquerading as a genesis).
+    #[test]
+    fn member_admit_must_chain_on_the_current_collection_not_a_stale_pre_enable_base() {
+        use crate::content_crypto::{wrap_to_member, ContentKey};
+        use crate::membership::{derive_content_key, derive_encryption};
+        let (osec, opk, ofp) = oplog_keypair(11);
+        let (msec, mpk, mfp) = oplog_keypair(22);
+
+        // 1) Owner shares: owner set, NO membership op-log yet (mirror of the share path).
+        let shared = KbCollectionDoc::new_owned("KB", &ofp, "owner");
+        let shared_state = shared.encode_state();
+        // The key-blind daemon relays the owner-signed collection bytes verbatim.
+        let mut daemon = KbCollectionDoc::from_bytes(&shared_state).unwrap();
+
+        // 2) Owner ENABLES e2e against a reconstruction of the shared collection.
+        let k = ContentKey::generate();
+        let mut live = KbCollectionDoc::from_bytes(&shared_state).unwrap();
+        let enable_delta = live.author_e2e_genesis(
+            "KB",
+            &ofp,
+            &osec,
+            &opk,
+            wrap_to_member(&k, &opk).unwrap(),
+            1000,
+        );
+        daemon.apply_update(&enable_delta).unwrap();
+        assert_eq!(
+            daemon.oplog_ops().len(),
+            2,
+            "daemon holds genesis + SetEncryption after enable"
+        );
+        let head_before_admit = {
+            // The op the admit MUST chain onto (the SetEncryption, latest in causal order).
+            let ops = daemon.oplog_ops();
+            ops.iter()
+                .find(|o| o.op.action == MembershipAction::SetEncryption)
+                .map(|o| o.chain_hash())
+                .expect("SetEncryption present")
+        };
+
+        // 3a) ROOT-CAUSE GUARD — authoring against the STALE pre-enable base produces a phantom
+        //     genesis (empty prev_hash): it has NO knowledge of the genesis/SetEncryption head.
+        {
+            let mut stale = KbCollectionDoc::from_bytes(&shared_state).unwrap(); // pre-enable!
+            stale.author_member_admit(
+                "KB",
+                &mfp,
+                &mpk,
+                Role::Editor,
+                "m",
+                wrap_to_member(&k, &mpk).unwrap(),
+                &ofp,
+                &osec,
+                &opk,
+                1001,
+            );
+            let admit = stale
+                .oplog_ops()
+                .into_iter()
+                .find(|o| o.op.subject == mfp)
+                .expect("admit authored");
+            assert!(
+                admit.op.prev_hash.is_empty(),
+                "stale-base admit masquerades as a genesis (the bug) — empty prev_hash"
+            );
+        }
+
+        // 3b) THE FIX — author against the CURRENT collection (the daemon's lineage). The admit
+        //     CHAINS onto the SetEncryption head; merging it is purely additive (no tombstone).
+        let mut current = KbCollectionDoc::from_bytes(&daemon.encode_state()).unwrap();
+        let good_delta = current.author_member_admit(
+            "KB",
+            &mfp,
+            &mpk,
+            Role::Editor,
+            "m",
+            wrap_to_member(&k, &mpk).unwrap(),
+            &ofp,
+            &osec,
+            &opk,
+            1001,
+        );
+        let admit = current
+            .oplog_ops()
+            .into_iter()
+            .find(|o| o.op.subject == mfp)
+            .expect("admit authored");
+        assert_eq!(
+            admit.op.prev_hash, head_before_admit,
+            "current-base admit chains onto the SetEncryption head (the fix)"
+        );
+
+        daemon.apply_update(&good_delta).unwrap();
+        // Adversarial: a duplicate echo of our own op must be idempotent (the racy re-apply path).
+        daemon.apply_update(&good_delta).unwrap();
+        assert_eq!(
+            daemon.oplog_ops().len(),
+            3,
+            "genesis + SetEncryption + admit all survive the merge (and the echo)"
+        );
+
+        // The joiner, with ONLY the daemon-relayed collection, derives the SAME content key AND
+        // sees E2e mode intact — the user-visible success the bug denied.
+        let joiner = KbCollectionDoc::from_bytes(&daemon.encode_state()).unwrap();
+        assert_eq!(
+            derive_encryption(&joiner.oplog_ops(), &opk),
+            Encryption::E2e,
+            "E2e mode survives (genesis anchor + SetEncryption intact)"
+        );
+        assert_eq!(
+            derive_content_key(&joiner.oplog_ops(), &opk, &mfp, &msec).map(|c| *c.as_bytes()),
+            Some(*k.as_bytes()),
+            "the approved member derives the content key from the relayed collection"
+        );
+        // A non-member still derives nothing.
+        let (xsec, _xpk, xfp) = oplog_keypair(33);
+        assert!(
+            derive_content_key(&joiner.oplog_ops(), &opk, &xfp, &xsec).is_none(),
+            "a non-member recovers no key"
+        );
+    }
+
     #[test]
     fn rotate_on_remove_rekeys_remaining_members_and_strands_the_removed_one() {
         // ADR-037 §D3 — the SELECTIVE security oracle. 3 members (owner + B + C) share key k.
