@@ -2221,6 +2221,14 @@ async fn handle_doc_request_inner(
                     );
                 }
             };
+            // ADR-037 (#171) RESEAL-AS-REPLACE: when E2E is enabled on a
+            // previously-plaintext KB, the owner reseals each node as a FRESH op-set and
+            // sets `reseal:true` so we PURGE the pre-enable plaintext lineage — `share_doc`
+            // atomically deletes the `kb:{node}` snapshot+WAL and recreates it from this
+            // ciphertext-only op (vs `apply_update`, which would stack the op-set on top of
+            // the readable plaintext). It is OWNER-gated (Manage) and bypasses the epoch
+            // fence (a full-doc replace, not a merge against the daemon's node SV).
+            let reseal = params["reseal"].as_bool().unwrap_or(false);
             // ADR-020 traceability: log on ENTRY so a received kb/node_update is
             // greppable on the daemon (distinguishes "never arrived" from "rejected").
             info!(
@@ -2243,11 +2251,14 @@ async fn handle_doc_request_inner(
             info!(session = session_id, kb_id = %kb_id, node_id = %node_id, update_len = update_bytes.len(), "kb/node_update");
 
             // ADR-018: editing a node requires editor/owner role. Viewers and
-            // non-members are denied (least privilege).
-            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Edit, transport).await {
+            // non-members are denied (least privilege). A RESEAL replaces the whole node
+            // doc, so it requires Manage (owner-only) — a mere Editor cannot purge/replace
+            // another's node lineage.
+            let required_op = if reseal { KbOp::Manage } else { KbOp::Edit };
+            match kb_access(doc_store, &kb_id, auth_principal, required_op, transport).await {
                 Ok(AccessDecision::Allow) => {}
                 Ok(AccessDecision::Deny(msg)) | Err(msg) => {
-                    warn!(session = session_id, kb_id = %kb_id, reason = %msg, "kb/node_update denied");
+                    warn!(session = session_id, kb_id = %kb_id, reseal, reason = %msg, "kb/node_update denied");
                     return JsonRpcResponse::error(id, McpError::internal_error(msg));
                 }
                 Ok(_) => {
@@ -2306,22 +2317,27 @@ async fn handle_doc_request_inner(
             // cascade after a grant — denied here, at the daemon, independent of any
             // (possibly malicious) client behaviour. Only enforced in key-auth mode:
             // `none`/loopback has no per-identity principal to derive an epoch from.
-            if let Some(principal) = auth_principal {
-                if let Err(reason) = enforce_epoch_fence(
-                    doc_store,
-                    &kb_id,
-                    &node_id,
-                    &node_doc,
-                    &update_bytes,
-                    principal,
-                )
-                .await
-                {
-                    warn!(
-                        session = session_id, kb_id = %kb_id, node_id = %node_id, %reason,
-                        "kb/node_update: epoch fence rejected (B-19)"
-                    );
-                    return JsonRpcResponse::error(id, McpError::internal_error(reason));
+            // A reseal REPLACES the doc (fresh op-set at clock 0) — there is no prior-SV
+            // merge to fence, and the owner's op is authored under its current epoch
+            // anyway, so the fence is skipped for it (owner-gated above).
+            if !reseal {
+                if let Some(principal) = auth_principal {
+                    if let Err(reason) = enforce_epoch_fence(
+                        doc_store,
+                        &kb_id,
+                        &node_id,
+                        &node_doc,
+                        &update_bytes,
+                        principal,
+                    )
+                    .await
+                    {
+                        warn!(
+                            session = session_id, kb_id = %kb_id, node_id = %node_id, %reason,
+                            "kb/node_update: epoch fence rejected (B-19)"
+                        );
+                        return JsonRpcResponse::error(id, McpError::internal_error(reason));
+                    }
                 }
             }
 
@@ -2335,7 +2351,14 @@ async fn handle_doc_request_inner(
                     .unwrap()
                     .subscribe_doc(session_id, &node_doc);
             }
-            match doc_store.apply_update(&node_doc, &update_bytes, None).await {
+            // #171: a reseal PURGES + replaces (delete plaintext snapshot+WAL, recreate
+            // from this ciphertext-only op); an ordinary edit MERGES into the CRDT.
+            let applied = if reseal {
+                doc_store.share_doc(&node_doc, &update_bytes).await
+            } else {
+                doc_store.apply_update(&node_doc, &update_bytes, None).await
+            };
+            match applied {
                 Ok(result) => {
                     // Broadcast to other subscribers of the collection.
                     {
@@ -2352,7 +2375,7 @@ async fn handle_doc_request_inner(
                             session_id,
                         );
                     }
-                    info!(session = session_id, kb_id = %kb_id, node_id = %node_id, wal_seq = result.wal_seq, "kb/node_update: applied");
+                    info!(session = session_id, kb_id = %kb_id, node_id = %node_id, wal_seq = result.wal_seq, reseal, "kb/node_update: applied");
                     JsonRpcResponse::success(id, serde_json::json!({ "applied": true }))
                 }
                 Err(e) => JsonRpcResponse::error(

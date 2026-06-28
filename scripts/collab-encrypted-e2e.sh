@@ -58,6 +58,10 @@ for b in "$MAE_BIN" "$MAE_DAEMON_BIN"; do [ -x "$b" ] || { echo "ERROR: missing 
 CANARY="CANARY-e2e-$$-$(od -An -N4 -tx4 /dev/urandom 2>/dev/null | tr -d ' ' || echo dead)"
 # §D3: a DISTINCT post-rotation canary so the two phases can never alias each other.
 CANARY2="CANARY2-postrot-$$-$(od -An -N4 -tx4 /dev/urandom 2>/dev/null | tr -d ' ' || echo dead)"
+# #171 purge: a DISTINCT canary written as PLAINTEXT *before* enable. The natural
+# share→enable flow ships it to the key-blind daemon in the clear; reseal-on-enable must
+# PURGE it (share_doc replace, not merge) so it does not survive at rest after encryption.
+PRECANARY="PRECANARY-preenable-$$-$(od -An -N4 -tx4 /dev/urandom 2>/dev/null | tr -d ' ' || echo dead)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mae-enc-e2e.XXXXXX")"
 
 # --- Isolation + reliable cleanup -------------------------------------------------
@@ -142,6 +146,7 @@ cat > "$WORK/scen/alice.scm" <<EOF
     (it-test "connects" (lambda () (wait-connected 30000)))
     (it-test "registers collabtest" (lambda () (execute-ex "kb-register collabtest $ROOT/tests/fixtures/kb/collabtest") (sleep-ms 1000)))
     (it-test "shares" (lambda () (execute-ex "kb-share collabtest") (sleep-ms 1200)))
+    (it-test "pre-enable PLAINTEXT edit (residual #171 fixture)" (lambda () (execute-ex "kb-update collabtest:alpha $PRECANARY") (sleep-ms 1500)))
     $ENABLE
     (it-test "signals shared" (lambda () (write-file "$WORK/sync/shared" "1")))
     (it-test "waits for bob pending" (lambda () (wait-for-file "$WORK/sync/bob-tried" 60000)))
@@ -216,6 +221,13 @@ if [ "$NEG" != "1" ]; then
   grep -rqaF "$CANARY" "$WORK/alice/.local/share" 2>/dev/null && echo "PASS: canary PRESENT in OWNER's KB (authored)" || { echo "FAIL: canary absent from owner's KB"; fail=1; }
   if grep -rqaF "$CANARY" "$WORK/bob/.local/share" 2>/dev/null; then echo "PASS: canary PRESENT in JOINER's KB store (decrypted on join + converged)"
   else echo "FAIL: joiner did NOT decrypt the sealed snapshot — only ciphertext in bob's store"; fail=1; fi
+  # (3) RESIDUAL #171 PURGE (the attacker's test): the PRE-enable plaintext canary was
+  # shipped to the daemon in the clear, then enable RE-SEALED the node. With reseal-as-
+  # REPLACE (share_doc + secure_delete) the daemon must NOT retain that plaintext at rest.
+  # On the OLD merge path this FAILS (plaintext stacks under the op-set); the fix PURGES it.
+  if grep -rqaF "$PRECANARY" "$WORK/srv/data" 2>/dev/null; then
+    echo "FAIL(#171): PRE-enable plaintext canary STILL in the daemon store after enable — not purged"; grep -rlaF "$PRECANARY" "$WORK/srv/data" | sed 's/^/  residual: /'; fail=1
+  else echo "PASS(#171): PRE-enable plaintext canary PURGED from the daemon store on enable"; fi
 fi
 
 # --- (3) ADR-037 §D3: removal rotates the key — removed member can't read NEW content,

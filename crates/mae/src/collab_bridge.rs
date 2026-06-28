@@ -3859,20 +3859,20 @@ async fn run_collab_task(
                                                     // client_id; the ADR-023 fence pins the seal client_id to
                                                     // that SAME id, so a naive first seal (fresh op-set at
                                                     // clock 0) OVERLAPS the plaintext clocks and yrs drops it
-                                                    // — joiners then never see sealed content. Seeding
-                                                    // `build_kb_node_update_request` with the node's CURRENT
-                                                    // state makes op 0 CONTINUE the lineage (clock K+1): it
-                                                    // grafts, later sealed edits chain onto it, and a joiner
-                                                    // opens the sealed content. (The pre-enable plaintext base
-                                                    // stays on the key-blind daemon — it was already shared;
-                                                    // purging it needs a fresh node lineage, tracked in #171.)
+                                                    // — joiners then never see sealed content. #171 PURGE:
+                                                    // instead of merging onto that plaintext lineage we now
+                                                    // build a FRESH op-set (empty seed → op 0 at clock 0,
+                                                    // self-contained) and ship it `reseal:true` so the daemon
+                                                    // `share_doc`-REPLACES `kb:{node}` — deleting the
+                                                    // pre-enable plaintext snapshot+WAL — rather than stacking
+                                                    // the op-set on top of it. Enable is the none→e2e
+                                                    // transition, so no node has a prior op-set to continue;
+                                                    // op 0 carries the node's full current state, later sealed
+                                                    // edits chain onto it, and a joiner opens only ciphertext.
                                                     let owner_epoch = coll.epoch_of(&owner_fp);
                                                     for (node_id, plaintext_state) in &node_states {
-                                                        let seed = op_sets
-                                                            .get(node_id)
-                                                            .cloned()
-                                                            .unwrap_or_else(|| plaintext_state.clone());
-                                                        if let Some((req, new_op_set_state, sealed_id)) =
+                                                        let seed: Vec<u8> = Vec::new();
+                                                        if let Some((mut req, new_op_set_state, sealed_id)) =
                                                             build_kb_node_update_request(
                                                                 next_request_id,
                                                                 &kb_id,
@@ -3885,6 +3885,20 @@ async fn run_collab_task(
                                                                 &seed,
                                                             )
                                                         {
+                                                            // #171 purge: flag this op so the daemon
+                                                            // `share_doc`-REPLACES `kb:{node}` (deleting the
+                                                            // pre-enable plaintext snapshot+WAL) instead of
+                                                            // merging the op-set on top of it. Additive param
+                                                            // (an old daemon ignores it → harmless merge).
+                                                            if let Some(p) = req
+                                                                .get_mut("params")
+                                                                .and_then(|p| p.as_object_mut())
+                                                            {
+                                                                p.insert(
+                                                                    "reseal".to_string(),
+                                                                    serde_json::Value::Bool(true),
+                                                                );
+                                                            }
                                                             next_request_id += 1;
                                                             if let Some(ref mut w) = writer {
                                                                 if let Ok(body) = serde_json::to_vec(&req) {
