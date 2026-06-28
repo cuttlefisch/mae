@@ -142,6 +142,13 @@ pub enum KbCollabAction {
         kb_id: String,
         mode: String,
     },
+    /// Block/unblock a principal on a KB's LOCAL self-protection blocklist (ADR-039 A2,
+    /// #162). `blocked` = true blocks, false unblocks. Local-only; not owner-gated.
+    SetBlock {
+        kb_id: String,
+        member: String,
+        blocked: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -205,6 +212,14 @@ pub enum CollabIntent {
     KbListPending { kb_id: String },
     /// Set a KB's join policy (restrictive|invite|permissive; owner-only, ADR-018).
     KbSetPolicy { kb_id: String, policy: String },
+    /// Add/remove a principal on a KB's LOCAL self-protection blocklist (ADR-039 A2,
+    /// #162). `blocked` = true blocks, false unblocks. Local-only to this daemon — never
+    /// propagated; not owner-gated (you may block even the owner).
+    KbSetBlock {
+        kb_id: String,
+        member: String,
+        blocked: bool,
+    },
     /// Enable E2E content encryption on an owned KB (owner-only, ADR-037/039).
     KbSetEncryption { kb_id: String, mode: String },
     /// Send a CRDT update for a KB node to the server.

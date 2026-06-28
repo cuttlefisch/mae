@@ -20,6 +20,8 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "kb_leave" => execute_kb_leave(editor, &call.arguments),
         "kb_add_member" => execute_kb_add_member(editor, &call.arguments),
         "kb_remove_member" => execute_kb_remove_member(editor, &call.arguments),
+        "kb_block_member" => execute_kb_set_block(editor, &call.arguments, true),
+        "kb_unblock_member" => execute_kb_set_block(editor, &call.arguments, false),
         "kb_approve" => execute_kb_approve(editor, &call.arguments),
         "kb_set_policy" => execute_kb_set_policy(editor, &call.arguments),
         "kb_set_encryption" => execute_kb_set_encryption(editor, &call.arguments),
@@ -383,6 +385,42 @@ fn execute_kb_remove_member(editor: &mut Editor, args: &Value) -> Result<String,
         "kb_id": kb_id,
         "member": member,
         "message": format!("Membership removal queued: '{member}' from KB '{kb_id}' (owner-only; applied by the daemon)"),
+    })
+    .to_string())
+}
+
+/// Add/remove a principal on a KB's LOCAL self-protection blocklist (ADR-039 A2, #162).
+/// Local-only to this daemon (never propagated); NOT owner-gated. `block` selects
+/// kb_block_member vs kb_unblock_member.
+fn execute_kb_set_block(editor: &mut Editor, args: &Value, block: bool) -> Result<String, String> {
+    let kb_id = args
+        .get("kb_id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'kb_id' parameter")?
+        .to_string();
+    let member = args
+        .get("member")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'member' parameter (peer fingerprint)")?
+        .to_string();
+    editor.collab.pending_intent = Some(CollabIntent::KbSetBlock {
+        kb_id: kb_id.clone(),
+        member: member.clone(),
+        blocked: block,
+    });
+    let verb = if block { "Blocking" } else { "Unblocking" };
+    editor.set_status(format!(
+        "{verb} '{member}' on KB '{kb_id}' (local self-protection)..."
+    ));
+    Ok(serde_json::json!({
+        "action": if block { "kb_block_member" } else { "kb_unblock_member" },
+        "kb_id": kb_id,
+        "member": member,
+        "blocked": block,
+        "message": format!(
+            "Local {} queued: '{member}' on KB '{kb_id}' (LOCAL-only self-protection — not propagated to peers; applied by the daemon)",
+            if block { "block" } else { "unblock" }
+        ),
     })
     .to_string())
 }

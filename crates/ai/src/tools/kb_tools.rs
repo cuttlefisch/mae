@@ -753,6 +753,60 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             permission: Some(PermissionTier::Write),
         },
         ToolDefinition {
+            name: "kb_block_member".into(),
+            description: "Locally block a principal on a KB (ADR-039 A2 self-protection deny-list). This is a LOCAL-ONLY override on THIS daemon — never propagated to peers (distinct from kb_remove_member, which is a global membership removal). Use it to stop trusting a principal you cannot get globally removed (e.g. you lack quorum). It is NOT owner-gated — you may block even the owner. The blocked principal is fenced at every membership check (access + content).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "kb_id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "KB identifier (e.g. 'collabtest')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "member".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Principal's collab identity fingerprint to block locally".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["kb_id".into(), "member".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "kb_unblock_member".into(),
+            description: "Remove a principal from a KB's LOCAL self-protection blocklist (ADR-039 A2), restoring this daemon's trust in them (subject to their normal derived membership). The inverse of kb_block_member.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "kb_id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "KB identifier (e.g. 'collabtest')".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "member".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Principal's collab identity fingerprint to unblock".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["kb_id".into(), "member".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
             name: "kb_approve".into(),
             description: "Approve a pending join request on a shared KB, granting the peer membership at a role (owner-only, ADR-018). Under the 'invite' policy, non-members' joins become pending until approved. Use kb_sharing_status first to read the pending fingerprints.".into(),
             parameters: ToolParameters {

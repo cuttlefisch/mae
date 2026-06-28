@@ -1428,6 +1428,15 @@ impl Editor {
             KbCollabAction::SetEncryption { kb_id, mode } => {
                 CollabIntent::KbSetEncryption { kb_id, mode }
             }
+            KbCollabAction::SetBlock {
+                kb_id,
+                member,
+                blocked,
+            } => CollabIntent::KbSetBlock {
+                kb_id,
+                member,
+                blocked,
+            },
         };
         self.collab.pending_intent = Some(intent);
     }

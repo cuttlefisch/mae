@@ -208,6 +208,34 @@ impl Editor {
                 ));
                 Some(true)
             }
+            "kb-member-block" | "kb-member-unblock" => {
+                // :kb-member-block <kb-id> <fingerprint> — ADR-039 A2 (#162) local
+                // self-protection deny-list. Local-only to the daemon; not owner-gated.
+                let line = self.vi.command_line.trim().to_string();
+                let mut parts = line.split_whitespace();
+                let kb_id = parts.next().unwrap_or("").to_string();
+                let member = parts.next().unwrap_or("").to_string();
+                if member.is_empty() {
+                    self.open_kb_sharing();
+                    self.set_status(
+                        "Pick a member in *KB Sharing* (b = block, e/v/o = role, x = remove)"
+                            .to_string(),
+                    );
+                    return Some(true);
+                }
+                let blocked = name == "kb-member-block";
+                self.collab.pending_intent = Some(CollabIntent::KbSetBlock {
+                    kb_id: kb_id.clone(),
+                    member: member.clone(),
+                    blocked,
+                });
+                self.set_status(format!(
+                    "{} '{member}' {} KB '{kb_id}' (local self-protection)...",
+                    if blocked { "Blocking" } else { "Unblocking" },
+                    if blocked { "on" } else { "from" }
+                ));
+                Some(true)
+            }
             "kb-approve" => {
                 // :kb-approve <kb-id> <fingerprint> [role]
                 let line = self.vi.command_line.trim().to_string();
@@ -374,6 +402,31 @@ mod tests {
             editor.collab.pending_intent.is_none(),
             "incomplete args must not queue an intent"
         );
+    }
+
+    #[test]
+    fn dispatch_kb_member_block_unblock_parse_args() {
+        // block → KbSetBlock { blocked: true }
+        let mut editor = Editor::new();
+        editor.vi.command_line = "my-kb bob".to_string();
+        assert_eq!(editor.dispatch_collab("kb-member-block"), Some(true));
+        assert!(matches!(
+            editor.collab.pending_intent,
+            Some(CollabIntent::KbSetBlock { blocked: true, .. })
+        ));
+        // unblock → KbSetBlock { blocked: false }
+        let mut editor = Editor::new();
+        editor.vi.command_line = "my-kb bob".to_string();
+        assert_eq!(editor.dispatch_collab("kb-member-unblock"), Some(true));
+        assert!(matches!(
+            editor.collab.pending_intent,
+            Some(CollabIntent::KbSetBlock { blocked: false, .. })
+        ));
+        // missing fingerprint → no intent queued (opens the picker instead).
+        let mut editor = Editor::new();
+        editor.vi.command_line = "only-kb-id".to_string();
+        assert_eq!(editor.dispatch_collab("kb-member-block"), Some(true));
+        assert!(editor.collab.pending_intent.is_none());
     }
 
     #[test]

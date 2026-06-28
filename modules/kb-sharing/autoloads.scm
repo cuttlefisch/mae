@@ -27,12 +27,14 @@
 (define-key "kb-sharing" "a" "kb-sharing-approve")
 (define-key "kb-sharing" "d" "kb-sharing-deny")
 
-;; Member actions (role changes + remove owner-only; copy for anyone; on a member row)
+;; Member actions (role changes + remove owner-only; copy + block for anyone; on a member row)
 (define-key "kb-sharing" "e" "kb-sharing-role-editor")
 (define-key "kb-sharing" "v" "kb-sharing-role-viewer")
 (define-key "kb-sharing" "o" "kb-sharing-role-owner")
 (define-key "kb-sharing" "x" "kb-sharing-remove")
 (define-key "kb-sharing" "y" "kb-sharing-copy-fingerprint")
+;; b = locally block this principal (ADR-039 A2 self-protection; local-only, not owner-gated)
+(define-key "kb-sharing" "b" "kb-sharing-block")
 
 ;; KB-level actions (on a KB header / policy line)
 (define-key "kb-sharing" "p" "kb-sharing-set-policy")

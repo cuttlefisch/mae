@@ -37,6 +37,7 @@ impl Editor {
             | "kb-sharing-role-viewer"
             | "kb-sharing-role-owner"
             | "kb-sharing-remove"
+            | "kb-sharing-block"
             | "kb-sharing-copy-fingerprint" => self.kb_sharing_member_action(name),
             "kb-sharing-set-policy" => self.kb_sharing_set_policy_at_cursor(),
             "kb-sharing-leave" => self.kb_sharing_leave_at_cursor(),
@@ -117,6 +118,21 @@ impl Editor {
                 Ok(()) => self.set_status(format!("Copied fingerprint: {fp}")),
                 Err(_) => self.set_status(format!("Fingerprint: {fp}")),
             }
+            return Some(true);
+        }
+        // Block is LOCAL self-protection (ADR-039 A2, #162) — NOT owner-gated: you may
+        // block any member (even the owner) on your own daemon. Local-only, never
+        // propagated. Handled before the owner guard below.
+        if name == "kb-sharing-block" {
+            self.collab.pending_intent = Some(CollabIntent::KbSetBlock {
+                kb_id: kb_id.clone(),
+                member: fp,
+                blocked: true,
+            });
+            self.set_status(format!(
+                "Blocking member locally in KB '{kb_id}' (self-protection; not propagated)…"
+            ));
+            self.mark_full_redraw();
             return Some(true);
         }
         if !self.kb_sharing_is_owner(&kb_id) {
@@ -278,6 +294,57 @@ mod tests {
             Some(CollabIntent::KbSetPolicy { kb_id, policy })
                 if kb_id == "team" && policy == "permissive"
         ));
+    }
+
+    #[test]
+    fn block_on_member_row_queues_local_block() {
+        let mut editor = editor_on_line(
+            |k| matches!(k, KbSharingLineKind::Member { fingerprint, .. } if fingerprint == "bobfp"),
+        );
+        assert_eq!(editor.dispatch_kb_sharing("kb-sharing-block"), Some(true));
+        assert!(matches!(
+            &editor.collab.pending_intent,
+            Some(CollabIntent::KbSetBlock { kb_id, member, blocked })
+                if kb_id == "team" && member == "bobfp" && *blocked
+        ));
+    }
+
+    #[test]
+    fn non_owner_can_still_block_self_protection() {
+        // ADR-039 A2: block is NOT owner-gated — a viewer (here bob, viewing as a
+        // non-owner) can locally block another principal. This is the inverse of the
+        // owner-only role/remove guard; the block only affects this peer's daemon.
+        use mae_sync::kb::{KbCollectionDoc, Role};
+        let mut editor = Editor::new();
+        editor.collab.local_fingerprint = "bobfp".to_string();
+        let mut coll = KbCollectionDoc::new_owned("Team", "alicefp", "alice");
+        let _ = coll.upsert_member("bobfp", "bob", Role::Viewer);
+        let _ = coll.upsert_member("malfp", "mallory", Role::Editor);
+        editor
+            .collab
+            .kb_collection_state
+            .insert("team".to_string(), coll.encode_state());
+        editor.open_kb_sharing();
+        let idx = editor.active_buffer_idx();
+        let row = editor.buffers[idx]
+            .kb_sharing_view()
+            .unwrap()
+            .lines
+            .iter()
+            .position(
+                |l| matches!(&l.kind, KbSharingLineKind::Member { fingerprint, .. } if fingerprint == "malfp"),
+            )
+            .unwrap();
+        editor.window_mgr.focused_window_mut().cursor_row = row;
+        assert_eq!(editor.dispatch_kb_sharing("kb-sharing-block"), Some(true));
+        assert!(
+            matches!(
+                &editor.collab.pending_intent,
+                Some(CollabIntent::KbSetBlock { member, blocked, .. })
+                    if member == "malfp" && *blocked
+            ),
+            "a non-owner may locally block (self-protection is not owner-gated)"
+        );
     }
 
     #[test]

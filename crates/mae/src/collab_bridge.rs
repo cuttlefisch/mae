@@ -279,6 +279,14 @@ pub enum CollabCommand {
         kb_id: String,
         policy: String,
     },
+    /// Add/remove a principal on a KB's LOCAL self-protection blocklist (ADR-039 A2,
+    /// #162). `block` = true → `kb/block_principal`, false → `kb/unblock_principal`.
+    /// Local-only to the daemon; never propagated; not owner-gated.
+    KbBlockPrincipal {
+        kb_id: String,
+        principal: String,
+        block: bool,
+    },
     /// Enable E2E encryption on an owned KB (ADR-037/038/039, owner-only). The network
     /// task generates + persists the content key, self-wraps it, authors the signed
     /// genesis + `SetEncryption` op against `collection_state` (carried from the main
@@ -771,6 +779,15 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         },
         CollabIntent::KbListPending { kb_id } => CollabCommand::KbListPending { kb_id },
         CollabIntent::KbSetPolicy { kb_id, policy } => CollabCommand::KbSetPolicy { kb_id, policy },
+        CollabIntent::KbSetBlock {
+            kb_id,
+            member,
+            blocked,
+        } => CollabCommand::KbBlockPrincipal {
+            kb_id,
+            principal: member,
+            block: blocked,
+        },
         CollabIntent::KbSetEncryption { kb_id, mode } => {
             // Carry the main thread's cached collection replica so the network task (which
             // holds the identity secret) can author the signed genesis + SetEncryption op.
@@ -978,6 +995,7 @@ fn collab_command_name(cmd: &CollabCommand) -> &'static str {
         CollabCommand::KbApprove { .. } => "kb-approve",
         CollabCommand::KbListPending { .. } => "kb-pending",
         CollabCommand::KbSetPolicy { .. } => "kb-policy",
+        CollabCommand::KbBlockPrincipal { .. } => "kb-block-principal",
         CollabCommand::KbSetEncryption { .. } => "kb-set-encryption",
         CollabCommand::KbCollectionOp { .. } => "kb-collection-op",
         CollabCommand::ListDocs { .. } => "list-docs",
@@ -3800,6 +3818,27 @@ async fn run_collab_task(
                                 }
                             }
                         }
+                        CollabCommand::KbBlockPrincipal { kb_id, principal, block } => {
+                            // ADR-039 A2 (#162): local self-protection blocklist. Fire-and-
+                            // forget like set_policy — the daemon enforces locally; nothing
+                            // syncs back (the block is never in the `kbc:` collection).
+                            if let Some(ref mut w) = writer {
+                                let req_id = next_request_id;
+                                next_request_id += 1;
+                                let method = if block {
+                                    "kb/block_principal"
+                                } else {
+                                    "kb/unblock_principal"
+                                };
+                                let req = serde_json::json!({
+                                    "jsonrpc": "2.0", "id": req_id, "method": method,
+                                    "params": { "kb_id": kb_id, "fingerprint": principal }
+                                });
+                                if let Ok(body) = serde_json::to_vec(&req) {
+                                    let _ = write_framed(w, &body, write_timeout).await;
+                                }
+                            }
+                        }
                         CollabCommand::KbSetEncryption { kb_id, mode, collection_state, node_states } => {
                             // ADR-037/038/039: enable E2E. ALL key crypto stays in this
                             // network task (it holds the secret); the daemon stays key-blind
@@ -5315,6 +5354,7 @@ async fn handle_disconnected_cmd(
         CollabCommand::KbMember { kb_id, .. }
         | CollabCommand::KbApprove { kb_id, .. }
         | CollabCommand::KbListPending { kb_id }
+        | CollabCommand::KbBlockPrincipal { kb_id, .. }
         | CollabCommand::KbSetPolicy { kb_id, .. } => {
             try_send_evt(
                 evt_tx,
