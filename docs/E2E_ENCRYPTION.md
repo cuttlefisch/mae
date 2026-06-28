@@ -170,8 +170,13 @@ meaningful.
 
 - **3b (#151):** enable surface (signed mode), owner key gen/persist/self-wrap, wrap-on-admit. Folds in F1,
   F2, F4, F6.
-- **3c (#152):** removal rotation (§D3) — the O(N) re-wrap to remaining members.
-- **3d (#153):** docker e2e encrypted-lifecycle + required CI gate (the confidentiality oracle).
+- **3c (#152) — SHIPPED:** removal rotation (§D3) — the O(N) re-wrap to remaining members, authored on the
+  network task against its own `kb_collections` replica (the kb/approve #179 fail-closed base rule).
+- **3d (#153) — SHIPPED:** docker e2e encrypted-lifecycle + required CI gate (the confidentiality oracle).
+  The §D3 path has its own e2e gate (`MAE_E2E_REMOVAL=1`): after a member reads CANARY1, the owner removes
+  them + rotates + authors CANARY2 — the removed-but-still-subscribed member RECEIVES the post-rotation
+  ciphertext over its live subscription (the relay does not re-filter broadcasts by membership) but, stranded
+  on the old key, CANNOT decrypt it, while RETAINING the CANARY1 history; the relay stays key-blind throughout.
 - **Hardening follow-ups:** F5 (manifest titles), F7 (AAD + content-key-id), F8 (compaction), F9 (zeroize),
   mesh anchor node-id pinning.
 - **FS/PCS evolution (deferred, ADR-037 §D4):** BeeKEM CGKA ratchet (O(log N) + forward/post-compromise

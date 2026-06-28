@@ -9,8 +9,25 @@
 #   - MAE_E2E_NEGATIVE=1 (skip encryption) makes the canary LEAK into the daemon store — the
 #     inject-regression control proving the oracle has teeth.
 #
+# MAE_E2E_REMOVAL=1 appends the ADR-037 §D3 removal+rotation phase to the same run (so the
+# history-retention claim is grounded in content bob legitimately read first). After bob reads
+# CANARY1 as a member, the owner REMOVES bob — which rotates the content key (fresh key wrapped
+# only to remaining members) — and authors CANARY2 under the new key. bob stays connected, so
+# the daemon (a generic broadcaster that does NOT re-filter subscribers by membership) still
+# relays him the CANARY2 CIPHERTEXT; holding only the stranded old key, he cannot decrypt it.
+# This proves §D3 end-to-end:
+#   - FORWARD SECRECY (the attacker's test): CANARY2 plaintext NEVER materializes in bob's store
+#     even though he receives the ciphertext — the rotated key strands him;
+#   - HISTORY RETENTION (§D3's distinguishing property): bob KEEPS CANARY1 plaintext (removal
+#     doesn't wipe what he legitimately decrypted with the old key);
+#   - KEY-BLIND across rotation: CANARY2 plaintext is ABSENT from the daemon store/WAL/logs;
+#   - NON-VACUITY: the daemon applied >=2 alpha edits and the owner CAN read CANARY2 — the
+#     post-rotation content really flowed and is sealed, so bob's blindness is a real outcome.
+# The crypto backstop itself (old key opens nothing post-rotation) is also unit-tested:
+# op_set/kb `rotate_on_remove_rekeys_remaining_members_and_strands_the_removed_one`.
+#
 # Usage:  scripts/collab-encrypted-e2e.sh
-# Env:    MAE_BIN, MAE_DAEMON_BIN, MAE_E2E_PORT, MAE_E2E_NEGATIVE=1
+# Env:    MAE_BIN, MAE_DAEMON_BIN, MAE_E2E_PORT, MAE_E2E_NEGATIVE=1, MAE_E2E_REMOVAL=1
 # Exit 0 on success, non-zero otherwise.
 set -euo pipefail
 
@@ -27,10 +44,20 @@ TIMEOUT_BIN="$(command -v timeout || command -v gtimeout || true)"
 pick_port() { local p="$1"; for _ in $(seq 0 49); do port_listening "$p" || { echo "$p"; return 0; }; p=$((p + 1)); done; echo ERR >&2; return 1; }
 PORT="${MAE_E2E_PORT:-$(pick_port 9521)}"
 NEG="${MAE_E2E_NEGATIVE:-0}"
+REMOVAL="${MAE_E2E_REMOVAL:-0}"
+# §D3 removal extends the run; give each editor more headroom than the lifecycle-only default.
+EDITOR_TIMEOUT=35
+[ "$REMOVAL" = "1" ] && EDITOR_TIMEOUT=60
+# The §D3 phase only makes sense with encryption ON; refuse the nonsensical combo loudly.
+if [ "$REMOVAL" = "1" ] && [ "$NEG" = "1" ]; then
+  echo "ERROR: MAE_E2E_REMOVAL=1 is incompatible with MAE_E2E_NEGATIVE=1 (rotation needs encryption)"; exit 2
+fi
 
 for b in "$MAE_BIN" "$MAE_DAEMON_BIN"; do [ -x "$b" ] || { echo "ERROR: missing binary: $b"; exit 2; }; done
 
 CANARY="CANARY-e2e-$$-$(od -An -N4 -tx4 /dev/urandom 2>/dev/null | tr -d ' ' || echo dead)"
+# §D3: a DISTINCT post-rotation canary so the two phases can never alias each other.
+CANARY2="CANARY2-postrot-$$-$(od -An -N4 -tx4 /dev/urandom 2>/dev/null | tr -d ' ' || echo dead)"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mae-enc-e2e.XXXXXX")"
 
 # --- Isolation + reliable cleanup -------------------------------------------------
@@ -92,6 +119,21 @@ cp "$ROOT/tests/collab-e2e/lib/test-helpers.scm" "$WORK/scen/helpers.scm"
 if [ "$NEG" = "1" ]; then ENABLE='(it-test "skip-enc (NEGATIVE)" (lambda () (sleep-ms 200)))'
 else ENABLE='(it-test "enable e2e" (lambda () (kb-set-encryption "collabtest" "e2e") (sleep-ms 1500)))'; fi
 
+# §D3 removal+rotation segments — empty unless MAE_E2E_REMOVAL=1, so the default run stays
+# byte-identical to the lifecycle-only gate. $WORK/$BOB_FP/$CANARY2 expand HERE (build time),
+# so the injected text carries concrete values and won't re-expand inside the scenario heredocs.
+ALICE_REMOVAL=''
+BOB_REMOVAL=''
+if [ "$REMOVAL" = "1" ]; then
+  ALICE_REMOVAL="    (it-test \"waits for bob to read CANARY1\" (lambda () (wait-for-file \"$WORK/sync/bob-got1\" 60000)))
+    (it-test \"removes bob — rotates the content key (ADR-037 §D3)\" (lambda () (execute-ex \"kb-member-remove collabtest $BOB_FP\") (sleep-ms 2000)))
+    (it-test \"edits the node under the ROTATED key\" (lambda () (execute-ex \"kb-update collabtest:alpha $CANARY2\") (sleep-ms 2500)))
+    (it-test \"signals rotated+edited\" (lambda () (write-file \"$WORK/sync/rotated\" \"1\")))"
+  BOB_REMOVAL="    (it-test \"signals read CANARY1\" (lambda () (write-file \"$WORK/sync/bob-got1\" \"1\")))
+    (it-test \"waits for the post-rotation edit\" (lambda () (wait-for-file \"$WORK/sync/rotated\" 60000)))
+    (it-test \"stays subscribed — absorbs the post-rotation broadcast it CANNOT decrypt\" (lambda () (sleep-ms 4000)))"
+fi
+
 # Owner: register + share + enable + approve bob + edit the SEALED node body.
 cat > "$WORK/scen/alice.scm" <<EOF
 (load "$WORK/scen/helpers.scm")
@@ -107,6 +149,7 @@ cat > "$WORK/scen/alice.scm" <<EOF
     (it-test "signals approved" (lambda () (write-file "$WORK/sync/added" "1")))
     (it-test "edits the sealed node body" (lambda () (execute-ex "kb-update collabtest:alpha $CANARY") (sleep-ms 2500)))
     (it-test "signals edited" (lambda () (write-file "$WORK/sync/edited" "1")))
+$ALICE_REMOVAL
     (it-test "waits for bob done" (lambda () (wait-for-file "$WORK/sync/bob-done" 60000)))))
 EOF
 
@@ -122,6 +165,7 @@ cat > "$WORK/scen/bob.scm" <<EOF
     (it-test "waits for approval" (lambda () (wait-for-file "$WORK/sync/added" 60000)))
     (it-test "waits for the sealed edit FIRST" (lambda () (wait-for-file "$WORK/sync/edited" 60000) (sleep-ms 500)))
     (it-test "join (member) — pulls sealed content + decrypts to disk" (lambda () (execute-ex "kb-join collabtest") (sleep-ms 3000)))
+$BOB_REMOVAL
     (it-test "signals done" (lambda () (write-file "$WORK/sync/bob-done" "1")))))
 EOF
 
@@ -137,12 +181,12 @@ spawn APID "$WORK/alice.tap" -- env \
   HOME="$WORK/alice" XDG_CONFIG_HOME="$WORK/alice/.config" XDG_DATA_HOME="$WORK/alice/.local/share" \
   MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 \
   MAE_LOG="${MAE_E2E_ALICE_LOG:-mae_mcp=warn,info}" \
-  ${TIMEOUT_BIN:+$TIMEOUT_BIN 35} "$MAE_BIN" --test "$WORK/scen/alice.scm"
+  ${TIMEOUT_BIN:+$TIMEOUT_BIN $EDITOR_TIMEOUT} "$MAE_BIN" --test "$WORK/scen/alice.scm"
 spawn BPID "$WORK/bob.tap" -- env \
   HOME="$WORK/bob" XDG_CONFIG_HOME="$WORK/bob/.config" XDG_DATA_HOME="$WORK/bob/.local/share" \
   MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 \
   MAE_LOG="${MAE_E2E_BOB_LOG:-mae_mcp=warn,info}" \
-  ${TIMEOUT_BIN:+$TIMEOUT_BIN 35} "$MAE_BIN" --test "$WORK/scen/bob.scm"
+  ${TIMEOUT_BIN:+$TIMEOUT_BIN $EDITOR_TIMEOUT} "$MAE_BIN" --test "$WORK/scen/bob.scm"
 echo "[harness] alice pgid=$APID bob pgid=$BPID"
 wait "$APID" 2>/dev/null || true
 wait "$BPID" 2>/dev/null || true
@@ -174,5 +218,33 @@ if [ "$NEG" != "1" ]; then
   else echo "FAIL: joiner did NOT decrypt the sealed snapshot — only ciphertext in bob's store"; fail=1; fi
 fi
 
-[ "$fail" -eq 0 ] && echo "PASS: E2E encrypted multi-user lifecycle${NEG:+ (NEGATIVE control)}" || echo "FAIL: E2E encrypted lifecycle"
+# --- (3) ADR-037 §D3: removal rotates the key — removed member can't read NEW content,
+# keeps history, relay stays key-blind. Only runs when MAE_E2E_REMOVAL=1 (⇒ encryption on).
+if [ "$REMOVAL" = "1" ]; then
+  echo "--- §D3 removal+rotation oracle ---"
+  # NON-VACUITY: the post-rotation edit must have actually flowed (>=2 alpha applies: C1 + C2).
+  applied2=$(grep -c "node_update: applied.*collabtest:alpha" "$WORK/daemon.log" || true)
+  [ "$applied2" -ge 2 ] || { echo "FAIL(§D3): daemon applied <2 alpha edits ($applied2) — the post-rotation write never landed, oracle vacuous"; fail=1; }
+  # ROTATION ACTUALLY RAN: the owner's bridge must have logged the §D3 re-key (not a silent skip).
+  grep -qaF "§D3: removed member + rotated content key" "$WORK/alice.tap" && echo "PASS(§D3): owner rotated the content key on removal" || { echo "FAIL(§D3): owner never logged the §D3 rotation — removal didn't re-key"; fail=1; }
+  # KEY-BLIND across rotation: CANARY2 plaintext must be sealed everywhere on the relay.
+  if grep -rqaF "$CANARY2" "$WORK/srv/data" 2>/dev/null; then
+    echo "FAIL(§D3): post-rotation canary FOUND in the daemon store/WAL — NOT sealed"; grep -rlaF "$CANARY2" "$WORK/srv/data" | sed 's/^/  leak: /'; fail=1
+  else echo "PASS(§D3): post-rotation canary ABSENT from the daemon store/WAL (sealed)"; fi
+  grep -qaF "$CANARY2" "$WORK/daemon.log" && { echo "FAIL(§D3): post-rotation canary in daemon logs"; fail=1; } || echo "PASS(§D3): post-rotation canary ABSENT from daemon logs"
+  # OWNER reads post-rotation content (proves the new content is real + the new key works).
+  grep -rqaF "$CANARY2" "$WORK/alice/.local/share" 2>/dev/null && echo "PASS(§D3): post-rotation canary PRESENT in OWNER's KB (authored under the new key)" || { echo "FAIL(§D3): owner can't read its own post-rotation content"; fail=1; }
+  # FORWARD SECRECY (the attacker's test): bob received the ciphertext but, stranded on the old
+  # key, must NEVER materialize CANARY2 plaintext.
+  if grep -rqaF "$CANARY2" "$WORK/bob/.local/share" 2>/dev/null; then
+    echo "FAIL(§D3): REMOVED member DECRYPTED post-rotation content — rotation did not strand the old key"; grep -rlaF "$CANARY2" "$WORK/bob/.local/share" | sed 's/^/  leak: /'; fail=1
+  else echo "PASS(§D3): removed member could NOT read post-rotation content (forward secrecy)"; fi
+  # HISTORY RETENTION (§D3's distinguishing property): bob KEEPS the pre-removal plaintext.
+  grep -rqaF "$CANARY" "$WORK/bob/.local/share" 2>/dev/null && echo "PASS(§D3): removed member RETAINS pre-removal history (CANARY1)" || { echo "FAIL(§D3): removal wiped the member's legitimately-read history"; fail=1; }
+fi
+
+suffix=""
+[ "$NEG" = "1" ] && suffix=" (NEGATIVE control)"
+[ "$REMOVAL" = "1" ] && suffix="$suffix + §D3 removal/rotation"
+[ "$fail" -eq 0 ] && echo "PASS: E2E encrypted multi-user lifecycle$suffix" || echo "FAIL: E2E encrypted lifecycle$suffix"
 exit $fail
