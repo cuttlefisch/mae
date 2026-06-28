@@ -373,6 +373,11 @@ pub enum CollabEvent {
         documents: Vec<String>,
         for_join: bool,
     },
+    /// Daemon returned its LOCAL self-protection blocklist (ADR-039 A2, #162):
+    /// `kb_id → blocked principals`. Cached for the `*KB Sharing*` Blocked view.
+    BlocklistUpdated {
+        blocklist: std::collections::HashMap<String, Vec<String>>,
+    },
     /// Joined a remote document — carries the full CRDT state.
     BufferJoined {
         doc_id: String,
@@ -1498,6 +1503,13 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             editor.set_status(format!("Shared: {}", doc_id));
             editor.mark_full_redraw();
         }
+        CollabEvent::BlocklistUpdated { blocklist } => {
+            // ADR-039 A2 (#162): cache the daemon's authoritative local blocklist and
+            // repaint the *KB Sharing* Blocked view. Display-only — the daemon enforces.
+            debug!(kbs = blocklist.len(), "local blocklist updated");
+            editor.collab.kb_blocklists = blocklist;
+            editor.refresh_kb_sharing_buffer();
+        }
         CollabEvent::DocList {
             documents,
             for_join,
@@ -2335,6 +2347,8 @@ pub(crate) enum PendingResponseKind {
     ListDocs {
         for_join: bool,
     },
+    /// Reply to `kb/blocklist` (ADR-039 A2, #162): the daemon's local blocklist.
+    Blocklist,
     JoinDoc {
         doc_id: String,
     },
@@ -3837,6 +3851,9 @@ async fn run_collab_task(
                                 if let Ok(body) = serde_json::to_vec(&req) {
                                     let _ = write_framed(w, &body, write_timeout).await;
                                 }
+                                // Re-pull the blocklist so the *KB Sharing* Blocked view
+                                // reflects this change (the daemon is authoritative).
+                                send_blocklist_fetch(w, &mut next_request_id, &mut pending_responses, write_timeout).await;
                             }
                         }
                         CollabCommand::KbSetEncryption { kb_id, mode, collection_state, node_states } => {
@@ -4152,6 +4169,8 @@ async fn run_collab_task(
                                         // Subscribe to sync_update events (B4 fix).
                                         if let Some(ref mut w) = writer {
                                             send_subscribe(w, &mut next_request_id, &mut pending_responses, write_timeout).await;
+                                            // ADR-039 A2 (#162): pull the local blocklist for the Blocked view.
+                                            send_blocklist_fetch(w, &mut next_request_id, &mut pending_responses, write_timeout).await;
                                         }
                                         try_send_evt(&evt_tx, CollabEvent::Connected {
                                             address: addr_clone,
@@ -4631,6 +4650,28 @@ fn handle_response(
                 },
             );
         }
+        PendingResponseKind::Blocklist => {
+            // ADR-039 A2 (#162): `{ blocklist: { kb_id: [fingerprint, ...] } }`.
+            let mut blocklist: std::collections::HashMap<String, Vec<String>> =
+                std::collections::HashMap::new();
+            if let Some(map) = result
+                .and_then(|r| r.get("blocklist"))
+                .and_then(|b| b.as_object())
+            {
+                for (kb_id, arr) in map {
+                    let fps: Vec<String> = arr
+                        .as_array()
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    blocklist.insert(kb_id.clone(), fps);
+                }
+            }
+            try_send_evt(evt_tx, CollabEvent::BlocklistUpdated { blocklist });
+        }
         PendingResponseKind::JoinDoc { doc_id } => {
             // sync/resync response: {"result": {"doc": "...", "state": "<base64>", "sv": "<base64>"}}
             // Use server-resolved doc_id (suffix matching may have expanded bare
@@ -5092,6 +5133,32 @@ async fn send_subscribe<W: tokio::io::AsyncWrite + Unpin>(
     }
 }
 
+/// Fetch the daemon's LOCAL self-protection blocklist (ADR-039 A2, #162) for the
+/// `*KB Sharing*` Blocked view. The blocklist is local-only on the daemon (never in the
+/// synced `kbc:` collection), so this RPC is the ONLY way the editor learns it. Sent on
+/// connect (durable prior-session blocks) and after each block/unblock (the user's own
+/// changes); the reply lands as `PendingResponseKind::Blocklist` → `BlocklistUpdated`.
+async fn send_blocklist_fetch<W: tokio::io::AsyncWrite + Unpin>(
+    writer: &mut W,
+    next_id: &mut u64,
+    pending: &mut std::collections::HashMap<u64, PendingResponseKind>,
+    timeout: std::time::Duration,
+) {
+    use mae_mcp::write_framed;
+
+    let req_id = *next_id;
+    *next_id += 1;
+    let req = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "method": "kb/blocklist",
+    });
+    let body = serde_json::to_vec(&req).unwrap();
+    if write_framed(writer, &body, timeout).await.is_ok() {
+        pending.insert(req_id, PendingResponseKind::Blocklist);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_disconnected_cmd(
     cmd: CollabCommand,
@@ -5123,6 +5190,14 @@ async fn handle_disconnected_cmd(
                         if let Some(ref mut w) = writer {
                             send_subscribe(w, next_request_id, pending_responses, write_timeout)
                                 .await;
+                            // ADR-039 A2 (#162): pull the local blocklist for the Blocked view.
+                            send_blocklist_fetch(
+                                w,
+                                next_request_id,
+                                pending_responses,
+                                write_timeout,
+                            )
+                            .await;
                         }
                         try_send_evt(
                             evt_tx,
@@ -5182,6 +5257,14 @@ async fn handle_disconnected_cmd(
                                 // Subscribe after server start too.
                                 if let Some(ref mut w) = writer {
                                     send_subscribe(
+                                        w,
+                                        next_request_id,
+                                        pending_responses,
+                                        write_timeout,
+                                    )
+                                    .await;
+                                    // ADR-039 A2 (#162): pull the local blocklist.
+                                    send_blocklist_fetch(
                                         w,
                                         next_request_id,
                                         pending_responses,

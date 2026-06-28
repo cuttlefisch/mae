@@ -2971,6 +2971,30 @@ async fn local_block_fences_principal_at_every_derive_site() {
         global.contains_key(&bob_fp),
         "the shared op-log still admits bob — the block was NOT propagated as a removal"
     );
+    // (e) INTROSPECTION: the kb/blocklist query reports the block (the ONLY way a client
+    //     learns the local-only blocklist; backs the editor's *KB Sharing* Blocked view).
+    let bl = dispatch_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&owner_fp),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"kb/blocklist","params":{"kb_id":"kbb"}}),
+        &mut docs,
+    )
+    .await;
+    let listed = bl
+        .result
+        .as_ref()
+        .and_then(|r| r.get("blocklist"))
+        .and_then(|b| b.get("kbb"))
+        .and_then(|a| a.as_array())
+        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+        .unwrap_or_default();
+    assert_eq!(
+        listed,
+        vec![bob_fp.as_str()],
+        "kb/blocklist reports exactly the locally-blocked principal"
+    );
 
     // --- fence even the OWNER (self-lock) — then unblock to restore ---
     dispatch_as(
