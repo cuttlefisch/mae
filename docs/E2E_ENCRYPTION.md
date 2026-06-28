@@ -125,11 +125,17 @@ Sources: [RFC 9420 (MLS)](https://www.rfc-editor.org/rfc/rfc9420.html) ·
    ordering is load-bearing.
 7. **Unbounded growth:** the op-set + membership log are grow-only (no compaction yet — ADR-028); long-lived
    heavily-edited KBs accumulate all historical ciphertext.
-8. **Enabling E2e does NOT retro-protect already-shared content (#171).** The natural flow — share a KB with
-   content, *then* `kb-set-encryption e2e` — transmits that content as plaintext while the KB is still
-   unencrypted, so the daemon holds plaintext `kb:{node}` docs that enabling does not re-seal; only subsequent
-   *edits* seal. Workaround: enable E2e on an empty KB before adding content. The fix (re-encryption-on-enable)
-   is tracked as #171.
+8. **Enabling E2e is forward-only — it does NOT retroactively un-send already-transmitted plaintext (#171).**
+   The natural flow — share a KB with content, *then* `kb-set-encryption e2e` — transmits that content as
+   plaintext while the KB is still unencrypted, so the daemon already holds plaintext `kb:{node}` docs. Enabling
+   now **re-seals** every already-shared node (#171, shipped): the owner seals each node's current content as
+   op 0 of a sealed op-set that continues the node's lineage, so a member who *joins after enable* reads the
+   sealed content (and all subsequent edits seal) — the join-decrypt path works. **What enabling cannot do is
+   retract the plaintext copy the daemon received before enable:** that pre-enable `kb:{node}` snapshot remains
+   on the key-blind daemon at rest. So confidentiality for shared-then-encrypted content is *forward* (future
+   reads + edits are sealed), not *retroactive*. Workaround for full confidentiality: enable E2e on an empty KB
+   **before** adding content. Purging the residual pre-enable plaintext base (needs a fresh on-daemon node
+   lineage) is the remaining work tracked under #171.
 
 > **Fail-closed seal (the operational guardrail, §7.6, is now enforced in code — #168/#170).** Both write paths
 > refuse to emit plaintext on an E2e KB: `kb/node_update` (`build_kb_node_update_request` returns *refuse* and
