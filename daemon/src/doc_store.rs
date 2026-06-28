@@ -4,10 +4,11 @@
 //! The outer `RwLock` protects the map (read to find, write to create/evict).
 //! Each document has its own `Mutex` for concurrent access to different docs.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use mae_sync::encoding::validate_update;
+use mae_sync::membership::MembershipView;
 use mae_sync::text::TextSync;
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, RwLock};
@@ -87,6 +88,13 @@ pub struct DocStore {
     /// seam for hub (`collab_handler`) and p2p (`dialer`) — both land at `apply_update`.
     /// Absent ⇒ no projector wired (e.g. a pure relay); emits are dropped.
     change_tx: std::sync::OnceLock<tokio::sync::mpsc::UnboundedSender<String>>,
+    /// Per-KB LOCAL self-protection blocklist (ADR-039 A2, #162): principals this
+    /// daemon refuses to trust, enforced at EVERY membership-derivation site via
+    /// [`DocStore::membership_view_for`]. Purely local — NEVER propagated to peers and
+    /// NEVER stored in the synced `kbc:` collection (that would be a signed op-log
+    /// Remove, a different thing). An in-memory read cache write-through-backed by the
+    /// durable `kb_blocklist` table; hydrated at startup by [`DocStore::load_blocklists`].
+    kb_blocklists: RwLock<HashMap<String, BTreeSet<String>>>,
 }
 
 /// Result of applying an update.
@@ -148,6 +156,7 @@ impl DocStore {
             signer: std::sync::OnceLock::new(),
             kb_anchors: RwLock::new(HashMap::new()),
             change_tx: std::sync::OnceLock::new(),
+            kb_blocklists: RwLock::new(HashMap::new()),
         }
     }
 
@@ -191,6 +200,74 @@ impl DocStore {
     /// The external trust anchor for `kb_id`, if one is registered (joined KBs).
     pub async fn kb_anchor(&self, kb_id: &str) -> Option<[u8; 32]> {
         self.kb_anchors.read().await.get(kb_id).copied()
+    }
+
+    /// Hydrate the in-memory blocklist cache from durable storage (ADR-039 A2, #162).
+    /// Called once at startup — a self-protection block set in a prior session must be
+    /// in force from the first op this session derives membership for.
+    pub async fn load_blocklists(&self) {
+        match self.storage.load_blocklist().await {
+            Ok(pairs) => {
+                let mut cache = self.kb_blocklists.write().await;
+                for (kb_id, principal) in pairs {
+                    cache.entry(kb_id).or_default().insert(principal);
+                }
+                let kbs = cache.len();
+                let total: usize = cache.values().map(|s| s.len()).sum();
+                if total > 0 {
+                    info!(
+                        kbs,
+                        blocked = total,
+                        "loaded local KB blocklist (ADR-039 A2)"
+                    );
+                }
+            }
+            Err(e) => warn!(error = %e, "failed to load local KB blocklist; starting empty"),
+        }
+    }
+
+    /// The set of principals locally blocked for `kb_id` (ADR-039 A2, #162). Read from
+    /// the in-memory cache — cheap enough for the per-op derive hot path.
+    pub async fn kb_blocklist(&self, kb_id: &str) -> BTreeSet<String> {
+        self.kb_blocklists
+            .read()
+            .await
+            .get(kb_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// The [`MembershipView`] to use when deriving members for `kb_id` — carries this
+    /// daemon's local blocklist so a blocked principal is dropped at EVERY derivation
+    /// site (complete mediation: the gate, the content paths, and the removal
+    /// derivation). The single seam that replaces `MembershipView::default()`.
+    pub async fn membership_view_for(&self, kb_id: &str) -> MembershipView {
+        MembershipView {
+            blocklist: self.kb_blocklist(kb_id).await,
+            ..MembershipView::default()
+        }
+    }
+
+    /// Add `principal` to `kb_id`'s local blocklist: write-through to durable storage
+    /// then the cache (ADR-039 A2, #162). Idempotent. Local-only — never broadcast.
+    pub async fn add_kb_block(&self, kb_id: &str, principal: &str) -> Result<(), StorageError> {
+        self.storage.add_block(kb_id, principal).await?;
+        self.kb_blocklists
+            .write()
+            .await
+            .entry(kb_id.to_string())
+            .or_default()
+            .insert(principal.to_string());
+        Ok(())
+    }
+
+    /// Remove `principal` from `kb_id`'s local blocklist (write-through). Idempotent.
+    pub async fn remove_kb_block(&self, kb_id: &str, principal: &str) -> Result<(), StorageError> {
+        self.storage.remove_block(kb_id, principal).await?;
+        if let Some(set) = self.kb_blocklists.write().await.get_mut(kb_id) {
+            set.remove(principal);
+        }
+        Ok(())
     }
 
     /// Set maximum documents allowed in memory. 0 = unlimited.

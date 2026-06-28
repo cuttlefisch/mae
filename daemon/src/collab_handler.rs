@@ -21,7 +21,7 @@ use mae_sync::kb::{
     Transport,
 };
 use mae_sync::membership::{
-    derive_governance, derive_valid_members_governed, Governance, MembershipAction, MembershipView,
+    derive_governance, derive_valid_members_governed, Governance, MembershipAction,
 };
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
@@ -545,6 +545,8 @@ async fn handle_doc_notification_inner(
         | "kb/collection_op"
         | "kb/set_policy"
         | "kb/set_governance"
+        | "kb/block_principal"
+        | "kb/unblock_principal"
         | "kb/revoke" => {
             warn!(
                 session = session_id,
@@ -639,7 +641,7 @@ pub async fn verify_content_op(
         anchor,
         now_unix(),
         governance,
-        &MembershipView::default(),
+        &doc_store.membership_view_for(kb_id).await,
     );
     signed
         .admit(&members)
@@ -858,8 +860,13 @@ async fn append_signed_revoke(
     let now = now_unix();
     let ops = coll.oplog_ops();
     let governance = derive_governance(&ops, &anchor);
-    let members =
-        derive_valid_members_governed(&ops, &anchor, now, governance, &MembershipView::default());
+    let members = derive_valid_members_governed(
+        &ops,
+        &anchor,
+        now,
+        governance,
+        &doc_store.membership_view_for(kb_id).await,
+    );
     let signer_fp = signer.fingerprint();
     if members.get(&signer_fp).map(|m| m.role) != Some(SyncRole::Owner) {
         return Err(format!(
@@ -916,7 +923,7 @@ async fn kb_member_epoch(
                 &anchor,
                 now_unix(),
                 governance,
-                &MembershipView::default(),
+                &doc_store.membership_view_for(kb_id).await,
             )
             .get(principal)
             .map(|m| m.epoch)
@@ -1002,7 +1009,7 @@ async fn kb_access(
                 &anchor,
                 now_unix(),
                 governance,
-                &MembershipView::default(),
+                &doc_store.membership_view_for(kb_id).await,
             )
             .get(principal)
             .map(|m| m.role)
@@ -2673,6 +2680,80 @@ async fn handle_doc_request_inner(
                     )
                 }
                 Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
+            }
+        }
+
+        // ADR-039 A2 (#162): manage this daemon's LOCAL self-protection blocklist for a KB.
+        // Deliberately NOT owner-gated and NOT routed through `kb_access`:
+        //  - blocking even the owner is the explicit capability (you reach for a local
+        //    block precisely when you *cannot* get a principal globally removed — e.g. you
+        //    lack quorum — but want THIS daemon to stop trusting them);
+        //  - it mutates only local trust, never the synced `kbc:` collection, and is never
+        //    broadcast — so there is nothing for a peer to observe and no membership to gate on.
+        // The block is honored at every membership-derivation site (`membership_view_for`),
+        // so once set it fences the principal at the access gate AND the content paths AND
+        // the removal derivation (complete mediation). Authz floor: it changes only this
+        // daemon's local state, so any trusted operator of this daemon may set it (a
+        // loopback `none` session — already fully trusted by `kb_access` — or an
+        // authenticated client). Trade-off: an authenticated remote client of a *shared*
+        // daemon could set a local block (a bounded, reversible local nuisance — never a
+        // privilege-escalation or data-exposure). Tightening this to the Unix operator
+        // socket only is a documented hardening follow-up (the handler isn't told the
+        // socket kind today; `Transport` is Hub/P2p, not Unix/Tcp).
+        "kb/block_principal" | "kb/unblock_principal" => {
+            let block = request.method == "kb/block_principal";
+            let kb_id = match params["kb_id"].as_str() {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error("missing 'kb_id' field".to_string()),
+                    )
+                }
+            };
+            // Accept `fingerprint` (the canonical name) or `principal` as an alias.
+            let principal = match params["fingerprint"]
+                .as_str()
+                .or_else(|| params["principal"].as_str())
+            {
+                Some(s) if !s.is_empty() => s.to_string(),
+                _ => {
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::parse_error(
+                            "missing 'fingerprint' field (the principal to block)".to_string(),
+                        ),
+                    )
+                }
+            };
+            let result = if block {
+                doc_store.add_kb_block(&kb_id, &principal).await
+            } else {
+                doc_store.remove_kb_block(&kb_id, &principal).await
+            };
+            match result {
+                Ok(()) => {
+                    info!(
+                        session = session_id,
+                        operator = ?auth_principal,
+                        kb_id = %kb_id,
+                        principal = %principal,
+                        block,
+                        "kb local blocklist updated (ADR-039 A2; local-only, not propagated)"
+                    );
+                    JsonRpcResponse::success(
+                        id,
+                        serde_json::json!({
+                            "kb_id": kb_id,
+                            "fingerprint": principal,
+                            "blocked": block,
+                        }),
+                    )
+                }
+                Err(e) => JsonRpcResponse::error(
+                    id,
+                    McpError::internal_error(format!("blocklist update failed: {e}")),
+                ),
             }
         }
 
