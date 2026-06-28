@@ -245,28 +245,38 @@ mod tests {
             "re-seal op 0 grafts onto the daemon's plaintext lineage (no clock collision)"
         );
 
-        // 3) A sealed EDIT after enable chains onto the re-sealed op-set.
-        let op_set_after_reseal = merge(&plaintext_state, &reseal).unwrap();
-        let edit = node.set_body("CANARY body");
-        let (op1_id, sealed_edit) = seal_op(&op_set_after_reseal, &key, &edit, owner_cid).unwrap();
-        daemon.apply_update(&sealed_edit).unwrap();
-        assert!(
-            op_ids(&daemon.encode_state()).contains(&op1_id),
-            "the sealed edit chains onto the re-sealed op-set on the daemon"
-        );
+        // 3) SEVERAL sealed edits after enable chain onto the re-sealed op-set. This is the
+        //    ordering-robustness case: re-seal op 0 carries the WHOLE pre-enable history (a
+        //    high clock-total), while each edit is a small delta — `open_new_ops` sorts by
+        //    ascending clock-total, so op 0 must still materialize FIRST and each edit after
+        //    the ops it depends on, or a later edit would apply against a missing base.
+        let mut op_set_state = merge(&plaintext_state, &reseal).unwrap();
+        for pt in [
+            node.set_body("CANARY body"),
+            node.set_title("Sealed Title v2"),
+            node.set_body("CANARY body — revised"),
+        ] {
+            let (op_id, sealed) = seal_op(&op_set_state, &key, &pt, owner_cid).unwrap();
+            daemon.apply_update(&sealed).unwrap();
+            op_set_state = merge(&op_set_state, &sealed).unwrap();
+            assert!(
+                op_ids(&daemon.encode_state()).contains(&op_id),
+                "each sealed edit chains onto the re-sealed op-set on the daemon"
+            );
+        }
 
-        // 4) A JOINER pulling the daemon's full node state materializes BOTH ops and reads the
-        //    sealed content — incl. the post-enable edit (the user-visible #171 success).
+        // 4) A JOINER pulling the daemon's full node state materializes ALL ops in causal
+        //    order and converges to the author's latest title + body (the #171 success).
         let joined = materialize(&daemon.encode_state(), &key);
         assert_eq!(
             joined.body(),
-            "CANARY body",
-            "joiner reads the sealed post-enable edit"
+            "CANARY body — revised",
+            "joiner converges to the latest sealed body across re-seal + N edits"
         );
         assert_eq!(
             joined.title(),
-            "Original Title",
-            "joiner reads the pre-enable content through op 0"
+            "Sealed Title v2",
+            "joiner converges to the latest sealed title (op 0 base + edits, ordered)"
         );
         // A wrong key still opens nothing from the merged daemon state.
         assert!(
