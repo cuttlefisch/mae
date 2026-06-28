@@ -260,14 +260,14 @@ pub enum CollabCommand {
         title: String,
         add: bool,
     },
-    /// Approve a pending join request as `role` (owner-only, ADR-018). `collection_state`
-    /// (the main thread's replica) lets the network task wrap the content key to the
-    /// approved member on an E2e KB (ADR-037/038); empty for the legacy unencrypted path.
+    /// Approve a pending join request as `role` (owner-only, ADR-018). On an E2e KB the
+    /// network task wraps the content key to the approved member (ADR-037/038), authoring
+    /// against its OWN `kb_collections` replica (the daemon's lineage) — NOT a main-thread
+    /// snapshot, which can be a divergent lineage that corrupts the op-log on merge.
     KbApprove {
         kb_id: String,
         principal: String,
         role: String,
-        collection_state: Vec<u8>,
     },
     /// List pending join requests for a KB (owner-only, ADR-018).
     KbListPending {
@@ -771,20 +771,11 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
             kb_id,
             principal,
             role,
-        } => {
-            let collection_state = editor
-                .collab
-                .kb_collection_state
-                .get(&kb_id)
-                .cloned()
-                .unwrap_or_default();
-            CollabCommand::KbApprove {
-                kb_id,
-                principal,
-                role,
-                collection_state,
-            }
-        }
+        } => CollabCommand::KbApprove {
+            kb_id,
+            principal,
+            role,
+        },
         CollabIntent::KbListPending { kb_id } => CollabCommand::KbListPending { kb_id },
         CollabIntent::KbSetPolicy { kb_id, policy } => CollabCommand::KbSetPolicy { kb_id, policy },
         CollabIntent::KbSetEncryption { kb_id, mode } => {
@@ -3685,7 +3676,7 @@ async fn run_collab_task(
                                 }
                             }
                         }
-                        CollabCommand::KbApprove { kb_id, principal, role, collection_state } => {
+                        CollabCommand::KbApprove { kb_id, principal, role } => {
                             // ADR-037/038: on an E2e KB the OWNER authors a signed Admit
                             // carrying the content key wrapped to the approved member (whose
                             // pubkey rode the pending request), shipped via the key-blind
@@ -3694,19 +3685,25 @@ async fn run_collab_task(
                             if let (Some(key), Some(id)) =
                                 (content_keys.get(&kb_id).cloned(), signing_identity.as_ref())
                             {
-                                // Author against the network task's OWN replica (`kb_collections`),
-                                // NOT the main-thread `collection_state` snapshot. #173 keeps the
-                                // replica CRDT-merged from the ops WE authored (genesis +
-                                // SetEncryption) plus every daemon broadcast (incl. the pending-add
-                                // carrying the joiner's pubkey), on the SAME yrs lineage the daemon
-                                // holds. The main-thread snapshot is a DIVERGENT lineage whose
-                                // re-created oplog-map root would tombstone the genesis/SetEncryption
-                                // ops when the daemon merges our delta — the joiner then never gets a
-                                // valid wrapped-key `Admit` and cannot derive the content key.
-                                let base_state = kb_collections
-                                    .get(&kb_id)
-                                    .cloned()
-                                    .unwrap_or_else(|| collection_state.clone());
+                                // Fail-CLOSED: author ONLY against the network task's OWN replica
+                                // (`kb_collections` — the daemon's lineage, kept CRDT-merged from
+                                // the ops WE authored at enable plus every daemon broadcast incl.
+                                // the pending-add pubkey, by #173). NEVER fall back to the
+                                // main-thread `collection_state` snapshot: independent `from_bytes`
+                                // reconstructions mint different yrs client_ids, so that snapshot
+                                // can be a DIVERGENT lineage whose merge tombstones the genesis/
+                                // SetEncryption ops (the join-decrypt bug). If the replica is absent
+                                // (e.g. post-restart, before a kbc: broadcast re-seeds it — unlike
+                                // `content_keys`, it isn't reloaded from disk), use an EMPTY base so
+                                // the decode below fails into the legacy member-add (the member is
+                                // re-wrapped on a later sync) — never risk op-log corruption.
+                                let base_state = match kb_collections.get(&kb_id) {
+                                    Some(s) => s.clone(),
+                                    None => {
+                                        warn!(kb = %kb_id, member = %principal, "kb/approve: E2e KB but no local collection replica yet (post-restart?) — deferring the key wrap to legacy member-add (avoids authoring against a divergent base)");
+                                        Vec::new()
+                                    }
+                                };
                                 if let Ok(mut coll) =
                                     mae_sync::kb::KbCollectionDoc::from_bytes(&base_state)
                                 {
