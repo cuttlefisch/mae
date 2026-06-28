@@ -539,9 +539,7 @@ mod tests {
                 if std::fs::File::open(&path)
                     .and_then(|mut f| f.read_to_end(&mut buf))
                     .is_ok()
-                    && buf
-                        .windows(canary.len())
-                        .any(|w| w == canary.as_slice())
+                    && buf.windows(canary.len()).any(|w| w == canary.as_slice())
                 {
                     hit = true;
                 }
