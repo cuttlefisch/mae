@@ -733,6 +733,19 @@ pub fn derive_content_key(
 /// no secret**, so the editor's main thread (which holds the collection doc but not the
 /// identity key) can extract the blob and hand it to the network task, which unwraps it
 /// with the secret. `None` ⇒ an unencrypted KB or no key delivered to me.
+///
+/// **#169 L1 — why this is not over-broad despite not intersecting the strong-removal
+/// resolver.** It counts ONLY `author == owner` wraps (the anchored genesis owner), and an
+/// E2e KB is **SingleOwner** by construction (ADR-039 F4: `kb/set_encryption` refuses any
+/// other governance). SingleOwner ⇒ no delegated inviters ⇒ no inviter-removal **cascade**,
+/// so a "resolver-invalidated" member simply cannot exist here. A non-owner-authored admit
+/// (the only thing a cascade could touch) carries no owner wrap, so it's ignored regardless.
+/// The one principal who is "not a current member yet still derives a key" is a member the
+/// owner explicitly removed: they keep their OLD wrapped blob (no re-key targets them) and so
+/// can read history they already had — the intended ADR-037 §D3 semantics, NOT a leak. Hence
+/// the deliberate choice to NOT intersect [`derive_valid_members`]: doing so would also strip
+/// the removed member's historical key. The "derives a key" set is exactly {owner} ∪
+/// {members the owner directly wrapped to}, current or §D3-removed.
 pub fn find_wrapped_content_key(
     ops: &[SignedMembershipOp],
     anchor_owner_pubkey: &[u8; 32],
@@ -1224,6 +1237,51 @@ mod tests {
             derived(&ops2, &m2),
             Some(*k.as_bytes()),
             "m2 excluded from k', stuck at old k"
+        );
+    }
+
+    // #169 L1: a "resolver-invalidated" member (the cascade case — admitted by a non-owner
+    // inviter whose authority is later revoked) must derive NO key. Under E2e ⇒ SingleOwner
+    // (F4) such a member can't even exist, but we pin the underlying bound: ONLY the anchored
+    // owner's wraps count, so a crypto-valid admit authored by a NON-owner — carrying a
+    // (necessarily attacker-built) wrapped blob to its subject — confers nothing. This is the
+    // resolver-invalidated test the L1 finding asked for; it also guards the §D3 boundary by
+    // showing the owner-wrapped sibling is unaffected.
+    #[test]
+    fn derive_content_key_denies_a_non_owner_conferred_member_l1() {
+        use crate::content_crypto::{wrap_to_member, ContentKey};
+        let owner = id(1);
+        let inviter = id(2); // owner-admitted member; stands in for a would-be delegator
+        let victim = id(3); // "admitted" by the inviter, not the owner
+        let k = ContentKey::generate();
+
+        let g = genesis(&owner);
+        let ai = make_wrapped(
+            &owner,
+            &inviter.fp,
+            wrap_to_member(&k, &inviter.pubkey).unwrap(),
+            &g.chain_hash(),
+        );
+        // The inviter (NOT the owner) authors an admit of the victim carrying a wrapped blob.
+        // In a real E2e KB the inviter never holds k; here we hand it one anyway to prove the
+        // op is rejected on AUTHORSHIP (author != owner), not on a crypto/availability detail.
+        let av = make_wrapped(
+            &inviter,
+            &victim.fp,
+            wrap_to_member(&k, &victim.pubkey).unwrap(),
+            &ai.chain_hash(),
+        );
+        let ops = vec![g, ai, av];
+
+        assert!(
+            derive_content_key(&ops, &owner.pubkey, &victim.fp, &victim.secret).is_none(),
+            "a member whose ONLY wrap is non-owner-authored derives no key (#169 L1)"
+        );
+        assert_eq!(
+            derive_content_key(&ops, &owner.pubkey, &inviter.fp, &inviter.secret)
+                .map(|c| *c.as_bytes()),
+            Some(*k.as_bytes()),
+            "the owner-wrapped sibling is unaffected (the bound is precise, not a blanket deny)"
         );
     }
 
