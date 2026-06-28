@@ -400,6 +400,13 @@ pub struct CollabState {
     /// when fencing), so a tampered local replica can only mislead this client about
     /// its own epoch — it can never self-elevate at the daemon.
     pub kb_collection_state: HashMap<String, Vec<u8>>,
+    /// ADR-039 A2 (#162): this peer's view of the daemon's LOCAL self-protection
+    /// blocklist, `kb_id → blocked principals`. Unlike membership (derived from
+    /// `kb_collection_state`), the blocklist is NEVER in the synced collection, so it is
+    /// fetched from the daemon via `kb/blocklist` (on connect + after each block/unblock)
+    /// and cached here purely to render the `*KB Sharing*` Blocked view. The daemon
+    /// stays authoritative; this is display-only.
+    pub kb_blocklists: HashMap<String, Vec<String>>,
     /// Pre-shared key for mutual authentication (plaintext fallback).
     pub psk: String,
     /// Shell command to retrieve the PSK (preferred over psk for security).
@@ -461,6 +468,7 @@ impl CollabState {
             local_fingerprint: String::new(),
             kb_epochs: HashMap::new(),
             kb_collection_state: HashMap::new(),
+            kb_blocklists: HashMap::new(),
             pending_reauthor: HashMap::new(),
             psk: String::new(),
             psk_command: String::new(),
