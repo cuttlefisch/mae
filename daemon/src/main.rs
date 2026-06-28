@@ -360,6 +360,9 @@ async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState
             .with_max_wal_entries(collab.storage.max_wal_entries)
             .with_max_document_size(collab.sync.max_document_size_bytes),
     );
+    // ADR-039 A2 (#162): hydrate the local self-protection blocklist from durable storage
+    // so a block set in a prior session is enforced from the first op this session derives.
+    doc_store.load_blocklists().await;
     let broadcaster: SharedBroadcaster = Arc::new(std::sync::Mutex::new(EventBroadcaster::new()));
     // Shared by the TCP listener and the P2P mesh so both report the same uptime.
     let server_start_time = std::time::Instant::now();

@@ -81,6 +81,23 @@ pub trait StorageBackend: Send + Sync {
 
     /// Delete all data for a document (snapshot + WAL entries).
     async fn delete_document(&self, doc_name: &str) -> Result<(), StorageError>;
+
+    /// Load the entire LOCAL per-KB blocklist as `(kb_id, principal)` pairs
+    /// (ADR-039 A2, #162). Local self-protection only — never synced to peers.
+    /// Default: no durable blocklist (an in-memory-only backend has nothing to load).
+    async fn load_blocklist(&self) -> Result<Vec<(String, String)>, StorageError> {
+        Ok(Vec::new())
+    }
+
+    /// Add `principal` to `kb_id`'s local blocklist (idempotent). Default no-op.
+    async fn add_block(&self, _kb_id: &str, _principal: &str) -> Result<(), StorageError> {
+        Ok(())
+    }
+
+    /// Remove `principal` from `kb_id`'s local blocklist (idempotent). Default no-op.
+    async fn remove_block(&self, _kb_id: &str, _principal: &str) -> Result<(), StorageError> {
+        Ok(())
+    }
 }
 
 /// Sharded SQLite connection pool.
@@ -129,6 +146,19 @@ impl SqlitePool {
                          wal_id INTEGER NOT NULL,
                          hash TEXT NOT NULL DEFAULT '',
                          updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+                     );
+
+                     -- ADR-039 A2 (#162): the per-KB LOCAL self-protection blocklist.
+                     -- A purely local deny-list of principals this daemon refuses to
+                     -- trust — NEVER propagated to peers (distinct from a signed op-log
+                     -- Remove/Revoke), so it lives in local storage and NOT in the synced
+                     -- `kbc:` collection doc. Durable so a self-protection block survives
+                     -- restart (an evaporating deny-list is a weak defense).
+                     CREATE TABLE IF NOT EXISTS kb_blocklist (
+                         kb_id TEXT NOT NULL,
+                         principal TEXT NOT NULL,
+                         created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                         PRIMARY KEY (kb_id, principal)
                      );",
                 )?;
                 // ADR-032 A5: migrate snapshot tables created before the integrity
@@ -161,6 +191,13 @@ impl SqlitePool {
                  wal_id INTEGER NOT NULL,
                  hash TEXT NOT NULL DEFAULT '',
                  updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+             );
+
+             CREATE TABLE kb_blocklist (
+                 kb_id TEXT NOT NULL,
+                 principal TEXT NOT NULL,
+                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                 PRIMARY KEY (kb_id, principal)
              );",
         )?;
         Ok(SqlitePool {
@@ -403,6 +440,39 @@ impl StorageBackend for SqliteBackend {
         info!(doc = doc_name, "deleted document from storage");
         Ok(())
     }
+
+    async fn load_blocklist(&self) -> Result<Vec<(String, String)>, StorageError> {
+        let conn = self.pool.primary().lock().unwrap();
+        let mut stmt = conn.prepare("SELECT kb_id, principal FROM kb_blocklist")?;
+        let mut pairs = Vec::new();
+        while let Ok(sqlite::State::Row) = stmt.next() {
+            let kb_id = stmt.read::<String, _>("kb_id")?;
+            let principal = stmt.read::<String, _>("principal")?;
+            pairs.push((kb_id, principal));
+        }
+        Ok(pairs)
+    }
+
+    async fn add_block(&self, kb_id: &str, principal: &str) -> Result<(), StorageError> {
+        let conn = self.pool.primary().lock().unwrap();
+        // Idempotent: re-blocking an already-blocked principal is a no-op.
+        let mut stmt =
+            conn.prepare("INSERT OR IGNORE INTO kb_blocklist (kb_id, principal) VALUES (?1, ?2)")?;
+        stmt.bind((1, kb_id))?;
+        stmt.bind((2, principal))?;
+        stmt.next()?;
+        Ok(())
+    }
+
+    async fn remove_block(&self, kb_id: &str, principal: &str) -> Result<(), StorageError> {
+        let conn = self.pool.primary().lock().unwrap();
+        let mut stmt =
+            conn.prepare("DELETE FROM kb_blocklist WHERE kb_id = ?1 AND principal = ?2")?;
+        stmt.bind((1, kb_id))?;
+        stmt.bind((2, principal))?;
+        stmt.next()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -568,6 +638,38 @@ mod tests {
                 "the plaintext canary MUST be scrubbed from the DB file at rest after delete_document (secure_delete + checkpoint)"
             );
         }
+    }
+
+    /// ADR-039 A2 (#162): the local blocklist round-trips through storage and — the
+    /// security-relevant property — SURVIVES a reopen (a self-protection deny-list that
+    /// evaporates on restart is a weak defense). Uses a file-backed DB so the second
+    /// `open` is a genuine restart, not a shared in-memory handle.
+    #[tokio::test]
+    async fn blocklist_round_trips_and_survives_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("collab.sqlite");
+        {
+            let backend = SqliteBackend::open(&db_path).unwrap();
+            backend.add_block("kbA", "SHA256:evil").await.unwrap();
+            backend.add_block("kbA", "SHA256:alsobad").await.unwrap();
+            backend.add_block("kbB", "SHA256:evil").await.unwrap();
+            // Idempotent re-block is a no-op (PRIMARY KEY + INSERT OR IGNORE).
+            backend.add_block("kbA", "SHA256:evil").await.unwrap();
+            // Unblock drops exactly one (kb_id, principal) pair.
+            backend.remove_block("kbA", "SHA256:alsobad").await.unwrap();
+        }
+        // Reopen — a fresh process would see the durable table.
+        let backend = SqliteBackend::open(&db_path).unwrap();
+        let mut pairs = backend.load_blocklist().await.unwrap();
+        pairs.sort();
+        assert_eq!(
+            pairs,
+            vec![
+                ("kbA".to_string(), "SHA256:evil".to_string()),
+                ("kbB".to_string(), "SHA256:evil".to_string()),
+            ],
+            "blocks persist across restart; the unblocked pair is gone; the block is per-KB"
+        );
     }
 
     #[tokio::test]
