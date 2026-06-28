@@ -40,6 +40,7 @@ impl Editor {
             | "kb-sharing-block"
             | "kb-sharing-copy-fingerprint" => self.kb_sharing_member_action(name),
             "kb-sharing-set-policy" => self.kb_sharing_set_policy_at_cursor(),
+            "kb-sharing-unblock" => self.kb_sharing_unblock_at_cursor(),
             "kb-sharing-leave" => self.kb_sharing_leave_at_cursor(),
             _ => {
                 self.set_status(format!("Unknown KB-sharing action: {name}"));
@@ -69,6 +70,24 @@ impl Editor {
             .and_then(|v| v.entry_for(kb_id))
             .map(|e| e.is_owner)
             .unwrap_or(false)
+    }
+
+    /// Unblock the principal on the focused `Blocked` row (ADR-039 A2, #162). Local
+    /// self-protection — NOT owner-gated (anyone may manage their own daemon's blocklist).
+    fn kb_sharing_unblock_at_cursor(&mut self) -> Option<bool> {
+        let Some((kb_id, Some(fp), KbSharingLineKind::Blocked { .. })) = self.kb_sharing_target()
+        else {
+            self.set_status("Move the cursor onto a blocked principal first");
+            return Some(true);
+        };
+        self.collab.pending_intent = Some(CollabIntent::KbSetBlock {
+            kb_id: kb_id.clone(),
+            member: fp,
+            blocked: false,
+        });
+        self.set_status(format!("Unblocking locally in KB '{kb_id}'…"));
+        self.mark_full_redraw();
+        Some(true)
     }
 
     fn kb_sharing_pending_action(&mut self, name: &str) -> Option<bool> {

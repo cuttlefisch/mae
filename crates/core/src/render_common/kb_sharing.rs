@@ -21,6 +21,8 @@ pub fn kb_sharing_line_theme_key(kind: &KbSharingLineKind) -> &'static str {
         KbSharingLineKind::Member { .. } => "ui.text",
         KbSharingLineKind::PendingHeader { .. } => "git.section",
         KbSharingLineKind::Pending { .. } => "diagnostic.warn",
+        KbSharingLineKind::BlockedHeader { .. } => "git.section",
+        KbSharingLineKind::Blocked { .. } => "diagnostic.error",
         KbSharingLineKind::Blank => "ui.text",
     }
 }
