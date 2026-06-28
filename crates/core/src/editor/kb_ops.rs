@@ -1068,18 +1068,41 @@ impl Editor {
         }
         let node =
             mae_kb::Node::new(id, title, kind, body).with_source(mae_kb::NodeSource::Manual, 0);
-        self.kb_persist_node(&node);
-        // Phase D1.1 (ADR-029): a created node on a daemon-hosted (or shared) primary
-        // must reach the daemon's CRDT — author it via `upsert_with_crdt` (enqueues the
-        // node doc) AND add it to the `kbc:` manifest, so the projector materializes it.
-        // Otherwise a create would only sync on its first edit. Non-syncing → plain
-        // insert (today's embedded behavior).
-        let owner: Option<String> = None;
+        // #165: route by the id's instance prefix (`collabtest:foo` → the registered
+        // `collabtest` federated instance), else the primary KB. A NEW node can't be
+        // resolved with `kb_owner_of` (nothing exists yet), so route by the instance-name
+        // prefix that federated-instance node ids follow — the prefix only diverts to an
+        // instance that is actually REGISTERED (a primary-namespace prefix like `concept:`
+        // with no matching instance stays in primary). Without this, every create fell to
+        // owner=None → primary, so a node added to a shared instance never resolved its
+        // collab_id, never fired the broadcast gate, and never synced.
+        let owner: Option<String> = id
+            .split_once(':')
+            .and_then(|(prefix, _)| self.kb.registry.find(prefix).map(|i| i.uuid.clone()));
+        // Persist to the OWNING store (primary or the matching instance store).
+        self.kb_persist_node_in(&owner, &node);
+        // Phase D1.1 (ADR-029): a created node on a daemon-hosted (or shared) KB must reach
+        // the daemon's CRDT — author it via `upsert_with_crdt` (enqueues the node doc) AND
+        // add it to the `kbc:` manifest, so the projector materializes it. Otherwise a
+        // create would only sync on its first edit. Non-syncing → plain insert into the
+        // owning in-memory KB (today's embedded behavior).
         if let Some(kb_id) = self.kb_sync_target(&owner) {
             self.kb_enqueue_node_crdt(&owner, &kb_id, id, node);
             self.kb_enqueue_manifest_op(&kb_id, id, title, true);
         } else {
-            self.kb.primary.insert(node);
+            match &owner {
+                Some(uuid) => match self.kb.instances.get_mut(uuid) {
+                    Some(kb) => {
+                        kb.insert(node);
+                    }
+                    None => {
+                        self.kb.primary.insert(node);
+                    }
+                },
+                None => {
+                    self.kb.primary.insert(node);
+                }
+            }
         }
         self.set_status(format!("KB node created: {}", id));
         Ok(())
@@ -3483,6 +3506,58 @@ mod tests {
         let result = editor.kb_create_node("index", "Override", "bad", mae_kb::NodeKind::Note);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("seed node"));
+    }
+
+    // #165: a node whose id is prefixed with a REGISTERED instance's name must be created
+    // in THAT federated instance, not the primary KB. Before the fix `kb_create_node`
+    // hard-coded owner=None, so every create landed in primary — its `kb_collab_id_of`
+    // resolved to None, the broadcast gate never fired, and a node added to a shared
+    // instance never synced to the daemon.
+    #[test]
+    fn kb_create_node_routes_an_instance_prefixed_id_to_that_instance() {
+        let dir = create_test_org_dir();
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+        let uuid = editor.kb_register("TestNotes", dir.path()).unwrap().uuid;
+
+        editor
+            .kb_create_node("TestNotes:fresh", "Fresh", "hi", mae_kb::NodeKind::Note)
+            .unwrap();
+        assert!(
+            editor
+                .kb
+                .instances
+                .get(&uuid)
+                .unwrap()
+                .get("TestNotes:fresh")
+                .is_some(),
+            "instance-prefixed create lands in the registered instance"
+        );
+        assert!(
+            editor.kb.primary.get("TestNotes:fresh").is_none(),
+            "and NOT in primary (the #165 bug: owner=None → primary → never syncs)"
+        );
+        assert_eq!(
+            editor.kb_owner_of("TestNotes:fresh"),
+            Some(Some(uuid.clone())),
+            "owner resolves to the instance (vs None before — which left the gate dead)"
+        );
+
+        // An unregistered prefix (a primary namespace like `concept:`) stays in primary.
+        editor
+            .kb_create_node("concept:x", "C", "c", mae_kb::NodeKind::Note)
+            .unwrap();
+        assert!(
+            editor.kb.primary.get("concept:x").is_some(),
+            "an unregistered prefix stays in the primary KB"
+        );
+        assert!(editor
+            .kb
+            .instances
+            .get(&uuid)
+            .unwrap()
+            .get("concept:x")
+            .is_none());
     }
 
     #[test]
