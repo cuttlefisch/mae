@@ -1712,6 +1712,49 @@ impl SchemeRuntime {
             },
         );
 
+        // (kb-block-member KB-ID FINGERPRINT) — add a principal to this daemon's LOCAL
+        // self-protection blocklist (ADR-039 A2, #162). Local-only, never propagated;
+        // not owner-gated (you may block even the owner).
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-block-member",
+            "Locally block a principal on a KB by fingerprint (self-protection deny-list; local-only, not propagated)",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let kb_id = arg_string(args, 0, "kb-block-member")?;
+                let member = arg_string(args, 1, "kb-block-member")?;
+                s.lock().unwrap().pending_kb_collab_actions.push(
+                    mae_core::KbCollabAction::SetBlock {
+                        kb_id,
+                        member,
+                        blocked: true,
+                    },
+                );
+                Ok(Value::Void)
+            },
+        );
+
+        // (kb-unblock-member KB-ID FINGERPRINT) — remove a principal from the LOCAL
+        // self-protection blocklist (ADR-039 A2, #162).
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-unblock-member",
+            "Locally unblock a principal on a KB by fingerprint (removes the local self-protection block)",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let kb_id = arg_string(args, 0, "kb-unblock-member")?;
+                let member = arg_string(args, 1, "kb-unblock-member")?;
+                s.lock().unwrap().pending_kb_collab_actions.push(
+                    mae_core::KbCollabAction::SetBlock {
+                        kb_id,
+                        member,
+                        blocked: false,
+                    },
+                );
+                Ok(Value::Void)
+            },
+        );
+
         // (kb-set-encryption KB-ID MODE) — enable E2E content encryption (owner-only,
         // one-way: MODE = "e2e"). ADR-037/039.
         let s = shared.clone();

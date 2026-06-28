@@ -1348,6 +1348,14 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "kb-block-member",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-unblock-member",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "kb-set-encryption",
       "source": "crates/scheme/src/runtime.rs"
     },

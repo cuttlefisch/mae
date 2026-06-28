@@ -1742,6 +1742,11 @@ authorized peer auto-joins as viewer).\n\
 - `:kb-policy <kb> <restrictive|invite|permissive>`, `:kb-pending <kb>` (lists \
 label + fingerprint), `:kb-approve <kb> <fingerprint> [role]`, \
 `:kb-member-add <kb> <fingerprint> [role]`, `:kb-member-remove <kb> <fingerprint>`.\n\
+- **Local self-protection (ADR-039 A2)**: `:kb-member-block <kb> <fingerprint>` / \
+`:kb-member-unblock <kb> <fingerprint>` (or `b` in *KB Sharing*) add/remove a \
+principal on **this daemon's LOCAL deny-list** — never propagated to peers (unlike \
+`:kb-member-remove`, a global removal) and **not owner-gated** (you may block even \
+the owner). Use it to stop trusting a principal you cannot get globally removed.\n\
 - Members are managed by **fingerprint** (from `:kb-pending` or, for admins, \
 `mae-daemon authorized`). Admin: `mae-daemon authorize <line> <unique-label>`, \
 `mae-daemon revoke <label|SHA256:fp>`.\n\
