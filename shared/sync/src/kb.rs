@@ -860,6 +860,32 @@ impl KbCollectionDoc {
         txn.encode_update_v1()
     }
 
+    /// #156 F5: blank every cleartext node title in the manifest in ONE transaction —
+    /// used when E2e is enabled on an EXISTING KB so the key-blind daemon stops holding
+    /// plaintext titles (the real title lives encrypted in the node op-set; the manifest
+    /// only needs the `node_id`). Returns the encoded delta, or an **empty `Vec`** when
+    /// there was nothing to blank (no nodes, or all titles already empty) — idempotent.
+    pub fn blank_node_titles_delta(&mut self) -> Vec<u8> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        let Some(Out::YMap(nodes)) = root.get(&txn, COLL_NODES_KEY) else {
+            return Vec::new();
+        };
+        let mut with_titles: Vec<String> = Vec::new();
+        for (k, v) in nodes.iter(&txn) {
+            if !v.to_string(&txn).is_empty() {
+                with_titles.push(k.to_string());
+            }
+        }
+        if with_titles.is_empty() {
+            return Vec::new();
+        }
+        for id in &with_titles {
+            nodes.insert(&mut txn, id.as_str(), "");
+        }
+        txn.encode_update_v1()
+    }
+
     /// Remove a node from the collection manifest. Returns encoded update.
     pub fn remove_node(&mut self, node_id: &str) -> Vec<u8> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
@@ -2234,6 +2260,49 @@ mod tests {
 
         coll.remove_node("concept:buffer");
         assert_eq!(coll.node_count(), 1);
+    }
+
+    /// #156 F5: the enable-time manifest-title scrub. Blanks every cleartext title in
+    /// ONE delta, preserves the node ids, leaves already-blank titles alone, and is
+    /// idempotent (a second call has nothing to do → empty delta). The delta, applied to
+    /// a fresh replica, reproduces the blanked manifest (round-trip).
+    #[test]
+    fn blank_node_titles_delta_scrubs_manifest_and_is_idempotent() {
+        let mut coll = KbCollectionDoc::new("Test", "alice");
+        coll.add_node("concept:a", "Secret Alpha");
+        coll.add_node("concept:b", "Secret Beta");
+        coll.add_node("concept:c", ""); // already blank
+        assert!(coll.list_nodes().iter().any(|(_, t)| t == "Secret Alpha"));
+
+        // A replica that SHARES this collection's lineage (built from its state — the
+        // daemon applies the delta to the same `kbc:` doc, never an independent rebuild,
+        // which would mint a divergent yrs client_id that wouldn't merge — the #179 rule).
+        let mut replica = KbCollectionDoc::from_bytes(&coll.encode_state()).unwrap();
+
+        let delta = coll.blank_node_titles_delta();
+        assert!(!delta.is_empty(), "produced a blanking delta");
+
+        let nodes = coll.list_nodes();
+        assert_eq!(nodes.len(), 3, "node ids preserved (only titles blanked)");
+        assert!(
+            nodes.iter().all(|(_, t)| t.is_empty()),
+            "every manifest title is blank after the scrub: {nodes:?}"
+        );
+
+        // Idempotent — nothing left to blank.
+        assert!(
+            coll.blank_node_titles_delta().is_empty(),
+            "second scrub is a no-op (empty delta)"
+        );
+
+        // The delta is a real applicable collection update: the lineage-sharing replica
+        // replays it and sees the blanked manifest (round-trip), not the cleartext titles.
+        replica.apply_update(&delta).unwrap();
+        assert!(
+            replica.list_nodes().iter().all(|(_, t)| t.is_empty()),
+            "applying the delta blanks the titles on a replica too: {:?}",
+            replica.list_nodes()
+        );
     }
 
     #[test]

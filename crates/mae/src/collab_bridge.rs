@@ -3925,6 +3925,27 @@ async fn run_collab_task(
                                                             let _ = write_framed(w, &body, write_timeout).await;
                                                         }
                                                     }
+                                                    // #156 F5 (enable-time scrub): a KB enabled E2e while it
+                                                    // already had nodes still has their cleartext titles in the
+                                                    // manifest (the forward-case blanking only covers nodes
+                                                    // added AFTER enable). Blank them now — the real titles ride
+                                                    // encrypted in the resealed node op-sets below; the
+                                                    // key-blind daemon must not keep the plaintext copies. Ship
+                                                    // as an owner-authored collection delta (no-op if nothing
+                                                    // to blank).
+                                                    let blank = coll.blank_node_titles_delta();
+                                                    if !blank.is_empty() {
+                                                        if let Some(ref mut w) = writer {
+                                                            let req_id = next_request_id;
+                                                            next_request_id += 1;
+                                                            let req = mae_sync::wire::kb_collection_op_request(
+                                                                req_id, &kb_id, &mae_sync::encoding::update_to_base64(&blank),
+                                                            );
+                                                            if let Ok(body) = serde_json::to_vec(&req) {
+                                                                let _ = write_framed(w, &body, write_timeout).await;
+                                                            }
+                                                        }
+                                                    }
                                                     // #171: RE-SEAL every already-shared node under the new
                                                     // key. A node shared PLAINTEXT before enable has a
                                                     // plaintext daemon lineage under the owner's content
