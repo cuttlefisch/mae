@@ -3065,6 +3065,7 @@ dependencies = [
  "tracing",
  "x25519-dalek",
  "yrs",
+ "zeroize",
 ]
 
 [[package]]
