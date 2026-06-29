@@ -26,6 +26,7 @@ use chacha20poly1305::{Key, KeyInit, XChaCha20Poly1305, XNonce};
 use curve25519_dalek::edwards::CompressedEdwardsY;
 use sha2::{Digest, Sha256, Sha512};
 use x25519_dalek::{PublicKey as XPublicKey, StaticSecret};
+use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// XChaCha20-Poly1305 nonce length (24 bytes — large enough for random nonces to be
 /// collision-safe without a counter, the reason for the *X*-variant).
@@ -34,9 +35,11 @@ const NONCE_LEN: usize = 24;
 const X25519_LEN: usize = 32;
 
 /// A per-KB symmetric content key (ADR-037 §D1). 32 bytes for XChaCha20-Poly1305.
-/// Best-effort zeroized on drop (a hardened `zeroize` is a future improvement — the
-/// manual overwrite here can be elided by the optimizer).
-#[derive(Clone, PartialEq, Eq)]
+/// `ZeroizeOnDrop` (#156 F9) wipes the bytes on drop via a non-elidable volatile write
+/// and a compiler fence — replacing the old best-effort manual `Drop`, which the
+/// optimizer could elide. `Clone` is retained (callers cache/wrap the key); each clone
+/// wipes on its own drop.
+#[derive(Clone, PartialEq, Eq, Zeroize, ZeroizeOnDrop)]
 pub struct ContentKey([u8; 32]);
 
 impl ContentKey {
@@ -52,12 +55,6 @@ impl ContentKey {
 
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
-    }
-}
-
-impl Drop for ContentKey {
-    fn drop(&mut self) {
-        self.0 = [0u8; 32];
     }
 }
 
@@ -165,9 +162,17 @@ pub fn unwrap_as_member(
         return Err(CryptoError::Malformed);
     }
     let wrap_key = derive_wrap_key(shared.as_bytes(), ephemeral_pub_bytes, my_x_pub.as_bytes());
-    let k_bytes = decrypt(&wrap_key, sealed)?;
-    let k: [u8; 32] = k_bytes.try_into().map_err(|_| CryptoError::Malformed)?;
-    Ok(ContentKey::from_bytes(k))
+    let mut k_bytes = decrypt(&wrap_key, sealed)?;
+    let mut k: [u8; 32] = k_bytes
+        .as_slice()
+        .try_into()
+        .map_err(|_| CryptoError::Malformed)?;
+    let key = ContentKey::from_bytes(k);
+    // #156 F9: wipe the raw key material copies (the Vec from `decrypt` + the array)
+    // now that it lives inside the zeroizing `ContentKey`.
+    k_bytes.zeroize();
+    k.zeroize();
+    Ok(key)
 }
 
 /// Derive the one-time AEAD wrap key from the ECDH shared secret. SHA-256 over a
@@ -201,10 +206,15 @@ fn ed25519_pub_to_x25519(ed_pub: &[u8; 32]) -> Result<XPublicKey, CryptoError> {
 /// self-consistent with [`ed25519_pub_to_x25519`] — proven by test, since
 /// `ed25519_pub == scalar·B` and `to_montgomery(scalar·B) == scalar·u_basepoint`.
 fn ed25519_secret_to_x25519(ed_secret_seed: &[u8; 32]) -> StaticSecret {
-    let hash = Sha512::digest(ed_secret_seed);
+    let mut hash = Sha512::digest(ed_secret_seed);
     let mut x_secret = [0u8; 32];
     x_secret.copy_from_slice(&hash[..32]);
-    StaticSecret::from(x_secret)
+    let secret = StaticSecret::from(x_secret);
+    // #156 F9: the SHA-512 expansion and the extracted scalar are the X25519 private key —
+    // wipe both once `StaticSecret` (itself zeroizing on drop) holds a copy.
+    x_secret.zeroize();
+    hash.zeroize();
+    secret
 }
 
 #[cfg(test)]
@@ -236,6 +246,21 @@ mod tests {
             b"\x00\x01\x02 yrs-update with NUL".to_vec(),
             (0..70_000u32).map(|i| (i % 256) as u8).collect(),
         ]
+    }
+
+    /// #156 F9: the content key is wiped, not left in memory. `ZeroizeOnDrop` is a
+    /// compile-time guarantee (the static assertion); here we also exercise the `Zeroize`
+    /// impl directly — after `zeroize()` the bytes are all-zero, not the original key.
+    #[test]
+    fn content_key_is_zeroized() {
+        use zeroize::Zeroize;
+        let mut k = ContentKey::from_bytes([0x42u8; 32]);
+        assert_eq!(k.as_bytes(), &[0x42u8; 32]);
+        k.zeroize();
+        assert_eq!(k.as_bytes(), &[0u8; 32], "Zeroize wipes the key bytes");
+
+        fn assert_zeroize_on_drop<T: zeroize::ZeroizeOnDrop>() {}
+        assert_zeroize_on_drop::<ContentKey>();
     }
 
     #[test]
