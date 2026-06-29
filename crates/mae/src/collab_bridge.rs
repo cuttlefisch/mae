@@ -583,6 +583,22 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         // self-heal on the reconnect re-share (which rebuilds the full manifest).
         for (kb_id, node_id, title, add) in std::mem::take(&mut editor.collab.pending_kb_manifest) {
             tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_id = %node_id, add, "drain: send kb/collection_node");
+            // #156 F5: never write a cleartext node title into the manifest of an E2e KB —
+            // the key-blind daemon/relay stores the manifest in the clear and would read it.
+            // The real title lives encrypted inside the node op-set; an E2e manifest needs
+            // only the node_id (the Blocked/list views fall back to it). Downgrade-resistant:
+            // `kb_collection_is_e2e` reads the SIGNED op-log, not the relay-flippable flag.
+            let title = if add
+                && editor
+                    .collab
+                    .kb_collection_state
+                    .get(&kb_id)
+                    .is_some_and(|s| kb_collection_is_e2e(s))
+            {
+                String::new()
+            } else {
+                title
+            };
             let cmd = CollabCommand::KbCollectionNode {
                 kb_id,
                 node_id,
