@@ -35,6 +35,8 @@
 (define-key "kb-sharing" "y" "kb-sharing-copy-fingerprint")
 ;; b = locally block this principal (ADR-039 A2 self-protection; local-only, not owner-gated)
 (define-key "kb-sharing" "b" "kb-sharing-block")
+;; B = unblock (on a Blocked row)
+(define-key "kb-sharing" "B" "kb-sharing-unblock")
 
 ;; KB-level actions (on a KB header / policy line)
 (define-key "kb-sharing" "p" "kb-sharing-set-policy")

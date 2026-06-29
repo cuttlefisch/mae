@@ -23,6 +23,9 @@ rand = "0.10" # #72: unpredictable authorization-epoch tokens (fresh_epoch_token
 chacha20poly1305 = "0.10" # XChaCha20-Poly1305 AEAD (content + key-wrap)
 x25519-dalek = { version = "2", features = ["static_secrets"] } # ECDH for key wrap
 curve25519-dalek = "4" # Ed25519->X25519 public conversion (Edwards->Montgomery)
+# #156 F9: zeroize key material on drop (ContentKey + DH/scalar intermediates). Same
+# version the dalek siblings already pull, so no new transitive cost.
+zeroize = { version = "1", features = ["zeroize_derive"] }
 
 [dev-dependencies]
 tempfile = "3"

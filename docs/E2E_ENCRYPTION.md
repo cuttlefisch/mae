@@ -159,11 +159,11 @@ The core primitives are sound (no must-fix break inside the crypto). Actionable 
 | F2 | **Encryption mode is an unsigned collection-map flag** → a relay can flip `e2e→none` → victim emits plaintext (downgrade attack) | WEAKNESS→BUG | **Fix in 3b**: assert E2e in the **signed** owner op-log; seal path **fail-closed** (never author plaintext once the signed log asserts E2e) |
 | F3 | Owner-side key-gen / wrap-on-admit / **rotate-on-remove not wired** (design + tests only) | BUG (gap) | **This is 3b (#151) + 3c (#152)** — the work in progress |
 | F4 | Content-key authority **undefined under `Governance::Quorum`** (frozen key if the genesis owner is quorum-removed) | WEAKNESS | **Fix in 3b**: restrict E2e to `SingleOwner` (reject `SetGovernance(Quorum)` on an E2e KB) for v1 |
-| F5 | **Node titles cleartext** in the collection manifest even on an E2e KB (redundant — titles are also encrypted inside the node op-set) | WEAKNESS | Document now (§7.4); omit/encrypt manifest title — hardening follow-up |
+| F5 | **Node titles cleartext** in the collection manifest even on an E2e KB (redundant — titles are also encrypted inside the node op-set) | WEAKNESS | **Forward case fixed (#156):** the editor blanks the manifest title for an E2e KB (downgrade-resistant `kb_collection_is_e2e`) so a node added on an E2e KB never writes a cleartext title. **Remaining:** retroactive scrub of titles already in the manifest when E2e is enabled on an *existing* KB (pairs with the #171 reseal path) |
 | F6 | No **all-zero / low-order DH** rejection in wrap/unwrap → attacker-chosen ephemeral could force a known wrap key (caught only because wraps are signature-covered) | WEAKNESS | **Fix in 3b** (cheap: reject all-zero shared secret) |
-| F7 | AEAD carries **no AAD** binding ciphertext to op/kb/node/author/epoch; signed header carries **no content-key-id** | WEAKNESS (defense-in-depth) | Hardening follow-up (mitigated today by encrypt-then-sign + wraps-in-signed-ops) |
+| F7 | AEAD carries **no AAD** binding ciphertext to op/kb/node/author/epoch; signed header carries **no content-key-id** | WEAKNESS (defense-in-depth) | **Parked (design note on #156):** in the op-set model the map is `{op_id: ciphertext}` with no per-op metadata, so op-set AAD can only bind `kb_id‖node_id` (already signature-bound) and a content-key-id needs an op-set schema change or header plumbing — fold into the **#176 rotation key-history** design (where the key-id earns its keep) rather than a standalone PR. Mitigated today by encrypt-then-sign + wraps-in-signed-ops |
 | F8 | Op-set + membership-log **unbounded growth**; `derive_*` is O(ops) per update | WEAKNESS (scale) | Document (§7.7); compaction + incremental derivation = ADR-028 follow-up |
-| F9 | `ContentKey` zeroization best-effort; intermediates not zeroized; `Clone` present | LIMITATION | Hardening follow-up (`zeroize` crate) |
+| F9 | `ContentKey` zeroization best-effort; intermediates not zeroized; `Clone` present | LIMITATION | **FIXED (#156, PR #190):** `ContentKey` derives `Zeroize + ZeroizeOnDrop`; the unwrap key bytes + the X25519 scalar/SHA-512 expansion are wiped |
 
 **Two reviews:** this is the **design pass** (before building 3b). An **implementation pass** re-runs after
 3b/3c land — verifying the code matches this design — before 3d's docker confidentiality gate is declared
@@ -180,7 +180,8 @@ meaningful.
   them + rotates + authors CANARY2 — the removed-but-still-subscribed member RECEIVES the post-rotation
   ciphertext over its live subscription (the relay does not re-filter broadcasts by membership) but, stranded
   on the old key, CANNOT decrypt it, while RETAINING the CANARY1 history; the relay stays key-blind throughout.
-- **Hardening follow-ups:** F5 (manifest titles), F7 (AAD + content-key-id), F8 (compaction), F9 (zeroize),
-  mesh anchor node-id pinning.
+- **Hardening follow-ups:** F9 (zeroize) **shipped (#190)**; F5 (manifest titles) **forward case shipped
+  (#156)**, enable-time retroactive scrub remaining; F7 (AAD + content-key-id) **parked** → folded into the
+  #176 rotation key-history design; F8 (compaction) + mesh anchor node-id pinning still open.
 - **FS/PCS evolution (deferred, ADR-037 §D4):** BeeKEM CGKA ratchet (O(log N) + forward/post-compromise
   secrecy), kept flagged research-maturity.
