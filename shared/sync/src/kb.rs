@@ -2305,6 +2305,34 @@ mod tests {
         );
     }
 
+    /// #156 F5 — the AT-REST oracle (the attacker's test). Blanking the manifest title
+    /// must not leave the ORIGINAL cleartext title recoverable in the `kbc:` doc's
+    /// persisted state bytes (a yrs overwrite can keep the old value as a tombstone). The
+    /// daemon stores `encode_state()`, so an attacker greps exactly these bytes.
+    #[test]
+    fn blank_node_titles_delta_purges_old_title_from_state_bytes() {
+        let canary = b"SECRET-TITLE-CANARY-do-not-survive";
+        let mut coll = KbCollectionDoc::new("Test", "alice");
+        coll.add_node("concept:a", std::str::from_utf8(canary).unwrap());
+        // Precondition (non-vacuous): the cleartext title IS in the state before scrub.
+        assert!(
+            coll.encode_state()
+                .windows(canary.len())
+                .any(|w| w == canary),
+            "precondition: the title is in the state before blanking (else the test is vacuous)"
+        );
+
+        coll.blank_node_titles_delta();
+
+        assert!(
+            !coll
+                .encode_state()
+                .windows(canary.len())
+                .any(|w| w == canary),
+            "the original cleartext title MUST NOT survive in the kbc: state bytes after blanking"
+        );
+    }
+
     #[test]
     fn collection_members() {
         let mut coll = KbCollectionDoc::new("Test", "alice");
