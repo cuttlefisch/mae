@@ -214,15 +214,47 @@ fn render(entries: &[KeyEntry]) -> String {
     out
 }
 
-/// Write `content` to `path` with `0600` permissions (unix).
+/// Write `content` to `path`, then restrict the file to the owner. This is the single
+/// secret-file write path — the identity key, the PSK keystore, and per-KB content keys
+/// all funnel through it — so [`set_secure_file_perms`] hardens every key file at once.
 pub fn write_secure(path: &Path, content: &str) -> std::io::Result<()> {
     std::fs::write(path, content)?;
+    set_secure_file_perms(path)
+}
+
+/// Restrict a freshly-written secret file to the owner. On unix: `chmod 0600` (a failure
+/// propagates — we never leave a secret world-readable silently). On non-unix (#158 I4,
+/// principle #13): MAE cannot portably set an owner-only ACL without a platform crate, so
+/// rather than **silently no-op** on one platform we **warn once** — the operator must
+/// rely on directory/user ACLs until native ACL tightening lands (a documented follow-up;
+/// MAE ships no Windows build yet, so this gates a future Windows release, not today's).
+fn set_secure_file_perms(path: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
     }
+    #[cfg(not(unix))]
+    warn_unenforced_perms(path);
     Ok(())
+}
+
+/// Warn ONCE that a secret file could not be permission-restricted. Kept platform-
+/// agnostic and **always compiled** (so Linux CI type-checks it — there is no Windows CI
+/// matrix), but only *called* on non-unix by [`set_secure_file_perms`].
+#[cfg_attr(unix, allow(dead_code))]
+fn warn_unenforced_perms(path: &Path) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static WARNED: AtomicBool = AtomicBool::new(false);
+    if !WARNED.swap(true, Ordering::Relaxed) {
+        tracing::warn!(
+            path = %path.display(),
+            "secret key files are written WITHOUT an enforced owner-only ACL on this \
+             platform (#158 I4): MAE cannot set 0600-equivalent permissions here. Protect \
+             the mae data directory via filesystem ACLs; native ACL tightening is a \
+             follow-up. (On unix, key files are chmod 0600 automatically.)"
+        );
+    }
 }
 
 #[cfg(unix)]
@@ -236,6 +268,15 @@ fn secure_dir(_dir: &Path) {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #158 I4: the non-unix permission-advisory body is always compiled (there is no
+    /// Windows CI matrix), so call it on Linux to catch a typo there. Warn-once ⇒ a
+    /// second call is a silent no-op (no panic).
+    #[test]
+    fn unenforced_perms_warning_is_callable_on_all_platforms() {
+        warn_unenforced_perms(std::path::Path::new("/nonexistent/key"));
+        warn_unenforced_perms(std::path::Path::new("/nonexistent/key"));
+    }
 
     #[test]
     fn parse_skips_comments_and_blanks() {
