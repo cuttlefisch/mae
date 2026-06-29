@@ -1070,6 +1070,13 @@ mod tests {
         let fp = fingerprint_of(&pubkey);
         Id { secret, pubkey, fp }
     }
+    impl Id {
+        /// ADR-041 (#158 I1): the identity's PUBLISHED X25519 wrap key — what the owner
+        /// wraps the content key to (no longer the ed25519 pubkey).
+        fn wrap_pub(&self) -> [u8; 32] {
+            crate::content_crypto::wrap_public_for(&self.secret)
+        }
+    }
 
     /// Build + sign a membership op authored by `author`, linked to `prev`.
     #[allow(clippy::too_many_arguments)]
@@ -1181,13 +1188,13 @@ mod tests {
         let a1 = make_wrapped(
             &owner,
             &m1.fp,
-            wrap_to_member(&k, &m1.pubkey).unwrap(),
+            wrap_to_member(&k, &m1.wrap_pub()).unwrap(),
             &g.chain_hash(),
         );
         let a2 = make_wrapped(
             &owner,
             &m2.fp,
-            wrap_to_member(&k, &m2.pubkey).unwrap(),
+            wrap_to_member(&k, &m2.wrap_pub()).unwrap(),
             &a1.chain_hash(),
         );
         let ops = vec![g.clone(), a1.clone(), a2.clone()];
@@ -1207,7 +1214,7 @@ mod tests {
         let forged = make_wrapped(
             &m1,
             &stranger.fp,
-            wrap_to_member(&k, &stranger.pubkey).unwrap(),
+            wrap_to_member(&k, &stranger.wrap_pub()).unwrap(),
             &a2.chain_hash(),
         );
         let mut ops_forged = ops.clone();
@@ -1224,7 +1231,7 @@ mod tests {
         let rewrap = make_wrapped(
             &owner,
             &m1.fp,
-            wrap_to_member(&k2, &m1.pubkey).unwrap(),
+            wrap_to_member(&k2, &m1.wrap_pub()).unwrap(),
             &a2.chain_hash(),
         );
         let ops2 = vec![g, a1, a2, rewrap];
@@ -1259,7 +1266,7 @@ mod tests {
         let ai = make_wrapped(
             &owner,
             &inviter.fp,
-            wrap_to_member(&k, &inviter.pubkey).unwrap(),
+            wrap_to_member(&k, &inviter.wrap_pub()).unwrap(),
             &g.chain_hash(),
         );
         // The inviter (NOT the owner) authors an admit of the victim carrying a wrapped blob.
@@ -1268,7 +1275,7 @@ mod tests {
         let av = make_wrapped(
             &inviter,
             &victim.fp,
-            wrap_to_member(&k, &victim.pubkey).unwrap(),
+            wrap_to_member(&k, &victim.wrap_pub()).unwrap(),
             &ai.chain_hash(),
         );
         let ops = vec![g, ai, av];

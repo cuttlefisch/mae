@@ -780,7 +780,7 @@ mod tests {
     #[test]
     fn pending_requests_surface() {
         let mut coll = KbCollectionDoc::new_owned("Team Notes", "alicefp", "alice");
-        let _ = coll.add_pending("carolfp", "carol", "2026-06-23T10:00:00Z", None);
+        let _ = coll.add_pending("carolfp", "carol", "2026-06-23T10:00:00Z", None, None);
 
         let state = state_with("alicefp", "team", &coll);
         let snap = build_snapshot(&state);
@@ -808,7 +808,7 @@ mod tests {
     fn owner_snapshot() -> KbSharingSnapshot {
         let mut coll = KbCollectionDoc::new_owned("Team Notes", "alicefp", "alice");
         let _ = coll.upsert_member("bobfp", "bob", Role::Editor);
-        let _ = coll.add_pending("carolfp", "carol", "2026-06-23", None);
+        let _ = coll.add_pending("carolfp", "carol", "2026-06-23", None, None);
         let mut s = CollabState::new();
         s.local_fingerprint = "alicefp".to_string();
         s.kb_collection_state

@@ -86,7 +86,7 @@ fn owner_notified_of_new_pending_join_request() {
         .insert("team".to_string(), coll.encode_state());
 
     // A peer's join request arrives as a kbc: broadcast.
-    let update = coll.add_pending("carolfp", "carol", "2026-06-23", None);
+    let update = coll.add_pending("carolfp", "carol", "2026-06-23", None, None);
     handle_collab_event(
         &mut editor,
         CollabEvent::RemoteUpdate {
@@ -3085,7 +3085,7 @@ fn select_share_node_states_never_ships_plaintext_on_e2e() {
 #[test]
 fn refresh_kb_content_key_re_derives_on_rotation_remaining_yes_removed_no() {
     use mae_mcp::identity::Identity;
-    use mae_sync::content_crypto::{wrap_to_member, ContentKey};
+    use mae_sync::content_crypto::{wrap_public_for, wrap_to_member, ContentKey};
     use mae_sync::kb::{KbCollectionDoc, Role};
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -3098,8 +3098,8 @@ fn refresh_kb_content_key_re_derives_on_rotation_remaining_yes_removed_no() {
         owner.public().to_bytes(),
         owner.secret_bytes(),
     );
-    let (bfp, bpk) = (b.fingerprint(), b.public().to_bytes());
-    let (cfp, cpk) = (c.fingerprint(), c.public().to_bytes());
+    let (bfp, bpk, bsec) = (b.fingerprint(), b.public().to_bytes(), b.secret_bytes());
+    let (cfp, cpk, csec) = (c.fingerprint(), c.public().to_bytes(), c.secret_bytes());
 
     let k = ContentKey::generate();
     let mut coll = KbCollectionDoc::new_owned("KB", &ofp, "owner");
@@ -3108,16 +3108,17 @@ fn refresh_kb_content_key_re_derives_on_rotation_remaining_yes_removed_no() {
         &ofp,
         &osec,
         &opk,
-        wrap_to_member(&k, &opk).unwrap(),
+        wrap_to_member(&k, &wrap_public_for(&osec)).unwrap(),
         1000,
     );
     coll.author_member_admit(
         "KB",
         &bfp,
         &bpk,
+        &wrap_public_for(&bsec),
         Role::Editor,
         "b",
-        wrap_to_member(&k, &bpk).unwrap(),
+        wrap_to_member(&k, &wrap_public_for(&bsec)).unwrap(),
         &ofp,
         &osec,
         &opk,
@@ -3127,9 +3128,10 @@ fn refresh_kb_content_key_re_derives_on_rotation_remaining_yes_removed_no() {
         "KB",
         &cfp,
         &cpk,
+        &wrap_public_for(&csec),
         Role::Editor,
         "c",
-        wrap_to_member(&k, &cpk).unwrap(),
+        wrap_to_member(&k, &wrap_public_for(&csec)).unwrap(),
         &ofp,
         &osec,
         &opk,
@@ -3140,8 +3142,14 @@ fn refresh_kb_content_key_re_derives_on_rotation_remaining_yes_removed_no() {
     let k2 = ContentKey::generate();
     assert_ne!(k.as_bytes(), k2.as_bytes());
     let rewraps = vec![
-        (ofp.clone(), wrap_to_member(&k2, &opk).unwrap()),
-        (cfp.clone(), wrap_to_member(&k2, &cpk).unwrap()),
+        (
+            ofp.clone(),
+            wrap_to_member(&k2, &wrap_public_for(&osec)).unwrap(),
+        ),
+        (
+            cfp.clone(),
+            wrap_to_member(&k2, &wrap_public_for(&csec)).unwrap(),
+        ),
     ];
     let delta = coll.author_rotate_on_remove("KB", &bfp, &rewraps, &ofp, &osec, &opk, 2000);
 
@@ -3570,8 +3578,13 @@ fn build_e2e_collection(
             0,
         );
         if encrypted {
+            // ADR-041 (#158 I1): wrap to the member's PUBLISHED X25519 wrap key.
             a.wrapped_key = Some(
-                mae_sync::content_crypto::wrap_to_member(key, &m.public().to_bytes()).unwrap(),
+                mae_sync::content_crypto::wrap_to_member(
+                    key,
+                    &mae_sync::content_crypto::wrap_public_for(&m.secret_bytes()),
+                )
+                .unwrap(),
             );
         }
         let asig = a.sign(&owner.secret_bytes());

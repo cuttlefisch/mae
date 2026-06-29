@@ -1952,6 +1952,14 @@ async fn handle_doc_request_inner(
             };
             info!(session = session_id, kb_id = %kb_id, "kb/join");
 
+            // ADR-041 (#158 I1): the joiner's PUBLISHED X25519 wrap key (hex), sent in the
+            // request — the daemon can't derive it (it's not the ed25519 session key), so
+            // the joiner publishes it for the owner to wrap the content key to on approval.
+            let join_wrap_pubkey: Option<[u8; 32]> = params["wrap_pubkey"]
+                .as_str()
+                .and_then(|h| hex::decode(h).ok())
+                .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok());
+
             // ADR-018 access gate (complete mediation): member → join; non-member
             // resolved by the KB's join policy (restrictive/invite/permissive).
             match kb_access(doc_store, &kb_id, auth_principal, KbOp::Join, transport).await {
@@ -1985,6 +1993,7 @@ async fn handle_doc_request_inner(
                             auth_label.unwrap_or(principal),
                             &now_stamp(),
                             auth_pubkey,
+                            join_wrap_pubkey.as_ref(),
                         );
                         let _ = persist_and_broadcast_collection(
                             doc_store,
