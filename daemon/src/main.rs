@@ -875,11 +875,17 @@ fn run_identity() -> i32 {
             return 1;
         }
     };
-    match mae_mcp::identity::Identity::load_or_generate(&dir, "daemon") {
-        Ok(id) => {
+    match mae_mcp::identity::Identity::load_or_generate_reporting(&dir, "daemon") {
+        Ok((id, newly_generated)) => {
             println!("Daemon identity ({}):", dir.join("id_ed25519").display());
             println!("  fingerprint: {}", id.fingerprint());
             println!("  public key:  {}", id.public().to_line());
+            if newly_generated {
+                // KL1 (SECURITY_REVIEW §6.1): make first creation loud + actionable for the
+                // operator — losing this key loses access to every shared KB (no recovery).
+                eprintln!();
+                eprintln!("  ⚠ {}", mae_mcp::identity::IDENTITY_BACKUP_ADVISORY);
+            }
             0
         }
         Err(e) => {

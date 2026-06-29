@@ -566,6 +566,30 @@ a PSK keystore / `collab-psk-command` for `psk` mode.
 - Firewall the port (`9473`) from untrusted networks; never bind `0.0.0.0` on a
   public IP without a VPN or firewall rule.
 
+### Back up your identity key
+
+In `key` mode (and for any KB you share or join, encrypted or not), your **Ed25519
+identity key** is the single root of your access:
+
+- It lives at `id_ed25519` in your collab directory — `$XDG_DATA_HOME/mae/collab/`
+  (`~/.local/share/mae/collab/` by default); the daemon's is under its own
+  `identity_dir`. The file is `0600` (owner-only), hex-encoded.
+- Everything else derives from it: your published X25519 **wrap key** (how the owner
+  seals a shared KB's content key to you) is derived from this seed, and your per-KB
+  content keys are recoverable from it. **Losing it means losing access to every KB you
+  share or join** — encrypted content becomes permanently unreadable.
+- **There is no recovery in this version.** Key *rotation* (ADR-040, `(rotate-identity)`)
+  requires the **existing** key to sign its successor, so it only helps for a *planned*
+  rotation while you still hold the key — not for a lost or destroyed one. (A
+  pre-registered offline recovery key is planned; see ADR-040 §Recovery-key design.)
+
+**So: back it up.** Copy `id_ed25519` (and `id_ed25519.pub`) to secure storage — a
+password manager, an encrypted volume, or an offline medium — the moment it is first
+generated. To migrate to a new device, copy the whole collab directory, or import an
+existing OpenSSH Ed25519 key (`mae` reuses it). If you suspect the key is compromised,
+do **not** rotate to a new key from the old one — have the KB owner remove you, rotate
+the content key (§D3), and re-join as a fresh principal (ADR-040 §compromise-recovery).
+
 ---
 
 ## 9. Data Lifecycle
