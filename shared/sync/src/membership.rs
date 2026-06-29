@@ -44,6 +44,16 @@ pub enum MembershipAction {
     /// emitting plaintext. Inert to membership derivation; read by [`derive_encryption`],
     /// which is monotonic (`e2e` is one-way — no downgrade).
     SetEncryption,
+    /// Identity key rotation (ADR-040). The holder of `author` (the OLD key) cross-signs a
+    /// successor: `subject` = the NEW key's fingerprint, and the op carries the new key's
+    /// published Ed25519 (`new_pubkey`) + X25519 wrap (`new_wrap_pubkey`, ADR-041/I1) keys.
+    /// Honored only if `author` is a current member at the op's causal point (you can only
+    /// rotate an identity you hold). On derivation the successor inherits the predecessor's
+    /// EXACT role/epoch/invited_by/can_invite and the predecessor is retired (its post-rebind
+    /// ops stop being honored) — additive, no history rewrite. The owner separately re-wraps
+    /// the content key to `new_wrap_pubkey`. NOT compromise-recovery (the old key signs, so a
+    /// thief could too) — that path is owner-eviction + re-join (ADR-040 §fork).
+    Rebind,
 }
 
 impl MembershipAction {
@@ -55,6 +65,7 @@ impl MembershipAction {
             MembershipAction::Revoke => "revoke",
             MembershipAction::SetGovernance => "set_governance",
             MembershipAction::SetEncryption => "set_encryption",
+            MembershipAction::Rebind => "rebind",
         }
     }
     pub fn parse(s: &str) -> Option<MembershipAction> {
@@ -65,6 +76,7 @@ impl MembershipAction {
             "revoke" => Some(MembershipAction::Revoke),
             "set_governance" => Some(MembershipAction::SetGovernance),
             "set_encryption" => Some(MembershipAction::SetEncryption),
+            "rebind" => Some(MembershipAction::Rebind),
             _ => None,
         }
     }
@@ -108,6 +120,17 @@ pub struct MembershipOp {
     /// wrapped key is part of the signed bytes); `None` keeps the byte-identical `v1`
     /// encoding so every pre-encryption op still verifies.
     pub wrapped_key: Option<Vec<u8>>,
+    /// ADR-040 §1: on a `Rebind`, the successor's published **Ed25519** key (`subject` is
+    /// its fingerprint). Carried so peers learn the new node-id and the owner can bind the
+    /// re-wrap; redundant-but-explicit (the fingerprint already commits to it). `Some` only
+    /// on `Rebind` ops, which use the `maememb/v3` canonical encoding (both rebind keys are
+    /// part of the signed bytes). `None` everywhere else keeps `v1`/`v2` byte-identical.
+    pub new_pubkey: Option<[u8; 32]>,
+    /// ADR-040 §3 + ADR-041/I1: on a `Rebind`, the successor's published **X25519 wrap** key
+    /// — what the owner seals the current content key to so the new identity can decrypt
+    /// (the wrap key is NOT derivable from the fingerprint, so it MUST be published here).
+    /// `Some` only on `Rebind` ops (`maememb/v3`).
+    pub new_wrap_pubkey: Option<[u8; 32]>,
 }
 
 impl MembershipOp {
@@ -121,10 +144,14 @@ impl MembershipOp {
             b.push(0);
         }
         let mut b = Vec::new();
-        // Versioned for backward compatibility: a `wrapped_key`-bearing op (ADR-037)
-        // is `v2` and appends the wrapped key; an op without one emits BYTE-IDENTICAL
-        // `v1` bytes, so every signature created before encryption still verifies.
-        let version = if self.wrapped_key.is_some() {
+        // Versioned for backward compatibility. A `Rebind` op (ADR-040) is `v3` and appends
+        // both new keys; a `wrapped_key`-bearing op (ADR-037) is `v2` and appends the wrapped
+        // key; an op without either emits BYTE-IDENTICAL `v1` bytes, so every signature
+        // created before encryption/rotation still verifies. (Rebind never carries a
+        // wrapped_key, and only Rebind carries the new keys, so the three are disjoint.)
+        let version = if self.action == MembershipAction::Rebind {
+            "maememb/v3"
+        } else if self.wrapped_key.is_some() {
             "maememb/v2"
         } else {
             "maememb/v1"
@@ -143,7 +170,18 @@ impl MembershipOp {
         );
         field(&mut b, &self.epoch.to_string());
         field(&mut b, &self.prev_hash);
-        if let Some(wk) = &self.wrapped_key {
+        if self.action == MembershipAction::Rebind {
+            // Both new keys are part of the signed bytes — empty string for a malformed
+            // Rebind missing one (it will fail to be honored in derivation regardless).
+            field(
+                &mut b,
+                &self.new_pubkey.map(hex::encode).unwrap_or_default(),
+            );
+            field(
+                &mut b,
+                &self.new_wrap_pubkey.map(hex::encode).unwrap_or_default(),
+            );
+        } else if let Some(wk) = &self.wrapped_key {
             field(&mut b, &hex::encode(wk));
         }
         b
@@ -629,7 +667,68 @@ fn authorized(
         // Encryption mode is owner-managed (ADR-039 F2). Inert to the member map; kept in
         // the valid set when owner-authored so `derive_encryption` can read it.
         MembershipAction::SetEncryption => author.role == Role::Owner,
+        // Identity rotation (ADR-040 §1): the author rotates THEIR OWN identity. The
+        // `mp.get` above already confirmed the author is a current member; here we require
+        // the op be well-formed and non-elevating:
+        //  - both successor keys present;
+        //  - `subject` is BOUND to `new_pubkey` (its fingerprint) — the endorsed successor
+        //    IS the named principal, so a member can't alias their seat onto an unrelated
+        //    key's fingerprint;
+        //  - `subject` is a FRESH identity, not already a member — you rotate INTO a new key,
+        //    never ONTO an existing member (which the post-pass would clobber/downgrade);
+        //  - not a self-rebind (`subject == author` is a no-op).
+        // The successor inherits the author's EXACT role/epoch in the derive post-pass, so a
+        // Rebind grants NO new authority (no self-elevation) — `author.role` is irrelevant.
+        MembershipAction::Rebind => match op.new_pubkey {
+            Some(npk) => {
+                op.new_wrap_pubkey.is_some()
+                    && fingerprint_of(&npk) == op.subject
+                    && op.subject != op.author
+                    && !mp.contains_key(&op.subject)
+            }
+            None => false,
+        },
     }
+}
+
+/// The set of fingerprints that ARE the anchored owner across identity rotations
+/// (ADR-040): the genesis owner plus every successor reachable through a chain of
+/// crypto-valid, fingerprint-bound `Rebind`s the owner (or a prior successor) signed.
+/// The owner-rooted readers ([`derive_governance`], [`derive_encryption`],
+/// [`find_wrapped_content_key`]) accept an op authored by ANY principal in this set, so a
+/// rotated owner keeps authoring governance / encryption / key-delivery ops. This is sound
+/// WITHOUT the full membership derive because each link carries the predecessor's signature
+/// (filtered by `verify_signed` upstream) and is fingerprint-bound — only the real
+/// key-holder can extend the chain — and E2e KBs are SingleOwner (the owner is irrevocable,
+/// so the owner's rebind chain is always honored; cf. `authorized`'s Rebind arm).
+fn owner_principal_chain(crypto: &[&SignedMembershipOp], genesis_owner: &str) -> BTreeSet<String> {
+    let mut chain: BTreeSet<String> = BTreeSet::new();
+    chain.insert(genesis_owner.to_string());
+    // Forward closure to a fixpoint so chained rotations (owner → o' → o'') all resolve.
+    loop {
+        let mut grew = false;
+        for o in crypto {
+            if o.op.action != MembershipAction::Rebind {
+                continue;
+            }
+            let bound =
+                o.op.new_pubkey
+                    .map(|pk| fingerprint_of(&pk) == o.op.subject)
+                    .unwrap_or(false);
+            if bound
+                && o.op.subject != o.op.author
+                && chain.contains(&o.op.author)
+                && !chain.contains(&o.op.subject)
+            {
+                chain.insert(o.op.subject.clone());
+                grew = true;
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    chain
 }
 
 /// Derive the KB's active [`Governance`] from the signed op-log (ADR-026 §A4).
@@ -656,12 +755,14 @@ pub fn derive_governance(ops: &[SignedMembershipOp], anchor_owner_pubkey: &[u8; 
         None => return Governance::SingleOwner, // no trusted root ⇒ default
     };
     let owner = genesis.op.subject.clone();
+    // Resolve the owner across identity rotations (ADR-040): accept any successor.
+    let owners = owner_principal_chain(&crypto, &owner);
     // Latest owner-authored SetGovernance in deterministic causal order.
     let order = causal_order(&by_hash, &genesis.chain_hash());
     let mut gov = Governance::SingleOwner;
     for h in &order {
         let o = &by_hash[h].op;
-        if o.action == MembershipAction::SetGovernance && o.author == owner {
+        if o.action == MembershipAction::SetGovernance && owners.contains(&o.author) {
             if let Some(g) = Governance::parse_spec(&o.subject) {
                 gov = g; // later ops in causal order override earlier ones
             }
@@ -692,11 +793,13 @@ pub fn derive_encryption(
         None => return crate::kb::Encryption::None,
     };
     let owner = genesis.op.subject.clone();
+    // Resolve the owner across identity rotations (ADR-040): a rotated owner still latches.
+    let owners = owner_principal_chain(&crypto, &owner);
     // Monotonic: ANY owner-authored `e2e` op latches E2e (one-way, no downgrade). No
     // causal ordering needed — once it's asserted, it stays.
     if crypto.iter().any(|o| {
         o.op.action == MembershipAction::SetEncryption
-            && o.op.author == owner
+            && owners.contains(&o.op.author)
             && o.op.subject == "e2e"
     }) {
         crate::kb::Encryption::E2e
@@ -762,12 +865,15 @@ pub fn find_wrapped_content_key(
             && &o.author_pubkey == anchor_owner_pubkey
     })?;
     let owner = genesis.op.subject.clone();
+    // Resolve the owner across identity rotations (ADR-040): a rotated owner's re-wraps
+    // (incl. the re-wrap delivering the key to a rotated MEMBER's new fingerprint) count.
+    let owners = owner_principal_chain(&crypto, &owner);
     let order = causal_order(&by_hash, &genesis.chain_hash());
     // Latest owner-authored wrapped key targeting me wins (rotation supersedes admit).
     let mut latest: Option<Vec<u8>> = None;
     for h in &order {
         let o = &by_hash[h].op;
-        if o.author == owner && o.subject == my_fingerprint {
+        if owners.contains(&o.author) && o.subject == my_fingerprint {
             if let Some(wk) = &o.wrapped_key {
                 latest = Some(wk.clone());
             }
@@ -867,6 +973,37 @@ fn build_members(
         }
         out.insert(principal, entry); // causal order ⇒ a later re-admit wins
     }
+    // ADR-040 identity-rotation post-pass. Apply honored `Rebind`s in causal order: each
+    // TRANSFERS the predecessor's derived entry to the successor (same role / epoch /
+    // invited_by / can_invite) and RETIRES the predecessor. Because this runs inside every
+    // `build_members` call — including `membership_at`, which builds over an op's causal
+    // past — a Rebind in an op's past retires the old key for THAT op's capability check, so
+    // a rotated-away key's later ops are not honored (retirement is causal, not global).
+    // Chained rebinds (a→b→c) compose by walking causal order. A Rebind whose predecessor is
+    // not a current member here (already retired/removed/never admitted) contributes nothing
+    // (fail-closed) — `authorized` already required a fresh, fingerprint-bound successor.
+    for h in order {
+        if !valid.contains(h) {
+            continue;
+        }
+        let op = &by_hash[h].op;
+        if op.action != MembershipAction::Rebind {
+            continue;
+        }
+        if let Some(mut entry) = out.remove(&op.author) {
+            entry.principal = op.subject.clone();
+            out.insert(op.subject.clone(), entry);
+            // Re-point provenance: members the predecessor invited now trace to the
+            // successor, so an inviter-removal cascade (CascadeAll) does NOT orphan a
+            // rotated inviter's invitees. The just-inserted successor entry keeps the
+            // predecessor's own `invited_by`, so it can't self-match here.
+            for m in out.values_mut() {
+                if m.invited_by == op.author {
+                    m.invited_by = op.subject.clone();
+                }
+            }
+        }
+    }
     out
 }
 
@@ -931,6 +1068,8 @@ mod tests {
             epoch: 0,
             prev_hash: prev_hash.into(),
             wrapped_key: None,
+            new_pubkey: None,
+            new_wrap_pubkey: None,
         }
     }
 
@@ -1101,6 +1240,8 @@ mod tests {
             epoch: 0,
             prev_hash: prev.into(),
             wrapped_key: None,
+            new_pubkey: None,
+            new_wrap_pubkey: None,
         };
         let sig = op.sign(&author.secret);
         SignedMembershipOp {
@@ -1129,6 +1270,8 @@ mod tests {
             epoch: 0,
             prev_hash: prev.into(),
             wrapped_key: Some(wrapped),
+            new_pubkey: None,
+            new_wrap_pubkey: None,
         };
         let sig = op.sign(&author.secret);
         SignedMembershipOp {
@@ -2563,5 +2706,399 @@ mod tests {
         assert!(!m.contains_key(&alice.fp), "alice removed by bob");
         assert!(!m.contains_key(&bob.fp), "bob removed by alice");
         assert!(m.contains_key(&owner.fp), "owner unaffected");
+    }
+
+    // --- ADR-040 identity rotation (Rebind) — adversarial set (§Threat model) ---
+
+    /// Build + sign a `Rebind`: predecessor `old` cross-signs successor `new`, publishing
+    /// `new`'s Ed25519 + X25519 wrap keys. `old`'s key signs (that is the whole point).
+    fn make_rebind(old: &Id, new: &Id, prev: &str) -> SignedMembershipOp {
+        let op = MembershipOp {
+            kb_id: "KB".into(),
+            action: MembershipAction::Rebind,
+            subject: new.fp.clone(),
+            role: None,
+            can_invite: false,
+            author: old.fp.clone(),
+            issued_at: 1,
+            expires_at: None,
+            epoch: 0,
+            prev_hash: prev.into(),
+            wrapped_key: None,
+            new_pubkey: Some(new.pubkey),
+            new_wrap_pubkey: Some(new.wrap_pub()),
+        };
+        let sig = op.sign(&old.secret);
+        SignedMembershipOp {
+            op,
+            sig,
+            author_pubkey: old.pubkey,
+        }
+    }
+
+    /// Happy path: a member rotates their identity; the successor inherits the EXACT
+    /// role / epoch / invited_by / can_invite and the predecessor is retired.
+    #[test]
+    fn rebind_transfers_membership_to_successor_and_retires_predecessor() {
+        let owner = id(1);
+        let bob = id(2);
+        let bob2 = id(3); // bob's new key
+        let g = genesis(&owner);
+        // Owner admits bob as Editor with the invite capability, at a non-zero epoch.
+        let mut admit = make(
+            &owner,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Editor),
+            true,
+            None,
+            &g.chain_hash(),
+        );
+        admit.op.epoch = 7;
+        admit.sig = admit.op.sign(&owner.secret);
+        let rebind = make_rebind(&bob, &bob2, &admit.chain_hash());
+
+        let m = derive_valid_members(&[g, admit, rebind], &owner.pubkey, 100);
+        assert!(!m.contains_key(&bob.fp), "predecessor retired");
+        let succ = m.get(&bob2.fp).expect("successor present");
+        assert_eq!(succ.role, Role::Editor, "inherits exact role");
+        assert!(succ.can_invite, "inherits can_invite");
+        assert_eq!(succ.epoch, 7, "inherits exact epoch (no rebase forced)");
+        assert_eq!(succ.invited_by, owner.fp, "inherits provenance");
+    }
+
+    /// A forged Rebind — the op claims `author = bob` but is signed by someone else —
+    /// does not verify, so it is never honored: bob stays, the impostor's successor is absent.
+    #[test]
+    fn forged_rebind_wrong_signer_is_rejected() {
+        let owner = id(1);
+        let bob = id(2);
+        let mallory_succ = id(9);
+        let g = genesis(&owner);
+        let admit = make(
+            &owner,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        // Mallory forges a rebind of bob→mallory_succ but signs with HER OWN key while
+        // claiming author = bob (and presenting bob's pubkey to dodge fingerprint binding).
+        let mut forged = make_rebind(&bob, &mallory_succ, &admit.chain_hash());
+        forged.sig = forged.op.sign(&mallory_succ.secret); // wrong signer
+                                                           // author_pubkey still bob's (so fingerprint_matches passes) but the sig won't verify.
+        let m = derive_valid_members(&[g, admit, forged], &owner.pubkey, 100);
+        assert!(
+            m.contains_key(&bob.fp),
+            "bob NOT rotated by a forged rebind"
+        );
+        assert!(
+            !m.contains_key(&mallory_succ.fp),
+            "forged successor never admitted"
+        );
+    }
+
+    /// A Rebind authored by a NON-member contributes nothing (you can only rotate an
+    /// identity you actually hold in this KB).
+    #[test]
+    fn rebind_by_non_member_contributes_nothing() {
+        let owner = id(1);
+        let stranger = id(5);
+        let stranger2 = id(6);
+        let g = genesis(&owner);
+        let rebind = make_rebind(&stranger, &stranger2, &g.chain_hash());
+        let m = derive_valid_members(&[g, rebind], &owner.pubkey, 100);
+        assert_eq!(m.len(), 1, "only the owner");
+        assert!(!m.contains_key(&stranger2.fp));
+    }
+
+    /// No self-elevation: a Viewer who rotates stays a Viewer — the successor inherits the
+    /// predecessor's exact (low) role, never more.
+    #[test]
+    fn rebind_does_not_elevate_role() {
+        let owner = id(1);
+        let viewer = id(2);
+        let viewer2 = id(3);
+        let g = genesis(&owner);
+        let admit = make(
+            &owner,
+            MembershipAction::Admit,
+            &viewer.fp,
+            Some(Role::Viewer),
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        let rebind = make_rebind(&viewer, &viewer2, &admit.chain_hash());
+        let m = derive_valid_members(&[g, admit, rebind], &owner.pubkey, 100);
+        assert_eq!(
+            m.get(&viewer2.fp).map(|x| x.role),
+            Some(Role::Viewer),
+            "successor inherits Viewer, not elevated"
+        );
+        assert!(
+            !m.get(&viewer2.fp).unwrap().can_invite,
+            "no invite capability gained"
+        );
+    }
+
+    /// The retired key is fenced: an op authored by the OLD key AFTER its rebind is not
+    /// honored, while the SAME op authored by the successor is.
+    #[test]
+    fn retired_key_later_op_is_fenced_but_successor_can_act() {
+        let owner = id(1);
+        let alice = id(2); // an admin who can invite
+        let alice2 = id(3);
+        let carol = id(4);
+        let g = genesis(&owner);
+        // Owner admits alice as Owner (so she may admit others).
+        let admit_alice = make(
+            &owner,
+            MembershipAction::Admit,
+            &alice.fp,
+            Some(Role::Owner),
+            true,
+            None,
+            &g.chain_hash(),
+        );
+        let rebind = make_rebind(&alice, &alice2, &admit_alice.chain_hash());
+        // The RETIRED alice key tries to admit carol after the rebind → must be fenced.
+        let stale_admit = make(
+            &alice,
+            MembershipAction::Admit,
+            &carol.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &rebind.chain_hash(),
+        );
+        let m = derive_valid_members(
+            &[g.clone(), admit_alice.clone(), rebind.clone(), stale_admit],
+            &owner.pubkey,
+            100,
+        );
+        assert!(
+            !m.contains_key(&carol.fp),
+            "retired predecessor key cannot admit"
+        );
+        // The SUCCESSOR key admitting carol IS honored (alice2 inherited Owner).
+        let good_admit = make(
+            &alice2,
+            MembershipAction::Admit,
+            &carol.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &rebind.chain_hash(),
+        );
+        let m2 = derive_valid_members(&[g, admit_alice, rebind, good_admit], &owner.pubkey, 100);
+        assert!(
+            m2.contains_key(&carol.fp),
+            "successor (inherited Owner) can admit"
+        );
+    }
+
+    /// Chained rebinds a→b→c resolve to c; all predecessors retired.
+    #[test]
+    fn chained_rebinds_resolve_to_the_final_successor() {
+        let owner = id(1);
+        let a = id(2);
+        let b = id(3);
+        let c = id(4);
+        let g = genesis(&owner);
+        let admit = make(
+            &owner,
+            MembershipAction::Admit,
+            &a.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        let r1 = make_rebind(&a, &b, &admit.chain_hash());
+        let r2 = make_rebind(&b, &c, &r1.chain_hash());
+        let m = derive_valid_members(&[g, admit, r1, r2], &owner.pubkey, 100);
+        assert!(!m.contains_key(&a.fp), "a retired");
+        assert!(!m.contains_key(&b.fp), "b retired");
+        assert_eq!(
+            m.get(&c.fp).map(|x| x.role),
+            Some(Role::Editor),
+            "final successor c inherits the role"
+        );
+    }
+
+    /// Clobber guard: a member cannot rebind ONTO an existing member's fingerprint (which
+    /// would overwrite/downgrade them). The successor must be a FRESH identity.
+    #[test]
+    fn rebind_onto_an_existing_member_is_rejected() {
+        let owner = id(1);
+        let bob = id(2); // a lowly editor
+        let g = genesis(&owner);
+        let admit_bob = make(
+            &owner,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        // bob attempts to rebind bob→owner (subject = owner's fp, new_pubkey = owner's REAL
+        // pubkey, so fingerprint binding passes) — to clobber the owner's entry with his own.
+        let op = MembershipOp {
+            kb_id: "KB".into(),
+            action: MembershipAction::Rebind,
+            subject: owner.fp.clone(),
+            role: None,
+            can_invite: false,
+            author: bob.fp.clone(),
+            issued_at: 1,
+            expires_at: None,
+            epoch: 0,
+            prev_hash: admit_bob.chain_hash(),
+            wrapped_key: None,
+            new_pubkey: Some(owner.pubkey),
+            new_wrap_pubkey: Some(owner.wrap_pub()),
+        };
+        let sig = op.sign(&bob.secret);
+        let attack = SignedMembershipOp {
+            op,
+            sig,
+            author_pubkey: bob.pubkey,
+        };
+        let m = derive_valid_members(&[g, admit_bob, attack], &owner.pubkey, 100);
+        assert_eq!(
+            m.get(&owner.fp).map(|x| x.role),
+            Some(Role::Owner),
+            "owner NOT downgraded by a clobber-rebind"
+        );
+        assert_eq!(
+            m.get(&bob.fp).map(|x| x.role),
+            Some(Role::Editor),
+            "bob unchanged (his rebind was not honored)"
+        );
+    }
+
+    /// Fingerprint binding: a Rebind whose `new_pubkey` does NOT hash to `subject` is not
+    /// honored (a member can't endorse an unrelated key under a fingerprint they chose).
+    #[test]
+    fn rebind_with_unbound_successor_key_is_rejected() {
+        let owner = id(1);
+        let bob = id(2);
+        let claimed = id(3); // the fingerprint bob claims to rotate to
+        let actual = id(4); // but publishes a DIFFERENT key
+        let g = genesis(&owner);
+        let admit = make(
+            &owner,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        let op = MembershipOp {
+            kb_id: "KB".into(),
+            action: MembershipAction::Rebind,
+            subject: claimed.fp.clone(),
+            role: None,
+            can_invite: false,
+            author: bob.fp.clone(),
+            issued_at: 1,
+            expires_at: None,
+            epoch: 0,
+            prev_hash: admit.chain_hash(),
+            wrapped_key: None,
+            new_pubkey: Some(actual.pubkey), // mismatched: fp(actual) != claimed.fp
+            new_wrap_pubkey: Some(actual.wrap_pub()),
+        };
+        let sig = op.sign(&bob.secret);
+        let bad = SignedMembershipOp {
+            op,
+            sig,
+            author_pubkey: bob.pubkey,
+        };
+        let m = derive_valid_members(&[g, admit, bad], &owner.pubkey, 100);
+        assert!(
+            m.contains_key(&bob.fp),
+            "bob not rotated by an unbound rebind"
+        );
+        assert!(!m.contains_key(&claimed.fp));
+    }
+
+    /// Order independence (N-peer convergence): the derived set is identical regardless of
+    /// the order ops arrive in (the resolver is causal, relay-independent).
+    #[test]
+    fn rebind_derivation_is_order_independent() {
+        let owner = id(1);
+        let bob = id(2);
+        let bob2 = id(3);
+        let g = genesis(&owner);
+        let admit = make(
+            &owner,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        let rebind = make_rebind(&bob, &bob2, &admit.chain_hash());
+        let forward = derive_valid_members(
+            &[g.clone(), admit.clone(), rebind.clone()],
+            &owner.pubkey,
+            100,
+        );
+        let reversed = derive_valid_members(&[rebind, admit, g], &owner.pubkey, 100);
+        assert_eq!(forward, reversed, "derivation is order-independent");
+    }
+
+    /// Owner rotation: a rotated OWNER keeps authoring owner-rooted ops. After owner→owner2,
+    /// an `e2e` enable + a member admit authored by owner2 are honored (the owner-principal
+    /// chain resolves the successor), and the predecessor owner is retired from membership.
+    #[test]
+    fn owner_rotation_is_honored_by_owner_rooted_readers() {
+        use crate::kb::Encryption;
+        let owner = id(1);
+        let owner2 = id(2);
+        let carol = id(3);
+        let g = genesis(&owner);
+        let rebind = make_rebind(&owner, &owner2, &g.chain_hash());
+        // owner2 (the successor) enables e2e + admits carol.
+        let enable = make(
+            &owner2,
+            MembershipAction::SetEncryption,
+            "e2e",
+            None,
+            false,
+            None,
+            &rebind.chain_hash(),
+        );
+        let admit_carol = make(
+            &owner2,
+            MembershipAction::Admit,
+            &carol.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &enable.chain_hash(),
+        );
+        let ops = [g, rebind, enable, admit_carol];
+        // derive_encryption resolves the owner across the rotation.
+        assert_eq!(
+            derive_encryption(&ops, &owner.pubkey),
+            Encryption::E2e,
+            "rotated owner can still latch e2e"
+        );
+        // Membership: owner retired, owner2 is Owner, carol admitted by owner2.
+        let m = derive_valid_members(&ops, &owner.pubkey, 100);
+        assert!(!m.contains_key(&owner.fp), "predecessor owner retired");
+        assert_eq!(m.get(&owner2.fp).map(|x| x.role), Some(Role::Owner));
+        assert!(
+            m.contains_key(&carol.fp),
+            "successor owner can still admit members"
+        );
     }
 }

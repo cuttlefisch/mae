@@ -546,6 +546,8 @@ const OP_PREV_KEY: &str = "prev_hash"; // chain_hash of the author's view-head (
 const OP_SIG_KEY: &str = "sig"; // hex(64-byte Ed25519 signature)
 const OP_PUBKEY_KEY: &str = "author_pubkey"; // hex(32-byte Ed25519 public key)
 const OP_WRAPPED_KEY: &str = "wrapped_key"; // ADR-037: hex(content key wrapped to subject); absent = none
+const OP_NEW_PUBKEY_KEY: &str = "new_pubkey"; // ADR-040: hex(successor Ed25519 pubkey) on a Rebind; absent = none
+const OP_NEW_WRAP_PUBKEY_KEY: &str = "new_wrap_pubkey"; // ADR-040/I1: hex(successor X25519 wrap pubkey) on a Rebind
 const MEMBER_ROLE_KEY: &str = "role";
 const MEMBER_LABEL_KEY: &str = "label";
 /// ADR-023: per-member monotonic authorization epoch, bumped by the daemon on
@@ -1512,6 +1514,17 @@ impl KbCollectionDoc {
                 wrapped_key: get(OP_WRAPPED_KEY)
                     .filter(|s| !s.is_empty())
                     .and_then(|s| hex::decode(s).ok()),
+                // ADR-040: present only on Rebind ops. A malformed/missing hex value decodes
+                // to None — the op then derives as the wrong version, fails its v3 signature,
+                // and is dropped by `verify_signed`, so it can't smuggle a bad successor key.
+                new_pubkey: get(OP_NEW_PUBKEY_KEY)
+                    .filter(|s| !s.is_empty())
+                    .and_then(|s| hex::decode(s).ok())
+                    .and_then(|b| b.try_into().ok()),
+                new_wrap_pubkey: get(OP_NEW_WRAP_PUBKEY_KEY)
+                    .filter(|s| !s.is_empty())
+                    .and_then(|s| hex::decode(s).ok())
+                    .and_then(|b| b.try_into().ok()),
             },
             sig,
             author_pubkey: pubkey,
@@ -1596,6 +1609,10 @@ impl KbCollectionDoc {
             // ADR-037: the caller sets this on an encrypted-KB admit (then signs);
             // the daemon's existing membership flows leave it None (v1, unchanged).
             wrapped_key: None,
+            // ADR-040: the caller sets these on a Rebind (then signs); all other ops
+            // leave them None (v1/v2, unchanged).
+            new_pubkey: None,
+            new_wrap_pubkey: None,
         }
     }
 
@@ -1646,6 +1663,13 @@ impl KbCollectionDoc {
         // ADR-037: only written for an encrypted-KB admit (absent ⇒ v1, unchanged).
         if let Some(wk) = &op.wrapped_key {
             rec.insert(&mut txn, OP_WRAPPED_KEY, hex::encode(wk));
+        }
+        // ADR-040: only written for a Rebind (absent ⇒ unchanged v1/v2).
+        if let Some(pk) = &op.new_pubkey {
+            rec.insert(&mut txn, OP_NEW_PUBKEY_KEY, hex::encode(pk));
+        }
+        if let Some(wpk) = &op.new_wrap_pubkey {
+            rec.insert(&mut txn, OP_NEW_WRAP_PUBKEY_KEY, hex::encode(wpk));
         }
         txn.encode_update_v1()
     }
@@ -1839,6 +1863,105 @@ impl KbCollectionDoc {
             let sig = op.sign(owner_secret);
             self.append_signed_op(&op, &sig, owner_pubkey);
         }
+        let sv_d = yrs::StateVector::decode_v1(&sv).unwrap_or_default();
+        let txn = self.doc.transact();
+        txn.encode_state_as_update_v1(&sv_d)
+    }
+
+    /// ADR-040 §1-2: author an identity-rotation `Rebind` into this KB's signed op-log.
+    /// The OLD key (`old_secret`/`old_pubkey`, fingerprint `old_fp`) cross-signs the
+    /// successor `new_fp` (which MUST equal `fingerprint_of(new_pubkey)`), publishing the
+    /// successor's Ed25519 (`new_pubkey`) + X25519 wrap (`new_wrap_pubkey`, ADR-041/I1)
+    /// keys so peers learn the new node-id and the owner can re-wrap the content key.
+    /// Honoring + retirement (the successor inherits the predecessor's exact role/epoch;
+    /// the old key's later ops stop being honored) are derived per-peer by
+    /// `derive_valid_members`. Returns the delta for the key-blind `kb/collection_op`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn author_rebind(
+        &mut self,
+        kb_id: &str,
+        old_fp: &str,
+        new_fp: &str,
+        new_pubkey: &[u8; 32],
+        new_wrap_pubkey: &[u8; 32],
+        old_secret: &[u8; 32],
+        old_pubkey: &[u8; 32],
+        now: u64,
+    ) -> Vec<u8> {
+        let sv = self.state_vector();
+        // subject = successor, author = predecessor (the OLD key signs). Role/epoch are
+        // inherited in derivation, so they are unset here (0/None).
+        let mut op = self.build_membership_op(
+            kb_id,
+            MembershipAction::Rebind,
+            new_fp,
+            None,
+            false,
+            old_fp,
+            now,
+            None,
+            0,
+        );
+        op.new_pubkey = Some(*new_pubkey);
+        op.new_wrap_pubkey = Some(*new_wrap_pubkey);
+        let sig = op.sign(old_secret);
+        self.append_signed_op(&op, &sig, old_pubkey);
+        let sv_d = yrs::StateVector::decode_v1(&sv).unwrap_or_default();
+        let txn = self.doc.transact();
+        txn.encode_state_as_update_v1(&sv_d)
+    }
+
+    /// ADR-040 §3: the owner re-wraps the CURRENT content key to a rotated member's
+    /// successor `new_fp`. Authors one owner-signed wrap-only `Admit` carrying `wrapped`
+    /// (the content key the caller sealed to the successor's published X25519 wrap key) and
+    /// re-asserting the successor's INHERITED role/can_invite/epoch verbatim (read from the
+    /// post-rebind derived membership) — so `derive_content_key` resolves for the new key
+    /// WITHOUT bumping the epoch (no forced rebase) or changing membership. Returns the
+    /// delta for the key-blind `kb/collection_op`. The caller holds the secret + content
+    /// key and does the sealing; this only authors the signed delivery op.
+    #[allow(clippy::too_many_arguments)]
+    pub fn author_rebind_rewrap(
+        &mut self,
+        kb_id: &str,
+        new_fp: &str,
+        new_pubkey: &[u8; 32],
+        wrapped: Vec<u8>,
+        owner_fp: &str,
+        owner_secret: &[u8; 32],
+        owner_pubkey: &[u8; 32],
+        now: u64,
+    ) -> Vec<u8> {
+        let sv = self.state_vector();
+        // Read the successor's inherited attributes from the post-rebind derived membership
+        // (the rebind already aliased old→new with old's role/epoch). Fall back defensively.
+        let ops = self.oplog_ops();
+        let governance = crate::membership::derive_governance(&ops, owner_pubkey);
+        let members = crate::membership::derive_valid_members_governed(
+            &ops,
+            owner_pubkey,
+            now,
+            governance,
+            &crate::membership::MembershipView::default(),
+        );
+        let (role, can_invite, epoch) = members
+            .get(new_fp)
+            .map(|m| (m.role, m.can_invite, m.epoch))
+            .unwrap_or((Role::Editor, false, self.epoch_of(new_fp)));
+        let _ = new_pubkey; // successor pubkey already published in the Rebind op
+        let mut op = self.build_membership_op(
+            kb_id,
+            MembershipAction::Admit,
+            new_fp,
+            Some(role),
+            can_invite,
+            owner_fp,
+            now,
+            None,
+            epoch,
+        );
+        op.wrapped_key = Some(wrapped);
+        let sig = op.sign(owner_secret);
+        self.append_signed_op(&op, &sig, owner_pubkey);
         let sv_d = yrs::StateVector::decode_v1(&sv).unwrap_or_default();
         let txn = self.doc.transact();
         txn.encode_state_as_update_v1(&sv_d)
@@ -3085,6 +3208,96 @@ mod tests {
         assert!(
             derive_content_key(&coll.oplog_ops(), &opk, &xfp, &_xsec).is_none(),
             "a non-member recovers no key"
+        );
+    }
+
+    /// ADR-040 §1-3 end-to-end through the yrs doc: a member rotates (`author_rebind`,
+    /// the v3 op survives serialization via `op_from_map`), the owner re-wraps the content
+    /// key to the successor (`author_rebind_rewrap`), and a FRESH PEER replica derives the
+    /// rotated membership + delivers the key to the new identity. Adversarial oracles:
+    /// the predecessor is retired from membership; a non-member still recovers nothing.
+    #[test]
+    fn rebind_rotates_identity_and_owner_rewrap_delivers_key_through_a_peer_replica() {
+        use crate::content_crypto::{wrap_public_for, wrap_to_member, ContentKey};
+        use crate::membership::{derive_content_key, derive_valid_members};
+        let (osec, opk, ofp) = oplog_keypair(1);
+        let (bsec, bpk, bfp) = oplog_keypair(2); // bob's OLD identity
+        let (b2sec, b2pk, b2fp) = oplog_keypair(3); // bob's NEW identity
+        let (_xsec, _xpk, xfp) = oplog_keypair(4); // a non-member
+        let mut coll = KbCollectionDoc::new_owned("KB", &ofp, "owner");
+        let k = ContentKey::generate();
+
+        // Owner enables e2e + admits bob (Editor), wrapping the key to bob's OLD wrap key.
+        let self_wrap = wrap_to_member(&k, &wrap_public_for(&osec)).unwrap();
+        coll.author_e2e_genesis("KB", &ofp, &osec, &opk, self_wrap, 1000);
+        let bob_wrap = wrap_to_member(&k, &wrap_public_for(&bsec)).unwrap();
+        coll.author_member_admit(
+            "KB",
+            &bfp,
+            &bpk,
+            &wrap_public_for(&bsec),
+            Role::Editor,
+            "bob",
+            bob_wrap,
+            &ofp,
+            &osec,
+            &opk,
+            1001,
+        );
+        assert_eq!(coll.role_of(&bfp), Some(Role::Editor));
+
+        // Bob rotates his identity: the OLD key cross-signs the NEW key.
+        coll.author_rebind(
+            "KB",
+            &bfp,
+            &b2fp,
+            &b2pk,
+            &wrap_public_for(&b2sec),
+            &bsec,
+            &bpk,
+            1002,
+        );
+        // Membership transfers to the successor; the predecessor is retired.
+        let m = derive_valid_members(&coll.oplog_ops(), &opk, 2000);
+        assert!(!m.contains_key(&bfp), "predecessor retired");
+        assert_eq!(
+            m.get(&b2fp).map(|x| x.role),
+            Some(Role::Editor),
+            "successor inherits Editor"
+        );
+        // ...but the successor can't read yet (no wrap targets the new key).
+        assert!(
+            derive_content_key(&coll.oplog_ops(), &opk, &b2fp, &b2sec).is_none(),
+            "successor cannot decrypt until the owner re-wraps"
+        );
+
+        // Owner observes the rebind and re-wraps the CURRENT key to the successor's wrap key.
+        let succ_wrap = wrap_to_member(&k, &wrap_public_for(&b2sec)).unwrap();
+        coll.author_rebind_rewrap("KB", &b2fp, &b2pk, succ_wrap, &ofp, &osec, &opk, 1003);
+
+        // The successor now recovers the SAME content key — proven on a FRESH PEER replica
+        // (the v3 Rebind op + the re-wrap Admit both survived yrs serialization).
+        let peer = KbCollectionDoc::from_bytes(&coll.encode_state()).unwrap();
+        let pm = derive_valid_members(&peer.oplog_ops(), &opk, 2000);
+        assert!(!pm.contains_key(&bfp), "peer agrees: predecessor retired");
+        assert!(pm.contains_key(&b2fp), "peer agrees: successor present");
+        assert_eq!(
+            derive_content_key(&peer.oplog_ops(), &opk, &b2fp, &b2sec).map(|c| *c.as_bytes()),
+            Some(*k.as_bytes()),
+            "the rotated member recovers the content key on a peer replica"
+        );
+        // A non-member still recovers nothing (selective oracle).
+        assert!(
+            derive_content_key(&peer.oplog_ops(), &opk, &xfp, &_xsec).is_none(),
+            "a non-member recovers no key after rotation"
+        );
+        // Planned-rotation property (ADR-040 threat model): the OLD key, still held by the
+        // user during a planned rotation, retains read access to pre-rotation content (its
+        // original wrap is untouched — only a §D3 rotation revokes that).
+        assert_eq!(
+            derive_content_key(&peer.oplog_ops(), &opk, &bfp, &bsec).map(|c| *c.as_bytes()),
+            Some(*k.as_bytes()),
+            "old key retains read access to history (planned rotation, not §D3 revocation)"
         );
     }
 
