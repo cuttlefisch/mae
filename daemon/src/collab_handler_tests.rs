@@ -2384,7 +2384,7 @@ async fn transport_policy_gate() {
     async fn share(store: &DocStore, owner: &str, member: &str, policy: TransportPolicy) {
         let mut coll = KbCollectionDoc::new_owned("KB", owner, "owner");
         coll.set_transport_policy(policy);
-        coll.add_pending(member, "bob", "t0", None);
+        coll.add_pending(member, "bob", "t0", None, None);
         coll.approve(member, SyncRole::Editor);
         store
             .share_doc("kbc:kbx", &coll.encode_state())
