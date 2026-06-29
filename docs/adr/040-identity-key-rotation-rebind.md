@@ -1,7 +1,8 @@
 # ADR-040: Identity key rotation & rebind (cross-signed, history-preserving)
 
-**Status:** Proposed (design). Closes security-review finding **I2** (`docs/SECURITY_REVIEW.md` §3,
-issue #158). No code yet — this ADR is the decision-of-record; implementation is staged behind it.
+**Status:** Accepted (design, 2026-06-29 — open questions resolved with the maintainer, see §Resolved
+decisions). Closes security-review finding **I2** (`docs/SECURITY_REVIEW.md` §3, issue #158). Implemented
+as one identity arc with **ADR-041** (I1 key separation — they land together).
 **Extends:** ADR-017/018 (asymmetric peer auth + identity-anchored access control), ADR-026 (signed,
 hash-chained membership op-log), ADR-037 (E2E content-key wraps in the op-log).
 **Relates:** ADR-023 (epoch fence), ADR-039 (identity/authz hardening — the local blocklist is the
@@ -138,29 +139,74 @@ point — ADR-040 is *rotation*, not *compromise recovery*.
 - Planned rotation does not deliver post-compromise security (by construction — that's the fork's right
   side, deferred).
 
-## Open questions (flagged for review — parked, not blocking the ADR)
+## Resolved decisions (review, 2026-06-29)
 
-- **Q1 — Owner co-sign?** Should a Rebind in an owner's KB also require the owner's counter-signature
-  (owner gates identity changes), or is old-key self-endorsement enough? *Recommendation:* self-endorsement
-  suffices for the membership transfer; the owner is already implicitly in the loop for E2e (must re-wrap),
-  so an explicit co-sign adds little for E2e and would block rotation in non-E2e KBs the owner is offline
-  for. Lean **no mandatory co-sign**; revisit if a KB wants stricter identity governance.
-- **Q2 — Pre-registered recovery key** for self-service *compromise* recovery (the deferred right side of
-  the fork). Worth a follow-up ADR? Prior art: Matrix master-key reset, TUF root rotation.
-- **Q3 — Interaction with HKDF per-context subkeys (#158 I1).** If we adopt I1 (derive signing/wrap/TLS
-  subkeys from one master seed), a rebind rotates the *master seed*, transparently rebinding all subkeys —
-  ADR-040 should be specified against the master identity, and I1 should land first or concurrently.
-- **Q4 — Expiry / rotation cadence.** Should rebinds carry an `expires_at` to encourage periodic rotation,
-  or stay purely event-driven? (N3 in the review already flags wall-clock `expires_at` fragility.)
+- **Q1 — Owner co-sign? → NO mandatory co-sign.** Old-key self-endorsement suffices for the membership
+  transfer; the owner is already implicitly in the loop for E2e (must re-wrap), and requiring a co-sign would
+  block rotation when the owner is offline. (Stricter per-KB identity governance is a possible later opt-in,
+  not v1.)
+- **Q2 — Compromise recovery → owner-mediated v1 NOW + pre-registered recovery key as the designed
+  fast-follow.** Recovery is a release gate, so it is no longer "deferred":
+  - **v1 (this arc, reuses shipped primitives):** a compromised principal is recovered by the **owner**:
+    `Remove` the compromised member → §D3 content-key rotation (ADR-037, shipped) → operators
+    `kb-block-member` the old fingerprint locally (ADR-039 A2, shipped #162) → the user **re-joins with a
+    fresh key as a new principal**. Works today end-to-end; the cost is loss of identity/membership
+    *continuity* on compromise (you come back as a new principal) and a dependency on the owner being
+    reachable. Document this as the v1 recovery flow.
+  - **v2 (designed next — see §Recovery-key design):** a **pre-registered offline recovery key** that can
+    author a `Rebind` even when the primary is compromised, giving *self-service* recovery WITH continuity.
+    Specified below so v1 doesn't paint us into a corner; implemented as the fast-follow.
+- **Q3 — I1 coupling → land I1 WITH I2 as one identity arc** (ADR-041). The identity grows a **separately
+  published X25519 wrap key** (the sender can't HKDF-derive a wrap key from only the recipient's *ed25519
+  public* key, so the recipient must publish it). A `Rebind` then rotates the master identity **and**
+  republishes the new wrap key coherently; the owner re-wraps to the new published wrap key. ADR-040 is
+  specified against the **master identity**; the wrap-key mechanics live in ADR-041.
+- **Q4 — Expiry → event-driven, NO `expires_at` on a Rebind.** Rotation is an explicit event; a wall-clock
+  `expires_at` is already flagged fragile (review N3) and peers can disagree on it. Cadence is operational
+  guidance, not a protocol field.
 
-## Implementation sketch (staged, post-acceptance)
+## Recovery-key design (v2 fast-follow — specified now, implemented after v1)
 
-1. `membership.rs`: `MembershipAction::Rebind`; `Rebind` op + `verify_signed`; the derive post-pass
-   (alias + retire) in `derive_valid_members_governed`; unit tests (the adversarial set above).
-2. `kb.rs`: `author_rebind(old_secret, new_fp, new_pubkey)` + owner re-wrap on observing a Rebind.
-3. Daemon `collab_handler`: accept a `Rebind` op via `kb/collection_op` (owner-gated like other signed
-   ops; key-blind); epoch fence unaffected (the successor inherits the epoch).
-4. Editor: `(rotate-identity)` Scheme/cmd/MCP — generate new key, fan out Rebinds across joined KBs,
-   update `known_hosts`; `mae-daemon authorize` for the new pubkey.
+A pre-registered **recovery key** `R` (a second Ed25519 keypair, generated at identity setup and kept
+**offline / out of the daemon**) is the authority that can rotate a *compromised* primary:
+
+- **Registration.** When a principal is admitted (or via a later self-authored op), it records a signed
+  `RecoveryKey { principal, recovery_pubkey }` — signed by the **primary** at a time it was uncompromised —
+  into each KB's membership op-log. Peers learn "principal P authorizes recovery-key R" the same way they
+  learn membership.
+- **Recovery.** A `Rebind { old_fp, new_fp, new_pubkey }` may be signed by **either** the old primary
+  (planned rotation, §Decision) **or** the registered recovery key `R` (compromise recovery). `derive_*`
+  honors a recovery-key-signed Rebind because `R` was endorsed by the principal before compromise — so even
+  if the attacker holds the primary, they cannot forge a recovery Rebind (they don't have `R`).
+- **Why offline matters.** `R`'s only job is to sign a rebind; it never touches content or transport, so it
+  can live on paper / a hardware token / a separate device. This is the Matrix master-key-reset / TUF
+  root-rotation pattern: a rarely-used high-value key that recovers the frequently-used one.
+- **Revoking a leaked recovery key.** A new `RecoveryKey` op (signed by the current primary) supersedes the
+  old one (latest-wins, like a wrap). Losing `R` itself falls back to owner-mediated recovery (v1).
+- **Threat note.** v2 closes the continuity gap of v1 (recover *as the same principal*) without trusting the
+  owner to be online — at the cost of the recovery-key storage/UX. v1 ships first; v2 is the fast-follow.
+
+## Implementation sketch (the identity arc — fewer, larger PRs)
+
+**PR 1 — I1 key separation (ADR-041), the foundation.** Identity publishes a distinct HKDF-derived X25519
+wrap key; `content_crypto` wraps to the *published* wrap key (not the ed25519→x25519 map); membership/admit
+carries it; `derive_content_key` unwraps with the HKDF-derived wrap secret. Rotation builds on this.
+
+**PR 2 — I2 rotation + owner-mediated recovery (this ADR).**
+1. `membership.rs`: `MembershipAction::Rebind`; `Rebind` op (carries `new_pubkey` + the new published wrap
+   key) + `verify_signed`; the derive post-pass (alias role/epoch + retire old) in
+   `derive_valid_members_governed`; the adversarial test set (§Consequences).
+2. `kb.rs`: `author_rebind(old_secret, new_fp, new_pubkey, new_wrap_pub)` + owner re-wrap to the new wrap
+   key on observing a Rebind.
+3. Daemon `collab_handler`: accept a `Rebind` via `kb/collection_op` (owner-gated, key-blind); epoch fence
+   unaffected (successor inherits the epoch).
+4. Editor: `(rotate-identity)` Scheme/cmd/MCP — generate the new keypair, fan out Rebinds across joined KBs,
+   update `known_hosts`; `mae-daemon authorize` the new pubkey. **Recovery v1** is the documented
+   owner-flow (Remove → §D3 rotate → `kb-block-member` → re-join), no new code beyond the docs + verifying
+   the path.
 5. Dialer: re-anchor a peer on its `new_pubkey`/node-id from the Rebind.
-6. Docs: `SECURITY_REVIEW.md` I2 → resolved-by-ADR-040; `E2E_ENCRYPTION.md` §7 (the read-access caveat).
+6. Docs: `SECURITY_REVIEW.md` I1+I2 → resolved-by; `E2E_ENCRYPTION.md` §7 (planned-rotation read-access
+   caveat); the manual's admin/maintenance section (rotation + recovery runbook — a release gate).
+
+**PR 3 (fast-follow) — recovery key v2** (§Recovery-key design): `RecoveryKey` op + recovery-key-signed
+Rebind path + offline-key storage/UX.
