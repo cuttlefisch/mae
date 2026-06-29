@@ -555,8 +555,13 @@ const MEMBER_LABEL_KEY: &str = "label";
 /// Stored as a decimal string (mirrors the role/label string fields).
 const MEMBER_EPOCH_KEY: &str = "epoch";
 const MEMBER_PUBKEY_KEY: &str = "pubkey"; // hex Ed25519, for E2e re-wrap on rotation (ADR-038)
+                                          // ADR-041 (#158 I1): the member's PUBLISHED X25519 wrap key (hex), distinct from the
+                                          // Ed25519 identity. The owner wraps the content key to THIS, not to a key derived from
+                                          // the ed25519 pubkey (which is impossible). Stored alongside the ed25519 pubkey.
+const MEMBER_WRAP_PUBKEY_KEY: &str = "wrap_pubkey";
 const PENDING_AT_KEY: &str = "requested_at";
 const PENDING_PUBKEY_KEY: &str = "pubkey"; // hex Ed25519 (ADR-038, optional)
+const PENDING_WRAP_PUBKEY_KEY: &str = "wrap_pubkey"; // hex X25519 wrap key (ADR-041 / I1)
 
 /// Collection schema version. v2 = ADR-018 (principal-anchored owner/roles/policy).
 pub const SCHEMA_VERSION: u32 = 2;
@@ -750,6 +755,10 @@ pub struct PendingRequest {
     /// `wrap_to_member` the content key on approval (the owner has only the fingerprint
     /// otherwise). `None` for a pre-ADR-038 pending record (backward-compatible).
     pub pubkey: Option<[u8; 32]>,
+    /// ADR-041 (#158 I1): the joiner's PUBLISHED X25519 wrap key (the owner wraps the
+    /// content key to THIS, not the ed25519 key). The joiner sends it on `kb/join` (the
+    /// daemon can't derive it). `None` for a pre-ADR-041 record.
+    pub wrap_pubkey: Option<[u8; 32]>,
 }
 
 /// A KB collection manifest represented as a yrs document.
@@ -1153,11 +1162,17 @@ impl KbCollectionDoc {
                         .map(|p| p.to_string(&txn))
                         .and_then(|h| hex::decode(h).ok())
                         .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok());
+                    let wrap_pubkey = req
+                        .get(&txn, PENDING_WRAP_PUBKEY_KEY)
+                        .map(|p| p.to_string(&txn))
+                        .and_then(|h| hex::decode(h).ok())
+                        .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok());
                     out.push(PendingRequest {
                         fingerprint: fp.to_string(),
                         label,
                         requested_at,
                         pubkey,
+                        wrap_pubkey,
                     });
                 }
             }
@@ -1382,6 +1397,7 @@ impl KbCollectionDoc {
         label: &str,
         requested_at: &str,
         pubkey: Option<&[u8; 32]>,
+        wrap_pubkey: Option<&[u8; 32]>,
     ) -> Vec<u8> {
         let root = self.doc.get_or_insert_map(COLLECTION_MAP);
         let mut txn = self.doc.transact_mut();
@@ -1394,6 +1410,11 @@ impl KbCollectionDoc {
         req.insert(&mut txn, PENDING_AT_KEY, requested_at);
         if let Some(pk) = pubkey {
             req.insert(&mut txn, PENDING_PUBKEY_KEY, hex::encode(pk));
+        }
+        // ADR-041 (#158 I1): the joiner's published X25519 wrap key — what the owner wraps
+        // the content key to. Sent by the joiner (the daemon can't derive it).
+        if let Some(wk) = wrap_pubkey {
+            req.insert(&mut txn, PENDING_WRAP_PUBKEY_KEY, hex::encode(wk));
         }
         txn.encode_update_v1()
     }
@@ -1698,11 +1719,13 @@ impl KbCollectionDoc {
     /// (the dual-write). `subject_pubkey` is also stored for later re-wrap on rotation.
     /// Returns the delta to ship via `kb/collection_op`.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn author_member_admit(
         &mut self,
         kb_id: &str,
         subject_fp: &str,
         subject_pubkey: &[u8; 32],
+        subject_wrap_pubkey: &[u8; 32],
         role: Role,
         label: &str,
         wrapped_key: Vec<u8>,
@@ -1712,9 +1735,11 @@ impl KbCollectionDoc {
         now: u64,
     ) -> Vec<u8> {
         let sv = self.state_vector();
-        // Mirror into member_roles (sets role + advances epoch) + store the pubkey.
+        // Mirror into member_roles (sets role + advances epoch) + store the pubkeys.
         self.upsert_member(subject_fp, label, role);
         self.store_member_pubkey(subject_fp, subject_pubkey);
+        self.store_member_wrap_pubkey(subject_fp, subject_wrap_pubkey); // ADR-041 I1
+
         // Author the signed Admit at the SAME epoch member_roles just assigned.
         let epoch = self.epoch_of(subject_fp);
         let mut op = self.build_membership_op(
@@ -1839,6 +1864,36 @@ impl KbCollectionDoc {
             if let Some(Out::YMap(entry)) = m.get(&txn, principal) {
                 return entry
                     .get(&txn, MEMBER_PUBKEY_KEY)
+                    .map(|p| p.to_string(&txn))
+                    .and_then(|h| hex::decode(h).ok())
+                    .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok());
+            }
+        }
+        None
+    }
+
+    /// ADR-041 (#158 I1): record a member's PUBLISHED X25519 wrap key (within the open
+    /// admit/genesis txn — same delta as the role), so rotation can re-wrap the content
+    /// key to it. No-op if the member entry doesn't exist yet.
+    fn store_member_wrap_pubkey(&mut self, principal: &str, wrap_pubkey: &[u8; 32]) {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let mut txn = self.doc.transact_mut();
+        if let Some(Out::YMap(m)) = root.get(&txn, COLL_MEMBER_ROLES_KEY) {
+            if let Some(Out::YMap(entry)) = m.get(&txn, principal) {
+                entry.insert(&mut txn, MEMBER_WRAP_PUBKEY_KEY, hex::encode(wrap_pubkey));
+            }
+        }
+    }
+
+    /// A member's stored X25519 wrap key (ADR-041), if recorded — the key the owner wraps
+    /// the content key to on admit/rotation.
+    pub fn member_wrap_pubkey(&self, principal: &str) -> Option<[u8; 32]> {
+        let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+        let txn = self.doc.transact();
+        if let Some(Out::YMap(m)) = root.get(&txn, COLL_MEMBER_ROLES_KEY) {
+            if let Some(Out::YMap(entry)) = m.get(&txn, principal) {
+                return entry
+                    .get(&txn, MEMBER_WRAP_PUBKEY_KEY)
                     .map(|p| p.to_string(&txn))
                     .and_then(|h| hex::decode(h).ok())
                     .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok());
@@ -2722,7 +2777,7 @@ mod tests {
     #[test]
     fn collection_v2_pending_then_approve_atomic() {
         let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:o", "alice");
-        coll.add_pending("SHA256:bob", "bob", "2026-06-16T00:00:00Z", None);
+        coll.add_pending("SHA256:bob", "bob", "2026-06-16T00:00:00Z", None, None);
         assert_eq!(coll.pending().len(), 1);
         assert_eq!(coll.role_of("SHA256:bob"), None);
         coll.approve("SHA256:bob", Role::Editor);
@@ -2741,7 +2796,7 @@ mod tests {
         let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:o", "alice");
         // With a pubkey: pending() recovers it, so the owner can wrap_to_member on approve.
         let pk = [42u8; 32];
-        coll.add_pending("SHA256:bob", "bob", "t", Some(&pk));
+        coll.add_pending("SHA256:bob", "bob", "t", Some(&pk), None);
         let bob = coll
             .pending()
             .into_iter()
@@ -2753,7 +2808,7 @@ mod tests {
             "the joiner's pubkey round-trips through the pending record"
         );
         // Without a pubkey (a v1 record): reads back None (backward-compatible).
-        coll.add_pending("SHA256:carol", "carol", "t", None);
+        coll.add_pending("SHA256:carol", "carol", "t", None, None);
         let carol = coll
             .pending()
             .into_iter()
@@ -2787,7 +2842,7 @@ mod tests {
         let mut coll = KbCollectionDoc::new_owned("KB", "SHA256:o", "alice");
         coll.upsert_member("SHA256:bob", "bob", Role::Viewer);
         coll.set_join_policy(JoinPolicy::Permissive);
-        coll.add_pending("SHA256:eve", "eve", "t", None);
+        coll.add_pending("SHA256:eve", "eve", "t", None, None);
         let bytes = coll.encode_state();
         let r = KbCollectionDoc::from_bytes(&bytes).unwrap();
         assert_eq!(r.schema_version(), 2);
@@ -2890,7 +2945,7 @@ mod tests {
 
     #[test]
     fn author_e2e_genesis_signs_encryption_self_wraps_and_relays_to_peers() {
-        use crate::content_crypto::{wrap_to_member, ContentKey};
+        use crate::content_crypto::{wrap_public_for, wrap_to_member, ContentKey};
         use crate::membership::{derive_content_key, derive_encryption};
         let (secret, pubkey, owner_fp) = oplog_keypair(1);
         let mut coll = KbCollectionDoc::new_owned("KB", &owner_fp, "alice");
@@ -2901,7 +2956,7 @@ mod tests {
         );
 
         let k = ContentKey::generate();
-        let self_wrap = wrap_to_member(&k, &pubkey).unwrap();
+        let self_wrap = wrap_to_member(&k, &wrap_public_for(&secret)).unwrap();
         let delta = coll.author_e2e_genesis("KB", &owner_fp, &secret, &pubkey, self_wrap, 1000);
 
         // Authoritative mode is the SIGNED op-log; the unsigned flag mirrors it; and the
@@ -2948,7 +3003,7 @@ mod tests {
 
         // Idempotent: a second enable on the already-genesis'd KB adds no second genesis.
         let len_before = coll.oplog_len();
-        let k2_wrap = wrap_to_member(&k, &pubkey).unwrap();
+        let k2_wrap = wrap_to_member(&k, &wrap_public_for(&secret)).unwrap();
         coll.author_e2e_genesis("KB", &owner_fp, &secret, &pubkey, k2_wrap, 1001);
         assert!(coll.oplog_len() >= len_before, "re-enable never DROPS ops");
         assert_eq!(
@@ -2960,7 +3015,7 @@ mod tests {
 
     #[test]
     fn author_member_admit_delivers_the_key_stores_pubkey_and_keeps_epoch_consistent() {
-        use crate::content_crypto::{wrap_to_member, ContentKey};
+        use crate::content_crypto::{wrap_public_for, wrap_to_member, ContentKey};
         use crate::membership::derive_content_key;
         let (osec, opk, ofp) = oplog_keypair(1);
         let (msec, mpk, mfp) = oplog_keypair(2);
@@ -2968,15 +3023,16 @@ mod tests {
         let mut coll = KbCollectionDoc::new_owned("KB", &ofp, "owner");
         let k = ContentKey::generate();
         // Owner enables (genesis + self-wrap).
-        let self_wrap = wrap_to_member(&k, &opk).unwrap();
+        let self_wrap = wrap_to_member(&k, &wrap_public_for(&osec)).unwrap();
         coll.author_e2e_genesis("KB", &ofp, &osec, &opk, self_wrap, 1000);
 
         // Owner admits a member, wrapping the content key to THEM.
-        let member_wrap = wrap_to_member(&k, &mpk).unwrap();
+        let member_wrap = wrap_to_member(&k, &wrap_public_for(&msec)).unwrap();
         let delta = coll.author_member_admit(
             "KB",
             &mfp,
             &mpk,
+            &wrap_public_for(&msec),
             Role::Editor,
             "m",
             member_wrap,
@@ -3043,7 +3099,7 @@ mod tests {
     // onto the SetEncryption head rather than masquerading as a genesis).
     #[test]
     fn member_admit_must_chain_on_the_current_collection_not_a_stale_pre_enable_base() {
-        use crate::content_crypto::{wrap_to_member, ContentKey};
+        use crate::content_crypto::{wrap_public_for, wrap_to_member, ContentKey};
         use crate::membership::{derive_content_key, derive_encryption};
         let (osec, opk, ofp) = oplog_keypair(11);
         let (msec, mpk, mfp) = oplog_keypair(22);
@@ -3062,7 +3118,7 @@ mod tests {
             &ofp,
             &osec,
             &opk,
-            wrap_to_member(&k, &opk).unwrap(),
+            wrap_to_member(&k, &wrap_public_for(&osec)).unwrap(),
             1000,
         );
         daemon.apply_update(&enable_delta).unwrap();
@@ -3088,9 +3144,10 @@ mod tests {
                 "KB",
                 &mfp,
                 &mpk,
+                &wrap_public_for(&msec),
                 Role::Editor,
                 "m",
-                wrap_to_member(&k, &mpk).unwrap(),
+                wrap_to_member(&k, &wrap_public_for(&msec)).unwrap(),
                 &ofp,
                 &osec,
                 &opk,
@@ -3114,9 +3171,10 @@ mod tests {
             "KB",
             &mfp,
             &mpk,
+            &wrap_public_for(&msec),
             Role::Editor,
             "m",
-            wrap_to_member(&k, &mpk).unwrap(),
+            wrap_to_member(&k, &wrap_public_for(&msec)).unwrap(),
             &ofp,
             &osec,
             &opk,
@@ -3168,7 +3226,7 @@ mod tests {
         // Remove B with a fresh k'. The remaining two must CONVERGE on k' and the removed B
         // must keep ONLY the old k (reads nothing new), not break entirely — proving the
         // rotation denies k' specifically, rather than just severing B's pipeline.
-        use crate::content_crypto::{wrap_to_member, ContentKey};
+        use crate::content_crypto::{wrap_public_for, wrap_to_member, ContentKey};
         use crate::membership::{
             derive_content_key, derive_governance, derive_valid_members_governed, MembershipView,
         };
@@ -3183,16 +3241,17 @@ mod tests {
             &ofp,
             &osec,
             &opk,
-            wrap_to_member(&k, &opk).unwrap(),
+            wrap_to_member(&k, &wrap_public_for(&osec)).unwrap(),
             1000,
         );
         coll.author_member_admit(
             "KB",
             &bfp,
             &bpk,
+            &wrap_public_for(&bsec),
             Role::Editor,
             "b",
-            wrap_to_member(&k, &bpk).unwrap(),
+            wrap_to_member(&k, &wrap_public_for(&bsec)).unwrap(),
             &ofp,
             &osec,
             &opk,
@@ -3202,9 +3261,10 @@ mod tests {
             "KB",
             &cfp,
             &cpk,
+            &wrap_public_for(&csec),
             Role::Editor,
             "c",
-            wrap_to_member(&k, &cpk).unwrap(),
+            wrap_to_member(&k, &wrap_public_for(&csec)).unwrap(),
             &ofp,
             &osec,
             &opk,
@@ -3226,8 +3286,14 @@ mod tests {
         let k2 = ContentKey::generate();
         assert_ne!(k.as_bytes(), k2.as_bytes(), "fresh rotation key");
         let rewraps = vec![
-            (ofp.clone(), wrap_to_member(&k2, &opk).unwrap()),
-            (cfp.clone(), wrap_to_member(&k2, &cpk).unwrap()),
+            (
+                ofp.clone(),
+                wrap_to_member(&k2, &wrap_public_for(&osec)).unwrap(),
+            ),
+            (
+                cfp.clone(),
+                wrap_to_member(&k2, &wrap_public_for(&csec)).unwrap(),
+            ),
         ];
         let delta = coll.author_rotate_on_remove("KB", &bfp, &rewraps, &ofp, &osec, &opk, 2000);
 

@@ -3392,7 +3392,16 @@ async fn run_collab_task(
                                         (id.clone(), mae_sync::encoding::update_to_base64(sv))
                                     })
                                     .collect();
-                                let req = mae_sync::wire::kb_join_request(req_id, &kb_id, &svs_b64);
+                                let mut req = mae_sync::wire::kb_join_request(req_id, &kb_id, &svs_b64);
+                                // ADR-041 (#158 I1): publish our X25519 wrap key so the owner can
+                                // wrap the content key to it on approval (the daemon can't derive
+                                // it). Only in key mode (no identity ⇒ no E2e anyway).
+                                if let Some(idy) = signing_identity.as_ref() {
+                                    let wrap_pub = mae_sync::content_crypto::wrap_public_for(&idy.secret_bytes());
+                                    if let Some(p) = req.get_mut("params").and_then(|p| p.as_object_mut()) {
+                                        p.insert("wrap_pubkey".to_string(), serde_json::Value::String(hex::encode(wrap_pub)));
+                                    }
+                                }
                                 let body = match serde_json::to_vec(&req) {
                                     Ok(b) => b,
                                     Err(e) => { error!("kb join serialize error: {e}"); continue; }
@@ -3618,13 +3627,18 @@ async fn run_collab_task(
                                                 if *fp == member {
                                                     continue;
                                                 }
-                                                let pk = if *fp == owner_fp {
-                                                    Some(owner_pubkey)
+                                                // ADR-041 (#158 I1): re-wrap to each member's
+                                                // PUBLISHED X25519 wrap key — the owner's own
+                                                // (derived from its seed) or the stored member key.
+                                                let wrap_pk = if *fp == owner_fp {
+                                                    Some(mae_sync::content_crypto::wrap_public_for(
+                                                        &owner_secret,
+                                                    ))
                                                 } else {
-                                                    coll.member_pubkey(fp)
+                                                    coll.member_wrap_pubkey(fp)
                                                 };
-                                                match pk.and_then(|pk| {
-                                                    mae_sync::content_crypto::wrap_to_member(&k2, &pk)
+                                                match wrap_pk.and_then(|wpk| {
+                                                    mae_sync::content_crypto::wrap_to_member(&k2, &wpk)
                                                         .ok()
                                                 }) {
                                                     Some(w) => rewraps.push((fp.clone(), w)),
@@ -3765,14 +3779,21 @@ async fn run_collab_task(
                                 if let Ok(mut coll) =
                                     mae_sync::kb::KbCollectionDoc::from_bytes(&base_state)
                                 {
-                                    let member_pk = coll
+                                    let pend = coll
                                         .pending()
                                         .into_iter()
-                                        .find(|p| p.fingerprint == principal)
-                                        .and_then(|p| p.pubkey);
-                                    if let Some(member_pk) = member_pk {
+                                        .find(|p| p.fingerprint == principal);
+                                    // ADR-041 (#158 I1): wrap the content key to the joiner's
+                                    // PUBLISHED X25519 wrap key (not the ed25519 key). Both ride
+                                    // the pending record; admit needs both (ed25519 for ADR-038
+                                    // rotation bookkeeping, wrap key for the actual wrap).
+                                    let member_pk = pend.as_ref().and_then(|p| p.pubkey);
+                                    let member_wrap_pk = pend.as_ref().and_then(|p| p.wrap_pubkey);
+                                    if let (Some(member_pk), Some(member_wrap_pk)) =
+                                        (member_pk, member_wrap_pk)
+                                    {
                                         if let Ok(wrapped) =
-                                            mae_sync::content_crypto::wrap_to_member(&key, &member_pk)
+                                            mae_sync::content_crypto::wrap_to_member(&key, &member_wrap_pk)
                                         {
                                             let role_enum = mae_sync::kb::Role::parse(&role)
                                                 .unwrap_or(mae_sync::kb::Role::Editor);
@@ -3781,8 +3802,8 @@ async fn run_collab_task(
                                                 .map(|d| d.as_secs())
                                                 .unwrap_or(0);
                                             let delta = coll.author_member_admit(
-                                                &kb_id, &principal, &member_pk, role_enum,
-                                                &principal, wrapped, &id.fingerprint(),
+                                                &kb_id, &principal, &member_pk, &member_wrap_pk,
+                                                role_enum, &principal, wrapped, &id.fingerprint(),
                                                 &id.secret_bytes(), &id.public().to_bytes(), now,
                                             );
                                             if let Some(ref mut w) = writer {
@@ -3906,7 +3927,9 @@ async fn run_collab_task(
                                                     k
                                                 }
                                             };
-                                            match mae_sync::content_crypto::wrap_to_member(&key, &owner_pubkey) {
+                                            // ADR-041 (#158 I1): self-wrap to the owner's OWN
+                                            // published X25519 wrap key (derived from its seed).
+                                            match mae_sync::content_crypto::wrap_to_member(&key, &mae_sync::content_crypto::wrap_public_for(&owner_secret)) {
                                                 Ok(self_wrap) => {
                                                     let now = std::time::SystemTime::now()
                                                         .duration_since(std::time::UNIX_EPOCH)
