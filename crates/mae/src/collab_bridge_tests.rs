@@ -2681,6 +2681,84 @@ fn collab_kb_manual_sync_mode_suppresses_auto_update() {
     );
 }
 
+/// #156 F5 — the manifest-title leak oracle (the attacker's test). A node added to an
+/// E2e KB must NOT carry its cleartext title into the manifest the key-blind daemon
+/// stores; the title is blanked at the editor before the `kb/collection_node_add` is
+/// sent (the real title is encrypted in the node op-set). Selective control: on an
+/// UNENCRYPTED KB the title rides along as before.
+#[test]
+fn manifest_title_blanked_on_e2e_kb_only() {
+    use mae_mcp::identity::Identity;
+    let title = "Secret Project Roadmap";
+
+    // Build a SIGNED-e2e collection replica (downgrade-resistant detection) for kb-e2e,
+    // and a plain replica for kb-plain.
+    let owner = Identity::generate("owner");
+    let (ofp, opk, osec) = (
+        owner.fingerprint(),
+        owner.public().to_bytes(),
+        owner.secret_bytes(),
+    );
+    let mut e2e = mae_sync::kb::KbCollectionDoc::new_owned("E2E", &ofp, "owner");
+    let k = mae_sync::content_crypto::ContentKey::generate();
+    let wrap = mae_sync::content_crypto::wrap_to_member(&k, &opk).unwrap();
+    e2e.author_e2e_genesis("kb-e2e", &ofp, &osec, &opk, wrap, 1000);
+    let plain = mae_sync::kb::KbCollectionDoc::new_owned("PLAIN", &ofp, "owner");
+
+    let mut editor = Editor::new();
+    editor.collab.status = CollabStatus::Connected { peer_count: 1 };
+    editor
+        .collab
+        .kb_collection_state
+        .insert("kb-e2e".to_string(), e2e.encode_state());
+    editor
+        .collab
+        .kb_collection_state
+        .insert("kb-plain".to_string(), plain.encode_state());
+    // Same node+title queued for BOTH KBs (an add op carries the title).
+    editor.collab.pending_kb_manifest.push((
+        "kb-e2e".to_string(),
+        "concept:n".to_string(),
+        title.to_string(),
+        true,
+    ));
+    editor.collab.pending_kb_manifest.push((
+        "kb-plain".to_string(),
+        "concept:n".to_string(),
+        title.to_string(),
+        true,
+    ));
+
+    let (tx, mut rx) = mpsc::channel(8);
+    drain_collab_intents(&mut editor, &tx);
+
+    let mut e2e_title = None;
+    let mut plain_title = None;
+    while let Ok(cmd) = rx.try_recv() {
+        if let CollabCommand::KbCollectionNode {
+            kb_id, title, add, ..
+        } = cmd
+        {
+            assert!(add);
+            match kb_id.as_str() {
+                "kb-e2e" => e2e_title = Some(title),
+                "kb-plain" => plain_title = Some(title),
+                _ => {}
+            }
+        }
+    }
+    assert_eq!(
+        e2e_title.as_deref(),
+        Some(""),
+        "E2e manifest add must blank the cleartext title (no leak to the key-blind daemon)"
+    );
+    assert_eq!(
+        plain_title.as_deref(),
+        Some(title),
+        "the unencrypted manifest still carries the title (selective control)"
+    );
+}
+
 #[test]
 fn collab_kb_drain_pending_updates_sends_commands() {
     let mut editor = Editor::new();
