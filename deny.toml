@@ -23,6 +23,9 @@ ignore = [
     { id = "RUSTSEC-2024-0384", reason = "sled transitive dep, no upstream fix" },
     # instant unmaintained (cozo → sled → parking_lot 0.11 → …)
     { id = "RUSTSEC-2025-0056", reason = "sled transitive dep, no upstream fix" },
+    # ttf-parser unmaintained (winit → sctk-adwaita → ab_glyph → owned_ttf_parser → ttf-parser);
+    # GUI-only font path, no safe upgrade available upstream (advisory says so explicitly)
+    { id = "RUSTSEC-2026-0192", reason = "winit transitive dep (GUI font parsing), no upstream fix" },
 ]
 
 [licenses]
