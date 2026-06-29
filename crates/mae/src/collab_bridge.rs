@@ -3938,9 +3938,17 @@ async fn run_collab_task(
                                                         if let Some(ref mut w) = writer {
                                                             let req_id = next_request_id;
                                                             next_request_id += 1;
-                                                            let req = mae_sync::wire::kb_collection_op_request(
+                                                            let mut req = mae_sync::wire::kb_collection_op_request(
                                                                 req_id, &kb_id, &mae_sync::encoding::update_to_base64(&blank),
                                                             );
+                                                            // #156 F5: ask the daemon to COMPACT the kbc: doc
+                                                            // after applying, so the pre-enable cleartext title
+                                                            // doesn't linger in the kbc: WAL at rest (the
+                                                            // snapshot is already title-blanked; this purges the
+                                                            // superseded WAL update + checkpoints the sidecar).
+                                                            if let Some(p) = req.get_mut("params").and_then(|p| p.as_object_mut()) {
+                                                                p.insert("scrub".to_string(), serde_json::Value::Bool(true));
+                                                            }
                                                             if let Ok(body) = serde_json::to_vec(&req) {
                                                                 let _ = write_framed(w, &body, write_timeout).await;
                                                             }

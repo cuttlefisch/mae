@@ -393,6 +393,14 @@ impl StorageBackend for SqliteBackend {
         match result {
             Ok(()) => {
                 conn.execute("COMMIT")?;
+                // ADR-037 (#156 F5): the WAL trim above frees the superseded update rows,
+                // and `secure_delete=ON` zeroes those pages in the main DB — but the
+                // removal is journalled through the WAL sidecar, which can keep a
+                // pre-image until checkpointed. TRUNCATE-checkpoint so a freed update's
+                // plaintext (e.g. a pre-E2e-enable manifest title superseded by the F5
+                // blank) cannot linger in the sidecar at rest. Best-effort (PASSIVE if
+                // another shard holds a read mark); never block the compaction on it.
+                let _ = conn.execute("PRAGMA wal_checkpoint(TRUNCATE);");
                 info!(doc = doc_name, up_to = up_to_wal_id, "compacted");
                 Ok(())
             }
@@ -670,6 +678,56 @@ mod tests {
             ],
             "blocks persist across restart; the unblocked pair is gone; the block is per-KB"
         );
+    }
+
+    /// #156 F5 — the compaction AT-REST oracle (the attacker's test). When a superseded
+    /// update is trimmed by `compact` (e.g. the pre-E2e-enable manifest title, superseded
+    /// by the F5 blank), its plaintext must be scrubbed from the DB FILE — not just
+    /// unlinked from the live snapshot. `secure_delete=ON` zeroes the freed pages and the
+    /// TRUNCATE checkpoint clears the WAL sidecar, so a grep of the on-disk footprint
+    /// finds nothing. This is what makes the F5 `scrub` (compact-after-blank) a real purge.
+    #[tokio::test]
+    async fn compact_scrubs_superseded_wal_content_from_the_db_file_at_rest() {
+        use std::io::Read;
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("collab.sqlite");
+        let canary = b"TITLE-CANARY-preenable-must-not-survive-compact";
+
+        let raw_contains_canary = |p: &std::path::Path| -> bool {
+            let mut hit = false;
+            for entry in std::fs::read_dir(p.parent().unwrap()).unwrap() {
+                let path = entry.unwrap().path();
+                let mut buf = Vec::new();
+                if std::fs::File::open(&path)
+                    .and_then(|mut f| f.read_to_end(&mut buf))
+                    .is_ok()
+                    && buf.windows(canary.len()).any(|w| w == canary.as_slice())
+                {
+                    hit = true;
+                }
+            }
+            hit
+        };
+
+        {
+            let backend = SqliteBackend::open(&db_path).unwrap();
+            // The original update carrying the cleartext manifest title (the `add_node`).
+            let id = backend.wal_append("kbc:x", canary, None).await.unwrap();
+            assert!(
+                raw_contains_canary(&db_path),
+                "precondition: the title is on disk before compaction (else the test is vacuous)"
+            );
+            // F5 blank → compact: re-snapshot a CLEAN (title-blanked) state + trim the WAL.
+            backend
+                .compact("kbc:x", b"BLANKED-STATE-no-title", id)
+                .await
+                .unwrap();
+            assert!(
+                !raw_contains_canary(&db_path),
+                "the superseded cleartext title MUST be scrubbed from the DB file after compaction \
+                 (secure_delete + TRUNCATE checkpoint)"
+            );
+        }
     }
 
     #[tokio::test]

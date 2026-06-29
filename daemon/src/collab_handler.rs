@@ -2450,6 +2450,13 @@ async fn handle_doc_request_inner(
                     );
                 }
             }
+            // #156 F5: the owner sets `scrub` on the enable-time manifest-title-blank op so
+            // the daemon force-COMPACTS the `kbc:` doc after applying — re-snapshotting the
+            // title-blanked state and trimming + TRUNCATE-checkpointing the WAL (secure_delete
+            // zeroes the freed pages), so the pre-enable cleartext title cannot linger in the
+            // `kbc:` WAL at rest. (The manifest doc is mutated in place, not replaced like a
+            // node doc under #171.) Additive flag — an old daemon ignores it.
+            let scrub = params["scrub"].as_bool().unwrap_or(false);
             match persist_and_broadcast_collection(
                 doc_store,
                 broadcaster,
@@ -2459,10 +2466,18 @@ async fn handle_doc_request_inner(
             )
             .await
             {
-                Ok(wal_seq) => JsonRpcResponse::success(
-                    id,
-                    serde_json::json!({ "applied": true, "wal_seq": wal_seq }),
-                ),
+                Ok(wal_seq) => {
+                    if scrub {
+                        let coll_doc = format!("kbc:{kb_id}");
+                        if let Err(e) = doc_store.compact_doc(&coll_doc).await {
+                            warn!(session = session_id, kb_id = %kb_id, error = %e, "kb/collection_op: scrub compaction failed (title may linger in the WAL until next compaction)");
+                        }
+                    }
+                    JsonRpcResponse::success(
+                        id,
+                        serde_json::json!({ "applied": true, "wal_seq": wal_seq, "scrubbed": scrub }),
+                    )
+                }
                 Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
             }
         }
