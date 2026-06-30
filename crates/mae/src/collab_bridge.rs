@@ -317,6 +317,21 @@ pub enum CollabCommand {
     /// re-anchor is out-of-band (ADR-040 §4): the daemon must `authorize` the new pubkey, then
     /// the user reconnects with the new key.
     RotateIdentity,
+    /// ADR-040 §Recovery-key — register an offline **recovery key**: the network task generates
+    /// a fresh Ed25519 keypair, authors a `RegisterRecoveryKey` (signed by the current primary)
+    /// into every KB it is a member of, ships them, and saves the recovery SECRET to a distinct
+    /// on-disk path so the user can back it up OFFLINE. The recovery key can later authorize a
+    /// `Rebind` if the primary is lost ([`CollabCommand::RecoverIdentity`]).
+    RegisterRecoveryKey,
+    /// ADR-040 §Recovery-key — recover a lost/compromised primary using the pre-registered
+    /// offline recovery key at `recovery_path`. The recovery is run AS the new key (already
+    /// authorized + connected, ADR-040 §4): the task loads the recovery secret and authors a
+    /// recovery-signed `Rebind` (`old_fp` → the current connected identity) into every KB
+    /// `old_fp` is a member of, so the new key inherits the lost key's seats.
+    RecoverIdentity {
+        recovery_path: String,
+        old_fp: String,
+    },
 }
 
 /// Events sent from the collab background task back to the main thread.
@@ -643,6 +658,14 @@ pub(crate) fn drain_collab_intents(editor: &mut Editor, collab_tx: &mpsc::Sender
         }
         CollabIntent::Disconnect => CollabCommand::Disconnect,
         CollabIntent::RotateIdentity => CollabCommand::RotateIdentity,
+        CollabIntent::RegisterRecoveryKey => CollabCommand::RegisterRecoveryKey,
+        CollabIntent::RecoverIdentity {
+            recovery_path,
+            old_fp,
+        } => CollabCommand::RecoverIdentity {
+            recovery_path,
+            old_fp,
+        },
         CollabIntent::ShowStatus => CollabCommand::ShowStatus,
         CollabIntent::ShareBuffer { buffer_name } => {
             // Enable sync on the buffer if not already enabled, then encode state.
@@ -1014,6 +1037,8 @@ fn collab_command_name(cmd: &CollabCommand) -> &'static str {
         CollabCommand::Connect { .. } => "connect",
         CollabCommand::Disconnect => "disconnect",
         CollabCommand::RotateIdentity => "rotate-identity",
+        CollabCommand::RegisterRecoveryKey => "register-recovery-key",
+        CollabCommand::RecoverIdentity { .. } => "recover-identity",
         CollabCommand::ShareBuffer { .. } => "share-buffer",
         CollabCommand::ForceSync { .. } => "force-sync",
         CollabCommand::ShowStatus => "show-status",
@@ -3139,6 +3164,155 @@ async fn run_collab_task(
                                 }
                             }
                         }
+                        CollabCommand::RegisterRecoveryKey => {
+                            // ADR-040 §Recovery-key: generate a fresh offline recovery keypair,
+                            // author a `RegisterRecoveryKey` (signed by the current primary) into
+                            // every KB I am a member of, ship them (owned KBs ride the owner gate,
+                            // member KBs the PR3 self-service gate), and save the recovery SECRET
+                            // to a DISTINCT path for the user to back up offline. The recovery key
+                            // never reads on its own — it only authorizes a future `Rebind`.
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0);
+                            match (signing_identity.clone(), writer.as_mut()) {
+                                (Some(id), Some(w)) => {
+                                    let recovery = mae_mcp::identity::Identity::generate("recovery");
+                                    let recovery_pubkey = recovery.public().to_bytes();
+                                    let plans = plan_register_recovery_key(
+                                        &kb_collections, &id, &recovery_pubkey, now,
+                                    );
+                                    let mut registered = 0usize;
+                                    for plan in &plans {
+                                        for delta in &plan.deltas {
+                                            let req_id = next_request_id;
+                                            next_request_id += 1;
+                                            let req = mae_sync::wire::kb_collection_op_request(
+                                                req_id,
+                                                &plan.kb_id,
+                                                &mae_sync::encoding::update_to_base64(delta),
+                                            );
+                                            if let Ok(body) = serde_json::to_vec(&req) {
+                                                let _ = write_framed(w, &body, write_timeout).await;
+                                            }
+                                        }
+                                        kb_collections
+                                            .insert(plan.kb_id.clone(), plan.new_replica.clone());
+                                        registered += 1;
+                                    }
+                                    // Save the recovery secret to `<collab_dir>/recovery` (a
+                                    // SEPARATE path from the primary `id_ed25519`, so it is not
+                                    // clobbered) for the user to move offline.
+                                    let rec_fp = recovery.fingerprint();
+                                    let saved_path = match mae_mcp::identity::default_collab_dir() {
+                                        Some(dir) => {
+                                            let rec_dir = dir.join("recovery");
+                                            match recovery.save(&rec_dir) {
+                                                Ok(()) => Some(rec_dir.join("id_ed25519")),
+                                                Err(e) => {
+                                                    warn!(error = %e, "register-recovery-key: failed to save the recovery key");
+                                                    None
+                                                }
+                                            }
+                                        }
+                                        None => None,
+                                    };
+                                    info!(registered, rec_fp = %rec_fp, "register-recovery-key: recovery key registered");
+                                    let mut lines = vec![
+                                        format!("Recovery key registered across {registered} KB(s)."),
+                                        format!("Recovery fingerprint: {rec_fp}"),
+                                    ];
+                                    match &saved_path {
+                                        Some(p) => {
+                                            lines.push(format!("Saved to: {}", p.display()));
+                                            lines.push("BACK THIS UP OFFLINE and remove it from this machine — anyone holding it can rotate your identity. To recover later: `:collab-recover-identity <path> <old-fingerprint>`.".to_string());
+                                        }
+                                        None => lines.push("WARNING: the recovery key was registered but could NOT be saved to disk — it is lost. Re-run after fixing the collab directory.".to_string()),
+                                    }
+                                    try_send_evt(&evt_tx, CollabEvent::StatusReport { lines });
+                                }
+                                (None, _) => {
+                                    try_send_evt(&evt_tx, CollabEvent::Error {
+                                        message: "register-recovery-key requires `key` auth mode (no signing identity in psk/none mode)".to_string(),
+                                    });
+                                }
+                                (_, None) => {
+                                    try_send_evt(&evt_tx, CollabEvent::Error {
+                                        message: "register-recovery-key: no active connection writer".to_string(),
+                                    });
+                                }
+                            }
+                        }
+                        CollabCommand::RecoverIdentity { recovery_path, old_fp } => {
+                            // ADR-040 §Recovery-key: recover a lost primary. Run AS the new key —
+                            // the user generated a fresh primary, authorized it on the daemon
+                            // out-of-band (§4), and connected with it, so `signing_identity` is the
+                            // successor. Load the offline recovery secret and author a
+                            // recovery-signed `Rebind` (old_fp → me) into every KB old_fp belonged
+                            // to; the daemon's PR3 gate accepts it (subject == this connection's
+                            // principal), and the new key inherits the lost key's seats.
+                            let now = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0);
+                            let recovery = mae_mcp::identity::Identity::load_secret(
+                                std::path::Path::new(&recovery_path),
+                                "recovery",
+                            );
+                            match (signing_identity.clone(), writer.as_mut(), recovery) {
+                                (Some(new_id), Some(w), Some(recovery)) => {
+                                    let plans = plan_recovery_rotation(
+                                        &kb_collections, &old_fp, &new_id, &recovery, now,
+                                    );
+                                    let mut recovered = 0usize;
+                                    for plan in &plans {
+                                        for delta in &plan.deltas {
+                                            let req_id = next_request_id;
+                                            next_request_id += 1;
+                                            let req = mae_sync::wire::kb_collection_op_request(
+                                                req_id,
+                                                &plan.kb_id,
+                                                &mae_sync::encoding::update_to_base64(delta),
+                                            );
+                                            if let Ok(body) = serde_json::to_vec(&req) {
+                                                let _ = write_framed(w, &body, write_timeout).await;
+                                            }
+                                        }
+                                        kb_collections
+                                            .insert(plan.kb_id.clone(), plan.new_replica.clone());
+                                        recovered += 1;
+                                    }
+                                    let new_fp = new_id.fingerprint();
+                                    info!(recovered, old_fp = %old_fp, new_fp = %new_fp, "recover-identity: recovery shipped");
+                                    if recovered == 0 {
+                                        try_send_evt(&evt_tx, CollabEvent::StatusReport { lines: vec![
+                                            format!("No KBs found where {old_fp} is a member — nothing to recover."),
+                                            "Ensure this peer holds the shared KB's collection state (it must know the KB locally to author the recovery).".to_string(),
+                                        ]});
+                                    } else {
+                                        try_send_evt(&evt_tx, CollabEvent::StatusReport { lines: vec![
+                                            format!("Recovered {recovered} KB(s): {old_fp} → {new_fp}."),
+                                            "Your new key now holds the lost key's seats. The owner re-wraps any E2e content keys to you reactively; your first edit may rebase once (set `collab-fence-resolution` to `auto`).".to_string(),
+                                        ]});
+                                    }
+                                }
+                                (None, _, _) => {
+                                    try_send_evt(&evt_tx, CollabEvent::Error {
+                                        message: "recover-identity requires `key` auth mode (connect with your NEW key first)".to_string(),
+                                    });
+                                }
+                                (_, None, _) => {
+                                    try_send_evt(&evt_tx, CollabEvent::Error {
+                                        message: "recover-identity: no active connection writer".to_string(),
+                                    });
+                                }
+                                (_, _, None) => {
+                                    try_send_evt(&evt_tx, CollabEvent::Error {
+                                        message: format!("recover-identity: could not load a recovery key from '{recovery_path}' (expected an id_ed25519 file in that directory)"),
+                                    });
+                                }
+                            }
+                        }
                         CollabCommand::ShowStatus => {
                             let lines = build_status_lines(
                                 target_address.as_deref().unwrap_or("?"),
@@ -4599,6 +4773,90 @@ pub(crate) fn plan_member_rotation(
     plans
 }
 
+/// ADR-040 §Recovery-key — plan registering this peer's offline **recovery key** across every
+/// KB it is a member of (owner or member). For each, author a `RegisterRecoveryKey` op signed
+/// by the CURRENT primary (`principal`), carrying the recovery key's public Ed25519 key. Pure;
+/// the caller ships the deltas (owned KBs ride the owner-`Manage` gate, member KBs ride the
+/// PR3 self-service gate) and stores `new_replica` back. Registration grants no new access — it
+/// just publishes the recovery key so a future [`plan_recovery_rotation`] is honored. KBs where
+/// I hold no role are skipped.
+pub(crate) fn plan_register_recovery_key(
+    kb_collections: &std::collections::HashMap<String, Vec<u8>>,
+    principal: &mae_mcp::identity::Identity,
+    recovery_pubkey: &[u8; 32],
+    now: u64,
+) -> Vec<RotationPlan> {
+    use mae_sync::kb::KbCollectionDoc;
+    let fp = principal.fingerprint();
+    let sec = principal.secret_bytes();
+    let pk = principal.public().to_bytes();
+    let mut plans = Vec::new();
+    for (kb_id, state) in kb_collections {
+        let Ok(mut coll) = KbCollectionDoc::from_bytes(state) else {
+            continue;
+        };
+        if coll.role_of(&fp).is_none() {
+            continue; // only KBs where I am a member
+        }
+        let delta = coll.author_register_recovery_key(kb_id, &fp, recovery_pubkey, &sec, &pk, now);
+        plans.push(RotationPlan {
+            kb_id: kb_id.clone(),
+            deltas: vec![delta],
+            new_replica: coll.encode_state(),
+        });
+    }
+    plans
+}
+
+/// ADR-040 §Recovery-key — plan recovering a lost/compromised primary `old_fp` to the
+/// successor `new_id` using the pre-registered offline `recovery` key. For each KB `old_fp` is
+/// a member of, author a recovery-signed `Rebind` (`author_recovery_rebind`: author = `old_fp`,
+/// subject = `new_id`, signed by the RECOVERY secret). `new_id` contributes only its public
+/// keys — it is the connected/authorized successor (recovery is run AS the new key, so the
+/// daemon's PR3 gate sees `subject == principal`). Owner re-wrap of E2e content keys is the
+/// owner's reactive job ([`plan_reactive_member_rewraps`]) exactly as for a member rotation;
+/// a recovering OWNER re-derives its own key from the post-rebind collection. Pure. KBs where
+/// `old_fp` holds no role are skipped.
+pub(crate) fn plan_recovery_rotation(
+    kb_collections: &std::collections::HashMap<String, Vec<u8>>,
+    old_fp: &str,
+    new_id: &mae_mcp::identity::Identity,
+    recovery: &mae_mcp::identity::Identity,
+    now: u64,
+) -> Vec<RotationPlan> {
+    use mae_sync::kb::KbCollectionDoc;
+    let new_fp = new_id.fingerprint();
+    let new_pk = new_id.public().to_bytes();
+    let new_wrap_pk = mae_sync::content_crypto::wrap_public_for(&new_id.secret_bytes());
+    let rec_sec = recovery.secret_bytes();
+    let rec_pk = recovery.public().to_bytes();
+    let mut plans = Vec::new();
+    for (kb_id, state) in kb_collections {
+        let Ok(mut coll) = KbCollectionDoc::from_bytes(state) else {
+            continue;
+        };
+        if coll.role_of(old_fp).is_none() {
+            continue; // only KBs where the lost key is a member
+        }
+        let delta = coll.author_recovery_rebind(
+            kb_id,
+            old_fp,
+            &new_fp,
+            &new_pk,
+            &new_wrap_pk,
+            &rec_sec,
+            &rec_pk,
+            now,
+        );
+        plans.push(RotationPlan {
+            kb_id: kb_id.clone(),
+            deltas: vec![delta],
+            new_replica: coll.encode_state(),
+        });
+    }
+    plans
+}
+
 /// #173: a `kbc:` collection delta arrived — advance this peer's collection replica and
 /// **re-derive** its content key, so a membership change (3c rotation, post-join
 /// wrap-on-admit) reaches the seal/open path live instead of leaving the member frozen on a
@@ -5779,6 +6037,26 @@ async fn handle_disconnected_cmd(
                 evt_tx,
                 CollabEvent::Error {
                     message: "Not connected \u{2014} connect before rotating your identity"
+                        .to_string(),
+                },
+            );
+        }
+        CollabCommand::RegisterRecoveryKey => {
+            // Registration ships `RegisterRecoveryKey` ops to the daemon — needs a connection.
+            try_send_evt(
+                evt_tx,
+                CollabEvent::Error {
+                    message: "Not connected \u{2014} connect before registering a recovery key"
+                        .to_string(),
+                },
+            );
+        }
+        CollabCommand::RecoverIdentity { .. } => {
+            // Recovery ships recovery-signed Rebinds — connect with your NEW key first (§4).
+            try_send_evt(
+                evt_tx,
+                CollabEvent::Error {
+                    message: "Not connected \u{2014} connect with your new key before recovering your identity"
                         .to_string(),
                 },
             );

@@ -496,6 +496,23 @@ fn crypto_valid(ops: &[SignedMembershipOp]) -> Vec<&SignedMembershipOp> {
         .collect()
 }
 
+/// ADR-040 §Recovery-key — the registered recovery-key map (principal fingerprint → recovery
+/// Ed25519 pubkey) derived from `ops`. Exposed so an *authorization point* outside the deriving
+/// readers (the daemon's `kb/collection_op` write gate) can honor a recovery-signed `Rebind`
+/// against the recovery keys a collection's existing op-log already registers. Latest-registration
+/// wins per principal, and only PRIMARY-signed registrations count — see [`build_recovery_registry`].
+pub fn recovery_registry(ops: &[SignedMembershipOp]) -> BTreeMap<String, [u8; 32]> {
+    build_recovery_registry(ops)
+}
+
+/// ADR-040 §Recovery-key — whether `op` is a `Rebind` validly signed by the recovery key that
+/// `registry` records for `op.author` (the rotating principal). Pair with [`recovery_registry`]
+/// (built from the *pre-existing* op-log) at an authorization point so a peer/daemon honors a
+/// recovery rotation the same way [`crypto_valid`] does, without re-deriving the member set.
+pub fn is_recovery_rebind(op: &SignedMembershipOp, registry: &BTreeMap<String, [u8; 32]>) -> bool {
+    is_recovery_signed_rebind(op, registry)
+}
+
 /// As [`derive_valid_members`], with a local [`MembershipView`] (ADR-026 §A3/§A4)
 /// under single-owner governance.
 pub fn derive_valid_members_with(

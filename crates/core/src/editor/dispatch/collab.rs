@@ -41,6 +41,15 @@ impl Editor {
                 self.mark_full_redraw();
                 Some(true)
             }
+            "collab-register-recovery-key" => {
+                // ADR-040 §Recovery-key: register an offline recovery key across my KBs.
+                self.collab.pending_intent = Some(CollabIntent::RegisterRecoveryKey);
+                self.set_status(
+                    "Registering recovery key — back up the saved recovery key OFFLINE",
+                );
+                self.mark_full_redraw();
+                Some(true)
+            }
             "collab-status" => {
                 self.collab.pending_intent = Some(CollabIntent::ShowStatus);
                 Some(true)

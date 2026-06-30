@@ -293,6 +293,15 @@ impl Identity {
         Ok((id, true))
     }
 
+    /// Strictly load an identity from `dir/id_ed25519` (hex Ed25519 seed), returning `None`
+    /// if the file is absent or malformed. Unlike [`load_or_generate`](Self::load_or_generate)
+    /// this NEVER generates a fresh key — identity **recovery** (ADR-040 §Recovery-key) must
+    /// fail loudly rather than silently sign with the wrong key.
+    pub fn load_secret(dir: &Path, label: &str) -> Option<Self> {
+        let content = std::fs::read_to_string(dir.join("id_ed25519")).ok()?;
+        Self::parse_private(content.trim(), label)
+    }
+
     /// Persist this identity to `dir`: private key `id_ed25519` (0600, hex) +
     /// public-key line `id_ed25519.pub`. Overwrites any existing identity.
     pub fn save(&self, dir: &Path) -> std::io::Result<()> {

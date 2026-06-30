@@ -578,10 +578,12 @@ identity key** is the single root of your access:
   seals a shared KB's content key to you) is derived from this seed, and your per-KB
   content keys are recoverable from it. **Losing it means losing access to every KB you
   share or join** — encrypted content becomes permanently unreadable.
-- **There is no recovery in this version.** Key *rotation* (ADR-040, `(rotate-identity)`)
+- **Recovery requires preparation.** Key *rotation* (ADR-040, `collab-rotate-identity`)
   requires the **existing** key to sign its successor, so it only helps for a *planned*
-  rotation while you still hold the key — not for a lost or destroyed one. (A
-  pre-registered offline recovery key is planned; see ADR-040 §Recovery-key design.)
+  rotation while you still hold the key — not for a lost or destroyed one. For loss, register
+  a **pre-registered offline recovery key** *now* (`collab-register-recovery-key`, below) so
+  a future loss is recoverable; without one, a lost key means lost access (ADR-040
+  §Recovery-key).
 
 **So: back it up.** Copy `id_ed25519` (and `id_ed25519.pub`) to secure storage — a
 password manager, an encrypted volume, or an offline medium — the moment it is first
@@ -599,20 +601,38 @@ do not treat a compromise as a simple rotation.
 **A. Planned rotation — you still hold the old key (key hygiene, new device).**
 This is the in-band path: the old key cross-signs the new one and your membership +
 content-key access transfer automatically, no owner action needed for the membership
-transfer. Use `(rotate-identity)` (ADR-040). *(Owner-rotation lands first; member rotation
-follows — see ADR-040 §Implementation addendum / issue #213. Until then, follow path B/C
-to move to a new key.)*
+transfer. Use `collab-rotate-identity` (ADR-040) — it rotates every KB you own *and* every
+KB where you are a member; the owner re-wraps E2e content keys to your new key reactively.
+Then authorize the new key on the daemon (`mae-daemon authorize`) and reconnect (the
+transport re-anchor is out-of-band, ADR-040 §4).
 
 **B. Lost key — you no longer have it, and it is not compromised.**
-There is **no self-service recovery** in v1 (recovering would require the lost key to
-sign, or a pre-registered recovery key — planned, ADR-040 §Recovery-key design). Recover
-by re-joining as a new principal:
-1. Generate a fresh identity (a new collab dir, or `mae-daemon identity` for a daemon).
-2. The KB **owner** removes your old fingerprint — `kb-remove-member` (on an E2e KB this
-   rotates the content key, §D3, so the abandoned key can read no new content).
-3. You request to join again with the new key (`kb-join`); the owner approves you
-   (`kb-approve`). You are a **new principal** — prior authorship attribution stays under
-   the old fingerprint (history is immutable), but you regain read/write access.
+If you registered a **recovery key** *before* the loss, recovery is self-service — no owner
+action needed:
+
+*Prepare ahead of time (while you still hold your primary):*
+- Run `collab-register-recovery-key`. It generates a fresh offline recovery keypair, registers
+  its public key into every KB you belong to (signed by your primary), and saves the secret to
+  `<collab_dir>/recovery/id_ed25519`. **Move that file OFFLINE** (a password manager, an
+  encrypted USB stick) and delete it from the machine — anyone holding it can rotate your
+  identity. Re-running registers a *fresh* recovery key, which supersedes any earlier one
+  (latest-registration-wins — use this to revoke a recovery key you think leaked).
+
+*Recover after a loss:*
+1. Generate a fresh primary identity (a new collab dir) and have it **authorized on the daemon
+   out-of-band** (`mae-daemon authorize` — the operator adds your new key; ADR-040 §4). Restore
+   your backed-up recovery key to a directory the editor can read.
+2. Connect with the new key, then run
+   `:collab-recover-identity <recovery-key-dir> <old-fingerprint>`. This authors a
+   recovery-signed `Rebind` (old → new) into every KB the old key belonged to, signed by the
+   recovery key. Peers and the daemon honor it because the recovery key was pre-registered.
+3. Your new key inherits the lost key's seats and roles (no elevation); the owner re-wraps E2e
+   content keys to you reactively. Prior authorship stays attributed to the old fingerprint
+   (history is immutable).
+
+If you did **not** register a recovery key, fall back to re-joining as a new principal: generate
+a fresh identity, ask the KB **owner** to remove your old fingerprint (`kb-remove-member` — on
+an E2e KB this rotates the content key, §D3), then `kb-join` + owner `kb-approve` as a new member.
 
 **C. Compromised key — someone else may hold it.**
 Same as B, plus **contain** the old key so the holder cannot keep acting:

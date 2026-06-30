@@ -21,7 +21,8 @@ use mae_sync::kb::{
     Transport,
 };
 use mae_sync::membership::{
-    derive_governance, derive_valid_members_governed, fingerprint_of, Governance, MembershipAction,
+    derive_governance, derive_valid_members_governed, fingerprint_of, is_recovery_rebind,
+    recovery_registry, Governance, MembershipAction,
 };
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
@@ -1096,31 +1097,41 @@ async fn current_member_set(
     }
 }
 
-/// ADR-040 PR2c — the member-authored `Rebind` write gate. `kb/collection_op` is
-/// otherwise owner-only (`KbOp::Manage`, ADR-018); this is the *single, narrow*
-/// exception that lets a NON-owner member rotate their **own** identity without owner
-/// mediation. It accepts the update **iff** every op it introduces to the collection
-/// is a member self-`Rebind` and the update mutates **nothing else** in the collection
-/// — so a member cannot smuggle a privilege change (an `Admit`, a `SetRole`, an owner
-/// flip) alongside the rotation. Concretely, applying `update` to the stored collection
-/// must:
-///   1. grow the op-log by ≥1 record and change **only** the op-log (owner / member
-///      roster / policies / encryption byte-identical before and after);
-///   2. and every NEW op must be a crypto-valid `Rebind` (`verify_signed`) whose
-///      `author` is the **connection's authenticated principal** (you rotate yourself,
-///      not someone else) AND a **current member**, with a well-formed, non-elevating
-///      successor: both successor keys present, `subject` fingerprint-bound to
-///      `new_pubkey`, `subject != author`, and `subject` not already a member (fresh).
+/// ADR-040 PR2c/PR3 — the member-authored **self-service** write gate. `kb/collection_op`
+/// is otherwise owner-only (`KbOp::Manage`, ADR-018); this is the *single, narrow*
+/// exception that lets a NON-owner member manage their **own** identity (rotation +
+/// recovery-key registration + recovery rotation) without owner mediation. It accepts the
+/// update **iff** every op it introduces is one of those three self-service shapes and the
+/// update mutates **nothing else** in the collection — so a member cannot smuggle a
+/// privilege change (an `Admit`, a `SetRole`, an owner flip) alongside it. Concretely,
+/// applying `update` to the stored collection must (1) grow the op-log by ≥1 record and
+/// change **only** the op-log (owner / member roster / policies / encryption byte-identical
+/// before and after); and (2) introduce only NEW ops that are each exactly one of these three
+/// self-service shapes:
 ///
-/// These mirror [`membership::authorized`]'s `Rebind` arm; we re-check here because the
-/// daemon — not just the deriving peers — is now an authorization point for this op.
-/// `auth_principal` is the verified session principal; `None` (un-authed local socket)
-/// never reaches here because the owner-`Manage` check already allowed it.
-/// On success returns the accepted `(successor_fp, predecessor_fp)` rebind pairs so the
-/// caller can mirror each successor into the owned-KB roster (the successor inherits the
-/// predecessor's role), giving it access on a roster-model daemon — the derive-based
-/// peers already alias it via the PR2a post-pass.
-async fn verify_member_rebind_update(
+/// - **member self-`Rebind`** — crypto-valid (`verify_signed`), `author` == the connection's
+///   authenticated principal (you rotate yourself) AND a current member, with a well-formed
+///   non-elevating successor.
+/// - **member `RegisterRecoveryKey`** — crypto-valid (primary-signed), `author` == `subject`
+///   == the principal AND a current member, carrying a `recovery_pubkey` (grants no roster
+///   access — it just publishes the offline recovery key for a future recovery).
+/// - **recovery-signed `Rebind`** (ADR-040 §Recovery-key) — signed NOT by the lost primary but
+///   by the predecessor's *registered* recovery key (validated against the recovery registry
+///   built from the **pre-existing** op-log), and submitted by the SUCCESSOR key's
+///   authenticated connection (`subject` == principal). The lost-primary path: the holder of
+///   the offline recovery key rotates a member that can no longer self-sign. The predecessor
+///   must be a current member and the successor well-formed/fresh.
+///
+/// The self-rotation + recovery arms mirror [`membership::authorized`]'s `Rebind` arm + [`membership::crypto_valid`]'s
+/// recovery filter; we re-check here because the daemon — not just the deriving peers — is
+/// now an authorization point for these ops. `auth_principal` is the verified session
+/// principal; `None` (un-authed local socket) never reaches here because the owner-`Manage`
+/// check already allowed it. On success returns the accepted `(successor_fp, predecessor_fp)`
+/// rebind pairs (rotation + recovery; registration contributes none) so the caller can mirror
+/// each successor into the owned-KB roster (inheriting the predecessor's role), giving it
+/// access on a roster-model daemon — the derive-based peers already alias it via the PR2a/PR3
+/// post-pass.
+async fn verify_member_self_service_update(
     doc_store: &DocStore,
     kb_id: &str,
     auth_principal: Option<&str>,
@@ -1167,9 +1178,15 @@ async fn verify_member_rebind_update(
         );
     }
 
-    // (2) Compute the op-log delta and require it be exactly member self-Rebind(s).
-    let before_hashes: HashSet<String> =
-        before.oplog_ops().iter().map(|o| o.chain_hash()).collect();
+    // (2) Compute the op-log delta and require every NEW op be one of the three
+    // self-service shapes. The recovery registry is built from the *pre-existing*
+    // op-log (`before`) so a recovery key must already be registered to authorize a
+    // recovery rotation — a registration cannot be smuggled into the same update to
+    // self-authorize (the registration itself requires a primary signature, which the
+    // recovering principal lacks).
+    let before_ops = before.oplog_ops();
+    let before_hashes: HashSet<String> = before_ops.iter().map(|o| o.chain_hash()).collect();
+    let registry = recovery_registry(&before_ops);
     let new_ops: Vec<_> = after
         .oplog_ops()
         .into_iter()
@@ -1181,41 +1198,85 @@ async fn verify_member_rebind_update(
     let members = current_member_set(doc_store, kb_id, &before).await;
     let mut pairs = Vec::with_capacity(new_ops.len());
     for o in &new_ops {
-        if !o.verify_signed() {
-            return Err("rotation op signature is invalid".to_string());
+        match o.op.action {
+            MembershipAction::Rebind => {
+                // Common successor validity (shapes a + c): well-formed, fingerprint-bound,
+                // non-self, fresh, with the predecessor a current member.
+                let npk = match o.op.new_pubkey {
+                    Some(k) => k,
+                    None => {
+                        return Err("rotation op is missing the successor public key".to_string())
+                    }
+                };
+                if o.op.new_wrap_pubkey.is_none() {
+                    return Err("rotation op is missing the successor wrap key".to_string());
+                }
+                if fingerprint_of(&npk) != o.op.subject {
+                    return Err("rotation successor is not bound to its public key".to_string());
+                }
+                if o.op.subject == o.op.author {
+                    return Err("rotation successor equals the author (no-op)".to_string());
+                }
+                if !members.contains(&o.op.author) {
+                    return Err("rotation predecessor is not a current member".to_string());
+                }
+                if members.contains(&o.op.subject) {
+                    return Err(
+                        "rotation successor is already a member (must rotate into a fresh key)"
+                            .to_string(),
+                    );
+                }
+                if o.verify_signed() {
+                    // (a) self-rotation: signed by the rotating principal's own primary, so
+                    // the op author must be the authenticated connection principal.
+                    if o.op.author != principal {
+                        return Err("a member may only rotate their own identity".to_string());
+                    }
+                } else if is_recovery_rebind(o, &registry) {
+                    // (c) recovery rotation: signed by the predecessor's *registered* recovery
+                    // key (the lost primary cannot self-sign), submitted by the SUCCESSOR key's
+                    // authenticated connection — so the recovering user proves control of the new
+                    // key it is rotating into, and the recovery key proves the authority to do so.
+                    if o.op.subject != principal {
+                        return Err(
+                            "a recovery rotation must be submitted by the successor key it rotates into"
+                                .to_string(),
+                        );
+                    }
+                } else {
+                    return Err(
+                        "rotation op is neither self-signed nor signed by a registered recovery key"
+                            .to_string(),
+                    );
+                }
+                pairs.push((o.op.subject.clone(), o.op.author.clone()));
+            }
+            MembershipAction::RegisterRecoveryKey => {
+                // (b) recovery-key registration: primary-signed self-registration. Grants no
+                // roster access — it only publishes the offline recovery key for a future (c).
+                if !o.verify_signed() {
+                    return Err("recovery-key registration signature is invalid".to_string());
+                }
+                if o.op.author != principal || o.op.subject != principal {
+                    return Err("a member may only register their OWN recovery key".to_string());
+                }
+                if o.op.recovery_pubkey.is_none() {
+                    return Err(
+                        "recovery-key registration is missing the recovery public key".to_string(),
+                    );
+                }
+                if !members.contains(&o.op.author) {
+                    return Err("recovery-key registrant is not a current member".to_string());
+                }
+            }
+            other => {
+                return Err(format!(
+                    "a member may only author a Rebind or RegisterRecoveryKey on this path, \
+                     not a {} op",
+                    other.as_str()
+                ));
+            }
         }
-        if o.op.action != MembershipAction::Rebind {
-            return Err(format!(
-                "a member may only author a Rebind on this path, not a {} op",
-                o.op.action.as_str()
-            ));
-        }
-        // You rotate YOURSELF: the op author must be the authenticated principal.
-        if o.op.author != principal {
-            return Err("a member may only rotate their own identity".to_string());
-        }
-        let npk = match o.op.new_pubkey {
-            Some(k) => k,
-            None => return Err("rotation op is missing the successor public key".to_string()),
-        };
-        if o.op.new_wrap_pubkey.is_none() {
-            return Err("rotation op is missing the successor wrap key".to_string());
-        }
-        if fingerprint_of(&npk) != o.op.subject {
-            return Err("rotation successor is not bound to its public key".to_string());
-        }
-        if o.op.subject == o.op.author {
-            return Err("rotation successor equals the author (no-op)".to_string());
-        }
-        if !members.contains(&o.op.author) {
-            return Err("rotation author is not a current member".to_string());
-        }
-        if members.contains(&o.op.subject) {
-            return Err(
-                "rotation successor is already a member (must rotate into a fresh key)".to_string(),
-            );
-        }
-        pairs.push((o.op.subject.clone(), o.op.author.clone()));
     }
     Ok(pairs)
 }
@@ -2603,19 +2664,26 @@ async fn handle_doc_request_inner(
                 );
             }
             // ADR-018: collection ops are owner-only (Manage) — with ONE narrow
-            // exception (ADR-040 PR2c): a non-owner member rotating their OWN identity.
-            // Probe Manage first; if it denies, accept the update IFF it is exactly a
-            // member self-`Rebind` (`verify_member_rebind_update`) and nothing else.
+            // exception (ADR-040 PR2c/PR3): a non-owner member managing their OWN identity
+            // (self-rotation, recovery-key registration, or recovery rotation). Probe Manage
+            // first; if it denies, accept the update IFF it is exactly such a self-service op
+            // (`verify_member_self_service_update`) and nothing else.
             let manage =
                 kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await;
-            // The `(successor, predecessor)` pairs of an accepted member self-rotation,
-            // empty for the owner path — used to mirror the successor into the roster below.
+            // The `(successor, predecessor)` pairs of an accepted member rotation/recovery,
+            // empty for the owner path and for a bare recovery-key registration — used to
+            // mirror the successor into the roster below.
             let mut rebind_pairs: Vec<(String, String)> = Vec::new();
             match manage {
                 Ok(AccessDecision::Allow) => {}
                 other => {
-                    match verify_member_rebind_update(doc_store, &kb_id, auth_principal, &update)
-                        .await
+                    match verify_member_self_service_update(
+                        doc_store,
+                        &kb_id,
+                        auth_principal,
+                        &update,
+                    )
+                    .await
                     {
                         Ok(pairs) => {
                             info!(
@@ -2623,7 +2691,7 @@ async fn handle_doc_request_inner(
                                 kb_id = %kb_id,
                                 principal = auth_principal.unwrap_or("?"),
                                 rebinds = pairs.len(),
-                                "kb/collection_op: accepted a member self-rotation (ADR-040 PR2c)"
+                                "kb/collection_op: accepted a member self-service identity op (ADR-040 PR2c/PR3)"
                             );
                             rebind_pairs = pairs;
                         }
@@ -2635,7 +2703,7 @@ async fn handle_doc_request_inner(
                             return JsonRpcResponse::error(
                                 id,
                                 McpError::internal_error(format!(
-                                    "{base} (and not a member self-rotation: {rebind_reason})"
+                                    "{base} (and not a member self-service identity op: {rebind_reason})"
                                 )),
                             );
                         }
@@ -2665,9 +2733,10 @@ async fn handle_doc_request_inner(
                             warn!(session = session_id, kb_id = %kb_id, error = %e, "kb/collection_op: scrub compaction failed (title may linger in the WAL until next compaction)");
                         }
                     }
-                    // ADR-040 PR2c: a member self-rotation only appends the `Rebind` to the
-                    // op-log. On a roster-model (owned/un-anchored) daemon, mirror each
-                    // successor into the `member_roles` roster with the PREDECESSOR's role so
+                    // ADR-040 PR2c/PR3: a member self-rotation or recovery rotation only appends
+                    // the `Rebind` to the op-log (a bare recovery-key registration appends none).
+                    // On a roster-model (owned/un-anchored) daemon, mirror each successor into the
+                    // `member_roles` roster with the PREDECESSOR's role so
                     // it gains access here too — parallel to how `kb/add_member` mirrors
                     // roster↔op-log. Additive: the predecessor is left in place (no lockout of
                     // the rotating session); the user removes the old key explicitly. Derive
