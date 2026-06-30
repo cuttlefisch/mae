@@ -46,15 +46,20 @@ PORT="${MAE_E2E_PORT:-$(pick_port 9521)}"
 NEG="${MAE_E2E_NEGATIVE:-0}"
 REMOVAL="${MAE_E2E_REMOVAL:-0}"
 ROTATE="${MAE_E2E_ROTATE:-0}"
-# §D3 removal / ADR-040 rotation extend the run; give each editor more headroom.
+# ADR-040 §Recovery-key: bob registers an offline recovery key, then a THIRD peer (carol = bob's
+# new key) recovers bob's lost identity using it. Adds a third editor — its own flag.
+RECOVER="${MAE_E2E_RECOVER:-0}"
+# §D3 removal / ADR-040 rotation+recovery extend the run; give each editor more headroom.
 EDITOR_TIMEOUT=35
-{ [ "$REMOVAL" = "1" ] || [ "$ROTATE" = "1" ]; } && EDITOR_TIMEOUT=60
+{ [ "$REMOVAL" = "1" ] || [ "$ROTATE" = "1" ] || [ "$RECOVER" = "1" ]; } && EDITOR_TIMEOUT=75
 # These phases only make sense with encryption ON; refuse the nonsensical combos loudly.
-if [ "$NEG" = "1" ] && { [ "$REMOVAL" = "1" ] || [ "$ROTATE" = "1" ]; }; then
-  echo "ERROR: MAE_E2E_NEGATIVE=1 is incompatible with the removal/rotation phases (they need encryption)"; exit 2
+if [ "$NEG" = "1" ] && { [ "$REMOVAL" = "1" ] || [ "$ROTATE" = "1" ] || [ "$RECOVER" = "1" ]; }; then
+  echo "ERROR: MAE_E2E_NEGATIVE=1 is incompatible with the removal/rotation/recovery phases (they need encryption)"; exit 2
 fi
-if [ "$REMOVAL" = "1" ] && [ "$ROTATE" = "1" ]; then
-  echo "ERROR: run MAE_E2E_REMOVAL and MAE_E2E_ROTATE separately (they both extend the alpha node)"; exit 2
+# The extended phases each rework the SAME alpha node / member set, so run them one at a time.
+xcount=$(( REMOVAL + ROTATE + RECOVER ))
+if [ "$xcount" -gt 1 ]; then
+  echo "ERROR: run MAE_E2E_REMOVAL / MAE_E2E_ROTATE / MAE_E2E_RECOVER separately (each extends the same flow)"; exit 2
 fi
 
 for b in "$MAE_BIN" "$MAE_DAEMON_BIN"; do [ -x "$b" ] || { echo "ERROR: missing binary: $b"; exit 2; }; done
@@ -101,10 +106,11 @@ cleanup() {
   return "$rc"
 }
 trap cleanup EXIT INT TERM
-mkdir -p "$WORK"/{srv/.config/mae,srv/.local/share,srv/data,alice/.config/mae,alice/.local/share,bob/.config/mae,bob/.local/share,sync,scen}
+mkdir -p "$WORK"/{srv/.config/mae,srv/.local/share,srv/data,alice/.config/mae,alice/.local/share,bob/.config/mae,bob/.local/share,carol/.config/mae,carol/.local/share,sync,scen}
 srv()   { HOME="$WORK/srv"   XDG_CONFIG_HOME="$WORK/srv/.config"   XDG_DATA_HOME="$WORK/srv/.local/share"   "$@"; }
 alice() { HOME="$WORK/alice" XDG_CONFIG_HOME="$WORK/alice/.config" XDG_DATA_HOME="$WORK/alice/.local/share" "$@"; }
 bob()   { HOME="$WORK/bob"   XDG_CONFIG_HOME="$WORK/bob/.config"   XDG_DATA_HOME="$WORK/bob/.local/share"   "$@"; }
+carol() { HOME="$WORK/carol" XDG_CONFIG_HOME="$WORK/carol/.config" XDG_DATA_HOME="$WORK/carol/.local/share" "$@"; }
 
 cat > "$WORK/srv/.config/mae/daemon.toml" <<EOF
 socket = "$WORK/srv/daemon.sock"
@@ -121,9 +127,27 @@ srv "$MAE_DAEMON_BIN" authorize mae-ed25519 "$AK" alice >/dev/null
 srv "$MAE_DAEMON_BIN" authorize mae-ed25519 "$BK" bob   >/dev/null
 BOB_FP="$(srv "$MAE_DAEMON_BIN" authorized 2>/dev/null | awk '$1=="bob"{print $2}' | grep -m1 '^SHA256:')"
 [ -n "$BOB_FP" ] || { echo "ERROR: could not read bob's fingerprint"; exit 1; }
-for who in alice bob; do
+INIT_WHO="alice bob"
+# ADR-040 §Recovery-key: carol is bob's NEW key, authorized on the daemon OUT-OF-BAND (§4) —
+# the operator adds it before carol can connect to recover. carol reads bob's offline recovery
+# key directly from bob's collab dir (same filesystem) and rotates bob's seat onto her key.
+if [ "$RECOVER" = "1" ]; then
+  CK="$(carol "$MAE_BIN" --collab-identity 2>/dev/null | sed -n 's/.*public key:  mae-ed25519 //p' | awk '{print $1}')"
+  srv "$MAE_DAEMON_BIN" authorize mae-ed25519 "$CK" carol >/dev/null
+  INIT_WHO="alice bob carol"
+fi
+for who in $INIT_WHO; do
   printf '(set-option! "collab-auth-mode" "key")\n(set-option! "collab-host-key-policy" "accept-new")\n' > "$WORK/$who/.config/mae/init.scm"
 done
+# carol's recovery rotation gives her a new ADR-023 write lineage; let her first edit rebase silently.
+if [ "$RECOVER" = "1" ]; then
+  printf '(set-option! "collab-fence-resolution" "auto")\n' >> "$WORK/carol/.config/mae/init.scm"
+fi
+# B2 restore model: bob persists his collection op-log + saves his offline recovery key under his
+# collab dir. carol (bob's new machine) RESTORES that backup into her own collab dir (a background
+# step gated on bob-registered), then recovers from it — no daemon op-log fetch needed.
+BOB_COLLAB="$WORK/bob/.local/share/mae/collab"
+CAROL_COLLAB="$WORK/carol/.local/share/mae/collab"
 # ADR-040 rotation: rotating the owner identity changes its per-node op-set client_id, so the
 # first post-rotation edit to an existing node trips the ADR-023 epoch fence once ("rebase
 # required") and must auto-re-author under the new client_id. Enable auto fence-resolution for
@@ -168,6 +192,20 @@ if [ "$ROTATE" = "1" ]; then
     (it-test \"re-joins to pull post-rotation content under the rotated owner (snapshot, like CANARY1)\" (lambda () (execute-ex \"kb-join collabtest\") (sleep-ms 3500)))"
 fi
 
+# ADR-040 §Recovery-key segments — empty unless MAE_E2E_RECOVER=1. After bob reads CANARY1 as a
+# member, bob REGISTERS an offline recovery key (rides the PR3 self-service gate), then is "lost".
+# carol — bob's NEW key, authorized out-of-band — joins to pull the roster, RECOVERS bob's seat
+# with the offline key (recovery-signed Rebind, accepted by the PR3 gate because the key was
+# pre-registered), and re-joins as the recovered member to decrypt the sealed content the LOST
+# key could read. The owner re-wraps the content key to carol reactively; the relay stays blind.
+ALICE_RECOVER=''
+BOB_RECOVER=''
+if [ "$RECOVER" = "1" ]; then
+  ALICE_RECOVER="    (it-test \"stays alive to reactively re-wrap to the recovered key\" (lambda () (wait-for-file \"$WORK/sync/carol-done\" 70000)))"
+  BOB_RECOVER="    (it-test \"registers an offline recovery key (ADR-040 §Recovery-key)\" (lambda () (execute-ex \"collab-register-recovery-key\") (sleep-ms 3500)))
+    (it-test \"signals recovery key registered\" (lambda () (write-file \"$WORK/sync/bob-registered\" \"1\")))"
+fi
+
 # Owner: register + share + enable + approve bob + edit the SEALED node body.
 cat > "$WORK/scen/alice.scm" <<EOF
 (load "$WORK/scen/helpers.scm")
@@ -184,7 +222,7 @@ cat > "$WORK/scen/alice.scm" <<EOF
     (it-test "signals approved" (lambda () (write-file "$WORK/sync/added" "1")))
     (it-test "edits the sealed node body" (lambda () (execute-ex "kb-update collabtest:alpha $CANARY") (sleep-ms 2500)))
     (it-test "signals edited" (lambda () (write-file "$WORK/sync/edited" "1")))
-$ALICE_REMOVAL$ALICE_ROTATE
+$ALICE_REMOVAL$ALICE_ROTATE$ALICE_RECOVER
     (it-test "waits for bob done" (lambda () (wait-for-file "$WORK/sync/bob-done" 60000)))))
 EOF
 
@@ -200,9 +238,24 @@ cat > "$WORK/scen/bob.scm" <<EOF
     (it-test "waits for approval" (lambda () (wait-for-file "$WORK/sync/added" 60000)))
     (it-test "waits for the sealed edit FIRST" (lambda () (wait-for-file "$WORK/sync/edited" 60000) (sleep-ms 500)))
     (it-test "join (member) — pulls sealed content + decrypts to disk" (lambda () (execute-ex "kb-join collabtest") (sleep-ms 3000)))
-$BOB_REMOVAL$BOB_ROTATE
+$BOB_REMOVAL$BOB_ROTATE$BOB_RECOVER
     (it-test "signals done" (lambda () (write-file "$WORK/sync/bob-done" "1")))))
 EOF
+
+# carol — bob's recovered key (only when MAE_E2E_RECOVER=1). Joins to pull the roster, recovers
+# bob's seat with the offline recovery key, re-joins as the recovered member, decrypts.
+if [ "$RECOVER" = "1" ]; then
+cat > "$WORK/scen/carol.scm" <<EOF
+(load "$WORK/scen/helpers.scm")
+(describe-group "carol (bob's recovered key)"
+  (lambda ()
+    (it-test "connects" (lambda () (wait-connected 30000)))
+    (it-test "waits for the restored backup (collection op-log + recovery key)" (lambda () (wait-for-file "$WORK/sync/carol-restored" 60000) (sleep-ms 500)))
+    (it-test "recovers bob's identity from the restored offline recovery key (ADR-040, B2)" (lambda () (execute-ex "collab-recover-identity $CAROL_COLLAB/recovery $BOB_FP") (sleep-ms 4000)))
+    (it-test "re-joins as the RECOVERED member — pulls + decrypts the sealed content" (lambda () (execute-ex "kb-join collabtest") (sleep-ms 4000)))
+    (it-test "signals done" (lambda () (write-file "$WORK/sync/carol-done" "1")))))
+EOF
+fi
 
 spawn DP "$WORK/daemon.log" -- env \
   HOME="$WORK/srv" XDG_CONFIG_HOME="$WORK/srv/.config" XDG_DATA_HOME="$WORK/srv/.local/share" \
@@ -222,12 +275,39 @@ spawn BPID "$WORK/bob.tap" -- env \
   MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 \
   MAE_LOG="${MAE_E2E_BOB_LOG:-mae_mcp=warn,info}" \
   ${TIMEOUT_BIN:+$TIMEOUT_BIN $EDITOR_TIMEOUT} "$MAE_BIN" --test "$WORK/scen/bob.scm"
-echo "[harness] alice pgid=$APID bob pgid=$BPID"
+CPID=""
+if [ "$RECOVER" = "1" ]; then
+  spawn CPID "$WORK/carol.tap" -- env \
+    HOME="$WORK/carol" XDG_CONFIG_HOME="$WORK/carol/.config" XDG_DATA_HOME="$WORK/carol/.local/share" \
+    MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 \
+    MAE_LOG="${MAE_E2E_CAROL_LOG:-mae_mcp=warn,info}" \
+    ${TIMEOUT_BIN:+$TIMEOUT_BIN $EDITOR_TIMEOUT} "$MAE_BIN" --test "$WORK/scen/carol.scm"
+fi
+echo "[harness] alice pgid=$APID bob pgid=$BPID${CPID:+ carol pgid=$CPID}"
+# B2 "restore your backup": once bob has registered (so his persisted op-log carries the
+# RegisterRecoveryKey) + persisted it, copy bob's collab backup (the key-blind collection
+# op-logs + the offline recovery key) onto carol's machine, then signal carol to recover.
+# This models the real recovery: you kept your data, lost your key. Background so it overlaps
+# the running editors; tracked as a harness pid so cleanup reaps it.
+if [ "$RECOVER" = "1" ]; then
+  (
+    for _ in $(seq 1 120); do [ -f "$WORK/sync/bob-registered" ] && break; sleep 0.5; done
+    sleep 1.5  # let bob's register op persist to disk
+    mkdir -p "$CAROL_COLLAB"
+    cp -r "$BOB_COLLAB/collections" "$CAROL_COLLAB/collections" 2>/dev/null || true
+    cp -r "$BOB_COLLAB/recovery"    "$CAROL_COLLAB/recovery"    2>/dev/null || true
+    printf '1\n' > "$WORK/sync/carol-restored"
+  ) &
+  RESTORE_PID=$!
+  HARNESS_PIDS+=("$RESTORE_PID")
+fi
 wait "$APID" 2>/dev/null || true
 wait "$BPID" 2>/dev/null || true
+[ -n "$CPID" ] && wait "$CPID" 2>/dev/null || true
 
 echo "--- alice TAP ---"; grep -E '^(ok|not ok|#)' "$WORK/alice.tap" | tail -6 || true
 echo "--- bob TAP ---";   grep -E '^(ok|not ok|#)' "$WORK/bob.tap"   | tail -6 || true
+[ "$RECOVER" = "1" ] && { echo "--- carol TAP ---"; grep -E '^(ok|not ok|#)' "$WORK/carol.tap" | tail -8 || true; }
 
 fail=0
 applied=$(grep -c "node_update: applied.*collabtest:alpha" "$WORK/daemon.log" || true)
@@ -315,9 +395,51 @@ if [ "$ROTATE" = "1" ]; then
     || { echo "FAIL(rotid): member did NOT converge on the rotated owner's content"; fail=1; }
 fi
 
+# --- ADR-040 §Recovery-key: a LOST member recovers via a pre-registered offline key. bob
+# registers a recovery key, then carol (bob's NEW key) uses it to inherit bob's seat and read
+# the sealed content the lost key could read — without owner mediation, relay stays key-blind.
+if [ "$RECOVER" = "1" ]; then
+  echo "--- ADR-040 recovery-key oracle ---"
+  # PREP RAN: bob actually registered an offline recovery key (the register handler logged it).
+  grep -qaF "register-recovery-key: recovery key registered" "$WORK/bob.tap" \
+    && echo "PASS(recover): bob registered an offline recovery key" \
+    || { echo "FAIL(recover): bob never registered a recovery key (the handler didn't run)"; fail=1; }
+  # The recovery key file was actually written to bob's collab dir (the offline backup).
+  [ -f "$BOB_COLLAB/recovery/id_ed25519" ] \
+    && echo "PASS(recover): recovery key persisted to bob's collab dir for offline backup" \
+    || { echo "FAIL(recover): recovery key was never saved to disk"; fail=1; }
+  # B2: bob persisted his collection op-log AND carol restored it onto her machine (the
+  # precondition for self-service recovery without a daemon op-log fetch).
+  if ls "$BOB_COLLAB/collections"/*.kbc >/dev/null 2>&1; then
+    echo "PASS(recover): bob persisted his collection op-log to disk (B2 durability)"
+  else
+    echo "FAIL(recover): bob's collection op-log was not persisted (B2 broken)"; fail=1
+  fi
+  # NON-VACUITY + GATE: the daemon's PR3 self-service gate accepted member ops — both bob's
+  # registration AND carol's recovery rebind (>=2 accepts; the owner path is separate).
+  acc=$(grep -ca "accepted a member self-service identity op" "$WORK/daemon.log" || true)
+  [ "$acc" -ge 2 ] \
+    && echo "PASS(recover): daemon accepted bob's registration AND carol's recovery rebind ($acc member self-service ops)" \
+    || { echo "FAIL(recover): expected >=2 member self-service accepts (register + recover), got $acc — the recovery rebind was rejected"; fail=1; }
+  # THE PROPERTY (the attacker's inverse): carol — a DIFFERENT key than bob, never admitted by
+  # the owner — DECRYPTS the sealed CANARY. She could only do so by inheriting bob's seat through
+  # the recovery rebind AND the owner reactively re-wrapping the content key to her.
+  if grep -rqaF "$CANARY" "$WORK/carol/.local/share" 2>/dev/null; then
+    echo "PASS(recover): the RECOVERED key decrypts the sealed content (inherited the lost key's seat + access)"
+  else
+    echo "FAIL(recover): the recovered key could NOT read the sealed content — recovery did not transfer access"; fail=1
+  fi
+  # KEY-BLIND across recovery: the canary must stay sealed on the relay (already checked absent
+  # from srv/data + daemon.log in the base oracle; re-affirm the recovery did not leak it).
+  grep -rqaF "$CANARY" "$WORK/srv/data" 2>/dev/null \
+    && { echo "FAIL(recover): canary FOUND in the daemon store after recovery — NOT key-blind"; fail=1; } \
+    || echo "PASS(recover): relay stayed key-blind across recovery (canary sealed)"
+fi
+
 suffix=""
 [ "$NEG" = "1" ] && suffix=" (NEGATIVE control)"
 [ "$REMOVAL" = "1" ] && suffix="$suffix + §D3 removal/rotation"
 [ "$ROTATE" = "1" ] && suffix="$suffix + ADR-040 identity rotation"
+[ "$RECOVER" = "1" ] && suffix="$suffix + ADR-040 recovery-key"
 [ "$fail" -eq 0 ] && echo "PASS: E2E encrypted multi-user lifecycle$suffix" || echo "FAIL: E2E encrypted lifecycle$suffix"
 exit $fail

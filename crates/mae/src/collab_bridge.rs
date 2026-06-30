@@ -3028,7 +3028,16 @@ async fn run_collab_task(
     // #173: kb_id → full collection replica, seeded at join/share/enable and advanced by
     // inbound `kbc:` deltas, so the content key is RE-DERIVED on any membership change
     // (rotation / post-join wrap) instead of being frozen at first derive.
+    // ADR-040 §Recovery (B2): re-seed from the durable on-disk store so a restarted (or
+    // restored-from-backup) member keeps its key-blind op-logs without a re-fetch — the
+    // precondition for self-service recovery, since the daemon serves the op-log only to
+    // members and a recovering peer is (yet) a non-member.
     let mut kb_collections: HashMap<String, Vec<u8>> = HashMap::new();
+    if let Some(d) = mae_mcp::collection_store::collections_dir() {
+        for (kb_id, bytes) in mae_mcp::collection_store::load_all(&d) {
+            kb_collections.insert(kb_id, bytes);
+        }
+    }
     // ADR-040 PR2c: owner-side reactive re-wrap outbox — filled by the receive path when a
     // member rotation lands on an E2e KB this peer owns, drained right after each inbound
     // message is handled (ships `kb/collection_op` + advances the replica).
@@ -3126,6 +3135,8 @@ async fn run_collab_task(
                                         // rotated state (and the new key derives its own content key).
                                         kb_collections
                                             .insert(plan.kb_id.clone(), plan.new_replica.clone());
+                                        // B2: persist so the rotated/recovered op-log survives a restart.
+                                        persist_collection(&plan.kb_id, &plan.new_replica);
                                         rotated += 1;
                                     }
                                     // Persist the successor key (the old key already signed the
@@ -3198,6 +3209,8 @@ async fn run_collab_task(
                                         }
                                         kb_collections
                                             .insert(plan.kb_id.clone(), plan.new_replica.clone());
+                                        // B2: persist so the rotated/recovered op-log survives a restart.
+                                        persist_collection(&plan.kb_id, &plan.new_replica);
                                         registered += 1;
                                     }
                                     // Save the recovery secret to `<collab_dir>/recovery` (a
@@ -3259,6 +3272,15 @@ async fn run_collab_task(
                                 std::path::Path::new(&recovery_path),
                                 "recovery",
                             );
+                            // B2: the recovering user just restored their data dir on a new
+                            // machine — re-seed kb_collections from the persisted op-logs so a KB
+                            // restored AFTER this session started is recoverable. Never clobber a
+                            // live (more-current) replica.
+                            if let Some(d) = mae_mcp::collection_store::collections_dir() {
+                                for (kb_id, bytes) in mae_mcp::collection_store::load_all(&d) {
+                                    kb_collections.entry(kb_id).or_insert(bytes);
+                                }
+                            }
                             match (signing_identity.clone(), writer.as_mut(), recovery) {
                                 (Some(new_id), Some(w), Some(recovery)) => {
                                     let plans = plan_recovery_rotation(
@@ -3280,6 +3302,8 @@ async fn run_collab_task(
                                         }
                                         kb_collections
                                             .insert(plan.kb_id.clone(), plan.new_replica.clone());
+                                        // B2: persist so the rotated/recovered op-log survives a restart.
+                                        persist_collection(&plan.kb_id, &plan.new_replica);
                                         recovered += 1;
                                     }
                                     let new_fp = new_id.fingerprint();
@@ -4954,6 +4978,18 @@ pub(crate) fn plan_reactive_member_rewraps(
     out
 }
 
+/// ADR-040 §Recovery (B2): mirror `kb_id`'s latest collection op-log to the durable on-disk
+/// store so it survives a restart / restore. Best-effort — a write failure is logged, never
+/// fatal (the in-memory replica remains authoritative for the session). The op-log is key-blind
+/// (roster + signed ops + ciphertext wraps, no plaintext secrets); see [`mae_mcp::collection_store`].
+pub(crate) fn persist_collection(kb_id: &str, state: &[u8]) {
+    if let Some(d) = mae_mcp::collection_store::collections_dir() {
+        if let Err(e) = mae_mcp::collection_store::save(&d, kb_id, state) {
+            warn!(kb = %kb_id, error = %e, "B2: failed to persist collection op-log to disk");
+        }
+    }
+}
+
 pub(crate) fn refresh_kb_content_key_on_collection_delta(
     kb: &mut KbCryptoCtx,
     doc_id: &str,
@@ -4985,6 +5021,8 @@ pub(crate) fn refresh_kb_content_key_on_collection_delta(
         }
     };
     kb.kb_collections.insert(kb_id.to_string(), merged.clone());
+    // B2: persist every inbound membership delta so the on-disk op-log stays current.
+    persist_collection(kb_id, &merged);
     // ADR-040 PR2c: owner-side reactive re-wrap. If a member rotated on an E2e KB we own,
     // deliver the content key to their successor (the member can't — only the owner passes
     // the daemon's owner-Manage gate for a re-wrap op). Queue the signed deltas; the network
@@ -5580,6 +5618,8 @@ fn handle_response(
                     // (rotation / admit) re-derives the key live.
                     kb.kb_collections
                         .insert(kb_id.clone(), collection_state.clone());
+                    // B2: persist the seeded op-log (durability + recovery precondition).
+                    persist_collection(&kb_id, &collection_state);
                     if let Some(content_key) = derive_kb_content_key(&collection_state, id) {
                         kb.content_keys.insert(kb_id.clone(), content_key);
                         debug!(kb = %kb_id, "ADR-037: derived owner content key on share");
@@ -5729,6 +5769,8 @@ fn handle_response(
                     // re-derives the (rotated) key live for this member.
                     kb.kb_collections
                         .insert(kb_id.clone(), collection_state.clone());
+                    // B2: persist the seeded op-log (durability + recovery precondition).
+                    persist_collection(&kb_id, &collection_state);
                     if let Some(content_key) = derive_kb_content_key(&collection_state, id) {
                         for n in &mut nodes {
                             kb.node_to_kb.insert(n.id.clone(), kb_id.clone());
@@ -5742,9 +5784,17 @@ fn handle_response(
                             let prev = kb.op_sets.get(&n.id).cloned().unwrap_or_default();
                             let merged = mae_sync::op_set::merge(&prev, &n.bytes)
                                 .unwrap_or_else(|_| n.bytes.clone());
-                            let seen = kb.seen_ops.entry(n.id.clone()).or_default();
+                            // The join snapshot is a FULL state — reconstruct the node from the
+                            // COMPLETE op-set (op 0 = base doc), NOT just the ops missing from the
+                            // live `seen` set. Using `seen` here would skip an already-seen BASE op
+                            // and rebuild from a mid-stream update → a gap that panics
+                            // `reconcile_remote_node` (a recovered member, who absorbed pre-join
+                            // broadcasts into `seen`, hit exactly this). Open against a FRESH set so
+                            // every op materializes; fold them into the real `seen` afterward so
+                            // subsequent LIVE updates still dedupe + chain on this state.
+                            let full_seen = std::collections::BTreeSet::new();
                             let opened =
-                                mae_sync::op_set::open_new_ops(&merged, &content_key, seen);
+                                mae_sync::op_set::open_new_ops(&merged, &content_key, &full_seen);
                             if !opened.is_empty() {
                                 // Reconstruct the node CRDT: op 0 is the base doc, the rest
                                 // are incremental updates (mirror of the seal round-trip).
@@ -5757,6 +5807,7 @@ fn handle_response(
                                     debug!(target: "kb_sync", node = %n.id, "JOIN-DECRYPT: materialized plaintext from sealed snapshot on join");
                                     n.bytes = reader.encode_state();
                                 }
+                                let seen = kb.seen_ops.entry(n.id.clone()).or_default();
                                 for (op_id, _) in &opened {
                                     seen.insert(op_id.clone());
                                 }
