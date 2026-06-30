@@ -131,6 +131,57 @@ self-rotation possible), follow the recovery runbook in `COLLABORATION.md §8`.
 
 ---
 
+## 3b. P2P mesh (ADR-025) — daemon-to-daemon, no central hub
+
+The mesh lets two daemons sync a KB **directly over iroh QUIC** — no shared relay server. The
+daemon's node identity IS its `key`-mode Ed25519 identity (§3), so the same `authorize`/`revoke`
+allow-list gates the mesh. **Beta** (validated two-daemon convergence; gossip/anti-entropy
+multi-way sync is a follow-up, #89).
+
+### Enable it
+
+```toml
+[collab]
+bind = "127.0.0.1:9473"     # the editor still connects to ITS daemon over this TCP socket
+[collab.auth]
+mode = "key"                # the mesh has no PSK/anonymous path — key mode is required
+[collab.p2p]
+enabled = true
+relay = "disabled"          # direct addressing (LAN / localhost). "default" = public iroh
+                            # relays (NAT hole-punch, needs internet); or a self-hosted URL.
+connection_gate = "authorized_keys"   # only authorized peer daemons (vs "open" TOFU)
+```
+
+`mae setup-collab --p2p` writes this for you. `relay = "disabled"` needs no external infra and
+is ideal where peers can reach each other directly; use `"default"` to traverse NAT.
+
+### Authorize the *peer daemon* (not just its editor)
+
+The mesh dialer connects as the **daemon's** identity, so on each side `authorize` the OTHER
+daemon's public key (read it with `mae-daemon identity`), in addition to your own editor:
+
+```bash
+mae-daemon identity                                   # this daemon's pubkey + fingerprint
+mae-daemon authorize mae-ed25519 <peer-daemon-pubkey> peerB   # trust the peer daemon
+```
+
+### Share → join → approve
+
+1. **Owner** (daemon A side): in the editor, `kb-share-p2p` — this establishes the mesh share
+   (`establish_p2p_share` widens the KB's transport to include the mesh) and prints a
+   `mae://join/…` **ticket** to `*Messages*`. (Two-step beta path: if the KB isn't on the daemon
+   yet, `kb-share` it first; single-command upload is a follow-up.)
+2. **Joiner** (daemon B side): `:kb-join-p2p mae://join/…` — daemon B's dialer connects to
+   daemon A over iroh and requests the KB.
+3. **Owner approves** the joining peer: the mesh join is owner-gated — approve the peer
+   **daemon's fingerprint** (`kb-approve <kb> SHA256:… editor`), or set a `permissive` policy
+   for auto-admit. The next dialer cycle (polls ~10s) pulls the KB; edits then sync live both
+   ways, peer-verified (signed ops, epoch fence).
+
+A full-process two-daemon convergence test is CI-gated: `scripts/collab-p2p-mesh-e2e.sh`.
+
+---
+
 ## 4. Persistence, WAL & at-rest
 
 - **WAL-first.** Every sync update is appended to a SQLite WAL before being applied in memory, then
@@ -225,6 +276,8 @@ exists (see §4). Keep backups for the solo-daemon case.
 | "rebase required" after rotation | expected once — the rotated key has a new write lineage; `collab-fence-resolution = auto` re-authors silently (ADR-023/040) |
 | E2e content unreadable on a peer | the owner must have approved + wrapped the key to that member; a member who re-syncs from scratch after a key rotation loses pre-rotation content (no key-history yet, #176) |
 | Store growing fast | grow-only CRDT state (§6 / #207) — watch `data_dir`; compaction of the CRDT itself is tracked (ADR-028) |
+| P2P mesh join stuck "pending" | the owner must approve the joining **peer daemon's** fingerprint (`kb-approve <kb> SHA256:… editor`) or set a `permissive` policy (§3b) |
+| Peer daemon can't dial over the mesh | `authorize` the peer **daemon's** pubkey on each side (not just its editor); with `relay = "disabled"` peers must be directly reachable (LAN/localhost) — use `relay = "default"` to traverse NAT (§3b) |
 
 See also: [`COLLABORATION.md`](COLLABORATION.md), [`E2E_ENCRYPTION.md`](E2E_ENCRYPTION.md),
 [`SECURITY_REVIEW.md`](SECURITY_REVIEW.md), and ADR-035 (editor↔daemon boundary).
