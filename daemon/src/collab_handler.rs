@@ -1116,12 +1116,16 @@ async fn current_member_set(
 /// daemon — not just the deriving peers — is now an authorization point for this op.
 /// `auth_principal` is the verified session principal; `None` (un-authed local socket)
 /// never reaches here because the owner-`Manage` check already allowed it.
+/// On success returns the accepted `(successor_fp, predecessor_fp)` rebind pairs so the
+/// caller can mirror each successor into the owned-KB roster (the successor inherits the
+/// predecessor's role), giving it access on a roster-model daemon — the derive-based
+/// peers already alias it via the PR2a post-pass.
 async fn verify_member_rebind_update(
     doc_store: &DocStore,
     kb_id: &str,
     auth_principal: Option<&str>,
     update: &[u8],
-) -> Result<(), String> {
+) -> Result<Vec<(String, String)>, String> {
     let principal = auth_principal
         .ok_or_else(|| "member self-rotation requires an authenticated principal".to_string())?;
     let collection_doc = format!("kbc:{kb_id}");
@@ -1175,6 +1179,7 @@ async fn verify_member_rebind_update(
         return Err("update introduces no new membership op (not a member rotation)".to_string());
     }
     let members = current_member_set(doc_store, kb_id, &before).await;
+    let mut pairs = Vec::with_capacity(new_ops.len());
     for o in &new_ops {
         if !o.verify_signed() {
             return Err("rotation op signature is invalid".to_string());
@@ -1210,8 +1215,9 @@ async fn verify_member_rebind_update(
                 "rotation successor is already a member (must rotate into a fresh key)".to_string(),
             );
         }
+        pairs.push((o.op.subject.clone(), o.op.author.clone()));
     }
-    Ok(())
+    Ok(pairs)
 }
 
 /// Membership-smuggling defense (ADR-018): a raw `sync/update` to a collection
@@ -2602,19 +2608,24 @@ async fn handle_doc_request_inner(
             // member self-`Rebind` (`verify_member_rebind_update`) and nothing else.
             let manage =
                 kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await;
+            // The `(successor, predecessor)` pairs of an accepted member self-rotation,
+            // empty for the owner path — used to mirror the successor into the roster below.
+            let mut rebind_pairs: Vec<(String, String)> = Vec::new();
             match manage {
                 Ok(AccessDecision::Allow) => {}
                 other => {
                     match verify_member_rebind_update(doc_store, &kb_id, auth_principal, &update)
                         .await
                     {
-                        Ok(()) => {
+                        Ok(pairs) => {
                             info!(
                                 session = session_id,
                                 kb_id = %kb_id,
                                 principal = auth_principal.unwrap_or("?"),
+                                rebinds = pairs.len(),
                                 "kb/collection_op: accepted a member self-rotation (ADR-040 PR2c)"
                             );
+                            rebind_pairs = pairs;
                         }
                         Err(rebind_reason) => {
                             let base = match other {
@@ -2652,6 +2663,33 @@ async fn handle_doc_request_inner(
                         let coll_doc = format!("kbc:{kb_id}");
                         if let Err(e) = doc_store.compact_doc(&coll_doc).await {
                             warn!(session = session_id, kb_id = %kb_id, error = %e, "kb/collection_op: scrub compaction failed (title may linger in the WAL until next compaction)");
+                        }
+                    }
+                    // ADR-040 PR2c: a member self-rotation only appends the `Rebind` to the
+                    // op-log. On a roster-model (owned/un-anchored) daemon, mirror each
+                    // successor into the `member_roles` roster with the PREDECESSOR's role so
+                    // it gains access here too — parallel to how `kb/add_member` mirrors
+                    // roster↔op-log. Additive: the predecessor is left in place (no lockout of
+                    // the rotating session); the user removes the old key explicitly. Derive
+                    // peers already alias + retire via the PR2a post-pass. Key-blind (the
+                    // roster holds no secrets).
+                    if !rebind_pairs.is_empty() {
+                        if let Ok(mut coll) = load_collection(doc_store, &kb_id).await {
+                            for (successor, predecessor) in &rebind_pairs {
+                                let role = coll.role_of(predecessor).unwrap_or(SyncRole::Editor);
+                                let u = coll.upsert_member(successor, successor, role);
+                                if let Err(e) = persist_and_broadcast_collection(
+                                    doc_store,
+                                    broadcaster,
+                                    session_id,
+                                    &kb_id,
+                                    &u,
+                                )
+                                .await
+                                {
+                                    warn!(session = session_id, kb_id = %kb_id, error = %e, "kb/collection_op: failed to mirror rotated successor into the roster");
+                                }
+                            }
                         }
                     }
                     JsonRpcResponse::success(

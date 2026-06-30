@@ -3841,6 +3841,18 @@ async fn member_self_rebind_is_accepted_and_stored() {
                 && o.op.subject == m2.2),
         "the member's Rebind op is stored in the collection op-log"
     );
+    // The successor is mirrored into the roster with the PREDECESSOR's role (Editor),
+    // so it gains access on this roster-model daemon. The predecessor is left in place.
+    assert_eq!(
+        stored.role_of(&m2.2),
+        Some(mae_sync::kb::Role::Editor),
+        "the rotated successor inherits the predecessor's role in the roster"
+    );
+    assert_eq!(
+        stored.role_of(&m.2),
+        Some(mae_sync::kb::Role::Editor),
+        "the predecessor is left in the roster (additive alias, no lockout)"
+    );
 }
 
 #[tokio::test]
