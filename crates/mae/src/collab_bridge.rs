@@ -3004,6 +3004,10 @@ async fn run_collab_task(
     // inbound `kbc:` deltas, so the content key is RE-DERIVED on any membership change
     // (rotation / post-join wrap) instead of being frozen at first derive.
     let mut kb_collections: HashMap<String, Vec<u8>> = HashMap::new();
+    // ADR-040 PR2c: owner-side reactive re-wrap outbox — filled by the receive path when a
+    // member rotation lands on an E2e KB this peer owns, drained right after each inbound
+    // message is handled (ships `kb/collection_op` + advances the replica).
+    let mut pending_collection_ops: Vec<(String, Vec<u8>)> = Vec::new();
     // WU6: Transport health counter for periodic diagnostics.
     let mut messages_received: u64 = 0;
     // WU2: Heartbeat interval (from collab_heartbeat_interval option, disabled if 0).
@@ -3067,9 +3071,18 @@ async fn run_collab_task(
                                     let new_id = std::sync::Arc::new(
                                         mae_mcp::identity::Identity::generate(old_id.label()),
                                     );
-                                    let plans = plan_owner_rotation(
+                                    // Owner-owned KBs (Rebind + self re-wrap) AND non-owned KBs
+                                    // where I am a member (Rebind only — the owner re-wraps the
+                                    // content key reactively, ADR-040 PR2c).
+                                    let owner_plans = plan_owner_rotation(
                                         &kb_collections, &content_keys, &old_id, &new_id, now,
                                     );
+                                    let member_plans =
+                                        plan_member_rotation(&kb_collections, &old_id, &new_id, now);
+                                    let owned_count = owner_plans.len();
+                                    let member_count = member_plans.len();
+                                    let plans: Vec<RotationPlan> =
+                                        owner_plans.into_iter().chain(member_plans).collect();
                                     let mut rotated = 0usize;
                                     for plan in &plans {
                                         for delta in &plan.deltas {
@@ -3101,10 +3114,10 @@ async fn run_collab_task(
                                     // Swap the live signing identity — future content ops sign with
                                     // the new key (which the rotated membership recognises as owner).
                                     signing_identity = Some(new_id);
-                                    info!(rotated, new_fp = %new_fp, "rotate-identity: owner rotation shipped");
+                                    info!(rotated, owned_count, member_count, new_fp = %new_fp, "rotate-identity: rotation shipped");
                                     try_send_evt(&evt_tx, CollabEvent::StatusReport {
                                         lines: vec![
-                                            format!("Identity rotated across {rotated} owned KB(s)."),
+                                            format!("Identity rotated across {rotated} KB(s) ({owned_count} owned, {member_count} as member)."),
                                             format!("New fingerprint: {new_fp}"),
                                             "Next: authorize the new key on the daemon (`mae-daemon authorize`), then reconnect — this connection still uses the old key.".to_string(),
                                             // The new key has a new ADR-023 client-id, so the FIRST edit to an
@@ -4192,8 +4205,41 @@ async fn run_collab_task(
                                     seen_ops: &mut seen_ops,
                                     kb_collections: &mut kb_collections,
                                     signing_identity: signing_identity.as_ref(),
+                                    pending_collection_ops: &mut pending_collection_ops,
                                 },
                             );
+                            // ADR-040 PR2c: ship any owner-side reactive re-wraps the receive
+                            // path queued (a member rotated on an E2e KB we own → deliver the
+                            // content key to their successor). The owner-gated `kb/collection_op`
+                            // accepts these (we sign with the owner key); advance the replica so
+                            // a later op chains on the re-wrapped state.
+                            if let Some(w) = writer.as_mut() {
+                                for (kb_id, delta) in pending_collection_ops.drain(..) {
+                                    let req_id = next_request_id;
+                                    next_request_id += 1;
+                                    let req = mae_sync::wire::kb_collection_op_request(
+                                        req_id,
+                                        &kb_id,
+                                        &mae_sync::encoding::update_to_base64(&delta),
+                                    );
+                                    if let Ok(body) = serde_json::to_vec(&req) {
+                                        let _ = write_framed(w, &body, write_timeout).await;
+                                    }
+                                    if let Some(base) = kb_collections.get(&kb_id) {
+                                        if let Ok(mut coll) =
+                                            mae_sync::kb::KbCollectionDoc::from_bytes(base)
+                                        {
+                                            if coll.apply_update(&delta).is_ok() {
+                                                kb_collections
+                                                    .insert(kb_id.clone(), coll.encode_state());
+                                            }
+                                        }
+                                    }
+                                    info!(kb = %kb_id, "rotate-identity: owner re-wrapped content key to a rotated member's successor");
+                                }
+                            } else {
+                                pending_collection_ops.clear();
+                            }
                             // Any valid message resets the ping_pending flag.
                             ping_pending = false;
                         }
@@ -4419,6 +4465,12 @@ pub(crate) struct KbCryptoCtx<'a> {
     /// derive and 3c rotation never reaches it.
     pub kb_collections: &'a mut std::collections::HashMap<String, Vec<u8>>,
     pub signing_identity: Option<&'a std::sync::Arc<mae_mcp::identity::Identity>>,
+    /// ADR-040 PR2c: owner-side reactive re-wrap queue. When a member's `Rebind` for
+    /// *another* principal lands on an E2e KB this peer OWNS, the receive path authors an
+    /// `author_rebind_rewrap` delivering the content key to the successor and pushes
+    /// `(kb_id, signed_delta)` here; the network loop ships each via the owner-gated
+    /// `kb/collection_op` and advances the replica. Empty on non-owners / non-E2e KBs.
+    pub pending_collection_ops: &'a mut Vec<(String, Vec<u8>)>,
 }
 
 /// ADR-040 PR2b: the planned content-op deltas to ship for ONE KB during an owner
@@ -4498,12 +4550,152 @@ pub(crate) fn plan_owner_rotation(
     plans
 }
 
+/// ADR-040 PR2c — plan a NON-owner **member** identity rotation. For each KB in
+/// `kb_collections` this peer is a member of but does **not** own, author a self-`Rebind`
+/// (the OLD key signs, carrying the new Ed25519 + published X25519 wrap keys). No content
+/// re-wrap: the member cannot pass the daemon's owner-`Manage` gate for a re-wrap op, so the
+/// owner delivers the content key to the successor reactively
+/// ([`plan_reactive_member_rewraps`]). Owned KBs are skipped (handled by
+/// [`plan_owner_rotation`]); so are KBs where I am not a roster member. Pure — the caller
+/// ships the deltas via the (PR2c-gated) `kb/collection_op` and stores `new_replica` back.
+pub(crate) fn plan_member_rotation(
+    kb_collections: &std::collections::HashMap<String, Vec<u8>>,
+    old_id: &mae_mcp::identity::Identity,
+    new_id: &mae_mcp::identity::Identity,
+    now: u64,
+) -> Vec<RotationPlan> {
+    use mae_sync::kb::KbCollectionDoc;
+    let old_fp = old_id.fingerprint();
+    let new_fp = new_id.fingerprint();
+    let old_pk = old_id.public().to_bytes();
+    let old_sec = old_id.secret_bytes();
+    let new_pk = new_id.public().to_bytes();
+    let new_wrap_pk = mae_sync::content_crypto::wrap_public_for(&new_id.secret_bytes());
+    let mut plans = Vec::new();
+    for (kb_id, state) in kb_collections {
+        let Ok(mut coll) = KbCollectionDoc::from_bytes(state) else {
+            continue;
+        };
+        // Owned KBs go through plan_owner_rotation; only rotate where I am a non-owner member.
+        if coll.owner() == old_fp || coll.role_of(&old_fp).is_none() {
+            continue;
+        }
+        let delta = coll.author_rebind(
+            kb_id,
+            &old_fp,
+            &new_fp,
+            &new_pk,
+            &new_wrap_pk,
+            &old_sec,
+            &old_pk,
+            now,
+        );
+        plans.push(RotationPlan {
+            kb_id: kb_id.clone(),
+            deltas: vec![delta],
+            new_replica: coll.encode_state(),
+        });
+    }
+    plans
+}
+
 /// #173: a `kbc:` collection delta arrived — advance this peer's collection replica and
 /// **re-derive** its content key, so a membership change (3c rotation, post-join
 /// wrap-on-admit) reaches the seal/open path live instead of leaving the member frozen on a
 /// stale key. Persists the refreshed key. No-op for a non-`kbc:` doc, an unseeded KB (we
 /// never joined it), an undecodable delta, or when no key derives (unencrypted / not a
 /// member / not yet wrapped to us — so a plain KB is never disturbed).
+/// ADR-040 PR2c — owner-side reactive re-wrap planner (pure). Given this peer's CURRENT
+/// collection replica `base` and an inbound `delta`, find every NEW member `Rebind` for a
+/// principal OTHER than this owner and — for an E2e KB this peer owns (genesis owner) —
+/// author an `author_rebind_rewrap` delivering `content_key` to each successor's published
+/// X25519 wrap key. Returns the signed `kbc:` deltas to ship via the owner-gated
+/// `kb/collection_op`. The successor inherits the content key with NO new authority (a
+/// re-wrap, not an admit). Empty unless this peer is the genesis owner, the KB is E2e, and
+/// the delta introduces a fresh, fingerprint-bound member Rebind by someone else.
+///
+/// v1 scope: the owner is assumed to be the genesis owner (`coll.owner() == owner_fp`). An
+/// owner who has itself rotated handles its own KBs via the rotation command; a rotated
+/// owner reacting to a *member* rotation is a deferred edge (it needs owner-chain
+/// resolution of the meta owner field).
+pub(crate) fn plan_reactive_member_rewraps(
+    kb_id: &str,
+    base: &[u8],
+    delta: &[u8],
+    content_key: &mae_sync::content_crypto::ContentKey,
+    owner: &mae_mcp::identity::Identity,
+    now: u64,
+) -> Vec<Vec<u8>> {
+    use mae_sync::kb::{Encryption, KbCollectionDoc};
+    use mae_sync::membership::{fingerprint_of, MembershipAction};
+
+    let owner_fp = owner.fingerprint();
+    let Ok(base_coll) = KbCollectionDoc::from_bytes(base) else {
+        return Vec::new();
+    };
+    let Ok(mut merged) = KbCollectionDoc::from_bytes(base) else {
+        return Vec::new();
+    };
+    if merged.apply_update(delta).is_err() {
+        return Vec::new();
+    }
+    // Only an E2e KB whose genesis owner I am.
+    if merged.encryption() != Encryption::E2e || merged.owner() != owner_fp {
+        return Vec::new();
+    }
+    // The genesis owner pubkey anchors the derive (drives find_wrapped_content_key); fall
+    // back to my own key if the op-log has no genesis (legacy/owned-without-oplog).
+    let anchor = merged
+        .oplog_ops()
+        .iter()
+        .find(|o| {
+            o.op.prev_hash.is_empty()
+                && o.op.action == MembershipAction::Admit
+                && o.op.subject == o.op.author
+        })
+        .map(|o| o.author_pubkey)
+        .unwrap_or_else(|| owner.public().to_bytes());
+
+    // Collect the NEW, fresh, fingerprint-bound member Rebinds (subject ≠ me) before
+    // authoring, so the immutable scan doesn't clash with the mutable re-wrap authoring.
+    let base_hashes: std::collections::HashSet<String> = base_coll
+        .oplog_ops()
+        .iter()
+        .map(|o| o.chain_hash())
+        .collect();
+    let mut targets: Vec<(String, [u8; 32], [u8; 32])> = Vec::new();
+    for o in merged.oplog_ops() {
+        if base_hashes.contains(&o.chain_hash())
+            || o.op.action != MembershipAction::Rebind
+            || o.op.subject == owner_fp
+            || o.op.author == owner_fp
+        {
+            continue;
+        }
+        let (Some(new_pk), Some(new_wrap_pk)) = (o.op.new_pubkey, o.op.new_wrap_pubkey) else {
+            continue;
+        };
+        if fingerprint_of(&new_pk) != o.op.subject {
+            continue; // not bound — a malformed rebind never reaches a valid derive
+        }
+        targets.push((o.op.subject.clone(), new_pk, new_wrap_pk));
+    }
+
+    let mut out = Vec::with_capacity(targets.len());
+    let owner_pk = owner.public().to_bytes();
+    let owner_sec = owner.secret_bytes();
+    for (new_fp, new_pk, new_wrap_pk) in targets {
+        let Ok(wrapped) = mae_sync::content_crypto::wrap_to_member(content_key, &new_wrap_pk)
+        else {
+            continue;
+        };
+        out.push(merged.author_rebind_rewrap(
+            kb_id, &new_fp, &new_pk, wrapped, &anchor, &owner_fp, &owner_sec, &owner_pk, now,
+        ));
+    }
+    out
+}
+
 pub(crate) fn refresh_kb_content_key_on_collection_delta(
     kb: &mut KbCryptoCtx,
     doc_id: &str,
@@ -4515,11 +4707,13 @@ pub(crate) fn refresh_kb_content_key_on_collection_delta(
     let Some(id) = kb.signing_identity else {
         return;
     };
-    let Some(base) = kb.kb_collections.get(kb_id) else {
+    // Snapshot this peer's PRE-delta replica (so the inbound rebind reads as a NEW op for
+    // the reactive scan) without holding a borrow across the later `insert`.
+    let Some(base_bytes) = kb.kb_collections.get(kb_id).cloned() else {
         return; // a KB we never seeded (never joined/shared/enabled here)
     };
     // Advance the local collection replica by the delta.
-    let merged = match mae_sync::kb::KbCollectionDoc::from_bytes(base) {
+    let merged = match mae_sync::kb::KbCollectionDoc::from_bytes(&base_bytes) {
         Ok(mut coll) => match coll.apply_update(delta) {
             Ok(()) => coll.encode_state(),
             Err(e) => {
@@ -4533,6 +4727,23 @@ pub(crate) fn refresh_kb_content_key_on_collection_delta(
         }
     };
     kb.kb_collections.insert(kb_id.to_string(), merged.clone());
+    // ADR-040 PR2c: owner-side reactive re-wrap. If a member rotated on an E2e KB we own,
+    // deliver the content key to their successor (the member can't — only the owner passes
+    // the daemon's owner-Manage gate for a re-wrap op). Queue the signed deltas; the network
+    // loop ships them.
+    let rewraps = match kb.content_keys.get(kb_id) {
+        Some(key) => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            plan_reactive_member_rewraps(kb_id, &base_bytes, delta, key, id, now)
+        }
+        None => Vec::new(),
+    };
+    for delta in rewraps {
+        kb.pending_collection_ops.push((kb_id.to_string(), delta));
+    }
     // Re-derive the (possibly rotated) key from the advanced collection.
     if let Some(new_key) = derive_kb_content_key(&merged, id) {
         let changed = kb

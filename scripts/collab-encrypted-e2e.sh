@@ -290,8 +290,9 @@ fi
 # runs when MAE_E2E_ROTATE=1 (⇒ encryption on).
 if [ "$ROTATE" = "1" ]; then
   echo "--- ADR-040 owner identity-rotation oracle ---"
-  # ROTATION ACTUALLY RAN: the owner's bridge logged the owner rotation (not a silent skip).
-  grep -qaF "rotate-identity: owner rotation shipped" "$WORK/alice.tap" \
+  # ROTATION ACTUALLY RAN: the owner's bridge logged the rotation (not a silent skip).
+  # (PR2c-2 reworded this to "rotation shipped" — it now covers owner + member KBs.)
+  grep -qaF "rotate-identity: rotation shipped" "$WORK/alice.tap" \
     && echo "PASS(rotid): owner shipped an identity rotation" \
     || { echo "FAIL(rotid): owner never shipped a rotation (the handler didn't run)"; fail=1; }
   # NON-VACUITY + NEW KEY IS A VALID AUTHOR: the post-rotation edit, signed by the NEW key,
