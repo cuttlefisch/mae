@@ -956,16 +956,30 @@ impl KnowledgeBase {
         // state-vector comparison (not `diff.is_empty()`, which never holds — a
         // no-op v1 update still encodes to a couple of bytes) to decide whether a
         // push is actually warranted.
-        let local_ahead = match self.nodes.get(node_id) {
-            Some(node) => {
-                let doc = node.to_crdt_doc()?;
-                if doc.has_ops_beyond(remote_sv)? {
-                    Some(doc.encode_diff(remote_sv)?)
-                } else {
-                    None
+        //
+        // ONLY for a node that pre-existed locally (crash-safety: re-sync unsynced edits
+        // we authored before a crash/disconnect). A node FRESHLY CREATED by this very
+        // reconcile (`!existed`) was authored entirely by the remote — there is nothing
+        // local to re-sync. Computing local-ahead for it is not just redundant, it is wrong
+        // on an **E2e** KB: our local doc is the *plaintext* node while `remote_sv` is the
+        // *op-set* doc's state vector — incompatible lineages, so `has_ops_beyond` is
+        // spuriously true and we would push a re-seal of content we just received. That
+        // extra op then yields an op-set a LATER joiner cannot reconstruct in causal order
+        // (the recovered-member join panic, #225). Gate on `existed` to suppress it.
+        let local_ahead = if existed {
+            match self.nodes.get(node_id) {
+                Some(node) => {
+                    let doc = node.to_crdt_doc()?;
+                    if doc.has_ops_beyond(remote_sv)? {
+                        Some(doc.encode_diff(remote_sv)?)
+                    } else {
+                        None
+                    }
                 }
+                None => None,
             }
-            None => None,
+        } else {
+            None
         };
 
         let action = if existed {
@@ -2847,6 +2861,47 @@ mod tests {
         assert!(
             outcome2.local_ahead.is_none(),
             "both sides caught up — no redundant push"
+        );
+    }
+
+    /// ADR-040 #225 — a node FRESHLY created by a join reconcile (the joiner authored
+    /// nothing) must NOT report local-ahead, even when `remote_sv` is BEHIND the diff. On
+    /// an E2e KB the join passes the op-set doc's SV while the local doc is the *plaintext*
+    /// node — incompatible lineages, so `has_ops_beyond` is spuriously true and a pre-fix
+    /// joiner would push a re-seal of content it just received. That extra op then yields an
+    /// op-set a LATER joiner cannot reconstruct in causal order — the recovered-member join
+    /// panic. The fix gates local-ahead on `existed`; this pins it at the unit layer.
+    #[cfg(feature = "crdt")]
+    #[test]
+    fn fresh_join_never_reports_local_ahead_even_with_a_behind_remote_sv() {
+        let alice_cid: u64 = 0xA11CE;
+        let mut alice = KnowledgeBase::new();
+        alice
+            .upsert_with_crdt(Node::new("t:n", "v1", NodeKind::Note, "body"), alice_cid)
+            .unwrap();
+        // A deliberately BEHIND state vector (captured at v1) — the v2 doc has ops beyond it,
+        // the same false-positive an E2e op-set SV produces against the plaintext node.
+        let behind_sv = alice.node_state_vector("t:n").unwrap();
+        let mut n = alice.get("t:n").unwrap().clone();
+        n.title = "v2".to_string();
+        alice.upsert_with_crdt(n, alice_cid).unwrap();
+        let full_state = alice.get("t:n").unwrap().to_crdt_doc().unwrap().encode();
+
+        // A FRESH joiner (no prior node) reconciles the full state against the behind SV.
+        let mut joiner = KnowledgeBase::new();
+        assert!(joiner.get("t:n").is_none(), "node absent before the join");
+        let outcome = joiner
+            .reconcile_remote_node("t:n", &full_state, &behind_sv)
+            .unwrap();
+        assert_eq!(outcome.action, ReconcileAction::Created);
+        assert!(
+            outcome.local_ahead.is_none(),
+            "a freshly-created node has nothing local to re-sync — no spurious push (#225)"
+        );
+        assert_eq!(
+            joiner.get("t:n").unwrap().title,
+            "v2",
+            "the remote content is still adopted in full"
         );
     }
 

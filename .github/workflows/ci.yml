@@ -285,6 +285,12 @@ jobs:
           MAE_DAEMON_BIN: ${{ github.workspace }}/daemon/target/release/mae-daemon
           MAE_E2E_ROTATE: "1"
         run: scripts/collab-encrypted-e2e.sh
+      - name: E2E ADR-040 recovery-key (lost member recovers via offline key, decrypts content)
+        env:
+          MAE_BIN: ${{ github.workspace }}/target/release/mae
+          MAE_DAEMON_BIN: ${{ github.workspace }}/daemon/target/release/mae-daemon
+          MAE_E2E_RECOVER: "1"
+        run: scripts/collab-encrypted-e2e.sh
       - name: Package install
         run: |
           mkdir -p ~/.config/mae
