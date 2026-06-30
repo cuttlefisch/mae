@@ -32,6 +32,15 @@ impl Editor {
                 self.mark_full_redraw();
                 Some(true)
             }
+            "collab-rotate-identity" => {
+                // ADR-040 PR2b: rotate this peer's collab identity key across every KB it owns.
+                self.collab.pending_intent = Some(CollabIntent::RotateIdentity);
+                self.set_status(
+                    "Rotating collab identity — authorize the new key on the daemon, then reconnect",
+                );
+                self.mark_full_redraw();
+                Some(true)
+            }
             "collab-status" => {
                 self.collab.pending_intent = Some(CollabIntent::ShowStatus);
                 Some(true)

@@ -159,6 +159,12 @@ pub enum CollabIntent {
     Connect { address: String },
     /// Disconnect from the current server.
     Disconnect,
+    /// ADR-040 PR2b: rotate this peer's collab identity key — generate a new keypair, author a
+    /// cross-signed `Rebind` (+ E2e content-key re-wrap) into every KB this peer owns, ship them
+    /// to the daemon, and swap to the new key. Owner-only in v1 (non-owner member rotation is
+    /// PR2c / #213). The transport re-anchor is out-of-band: authorize the new key on the daemon,
+    /// then reconnect.
+    RotateIdentity,
     /// Show the *Collab Status* diagnostic buffer.
     ShowStatus,
     /// Share the named buffer for collaborative editing.

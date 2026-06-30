@@ -1373,6 +1373,10 @@ impl CommandRegistry {
         reg.register_builtin("collab-start", "Start local daemon");
         reg.register_builtin("collab-connect", "Connect to collaborative daemon");
         reg.register_builtin("collab-disconnect", "Disconnect from daemon");
+        reg.register_builtin(
+            "collab-rotate-identity",
+            "Rotate your collab identity key across every KB you own (ADR-040)",
+        );
         reg.register_builtin("collab-status", "Show collaborative editing status");
         reg.register_builtin("collab-share", "Share current buffer for collaboration");
         reg.register_builtin("collab-sync", "Force sync current buffer");
