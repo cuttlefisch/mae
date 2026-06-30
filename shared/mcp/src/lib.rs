@@ -43,6 +43,7 @@ pub mod auth;
 pub mod broadcast;
 pub mod client;
 pub mod client_mgr;
+pub mod collection_store;
 pub mod content_key_store;
 pub mod daemon_client;
 pub mod identity;
