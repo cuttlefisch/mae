@@ -1,23 +1,21 @@
 #!/usr/bin/env bash
 # collab-p2p-mesh-e2e.sh — FULL two-daemon P2P mesh end-to-end (ADR-025), no central hub.
 #
-# STATUS: WIP scaffold — NOT yet wired into CI. VALIDATED so far: two daemons bind their iroh
-# mesh endpoints with `relay = "disabled"` (direct localhost, no external infra — the key
-# CI-viability question) and daemon B DIALS daemon A over the mesh. REMAINING: a mesh share is
-# DAEMON-OWNED (`p2p/share_kb` seeds from the daemon's CozoDB KB store with owner = the daemon's
-# identity), whereas this scaffold uses the editor's hub `kb-share` (editor-owned) — the
-# ownership/transport mismatch means the join is rejected ("not shared over the P2P mesh"). The
-# fix is to put content into the daemon's KB store via the HOSTED-KB model (daemon_mode=shared /
-# the editor hosting its primary on the daemon) or a headless daemon ingest, THEN p2p/share_kb.
-# Tracked for the next iteration (#200). The `--test` daemon-control wiring this needs IS landed.
-#
-# Two ISOLATED daemons mesh a KB over real iroh QUIC on localhost (relay disabled — direct,
-# CI-friendly, no external infra). Alice's editor talks ONLY to daemon A; Bob's editor talks
-# ONLY to daemon B; the two DAEMONS peer over iroh. We prove:
+# Two ISOLATED daemons mesh a KB over real iroh QUIC on localhost with `relay = "disabled"`
+# (direct addressing — no external relay infra, so it runs in CI). Alice's editor talks ONLY to
+# daemon A; Bob's editor talks ONLY to daemon B; the two DAEMONS peer directly over iroh. We prove:
 #   - daemon B DIALS daemon A over the mesh (node-id = the authorized Ed25519 peer key);
-#   - a KB Alice authors on daemon A CONVERGES to Bob's store via the mesh (the canary lands
-#     in Bob's KB store — pulled peer-to-peer, never through a shared hub);
-#   - the unauthorized path stays closed (covered by the in-process gate tests).
+#   - a KB Alice authors on daemon A CONVERGES to daemon B via the mesh (the canary, edited on
+#     daemon A, lands in daemon B's store — pulled peer-to-peer, never through a shared hub);
+#   - the owner gates the mesh join (Alice approves the joining peer daemon's fingerprint).
+# The unauthorized/forged paths stay closed — covered by the in-process gate + dialer tests
+# (daemon/src/p2p.rs, dialer.rs): node-id-mismatch rejection, selective op verification, etc.
+#
+# Flow: Alice registers + hub-shares a KB (uploads content to daemon A) + edits a canary node,
+# sets a permissive policy, then `kb-share-p2p` (the COMMAND — `establish_p2p_share` widens the
+# collection's transport to include the mesh) and mints a join ticket. Bob's `kb-join-p2p`
+# records the ticket; daemon B's dialer connects to daemon A over iroh; Alice approves daemon B;
+# the next dialer cycle pulls the KB. Asserts the canary reached daemon B's store.
 #
 # Usage:  scripts/collab-p2p-mesh-e2e.sh
 # Env:    MAE_BIN, MAE_DAEMON_BIN, MAE_E2E_PORT (base; A=port, B=port+1), MAE_E2E_KEEP=1
@@ -93,6 +91,10 @@ DBK="$(srvB "$MAE_DAEMON_BIN" identity 2>/dev/null | sed -n 's/.*public key:  ma
 AK="$(alice "$MAE_BIN" --collab-identity 2>/dev/null | sed -n 's/.*public key:  mae-ed25519 //p' | awk '{print $1}')"
 BK="$(bob   "$MAE_BIN" --collab-identity 2>/dev/null | sed -n 's/.*public key:  mae-ed25519 //p' | awk '{print $1}')"
 for k in "$DAK" "$DBK" "$AK" "$BK"; do [ -n "$k" ] || { echo "ERROR: could not read a public key"; exit 1; }; done
+# The mesh dialer connects as daemon B's identity, so the join principal alice must approve
+# is daemon B's FINGERPRINT (the editor join policy gates the mesh join too).
+DBK_FP="$(srvB "$MAE_DAEMON_BIN" identity 2>/dev/null | sed -n 's/.*fingerprint: //p' | awk '{print $1}')"
+[ -n "$DBK_FP" ] || { echo "ERROR: could not read daemon B fingerprint"; exit 1; }
 
 # Trust: daemon A trusts its editor (alice, over TCP) + daemon B (the mesh dialer B→A).
 srvA "$MAE_DAEMON_BIN" authorize mae-ed25519 "$AK"  alice  >/dev/null
@@ -115,12 +117,15 @@ cat > "$WORK/scen/alice.scm" <<EOF
 (describe-group "alice (mesh owner, daemon A)"
   (lambda ()
     (it-test "connects to daemon A" (lambda () (wait-connected 30000)))
-    (it-test "registers KB" (lambda () (execute-ex "kb-register meshtest $ROOT/tests/fixtures/kb/collabtest") (sleep-ms 1000)))
-    (it-test "shares (uploads content to daemon A's store)" (lambda () (execute-ex "kb-share meshtest") (sleep-ms 1500)))
-    (it-test "edits a node with the canary" (lambda () (execute-ex "kb-update meshtest:alpha $CANARY") (sleep-ms 1500)))
-    (it-test "permissive join policy (mesh joiner auto-admits)" (lambda () (execute-ex "kb-set-policy meshtest permissive") (sleep-ms 1200)))
-    (it-test "shares over P2P + writes the join ticket" (lambda () (write-file "$TICKET_FILE" (kb-share-p2p "meshtest")) (sleep-ms 1000)))
+    (it-test "registers KB" (lambda () (execute-ex "kb-register collabtest $ROOT/tests/fixtures/kb/collabtest") (sleep-ms 1000)))
+    (it-test "shares (uploads content to daemon A's store)" (lambda () (execute-ex "kb-share collabtest") (sleep-ms 1500)))
+    (it-test "edits a node with the canary" (lambda () (execute-ex "kb-update collabtest:alpha $CANARY") (sleep-ms 1500)))
+    (it-test "permissive join policy (mesh joiner auto-admits)" (lambda () (execute-ex "kb-set-policy collabtest permissive") (sleep-ms 1200)))
+    (it-test "shares over P2P (command: establish_p2p_share widens transport→both)" (lambda () (execute-ex "kb-share-p2p") (sleep-ms 2000)))
+    (it-test "writes the join ticket (primitive re-mints + returns it)" (lambda () (write-file "$TICKET_FILE" (kb-share-p2p "collabtest")) (sleep-ms 1000)))
     (it-test "signals shared" (lambda () (write-file "$WORK/sync/shared" "1")))
+    (it-test "waits for daemon B's mesh join to land pending" (lambda () (sleep-ms 14000)))
+    (it-test "approves the peer daemon (mesh join is owner-gated)" (lambda () (execute-ex "kb-approve collabtest $DBK_FP editor") (sleep-ms 2000)))
     (it-test "stays alive for the mesh pull + live sync" (lambda () (wait-for-file "$WORK/sync/bob-done" 80000)))))
 EOF
 
@@ -132,8 +137,8 @@ cat > "$WORK/scen/bob.scm" <<EOF
     (it-test "connects to daemon B" (lambda () (wait-connected 30000)))
     (it-test "waits for alice's ticket" (lambda () (wait-for-file "$WORK/sync/shared" 60000) (sleep-ms 300)))
     (it-test "joins via the P2P ticket (daemon B dials daemon A)" (lambda () (execute-ex (string-append "kb-join-p2p " (read-file "$TICKET_FILE"))) (sleep-ms 2000)))
-    (it-test "waits for the mesh dial + pull (dialer polls ~10s)" (lambda () (sleep-ms 30000)))
-    (it-test "loads the joined KB to materialize content" (lambda () (execute-ex "kb-load meshtest") (sleep-ms 3000)))
+    (it-test "waits for dial + owner approval + a dialer retry (pulls content)" (lambda () (sleep-ms 42000)))
+    (it-test "loads the joined KB to materialize content" (lambda () (execute-ex "kb-load collabtest") (sleep-ms 3000)))
     (it-test "signals done" (lambda () (write-file "$WORK/sync/bob-done" "1")))))
 EOF
 
@@ -168,13 +173,15 @@ if grep -qaiE "dial|connected to peer|peer verified|pulling|anchored" "$WORK/dae
 else
   echo "FAIL(mesh): daemon B never dialed a peer — the mesh connection didn't establish"; fail=1
 fi
-# (2) NON-VACUITY: the owner authored the canary into its OWN store.
-grep -rqaF "$CANARY" "$WORK/alice/.local/share" 2>/dev/null && echo "PASS(mesh): owner authored the canary" || { echo "FAIL(mesh): canary absent from owner's store"; fail=1; }
-# (3) THE PROPERTY: the canary CONVERGED to Bob's store over the mesh (no hub between them).
-if grep -rqaF "$CANARY" "$WORK/bob/.local/share" 2>/dev/null; then
-  echo "PASS(mesh): canary CONVERGED to the joiner over P2P (pulled daemon→daemon, no hub)"
+# (2) NON-VACUITY: the canary reached the OWNER daemon's store (the mesh has real content to serve).
+grep -rqaF "$CANARY" "$WORK/srvA/data" 2>/dev/null && echo "PASS(mesh): canary present in the owner daemon's store" || { echo "FAIL(mesh): canary absent from the owner daemon's store (nothing to converge)"; fail=1; }
+# (3) THE PROPERTY: the canary CONVERGED to the JOINER DAEMON's store over the mesh — pulled
+# peer-to-peer (daemon A → daemon B over iroh), never through a shared hub (each editor talks
+# only to its own daemon; the daemons meshed directly).
+if grep -rqaF "$CANARY" "$WORK/srvB/data" 2>/dev/null; then
+  echo "PASS(mesh): canary CONVERGED to the joiner daemon over P2P (pulled daemon→daemon, no hub)"
 else
-  echo "FAIL(mesh): canary did NOT reach the joiner — mesh convergence failed"; fail=1
+  echo "FAIL(mesh): canary did NOT reach the joiner daemon — mesh convergence failed"; fail=1
 fi
 
 [ "$fail" -eq 0 ] && echo "PASS: P2P mesh two-daemon convergence" || echo "FAIL: P2P mesh two-daemon convergence"

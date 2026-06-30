@@ -291,6 +291,11 @@ jobs:
           MAE_DAEMON_BIN: ${{ github.workspace }}/daemon/target/release/mae-daemon
           MAE_E2E_RECOVER: "1"
         run: scripts/collab-encrypted-e2e.sh
+      - name: E2E ADR-025 P2P mesh (two daemons converge a KB over iroh, no hub)
+        env:
+          MAE_BIN: ${{ github.workspace }}/target/release/mae
+          MAE_DAEMON_BIN: ${{ github.workspace }}/daemon/target/release/mae-daemon
+        run: scripts/collab-p2p-mesh-e2e.sh
       - name: Package install
         run: |
           mkdir -p ~/.config/mae
