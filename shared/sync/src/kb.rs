@@ -548,6 +548,7 @@ const OP_PUBKEY_KEY: &str = "author_pubkey"; // hex(32-byte Ed25519 public key)
 const OP_WRAPPED_KEY: &str = "wrapped_key"; // ADR-037: hex(content key wrapped to subject); absent = none
 const OP_NEW_PUBKEY_KEY: &str = "new_pubkey"; // ADR-040: hex(successor Ed25519 pubkey) on a Rebind; absent = none
 const OP_NEW_WRAP_PUBKEY_KEY: &str = "new_wrap_pubkey"; // ADR-040/I1: hex(successor X25519 wrap pubkey) on a Rebind
+const OP_RECOVERY_PUBKEY_KEY: &str = "recovery_pubkey"; // ADR-040 §Recovery: hex(recovery Ed25519 pubkey) on a RegisterRecoveryKey
 const MEMBER_ROLE_KEY: &str = "role";
 const MEMBER_LABEL_KEY: &str = "label";
 /// ADR-023: per-member monotonic authorization epoch, bumped by the daemon on
@@ -1525,6 +1526,11 @@ impl KbCollectionDoc {
                     .filter(|s| !s.is_empty())
                     .and_then(|s| hex::decode(s).ok())
                     .and_then(|b| b.try_into().ok()),
+                // ADR-040 §Recovery-key: present only on RegisterRecoveryKey ops (v4).
+                recovery_pubkey: get(OP_RECOVERY_PUBKEY_KEY)
+                    .filter(|s| !s.is_empty())
+                    .and_then(|s| hex::decode(s).ok())
+                    .and_then(|b| b.try_into().ok()),
             },
             sig,
             author_pubkey: pubkey,
@@ -1613,6 +1619,8 @@ impl KbCollectionDoc {
             // leave them None (v1/v2, unchanged).
             new_pubkey: None,
             new_wrap_pubkey: None,
+            // ADR-040 §Recovery: the caller sets this on a RegisterRecoveryKey (then signs).
+            recovery_pubkey: None,
         }
     }
 
@@ -1670,6 +1678,10 @@ impl KbCollectionDoc {
         }
         if let Some(wpk) = &op.new_wrap_pubkey {
             rec.insert(&mut txn, OP_NEW_WRAP_PUBKEY_KEY, hex::encode(wpk));
+        }
+        // ADR-040 §Recovery: only written for a RegisterRecoveryKey (absent ⇒ unchanged).
+        if let Some(rpk) = &op.recovery_pubkey {
+            rec.insert(&mut txn, OP_RECOVERY_PUBKEY_KEY, hex::encode(rpk));
         }
         txn.encode_update_v1()
     }
@@ -1906,6 +1918,84 @@ impl KbCollectionDoc {
         op.new_wrap_pubkey = Some(*new_wrap_pubkey);
         let sig = op.sign(old_secret);
         self.append_signed_op(&op, &sig, old_pubkey);
+        let sv_d = yrs::StateVector::decode_v1(&sv).unwrap_or_default();
+        let txn = self.doc.transact();
+        txn.encode_state_as_update_v1(&sv_d)
+    }
+
+    /// ADR-040 §Recovery-key — register `principal_fp`'s offline **recovery key** (its public
+    /// `recovery_pubkey`), SIGNED BY THE PRIMARY (`primary_secret`/`primary_pubkey`) while it
+    /// is uncompromised. Self-targeted (`subject == author == principal_fp`). Peers store it in
+    /// the recovery registry so a later `author_recovery_rebind` signed by the matching
+    /// recovery secret is honored. Latest registration wins (revokes a leaked recovery key).
+    /// Returns the delta for the key-blind `kb/collection_op`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn author_register_recovery_key(
+        &mut self,
+        kb_id: &str,
+        principal_fp: &str,
+        recovery_pubkey: &[u8; 32],
+        primary_secret: &[u8; 32],
+        primary_pubkey: &[u8; 32],
+        now: u64,
+    ) -> Vec<u8> {
+        let sv = self.state_vector();
+        let mut op = self.build_membership_op(
+            kb_id,
+            MembershipAction::RegisterRecoveryKey,
+            principal_fp, // subject == author (self-registration)
+            None,
+            false,
+            principal_fp,
+            now,
+            None,
+            0,
+        );
+        op.recovery_pubkey = Some(*recovery_pubkey);
+        let sig = op.sign(primary_secret);
+        self.append_signed_op(&op, &sig, primary_pubkey);
+        let sv_d = yrs::StateVector::decode_v1(&sv).unwrap_or_default();
+        let txn = self.doc.transact();
+        txn.encode_state_as_update_v1(&sv_d)
+    }
+
+    /// ADR-040 §Recovery-key — rotate `old_fp` to a fresh successor using the pre-registered
+    /// **recovery key** (compromise/loss recovery, when the primary can no longer sign). The
+    /// op is a normal `Rebind` (author = `old_fp` = the recovered principal; subject =
+    /// `new_fp`) but the RECORD is signed by the recovery secret and stamped with
+    /// `recovery_pubkey`. `verify_signed` is false for it (the signer ≠ `old_fp`), so peers
+    /// honor it only via the recovery registry — i.e. iff `recovery_pubkey` is the registered
+    /// recovery key for `old_fp` (`is_recovery_signed_rebind`). Returns the `kb/collection_op`
+    /// delta. The successor inherits `old_fp`'s exact role/epoch (no elevation).
+    #[allow(clippy::too_many_arguments)]
+    pub fn author_recovery_rebind(
+        &mut self,
+        kb_id: &str,
+        old_fp: &str,
+        new_fp: &str,
+        new_pubkey: &[u8; 32],
+        new_wrap_pubkey: &[u8; 32],
+        recovery_secret: &[u8; 32],
+        recovery_pubkey: &[u8; 32],
+        now: u64,
+    ) -> Vec<u8> {
+        let sv = self.state_vector();
+        let mut op = self.build_membership_op(
+            kb_id,
+            MembershipAction::Rebind,
+            new_fp,
+            None,
+            false,
+            old_fp, // author = the principal being recovered (NOT the recovery key)
+            now,
+            None,
+            0,
+        );
+        op.new_pubkey = Some(*new_pubkey);
+        op.new_wrap_pubkey = Some(*new_wrap_pubkey);
+        // Signed by the RECOVERY key; the record's author_pubkey is the recovery pubkey.
+        let sig = op.sign(recovery_secret);
+        self.append_signed_op(&op, &sig, recovery_pubkey);
         let sv_d = yrs::StateVector::decode_v1(&sv).unwrap_or_default();
         let txn = self.doc.transact();
         txn.encode_state_as_update_v1(&sv_d)
@@ -3310,6 +3400,443 @@ mod tests {
             derive_content_key(&peer.oplog_ops(), &opk, &bfp, &bsec).map(|c| *c.as_bytes()),
             Some(*k.as_bytes()),
             "old key retains read access to history (planned rotation, not §D3 revocation)"
+        );
+    }
+
+    /// ADR-040 §Recovery-key (the attacker's test): a member registers an offline recovery
+    /// key R (signed by its primary), LOSES the primary, and rotates using R — honored. A
+    /// FORGER who lacks R cannot rotate the member, even authoring the identical Rebind shape.
+    #[test]
+    fn recovery_key_signed_rebind_is_honored_and_forgery_is_rejected() {
+        use crate::content_crypto::wrap_public_for;
+        use crate::membership::derive_valid_members;
+        let (osec, opk, ofp) = oplog_keypair(1);
+        let (msec, mpk, mfp) = oplog_keypair(2); // member's primary
+        let (rsec, rpk, _rfp) = oplog_keypair(3); // member's OFFLINE recovery key
+        let (s2sec, s2pk, s2fp) = oplog_keypair(4); // the recovered successor
+        let (zsec, zpk, _zfp) = oplog_keypair(9); // a forger's key (NOT R)
+        let (g2sec, g2pk, g2fp) = oplog_keypair(10); // the forger's would-be successor
+
+        let mut coll = KbCollectionDoc::new_owned("KB", &ofp, "owner");
+        coll.author_e2e_genesis(
+            "KB",
+            &ofp,
+            &osec,
+            &opk,
+            crate::content_crypto::wrap_to_member(
+                &crate::content_crypto::ContentKey::generate(),
+                &wrap_public_for(&osec),
+            )
+            .unwrap(),
+            1000,
+        );
+        // Owner admits the member (Editor), no content wrap needed for this membership test.
+        coll.author_member_admit(
+            "KB",
+            &mfp,
+            &mpk,
+            &wrap_public_for(&msec),
+            Role::Editor,
+            "m",
+            crate::content_crypto::wrap_to_member(
+                &crate::content_crypto::ContentKey::generate(),
+                &wrap_public_for(&msec),
+            )
+            .unwrap(),
+            &ofp,
+            &osec,
+            &opk,
+            1001,
+        );
+        // The member registers its recovery key R (signed by its PRIMARY).
+        coll.author_register_recovery_key("KB", &mfp, &rpk, &msec, &mpk, 1002);
+
+        // PRIMARY LOST. The member rotates m → s2 using the RECOVERY key R.
+        coll.author_recovery_rebind(
+            "KB",
+            &mfp,
+            &s2fp,
+            &s2pk,
+            &wrap_public_for(&s2sec),
+            &rsec,
+            &rpk,
+            1003,
+        );
+
+        // A FORGER, lacking R, authors the same-shaped recovery Rebind m → g2 with key Z.
+        coll.author_recovery_rebind(
+            "KB",
+            &mfp,
+            &g2fp,
+            &g2pk,
+            &wrap_public_for(&g2sec),
+            &zsec,
+            &zpk,
+            1004,
+        );
+
+        // On a FRESH peer: the recovery-key rotation is honored (s2 inherits Editor, m retired);
+        // the forged one is NOT (g2 is not a member — the registry binds recovery to R alone).
+        let peer = KbCollectionDoc::from_bytes(&coll.encode_state()).unwrap();
+        let m = derive_valid_members(&peer.oplog_ops(), &opk, 2000);
+        assert_eq!(
+            m.get(&s2fp).map(|x| x.role),
+            Some(Role::Editor),
+            "the recovery-key-signed rotation is honored; successor inherits Editor"
+        );
+        assert!(!m.contains_key(&mfp), "the recovered primary is retired");
+        assert!(
+            !m.contains_key(&g2fp),
+            "a forger without the recovery key cannot rotate the member"
+        );
+    }
+
+    /// ADR-040 §Recovery-key: with NO registration, a Rebind for a principal signed by any
+    /// non-primary key is not honored — recovery requires a pre-registered key.
+    #[test]
+    fn recovery_rebind_without_registration_is_rejected() {
+        use crate::content_crypto::wrap_public_for;
+        use crate::membership::derive_valid_members;
+        let (osec, opk, ofp) = oplog_keypair(1);
+        let (_msec, _mpk, mfp) = oplog_keypair(2);
+        let (rsec, rpk, _rfp) = oplog_keypair(3); // an UNREGISTERED key
+        let (s2sec, s2pk, s2fp) = oplog_keypair(4);
+        let mut coll = KbCollectionDoc::new_owned("KB", &ofp, "owner");
+        let g = coll.build_membership_op(
+            "KB",
+            MembershipAction::Admit,
+            &ofp,
+            Some(Role::Owner),
+            true,
+            &ofp,
+            1000,
+            None,
+            0,
+        );
+        let gs = g.sign(&osec);
+        coll.append_signed_op(&g, &gs, &opk);
+        let a = coll.build_membership_op(
+            "KB",
+            MembershipAction::Admit,
+            &mfp,
+            Some(Role::Editor),
+            false,
+            &ofp,
+            1001,
+            None,
+            0,
+        );
+        let as_ = a.sign(&osec);
+        coll.append_signed_op(&a, &as_, &opk);
+        // No author_register_recovery_key. Try to recover m → s2 with an unregistered key.
+        coll.author_recovery_rebind(
+            "KB",
+            &mfp,
+            &s2fp,
+            &s2pk,
+            &wrap_public_for(&s2sec),
+            &rsec,
+            &rpk,
+            1002,
+        );
+        let m = derive_valid_members(&coll.oplog_ops(), &opk, 2000);
+        assert!(
+            !m.contains_key(&s2fp),
+            "no registration ⇒ recovery rebind ignored"
+        );
+        assert_eq!(
+            m.get(&mfp).map(|x| x.role),
+            Some(Role::Editor),
+            "the member is unchanged"
+        );
+    }
+
+    /// ADR-040 §Recovery-key: a registration is only honored when signed by the PRINCIPAL'S
+    /// PRIMARY (verify_signed). A registration "for m" signed by an attacker's key never enters
+    /// the registry, so a Rebind signed by that attacker key is not honored.
+    #[test]
+    fn recovery_registration_requires_the_primary() {
+        use crate::content_crypto::wrap_public_for;
+        use crate::membership::derive_valid_members;
+        let (osec, opk, ofp) = oplog_keypair(1);
+        let (_msec, _mpk, mfp) = oplog_keypair(2);
+        let (atksec, atkpk, _atkfp) = oplog_keypair(8); // attacker key
+        let (s2sec, s2pk, s2fp) = oplog_keypair(4);
+        let mut coll = KbCollectionDoc::new_owned("KB", &ofp, "owner");
+        let g = coll.build_membership_op(
+            "KB",
+            MembershipAction::Admit,
+            &ofp,
+            Some(Role::Owner),
+            true,
+            &ofp,
+            1000,
+            None,
+            0,
+        );
+        let gs = g.sign(&osec);
+        coll.append_signed_op(&g, &gs, &opk);
+        let a = coll.build_membership_op(
+            "KB",
+            MembershipAction::Admit,
+            &mfp,
+            Some(Role::Editor),
+            false,
+            &ofp,
+            1001,
+            None,
+            0,
+        );
+        let as_ = a.sign(&osec);
+        coll.append_signed_op(&a, &as_, &opk);
+        // Attacker forges a RegisterRecoveryKey for m, authorizing ITS OWN key as recovery —
+        // but signs with the attacker key (not m's primary). subject=m, author=m, signed by atk.
+        let mut reg = coll.build_membership_op(
+            "KB",
+            MembershipAction::RegisterRecoveryKey,
+            &mfp,
+            None,
+            false,
+            &mfp,
+            1002,
+            None,
+            0,
+        );
+        reg.recovery_pubkey = Some(atkpk);
+        let regsig = reg.sign(&atksec); // WRONG signer (not m's primary)
+        coll.append_signed_op(&reg, &regsig, &atkpk);
+        // Attacker now tries to recover m → s2 with its key.
+        coll.author_recovery_rebind(
+            "KB",
+            &mfp,
+            &s2fp,
+            &s2pk,
+            &wrap_public_for(&s2sec),
+            &atksec,
+            &atkpk,
+            1003,
+        );
+        let m = derive_valid_members(&coll.oplog_ops(), &opk, 2000);
+        assert!(
+            !m.contains_key(&s2fp),
+            "a registration not signed by the primary is ignored"
+        );
+    }
+
+    /// ADR-040 §Recovery-key: latest registration wins (revoke a leaked recovery key). After
+    /// R1 is superseded by R2, a Rebind signed by R1 is rejected while one signed by R2 is
+    /// honored. Two independent collections (same op history up to the competing rebind) so the
+    /// rejected branch doesn't causally orphan the honored one.
+    #[test]
+    fn latest_recovery_key_registration_wins() {
+        use crate::content_crypto::wrap_public_for;
+        use crate::membership::derive_valid_members;
+        let (osec, opk, ofp) = oplog_keypair(1);
+        let (msec, mpk, mfp) = oplog_keypair(2);
+        let (r1sec, r1pk, _r1fp) = oplog_keypair(3); // first (leaked) recovery key
+        let (r2sec, r2pk, _r2fp) = oplog_keypair(5); // replacement recovery key
+        let (ssec, spk, sfp) = oplog_keypair(4); // the would-be successor
+
+        // Build the shared prefix: owner genesis + admit m + register R1 + supersede with R2.
+        let seed = |label: &str| {
+            let mut coll = KbCollectionDoc::new_owned("KB", &ofp, "owner");
+            let g = coll.build_membership_op(
+                "KB",
+                MembershipAction::Admit,
+                &ofp,
+                Some(Role::Owner),
+                true,
+                &ofp,
+                1000,
+                None,
+                0,
+            );
+            let gs = g.sign(&osec);
+            coll.append_signed_op(&g, &gs, &opk);
+            let a = coll.build_membership_op(
+                "KB",
+                MembershipAction::Admit,
+                &mfp,
+                Some(Role::Editor),
+                false,
+                &ofp,
+                1001,
+                None,
+                0,
+            );
+            let as_ = a.sign(&osec);
+            coll.append_signed_op(&a, &as_, &opk);
+            coll.author_register_recovery_key("KB", &mfp, &r1pk, &msec, &mpk, 1002);
+            coll.author_register_recovery_key("KB", &mfp, &r2pk, &msec, &mpk, 1003); // supersedes R1
+            let _ = label;
+            coll
+        };
+
+        // Branch A: rotate with the SUPERSEDED R1 → rejected (m unchanged).
+        let mut a = seed("a");
+        a.author_recovery_rebind(
+            "KB",
+            &mfp,
+            &sfp,
+            &spk,
+            &wrap_public_for(&ssec),
+            &r1sec,
+            &r1pk,
+            1004,
+        );
+        let ma = derive_valid_members(&a.oplog_ops(), &opk, 2000);
+        assert!(
+            !ma.contains_key(&sfp),
+            "a Rebind signed by the SUPERSEDED recovery key is rejected"
+        );
+        assert_eq!(
+            ma.get(&mfp).map(|x| x.role),
+            Some(Role::Editor),
+            "the member is unchanged under the revoked key"
+        );
+
+        // Branch B: rotate with the CURRENT R2 → honored (m → successor).
+        let mut b = seed("b");
+        b.author_recovery_rebind(
+            "KB",
+            &mfp,
+            &sfp,
+            &spk,
+            &wrap_public_for(&ssec),
+            &r2sec,
+            &r2pk,
+            1004,
+        );
+        let mb = derive_valid_members(&b.oplog_ops(), &opk, 2000);
+        assert_eq!(
+            mb.get(&sfp).map(|x| x.role),
+            Some(Role::Editor),
+            "the CURRENT recovery key rotates the member"
+        );
+        assert!(
+            !mb.contains_key(&mfp),
+            "and the recovered member key is retired"
+        );
+    }
+
+    /// ADR-040 §Recovery-key: a REMOVED member cannot recover — `authorized`'s Rebind arm
+    /// still requires the recovered principal be a current member, independent of who signed.
+    #[test]
+    fn removed_member_cannot_recover() {
+        use crate::content_crypto::wrap_public_for;
+        use crate::membership::derive_valid_members;
+        let (osec, opk, ofp) = oplog_keypair(1);
+        let (msec, mpk, mfp) = oplog_keypair(2);
+        let (rsec, rpk, _rfp) = oplog_keypair(3);
+        let (s2sec, s2pk, s2fp) = oplog_keypair(4);
+        let mut coll = KbCollectionDoc::new_owned("KB", &ofp, "owner");
+        let g = coll.build_membership_op(
+            "KB",
+            MembershipAction::Admit,
+            &ofp,
+            Some(Role::Owner),
+            true,
+            &ofp,
+            1000,
+            None,
+            0,
+        );
+        let gs = g.sign(&osec);
+        coll.append_signed_op(&g, &gs, &opk);
+        let a = coll.build_membership_op(
+            "KB",
+            MembershipAction::Admit,
+            &mfp,
+            Some(Role::Editor),
+            false,
+            &ofp,
+            1001,
+            None,
+            0,
+        );
+        let as_ = a.sign(&osec);
+        coll.append_signed_op(&a, &as_, &opk);
+        coll.author_register_recovery_key("KB", &mfp, &rpk, &msec, &mpk, 1002);
+        // Owner removes m.
+        let rm = coll.build_membership_op(
+            "KB",
+            MembershipAction::Remove,
+            &mfp,
+            None,
+            false,
+            &ofp,
+            1003,
+            None,
+            0,
+        );
+        let rmsig = rm.sign(&osec);
+        coll.append_signed_op(&rm, &rmsig, &opk);
+        // m tries to recover via R → rejected (not a current member).
+        coll.author_recovery_rebind(
+            "KB",
+            &mfp,
+            &s2fp,
+            &s2pk,
+            &wrap_public_for(&s2sec),
+            &rsec,
+            &rpk,
+            1004,
+        );
+        let m = derive_valid_members(&coll.oplog_ops(), &opk, 2000);
+        assert!(
+            !m.contains_key(&s2fp),
+            "a removed member cannot recover its seat via the recovery key"
+        );
+        assert!(
+            !m.contains_key(&mfp),
+            "and the removed member stays removed"
+        );
+    }
+
+    /// ADR-040 §Recovery-key (owner recovery): the OWNER recovers via its recovery key; the
+    /// owner chain + governance/encryption readers honor the recovery-signed Rebind, so the
+    /// successor is resolved as Owner and the KB stays E2e.
+    #[test]
+    fn owner_recovery_via_recovery_key_preserves_owner_chain() {
+        use crate::content_crypto::{wrap_public_for, wrap_to_member, ContentKey};
+        use crate::membership::{derive_encryption, derive_valid_members};
+        let (osec, opk, ofp) = oplog_keypair(1);
+        let (rsec, rpk, _rfp) = oplog_keypair(3); // owner's offline recovery key
+        let (o2sec, o2pk, o2fp) = oplog_keypair(2); // recovered owner identity
+        let mut coll = KbCollectionDoc::new_owned("KB", &ofp, "owner");
+        let k = ContentKey::generate();
+        coll.author_e2e_genesis(
+            "KB",
+            &ofp,
+            &osec,
+            &opk,
+            wrap_to_member(&k, &wrap_public_for(&osec)).unwrap(),
+            1000,
+        );
+        coll.author_register_recovery_key("KB", &ofp, &rpk, &osec, &opk, 1001);
+        // Owner primary LOST → recover owner → owner2 via R.
+        coll.author_recovery_rebind(
+            "KB",
+            &ofp,
+            &o2fp,
+            &o2pk,
+            &wrap_public_for(&o2sec),
+            &rsec,
+            &rpk,
+            1002,
+        );
+        let peer = KbCollectionDoc::from_bytes(&coll.encode_state()).unwrap();
+        let m = derive_valid_members(&peer.oplog_ops(), &opk, 2000);
+        assert_eq!(
+            m.get(&o2fp).map(|x| x.role),
+            Some(Role::Owner),
+            "recovered owner identity is Owner"
+        );
+        assert!(!m.contains_key(&ofp), "the lost owner key is retired");
+        assert_eq!(
+            derive_encryption(&peer.oplog_ops(), &opk),
+            Encryption::E2e,
+            "the KB stays E2e across owner recovery (owner chain honors the recovery Rebind)"
         );
     }
 

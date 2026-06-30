@@ -54,6 +54,15 @@ pub enum MembershipAction {
     /// the content key to `new_wrap_pubkey`. NOT compromise-recovery (the old key signs, so a
     /// thief could too) — that path is owner-eviction + re-join (ADR-040 §fork).
     Rebind,
+    /// Register a pre-shared **recovery key** for `author` (ADR-040 §Recovery-key, v2). The
+    /// principal records — signed by its PRIMARY key while uncompromised — the public key of a
+    /// second, offline Ed25519 keypair (`recovery_pubkey`) authorized to rotate it later. The
+    /// op self-registers: `subject == author` (you register your OWN recovery key). Inert to the
+    /// member map; read by the derive's recovery registry so a `Rebind` for this principal signed
+    /// by `recovery_pubkey` is honored even when the primary is lost/compromised (the attacker
+    /// who holds only the primary cannot forge it — they don't have the offline recovery key).
+    /// Latest-wins per principal (a new registration supersedes a leaked recovery key).
+    RegisterRecoveryKey,
 }
 
 impl MembershipAction {
@@ -66,6 +75,7 @@ impl MembershipAction {
             MembershipAction::SetGovernance => "set_governance",
             MembershipAction::SetEncryption => "set_encryption",
             MembershipAction::Rebind => "rebind",
+            MembershipAction::RegisterRecoveryKey => "register_recovery_key",
         }
     }
     pub fn parse(s: &str) -> Option<MembershipAction> {
@@ -77,6 +87,7 @@ impl MembershipAction {
             "set_governance" => Some(MembershipAction::SetGovernance),
             "set_encryption" => Some(MembershipAction::SetEncryption),
             "rebind" => Some(MembershipAction::Rebind),
+            "register_recovery_key" => Some(MembershipAction::RegisterRecoveryKey),
             _ => None,
         }
     }
@@ -131,6 +142,12 @@ pub struct MembershipOp {
     /// (the wrap key is NOT derivable from the fingerprint, so it MUST be published here).
     /// `Some` only on `Rebind` ops (`maememb/v3`).
     pub new_wrap_pubkey: Option<[u8; 32]>,
+    /// ADR-040 §Recovery-key (v2): on a `RegisterRecoveryKey` op, the **Ed25519 public key of
+    /// the offline recovery keypair** `author` authorizes to rotate it. `Some` only on
+    /// `RegisterRecoveryKey` ops, which use the `maememb/v4` canonical encoding (the recovery
+    /// key is part of the signed bytes). `None` everywhere else keeps `v1`/`v2`/`v3`
+    /// byte-identical.
+    pub recovery_pubkey: Option<[u8; 32]>,
 }
 
 impl MembershipOp {
@@ -151,6 +168,8 @@ impl MembershipOp {
         // wrapped_key, and only Rebind carries the new keys, so the three are disjoint.)
         let version = if self.action == MembershipAction::Rebind {
             "maememb/v3"
+        } else if self.action == MembershipAction::RegisterRecoveryKey {
+            "maememb/v4"
         } else if self.wrapped_key.is_some() {
             "maememb/v2"
         } else {
@@ -180,6 +199,12 @@ impl MembershipOp {
             field(
                 &mut b,
                 &self.new_wrap_pubkey.map(hex::encode).unwrap_or_default(),
+            );
+        } else if self.action == MembershipAction::RegisterRecoveryKey {
+            // The recovery key is part of the signed bytes (so the primary commits to it).
+            field(
+                &mut b,
+                &self.recovery_pubkey.map(hex::encode).unwrap_or_default(),
             );
         } else if let Some(wk) = &self.wrapped_key {
             field(&mut b, &hex::encode(wk));
@@ -414,6 +439,63 @@ pub fn derive_valid_members(
     derive_valid_members_with(ops, anchor_owner_pubkey, now, &MembershipView::default())
 }
 
+/// ADR-040 §Recovery-key — the per-principal registered **recovery key**, derived from
+/// crypto-valid (PRIMARY-signed) `RegisterRecoveryKey` self-registrations. Latest-wins per
+/// principal by `(issued_at, chain_hash)` so a fresh registration deterministically
+/// supersedes a leaked recovery key. Built from the `verify_signed` set — only the holder of
+/// the principal's *primary* key can register/replace its recovery key, so a forger cannot.
+fn build_recovery_registry(ops: &[SignedMembershipOp]) -> BTreeMap<String, [u8; 32]> {
+    let mut best_rank: BTreeMap<String, (u64, String)> = BTreeMap::new();
+    let mut keys: BTreeMap<String, [u8; 32]> = BTreeMap::new();
+    for o in ops {
+        if o.op.action != MembershipAction::RegisterRecoveryKey
+            || o.op.author != o.op.subject
+            || !o.verify_signed()
+        {
+            continue;
+        }
+        let Some(rpk) = o.op.recovery_pubkey else {
+            continue;
+        };
+        let rank = (o.op.issued_at, o.chain_hash());
+        if best_rank
+            .get(&o.op.subject)
+            .map(|c| rank > *c)
+            .unwrap_or(true)
+        {
+            best_rank.insert(o.op.subject.clone(), rank);
+            keys.insert(o.op.subject.clone(), rpk);
+        }
+    }
+    keys
+}
+
+/// ADR-040 §Recovery-key — a `Rebind` whose record is signed NOT by the rotating principal's
+/// primary (so [`SignedMembershipOp::verify_signed`] is false — the signing key's fingerprint
+/// is not `op.author`) but by that principal's **registered recovery key** `R`. Honored so a
+/// principal that LOST/compromised its primary can still rotate to a fresh key, while a forger
+/// holding neither key cannot (and one holding only the primary gains nothing — it can rotate
+/// directly). The successor still passes the standard `Rebind` validity (member, fresh,
+/// fingerprint-bound) in [`authorized`].
+fn is_recovery_signed_rebind(
+    o: &SignedMembershipOp,
+    registry: &BTreeMap<String, [u8; 32]>,
+) -> bool {
+    o.op.action == MembershipAction::Rebind
+        && registry.get(&o.op.author) == Some(&o.author_pubkey)
+        && o.op.verify(&o.sig, &o.author_pubkey)
+}
+
+/// The cryptographically-honored op set: every `verify_signed` record PLUS recovery-key-signed
+/// `Rebind`s (ADR-040 §Recovery-key). The single filter every `derive_*` reader shares so the
+/// recovery path is honored uniformly (membership, governance, encryption, key delivery).
+fn crypto_valid(ops: &[SignedMembershipOp]) -> Vec<&SignedMembershipOp> {
+    let registry = build_recovery_registry(ops);
+    ops.iter()
+        .filter(|o| o.verify_signed() || is_recovery_signed_rebind(o, &registry))
+        .collect()
+}
+
 /// As [`derive_valid_members`], with a local [`MembershipView`] (ADR-026 §A3/§A4)
 /// under single-owner governance.
 pub fn derive_valid_members_with(
@@ -438,12 +520,17 @@ pub fn derive_valid_members_governed(
     governance: Governance,
     view: &MembershipView,
 ) -> BTreeMap<String, ValidMember> {
-    // 1. Keep only cryptographically-valid records (sig + author↔key binding), and
-    //    drop ops authored by a locally-blocked principal (this peer ignores their
-    //    authority entirely — even the owner's). Indexed by chain_hash.
+    // 1. Keep only cryptographically-valid records (sig + author↔key binding) — PLUS
+    //    recovery-key-signed Rebinds (ADR-040 §Recovery-key) — and drop ops authored by a
+    //    locally-blocked principal (this peer ignores their authority entirely — even the
+    //    owner's). Indexed by chain_hash.
+    let recovery_registry = build_recovery_registry(ops);
     let crypto: Vec<&SignedMembershipOp> = ops
         .iter()
-        .filter(|o| o.verify_signed() && !view.blocklist.contains(&o.op.author))
+        .filter(|o| {
+            (o.verify_signed() || is_recovery_signed_rebind(o, &recovery_registry))
+                && !view.blocklist.contains(&o.op.author)
+        })
         .collect();
     let by_hash: BTreeMap<String, &SignedMembershipOp> =
         crypto.iter().map(|o| (o.chain_hash(), *o)).collect();
@@ -688,6 +775,14 @@ fn authorized(
             }
             None => false,
         },
+        // Recovery-key registration (ADR-040 §Recovery-key): the author registers THEIR OWN
+        // offline recovery key. `mp.get` above already confirmed the author is a current
+        // member; require it be self-targeted (`subject == author`) and carry a key. Inert to
+        // the member map (`build_members` skips it); the derive's recovery registry reads the
+        // key. Grants NO authority change — `author.role` is irrelevant.
+        MembershipAction::RegisterRecoveryKey => {
+            op.subject == op.author && op.recovery_pubkey.is_some()
+        }
     }
 }
 
@@ -741,7 +836,7 @@ fn owner_principal_chain(crypto: &[&SignedMembershipOp], genesis_owner: &str) ->
 /// handled by every peer's local blocklist (§A4), not here.
 pub fn derive_governance(ops: &[SignedMembershipOp], anchor_owner_pubkey: &[u8; 32]) -> Governance {
     // Crypto-valid ops only, indexed by chain_hash (mirrors derive_valid_members §1).
-    let crypto: Vec<&SignedMembershipOp> = ops.iter().filter(|o| o.verify_signed()).collect();
+    let crypto: Vec<&SignedMembershipOp> = crypto_valid(ops);
     let by_hash: BTreeMap<String, &SignedMembershipOp> =
         crypto.iter().map(|o| (o.chain_hash(), *o)).collect();
     // Anchor: the genesis owner self-admit signed by the external trust root.
@@ -782,7 +877,7 @@ pub fn derive_encryption(
     ops: &[SignedMembershipOp],
     anchor_owner_pubkey: &[u8; 32],
 ) -> crate::kb::Encryption {
-    let crypto: Vec<&SignedMembershipOp> = ops.iter().filter(|o| o.verify_signed()).collect();
+    let crypto: Vec<&SignedMembershipOp> = crypto_valid(ops);
     let genesis = match crypto.iter().find(|o| {
         o.op.prev_hash.is_empty()
             && o.op.action == MembershipAction::Admit
@@ -855,7 +950,7 @@ pub fn find_wrapped_content_key(
     my_fingerprint: &str,
 ) -> Option<Vec<u8>> {
     // Crypto-valid ops only, indexed by chain_hash (mirrors derive_governance §1).
-    let crypto: Vec<&SignedMembershipOp> = ops.iter().filter(|o| o.verify_signed()).collect();
+    let crypto: Vec<&SignedMembershipOp> = crypto_valid(ops);
     let by_hash: BTreeMap<String, &SignedMembershipOp> =
         crypto.iter().map(|o| (o.chain_hash(), *o)).collect();
     let genesis = crypto.iter().find(|o| {
@@ -1070,6 +1165,7 @@ mod tests {
             wrapped_key: None,
             new_pubkey: None,
             new_wrap_pubkey: None,
+            recovery_pubkey: None,
         }
     }
 
@@ -1242,6 +1338,7 @@ mod tests {
             wrapped_key: None,
             new_pubkey: None,
             new_wrap_pubkey: None,
+            recovery_pubkey: None,
         };
         let sig = op.sign(&author.secret);
         SignedMembershipOp {
@@ -1272,6 +1369,7 @@ mod tests {
             wrapped_key: Some(wrapped),
             new_pubkey: None,
             new_wrap_pubkey: None,
+            recovery_pubkey: None,
         };
         let sig = op.sign(&author.secret);
         SignedMembershipOp {
@@ -2727,6 +2825,7 @@ mod tests {
             wrapped_key: None,
             new_pubkey: Some(new.pubkey),
             new_wrap_pubkey: Some(new.wrap_pub()),
+            recovery_pubkey: None,
         };
         let sig = op.sign(&old.secret);
         SignedMembershipOp {
@@ -2961,6 +3060,7 @@ mod tests {
             wrapped_key: None,
             new_pubkey: Some(owner.pubkey),
             new_wrap_pubkey: Some(owner.wrap_pub()),
+            recovery_pubkey: None,
         };
         let sig = op.sign(&bob.secret);
         let attack = SignedMembershipOp {
@@ -3013,6 +3113,7 @@ mod tests {
             wrapped_key: None,
             new_pubkey: Some(actual.pubkey), // mismatched: fp(actual) != claimed.fp
             new_wrap_pubkey: Some(actual.wrap_pub()),
+            recovery_pubkey: None,
         };
         let sig = op.sign(&bob.secret);
         let bad = SignedMembershipOp {
