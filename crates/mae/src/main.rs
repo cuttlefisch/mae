@@ -850,6 +850,23 @@ fn main() -> io::Result<()> {
             }
         }
 
+        // P2P control channel: the interactive path wires this (the second DaemonClient at
+        // the `set_daemon_control` site below); the `--test` path must too, else a scenario
+        // that drives `kb-share-p2p` / `kb-join-p2p` (daemon control-socket RPCs, not the
+        // collab TCP stream) fails with "not connected to a daemon". Best-effort — absent a
+        // daemon it stays unset and the p2p primitives report their actionable error.
+        {
+            let socket = editor.kb.daemon_socket.clone();
+            let mut control = mae_mcp::daemon_client::DaemonClient::new(&socket);
+            if control.connect().is_ok() {
+                editor
+                    .kb
+                    .set_daemon_control(Some(std::sync::Arc::new(DaemonControlClient(
+                        std::sync::Mutex::new(control),
+                    ))));
+            }
+        }
+
         // Build a minimal tokio runtime for the collab bridge.
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
