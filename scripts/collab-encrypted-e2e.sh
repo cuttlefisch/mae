@@ -143,8 +143,11 @@ done
 if [ "$RECOVER" = "1" ]; then
   printf '(set-option! "collab-fence-resolution" "auto")\n' >> "$WORK/carol/.config/mae/init.scm"
 fi
-# bob's offline recovery key lands here (register saves to <collab_dir>/recovery); carol reads it.
-BOB_RECOVERY_DIR="$WORK/bob/.local/share/mae/collab/recovery"
+# B2 restore model: bob persists his collection op-log + saves his offline recovery key under his
+# collab dir. carol (bob's new machine) RESTORES that backup into her own collab dir (a background
+# step gated on bob-registered), then recovers from it — no daemon op-log fetch needed.
+BOB_COLLAB="$WORK/bob/.local/share/mae/collab"
+CAROL_COLLAB="$WORK/carol/.local/share/mae/collab"
 # ADR-040 rotation: rotating the owner identity changes its per-node op-set client_id, so the
 # first post-rotation edit to an existing node trips the ADR-023 epoch fence once ("rebase
 # required") and must auto-re-author under the new client_id. Enable auto fence-resolution for
@@ -247,9 +250,8 @@ cat > "$WORK/scen/carol.scm" <<EOF
 (describe-group "carol (bob's recovered key)"
   (lambda ()
     (it-test "connects" (lambda () (wait-connected 30000)))
-    (it-test "waits for bob to register a recovery key" (lambda () (wait-for-file "$WORK/sync/bob-registered" 60000) (sleep-ms 1500)))
-    (it-test "joins to pull the collection roster (non-member, pending)" (lambda () (execute-ex "kb-join collabtest") (sleep-ms 2500)))
-    (it-test "recovers bob's identity with the offline recovery key (ADR-040)" (lambda () (execute-ex "collab-recover-identity $BOB_RECOVERY_DIR $BOB_FP") (sleep-ms 4000)))
+    (it-test "waits for the restored backup (collection op-log + recovery key)" (lambda () (wait-for-file "$WORK/sync/carol-restored" 60000) (sleep-ms 500)))
+    (it-test "recovers bob's identity from the restored offline recovery key (ADR-040, B2)" (lambda () (execute-ex "collab-recover-identity $CAROL_COLLAB/recovery $BOB_FP") (sleep-ms 4000)))
     (it-test "re-joins as the RECOVERED member — pulls + decrypts the sealed content" (lambda () (execute-ex "kb-join collabtest") (sleep-ms 4000)))
     (it-test "signals done" (lambda () (write-file "$WORK/sync/carol-done" "1")))))
 EOF
@@ -282,6 +284,23 @@ if [ "$RECOVER" = "1" ]; then
     ${TIMEOUT_BIN:+$TIMEOUT_BIN $EDITOR_TIMEOUT} "$MAE_BIN" --test "$WORK/scen/carol.scm"
 fi
 echo "[harness] alice pgid=$APID bob pgid=$BPID${CPID:+ carol pgid=$CPID}"
+# B2 "restore your backup": once bob has registered (so his persisted op-log carries the
+# RegisterRecoveryKey) + persisted it, copy bob's collab backup (the key-blind collection
+# op-logs + the offline recovery key) onto carol's machine, then signal carol to recover.
+# This models the real recovery: you kept your data, lost your key. Background so it overlaps
+# the running editors; tracked as a harness pid so cleanup reaps it.
+if [ "$RECOVER" = "1" ]; then
+  (
+    for _ in $(seq 1 120); do [ -f "$WORK/sync/bob-registered" ] && break; sleep 0.5; done
+    sleep 1.5  # let bob's register op persist to disk
+    mkdir -p "$CAROL_COLLAB"
+    cp -r "$BOB_COLLAB/collections" "$CAROL_COLLAB/collections" 2>/dev/null || true
+    cp -r "$BOB_COLLAB/recovery"    "$CAROL_COLLAB/recovery"    2>/dev/null || true
+    printf '1\n' > "$WORK/sync/carol-restored"
+  ) &
+  RESTORE_PID=$!
+  HARNESS_PIDS+=("$RESTORE_PID")
+fi
 wait "$APID" 2>/dev/null || true
 wait "$BPID" 2>/dev/null || true
 [ -n "$CPID" ] && wait "$CPID" 2>/dev/null || true
@@ -385,10 +404,17 @@ if [ "$RECOVER" = "1" ]; then
   grep -qaF "register-recovery-key: recovery key registered" "$WORK/bob.tap" \
     && echo "PASS(recover): bob registered an offline recovery key" \
     || { echo "FAIL(recover): bob never registered a recovery key (the handler didn't run)"; fail=1; }
-  # The recovery key file was actually written to bob's collab dir (so carol could read it).
-  [ -f "$BOB_RECOVERY_DIR/id_ed25519" ] \
+  # The recovery key file was actually written to bob's collab dir (the offline backup).
+  [ -f "$BOB_COLLAB/recovery/id_ed25519" ] \
     && echo "PASS(recover): recovery key persisted to bob's collab dir for offline backup" \
     || { echo "FAIL(recover): recovery key was never saved to disk"; fail=1; }
+  # B2: bob persisted his collection op-log AND carol restored it onto her machine (the
+  # precondition for self-service recovery without a daemon op-log fetch).
+  if ls "$BOB_COLLAB/collections"/*.kbc >/dev/null 2>&1; then
+    echo "PASS(recover): bob persisted his collection op-log to disk (B2 durability)"
+  else
+    echo "FAIL(recover): bob's collection op-log was not persisted (B2 broken)"; fail=1
+  fi
   # NON-VACUITY + GATE: the daemon's PR3 self-service gate accepted member ops — both bob's
   # registration AND carol's recovery rebind (>=2 accepts; the owner path is separate).
   acc=$(grep -ca "accepted a member self-service identity op" "$WORK/daemon.log" || true)
