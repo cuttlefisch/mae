@@ -188,8 +188,20 @@ live DB file** — you can capture a torn/stale state. Use SQLite's consistent o
 sqlite3 ~/.local/share/mae/<store>.cozo ".backup '/backups/mae-$(date +%F).cozo'"
 # or:  sqlite3 <store>.cozo "VACUUM INTO '/backups/mae.cozo'"
 
-# Back up the collab trust material too — these are not in the DB:
-cp -a ~/.local/share/mae/collab/ /backups/mae-collab-$(date +%F)/   # id_ed25519, authorized_keys, known_hosts
+# Back up the collab trust material too — these are NOT in the DB. `cp -a` of the whole dir
+# captures everything that matters for identity + recovery:
+#   id_ed25519            — your identity seed (the root of all access; losing it = losing every KB)
+#   authorized_keys       — the daemon's trust allow-list (key mode)
+#   known_hosts           — host keys this peer has pinned (TOFU)
+#   collections/          — per-KB key-blind collection op-logs (ADR-040 B2): required to RECOVER a
+#                           lost identity on a new machine (the recovering key authors its Rebind
+#                           against these without re-fetching from the daemon)
+#   content_keys/         — recovered per-KB content keys (re-derivable from the op-log, but cached)
+#   recovery/             — your registered OFFLINE recovery key, if you ran collab-register-recovery-key
+cp -a ~/.local/share/mae/collab/ /backups/mae-collab-$(date +%F)/
+# NOTE: for real key separation, keep `recovery/` on SEPARATE offline media from this backup —
+# a backup holding BOTH your primary and your recovery key gives a thief either path in. The
+# recovery key's purpose is to survive loss/compromise of the primary; co-locating them defeats it.
 
 # Restore: stop the daemon, replace the store file + the collab dir, restart.
 systemctl --user stop mae-daemon
