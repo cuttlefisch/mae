@@ -1919,6 +1919,15 @@ impl KbCollectionDoc {
     /// WITHOUT bumping the epoch (no forced rebase) or changing membership. Returns the
     /// delta for the key-blind `kb/collection_op`. The caller holds the secret + content
     /// key and does the sealing; this only authors the signed delivery op.
+    ///
+    /// `anchor_pubkey` is the KB's **genesis** owner pubkey — the trust anchor, which never
+    /// changes across rotations — used to DERIVE membership. `signer_*` is the **current**
+    /// owner authoring the re-wrap, which may be a rotated successor distinct from the anchor:
+    /// on OWNER self-rotation the old owner key is retired the instant its Rebind lands, so
+    /// the re-wrap MUST be signed by the NEW owner key while derivation still anchors on the
+    /// original genesis. (For a member rotation re-wrapped by a stable owner, pass the same
+    /// key as both — `anchor == signer`.) The signer is honored because it is in the genesis
+    /// owner's rebind chain (`owner_principal_chain`).
     #[allow(clippy::too_many_arguments)]
     pub fn author_rebind_rewrap(
         &mut self,
@@ -1926,19 +1935,21 @@ impl KbCollectionDoc {
         new_fp: &str,
         new_pubkey: &[u8; 32],
         wrapped: Vec<u8>,
-        owner_fp: &str,
-        owner_secret: &[u8; 32],
-        owner_pubkey: &[u8; 32],
+        anchor_pubkey: &[u8; 32],
+        signer_fp: &str,
+        signer_secret: &[u8; 32],
+        signer_pubkey: &[u8; 32],
         now: u64,
     ) -> Vec<u8> {
         let sv = self.state_vector();
         // Read the successor's inherited attributes from the post-rebind derived membership
-        // (the rebind already aliased old→new with old's role/epoch). Fall back defensively.
+        // (the rebind already aliased old→new with old's role/epoch). Anchor on the GENESIS
+        // owner pubkey — the successor is not the anchor. Fall back defensively.
         let ops = self.oplog_ops();
-        let governance = crate::membership::derive_governance(&ops, owner_pubkey);
+        let governance = crate::membership::derive_governance(&ops, anchor_pubkey);
         let members = crate::membership::derive_valid_members_governed(
             &ops,
-            owner_pubkey,
+            anchor_pubkey,
             now,
             governance,
             &crate::membership::MembershipView::default(),
@@ -1954,14 +1965,14 @@ impl KbCollectionDoc {
             new_fp,
             Some(role),
             can_invite,
-            owner_fp,
+            signer_fp,
             now,
             None,
             epoch,
         );
         op.wrapped_key = Some(wrapped);
-        let sig = op.sign(owner_secret);
-        self.append_signed_op(&op, &sig, owner_pubkey);
+        let sig = op.sign(signer_secret);
+        self.append_signed_op(&op, &sig, signer_pubkey);
         let sv_d = yrs::StateVector::decode_v1(&sv).unwrap_or_default();
         let txn = self.doc.transact();
         txn.encode_state_as_update_v1(&sv_d)
@@ -3273,7 +3284,8 @@ mod tests {
 
         // Owner observes the rebind and re-wraps the CURRENT key to the successor's wrap key.
         let succ_wrap = wrap_to_member(&k, &wrap_public_for(&b2sec)).unwrap();
-        coll.author_rebind_rewrap("KB", &b2fp, &b2pk, succ_wrap, &ofp, &osec, &opk, 1003);
+        // Member rotation re-wrapped by the STABLE owner: anchor == signer == owner.
+        coll.author_rebind_rewrap("KB", &b2fp, &b2pk, succ_wrap, &opk, &ofp, &osec, &opk, 1003);
 
         // The successor now recovers the SAME content key — proven on a FRESH PEER replica
         // (the v3 Rebind op + the re-wrap Admit both survived yrs serialization).
@@ -3298,6 +3310,70 @@ mod tests {
             derive_content_key(&peer.oplog_ops(), &opk, &bfp, &bsec).map(|c| *c.as_bytes()),
             Some(*k.as_bytes()),
             "old key retains read access to history (planned rotation, not §D3 revocation)"
+        );
+    }
+
+    /// ADR-040 PR2b (owner self-rotation): the OWNER rotates their own identity on an E2e KB
+    /// they own. The Rebind is signed by the OLD owner key (still valid at the rebind's causal
+    /// point); the content-key re-wrap to the NEW owner key must be signed by the NEW key (the
+    /// old is retired the instant the Rebind lands) while derivation still anchors on the
+    /// ORIGINAL genesis owner pubkey — the `anchor != signer` case. Proven on a fresh peer
+    /// replica: owner2 is Owner, the predecessor owner is retired, owner2 decrypts, and the
+    /// KB is still latched E2e via the owner chain.
+    #[test]
+    fn owner_self_rotation_rewraps_to_new_key_anchored_on_genesis() {
+        use crate::content_crypto::{wrap_public_for, wrap_to_member, ContentKey};
+        use crate::membership::{derive_content_key, derive_encryption, derive_valid_members};
+        let (osec, opk, ofp) = oplog_keypair(1); // genesis owner (the anchor, forever)
+        let (o2sec, o2pk, o2fp) = oplog_keypair(2); // owner's NEW identity
+        let (_xsec, _xpk, xfp) = oplog_keypair(3); // a non-member
+        let mut coll = KbCollectionDoc::new_owned("KB", &ofp, "owner");
+        let k = ContentKey::generate();
+        // Owner enables e2e (genesis self-wrap to the owner's OLD wrap key).
+        let self_wrap = wrap_to_member(&k, &wrap_public_for(&osec)).unwrap();
+        coll.author_e2e_genesis("KB", &ofp, &osec, &opk, self_wrap, 1000);
+
+        // Owner rotates: the OLD owner key signs Rebind(owner → owner2).
+        coll.author_rebind(
+            "KB",
+            &ofp,
+            &o2fp,
+            &o2pk,
+            &wrap_public_for(&o2sec),
+            &osec,
+            &opk,
+            1001,
+        );
+        // Owner re-wraps the content key to the NEW owner key — signed by owner2, anchored on
+        // the OLD genesis pubkey (anchor != signer).
+        let new_wrap = wrap_to_member(&k, &wrap_public_for(&o2sec)).unwrap();
+        coll.author_rebind_rewrap(
+            "KB", &o2fp, &o2pk, new_wrap, /*anchor*/ &opk, /*signer*/ &o2fp, &o2sec,
+            &o2pk, 1002,
+        );
+
+        // Fresh peer replica: derive everything from the anchored (OLD) genesis pubkey.
+        let peer = KbCollectionDoc::from_bytes(&coll.encode_state()).unwrap();
+        let m = derive_valid_members(&peer.oplog_ops(), &opk, 2000);
+        assert!(!m.contains_key(&ofp), "predecessor owner retired");
+        assert_eq!(
+            m.get(&o2fp).map(|x| x.role),
+            Some(Role::Owner),
+            "successor inherits Owner"
+        );
+        assert_eq!(
+            derive_encryption(&peer.oplog_ops(), &opk),
+            Encryption::E2e,
+            "still e2e via the owner chain after rotation"
+        );
+        assert_eq!(
+            derive_content_key(&peer.oplog_ops(), &opk, &o2fp, &o2sec).map(|c| *c.as_bytes()),
+            Some(*k.as_bytes()),
+            "rotated owner recovers the content key with the new key"
+        );
+        assert!(
+            derive_content_key(&peer.oplog_ops(), &opk, &xfp, &_xsec).is_none(),
+            "a non-member recovers nothing"
         );
     }
 
