@@ -21,7 +21,7 @@ use mae_sync::kb::{
     Transport,
 };
 use mae_sync::membership::{
-    derive_governance, derive_valid_members_governed, Governance, MembershipAction,
+    derive_governance, derive_valid_members_governed, fingerprint_of, Governance, MembershipAction,
 };
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
@@ -1062,6 +1062,156 @@ async fn kb_access(
             ))),
         },
     }
+}
+
+/// The current member principals as the daemon derives them for `kb_id` — the same
+/// anchored-vs-legacy split [`kb_access`] uses: an anchored, op-logged KB derives the
+/// set from the SIGNED op-log under its declared governance; an owned / un-anchored KB
+/// reads the locally-authoritative `member_roles`. Used by the member-`Rebind` gate to
+/// confirm the rotating author is a current member and the successor is fresh.
+async fn current_member_set(
+    doc_store: &DocStore,
+    kb_id: &str,
+    coll: &KbCollectionDoc,
+) -> std::collections::BTreeSet<String> {
+    match doc_store.kb_anchor(kb_id).await {
+        Some(anchor) if coll.oplog_head().is_some() => {
+            let ops = coll.oplog_ops();
+            let governance = derive_governance(&ops, &anchor);
+            derive_valid_members_governed(
+                &ops,
+                &anchor,
+                now_unix(),
+                governance,
+                &doc_store.membership_view_for(kb_id).await,
+            )
+            .into_keys()
+            .collect()
+        }
+        _ => coll
+            .member_roles()
+            .into_iter()
+            .map(|m| m.fingerprint)
+            .collect(),
+    }
+}
+
+/// ADR-040 PR2c — the member-authored `Rebind` write gate. `kb/collection_op` is
+/// otherwise owner-only (`KbOp::Manage`, ADR-018); this is the *single, narrow*
+/// exception that lets a NON-owner member rotate their **own** identity without owner
+/// mediation. It accepts the update **iff** every op it introduces to the collection
+/// is a member self-`Rebind` and the update mutates **nothing else** in the collection
+/// — so a member cannot smuggle a privilege change (an `Admit`, a `SetRole`, an owner
+/// flip) alongside the rotation. Concretely, applying `update` to the stored collection
+/// must:
+///   1. grow the op-log by ≥1 record and change **only** the op-log (owner / member
+///      roster / policies / encryption byte-identical before and after);
+///   2. and every NEW op must be a crypto-valid `Rebind` (`verify_signed`) whose
+///      `author` is the **connection's authenticated principal** (you rotate yourself,
+///      not someone else) AND a **current member**, with a well-formed, non-elevating
+///      successor: both successor keys present, `subject` fingerprint-bound to
+///      `new_pubkey`, `subject != author`, and `subject` not already a member (fresh).
+///
+/// These mirror [`membership::authorized`]'s `Rebind` arm; we re-check here because the
+/// daemon — not just the deriving peers — is now an authorization point for this op.
+/// `auth_principal` is the verified session principal; `None` (un-authed local socket)
+/// never reaches here because the owner-`Manage` check already allowed it.
+async fn verify_member_rebind_update(
+    doc_store: &DocStore,
+    kb_id: &str,
+    auth_principal: Option<&str>,
+    update: &[u8],
+) -> Result<(), String> {
+    let principal = auth_principal
+        .ok_or_else(|| "member self-rotation requires an authenticated principal".to_string())?;
+    let collection_doc = format!("kbc:{kb_id}");
+    let (state, _sv) = doc_store
+        .encode_state_and_sv(&collection_doc)
+        .await
+        .map_err(|e| format!("KB '{kb_id}' not found: {e}"))?;
+    let before = KbCollectionDoc::from_bytes(&state).map_err(|e| format!("bad collection: {e}"))?;
+    let mut after =
+        KbCollectionDoc::from_bytes(&state).map_err(|e| format!("bad collection: {e}"))?;
+    after
+        .apply_update(update)
+        .map_err(|e| format!("collection update did not apply: {e}"))?;
+
+    // (1) The update must touch ONLY the op-log. Authority on the daemon derives from
+    // the op-log (anchored) or the `member_roles` roster (owned/legacy) plus the owner
+    // and the policy/encryption fields — pin every one of them so a rebind cannot ride
+    // a roster or policy mutation. The roster is compared as a SET (keyed by
+    // fingerprint): `member_roles()` is a yrs-map projection whose Vec order is not
+    // stable across decodes, so an order-sensitive `!=` would false-positive.
+    let roster_of =
+        |c: &KbCollectionDoc| -> std::collections::BTreeMap<String, (SyncRole, String)> {
+            c.member_roles()
+                .into_iter()
+                .map(|m| (m.fingerprint, (m.role, m.label)))
+                .collect()
+        };
+    if after.owner() != before.owner()
+        || roster_of(&after) != roster_of(&before)
+        || after.join_policy() != before.join_policy()
+        || after.transport_policy_raw() != before.transport_policy_raw()
+        || after.encryption() != before.encryption()
+        || after.creator() != before.creator()
+    {
+        return Err(
+            "a member self-rotation may not modify the owner, member roster, policy, \
+             or encryption state of the collection"
+                .to_string(),
+        );
+    }
+
+    // (2) Compute the op-log delta and require it be exactly member self-Rebind(s).
+    let before_hashes: HashSet<String> =
+        before.oplog_ops().iter().map(|o| o.chain_hash()).collect();
+    let new_ops: Vec<_> = after
+        .oplog_ops()
+        .into_iter()
+        .filter(|o| !before_hashes.contains(&o.chain_hash()))
+        .collect();
+    if new_ops.is_empty() {
+        return Err("update introduces no new membership op (not a member rotation)".to_string());
+    }
+    let members = current_member_set(doc_store, kb_id, &before).await;
+    for o in &new_ops {
+        if !o.verify_signed() {
+            return Err("rotation op signature is invalid".to_string());
+        }
+        if o.op.action != MembershipAction::Rebind {
+            return Err(format!(
+                "a member may only author a Rebind on this path, not a {} op",
+                o.op.action.as_str()
+            ));
+        }
+        // You rotate YOURSELF: the op author must be the authenticated principal.
+        if o.op.author != principal {
+            return Err("a member may only rotate their own identity".to_string());
+        }
+        let npk = match o.op.new_pubkey {
+            Some(k) => k,
+            None => return Err("rotation op is missing the successor public key".to_string()),
+        };
+        if o.op.new_wrap_pubkey.is_none() {
+            return Err("rotation op is missing the successor wrap key".to_string());
+        }
+        if fingerprint_of(&npk) != o.op.subject {
+            return Err("rotation successor is not bound to its public key".to_string());
+        }
+        if o.op.subject == o.op.author {
+            return Err("rotation successor equals the author (no-op)".to_string());
+        }
+        if !members.contains(&o.op.author) {
+            return Err("rotation author is not a current member".to_string());
+        }
+        if members.contains(&o.op.subject) {
+            return Err(
+                "rotation successor is already a member (must rotate into a fresh key)".to_string(),
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Membership-smuggling defense (ADR-018): a raw `sync/update` to a collection
@@ -2446,17 +2596,39 @@ async fn handle_doc_request_inner(
                     )),
                 );
             }
-            // ADR-018: owner-only (Manage). A non-owner cannot inject collection ops.
-            match kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await {
+            // ADR-018: collection ops are owner-only (Manage) — with ONE narrow
+            // exception (ADR-040 PR2c): a non-owner member rotating their OWN identity.
+            // Probe Manage first; if it denies, accept the update IFF it is exactly a
+            // member self-`Rebind` (`verify_member_rebind_update`) and nothing else.
+            let manage =
+                kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await;
+            match manage {
                 Ok(AccessDecision::Allow) => {}
-                Ok(AccessDecision::Deny(m)) | Err(m) => {
-                    return JsonRpcResponse::error(id, McpError::internal_error(m));
-                }
-                Ok(_) => {
-                    return JsonRpcResponse::error(
-                        id,
-                        McpError::internal_error(format!("not authorized to manage KB '{kb_id}'")),
-                    );
+                other => {
+                    match verify_member_rebind_update(doc_store, &kb_id, auth_principal, &update)
+                        .await
+                    {
+                        Ok(()) => {
+                            info!(
+                                session = session_id,
+                                kb_id = %kb_id,
+                                principal = auth_principal.unwrap_or("?"),
+                                "kb/collection_op: accepted a member self-rotation (ADR-040 PR2c)"
+                            );
+                        }
+                        Err(rebind_reason) => {
+                            let base = match other {
+                                Ok(AccessDecision::Deny(m)) | Err(m) => m,
+                                _ => format!("not authorized to manage KB '{kb_id}'"),
+                            };
+                            return JsonRpcResponse::error(
+                                id,
+                                McpError::internal_error(format!(
+                                    "{base} (and not a member self-rotation: {rebind_reason})"
+                                )),
+                            );
+                        }
+                    }
                 }
             }
             // #156 F5: the owner sets `scrub` on the enable-time manifest-title-blank op so
