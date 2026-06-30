@@ -214,6 +214,13 @@
 (define-key "leader" "C j" "collab-join")
 (define-key "leader" "C P" "collab-discover")
 
+;; +identity (key rotation / recovery — ADR-040). Sensitive, infrequent ops kept under
+;; a dedicated subgroup. `collab-recover-identity` needs args, so it stays `:`-only
+;; (`:collab-recover-identity <recovery-key-dir> <old-fingerprint>`).
+(set-group-name "leader" "C I" "identity")
+(define-key "leader" "C I r" "collab-rotate-identity")
+(define-key "leader" "C I k" "collab-register-recovery-key")
+
 ;; +kb-collaboration
 (set-group-name "leader" "C K" "KB sharing")
 (define-key "leader" "C K s" "kb-share")
