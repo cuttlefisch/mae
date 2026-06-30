@@ -198,8 +198,9 @@ carries it; `derive_content_key` unwraps with the HKDF-derived wrap secret. Rota
    `derive_valid_members_governed`; the adversarial test set (§Consequences).
 2. `kb.rs`: `author_rebind(old_secret, new_fp, new_pubkey, new_wrap_pub)` + owner re-wrap to the new wrap
    key on observing a Rebind.
-3. Daemon `collab_handler`: accept a `Rebind` via `kb/collection_op` (owner-gated, key-blind); epoch fence
-   unaffected (successor inherits the epoch).
+3. Daemon `collab_handler`: accept a `Rebind`, key-blind; epoch fence unaffected (successor inherits the
+   epoch). **See the implementation addendum below** — owner rotation rides the existing owner-gated
+   `kb/collection_op`; a non-owner member's self-`Rebind` needs a new verified member-authored path (PR2c).
 4. Editor: `(rotate-identity)` Scheme/cmd/MCP — generate the new keypair, fan out Rebinds across joined KBs,
    update `known_hosts`; `mae-daemon authorize` the new pubkey. **Recovery v1** is the documented
    owner-flow (Remove → §D3 rotate → `kb-block-member` → re-join), no new code beyond the docs + verifying
@@ -210,3 +211,40 @@ carries it; `derive_content_key` unwraps with the HKDF-derived wrap secret. Rota
 
 **PR 3 (fast-follow) — recovery key v2** (§Recovery-key design): `RecoveryKey` op + recovery-key-signed
 Rebind path + offline-key storage/UX.
+
+### Implementation addendum (2026-06-30): PR2 splits into PR2a / PR2b / PR2c
+
+Implementing PR2 surfaced a daemon authorization constraint that cleanly splits the rotation work. The hub
+write path `kb/collection_op` is **owner-only** (`KbOp::Manage`, ADR-018 — `collab_handler.rs`: "a non-owner
+cannot inject collection ops"). A `Rebind` is authored by the **rotating member**, who may be a non-owner, so
+the two cases need different paths:
+
+- **PR2a — rebind core (shipped, #210).** `mae-sync` only: `MembershipAction::Rebind` + `maememb/v3` encoding
+  (carries `new_pubkey` + `new_wrap_pubkey`); `authorized` arm (member-only, fingerprint-bound, **fresh**
+  successor — a clobber-an-existing-member guard — no self-elevation); the `build_members` alias/retire
+  post-pass (causal retirement via `membership_at`, provenance re-point); `owner_principal_chain` so the
+  genesis-anchored readers (`derive_governance`/`derive_encryption`/`find_wrapped_content_key`) keep honoring a
+  rotated **owner**; `kb.rs` `author_rebind` + `author_rebind_rewrap`. Full adversarial set + a peer-replica
+  round-trip.
+
+- **PR2b — OWNER rotation.** The owner rotating their *own* identity works through the **existing owner-gated
+  path**: the owner signs the `Rebind` with their OLD owner key (still passes `Manage`), and
+  `owner_principal_chain` resolves the successor so `owner2` passes `Manage` for subsequent ops. The editor
+  `(rotate-identity)` (cmd/Scheme/MCP) generates the new keypair, and for each **owned** KB authors
+  `author_rebind` + `author_rebind_rewrap` (to the owner's own new wrap key) against the network task's
+  `kb_collections` replica (the #179 fail-closed base rule), ships both via `kb/collection_op`, then swaps the
+  in-memory signing identity + content keys and persists the new key. Transport re-anchor (the node-id changes)
+  is **out-of-band by design** (§4): `mae-daemon authorize` the new pubkey + re-pin `known_hosts`. No daemon
+  change required. e2e: `MAE_E2E_ROTATE=1`.
+
+- **PR2c — NON-OWNER member rotation (tracked: issue #213).** A member who is not the owner has **no path
+  today** — the owner-`Manage` gate rejects their self-`Rebind`. PR2c adds a **member-authored Rebind write**
+  to the daemon: a verified path (its own RPC, or a `Rebind`-aware branch of `kb/collection_op`) that accepts
+  an op **iff** it is *specifically a `Rebind`*, its signature verifies, its author is a **current member**,
+  and the successor is fresh + fingerprint-bound — explicitly **not** general `Manage`, and it must reject any
+  other collection op so a member cannot widen their privilege. Plus the **owner-side reactive re-wrap**: when
+  a `Rebind` for another member arrives in a `kbc:` delta on a KB this peer owns, the owner authors
+  `author_rebind_rewrap` to deliver the content key to the successor (extends
+  `refresh_kb_content_key_on_collection_delta`). This is the **first non-owner write to the collection op-log**
+  — a new authorization surface — so it carries heavy adversarial tests (non-member rejected; a member's
+  *non*-Rebind op rejected; stale-epoch; forged) and this addendum is its design of record.
