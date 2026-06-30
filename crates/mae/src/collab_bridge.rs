@@ -3107,6 +3107,10 @@ async fn run_collab_task(
                                             format!("Identity rotated across {rotated} owned KB(s)."),
                                             format!("New fingerprint: {new_fp}"),
                                             "Next: authorize the new key on the daemon (`mae-daemon authorize`), then reconnect — this connection still uses the old key.".to_string(),
+                                            // The new key has a new ADR-023 client-id, so the FIRST edit to an
+                                            // existing node after rotation trips the epoch fence once and must
+                                            // rebase; `collab-fence-resolution = auto` re-authors it silently.
+                                            "Your first edit to an existing node may rebase once (the rotated key has a new write lineage) — set `collab-fence-resolution` to `auto` to handle it silently.".to_string(),
                                         ],
                                     });
                                 }
