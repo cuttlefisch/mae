@@ -1760,7 +1760,10 @@ impl SchemeRuntime {
         let s = shared.clone();
         vm.register_fn(
             "kb-set-encryption",
-            "Enable E2E content encryption on an owned KB (owner-only, one-way): MODE = \"e2e\"",
+            "Enable E2E content encryption on an owned KB (owner-only, one-way): MODE = \"e2e\". \
+Protects node CONTENT from non-members/relay; does NOT provide forward secrecy, hide metadata \
+(who/when/which-node/size), or retroactively protect already-shared plaintext — enable before \
+sharing. Lost identity key = permanent loss. See :help concept:kb-encryption.",
             Arity::Fixed(2),
             move |args: &[Value]| {
                 let kb_id = arg_string(args, 0, "kb-set-encryption")?;

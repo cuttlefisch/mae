@@ -7,6 +7,31 @@ use mae_kb::KbStore;
 
 use super::Editor;
 
+/// The honest, point-of-action advisory shown when a user enables E2E content
+/// encryption on a KB (CF1, `docs/SECURITY_REVIEW.md §6.3`). "E2E" connotes
+/// Signal-like privacy; MAE's model protects node *content* from non-members but
+/// does NOT provide forward secrecy / PCS, hide metadata, or retroactively protect
+/// already-shared plaintext. Surfacing this at enable-time — not only in
+/// `docs/E2E_ENCRYPTION.md §7` — keeps the label from overselling. Kept as one
+/// shared const so the enable surface, the `*KB Sharing*` buffer, and the Scheme
+/// primitive doc all say the same thing (CLAUDE.md #3).
+pub const E2E_ENABLE_ADVISORY: &str = "\
+E2E content encryption is now ENABLED on this KB (one-way — it cannot be disabled).
+
+What it protects: node CONTENT (titles + bodies) is sealed so the daemon/relay and \
+non-members see only ciphertext.
+
+What it does NOT protect (be aware before relying on it):
+  • No forward secrecy / post-compromise security — a leaked key opens past AND future content.
+  • Metadata is visible to the host: who is in the KB, who admitted whom, which node each \
+edit touches, when, by whom, and the size of each edit — just not the content.
+  • Node IDs remain cleartext in the collection manifest (titles are blanked).
+  • It is NOT retroactive: anything already shared as plaintext stays on the relay until \
+re-sealed — enable BEFORE sharing for full protection.
+  • If you lose your identity key you lose access permanently — back it up.
+
+See :help concept:kb-encryption and docs/E2E_ENCRYPTION.md §7 for the full model.";
+
 /// Cumulative statistics for KB watcher drain operations.
 #[derive(Debug, Default)]
 pub struct KbWatcherStats {
@@ -1426,6 +1451,20 @@ impl Editor {
                 CollabIntent::KbSetPolicy { kb_id, policy }
             }
             KbCollabAction::SetEncryption { kb_id, mode } => {
+                // CF1 (SECURITY_REVIEW §6.3): the honest E2E caveats must reach the user at the
+                // POINT OF ACTION, not only in docs/E2E_ENCRYPTION.md §7. Surface them the moment
+                // E2E is enabled (one-way, irreversible) so "E2E" is not silently oversold.
+                if mode.eq_ignore_ascii_case("e2e") {
+                    self.message_log.push(
+                        crate::messages::MessageLevel::Warn,
+                        "kb-encryption",
+                        E2E_ENABLE_ADVISORY,
+                    );
+                    self.set_status(
+                        "E2E enabled (one-way): protects node CONTENT only — no forward secrecy, \
+                         metadata still visible. See :help concept:kb-encryption (full note in *Messages*).",
+                    );
+                }
                 CollabIntent::KbSetEncryption { kb_id, mode }
             }
             KbCollabAction::SetBlock {
@@ -4841,6 +4880,72 @@ mod tests {
         assert_eq!(
             data_mtime, data_mtime_after,
             "data dir kb-registry.toml was modified by test"
+        );
+    }
+
+    /// CF1 (SECURITY_REVIEW §6.3): enabling E2E MUST surface the honesty advisory at
+    /// the point of action — and a non-e2e mode MUST NOT. Selective oracle: the WARN
+    /// message names the *actual* caveats (no forward secrecy, metadata visible), not
+    /// an incidental string; and the negative `mode="none"` case must produce no
+    /// advisory (the failure mode that would let the label silently oversell).
+    #[test]
+    fn enabling_e2e_surfaces_the_caveat_advisory_at_point_of_action() {
+        use crate::editor::KbCollabAction;
+
+        // Enable E2E → exactly one WARN advisory, naming the real caveats.
+        let mut editor = Editor::new();
+        editor.queue_kb_collab_action(KbCollabAction::SetEncryption {
+            kb_id: "kb-cf1".into(),
+            mode: "e2e".into(),
+        });
+        let warns = editor
+            .message_log
+            .entries_filtered(crate::messages::MessageLevel::Warn);
+        let advisory: Vec<_> = warns
+            .iter()
+            .filter(|e| e.target == "kb-encryption")
+            .collect();
+        assert_eq!(
+            advisory.len(),
+            1,
+            "exactly one E2E enable advisory expected, got {}",
+            advisory.len()
+        );
+        let msg = &advisory[0].message;
+        // Selective oracle: the meaningful caveats, not an incidental token.
+        assert!(
+            msg.contains("No forward secrecy"),
+            "advisory must disclose the no-FS caveat"
+        );
+        assert!(
+            msg.to_lowercase().contains("metadata is visible"),
+            "advisory must disclose metadata exposure"
+        );
+        assert!(
+            msg.contains("NOT retroactive"),
+            "advisory must warn enable-before-sharing"
+        );
+        // The intent is still queued (the advisory doesn't block the action).
+        assert!(matches!(
+            editor.collab.pending_intent,
+            Some(crate::editor::CollabIntent::KbSetEncryption { .. })
+        ));
+
+        // Negative: a non-e2e mode must NOT emit the advisory (the oversell failure mode).
+        let mut editor2 = Editor::new();
+        editor2.queue_kb_collab_action(KbCollabAction::SetEncryption {
+            kb_id: "kb-cf1".into(),
+            mode: "none".into(),
+        });
+        let advisory2 = editor2
+            .message_log
+            .entries()
+            .into_iter()
+            .filter(|e| e.target == "kb-encryption")
+            .count();
+        assert_eq!(
+            advisory2, 0,
+            "no advisory should fire for a non-e2e SetEncryption mode"
         );
     }
 }
