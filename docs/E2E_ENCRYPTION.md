@@ -37,9 +37,14 @@ All in `shared/sync/src/content_crypto.rs` (reviewed: sound, no must-fix break i
   nonce + fresh ephemeral, used once).
 - **KDF:** `SHA-256("mae-content-key-wrap/v1" ‖ DH ‖ ephemeral_pub ‖ recipient_pub)` — binds both public
   keys + a versioned domain-separation tag (defeats unknown-key-share / cross-protocol confusion).
-- **Identity reuse:** the member's **Ed25519** identity is converted to X25519 (the standard libsodium
-  birational map) for the wrap. Dual-use is within the published joint-security result **because** the wrap
-  KDF is domain-separated from the signing context — those tags are load-bearing and must never be removed.
+- **Separate published wrap key (ADR-041 / I1, #198):** signing and key-exchange use **distinct** keys.
+  Each member derives a dedicated X25519 **wrap key** from its identity seed —
+  `SHA-512("mae-x25519-wrap/v1" ‖ seed)[..32]` — and **publishes** the wrap *public* key in the signed
+  membership op-log (a joiner ships it on join; an admit/rebind records it). The owner seals the content key
+  to that *published* wrap key, **not** to a key derived from the Ed25519 identity. (The earlier design reused
+  the Ed25519→X25519 birational map; I1 replaced it so a signing-key compromise does not imply a
+  key-exchange-key compromise.) The wrap KDF stays domain-separated from the signing context — those tags are
+  load-bearing and must never be removed.
 - **Encrypt-then-sign:** content ops are encrypted, then the ciphertext-bearing op is signed (ADR-036). A
   receiver **verifies before decrypting**; a key-blind relay verifies integrity without the key.
 
@@ -115,8 +120,9 @@ Sources: [RFC 9420 (MLS)](https://www.rfc-editor.org/rfc/rfc9420.html) ·
    cleartext): per-op **edit sizes** (±40 B — XChaCha is a stream cipher, ciphertext length = plaintext
    length), **edit timing**, **author attribution** (the ADR-036 signed header is cleartext, and the
    epoch-derived client-id is precomputable), and the **full membership / social graph** (fingerprints,
-   roles, who-admitted-whom, pending requests). **Node ids and titles are currently cleartext in the
-   collection manifest** even for an E2e KB (Finding F5). Traffic-analysis resistance is out of scope.
+   roles, who-admitted-whom, pending requests). **Node ids are cleartext in the collection manifest** even
+   for an E2e KB; node **titles** are blanked there (forward + enable-time scrub, Finding F5 / #156).
+   Traffic-analysis resistance is out of scope.
 5. **A malicious *member* is not constrained by encryption** — members hold the key. Confidentiality is from
    non-members/relays/hosts; *membership control* (ADR-026) is the only defense against an admitted peer.
 6. **Operational guardrail (load-bearing):** the daemon must **never** log/persist plaintext for an E2e KB
@@ -180,8 +186,10 @@ meaningful.
   them + rotates + authors CANARY2 — the removed-but-still-subscribed member RECEIVES the post-rotation
   ciphertext over its live subscription (the relay does not re-filter broadcasts by membership) but, stranded
   on the old key, CANNOT decrypt it, while RETAINING the CANARY1 history; the relay stays key-blind throughout.
-- **Hardening follow-ups:** F9 (zeroize) **shipped (#190)**; F5 (manifest titles) **forward case shipped
-  (#156)**, enable-time retroactive scrub remaining; F7 (AAD + content-key-id) **parked** → folded into the
+- **Hardening follow-ups:** F9 (zeroize) **shipped (#190)**; F5 (manifest titles) **shipped (#156)** — both
+  the *forward* case (a node added on an E2e KB never writes a cleartext title) and the *enable-time*
+  retroactive scrub (blanking titles already in the manifest, incl. the at-rest WAL); F7 (AAD + content-key-id)
+  **parked** → folded into the
   #176 rotation key-history design; F8 (compaction) + mesh anchor node-id pinning still open.
 - **FS/PCS evolution (deferred, ADR-037 §D4):** BeeKEM CGKA ratchet (O(log N) + forward/post-compromise
   secrecy), kept flagged research-maturity.
