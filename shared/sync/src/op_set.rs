@@ -371,4 +371,52 @@ mod tests {
         assert_eq!(node.title(), "from A");
         assert_eq!(node.body(), "from B");
     }
+
+    // ADR-040 #225: a re-seal-on-enable op 0 carries a LARGE pre-enable history (high SV
+    // clock-total) under one client; a post-enable edit by a DIFFERENT client is a small
+    // delta (low clock-total). `open_new_ops` sorts by ascending clock-total, which can place
+    // that small edit BEFORE op 0 — so any reconstruction that treats `opened[0]` as the base
+    // rebuilds from a mid-stream op. The materialized node must still round-trip through
+    // `encode_state` → re-apply to a FRESH doc without a yrs gap — that is exactly what a
+    // joiner's `reconcile_remote_node` does, and where the recovered-member join panicked.
+    #[test]
+    fn reseal_high_clock_op0_then_cross_client_edit_round_trips() {
+        let key = ContentKey::generate();
+
+        // A substantial pre-enable history under client 1 (high clock-total in op 0).
+        let mut author = KbNodeDoc::new_with_client_id("n1", "", "", &[], 1);
+        author.set_title("t1");
+        author.set_body("body one");
+        author.set_title("t2");
+        author.set_body("body two — longer text to grow the clock and the text lineage");
+        let pre_enable_state = author.encode_state();
+
+        // op 0 = re-seal carrying the WHOLE pre-enable history.
+        let mut state = Vec::new();
+        let (_id0, o0) = seal_op(&state, &key, &pre_enable_state, 1).unwrap();
+        state = merge(&state, &o0).unwrap();
+
+        // A post-enable TEXT edit by a DIFFERENT client (2) — a small delta whose YText ops
+        // depend on op 0's text positions. Low clock-total ⇒ sorts before op 0.
+        let mut owner = KbNodeDoc::from_bytes_with_client_id(&pre_enable_state, 2).unwrap();
+        let delta =
+            owner.set_body("body two — longer text to grow the clock and the text lineage, POST");
+        let (_id1, o1) = seal_op(&state, &key, &delta, 2).unwrap();
+        state = merge(&state, &o1).unwrap();
+
+        // Materialize (mirror of join-decrypt) → encode_state → re-apply to a fresh doc
+        // (mirror of the joiner's reconcile_remote_node). This MUST NOT gap.
+        let m = materialize(&state, &key);
+        let encoded = m.encode_state();
+        let reapplied = KbNodeDoc::from_bytes(&encoded).expect(
+            "the reconstructed full state must re-apply to a fresh doc without a yrs gap (#225)",
+        );
+        assert_eq!(reapplied.title(), m.title(), "round-trip preserves title");
+        assert_eq!(reapplied.body(), m.body(), "round-trip preserves body");
+        assert_eq!(
+            reapplied.body(),
+            "body two — longer text to grow the clock and the text lineage, POST",
+            "the post-enable edit by the second client materializes",
+        );
+    }
 }
