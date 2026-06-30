@@ -12,6 +12,7 @@ macro_rules! kb_ctx {
             seen_ops: &mut std::collections::HashMap::new(),
             kb_collections: &mut std::collections::HashMap::new(),
             signing_identity: None,
+            pending_collection_ops: &mut Vec::new(),
         }
     };
 }
@@ -3159,6 +3160,7 @@ fn refresh_kb_content_key_re_derives_on_rotation_remaining_yes_removed_no() {
         let mut collections: HashMap<String, Vec<u8>> = HashMap::new();
         collections.insert("KB".to_string(), pre_rotation.clone());
         let (mut os, mut n2k, mut so) = (HashMap::new(), HashMap::new(), HashMap::new());
+        let mut pco: Vec<(String, Vec<u8>)> = Vec::new();
         {
             let mut ctx = KbCryptoCtx {
                 content_keys: &mut content_keys,
@@ -3167,6 +3169,7 @@ fn refresh_kb_content_key_re_derives_on_rotation_remaining_yes_removed_no() {
                 seen_ops: &mut so,
                 kb_collections: &mut collections,
                 signing_identity: Some(id),
+                pending_collection_ops: &mut pco,
             };
             refresh_kb_content_key_on_collection_delta(&mut ctx, "kbc:KB", &delta);
         }
@@ -4017,5 +4020,187 @@ fn plan_owner_rotation_rotates_owned_e2e_kb_and_skips_unowned() {
         stored.owner(),
         ofp,
         "the genesis owner (the immutable derive anchor) is unchanged in the manifest"
+    );
+}
+
+/// ADR-040 PR2c — `plan_member_rotation`: a NON-owner member rotates their own identity on
+/// the KBs they belong to, and ONLY those. Owned KBs (handled by the owner planner) and KBs
+/// where I am not a member are skipped. The shipped Rebind aliases the successor on a peer
+/// replica with NO new authority.
+#[test]
+fn plan_member_rotation_rebinds_member_kbs_only() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::content_crypto::{wrap_public_for, wrap_to_member, ContentKey};
+    use mae_sync::kb::{KbCollectionDoc, Role};
+    use mae_sync::membership::derive_valid_members;
+    use std::collections::HashMap;
+
+    let owner = Identity::from_seed(&[1u8; 32], "owner");
+    let me = Identity::from_seed(&[2u8; 32], "me"); // a non-owner member
+    let new = Identity::from_seed(&[3u8; 32], "new"); // my successor
+    let (ofp, opk, osec) = (
+        owner.fingerprint(),
+        owner.public().to_bytes(),
+        owner.secret_bytes(),
+    );
+    let mfp = me.fingerprint();
+
+    // KB-M: E2e, owned by `owner`, with `me` admitted as an Editor (oplog + roster).
+    let mut m_kb = KbCollectionDoc::new_owned("M", &ofp, "owner");
+    let k = ContentKey::generate();
+    let self_wrap = wrap_to_member(&k, &wrap_public_for(&osec)).unwrap();
+    m_kb.author_e2e_genesis("kb-m", &ofp, &osec, &opk, self_wrap, 1000);
+    let my_wrap = wrap_to_member(&k, &wrap_public_for(&me.secret_bytes())).unwrap();
+    m_kb.author_member_admit(
+        "kb-m",
+        &mfp,
+        &me.public().to_bytes(),
+        &wrap_public_for(&me.secret_bytes()),
+        Role::Editor,
+        "me",
+        my_wrap,
+        &ofp,
+        &osec,
+        &opk,
+        1001,
+    );
+    // KB-OWN: owned by ME — must be skipped (owner path handles it, not the member path).
+    let own = KbCollectionDoc::new_owned("OWN", &mfp, "me");
+    // KB-X: owned by `owner`, I am NOT a member — skipped.
+    let x = KbCollectionDoc::new_owned("X", &ofp, "owner");
+
+    let mut kb_collections = HashMap::new();
+    kb_collections.insert("kb-m".to_string(), m_kb.encode_state());
+    kb_collections.insert("kb-own".to_string(), own.encode_state());
+    kb_collections.insert("kb-x".to_string(), x.encode_state());
+
+    let plans = plan_member_rotation(&kb_collections, &me, &new, 2000);
+
+    assert_eq!(
+        plans.len(),
+        1,
+        "only the KB where I am a non-owner member is rotated"
+    );
+    let plan = &plans[0];
+    assert_eq!(plan.kb_id, "kb-m");
+    assert_eq!(
+        plan.deltas.len(),
+        1,
+        "member rotation ships ONLY the Rebind (the owner re-wraps the key reactively)"
+    );
+
+    // A fresh peer applying the Rebind aliases the successor to my Editor seat; I retire.
+    let mut peer = KbCollectionDoc::from_bytes(&kb_collections["kb-m"]).unwrap();
+    peer.apply_update(&plan.deltas[0]).unwrap();
+    let nfp = new.fingerprint();
+    let derived = derive_valid_members(&peer.oplog_ops(), &opk, 3000);
+    assert!(!derived.contains_key(&mfp), "predecessor member retired");
+    assert_eq!(
+        derived.get(&nfp).map(|x| x.role),
+        Some(Role::Editor),
+        "the successor inherits my exact role — no elevation"
+    );
+}
+
+/// ADR-040 PR2c — `plan_reactive_member_rewraps`: the OWNER, on receiving a member's
+/// `Rebind`, delivers the content key to that member's successor so the successor can
+/// decrypt — the member can't author the re-wrap (the daemon's owner gate). A FRESH peer
+/// holding only the successor's key derives the content key after applying both ops.
+#[test]
+fn plan_reactive_member_rewraps_delivers_key_to_a_members_successor() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::content_crypto::{wrap_public_for, wrap_to_member, ContentKey};
+    use mae_sync::kb::{KbCollectionDoc, Role};
+    use mae_sync::membership::derive_content_key;
+
+    let owner = Identity::from_seed(&[1u8; 32], "owner");
+    let member = Identity::from_seed(&[2u8; 32], "member");
+    let succ = Identity::from_seed(&[3u8; 32], "succ"); // the member's successor
+    let (ofp, opk, osec) = (
+        owner.fingerprint(),
+        owner.public().to_bytes(),
+        owner.secret_bytes(),
+    );
+    let mfp = member.fingerprint();
+
+    // E2e KB owned by `owner`, with `member` admitted (key wrapped to the member).
+    let mut kb = KbCollectionDoc::new_owned("M", &ofp, "owner");
+    let k = ContentKey::generate();
+    let self_wrap = wrap_to_member(&k, &wrap_public_for(&osec)).unwrap();
+    kb.author_e2e_genesis("kb", &ofp, &osec, &opk, self_wrap, 1000);
+    let member_wrap = wrap_to_member(&k, &wrap_public_for(&member.secret_bytes())).unwrap();
+    kb.author_member_admit(
+        "kb",
+        &mfp,
+        &member.public().to_bytes(),
+        &wrap_public_for(&member.secret_bytes()),
+        Role::Editor,
+        "member",
+        member_wrap,
+        &ofp,
+        &osec,
+        &opk,
+        1001,
+    );
+    let base = kb.encode_state(); // the owner's replica BEFORE the member rotates
+
+    // The member rotates: author their self-Rebind (the inbound delta the owner receives).
+    let sfp = succ.fingerprint();
+    let mut member_view = KbCollectionDoc::from_bytes(&base).unwrap();
+    let rebind = member_view.author_rebind(
+        "kb",
+        &mfp,
+        &sfp,
+        &succ.public().to_bytes(),
+        &wrap_public_for(&succ.secret_bytes()),
+        &member.secret_bytes(),
+        &member.public().to_bytes(),
+        2000,
+    );
+
+    // The OWNER reacts: produce the re-wrap that delivers the key to the successor.
+    let rewraps = plan_reactive_member_rewraps("kb", &base, &rebind, &k, &owner, 2001);
+    assert_eq!(
+        rewraps.len(),
+        1,
+        "the owner re-wraps for the one rotated member"
+    );
+
+    // A FRESH peer applies the member's Rebind + the owner's re-wrap; the SUCCESSOR's key
+    // now opens the content key (it could not before — the key was wrapped to the old key).
+    let mut peer = KbCollectionDoc::from_bytes(&base).unwrap();
+    peer.apply_update(&rebind).unwrap();
+    peer.apply_update(&rewraps[0]).unwrap();
+    assert_eq!(
+        derive_content_key(&peer.oplog_ops(), &opk, &sfp, &succ.secret_bytes())
+            .map(|c| *c.as_bytes()),
+        Some(*k.as_bytes()),
+        "the rotated member's successor decrypts with its NEW key"
+    );
+
+    // Adversarial: a NON-owner running the same planner produces nothing (owner gate).
+    let stranger = Identity::from_seed(&[9u8; 32], "stranger");
+    assert!(
+        plan_reactive_member_rewraps("kb", &base, &rebind, &k, &stranger, 2002).is_empty(),
+        "only the owner authors the reactive re-wrap"
+    );
+
+    // Adversarial: the owner's OWN rotation is not re-wrapped here (subject == owner is
+    // handled by the rotation command, not the reactive member path).
+    let owner_new = Identity::from_seed(&[8u8; 32], "owner2");
+    let mut ov = KbCollectionDoc::from_bytes(&base).unwrap();
+    let owner_rebind = ov.author_rebind(
+        "kb",
+        &ofp,
+        &owner_new.fingerprint(),
+        &owner_new.public().to_bytes(),
+        &wrap_public_for(&owner_new.secret_bytes()),
+        &osec,
+        &opk,
+        2003,
+    );
+    assert!(
+        plan_reactive_member_rewraps("kb", &base, &owner_rebind, &k, &owner, 2004).is_empty(),
+        "the owner's own rotation is not handled by the reactive MEMBER re-wrap path"
     );
 }
