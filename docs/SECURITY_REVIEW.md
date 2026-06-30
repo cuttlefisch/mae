@@ -35,7 +35,7 @@ at-rest protection, single-key separation) — none an architectural dead-end.
 | **N3-authz** | Authz | `expires_at` enforced against local wall-clock, not a log-derived logical time → peers can disagree on a time-boxed member | LOW | document/harden |
 | **N4-authz** | Authz | Permissive auto-join races a concurrent `set_policy(restrictive)` (TOCTOU) | LOW | harden (re-check in crit. section) |
 | **N5-authz** | Authz | Capability attenuation, owner-only governance, transport gate, smuggling defense — **reviewed sound** | OK | — |
-| **I1** | Identity | **Single-key reuse** — one Ed25519 seed signs membership+content ops, backs TLS, is the mesh node-id, AND is the X25519 wrap key; runs against signing/key-exchange separation guidance (each context is domain-separated) | WEAKNESS | **ADR-041 (Accepted)** — a distinct, HKDF-derived **published X25519 wrap key** per identity (the recipient must publish it; a sender can't derive it from the ed25519 pubkey). Implemented with I2 as one arc |
+| **I1** | Identity | **Single-key reuse** — one Ed25519 seed signs membership+content ops, backs TLS, is the mesh node-id, AND (formerly) was the X25519 wrap key; ran against signing/key-exchange separation guidance | ~~WEAKNESS~~ → **ADDRESSED (#198)** | **ADR-041 shipped** — signing and key-exchange now use distinct keys: each identity derives a dedicated X25519 wrap key (`SHA-512("mae-x25519-wrap/v1" ‖ seed)`) and **publishes** the wrap pubkey in the signed log (a sender cannot derive it from the ed25519 pubkey). The seed still backs TLS + the mesh node-id (those are signing/identity uses, correctly separated from key-exchange) |
 | **I2** | Identity | **No key rotation / rebind** — rotating a key = a new principal → lose every KB membership + every content-key wrap | WEAKNESS | **ADR-040 (Accepted)** — cross-signed `Rebind` op (old key endorses new, history-preserving). **Recovery (release gate):** owner-mediated v1 (Remove + §D3 rotate + ADR-039 block + re-join) now; pre-registered **recovery key** v2 designed as the fast-follow. No owner co-sign; event-driven (no expiry) |
 | **I3** | Identity | **At-rest plaintext** — identity key, PSK keystore, and per-KB content keys are `0600` hex, no passphrase/OS-keychain | WEAKNESS | document; opt-in passphrase/keychain follow-up |
 | **I4** | Identity | **Non-unix chmod not enforced + no warning** (Windows exposure) — tension with principle #13 | WEAKNESS | **Partly fixed (#158):** the single secret-file write path (`keystore::write_secure`) now **warns once** on non-unix instead of silently no-opping (the "no warning" gap); native ACL tightening (owner-only DACL) remains a follow-up before a Windows release |
@@ -75,11 +75,12 @@ pins; (4) a KB's owner key (the membership op-log anchor); (5) the per-KB conten
 member's identity key through the membership op-log (the daemon stays key-blind).
 
 ### Honest weaknesses
-- **One identity key serves several roles** (I1) — signs membership + content ops, backs TLS, is the mesh
-  node-id, and (via the standard Ed25519→X25519 map) is the E2E key-wrap key. Each context is
-  domain-separated, but reusing one key for both signing and key-exchange runs against standard
-  key-separation guidance — a deliberate, documented trade-off; HKDF-derived per-context subkeys are the
-  hardening path. *(Sources: [filippo.io](https://words.filippo.io/using-ed25519-keys-for-encryption/),
+- **One identity key serves several roles** (I1 — key-exchange now split out, #198) — signs membership +
+  content ops, backs TLS, and is the mesh node-id. The E2E key-wrap key is a **separate published X25519
+  subkey** (ADR-041), no longer the Ed25519→X25519 map. Signing and key-exchange are therefore now on
+  **separate** keys (#198), closing the original concern; the remaining reuse — signing membership/content
+  ops, TLS, and the mesh node-id — is all *signing/identity* context, domain-separated and standard.
+  *(Sources: [filippo.io](https://words.filippo.io/using-ed25519-keys-for-encryption/),
   [EdDSA double-pubkey oracle](https://arxiv.org/pdf/2308.15009),
   [libsodium ed25519→curve25519](https://libsodium.gitbook.io/doc/advanced/ed25519-curve25519).)*
 - **No key rotation/rebind** (I2) — rotating = a new principal (lose memberships + wraps). The fix is a
@@ -225,8 +226,8 @@ The *primitives* are sound; the exposure is **honesty reaching the user** and **
 | ID | Finding | Severity | Disposition |
 |----|---------|----------|-------------|
 | CF1 | `kb-set-encryption` oversells: every FS/PCS/metadata caveat lives only in a doc the user never sees. Shipping an "E2E" label whose caveats are invisible at enable time. | **SHOULD-FIX (product)** | Emit a one-time advisory on enable + in the `*KB Sharing*` buffer + the primitive doc (Phase 4). |
-| CF2 | Docs describe the **superseded** Ed25519→X25519 birational-map wrap; code uses the dedicated **published** X25519 wrap key (ADR-041/I1). Docs misdescribe live crypto *and* undersell I1. | SHOULD-FIX-DOCS | Rewrite E2E §3 + downgrade SECURITY_REVIEW I1 to "addressed (#158)" (Phase 5). |
-| CF3 | E2E doc contradicts itself on the F5 manifest-title leak (§7.4 "cleartext" vs §9 "shipped"). Node **ids** are cleartext (true); node **titles** are blanked (shipped #156). | SHOULD-FIX-DOCS | Reconcile §7.4/§9 (Phase 5). |
+| CF2 | Docs describe the **superseded** Ed25519→X25519 birational-map wrap; code uses the dedicated **published** X25519 wrap key (ADR-041/I1). Docs misdescribe live crypto *and* undersell I1. | ✓ RECONCILED | E2E §3 rewritten to the published-wrap-key model; I1 downgraded to ADDRESSED (#198). |
+| CF3 | E2E doc contradicts itself on the F5 manifest-title leak (§7.4 "cleartext" vs §9 "shipped"). Node **ids** are cleartext (true); node **titles** are blanked (shipped #156). | ✓ RECONCILED | §7.4 (ids cleartext, titles blanked) + §9 (enable-time scrub shipped) now agree. |
 | CF4 | "Withholding is detectable" overclaims: only the **membership** log is hash-chained. Content ops are an unordered set with **no completeness proof** — a withheld content op is indistinguishable from "not authored yet." | SHOULD-FIX-DOCS | Scope the claim; true fix = op-set completeness/key-id (F7/#176). |
 | CF5 | Silent-skip decrypt: wrong key / rotated key / tampered op / not-yet-received all surface identically as "content absent." Fail-*safe* for secrecy, fail-*silent* for the user. | documented-limitation | Surface an "N ops undecryptable — wrong/rotated key?" indicator (→ issue). |
 | CF6 | #176 re-sync loss: one key per KB, no key-history → a from-scratch re-sync **after** a rotation permanently drops pre-rotation content, even for a legitimate current member. Undocumented user-facing failure. | documented-limitation (#176) | Document in E2E §7; fix = `HashMap<String, Vec<ContentKey>>` + op-set key-id (F7). |
