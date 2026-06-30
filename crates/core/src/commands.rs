@@ -1377,6 +1377,14 @@ impl CommandRegistry {
             "collab-rotate-identity",
             "Rotate your collab identity key across every KB you own (ADR-040)",
         );
+        reg.register_builtin(
+            "collab-register-recovery-key",
+            "Register an offline recovery key across your KBs — back it up offline (ADR-040)",
+        );
+        reg.register_builtin(
+            "collab-recover-identity",
+            "Recover a lost identity via a recovery key (:collab-recover-identity <path> <old-fp>)",
+        );
         reg.register_builtin("collab-status", "Show collaborative editing status");
         reg.register_builtin("collab-share", "Share current buffer for collaboration");
         reg.register_builtin("collab-sync", "Force sync current buffer");

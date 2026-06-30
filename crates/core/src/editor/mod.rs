@@ -165,6 +165,19 @@ pub enum CollabIntent {
     /// PR2c / #213). The transport re-anchor is out-of-band: authorize the new key on the daemon,
     /// then reconnect.
     RotateIdentity,
+    /// ADR-040 PR3 / §Recovery-key: register an offline recovery key — generate a fresh Ed25519
+    /// recovery keypair, author `RegisterRecoveryKey` into every KB this peer is a member of,
+    /// save the recovery secret to a distinct path, and advise backing it up OFFLINE. The
+    /// recovery key can later authorize a `Rebind` if the primary is lost ([`Self::RecoverIdentity`]).
+    RegisterRecoveryKey,
+    /// ADR-040 PR3 / §Recovery-key: recover a lost/compromised primary using the pre-registered
+    /// offline recovery key at `recovery_path`. Run AS the new key (already authorized + connected
+    /// out-of-band, §4): authors a recovery-signed `Rebind` (`old_fp` → the connected identity)
+    /// into every KB `old_fp` is a member of, so the new key inherits the lost key's seats.
+    RecoverIdentity {
+        recovery_path: String,
+        old_fp: String,
+    },
     /// Show the *Collab Status* diagnostic buffer.
     ShowStatus,
     /// Share the named buffer for collaborative editing.

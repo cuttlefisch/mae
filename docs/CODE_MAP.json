@@ -3831,6 +3831,14 @@
       "doc": "Rotate your collab identity key across every KB you own (ADR-040)"
     },
     {
+      "name": "collab-register-recovery-key",
+      "doc": "Register an offline recovery key across your KBs — back it up offline (ADR-040)"
+    },
+    {
+      "name": "collab-recover-identity",
+      "doc": "Recover a lost identity via a recovery key (:collab-recover-identity <path> <old-fp>)"
+    },
+    {
       "name": "collab-status",
       "doc": "Show collaborative editing status"
     },

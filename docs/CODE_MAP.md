@@ -601,7 +601,7 @@ Source: `shared/sync/src/lib.rs`
 | `undo-available?` | `crates/scheme/src/runtime.rs` |
 | `redo-available?` | `crates/scheme/src/runtime.rs` |
 
-## Commands (528 built-in)
+## Commands (530 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -1121,6 +1121,8 @@ Source: `shared/sync/src/lib.rs`
 | `collab-connect` | Connect to collaborative daemon |
 | `collab-disconnect` | Disconnect from daemon |
 | `collab-rotate-identity` | Rotate your collab identity key across every KB you own (ADR-040) |
+| `collab-register-recovery-key` | Register an offline recovery key across your KBs — back it up offline (ADR-040) |
+| `collab-recover-identity` | Recover a lost identity via a recovery key (:collab-recover-identity <path> <old-fp>) |
 | `collab-status` | Show collaborative editing status |
 | `collab-share` | Share current buffer for collaboration |
 | `collab-sync` | Force sync current buffer |

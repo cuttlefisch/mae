@@ -1175,6 +1175,27 @@ impl Editor {
                         return true;
                     }
                 }
+                // ADR-040 §Recovery-key: `:collab-recover-identity <recovery-key-path> <old-fp>`
+                // recovers a lost primary. Both args are required (the recovery key path the
+                // backup was restored to, and the lost key's fingerprint).
+                if command == "collab-recover-identity" {
+                    let raw = args.map(str::trim).unwrap_or("");
+                    let parts: Vec<&str> = raw.split_whitespace().collect();
+                    if parts.len() == 2 {
+                        self.collab.pending_intent = Some(super::CollabIntent::RecoverIdentity {
+                            recovery_path: parts[0].to_string(),
+                            old_fp: parts[1].to_string(),
+                        });
+                        self.set_status(
+                            "Recovering identity — the new key inherits the lost key's KB seats",
+                        );
+                        return true;
+                    }
+                    self.set_status(
+                        "Usage: :collab-recover-identity <recovery-key-path> <old-fingerprint>",
+                    );
+                    return true;
+                }
                 // Final fallback: dispatch any registered builtin command by
                 // name. This lets `:debug-stop`, `:debug-continue`, etc. work
                 // without explicit `:`-arms, and is the foundation for making
