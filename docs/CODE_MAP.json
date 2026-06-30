@@ -3827,6 +3827,10 @@
       "doc": "Disconnect from daemon"
     },
     {
+      "name": "collab-rotate-identity",
+      "doc": "Rotate your collab identity key across every KB you own (ADR-040)"
+    },
+    {
       "name": "collab-status",
       "doc": "Show collaborative editing status"
     },

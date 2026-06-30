@@ -601,7 +601,7 @@ Source: `shared/sync/src/lib.rs`
 | `undo-available?` | `crates/scheme/src/runtime.rs` |
 | `redo-available?` | `crates/scheme/src/runtime.rs` |
 
-## Commands (527 built-in)
+## Commands (528 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -1120,6 +1120,7 @@ Source: `shared/sync/src/lib.rs`
 | `collab-start` | Start local daemon |
 | `collab-connect` | Connect to collaborative daemon |
 | `collab-disconnect` | Disconnect from daemon |
+| `collab-rotate-identity` | Rotate your collab identity key across every KB you own (ADR-040) |
 | `collab-status` | Show collaborative editing status |
 | `collab-share` | Share current buffer for collaboration |
 | `collab-sync` | Force sync current buffer |

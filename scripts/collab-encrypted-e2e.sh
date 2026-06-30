@@ -45,12 +45,16 @@ pick_port() { local p="$1"; for _ in $(seq 0 49); do port_listening "$p" || { ec
 PORT="${MAE_E2E_PORT:-$(pick_port 9521)}"
 NEG="${MAE_E2E_NEGATIVE:-0}"
 REMOVAL="${MAE_E2E_REMOVAL:-0}"
-# §D3 removal extends the run; give each editor more headroom than the lifecycle-only default.
+ROTATE="${MAE_E2E_ROTATE:-0}"
+# §D3 removal / ADR-040 rotation extend the run; give each editor more headroom.
 EDITOR_TIMEOUT=35
-[ "$REMOVAL" = "1" ] && EDITOR_TIMEOUT=60
-# The §D3 phase only makes sense with encryption ON; refuse the nonsensical combo loudly.
-if [ "$REMOVAL" = "1" ] && [ "$NEG" = "1" ]; then
-  echo "ERROR: MAE_E2E_REMOVAL=1 is incompatible with MAE_E2E_NEGATIVE=1 (rotation needs encryption)"; exit 2
+{ [ "$REMOVAL" = "1" ] || [ "$ROTATE" = "1" ]; } && EDITOR_TIMEOUT=60
+# These phases only make sense with encryption ON; refuse the nonsensical combos loudly.
+if [ "$NEG" = "1" ] && { [ "$REMOVAL" = "1" ] || [ "$ROTATE" = "1" ]; }; then
+  echo "ERROR: MAE_E2E_NEGATIVE=1 is incompatible with the removal/rotation phases (they need encryption)"; exit 2
+fi
+if [ "$REMOVAL" = "1" ] && [ "$ROTATE" = "1" ]; then
+  echo "ERROR: run MAE_E2E_REMOVAL and MAE_E2E_ROTATE separately (they both extend the alpha node)"; exit 2
 fi
 
 for b in "$MAE_BIN" "$MAE_DAEMON_BIN"; do [ -x "$b" ] || { echo "ERROR: missing binary: $b"; exit 2; }; done
@@ -58,6 +62,8 @@ for b in "$MAE_BIN" "$MAE_DAEMON_BIN"; do [ -x "$b" ] || { echo "ERROR: missing 
 CANARY="CANARY-e2e-$$-$(od -An -N4 -tx4 /dev/urandom 2>/dev/null | tr -d ' ' || echo dead)"
 # §D3: a DISTINCT post-rotation canary so the two phases can never alias each other.
 CANARY2="CANARY2-postrot-$$-$(od -An -N4 -tx4 /dev/urandom 2>/dev/null | tr -d ' ' || echo dead)"
+# ADR-040: a DISTINCT canary authored AFTER an owner identity rotation, by the NEW key.
+CANARY3="CANARY3-postrotid-$$-$(od -An -N4 -tx4 /dev/urandom 2>/dev/null | tr -d ' ' || echo dead)"
 # #171 purge: a DISTINCT canary written as PLAINTEXT *before* enable. The natural
 # share→enable flow ships it to the key-blind daemon in the clear; reseal-on-enable must
 # PURGE it (share_doc replace, not merge) so it does not survive at rest after encryption.
@@ -118,6 +124,13 @@ BOB_FP="$(srv "$MAE_DAEMON_BIN" authorized 2>/dev/null | awk '$1=="bob"{print $2
 for who in alice bob; do
   printf '(set-option! "collab-auth-mode" "key")\n(set-option! "collab-host-key-policy" "accept-new")\n' > "$WORK/$who/.config/mae/init.scm"
 done
+# ADR-040 rotation: rotating the owner identity changes its per-node op-set client_id, so the
+# first post-rotation edit to an existing node trips the ADR-023 epoch fence once ("rebase
+# required") and must auto-re-author under the new client_id. Enable auto fence-resolution for
+# the owner so a planned rotation can keep authoring without an interactive prompt.
+if [ "$ROTATE" = "1" ]; then
+  printf '(set-option! "collab-fence-resolution" "auto")\n' >> "$WORK/alice/.config/mae/init.scm"
+fi
 cp "$ROOT/tests/collab-e2e/lib/test-helpers.scm" "$WORK/scen/helpers.scm"
 
 if [ "$NEG" = "1" ]; then ENABLE='(it-test "skip-enc (NEGATIVE)" (lambda () (sleep-ms 200)))'
@@ -138,6 +151,23 @@ if [ "$REMOVAL" = "1" ]; then
     (it-test \"stays subscribed — absorbs the post-rotation broadcast it CANNOT decrypt\" (lambda () (sleep-ms 4000)))"
 fi
 
+# ADR-040 owner identity-rotation segments — empty unless MAE_E2E_ROTATE=1. After bob reads
+# CANARY1 as a member, the owner ROTATES its identity key (collab-rotate-identity → Rebind +
+# E2e content-key re-wrap to the NEW key, shipped owner-gated), then authors CANARY3 under the
+# NEW key. bob (still a member) must converge on CANARY3 — proving the new key is a valid owner
+# whose content the daemon accepts and a member decrypts, while the relay stays key-blind.
+ALICE_ROTATE=''
+BOB_ROTATE=''
+if [ "$ROTATE" = "1" ]; then
+  ALICE_ROTATE="    (it-test \"waits for bob to read CANARY1\" (lambda () (wait-for-file \"$WORK/sync/bob-got1\" 60000)))
+    (it-test \"rotates the owner identity key (ADR-040)\" (lambda () (execute-ex \"collab-rotate-identity\") (sleep-ms 3500)))
+    (it-test \"edits the node UNDER THE ROTATED key\" (lambda () (execute-ex \"kb-update collabtest:alpha $CANARY3\") (sleep-ms 3000)))
+    (it-test \"signals rotated-id\" (lambda () (write-file \"$WORK/sync/rotid\" \"1\")))"
+  BOB_ROTATE="    (it-test \"signals read CANARY1\" (lambda () (write-file \"$WORK/sync/bob-got1\" \"1\")))
+    (it-test \"waits for the post-rotation edit\" (lambda () (wait-for-file \"$WORK/sync/rotid\" 60000)))
+    (it-test \"re-joins to pull post-rotation content under the rotated owner (snapshot, like CANARY1)\" (lambda () (execute-ex \"kb-join collabtest\") (sleep-ms 3500)))"
+fi
+
 # Owner: register + share + enable + approve bob + edit the SEALED node body.
 cat > "$WORK/scen/alice.scm" <<EOF
 (load "$WORK/scen/helpers.scm")
@@ -154,7 +184,7 @@ cat > "$WORK/scen/alice.scm" <<EOF
     (it-test "signals approved" (lambda () (write-file "$WORK/sync/added" "1")))
     (it-test "edits the sealed node body" (lambda () (execute-ex "kb-update collabtest:alpha $CANARY") (sleep-ms 2500)))
     (it-test "signals edited" (lambda () (write-file "$WORK/sync/edited" "1")))
-$ALICE_REMOVAL
+$ALICE_REMOVAL$ALICE_ROTATE
     (it-test "waits for bob done" (lambda () (wait-for-file "$WORK/sync/bob-done" 60000)))))
 EOF
 
@@ -170,7 +200,7 @@ cat > "$WORK/scen/bob.scm" <<EOF
     (it-test "waits for approval" (lambda () (wait-for-file "$WORK/sync/added" 60000)))
     (it-test "waits for the sealed edit FIRST" (lambda () (wait-for-file "$WORK/sync/edited" 60000) (sleep-ms 500)))
     (it-test "join (member) — pulls sealed content + decrypts to disk" (lambda () (execute-ex "kb-join collabtest") (sleep-ms 3000)))
-$BOB_REMOVAL
+$BOB_REMOVAL$BOB_ROTATE
     (it-test "signals done" (lambda () (write-file "$WORK/sync/bob-done" "1")))))
 EOF
 
@@ -255,8 +285,38 @@ if [ "$REMOVAL" = "1" ]; then
   grep -rqaF "$CANARY" "$WORK/bob/.local/share" 2>/dev/null && echo "PASS(§D3): removed member RETAINS pre-removal history (CANARY1)" || { echo "FAIL(§D3): removal wiped the member's legitimately-read history"; fail=1; }
 fi
 
+# --- ADR-040: owner identity rotation. The owner rotates its key, then authors CANARY3 under
+# the NEW key; a still-member peer must converge on it, and the relay stays key-blind. Only
+# runs when MAE_E2E_ROTATE=1 (⇒ encryption on).
+if [ "$ROTATE" = "1" ]; then
+  echo "--- ADR-040 owner identity-rotation oracle ---"
+  # ROTATION ACTUALLY RAN: the owner's bridge logged the owner rotation (not a silent skip).
+  grep -qaF "rotate-identity: owner rotation shipped" "$WORK/alice.tap" \
+    && echo "PASS(rotid): owner shipped an identity rotation" \
+    || { echo "FAIL(rotid): owner never shipped a rotation (the handler didn't run)"; fail=1; }
+  # NON-VACUITY + NEW KEY IS A VALID AUTHOR: the post-rotation edit, signed by the NEW key,
+  # landed on the daemon (>=2 alpha applies: CANARY1 under the old key + CANARY3 under the new).
+  applied3=$(grep -c "node_update: applied.*collabtest:alpha" "$WORK/daemon.log" || true)
+  [ "$applied3" -ge 2 ] || { echo "FAIL(rotid): <2 alpha edits ($applied3) — the post-rotation (new-key) write never landed; the daemon rejected the rotated owner's op or the oracle is vacuous"; fail=1; }
+  # KEY-BLIND across the rotation: CANARY3 plaintext must be sealed everywhere on the relay.
+  if grep -rqaF "$CANARY3" "$WORK/srv/data" 2>/dev/null; then
+    echo "FAIL(rotid): post-rotation canary FOUND in the daemon store/WAL — NOT sealed"; grep -rlaF "$CANARY3" "$WORK/srv/data" | sed 's/^/  leak: /'; fail=1
+  else echo "PASS(rotid): post-rotation canary ABSENT from the daemon store/WAL (sealed under the new key)"; fi
+  grep -qaF "$CANARY3" "$WORK/daemon.log" && { echo "FAIL(rotid): post-rotation canary in daemon logs"; fail=1; } || echo "PASS(rotid): post-rotation canary ABSENT from daemon logs"
+  # NEW KEY IS A VALID OWNER: the owner reads content it authored under the rotated key.
+  grep -rqaF "$CANARY3" "$WORK/alice/.local/share" 2>/dev/null \
+    && echo "PASS(rotid): owner reads content it authored under the ROTATED key" \
+    || { echo "FAIL(rotid): owner can't read content authored under the rotated key"; fail=1; }
+  # CONVERGENCE UNDER ROTATION (the real property): the still-member peer DECRYPTS the
+  # post-rotation content — so the Rebind transferred ownership and the member tracked it.
+  grep -rqaF "$CANARY3" "$WORK/bob/.local/share" 2>/dev/null \
+    && echo "PASS(rotid): member CONVERGED on post-rotation content under the rotated owner" \
+    || { echo "FAIL(rotid): member did NOT converge on the rotated owner's content"; fail=1; }
+fi
+
 suffix=""
 [ "$NEG" = "1" ] && suffix=" (NEGATIVE control)"
 [ "$REMOVAL" = "1" ] && suffix="$suffix + §D3 removal/rotation"
+[ "$ROTATE" = "1" ] && suffix="$suffix + ADR-040 identity rotation"
 [ "$fail" -eq 0 ] && echo "PASS: E2E encrypted multi-user lifecycle$suffix" || echo "FAIL: E2E encrypted lifecycle$suffix"
 exit $fail
