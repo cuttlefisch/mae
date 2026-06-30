@@ -590,6 +590,43 @@ existing OpenSSH Ed25519 key (`mae` reuses it). If you suspect the key is compro
 do **not** rotate to a new key from the old one — have the KB owner remove you, rotate
 the content key (§D3), and re-join as a fresh principal (ADR-040 §compromise-recovery).
 
+### Recovering access (owner-mediated, v1)
+
+How you recover depends on whether the old key is **lost** (you no longer have it, but
+nobody else does) or **compromised** (someone else may have it). The two are different —
+do not treat a compromise as a simple rotation.
+
+**A. Planned rotation — you still hold the old key (key hygiene, new device).**
+This is the in-band path: the old key cross-signs the new one and your membership +
+content-key access transfer automatically, no owner action needed for the membership
+transfer. Use `(rotate-identity)` (ADR-040). *(Owner-rotation lands first; member rotation
+follows — see ADR-040 §Implementation addendum / issue #213. Until then, follow path B/C
+to move to a new key.)*
+
+**B. Lost key — you no longer have it, and it is not compromised.**
+There is **no self-service recovery** in v1 (recovering would require the lost key to
+sign, or a pre-registered recovery key — planned, ADR-040 §Recovery-key design). Recover
+by re-joining as a new principal:
+1. Generate a fresh identity (a new collab dir, or `mae-daemon identity` for a daemon).
+2. The KB **owner** removes your old fingerprint — `kb-remove-member` (on an E2e KB this
+   rotates the content key, §D3, so the abandoned key can read no new content).
+3. You request to join again with the new key (`kb-join`); the owner approves you
+   (`kb-approve`). You are a **new principal** — prior authorship attribution stays under
+   the old fingerprint (history is immutable), but you regain read/write access.
+
+**C. Compromised key — someone else may hold it.**
+Same as B, plus **contain** the old key so the holder cannot keep acting:
+1. The owner **removes** the compromised fingerprint and rotates the content key (§D3) —
+   this denies the thief *future* content immediately.
+2. Every peer/operator **locally blocks** the old fingerprint — `kb-block-member`
+   (ADR-039 A2): their authored ops are ignored locally, even if the relay still carries
+   them, and even if they were the owner (this severs *your* node from a compromised
+   owner). The block is local + immediate and needs no consensus.
+3. You re-join with a fresh key as in B.
+> The old key keeps whatever content it already decrypted (history is immutable and was
+> already delivered) — rotation protects *future* content, not the past. Treat anything
+> the compromised key could read as exposed.
+
 ---
 
 ## 9. Data Lifecycle
