@@ -19,6 +19,20 @@ use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 /// Algorithm tag written in key lines and the handshake.
 pub const ALGO: &str = "mae-ed25519";
 
+/// KL1 (`docs/SECURITY_REVIEW.md §6.1`): the advisory shown the FIRST time a collab
+/// identity is generated. The Ed25519 seed (`id_ed25519`) is the single root of a
+/// member's access — the X25519 wrap key is derived from it, and per-KB content keys are
+/// re-derivable from it — so losing it loses access to every shared/encrypted KB, with no
+/// recovery in v1 (planned rotation needs the OLD key; ADR-040). Surfaced so key loss is
+/// neither silent nor undocumented. Callers that have a UI should also show this via
+/// [`Identity::load_or_generate_reporting`]; the daemon logs it on first generation.
+pub const IDENTITY_BACKUP_ADVISORY: &str = "\
+A new collaboration identity key was generated. THIS KEY IS YOUR ONLY ACCESS to every \
+KB you share or join — back it up now (copy `id_ed25519` from your collab directory to a \
+safe place). If you lose it, that access is gone permanently: there is no recovery in \
+this version, and key rotation requires the existing key. See docs/COLLABORATION.md \
+(\"Back up your identity key\").";
+
 /// Domain-separation prefix bound into every signed transcript.
 const TRANSCRIPT_DOMAIN: &[u8] = b"mae-collab-key-auth-v1";
 
@@ -251,16 +265,32 @@ impl Identity {
     /// Load the identity from `dir/id_ed25519`, generating + persisting one
     /// (0600 private key, public-key line) if absent.
     pub fn load_or_generate(dir: &Path, label: &str) -> std::io::Result<Self> {
+        let (id, newly_generated) = Self::load_or_generate_reporting(dir, label)?;
+        if newly_generated {
+            // KL1: at minimum, log the backup advisory on first generation so it is never
+            // SILENT (the daemon surfaces this to its operator via stderr/journal). A UI
+            // caller (the editor) should additionally show `IDENTITY_BACKUP_ADVISORY` to the
+            // user — use `load_or_generate_reporting` directly to detect first creation.
+            tracing::warn!(dir = %dir.display(), "{}", crate::identity::IDENTITY_BACKUP_ADVISORY);
+        }
+        Ok(id)
+    }
+
+    /// Like [`load_or_generate`](Self::load_or_generate), but reports whether the identity
+    /// was **newly generated** (`true`) vs loaded from disk (`false`). Callers with a user
+    /// interface use this to surface [`IDENTITY_BACKUP_ADVISORY`] at the point of creation
+    /// (KL1) — losing the seed means losing access to every shared KB with no recovery.
+    pub fn load_or_generate_reporting(dir: &Path, label: &str) -> std::io::Result<(Self, bool)> {
         let priv_path = dir.join("id_ed25519");
         if let Ok(content) = std::fs::read_to_string(&priv_path) {
             if let Some(id) = Self::parse_private(content.trim(), label) {
-                return Ok(id);
+                return Ok((id, false));
             }
         }
         // Generate + persist.
         let id = Self::generate(label);
         id.save(dir)?;
-        Ok(id)
+        Ok((id, true))
     }
 
     /// Persist this identity to `dir`: private key `id_ed25519` (0600, hex) +
@@ -766,6 +796,31 @@ mod tests {
                 .mode();
             assert_eq!(mode & 0o777, 0o600, "private key must be 0600");
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// KL1 (`SECURITY_REVIEW §6.1`): first creation reports `newly_generated = true` (so a UI
+    /// can show the backup advisory); a subsequent load reports `false` with the SAME key.
+    /// The advisory text must name the actual stakes — back up + permanent loss — not an
+    /// incidental string. Per-test isolated dir (not the shared PID path) per CLAUDE.md #14.
+    #[test]
+    fn load_or_generate_reports_first_creation_for_the_backup_advisory() {
+        // Per-test isolated dir (distinct prefix from the sibling test, so no collision).
+        let dir = std::env::temp_dir().join(format!("mae-id-kl1-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (a, fresh) = Identity::load_or_generate_reporting(&dir, "framework").unwrap();
+        assert!(fresh, "first call newly generates → advisory should fire");
+        let (b, again) = Identity::load_or_generate_reporting(&dir, "framework").unwrap();
+        assert!(!again, "second call loads the existing key → no advisory");
+        assert_eq!(
+            a.public().to_bytes(),
+            b.public().to_bytes(),
+            "same key across the load"
+        );
+        // Selective oracle on the advisory: it must convey backup + permanence, not just exist.
+        let adv = IDENTITY_BACKUP_ADVISORY.to_lowercase();
+        assert!(adv.contains("back it up") || adv.contains("back up"));
+        assert!(adv.contains("permanently") || adv.contains("no recovery"));
         let _ = std::fs::remove_dir_all(&dir);
     }
 
