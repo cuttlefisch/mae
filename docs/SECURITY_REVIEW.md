@@ -178,3 +178,70 @@ smuggling defenses were reviewed and found **sound — no privilege-escalation p
 
 Every fix above is security-relevant and ships with an **adversarial test** exercising the failure mode
 (malicious relay, removed member, stale/forged epoch, blocked principal) — per the testing-rigor principle.
+
+## 6. Maintainability & wild-usability review (v0.15 release gate)
+
+A three-lens adversarial review of whether the E2E story holds up **in the wild** over time — not just
+demo-green. Lenses: **key lifecycle & loss**, **scaling & operational longevity**, **confidentiality
+honesty & failure modes**. Verdict: **no confidentiality-bypass or correctness BLOCKER** — seal/share/
+genesis/DH/open all fail *closed* (Lens-3 F-L3-7) and convergence/fencing/at-rest-scrub are well-tested. The
+release-relevant gaps are (a) one **key-loss UX blocker**, (b) a **scaling wall** that is honestly documented
+but unmitigated, and (c) **doc/code drift + caveats invisible at the point of action**.
+
+### 6.1 Key lifecycle & loss (Lens 1)
+
+| ID | Finding | Severity | Disposition |
+|----|---------|----------|-------------|
+| KL1 | Identity-seed loss is **silent, total, unrecoverable** — no backup prompt at key creation, no onboarding doc. The Ed25519 seed is the single root: the X25519 wrap key is *derived* from it, and the content-key file is a recoverable cache (re-derivable from the self-wrap in the op-log). So the seed is the sole SPOF. | **BLOCKER (UX)** | Release fix: backup prompt at key creation + "back up your identity" in the user guide. → issue |
+| KL2 | ADR-040 rotation/rebind is design-only (0 code). | SHOULD-FIX | **Phase 2** (this release). |
+| KL3 | Solo-owner key loss has **no recovery actor** (no second owner / recovery key) → KB unrecoverable. | SHOULD-FIX | **Phase 2** recovery-key v2 (this release). |
+| KL4 | At-rest keys are `0600` plaintext (no passphrase/keychain) — local theft reads everything (I3). | documented-limitation | → issue (I3, post-release). |
+| KL5 | No backup/restore tooling or documented recipe for the collab dir (keys + KB). | SHOULD-FIX | → issue + DAEMON_ADMIN.md recipe (Phase 5). |
+
+### 6.2 Scaling & operational longevity (Lens 2)
+
+All four scaling findings roll up to one fix — **ADR-028 op-set / membership-log compaction + checkpointing**
+(already tracked as #156 F8). The codebase is honest about it (`docs/E2E_ENCRYPTION.md` F8) but it is
+currently *unmitigated*. Cost tracks **total-edits-ever**, not live-content-size.
+
+| ID | Finding | Severity |
+|----|---------|----------|
+| SC1 | Op-set is grow-only per node; `merge` re-encodes full state on every inbound op ⇒ **O(M²)** over a node's life; a 1-edit change costs ~150–300 B forever (100×+ blowup on hot nodes). | SHOULD-FIX |
+| SC2 | Membership op-log is grow-only; each removal appends O(N) permanent re-key ops; every `derive_*` replays the whole log. | SHOULD-FIX |
+| SC3 | `derive_valid_members` is super-linear (~O(M³)–O(M⁴)) and re-run on **every content op** the daemon fences (no memoization, re-parses `oplog_ops()` each call). Per-write hot path. | SHOULD-FIX (blocker-adjacent at high churn) |
+| SC4 | A cold joiner pulls + AEAD-decrypts the **entire op history** of every node (no "since op X"). | SHOULD-FIX |
+| SC5 | Daemon `PRAGMA synchronous=NORMAL` under WAL is **not power-loss-safe** to last-ack (only last-checkpoint); ~60 s/500-update window. Heals from peers if any exist; solo daemon = real loss (#77). | SHOULD-FIX |
+| SC6 | No metric/command surfaces op-set/log size or growth; naive `cp` of the live SQLite DB (with `-wal`/`-shm` sidecars + secure_delete churn) captures inconsistent state — no safe backup recipe. | SHOULD-FIX (ops) |
+
+**Mitigation for release:** memoize the derived member-set per collection-doc version (SC3 — content edits
+never change membership, so this is a safe, high-leverage cache) is a candidate quick win; the rest are
+tracked for v0.16 compaction. Surface op-set/log growth in `collab_doctor` + document the `VACUUM INTO`
+backup recipe and the solo-daemon durability caveat (Phase 5).
+
+### 6.3 Confidentiality honesty & failure modes (Lens 3)
+
+The *primitives* are sound; the exposure is **honesty reaching the user** and **doc/code drift**.
+
+| ID | Finding | Severity | Disposition |
+|----|---------|----------|-------------|
+| CF1 | `kb-set-encryption` oversells: every FS/PCS/metadata caveat lives only in a doc the user never sees. Shipping an "E2E" label whose caveats are invisible at enable time. | **SHOULD-FIX (product)** | Emit a one-time advisory on enable + in the `*KB Sharing*` buffer + the primitive doc (Phase 4). |
+| CF2 | Docs describe the **superseded** Ed25519→X25519 birational-map wrap; code uses the dedicated **published** X25519 wrap key (ADR-041/I1). Docs misdescribe live crypto *and* undersell I1. | SHOULD-FIX-DOCS | Rewrite E2E §3 + downgrade SECURITY_REVIEW I1 to "addressed (#158)" (Phase 5). |
+| CF3 | E2E doc contradicts itself on the F5 manifest-title leak (§7.4 "cleartext" vs §9 "shipped"). Node **ids** are cleartext (true); node **titles** are blanked (shipped #156). | SHOULD-FIX-DOCS | Reconcile §7.4/§9 (Phase 5). |
+| CF4 | "Withholding is detectable" overclaims: only the **membership** log is hash-chained. Content ops are an unordered set with **no completeness proof** — a withheld content op is indistinguishable from "not authored yet." | SHOULD-FIX-DOCS | Scope the claim; true fix = op-set completeness/key-id (F7/#176). |
+| CF5 | Silent-skip decrypt: wrong key / rotated key / tampered op / not-yet-received all surface identically as "content absent." Fail-*safe* for secrecy, fail-*silent* for the user. | documented-limitation | Surface an "N ops undecryptable — wrong/rotated key?" indicator (→ issue). |
+| CF6 | #176 re-sync loss: one key per KB, no key-history → a from-scratch re-sync **after** a rotation permanently drops pre-rotation content, even for a legitimate current member. Undocumented user-facing failure. | documented-limitation (#176) | Document in E2E §7; fix = `HashMap<String, Vec<ContentKey>>` + op-set key-id (F7). |
+| CF7 | Metadata surface understated at the *user* surface: the host learns the **full social graph, per-edit author/timing/size, node-ids** — "E2E" connotes Signal-like minimization it does not provide. | documented-limitation | Promote the quantified "what the host learns" to the enable surface (CF1, Phase 4). |
+
+### 6.4 Release dispositions
+
+- **BLOCKER (must fix before v0.15):** KL1 (identity-seed backup prompt + doc), CF1 (E2E-enable advisory at
+  point of action). Both are small, high-leverage UX fixes.
+- **In this release by plan:** KL2/KL3 (Phase 2 identity arc), CF2/CF3 (Phase 5 doc reconciliation),
+  CF4/CF7 wording (Phase 5), KL5 backup recipe (Phase 5).
+- **Tracked, not release-blocking (v0.16):** SC1–SC6 (ADR-028 compaction + durability + ops observability,
+  with SC3 memoization a candidate quick win), KL4 (I3 at-rest passphrase), CF5/CF6 (key-history + undecrypt
+  indicator, #176/F7).
+
+No finding reopens a confidentiality bypass. The system is **correct because it fails closed**; the wild-
+usability work is making that correctness *survivable* (key loss), *scalable* (compaction), and *honest at
+the point of use* (caveats at enable, not buried in a doc).
