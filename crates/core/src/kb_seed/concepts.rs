@@ -1752,5 +1752,30 @@ the owner). Use it to stop trusting a principal you cannot get globally removed.
 `mae-daemon revoke <label|SHA256:fp>`.\n\
 **As an AI peer you act under the human's KB role and cannot exceed it** — the \
 daemon enforces identically for keybindings and tool calls.\n\n\
+** End-to-End Encryption (ADR-037)\n\
+`:kb-set-encryption <kb> e2e` seals a KB's node content under a per-KB symmetric \
+content key. The daemon/relay is **key-blind** — it stores only ciphertext and never \
+holds the key. The owner wraps the key to each member's published X25519 key on \
+approval; a member derives it from the signed membership op-log. Your Ed25519 \
+identity seed (`~/.local/share/mae/collab/id_ed25519`) is the root of all access — \
+**back it up**; without it (and absent a recovery key) encrypted content is \
+unrecoverable. See [[concept:collab-architecture]] and `docs/E2E_ENCRYPTION.md`.\n\n\
+** Identity rotation & recovery (ADR-040)\n\
+- **Rotate** (planned key change, new device): `collab-rotate-identity` (`SPC C I r`) \
+cross-signs a successor key into every KB you own AND belong to; the owner re-wraps \
+E2e keys to your new key. Then authorize the new key on the daemon and reconnect.\n\
+- **Prepare for loss**: `collab-register-recovery-key` (`SPC C I k`) registers an \
+offline recovery key across your KBs and saves it to `<collab_dir>/recovery` — **move \
+it OFFLINE**. Latest registration wins (revokes a leaked one).\n\
+- **Recover a lost key**: with your new key authorized + connected, \
+`:collab-recover-identity <recovery-key-dir> <old-fingerprint>` uses the offline key \
+to rotate your seats onto the new key. Compromise (not just loss) → owner-mediated \
+remove + re-key + local block (see COLLABORATION.md §8).\n\n\
+** P2P mesh (ADR-025, beta)\n\
+Two **daemons** can sync a KB directly over iroh QUIC — no central hub. `kb-share-p2p` \
+establishes a mesh share on your daemon and mints a `mae://join/…` ticket; a peer runs \
+`:kb-join-p2p <ticket>`, their daemon dials yours, you approve the peer daemon's \
+fingerprint, and the KB converges peer-to-peer. Enable with `[collab.p2p]` + \
+`mae setup-collab --p2p`; see `docs/DAEMON_ADMIN.md §3b`.\n\n\
 See also: [[concept:knowledge-base]], [[concept:collab-architecture]], \
 [[concept:sync-engine]], [[concept:adr-kb-crdt]], [[index]]\n";

@@ -919,13 +919,31 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_KB_SHARING,
         )
-        .with_tags(["kb", "collaboration", "sync", "sharing"])
+        .with_tags([
+            "kb",
+            "collaboration",
+            "sync",
+            "sharing",
+            "encryption",
+            "e2e",
+            "identity",
+            "recovery",
+            "mesh",
+        ])
         .with_aliases([
             "kb-share",
             "kb-join",
             "kb-leave",
             "shared kb",
             "collaborative kb",
+            "e2e encryption",
+            "kb-set-encryption",
+            "identity rotation",
+            "collab-rotate-identity",
+            "recovery key",
+            "collab-recover-identity",
+            "p2p mesh",
+            "kb-share-p2p",
         ]),
         Node::new(
             "concept:scheme-testing",
