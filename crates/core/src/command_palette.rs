@@ -438,11 +438,41 @@ impl CommandPalette {
     }
 
     /// Setup: collaboration mode selection. Used by `:setup-collab`.
+    /// Guided picker for the collaboration mode (`:setup-collab`). Each entry explains the
+    /// tier (ADR-035 `daemon_mode`) so a newcomer can choose with context; the `name` is the
+    /// token the setup dispatch consumes, so those stay `solo|loopback|network|skip`.
     pub fn for_setup_collab_mode() -> Self {
-        Self::with_name_list(
-            &["solo", "loopback", "network", "skip"],
-            PalettePurpose::SetupCollabMode,
-        )
+        let entries = vec![
+            PaletteEntry {
+                name: "solo".to_string(),
+                doc: "No daemon — fully local. Edits are still CRDT (full undo/redo, offline). Zero config; instant upgrade to loopback/network later.".to_string(),
+                searchable_extra: Some("local offline default none no daemon".to_string()),
+            },
+            PaletteEntry {
+                name: "loopback".to_string(),
+                doc: "Local daemon (127.0.0.1:9473) — coordinate several MAE instances / AI agents on THIS machine. Persistence + multi-client on one box.".to_string(),
+                searchable_extra: Some("localhost multi-agent same machine on-demand".to_string()),
+            },
+            PaletteEntry {
+                name: "network".to_string(),
+                doc: "Shared daemon over the network — multi-user collaboration + KB sharing. Key-mode auth, E2E encryption, identity rotation/recovery, and the P2P mesh live here.".to_string(),
+                searchable_extra: Some("multi-user lan server shared remote e2e encryption mesh p2p".to_string()),
+            },
+            PaletteEntry {
+                name: "skip".to_string(),
+                doc: "Don't configure collaboration now — leave settings unchanged.".to_string(),
+                searchable_extra: Some("cancel later none".to_string()),
+            },
+        ];
+        let filtered = (0..entries.len()).collect();
+        CommandPalette {
+            query: String::new(),
+            entries,
+            filtered,
+            selected: 0,
+            purpose: PalettePurpose::SetupCollabMode,
+            query_selected: false,
+        }
     }
 
     /// Choose-keybindings picker (dashboard quick-action / `:choose-keymap-flavor`).
