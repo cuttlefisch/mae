@@ -109,6 +109,7 @@ MESH_POLICY="permissive"
 BK_FP=""
 E2E_ENABLE=""   # alice: enable encryption before the canary edit
 E2E_BOB_JOIN="" # bob: request editor membership over the mesh
+E2E_BOB_PULL="" # bob: re-join after approval to pull the wrapped key + decrypt
 E2E_ALICE_ADD=""  # alice: approve bob's EDITOR membership (wraps the content key to BK)
 if [ "$E2E_MESH" = "1" ]; then
   BK_FP="$(bob "$MAE_BIN" --collab-identity 2>/dev/null | sed -n 's/.*fingerprint: //p' | awk '{print $1}')"
@@ -116,6 +117,7 @@ if [ "$E2E_MESH" = "1" ]; then
   E2E_ENABLE="    (it-test \"enables E2E (owner) BEFORE authoring the canary\" (lambda () (kb-set-encryption \"collabtest\" \"e2e\") (sleep-ms 2500)))"
   E2E_BOB_JOIN="    (it-test \"editor requests membership over the mesh (publishes BK wrap key)\" (lambda () (execute-ex \"kb-join collabtest\") (sleep-ms 3000)))
     (it-test \"signals editor-join\" (lambda () (write-file \"$WORK/sync/bob-ejoin\" \"1\")))"
+  E2E_BOB_PULL="    (it-test \"re-joins as approved member — pulls the wrapped content key + decrypts\" (lambda () (execute-ex \"kb-join collabtest\") (sleep-ms 4000)))"
   E2E_ALICE_ADD="    (it-test \"waits for bob's editor membership request\" (lambda () (wait-for-file \"$WORK/sync/bob-ejoin\" 60000) (sleep-ms 1500)))
     (it-test \"approves bob's EDITOR (wraps content key to BK, not the daemon)\" (lambda () (execute-ex \"kb-approve collabtest $BK_FP editor\") (sleep-ms 2500)))"
 fi
@@ -166,6 +168,7 @@ cat > "$WORK/scen/bob.scm" <<EOF
     (it-test "joins via the P2P ticket (daemon B dials daemon A)" (lambda () (execute-ex (string-append "kb-join-p2p " (read-file "$TICKET_FILE"))) (sleep-ms 2000)))
 $E2E_BOB_JOIN
     (it-test "waits for dial + owner approval + a dialer retry (pulls content)" (lambda () (sleep-ms 42000)))
+$E2E_BOB_PULL
     (it-test "loads the joined KB to materialize content" (lambda () (execute-ex "kb-load collabtest") (sleep-ms 3000)))
     (it-test "signals done" (lambda () (write-file "$WORK/sync/bob-done" "1")))))
 EOF
