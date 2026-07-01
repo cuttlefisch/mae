@@ -296,6 +296,12 @@ jobs:
           MAE_BIN: ${{ github.workspace }}/target/release/mae
           MAE_DAEMON_BIN: ${{ github.workspace }}/daemon/target/release/mae-daemon
         run: scripts/collab-p2p-mesh-e2e.sh
+      - name: E2E ADR-043 P2P mesh + encryption (content sealed, daemons key-blind over the mesh)
+        env:
+          MAE_BIN: ${{ github.workspace }}/target/release/mae
+          MAE_DAEMON_BIN: ${{ github.workspace }}/daemon/target/release/mae-daemon
+          MAE_E2E_MESH: "1"
+        run: scripts/collab-p2p-mesh-e2e.sh
       - name: Package install
         run: |
           mkdir -p ~/.config/mae

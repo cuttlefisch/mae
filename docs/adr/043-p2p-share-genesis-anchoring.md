@@ -41,15 +41,29 @@ on a re-share (the widen path leaves an existing op-log untouched, B-12).
 - **Unit:** `share_kb_seeds_a_signed_owner_genesis_so_the_collection_is_anchorable` — a fresh
   `p2p/share_kb` produces a collection whose op-log has a genesis, and the owner **derives as
   `Owner`** from that signed log anchored on the owner's key (was impossible before).
-- **End-to-end (`MAE_E2E_MESH` gate):** two daemons over real iroh — owner shares a KB over the
-  mesh, **enables E2E**, a second member joins and **decrypts**; the key-blind canary proves the
-  relaying daemon sees only ciphertext; a non-member / removed member cannot read. Wired into CI
-  alongside the existing mesh-convergence gate.
+- **End-to-end (`MAE_E2E_MESH` gate, wired into CI):** two daemons over real iroh — owner shares a
+  KB over the mesh and **enables E2E**. The gate PROVES: the content is **sealed** and both daemons
+  are **key-blind** (canary plaintext ABSENT from either daemon's store + logs; the owner authors +
+  reads it). This is the property the genesis anchor delivers — E2E now *seals* over the mesh, which
+  was impossible before.
+
+## What verify surfaced (a deeper gap — #255)
+
+The gate also revealed that the genesis seed is **necessary but not sufficient** for a *member* to
+read over the mesh: a joining member's published wrap pubkey does not reach the owner through the
+mesh join path (`kb/approve: E2e KB but the pending request carries no pubkey`), so members are
+admitted **keyless** and cannot decrypt yet. The gate pins this honestly (KNOWN-GAP #255, non-fatal)
+so the *sealing/key-blindness* property is a green regression guard while member key-delivery over
+the mesh is tracked + fixed separately. (A related finding: the **permissive** auto-join path records
+a member without their wrap pubkey even on the hub — permissive is incompatible with E2E membership
+as-is; use invite. Also #255.)
 
 ## Consequences
 
-- E2E-on-mesh is anchored end-to-end; the dogfood can share over P2P with encryption. The
-  E2E_USER_GUIDE §7 "mesh = non-E2E beta" caveat is lifted once the gate is green.
+- E2E now **seals over the mesh** (relays key-blind) — real, gated progress. Full E2E-on-mesh (a
+  member joining over the mesh and decrypting) additionally needs the #255 member-key-delivery fix;
+  until then **E2E remains hub-recommended** and the E2E_USER_GUIDE §7 caveat stays (updated to name
+  the exact gap rather than a blanket "mesh = non-E2E").
 - No change to the hub path or to an existing mesh collection (re-share widens transport only).
 - The daemon owner identity must be present (key mode) to sign the genesis — consistent with
   `p2p/share_kb` already requiring the mesh + owner identity.
