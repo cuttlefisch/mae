@@ -843,6 +843,31 @@ fn owner_principal_chain(crypto: &[&SignedMembershipOp], genesis_owner: &str) ->
     chain
 }
 
+/// Is `fp` a current owner principal of this KB — the genesis owner **or** any of its
+/// cross-signed rotation successors (ADR-040)? Resolves the same owner-anchored chain
+/// [`derive_governance`] / [`derive_valid_members_governed`] use internally, so callers
+/// outside this module (e.g. the editor's reactive content-key re-wrap) can ask "does this
+/// key still speak for the owner?" after the owner has itself rotated — where the collection's
+/// meta `owner()` field still points at the genesis fingerprint. Returns `false` when there is
+/// no anchored genesis (untrusted / un-anchored log). Authority for a *write* is still enforced
+/// by the daemon per-op; this is the local planning check.
+pub fn is_owner_principal(
+    ops: &[SignedMembershipOp],
+    anchor_owner_pubkey: &[u8; 32],
+    fp: &str,
+) -> bool {
+    let crypto: Vec<&SignedMembershipOp> = crypto_valid(ops);
+    let Some(genesis) = crypto.iter().find(|o| {
+        o.op.prev_hash.is_empty()
+            && o.op.action == MembershipAction::Admit
+            && o.op.subject == o.op.author
+            && &o.author_pubkey == anchor_owner_pubkey
+    }) else {
+        return false; // no trusted root ⇒ nobody is an owner principal
+    };
+    owner_principal_chain(&crypto, &genesis.op.subject).contains(fp)
+}
+
 /// Derive the KB's active [`Governance`] from the signed op-log (ADR-026 §A4).
 /// Owner-rooted + deterministic: the **latest** crypto-valid `SetGovernance` op
 /// authored by the anchored owner, in causal order, wins; absent/unparseable ⇒
@@ -3217,6 +3242,72 @@ mod tests {
         assert!(
             m.contains_key(&carol.fp),
             "successor owner can still admit members"
+        );
+    }
+
+    #[test]
+    fn is_owner_principal_accepts_genesis_and_chained_successors_rejects_others() {
+        let owner = id(1);
+        let owner2 = id(2);
+        let owner3 = id(3);
+        let member = id(4);
+        let stranger = id(5);
+        let g = genesis(&owner);
+        let admit_member = make(
+            &owner,
+            MembershipAction::Admit,
+            &member.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        let rebind1 = make_rebind(&owner, &owner2, &admit_member.chain_hash()); // owner → owner2
+        let rebind2 = make_rebind(&owner2, &owner3, &rebind1.chain_hash()); // owner2 → owner3 (chained)
+        let ops = [g, admit_member, rebind1, rebind2];
+
+        // The genesis owner AND every cross-signed successor speak for the owner.
+        assert!(
+            is_owner_principal(&ops, &owner.pubkey, &owner.fp),
+            "genesis owner is an owner principal"
+        );
+        assert!(
+            is_owner_principal(&ops, &owner.pubkey, &owner2.fp),
+            "the first rotation successor is an owner principal"
+        );
+        assert!(
+            is_owner_principal(&ops, &owner.pubkey, &owner3.fp),
+            "a chained (owner2→owner3) successor is an owner principal"
+        );
+
+        // A plain member and an unrelated stranger are NOT — the attacker case for the
+        // reactive-rewrap authority guard.
+        assert!(
+            !is_owner_principal(&ops, &owner.pubkey, &member.fp),
+            "an admitted member is not an owner principal"
+        );
+        assert!(
+            !is_owner_principal(&ops, &owner.pubkey, &stranger.fp),
+            "a stranger never named in the log is not an owner principal"
+        );
+    }
+
+    #[test]
+    fn is_owner_principal_is_false_without_a_genesis_anchored_on_the_given_key() {
+        // A genesis exists, but it is anchored on a DIFFERENT key than the one we ask about ⇒
+        // no trusted root under this anchor ⇒ nobody (not even that genesis's own subject)
+        // resolves as an owner principal for `owner`'s anchor.
+        let owner = id(1);
+        let other = id(2);
+        let g = genesis(&other);
+        let ops = [g];
+        assert!(
+            !is_owner_principal(&ops, &owner.pubkey, &owner.fp),
+            "no genesis under this anchor ⇒ not an owner principal"
+        );
+        assert!(
+            !is_owner_principal(&ops, &owner.pubkey, &other.fp),
+            "the other genesis is not anchored on our queried key"
         );
     }
 }
