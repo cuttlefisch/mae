@@ -13,6 +13,9 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "collab_doctor" => execute_collab_doctor(editor),
         "collab_list" => execute_collab_list(editor),
         "collab_discover" => execute_collab_discover(editor),
+        "collab_rotate_identity" => execute_collab_rotate_identity(editor),
+        "collab_register_recovery_key" => execute_collab_register_recovery_key(editor),
+        "collab_recover_identity" => execute_collab_recover_identity(editor, &call.arguments),
         "kb_share" => execute_kb_share(editor, &call.arguments),
         "kb_share_p2p" => execute_kb_share_p2p(editor, &call.arguments),
         "kb_join_p2p" => execute_kb_join_p2p(editor, &call.arguments),
@@ -174,6 +177,57 @@ fn execute_collab_doctor(editor: &mut Editor) -> Result<String, String> {
         "address": address,
         "checks": checks,
         "all_passed": connected,
+    })
+    .to_string())
+}
+
+/// ADR-040: rotate this peer's collab identity key across every KB it owns AND belongs to
+/// (cross-signed `Rebind` + owner reactive re-wrap). Queues the intent the network task drains;
+/// the transport re-anchor is out-of-band (authorize the new key on the daemon, reconnect).
+fn execute_collab_rotate_identity(editor: &mut Editor) -> Result<String, String> {
+    editor.collab.pending_intent = Some(CollabIntent::RotateIdentity);
+    editor.set_status("Rotating collab identity...");
+    Ok(serde_json::json!({
+        "action": "rotate_identity",
+        "message": "Identity rotation queued. After it ships, authorize the new key on the daemon and reconnect (ADR-040 §4).",
+    })
+    .to_string())
+}
+
+/// ADR-040 §Recovery-key: register a fresh OFFLINE recovery key across every KB this peer
+/// belongs to. The recovery secret is saved locally — it must be backed up offline.
+fn execute_collab_register_recovery_key(editor: &mut Editor) -> Result<String, String> {
+    editor.collab.pending_intent = Some(CollabIntent::RegisterRecoveryKey);
+    editor.set_status("Registering recovery key...");
+    Ok(serde_json::json!({
+        "action": "register_recovery_key",
+        "message": "Recovery-key registration queued. Back up the saved recovery key OFFLINE (it can rotate your identity).",
+    })
+    .to_string())
+}
+
+/// ADR-040 §Recovery-key: recover a lost/compromised primary using a pre-registered offline
+/// recovery key. Run AS the new key (already authorized + connected out-of-band, §4).
+fn execute_collab_recover_identity(editor: &mut Editor, args: &Value) -> Result<String, String> {
+    let recovery_path = args
+        .get("recovery_path")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'recovery_path' (dir holding the offline recovery key)")?
+        .to_string();
+    let old_fp = args
+        .get("old_fingerprint")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required 'old_fingerprint' (the lost key's fingerprint)")?
+        .to_string();
+    editor.collab.pending_intent = Some(CollabIntent::RecoverIdentity {
+        recovery_path: recovery_path.clone(),
+        old_fp: old_fp.clone(),
+    });
+    editor.set_status("Recovering identity...");
+    Ok(serde_json::json!({
+        "action": "recover_identity",
+        "old_fingerprint": old_fp,
+        "message": "Recovery queued — the new key will inherit the lost key's KB seats.",
     })
     .to_string())
 }

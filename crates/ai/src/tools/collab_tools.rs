@@ -79,5 +79,52 @@ pub(super) fn collab_tool_definitions() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        ToolDefinition {
+            name: "collab_rotate_identity".into(),
+            description: "Rotate this peer's collab identity key (ADR-040) across every KB it owns AND belongs to: cross-signs a successor key and the owner re-wraps E2e content keys. After it ships, the new key must be authorized on the daemon out-of-band, then reconnect. Requires `key` auth mode + an active connection.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "collab_register_recovery_key".into(),
+            description: "Register a fresh OFFLINE recovery key (ADR-040 §Recovery-key) across every KB this peer belongs to, so a future key loss is recoverable. The recovery secret is saved locally and MUST be backed up offline (whoever holds it can rotate your identity). Latest registration wins.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "collab_recover_identity".into(),
+            description: "Recover a lost/compromised primary key using a pre-registered offline recovery key (ADR-040 §Recovery-key). Run AS the new key (already authorized + connected out-of-band): authors a recovery-signed rebind so the new key inherits the lost key's KB seats.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "recovery_path".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Directory holding the restored offline recovery key (an `id_ed25519` file)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "old_fingerprint".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "The lost key's fingerprint (SHA256:…) to rotate onto the new key".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["recovery_path".into(), "old_fingerprint".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
     ]
 }
