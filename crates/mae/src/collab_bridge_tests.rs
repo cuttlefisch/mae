@@ -4205,6 +4205,119 @@ fn plan_reactive_member_rewraps_delivers_key_to_a_members_successor() {
     );
 }
 
+/// ADR-040 (confidence-review #237) — the reactive member re-wrap must still fire AFTER the
+/// OWNER has itself rotated. The collection's meta `owner()` field still points at the GENESIS
+/// fingerprint, so the old `owner() == owner_fp` guard wrongly skipped a rotated owner reacting
+/// to a member's rebind (the member's successor could never decrypt). The fix resolves owner
+/// authority through the cross-signed rotation chain (`is_owner_principal`). This is the compound
+/// sequence: owner→owner2, THEN member→succ, and owner2 must deliver the key to succ.
+#[test]
+fn plan_reactive_member_rewraps_works_after_the_owner_has_itself_rotated() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::content_crypto::{wrap_public_for, wrap_to_member, ContentKey};
+    use mae_sync::kb::{KbCollectionDoc, Role};
+    use mae_sync::membership::derive_content_key;
+
+    let owner = Identity::from_seed(&[1u8; 32], "owner");
+    let owner2 = Identity::from_seed(&[7u8; 32], "owner2"); // the owner's successor
+    let member = Identity::from_seed(&[2u8; 32], "member");
+    let succ = Identity::from_seed(&[3u8; 32], "succ"); // the member's successor
+    let (ofp, opk, osec) = (
+        owner.fingerprint(),
+        owner.public().to_bytes(),
+        owner.secret_bytes(),
+    );
+    let mfp = member.fingerprint();
+
+    // E2e KB owned by `owner`, `member` admitted.
+    let mut kb = KbCollectionDoc::new_owned("M", &ofp, "owner");
+    let k = ContentKey::generate();
+    let self_wrap = wrap_to_member(&k, &wrap_public_for(&osec)).unwrap();
+    kb.author_e2e_genesis("kb", &ofp, &osec, &opk, self_wrap, 1000);
+    let member_wrap = wrap_to_member(&k, &wrap_public_for(&member.secret_bytes())).unwrap();
+    kb.author_member_admit(
+        "kb",
+        &mfp,
+        &member.public().to_bytes(),
+        &wrap_public_for(&member.secret_bytes()),
+        Role::Editor,
+        "member",
+        member_wrap,
+        &ofp,
+        &osec,
+        &opk,
+        1001,
+    );
+
+    // The OWNER rotates first: owner → owner2 (old owner key signs the Rebind), then re-wraps
+    // the content key to its own new key — exactly as `plan_owner_rotation` does. The meta
+    // owner() field still resolves to the genesis owner fp — the condition the old guard botched.
+    kb.author_rebind(
+        "kb",
+        &ofp,
+        &owner2.fingerprint(),
+        &owner2.public().to_bytes(),
+        &wrap_public_for(&owner2.secret_bytes()),
+        &osec,
+        &opk,
+        1002,
+    );
+    let owner2_wrap = wrap_to_member(&k, &wrap_public_for(&owner2.secret_bytes())).unwrap();
+    let _ = kb.author_rebind_rewrap(
+        "kb",
+        &owner2.fingerprint(),
+        &owner2.public().to_bytes(),
+        owner2_wrap,
+        &opk, // anchor = genesis owner pubkey
+        &ofp, // signer = current owner (the old key authors the rewrap at rotation time)
+        &osec,
+        &opk,
+        1003,
+    );
+    let base = kb.encode_state(); // owner2 is now the acting owner; meta owner() == genesis ofp
+
+    // A member rotates AFTER the owner rotation.
+    let sfp = succ.fingerprint();
+    let mut member_view = KbCollectionDoc::from_bytes(&base).unwrap();
+    let rebind = member_view.author_rebind(
+        "kb",
+        &mfp,
+        &sfp,
+        &succ.public().to_bytes(),
+        &wrap_public_for(&succ.secret_bytes()),
+        &member.secret_bytes(),
+        &member.public().to_bytes(),
+        2000,
+    );
+
+    // The ROTATED owner (owner2) reacts — pre-fix this returned empty (owner()!=owner2.fp).
+    let rewraps = plan_reactive_member_rewraps("kb", &base, &rebind, &k, &owner2, 2001);
+    assert_eq!(
+        rewraps.len(),
+        1,
+        "a rotated owner must still re-wrap for a member who rotates after it"
+    );
+
+    // The member's successor decrypts with its NEW key, deriving under the ORIGINAL genesis
+    // anchor (owner2's authored re-wrap is accepted via the owner principal chain).
+    let mut peer = KbCollectionDoc::from_bytes(&base).unwrap();
+    peer.apply_update(&rebind).unwrap();
+    peer.apply_update(&rewraps[0]).unwrap();
+    assert_eq!(
+        derive_content_key(&peer.oplog_ops(), &opk, &sfp, &succ.secret_bytes())
+            .map(|c| *c.as_bytes()),
+        Some(*k.as_bytes()),
+        "the member's successor decrypts even though the owner had itself rotated first"
+    );
+
+    // Authority negative still holds: a stranger (not in the owner chain) produces nothing.
+    let stranger = Identity::from_seed(&[9u8; 32], "stranger");
+    assert!(
+        plan_reactive_member_rewraps("kb", &base, &rebind, &k, &stranger, 2002).is_empty(),
+        "a non-owner (not in the owner principal chain) never authors a reactive re-wrap"
+    );
+}
+
 /// ADR-040 §Recovery-key — `plan_register_recovery_key` authors a `RegisterRecoveryKey` on
 /// every KB I am a member of (owner OR member role) and NOTHING where I hold no role. After
 /// applying the delta, a fresh peer's recovery registry resolves my registered recovery key —

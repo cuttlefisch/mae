@@ -4921,8 +4921,8 @@ pub(crate) fn plan_reactive_member_rewraps(
     if merged.apply_update(delta).is_err() {
         return Vec::new();
     }
-    // Only an E2e KB whose genesis owner I am.
-    if merged.encryption() != Encryption::E2e || merged.owner() != owner_fp {
+    // Only an E2e KB.
+    if merged.encryption() != Encryption::E2e {
         return Vec::new();
     }
     // The genesis owner pubkey anchors the derive (drives find_wrapped_content_key); fall
@@ -4937,6 +4937,16 @@ pub(crate) fn plan_reactive_member_rewraps(
         })
         .map(|o| o.author_pubkey)
         .unwrap_or_else(|| owner.public().to_bytes());
+    // I must currently speak for the owner to re-wrap: the genesis owner, ANY cross-signed
+    // rotation successor (ADR-040 — after the owner itself rotates, the collection's meta
+    // `owner()` still points at the GENESIS fingerprint, so a bare `owner() == owner_fp` check
+    // wrongly skips a rotated owner reacting to a member's rebind), or the meta owner field
+    // itself (a legacy/owned KB with no anchored genesis). The daemon re-validates each op.
+    if !mae_sync::membership::is_owner_principal(&merged.oplog_ops(), &anchor, &owner_fp)
+        && merged.owner() != owner_fp
+    {
+        return Vec::new();
+    }
 
     // Collect the NEW, fresh, fingerprint-bound member Rebinds (subject ≠ me) before
     // authoring, so the immutable scan doesn't clash with the mutable re-wrap authoring.
