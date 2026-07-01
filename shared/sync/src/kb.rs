@@ -1633,6 +1633,11 @@ impl KbCollectionDoc {
     /// separate (a relay may carry an invalid op; `derive_valid_members` is what
     /// refuses to count it). The daemon gates the author's capability *before*
     /// appending (Phase 2b-6).
+    // PERF/DOGFOOD(#247): the membership op-log is APPEND-ONLY and never pruned — it grows for the
+    // KB's lifetime (one op per admit/remove/role-change/rebind/recovery-key-register). Every
+    // derive decodes the whole log; a long-lived, high-churn shared KB will accumulate thousands
+    // of ops. Op-log checkpointing/compaction is a v0.16 item — the dogfood measures where this
+    // actually walls before we build it. See ADR-042.
     pub fn append_signed_op(
         &mut self,
         op: &MembershipOp,

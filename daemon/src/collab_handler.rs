@@ -712,6 +712,11 @@ pub async fn verify_relayed_content_op(
 }
 
 /// Persist a collection update + broadcast it to other subscribers. Returns wal_seq.
+// KLUDGE(#246): persist-then-broadcast is not atomic, and membership propagation is eventually
+// consistent — a peer may honor an op from someone just removed until the removal op reaches it.
+// This is inherent to CRDT/eventual-consistency (not a fixable bug), but it means access decisions
+// are "correct at the derivation point," not globally instantaneous. Security rests on every honest
+// peer converging to deny; a hostile peer is handled by the local blocklist (ADR-039), not timing.
 async fn persist_and_broadcast_collection(
     doc_store: &DocStore,
     broadcaster: &SharedBroadcaster,
@@ -1004,6 +1009,11 @@ async fn kb_access(
             // co-signed removals (and an Owner removed by quorum loses access here)
             // exactly as every honest peer derives it. `SingleOwner` (the default)
             // reduces to the prior single-author rule.
+            // PERF(#247): this full op-log decode + governance + membership derive runs on EVERY
+            // anchored/E2E access check (7+ call sites), cost scaling with membership-churn.
+            // Workstream B / ADR-042 add a derive cache keyed on the op-log state-vector so an
+            // unchanged op-log is O(1) here. Correctness invariant for that cache: it must never
+            // serve a stale membership that admits a removed member or misses a rotation.
             let ops = coll.oplog_ops();
             let governance = derive_governance(&ops, &anchor);
             derive_valid_members_governed(

@@ -817,7 +817,15 @@ fn owner_principal_chain(crypto: &[&SignedMembershipOp], genesis_owner: &str) ->
     let mut chain: BTreeSet<String> = BTreeSet::new();
     chain.insert(genesis_owner.to_string());
     // Forward closure to a fixpoint so chained rotations (owner → o' → o'') all resolve.
-    loop {
+    // Termination: every growing pass inserts a NEW subject (guarded by `!chain.contains`), and
+    // the chain holds at most one entry per distinct Rebind subject, so it converges in
+    // ≤ crypto.len() passes even on a maliciously cyclic/forged rebind set. The explicit
+    // `max_passes` ceiling keeps that guarantee defensive against a future refactor that breaks
+    // the set-growth invariant.
+    // PERF: O(passes × crypto.len()); part of the per-access derive cost the derive cache
+    // addresses (Workstream B / ADR-042, #247).
+    let max_passes = crypto.len().saturating_add(1);
+    for _ in 0..max_passes {
         let mut grew = false;
         for o in crypto {
             if o.op.action != MembershipAction::Rebind {
@@ -986,6 +994,11 @@ pub fn derive_content_key(
 /// the deliberate choice to NOT intersect [`derive_valid_members`]: doing so would also strip
 /// the removed member's historical key. The "derives a key" set is exactly {owner} ∪
 /// {members the owner directly wrapped to}, current or §D3-removed.
+// FIXME(#237): join-after-removal cannot open pre-rotation ops. This returns the CURRENT wrapped
+// content key; a member who joins (or re-joins) after a removal + content-key rotation has no wrap
+// for the PREVIOUS key, so ops sealed before their access are undecryptable to them. Intended
+// (removal re-keys forward) but the boundary is a design gap for re-admits — key-history/rewrap is
+// a v0.16 item (ADR-037 §D4). Documented in E2E_USER_GUIDE §7.
 pub fn find_wrapped_content_key(
     ops: &[SignedMembershipOp],
     anchor_owner_pubkey: &[u8; 32],
@@ -1150,6 +1163,10 @@ fn build_members(
 /// `chain_hash` order — so every honest peer replays identically regardless of the
 /// order ops arrived in. Ops **not** reachable from the anchored genesis (orphans
 /// with a dangling `prev_hash`, or a forged second root) are never emitted.
+// PERF(#247): O(depth × n) — one pass per causal generation, each scanning all n ops. Membership
+// ops form a near-linear chain (each op's prev_hash = the current head), so depth≈n ⇒ O(n²). Runs
+// inside every per-access membership derivation. Workstream B rebuilds this as O(n log n) (Kahn's
+// with a children-adjacency map) while preserving the exact emit order (deterministic replay).
 fn causal_order(by_hash: &BTreeMap<String, &SignedMembershipOp>, genesis: &str) -> Vec<String> {
     let mut emitted: BTreeSet<String> = BTreeSet::new();
     let mut order: Vec<String> = Vec::new();
@@ -1177,6 +1194,12 @@ fn causal_order(by_hash: &BTreeMap<String, &SignedMembershipOp>, genesis: &str) 
 /// The `SHA256:<base64>` fingerprint of an Ed25519 public key — the membership
 /// **principal**. Matches `mae_mcp::identity::PublicKey::fingerprint()` so a
 /// member's principal is identical whether derived here or there.
+///
+// KLUDGE(#246): the fingerprint format is UNVERSIONED — all authority binds to this exact
+// `SHA256:` + STANDARD_NO_PAD encoding. If the encoding ever changes (padding, hash, prefix),
+// every prior op silently stops verifying and legitimate members vanish. Not a bug today (it was
+// fixed at v0.1), but a format version tag would make a future migration safe. No repo change
+// without a coordinated op-log migration.
 pub fn fingerprint_of(pubkey: &[u8; 32]) -> String {
     use base64::Engine;
     // MUST match `mae_mcp::identity::PublicKey::fingerprint()` exactly
@@ -3308,6 +3331,30 @@ mod tests {
         assert!(
             !is_owner_principal(&ops, &owner.pubkey, &other.fp),
             "the other genesis is not anchored on our queried key"
+        );
+    }
+
+    /// Workstream A (#246) — the owner-chain fixpoint must TERMINATE on a maliciously cyclic
+    /// rebind set (A→B→A) and still resolve the reachable owner principals. Guards the explicit
+    /// `max_passes` bound: if the loop ever failed to terminate this test would hang.
+    #[test]
+    fn is_owner_principal_terminates_on_a_cyclic_rebind_set() {
+        let a = id(1);
+        let b = id(2);
+        let g = genesis(&a);
+        let ab = make_rebind(&a, &b, &g.chain_hash()); // A → B (A signs)
+        let ba = make_rebind(&b, &a, &ab.chain_hash()); // B → A (B signs) — closes the cycle
+        let ops = [g, ab, ba];
+        // Terminates; the genesis owner + its cross-signed successor are both owner principals.
+        assert!(is_owner_principal(&ops, &a.pubkey, &a.fp), "genesis owner");
+        assert!(
+            is_owner_principal(&ops, &a.pubkey, &b.fp),
+            "successor reached before the cycle closes"
+        );
+        // An unrelated stranger is still not an owner principal.
+        assert!(
+            !is_owner_principal(&ops, &a.pubkey, &id(9).fp),
+            "a stranger is never in the owner chain"
         );
     }
 }
