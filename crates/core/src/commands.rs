@@ -1399,6 +1399,60 @@ impl CommandRegistry {
             "Discover MAE peers on the local network via mDNS",
         );
 
+        // KB sharing (ADR-018/037/043) — dispatched in editor/dispatch/collab.rs. Registered here
+        // so the whole sharing surface is discoverable in :help + the command palette, at parity
+        // with the Scheme primitives + MCP tools (principle #3). Args shown in the doc string.
+        reg.register_builtin(
+            "kb-share",
+            "Share a KB for collaborative editing (:kb-share <kb>)",
+        );
+        reg.register_builtin("kb-join", "Join a shared KB (:kb-join <kb>)");
+        reg.register_builtin("kb-leave", "Leave a shared KB (local copy preserved)");
+        reg.register_builtin(
+            "kb-share-p2p",
+            "Share a KB over the P2P mesh + mint a join ticket (:kb-share-p2p [kb])",
+        );
+        reg.register_builtin(
+            "kb-join-p2p",
+            "Join a KB from a P2P ticket (:kb-join-p2p <mae://join/…>)",
+        );
+        reg.register_builtin(
+            "kb-set-encryption",
+            "Enable E2E content encryption on an owned KB (:kb-set-encryption <kb> e2e)",
+        );
+        reg.register_builtin(
+            "kb-member-add",
+            "Add a member to a KB by fingerprint (:kb-member-add <kb> <fp> [role])",
+        );
+        reg.register_builtin(
+            "kb-member-remove",
+            "Remove a member from a KB (:kb-member-remove <kb> <fp>)",
+        );
+        reg.register_builtin(
+            "kb-member-block",
+            "Locally block a principal on a KB — self-protection, ADR-039 (:kb-member-block <kb> <fp>)",
+        );
+        reg.register_builtin(
+            "kb-member-unblock",
+            "Unblock a locally-blocked principal (:kb-member-unblock <kb> <fp>)",
+        );
+        reg.register_builtin(
+            "kb-approve",
+            "Approve a pending join request as a role (:kb-approve <kb> <fp> [role])",
+        );
+        reg.register_builtin(
+            "kb-pending",
+            "List pending join requests for a KB (:kb-pending <kb>)",
+        );
+        reg.register_builtin(
+            "kb-policy",
+            "Set a KB's join policy: restrictive | invite | permissive (:kb-policy <kb> <policy>)",
+        );
+        reg.register_builtin(
+            "kb-list-remote",
+            "List KBs shared on the connected daemon (:kb-list-remote)",
+        );
+
         reg
     }
 }
@@ -1454,6 +1508,36 @@ mod tests {
         reg.register_builtin("mmm", "Middle");
         let names = reg.list_names();
         assert_eq!(names, vec!["aaa", "mmm", "zzz"]);
+    }
+
+    /// Workstream D (#248) parity guard: the KB-sharing command surface must be discoverable in
+    /// :help + the palette (registered builtins), at parity with the Scheme prims + MCP tools. A
+    /// dispatch-only command (invisible to :help) is the exact gap this closes — regressing any of
+    /// these back to dispatch-only fails here.
+    #[test]
+    fn with_builtins_has_kb_sharing_commands() {
+        let reg = CommandRegistry::with_builtins();
+        for cmd in [
+            "kb-share",
+            "kb-join",
+            "kb-leave",
+            "kb-share-p2p",
+            "kb-join-p2p",
+            "kb-set-encryption",
+            "kb-member-add",
+            "kb-member-remove",
+            "kb-member-block",
+            "kb-member-unblock",
+            "kb-approve",
+            "kb-pending",
+            "kb-policy",
+            "kb-list-remote",
+        ] {
+            assert!(
+                reg.contains(cmd),
+                "KB-sharing command not registered: {cmd}"
+            );
+        }
     }
 
     #[test]

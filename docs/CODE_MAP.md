@@ -602,7 +602,7 @@ Source: `shared/sync/src/lib.rs`
 | `undo-available?` | `crates/scheme/src/runtime.rs` |
 | `redo-available?` | `crates/scheme/src/runtime.rs` |
 
-## Commands (530 built-in)
+## Commands (544 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -1131,6 +1131,20 @@ Source: `shared/sync/src/lib.rs`
 | `collab-list` | List shared documents on the daemon (SPC C l) |
 | `collab-join` | Join a shared document (SPC C j) |
 | `collab-discover` | Discover MAE peers on the local network via mDNS |
+| `kb-share` | Share a KB for collaborative editing (:kb-share <kb>) |
+| `kb-join` | Join a shared KB (:kb-join <kb>) |
+| `kb-leave` | Leave a shared KB (local copy preserved) |
+| `kb-share-p2p` | Share a KB over the P2P mesh + mint a join ticket (:kb-share-p2p [kb]) |
+| `kb-join-p2p` | Join a KB from a P2P ticket (:kb-join-p2p <mae://join/…>) |
+| `kb-set-encryption` | Enable E2E content encryption on an owned KB (:kb-set-encryption <kb> e2e) |
+| `kb-member-add` | Add a member to a KB by fingerprint (:kb-member-add <kb> <fp> [role]) |
+| `kb-member-remove` | Remove a member from a KB (:kb-member-remove <kb> <fp>) |
+| `kb-member-block` | Locally block a principal on a KB — self-protection, ADR-039 (:kb-member-block <kb> <fp>) |
+| `kb-member-unblock` | Unblock a locally-blocked principal (:kb-member-unblock <kb> <fp>) |
+| `kb-approve` | Approve a pending join request as a role (:kb-approve <kb> <fp> [role]) |
+| `kb-pending` | List pending join requests for a KB (:kb-pending <kb>) |
+| `kb-policy` | Set a KB's join policy: restrictive | invite | permissive (:kb-policy <kb> <policy>) |
+| `kb-list-remote` | List KBs shared on the connected daemon (:kb-list-remote) |
 | `move-down` | Move cursor down |
 | `move-down` | Move down |
 | `zzz` | Last |
