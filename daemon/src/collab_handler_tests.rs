@@ -4357,3 +4357,143 @@ async fn recovery_rebind_must_be_submitted_by_the_successor_key() {
         "a recovery rebind must be submitted by the successor key it rotates into (subject == principal)"
     );
 }
+
+// ============================================================================
+// Confidence-review finding A3 — RAW-sync read of a KB doc must be access-gated.
+// `sync/full_state` / `sync/state_vector` return a doc's yrs state for any caller-supplied
+// name; without a gate they bypass the `kb_access(Read)` check that `kb/node_fetch`/`kb/join`
+// enforce, leaking `kb:<node>` plaintext and `kbc:<kb>` (roster + pending pubkeys) to a
+// non-member. The attacker's test: a stranger must be DENIED.
+// ============================================================================
+
+#[tokio::test]
+async fn raw_sync_read_of_a_kb_doc_is_access_gated() {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut docs = HashSet::new();
+    let owner = fp("owner");
+    kb_share_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&owner),
+        "kbsec",
+        "owner",
+        &mut docs,
+    )
+    .await;
+
+    // A stranger (non-member) must be DENIED both the collection doc and any node doc, on
+    // BOTH raw read methods.
+    for doc in ["kbc:kbsec", "kb:kbsec:alpha"] {
+        for method in ["sync/full_state", "sync/state_vector"] {
+            let r = dispatch_as(
+                &store,
+                &bc,
+                Some("evil"),
+                Some(&fp("evil")),
+                serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":{"doc":doc}}),
+                &mut docs,
+            )
+            .await;
+            assert!(
+                r.error.is_some(),
+                "a non-member must be DENIED {method} on {doc}"
+            );
+        }
+    }
+
+    // The owner (a member) MAY read its own collection doc via the raw path (members pass the
+    // Read gate) — so the fix closes the hole without breaking legitimate members.
+    let r = dispatch_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&owner),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"sync/full_state","params":{"doc":"kbc:kbsec"}}),
+        &mut docs,
+    )
+    .await;
+    assert!(
+        r.error.is_none(),
+        "the owner (a member) may read its own collection doc"
+    );
+
+    // A non-KB doc (text buffer / session doc) is UNAFFECTED — no KB gating applied.
+    let r = dispatch_as(
+        &store,
+        &bc,
+        Some("evil"),
+        Some(&fp("evil")),
+        serde_json::json!({"jsonrpc":"2.0","id":1,"method":"sync/full_state","params":{"doc":"a-shared-buffer"}}),
+        &mut docs,
+    )
+    .await;
+    assert!(
+        r.error.is_none(),
+        "a non-KB doc keeps its existing (ungated) sync behavior"
+    );
+}
+
+// Confidence-review finding A1 — the member self-service write gate must enforce the op-log
+// is APPEND-ONLY. A member could otherwise ride a valid self-Rebind while DELETING an existing
+// op (a co-member's admit, the owner's SetEncryption — an ADR-039 anti-downgrade attack — or
+// the genesis), none of which touch the pinned manifest fields. The attacker's test:
+#[tokio::test]
+async fn member_self_service_update_cannot_delete_an_existing_oplog_op() {
+    // (1) Member M legitimately self-rebinds to m2 — this appends a `Rebind` op to the
+    // op-log (the owned KB's log starts empty; the accepted rebind populates it).
+    let (store, bc, m, mut docs) = kb_with_member("kbdel", 60).await;
+    let m2 = rotor_keys(63);
+    let mut coll = load_coll(&store, "kbdel").await;
+    let update = coll.author_rebind("kbdel", &m.2, &m2.2, &m2.1, &m2.3, &m.0, &m.1, 1000);
+    let r = dispatch_as(
+        &store,
+        &bc,
+        Some("m"),
+        Some(&m.2),
+        kb_collection_op_msg("kbdel", &update),
+        &mut docs,
+    )
+    .await;
+    assert!(r.error.is_none(), "legit self-rebind accepted: {:?}", r.error);
+
+    // (2) The op-log now has a record to attack.
+    let mut coll = load_coll(&store, "kbdel").await;
+    let ops = coll.oplog_ops();
+    assert!(
+        !ops.is_empty(),
+        "precondition: the accepted rebind left an op-log record to attack"
+    );
+    let victim = ops[0].chain_hash();
+
+    // (3) The now-current key m2 crafts an update that DELETES that op-log record. The
+    // grow-only gate must reject it wholesale (before ⊄ after), even though it touches no
+    // pinned manifest field.
+    let delete_update = coll.remove_oplog_op_for_test(&victim);
+    let r = dispatch_as(
+        &store,
+        &bc,
+        Some("m2"),
+        Some(&m2.2),
+        kb_collection_op_msg("kbdel", &delete_update),
+        &mut docs,
+    )
+    .await;
+    let msg = r
+        .error
+        .as_ref()
+        .map(|e| e.message.clone())
+        .unwrap_or_default();
+    assert!(
+        msg.contains("append-only"),
+        "the delete must be rejected specifically by the append-only op-log gate, got: {msg}"
+    );
+
+    // (4) The rejected delete left the daemon's op-log intact.
+    let after = load_coll(&store, "kbdel").await;
+    assert!(
+        after.oplog_ops().iter().any(|o| o.chain_hash() == victim),
+        "the rejected delete must not have removed the op from the daemon's store"
+    );
+}
