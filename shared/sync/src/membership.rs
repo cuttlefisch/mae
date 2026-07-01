@@ -1163,30 +1163,45 @@ fn build_members(
 /// `chain_hash` order — so every honest peer replays identically regardless of the
 /// order ops arrived in. Ops **not** reachable from the anchored genesis (orphans
 /// with a dangling `prev_hash`, or a forged second root) are never emitted.
-// PERF(#247): O(depth × n) — one pass per causal generation, each scanning all n ops. Membership
-// ops form a near-linear chain (each op's prev_hash = the current head), so depth≈n ⇒ O(n²). Runs
-// inside every per-access membership derivation. Workstream B rebuilds this as O(n log n) (Kahn's
-// with a children-adjacency map) while preserving the exact emit order (deterministic replay).
+// ADR-042 (#247): O(n log n) BFS from the genesis via a children-adjacency map, replacing the prior
+// O(depth × n) generation-scan (membership ops form a near-linear chain ⇒ depth≈n ⇒ O(n²) on every
+// per-access derive). The emit order is IDENTICAL to the prior impl — BFS by causal generation, each
+// generation emitted in ascending `chain_hash` order — so every honest peer still replays identically
+// (property-tested against the reference impl on random trees). Each op has exactly one parent via
+// `prev_hash`, so the reachable set is a tree; orphans (dangling `prev_hash`) and forged second roots
+// are never reached from `genesis`, so they are dropped exactly as before.
 fn causal_order(by_hash: &BTreeMap<String, &SignedMembershipOp>, genesis: &str) -> Vec<String> {
-    let mut emitted: BTreeSet<String> = BTreeSet::new();
-    let mut order: Vec<String> = Vec::new();
-    loop {
-        // Every not-yet-emitted node whose parent is already emitted (genesis has
-        // no parent) — one causal "generation" per pass.
-        let mut ready: Vec<String> = by_hash
-            .keys()
-            .filter(|h| !emitted.contains(*h))
-            .filter(|h| h.as_str() == genesis || emitted.contains(&by_hash[*h].op.prev_hash))
-            .cloned()
-            .collect();
-        if ready.is_empty() {
-            break;
+    if !by_hash.contains_key(genesis) {
+        return Vec::new(); // no anchored root ⇒ nothing reachable
+    }
+    // parent chain_hash → its child hashes (BTreeSet keeps the sibling order deterministic).
+    let mut children: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for (h, o) in by_hash {
+        children
+            .entry(o.op.prev_hash.as_str())
+            .or_default()
+            .insert(h.as_str());
+    }
+    let mut order: Vec<String> = Vec::with_capacity(by_hash.len());
+    let mut emitted: BTreeSet<&str> = BTreeSet::new();
+    // Frontier = one causal generation; genesis is generation 0.
+    let mut frontier: Vec<&str> = vec![genesis];
+    while !frontier.is_empty() {
+        frontier.sort_unstable(); // ascending chain_hash across the whole generation (matches prior)
+        for h in &frontier {
+            if emitted.insert(*h) {
+                order.push((*h).to_string());
+            }
         }
-        ready.sort(); // ascending chain_hash — deterministic sibling tiebreak
-        for h in ready {
-            emitted.insert(h.clone());
-            order.push(h);
+        // Next generation = children of everything just emitted (each has a single parent, so no
+        // node is enqueued twice; the `emitted` guard is defensive).
+        let mut next: Vec<&str> = Vec::new();
+        for h in &frontier {
+            if let Some(cs) = children.get(*h) {
+                next.extend(cs.iter().copied().filter(|c| !emitted.contains(c)));
+            }
         }
+        frontier = next;
     }
     order
 }
@@ -3356,5 +3371,85 @@ mod tests {
             !is_owner_principal(&ops, &a.pubkey, &id(9).fp),
             "a stranger is never in the owner chain"
         );
+    }
+
+    /// ADR-042 (#247) — the O(n log n) `causal_order` must emit IDENTICALLY to the prior O(n²)
+    /// generation-scan (deterministic replay is a hard correctness invariant: every honest peer
+    /// must replay the op-log in the same order). Property-tested against a reference copy of the
+    /// old impl on random op-trees (linear chains, wide fan-out, orphans).
+    #[test]
+    fn causal_order_matches_the_reference_impl_on_random_trees() {
+        use rand::{rngs::StdRng, RngExt, SeedableRng};
+
+        // Reference = the pre-ADR-042 generation-scan, verbatim.
+        fn reference(
+            by_hash: &BTreeMap<String, &SignedMembershipOp>,
+            genesis: &str,
+        ) -> Vec<String> {
+            let mut emitted: BTreeSet<String> = BTreeSet::new();
+            let mut order: Vec<String> = Vec::new();
+            loop {
+                let mut ready: Vec<String> = by_hash
+                    .keys()
+                    .filter(|h| !emitted.contains(*h))
+                    .filter(|h| {
+                        h.as_str() == genesis || emitted.contains(&by_hash[*h].op.prev_hash)
+                    })
+                    .cloned()
+                    .collect();
+                if ready.is_empty() {
+                    break;
+                }
+                ready.sort();
+                for h in ready {
+                    emitted.insert(h.clone());
+                    order.push(h);
+                }
+            }
+            order
+        }
+
+        let owner = id(1);
+        for seed in 0..64u64 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            // Build a random tree: op 0 = genesis (prev ""); each later op's parent is a random
+            // earlier op; distinct subject per op ⇒ distinct chain_hash (no map collision).
+            let mut ops: Vec<SignedMembershipOp> = vec![genesis(&owner)];
+            let n: usize = rng.random_range(0..30);
+            for i in 0..n {
+                let parent = ops[rng.random_range(0..ops.len())].chain_hash();
+                let subj = id(((i % 240) + 2) as u8).fp;
+                ops.push(make(
+                    &owner,
+                    MembershipAction::Admit,
+                    &subj,
+                    Some(Role::Viewer),
+                    false,
+                    None,
+                    &parent,
+                ));
+            }
+            // Occasionally add an ORPHAN (prev points nowhere) — both impls must drop it.
+            if seed % 3 == 0 {
+                let subj = id(255).fp;
+                ops.push(make(
+                    &owner,
+                    MembershipAction::Admit,
+                    &subj,
+                    Some(Role::Viewer),
+                    false,
+                    None,
+                    "dangling-parent-hash",
+                ));
+            }
+            let by_hash: BTreeMap<String, &SignedMembershipOp> =
+                ops.iter().map(|o| (o.chain_hash(), o)).collect();
+            let genesis_h = ops[0].chain_hash();
+            assert_eq!(
+                causal_order(&by_hash, &genesis_h),
+                reference(&by_hash, &genesis_h),
+                "seed {seed}: causal_order must match the reference impl exactly"
+            );
+        }
     }
 }

@@ -4,11 +4,14 @@
 //! The outer `RwLock` protects the map (read to find, write to create/evict).
 //! Each document has its own `Mutex` for concurrent access to different docs.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use mae_sync::encoding::validate_update;
-use mae_sync::membership::MembershipView;
+use mae_sync::kb::KbCollectionDoc;
+use mae_sync::membership::{
+    derive_governance, derive_valid_members_governed, Governance, MembershipView, ValidMember,
+};
 use mae_sync::text::TextSync;
 use sha2::{Digest, Sha256};
 use tokio::sync::{Mutex, RwLock};
@@ -95,6 +98,30 @@ pub struct DocStore {
     /// Remove, a different thing). An in-memory read cache write-through-backed by the
     /// durable `kb_blocklist` table; hydrated at startup by [`DocStore::load_blocklists`].
     kb_blocklists: RwLock<HashMap<String, BTreeSet<String>>>,
+    /// ADR-042 (#247): memoized membership derivation. The full op-log decode +
+    /// `derive_governance` + `derive_valid_members_governed` runs on EVERY anchored/E2E access;
+    /// this caches the result per KB. INVALIDATION triggers: an op-log advance changes the
+    /// collection state-vector (SV mismatch ⇒ recompute); a local block/unblock removes the
+    /// entry explicitly (the blocklist is per-peer, not in the SV); a member timebox
+    /// (`expires_at`) is bounded by `valid_until`. The cache must NEVER serve a stale set that
+    /// admits a removed member or misses a rotation.
+    derive_cache: RwLock<HashMap<String, CachedDerive>>,
+}
+
+/// A derived membership snapshot (ADR-042): the governance + valid-member set for a KB at a
+/// point in its op-log. Shared behind an `Arc` so a cache hit never clones the member map.
+pub struct DerivedMembership {
+    pub governance: Governance,
+    pub members: BTreeMap<String, ValidMember>,
+}
+
+/// One [`DocStore::derive_cache`] entry. A hit requires the collection SV **and** anchor to still
+/// match AND `now < valid_until` (the earliest future member timebox that would flip the set).
+struct CachedDerive {
+    sv: Vec<u8>,
+    anchor: [u8; 32],
+    valid_until: u64,
+    result: Arc<DerivedMembership>,
 }
 
 /// Result of applying an update.
@@ -157,7 +184,74 @@ impl DocStore {
             kb_anchors: RwLock::new(HashMap::new()),
             change_tx: std::sync::OnceLock::new(),
             kb_blocklists: RwLock::new(HashMap::new()),
+            derive_cache: RwLock::new(HashMap::new()),
         }
+    }
+
+    /// ADR-042 (#247): derive `kb_id`'s `(governance, valid_members)` with memoization. The
+    /// caller supplies the already-loaded collection + trust anchor; a cache hit (unchanged
+    /// op-log SV + anchor, and `now` still before the next timebox horizon) returns the shared
+    /// `Arc` without re-decoding the op-log or re-deriving. Correctness invariant: the cache is
+    /// keyed on every input to the derive — the op-log (via SV), the anchor, the local blocklist
+    /// (invalidated on block/unblock), and time (via `valid_until`) — so it can never serve a
+    /// membership that a fresh derive would not (no stale admit of a removed member / missed
+    /// rotation / expired timebox).
+    ///
+    // KLUDGE(#247, Checkpoint-1): the `MembershipView` this derive consumes currently depends ONLY
+    // on the local blocklist (invalidated explicitly on block/unblock) — `cascade` is hardcoded to
+    // the `PendingOnly` default. If `membership_view_for` ever gains another MUTABLE per-KB input
+    // (e.g. a configurable inviter-removal cascade), that input MUST be added to the cache key OR
+    // trigger `invalidate_derive_cache`, or the cache will silently serve stale membership. This
+    // guard exists because the review found it: not a bug today, a trap for a future change.
+    pub async fn derived_membership(
+        &self,
+        kb_id: &str,
+        coll: &KbCollectionDoc,
+        anchor: &[u8; 32],
+        now: u64,
+    ) -> Arc<DerivedMembership> {
+        let sv = coll.state_vector();
+        {
+            let cache = self.derive_cache.read().await;
+            if let Some(e) = cache.get(kb_id) {
+                if e.sv == sv && &e.anchor == anchor && now < e.valid_until {
+                    return Arc::clone(&e.result);
+                }
+            }
+        }
+        // Miss — recompute. Every derive input is captured in the cache key below.
+        let ops = coll.oplog_ops();
+        let governance = derive_governance(&ops, anchor);
+        let view = self.membership_view_for(kb_id).await;
+        let members = derive_valid_members_governed(&ops, anchor, now, governance, &view);
+        // The result holds until the earliest FUTURE member timebox flips a member out. No such
+        // timebox ⇒ valid until the op-log (SV) or blocklist changes.
+        let valid_until = ops
+            .iter()
+            .filter_map(|o| o.op.expires_at)
+            .filter(|e| *e > now)
+            .min()
+            .unwrap_or(u64::MAX);
+        let result = Arc::new(DerivedMembership {
+            governance,
+            members,
+        });
+        self.derive_cache.write().await.insert(
+            kb_id.to_string(),
+            CachedDerive {
+                sv,
+                anchor: *anchor,
+                valid_until,
+                result: Arc::clone(&result),
+            },
+        );
+        result
+    }
+
+    /// Drop `kb_id`'s memoized membership (ADR-042). Called when a per-peer input that is NOT in
+    /// the collection SV changes — i.e. the local blocklist (block/unblock).
+    async fn invalidate_derive_cache(&self, kb_id: &str) {
+        self.derive_cache.write().await.remove(kb_id);
     }
 
     /// Install the daemon's signing identity (ADR-026). Called once at startup in
@@ -272,6 +366,8 @@ impl DocStore {
             .entry(kb_id.to_string())
             .or_default()
             .insert(principal.to_string());
+        // ADR-042: the blocklist feeds the derive but is not in the collection SV — invalidate.
+        self.invalidate_derive_cache(kb_id).await;
         Ok(())
     }
 
@@ -281,6 +377,8 @@ impl DocStore {
         if let Some(set) = self.kb_blocklists.write().await.get_mut(kb_id) {
             set.remove(principal);
         }
+        // ADR-042: blocklist change is not reflected in the collection SV — invalidate.
+        self.invalidate_derive_cache(kb_id).await;
         Ok(())
     }
 
