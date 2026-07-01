@@ -205,6 +205,14 @@ Labels take precedence over commit scanning. If your PR has `feat` commits but s
 - Use `?` propagation and typed errors. `anyhow` is acceptable at binary boundaries; typed errors (`thiserror`) are preferred inside library crates.
 - Panics must be reserved for invariant violations that indicate a programming error, not runtime conditions.
 
+### Surfacing findings — flag comments
+
+Known bugs, kludges, scale hot-spots, and incomplete edges are surfaced in-code with a greppable
+convention so they are reviewed, not buried: `// BUG:` (wrong behavior), `// KLUDGE:` (works but
+ad-hoc), `// PERF:` (scale hot-spot), `// DOGFOOD:` (verify/measure under real data), `// FIXME:`
+(known-incomplete) — each with a one-line why + an issue ref. Grep with
+`rg '// (BUG|KLUDGE|PERF|DOGFOOD|FIXME)\('`. The running index lives in [`docs/CODE_REVIEW_FLAGS.md`](docs/CODE_REVIEW_FLAGS.md).
+
 ### Scheme-First Configurability
 
 If a behavior is user-visible and could reasonably differ between users, it must go through `OptionRegistry`:

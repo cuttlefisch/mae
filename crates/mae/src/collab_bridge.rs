@@ -4893,13 +4893,15 @@ pub(crate) fn plan_recovery_rotation(
 /// author an `author_rebind_rewrap` delivering `content_key` to each successor's published
 /// X25519 wrap key. Returns the signed `kbc:` deltas to ship via the owner-gated
 /// `kb/collection_op`. The successor inherits the content key with NO new authority (a
-/// re-wrap, not an admit). Empty unless this peer is the genesis owner, the KB is E2e, and
-/// the delta introduces a fresh, fingerprint-bound member Rebind by someone else.
+/// re-wrap, not an admit). Empty unless this peer currently speaks for the owner (the genesis
+/// owner OR any cross-signed rotation successor), the KB is E2e, and the delta introduces a
+/// fresh, fingerprint-bound member Rebind by someone else.
 ///
-/// v1 scope: the owner is assumed to be the genesis owner (`coll.owner() == owner_fp`). An
-/// owner who has itself rotated handles its own KBs via the rotation command; a rotated
-/// owner reacting to a *member* rotation is a deferred edge (it needs owner-chain
-/// resolution of the meta owner field).
+/// A rotated owner IS handled (#239/#237): authority is resolved through the owner principal
+/// chain (`is_owner_principal`, ADR-040), NOT the collection's meta `owner()` field — which
+/// still points at the genesis fingerprint after the owner rotates. So the compound sequence
+/// "owner rotates, then a member rotates" still delivers the content key to the member's
+/// successor. Pinned by `plan_reactive_member_rewraps_works_after_the_owner_has_itself_rotated`.
 pub(crate) fn plan_reactive_member_rewraps(
     kb_id: &str,
     base: &[u8],
