@@ -4456,7 +4456,11 @@ async fn member_self_service_update_cannot_delete_an_existing_oplog_op() {
         &mut docs,
     )
     .await;
-    assert!(r.error.is_none(), "legit self-rebind accepted: {:?}", r.error);
+    assert!(
+        r.error.is_none(),
+        "legit self-rebind accepted: {:?}",
+        r.error
+    );
 
     // (2) The op-log now has a record to attack.
     let mut coll = load_coll(&store, "kbdel").await;
