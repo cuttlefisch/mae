@@ -392,9 +392,16 @@ where
     R: AsyncBufRead + Unpin,
 {
     let node_svs = node_svs_for(doc_store, &ticket.kb_id).await;
+    // #255: forward any LOCAL pending join requests (editor members waiting behind this relay),
+    // carrying each member's published wrap pubkey, so the owner can wrap the E2E content key to
+    // them on approval. Without this a member joining over the mesh is admitted keyless (the owner
+    // never receives their wrap key). Secure in the two-daemon model: the owner trusts this
+    // authorized peer, which authenticated the member's editor session; this daemon stays key-blind
+    // (it relays ciphertext + the owner-authored wrap, never the content key).
+    let pending_members = pending_members_for(doc_store, &ticket.kb_id).await;
     let req = json!({
         "jsonrpc": "2.0", "id": 1, "method": "kb/join",
-        "params": { "kb_id": ticket.kb_id, "node_svs": node_svs }
+        "params": { "kb_id": ticket.kb_id, "node_svs": node_svs, "pending_members": pending_members }
     })
     .to_string();
     mae_mcp::write_framed(send, req.as_bytes(), WRITE_TIMEOUT)
@@ -429,6 +436,32 @@ async fn node_svs_for(doc_store: &Arc<DocStore>, kb_id: &str) -> Vec<Value> {
         }
     }
     out
+}
+
+/// #255: local pending join requests to FORWARD to the owner over the mesh — each editor member
+/// waiting behind this relay, with the wrap pubkey it published to us. Only requests carrying a
+/// wrap key are forwarded (an E2e member the owner must be able to seal the content key to); a
+/// keyless request has nothing to deliver. The owner records them as pending + wraps on approval.
+async fn pending_members_for(doc_store: &Arc<DocStore>, kb_id: &str) -> Vec<Value> {
+    let coll_doc = format!("kbc:{kb_id}");
+    let Ok((state, _)) = doc_store.encode_state_and_sv(&coll_doc).await else {
+        return Vec::new();
+    };
+    let Ok(coll) = KbCollectionDoc::from_bytes(&state) else {
+        return Vec::new();
+    };
+    coll.pending()
+        .into_iter()
+        .filter_map(|p| {
+            let wrap = p.wrap_pubkey?;
+            Some(json!({
+                "fp": p.fingerprint,
+                "label": p.label,
+                "pubkey": p.pubkey.map(hex::encode),
+                "wrap_pubkey": hex::encode(wrap),
+            }))
+        })
+        .collect()
 }
 
 /// Parse a `kb/join` response and apply the collection + node docs locally

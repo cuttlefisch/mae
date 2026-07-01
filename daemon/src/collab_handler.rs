@@ -2214,6 +2214,59 @@ async fn handle_doc_request_inner(
                 .and_then(|h| hex::decode(h).ok())
                 .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok());
 
+            // #255: a mesh relay (an authorized peer) may FORWARD its local editor members' pending
+            // join requests here, each with the wrap pubkey that member published to it — so the
+            // owner can wrap the E2E content key to them on approval (the member can't reach the
+            // owner directly over the mesh). A pending is a self-service request the owner still
+            // explicitly approves, so recording a forwarded one is not privileged. Idempotent: skip
+            // anyone already a member or already pending WITH a wrap key (don't re-broadcast on the
+            // dialer's retry loop).
+            if let Some(arr) = params["pending_members"]
+                .as_array()
+                .filter(|a| !a.is_empty())
+            {
+                if let Ok(mut coll) = load_collection(doc_store, &kb_id).await {
+                    let members: HashSet<String> = coll
+                        .member_roles()
+                        .into_iter()
+                        .map(|m| m.fingerprint)
+                        .collect();
+                    let keyed_pending: HashSet<String> = coll
+                        .pending()
+                        .into_iter()
+                        .filter(|p| p.wrap_pubkey.is_some())
+                        .map(|p| p.fingerprint)
+                        .collect();
+                    for pm in arr {
+                        let Some(fp) = pm["fp"].as_str() else {
+                            continue;
+                        };
+                        if members.contains(fp) || keyed_pending.contains(fp) {
+                            continue;
+                        }
+                        let hex32 = |v: &serde_json::Value| -> Option<[u8; 32]> {
+                            v.as_str()
+                                .and_then(|h| hex::decode(h).ok())
+                                .and_then(|b| <[u8; 32]>::try_from(b.as_slice()).ok())
+                        };
+                        let wrap = hex32(&pm["wrap_pubkey"]);
+                        let pk = hex32(&pm["pubkey"]);
+                        let label = pm["label"].as_str().unwrap_or(fp);
+                        let update =
+                            coll.add_pending(fp, label, &now_stamp(), pk.as_ref(), wrap.as_ref());
+                        let _ = persist_and_broadcast_collection(
+                            doc_store,
+                            broadcaster,
+                            session_id,
+                            &kb_id,
+                            &update,
+                        )
+                        .await;
+                        info!(session = session_id, kb_id = %kb_id, member = %fp, "kb/join: recorded a forwarded pending member (#255 mesh key delivery)");
+                    }
+                }
+            }
+
             // ADR-018 access gate (complete mediation): member → join; non-member
             // resolved by the KB's join policy (restrictive/invite/permissive).
             match kb_access(doc_store, &kb_id, auth_principal, KbOp::Join, transport).await {
