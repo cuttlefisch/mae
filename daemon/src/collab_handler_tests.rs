@@ -4501,3 +4501,91 @@ async fn member_self_service_update_cannot_delete_an_existing_oplog_op() {
         "the rejected delete must not have removed the op from the daemon's store"
     );
 }
+
+/// ADR-042 (#247) — the membership derive cache must be O(1) on cache hits AND must NEVER serve a
+/// stale set. The adversarial invariant: every input to the derive keys the cache — the op-log
+/// (via state-vector), the anchor, and the local blocklist (invalidated on block). A blocked owner
+/// (ADR-039 A2) whose authority is now ignored must NOT be served stale as still-authoritative.
+#[tokio::test]
+async fn derive_cache_hits_but_never_serves_stale_membership() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::content_crypto::{wrap_public_for, wrap_to_member, ContentKey};
+    use mae_sync::kb::KbCollectionDoc;
+
+    let store = test_doc_store();
+    let owner = Identity::from_seed(&[1u8; 32], "owner");
+    let owner_fp = owner.fingerprint();
+    let opk = owner.public().to_bytes();
+    let osec = owner.secret_bytes();
+    let anchor = opk;
+    let member = Identity::from_seed(&[2u8; 32], "member");
+    let mfp = member.fingerprint();
+    let now = 2_000;
+
+    // An E2e KB with a signed owner genesis — the anchor the derive resolves membership from.
+    let k = ContentKey::generate();
+    let self_wrap = wrap_to_member(&k, &wrap_public_for(&osec)).unwrap();
+    let mut coll = KbCollectionDoc::new_owned("kbc", &owner_fp, "owner");
+    coll.author_e2e_genesis("kbc", &owner_fp, &osec, &opk, self_wrap, 1000);
+
+    // (1) Two derives on an UNCHANGED op-log return the same cached Arc — the O(1) hit.
+    let dm1 = store.derived_membership("kbc", &coll, &anchor, now).await;
+    let dm2 = store.derived_membership("kbc", &coll, &anchor, now).await;
+    assert!(
+        std::sync::Arc::ptr_eq(&dm1, &dm2),
+        "an unchanged op-log must be a cache hit (same Arc)"
+    );
+    assert_eq!(
+        dm1.members.get(&owner_fp).map(|m| m.role),
+        Some(SyncRole::Owner),
+        "owner derived from the genesis"
+    );
+
+    // (2) Advancing the op-log (admit a member) changes the collection SV ⇒ the cache must
+    // recompute, not serve the stale Arc.
+    let member_wrap = wrap_to_member(&k, &wrap_public_for(&member.secret_bytes())).unwrap();
+    coll.author_member_admit(
+        "kbc",
+        &mfp,
+        &member.public().to_bytes(),
+        &wrap_public_for(&member.secret_bytes()),
+        SyncRole::Editor,
+        "member",
+        member_wrap,
+        &owner_fp,
+        &osec,
+        &opk,
+        1001,
+    );
+    let dm3 = store.derived_membership("kbc", &coll, &anchor, now).await;
+    assert!(
+        !std::sync::Arc::ptr_eq(&dm1, &dm3),
+        "an op-log advance (SV change) must invalidate the cache"
+    );
+    assert!(
+        dm3.members.contains_key(&mfp),
+        "the newly admitted member is present after the op-log advance"
+    );
+
+    // (3) A local BLOCK is NOT in the op-log SV, so it must invalidate explicitly. A blocked
+    // owner's authority (incl. the genesis it signed) is ignored ⇒ the derived set must drop it.
+    // A stale cache would wrongly keep serving the blocked owner as authoritative.
+    store.add_kb_block("kbc", &owner_fp).await.unwrap();
+    let dm4 = store.derived_membership("kbc", &coll, &anchor, now).await;
+    assert!(
+        !std::sync::Arc::ptr_eq(&dm3, &dm4),
+        "a block (same SV) must still invalidate the derive cache"
+    );
+    assert!(
+        !dm4.members.contains_key(&owner_fp),
+        "a locally-blocked owner must NOT be served stale as authoritative (ADR-039)"
+    );
+
+    // (4) Unblocking invalidates again and restores the owner.
+    store.remove_kb_block("kbc", &owner_fp).await.unwrap();
+    let dm5 = store.derived_membership("kbc", &coll, &anchor, now).await;
+    assert!(
+        dm5.members.contains_key(&owner_fp),
+        "unblock invalidates + restores the owner"
+    );
+}

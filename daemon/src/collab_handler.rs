@@ -21,8 +21,7 @@ use mae_sync::kb::{
     Transport,
 };
 use mae_sync::membership::{
-    derive_governance, derive_valid_members_governed, fingerprint_of, is_recovery_rebind,
-    recovery_registry, Governance, MembershipAction,
+    fingerprint_of, is_recovery_rebind, recovery_registry, Governance, MembershipAction,
 };
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
@@ -636,17 +635,11 @@ pub async fn verify_content_op(
     signed: &SignedContentOp,
 ) -> Result<(), String> {
     let coll = load_collection(doc_store, kb_id).await?;
-    let ops = coll.oplog_ops();
-    let governance = derive_governance(&ops, anchor);
-    let members = derive_valid_members_governed(
-        &ops,
-        anchor,
-        now_unix(),
-        governance,
-        &doc_store.membership_view_for(kb_id).await,
-    );
+    let dm = doc_store
+        .derived_membership(kb_id, &coll, anchor, now_unix())
+        .await;
     signed
-        .admit(&members)
+        .admit(&dm.members)
         .map_err(|e| format!("signed content op rejected: {e:?}"))
 }
 
@@ -865,22 +858,16 @@ async fn append_signed_revoke(
         None => signer.public().to_bytes(),
     };
     let now = now_unix();
-    let ops = coll.oplog_ops();
-    let governance = derive_governance(&ops, &anchor);
-    let members = derive_valid_members_governed(
-        &ops,
-        &anchor,
-        now,
-        governance,
-        &doc_store.membership_view_for(kb_id).await,
-    );
+    let dm = doc_store
+        .derived_membership(kb_id, coll, &anchor, now)
+        .await;
     let signer_fp = signer.fingerprint();
-    if members.get(&signer_fp).map(|m| m.role) != Some(SyncRole::Owner) {
+    if dm.members.get(&signer_fp).map(|m| m.role) != Some(SyncRole::Owner) {
         return Err(format!(
             "signer is not a current owner of KB '{kb_id}'; cannot revoke"
         ));
     }
-    if !members.contains_key(subject) {
+    if !dm.members.contains_key(subject) {
         return Err(format!(
             "'{subject}' is not a current member of KB '{kb_id}'"
         ));
@@ -922,20 +909,13 @@ async fn kb_member_epoch(
     principal: &str,
 ) -> u64 {
     match doc_store.kb_anchor(kb_id).await {
-        Some(anchor) if coll.oplog_head().is_some() => {
-            let ops = coll.oplog_ops();
-            let governance = derive_governance(&ops, &anchor);
-            derive_valid_members_governed(
-                &ops,
-                &anchor,
-                now_unix(),
-                governance,
-                &doc_store.membership_view_for(kb_id).await,
-            )
+        Some(anchor) if coll.oplog_head().is_some() => doc_store
+            .derived_membership(kb_id, coll, &anchor, now_unix())
+            .await
+            .members
             .get(principal)
             .map(|m| m.epoch)
-            .unwrap_or(0)
-        }
+            .unwrap_or(0),
         _ => coll.epoch_of(principal),
     }
 }
@@ -1009,22 +989,16 @@ async fn kb_access(
             // co-signed removals (and an Owner removed by quorum loses access here)
             // exactly as every honest peer derives it. `SingleOwner` (the default)
             // reduces to the prior single-author rule.
-            // PERF(#247): this full op-log decode + governance + membership derive runs on EVERY
-            // anchored/E2E access check (7+ call sites), cost scaling with membership-churn.
-            // Workstream B / ADR-042 add a derive cache keyed on the op-log state-vector so an
-            // unchanged op-log is O(1) here. Correctness invariant for that cache: it must never
-            // serve a stale membership that admits a removed member or misses a rotation.
-            let ops = coll.oplog_ops();
-            let governance = derive_governance(&ops, &anchor);
-            derive_valid_members_governed(
-                &ops,
-                &anchor,
-                now_unix(),
-                governance,
-                &doc_store.membership_view_for(kb_id).await,
-            )
-            .get(principal)
-            .map(|m| m.role)
+            // ADR-042 (#247): membership derivation is memoized in `derived_membership` — an
+            // unchanged op-log (state-vector) + anchor + timebox horizon returns the cached set
+            // without re-decoding the whole op-log. This gate runs on every anchored/E2E access;
+            // the cache is what keeps it O(1) at membership-churn scale.
+            doc_store
+                .derived_membership(kb_id, &coll, &anchor, now_unix())
+                .await
+                .members
+                .get(principal)
+                .map(|m| m.role)
         }
         _ => coll.role_of(principal),
     };
@@ -1086,19 +1060,13 @@ async fn current_member_set(
     coll: &KbCollectionDoc,
 ) -> std::collections::BTreeSet<String> {
     match doc_store.kb_anchor(kb_id).await {
-        Some(anchor) if coll.oplog_head().is_some() => {
-            let ops = coll.oplog_ops();
-            let governance = derive_governance(&ops, &anchor);
-            derive_valid_members_governed(
-                &ops,
-                &anchor,
-                now_unix(),
-                governance,
-                &doc_store.membership_view_for(kb_id).await,
-            )
-            .into_keys()
-            .collect()
-        }
+        Some(anchor) if coll.oplog_head().is_some() => doc_store
+            .derived_membership(kb_id, coll, &anchor, now_unix())
+            .await
+            .members
+            .keys()
+            .cloned()
+            .collect(),
         _ => coll
             .member_roles()
             .into_iter()
