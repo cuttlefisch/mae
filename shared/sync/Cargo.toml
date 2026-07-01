@@ -20,7 +20,7 @@ rand = "0.10" # #72: unpredictable authorization-epoch tokens (fresh_epoch_token
 # — they share curve25519-dalek 4, so no duplicate curve arithmetic. The wrap key is
 # derived from the X25519 ECDH secret with sha2 (already vendored) — no `hkdf` crate,
 # which would pull a second `digest` major and break the #98 crypto coherence.
-chacha20poly1305 = "0.10" # XChaCha20-Poly1305 AEAD (content + key-wrap)
+chacha20poly1305 = "0.11" # XChaCha20-Poly1305 AEAD (content + key-wrap)
 x25519-dalek = { version = "2", features = ["static_secrets"] } # ECDH for key wrap
 curve25519-dalek = "4" # Ed25519->X25519 public conversion (Edwards->Montgomery)
 # #156 F9: zeroize key material on drop (ContentKey + DH/scalar intermediates). Same
