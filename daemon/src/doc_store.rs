@@ -196,6 +196,13 @@ impl DocStore {
     /// (invalidated on block/unblock), and time (via `valid_until`) — so it can never serve a
     /// membership that a fresh derive would not (no stale admit of a removed member / missed
     /// rotation / expired timebox).
+    ///
+    // KLUDGE(#247, Checkpoint-1): the `MembershipView` this derive consumes currently depends ONLY
+    // on the local blocklist (invalidated explicitly on block/unblock) — `cascade` is hardcoded to
+    // the `PendingOnly` default. If `membership_view_for` ever gains another MUTABLE per-KB input
+    // (e.g. a configurable inviter-removal cascade), that input MUST be added to the cache key OR
+    // trigger `invalidate_derive_cache`, or the cache will silently serve stale membership. This
+    // guard exists because the review found it: not a bug today, a trap for a future change.
     pub async fn derived_membership(
         &self,
         kb_id: &str,
