@@ -656,6 +656,31 @@ async fn establish_p2p_share(
         if let Some(p) = policy {
             coll.set_join_policy(p);
         }
+        // ADR-043: seed the SIGNED owner-genesis so a fresh mesh share anchors membership + E2E
+        // key-derivation identically to the hub `kb/share` path (collab_handler.rs "Seed the
+        // genesis owner self-admit"). Without it the collection is roster-only — not
+        // peer-verifiable and not E2E-capable (`derive_valid_members` / `find_wrapped_content_key`
+        // have no anchor). Closes the #237 p2p-no-genesis gap. `to_collection` / `new` produce an
+        // empty op-log, so this always fires on a fresh share.
+        if coll.oplog_head().is_none() {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let g = coll.build_membership_op(
+                kb_id,
+                mae_sync::membership::MembershipAction::Admit,
+                &owner_fp,
+                Some(mae_sync::kb::Role::Owner),
+                true,
+                &owner_fp,
+                now,
+                None,
+                0,
+            );
+            let gsig = g.sign(&owner.secret_bytes());
+            coll.append_signed_op(&g, &gsig, &owner.public().to_bytes());
+        }
         doc_store
             .share_doc(&collection_doc, &coll.encode_state())
             .await
@@ -1029,6 +1054,45 @@ mod tests {
         assert_eq!(coll.transport_policy(), TransportPolicy::Both);
         assert!(coll.transport_policy().allows(Transport::P2p));
         assert!(coll.transport_policy().allows(Transport::Hub));
+    }
+
+    /// ADR-043 (#237, #182) — a fresh P2P mesh share must seed a SIGNED owner-genesis, not a
+    /// roster-only manifest, so the collection is peer-verifiable + E2E key-derivation capable
+    /// (the whole reason E2E-on-mesh was previously impossible). Proves the owner derives from
+    /// the signed op-log anchored on its own key.
+    #[tokio::test]
+    async fn share_kb_seeds_a_signed_owner_genesis_so_the_collection_is_anchorable() {
+        use mae_sync::kb::{KbCollectionDoc, Role};
+        use mae_sync::membership::derive_valid_members;
+        let (state, owner) = share_kb_state();
+        dispatch(
+            "p2p/share_kb",
+            json!({"kb_id": "concept:x", "policy": "permissive"}),
+            &state,
+        )
+        .await
+        .unwrap();
+        let doc_store = state.lock().await.doc_store.clone().unwrap();
+        let (bytes, _sv) = doc_store
+            .encode_state_and_sv("kbc:concept:x")
+            .await
+            .unwrap();
+        let coll = KbCollectionDoc::from_bytes(&bytes).unwrap();
+
+        // The share carries a signed op-log genesis (not roster-only).
+        assert!(
+            coll.oplog_head().is_some(),
+            "a fresh mesh share must seed a signed op-log genesis"
+        );
+        // The genesis anchors membership derivation on the owner's key — so the collection is
+        // peer-verifiable (ADR-026) and E2E-anchorable (ADR-037 `find_wrapped_content_key`).
+        let members =
+            derive_valid_members(&coll.oplog_ops(), &owner.public().to_bytes(), 9_999_999_999);
+        assert_eq!(
+            members.get(&owner.fingerprint()).map(|m| m.role),
+            Some(Role::Owner),
+            "the seeded genesis makes the owner derivable as Owner from the signed op-log"
+        );
     }
 
     #[tokio::test]
