@@ -32,11 +32,26 @@ fn coll_path(dir: &Path, kb_id: &str) -> PathBuf {
 
 /// Persist `kb_id`'s collection op-log bytes (`0600` in a `0700` dir, created if needed).
 /// Overwrites any prior snapshot — the caller passes the latest full collection state.
+///
+/// **Crash-atomic.** The prior in-place `fs::write` could leave a truncated/corrupt op-log if
+/// the process died mid-write — and this store is a member's *only* copy of the op-log it needs
+/// to author a recovery `Rebind` (a non-member can't re-fetch it from the daemon). So we write
+/// to a sibling temp on the SAME dir (same filesystem ⇒ `rename` is atomic), fsync it, then
+/// rename over the target. A crash can only leave a stale `.tmp` (ignored by `load`/`load_all`,
+/// which read only `.kbc`) — never a corrupt op-log at the real path.
 pub fn save(dir: &Path, kb_id: &str, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
     std::fs::create_dir_all(dir)?;
     secure_dir(dir);
     let path = coll_path(dir, kb_id);
-    std::fs::write(&path, bytes)?;
+    let tmp = path.with_extension("kbc.tmp");
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        secure_file(&tmp);
+        f.write_all(bytes)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, &path)?;
     secure_file(&path);
     Ok(())
 }
@@ -172,6 +187,32 @@ mod tests {
             vec![("real".to_string(), b"ok".to_vec())],
             "only well-formed .kbc files with hex-decodable stems are loaded"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_is_atomic_a_stale_tmp_never_shadows_the_committed_op_log() {
+        let dir = tmp("atomic");
+        let _ = std::fs::remove_dir_all(&dir);
+        // Commit a real snapshot.
+        save(&dir, "kbA", b"committed-v1").unwrap();
+        // Simulate a crash DURING a later save: a leftover temp sibling with garbage. It must
+        // never be surfaced by load / load_all, and must not disturb the committed op-log.
+        let tmp_sibling = coll_path(&dir, "kbA").with_extension("kbc.tmp");
+        std::fs::write(&tmp_sibling, b"torn-write-garbage").unwrap();
+        assert_eq!(
+            load(&dir, "kbA").as_deref(),
+            Some(&b"committed-v1"[..]),
+            "the committed op-log is intact despite a stale .tmp"
+        );
+        assert_eq!(
+            load_all(&dir),
+            vec![("kbA".to_string(), b"committed-v1".to_vec())],
+            "load_all ignores the .tmp and returns only the committed .kbc"
+        );
+        // A subsequent successful save commits the new bytes atomically (rename over target).
+        save(&dir, "kbA", b"committed-v2").unwrap();
+        assert_eq!(load(&dir, "kbA").as_deref(), Some(&b"committed-v2"[..]));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

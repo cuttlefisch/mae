@@ -1187,8 +1187,22 @@ async fn verify_member_self_service_update(
     let before_ops = before.oplog_ops();
     let before_hashes: HashSet<String> = before_ops.iter().map(|o| o.chain_hash()).collect();
     let registry = recovery_registry(&before_ops);
-    let new_ops: Vec<_> = after
-        .oplog_ops()
+    let after_ops = after.oplog_ops();
+    let after_hashes: HashSet<String> = after_ops.iter().map(|o| o.chain_hash()).collect();
+    // The membership op-log is APPEND-ONLY: for an anchored/E2e KB the authoritative
+    // membership + governance + encryption are DERIVED from it (not the manifest roster this
+    // gate pins), so a self-service update must never DELETE a pre-existing op. Without this,
+    // a member could ride a valid self-`Rebind` while dropping a co-member's `Admit`, the
+    // owner's `SetEncryption("e2e")` (an ADR-039 anti-downgrade attack), or the genesis (DoS)
+    // — none of which touch the pinned manifest fields. Reject any update that loses a prior op.
+    if !before_hashes.is_subset(&after_hashes) {
+        return Err(
+            "a member self-service update may not remove or rewrite any existing membership \
+             op — the op-log is append-only"
+                .to_string(),
+        );
+    }
+    let new_ops: Vec<_> = after_ops
         .into_iter()
         .filter(|o| !before_hashes.contains(&o.chain_hash()))
         .collect();
@@ -1303,6 +1317,39 @@ async fn deny_collection_smuggling(
     }
 }
 
+/// Complete-mediation for RAW doc READS (`sync/full_state`, `sync/state_vector`). These
+/// generic sync methods otherwise return a doc's yrs state for ANY caller-supplied name,
+/// bypassing the `kb_access(Read)` gate that `kb/node_fetch`/`kb/join` enforce — a
+/// confidentiality hole (a non-member could pull `kb:<node>` plaintext, or `kbc:<kb>` =
+/// the roster + pending join pubkeys + node manifest). So: a `kbc:` collection doc is gated
+/// on `Read` (members only); a `kb:` node doc is DENIED on this raw path — content is fetched
+/// via the access-gated `kb/node_fetch`. Non-KB docs (text buffers / session docs) keep their
+/// existing behavior. Fail-closed. The editor only force-syncs BUFFER docs here, so gating KB
+/// docs breaks no legitimate flow (KB sync uses `kb/join` + `kb/node_fetch`).
+async fn deny_kb_doc_read(
+    doc_store: &DocStore,
+    doc_name: &str,
+    principal: Option<&str>,
+    transport: Transport,
+) -> Result<(), String> {
+    if let Some(kb_id) = doc_name.strip_prefix("kbc:") {
+        match kb_access(doc_store, kb_id, principal, KbOp::Read, transport).await? {
+            AccessDecision::Allow => Ok(()),
+            _ => Err(format!(
+                "not authorized to read the collection doc for KB '{kb_id}' (members only)"
+            )),
+        }
+    } else if doc_name.starts_with("kb:") {
+        Err(
+            "KB node content must be fetched via the access-gated `kb/node_fetch`, \
+             not the raw `sync/full_state` / `sync/state_vector` path"
+                .to_string(),
+        )
+    } else {
+        Ok(())
+    }
+}
+
 /// Handle document-level methods directly (without editor tool dispatch).
 /// `auth_principal` (key fingerprint / psk:<keyid>) is the authoritative subject
 /// for KB access control (ADR-018); `auth_label` is display/attribution only.
@@ -1336,6 +1383,12 @@ async fn handle_doc_request_inner(
     match request.method.as_str() {
         "sync/state_vector" => {
             let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            if let Err(msg) =
+                deny_kb_doc_read(doc_store, &doc_name, auth_principal, transport).await
+            {
+                warn!(session = session_id, doc = %doc_name, reason = %msg, "sync/state_vector denied");
+                return JsonRpcResponse::error(id, McpError::internal_error(msg));
+            }
             match doc_store.state_vector(&doc_name).await {
                 Ok(sv) => {
                     let sv_b64 = update_to_base64(&sv);
@@ -1573,6 +1626,12 @@ async fn handle_doc_request_inner(
 
         "sync/full_state" => {
             let doc_name = params["doc"].as_str().unwrap_or("default").to_string();
+            if let Err(msg) =
+                deny_kb_doc_read(doc_store, &doc_name, auth_principal, transport).await
+            {
+                warn!(session = session_id, doc = %doc_name, reason = %msg, "sync/full_state denied");
+                return JsonRpcResponse::error(id, McpError::internal_error(msg));
+            }
             // Track this doc for disconnect cleanup and doc-scoped broadcast filtering.
             if session_docs.insert(doc_name.clone()) {
                 let _ = doc_store.track_client_connect(&doc_name).await;

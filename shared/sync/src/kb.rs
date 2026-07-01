@@ -1686,6 +1686,26 @@ impl KbCollectionDoc {
         txn.encode_update_v1()
     }
 
+    /// ADVERSARIAL-TEST ONLY: remove an op-log record by its `chain_hash` and return the
+    /// resulting delta. The membership op-log is APPEND-ONLY in production (no code path
+    /// deletes) — this exists so tests can construct the deletion attack the daemon's
+    /// grow-only self-service gate must reject (a member dropping a co-member's `Admit`, the
+    /// owner's `SetEncryption`, or the genesis). Safe to expose: any delta it produces is
+    /// rejected by that gate, so it cannot be used to actually mutate a shared KB.
+    #[doc(hidden)]
+    pub fn remove_oplog_op_for_test(&mut self, chain_hash: &str) -> Vec<u8> {
+        let sv = self.state_vector();
+        {
+            let root = self.doc.get_or_insert_map(COLLECTION_MAP);
+            let mut txn = self.doc.transact_mut();
+            let log = Self::oplog_map(&root, &mut txn);
+            log.remove(&mut txn, chain_hash);
+        }
+        let sv_d = yrs::StateVector::decode_v1(&sv).unwrap_or_default();
+        let txn = self.doc.transact();
+        txn.encode_state_as_update_v1(&sv_d)
+    }
+
     /// ADR-037/039: enable E2E encryption on an owned KB. Authors, in ONE combined
     /// collection delta (a state-vector diff), all of:
     /// - the **genesis owner self-admit** (the trust anchor `derive_*` require), carrying

@@ -2905,6 +2905,66 @@ mod tests {
         );
     }
 
+    /// ADR-040 #225 (confidence-review #237, E2e RE-join) — the fresh-join fix gates
+    /// local-ahead on `existed`, but a review flagged the RE-join case (`existed = true`): a
+    /// member who ALREADY holds the plaintext node reconnects and reconciles against an op-set
+    /// SV from the *disjoint* ciphertext lineage. Could the plaintext-doc-vs-op-set-SV mismatch
+    /// still spuriously push a re-seal (the #225 op a later joiner can't reconstruct)? This
+    /// pins the answer: NO — the pre-merge divergent-lineage guard fires FIRST (disjoint client
+    /// sets), classifying it `DivergentLineage` with `local_ahead = None`, so no spurious op is
+    /// authored. (A *same*-lineage reconnect that is genuinely behind still re-syncs correctly —
+    /// that is the legitimate crash-recovery path, covered by the lost-row test.)
+    #[cfg(feature = "crdt")]
+    #[test]
+    fn rejoin_with_a_disjoint_ahead_lineage_never_pushes_a_spurious_reseal() {
+        // The member already holds the plaintext node on its own lineage.
+        let member_cid: u64 = 0x0EEDBEEF;
+        let mut member = KnowledgeBase::new();
+        member
+            .upsert_with_crdt(
+                Node::new("t:n", "plain-v1", NodeKind::Note, "body"),
+                member_cid,
+            )
+            .unwrap();
+        assert!(
+            member.get("t:n").is_some(),
+            "node exists before the re-join"
+        );
+
+        // The inbound reconcile carries an op-set-shaped lineage: a DISJOINT client, and it is
+        // strictly AHEAD (extra ops) — the exact false-positive `has_ops_beyond` would trip on.
+        let opset_cid: u64 = 0x0F5E7; // distinct from member_cid ⇒ disjoint client sets
+        let mut opset = KnowledgeBase::new();
+        opset
+            .upsert_with_crdt(Node::new("t:n", "ct-a", NodeKind::Note, "x"), opset_cid)
+            .unwrap();
+        let mut n = opset.get("t:n").unwrap().clone();
+        n.title = "ct-b".to_string(); // a second op ⇒ genuinely "ahead"
+        opset.upsert_with_crdt(n, opset_cid).unwrap();
+        let opset_doc = opset.get("t:n").unwrap().to_crdt_doc().unwrap();
+        let member_sv = member.node_state_vector("t:n").unwrap();
+
+        let outcome = member
+            .reconcile_remote_node(
+                "t:n",
+                &opset_doc.encode_diff(&member_sv).unwrap(),
+                &opset_doc.state_vector(),
+            )
+            .unwrap();
+
+        assert_eq!(
+            outcome.action,
+            ReconcileAction::DivergentLineage,
+            "a disjoint ahead lineage on re-join is DivergentLineage, not a merge+push"
+        );
+        assert!(
+            outcome.local_ahead.is_none(),
+            "the RE-join must NOT push a spurious re-seal (the #225 unreconstructable op)"
+        );
+        // Divergent ⇒ local content is left untouched for the caller to adopt full state.
+        assert_eq!(member.get("t:n").unwrap().title, "plain-v1");
+    }
+
     /// ADR-022 — divergent (independently-constructed) same-id lineages are
     /// classified `DivergentLineage`, NOT silently clobbered.
     #[cfg(feature = "crdt")]
