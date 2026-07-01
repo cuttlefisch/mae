@@ -4,9 +4,46 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+> **v0.15.0 — Collaborative E2E KB Sharing.** The headline is end-to-end encrypted knowledge-base
+> sharing with a full identity lifecycle. The **mTLS hub is production-ready (GA)**; the **P2P mesh
+> ships as beta** (two-daemon convergence is CI-gated, but E2E-on-mesh and single-command mesh share
+> are follow-ups). Read [`docs/E2E_USER_GUIDE.md`](docs/E2E_USER_GUIDE.md) §7 for the honest
+> limitations (no forward secrecy / PCS, metadata is visible, at-rest keys are plaintext, key loss
+> without a backup/recovery key is unrecoverable) before relying on the encryption.
+
 ### Features
 
+- **E2E content encryption** — per-KB content key, key-blind daemon/hub/relay, transport-agnostic
+  over hub + mesh; owner-only `:kb-set-encryption <kb> e2e` (ADR-037/038/039).
+- **Identity arc (ADR-040/041)** — cross-signed key **rotation** (`:collab-rotate-identity`) and
+  **recovery** via a pre-registered offline key (`:collab-register-recovery-key` /
+  `:collab-recover-identity`), across every KB you own or belong to; published X25519 wrap key so a
+  signing-key compromise does not imply a content-key compromise. Rotation/recovery are CI-gated
+  (`MAE_E2E_ROTATE`, `MAE_E2E_RECOVER`).
+- **P2P mesh (beta)** — two-daemon iroh convergence with no central server, CI-gated by
+  `scripts/collab-p2p-mesh-e2e.sh`.
+- **Peer parity** — rotation/recovery are first-class across the human command, Scheme, and MCP
+  surfaces (`collab_rotate_identity` / `collab_register_recovery_key` / `collab_recover_identity`).
 - E2E enable flow — owner key lifecycle, daemon key-blind (ADR-037/038/039, #151 Phase 3b PR A) (#160) ([8dc9cc9](https://github.com/cuttlefisch/mae/commit/8dc9cc9813a04bff1551c55fc48c85b16cf3ffe8))
+
+### Security
+
+- **Append-only membership op-log gate (A1)** — the daemon's member self-service write gate now
+  rejects any update that deletes a prior op, closing an ADR-039 encryption-downgrade / co-member
+  eviction vector.
+- **Access-gated raw sync reads (A3)** — `sync/full_state` / `sync/state_vector` now enforce
+  `kb_access(Read)` on KB docs, so a non-member can no longer pull node plaintext or the roster +
+  pending-join pubkeys via the generic sync path.
+- **Crash-atomic collection op-log persistence (A2)** — a member's recovery-critical op-log is now
+  written temp+fsync+rename, so a crash cannot corrupt it.
+- The `collab / docker e2e` gate set (mTLS + membership + encrypted + removal + rotate + recover +
+  mesh) is now a **required** branch-protection check.
+
+### Documentation
+
+- New [`docs/E2E_USER_GUIDE.md`](docs/E2E_USER_GUIDE.md) (enable / members / rotate / recover +
+  honest limitations) and [`docs/RELEASING.md`](docs/RELEASING.md); in-editor `concept:kb-sharing`
+  covers the E2E/rotation/recovery/mesh material.
 
 ## [0.14.14] - 2026-06-27
 
