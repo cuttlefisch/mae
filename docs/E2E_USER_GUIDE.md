@@ -136,10 +136,9 @@ What it does, in order:
 > required"). With `collab-fence-resolution=auto` (the default advisory) it re-authors transparently;
 > otherwise re-issue the edit.
 
-**Known v1-scope limits** (tracked, see §7): if you are an **owner** and you rotate, then a
-*member* rotates afterward, the member's new key is not yet reactively re-wrapped — have that member
-rotate again once your rotation has settled, or re-add them. Chained/single rotations otherwise
-converge and are CI-gated (`MAE_E2E_ROTATE`).
+Rotations compose: chained rotations, an owner rotating, and a member rotating **after** the owner
+has itself rotated all converge — the owner reactively re-wraps the content key to a rotated
+member's new key regardless of whether the owner has rotated first. CI-gated (`MAE_E2E_ROTATE`).
 
 ---
 
@@ -239,7 +238,6 @@ It is deliberately *not* more than that. Be honest with yourself about the bound
 **v0.15 scope limits (tracked, being tightened):**
 - **E2E on the P2P mesh** is not yet anchored end-to-end — enable E2E on the **hub**. Mesh ships as
   beta for *non*-E2E sharing.
-- **Owner-rotate-then-member-rotate** does not reactively re-wrap the member (§4 workaround).
 - **Joining after a removal + rotation** cannot decrypt ops sealed before you had access.
 
 If your threat model needs metadata privacy, insider protection, or forward secrecy, MAE's E2E is
