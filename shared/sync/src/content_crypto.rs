@@ -24,7 +24,7 @@
 //! `payload` is opaque bytes — it transparently holds ciphertext, no struct change.
 
 use chacha20poly1305::aead::Aead;
-use chacha20poly1305::{Key, KeyInit, XChaCha20Poly1305, XNonce};
+use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
 use sha2::{Digest, Sha256, Sha512};
 use x25519_dalek::{PublicKey as XPublicKey, StaticSecret};
 use zeroize::{Zeroize, ZeroizeOnDrop};
@@ -83,10 +83,11 @@ pub enum CryptoError {
 /// random nonce per call** (XChaCha20's 24-byte nonce makes random nonces safe), so
 /// encrypting the same plaintext twice yields distinct ciphertexts.
 pub fn encrypt(key: &ContentKey, plaintext: &[u8]) -> Vec<u8> {
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(&key.0));
+    let cipher =
+        XChaCha20Poly1305::new_from_slice(&key.0).expect("ContentKey is exactly KEY_LEN bytes");
     let nonce = rand::random::<[u8; NONCE_LEN]>();
     let ciphertext = cipher
-        .encrypt(XNonce::from_slice(&nonce), plaintext)
+        .encrypt(&XNonce::from(nonce), plaintext)
         .expect("XChaCha20-Poly1305 encryption is infallible for valid keys");
     let mut out = Vec::with_capacity(NONCE_LEN + ciphertext.len());
     out.extend_from_slice(&nonce);
@@ -101,9 +102,14 @@ pub fn decrypt(key: &ContentKey, blob: &[u8]) -> Result<Vec<u8>, CryptoError> {
         return Err(CryptoError::Malformed);
     }
     let (nonce, ciphertext) = blob.split_at(NONCE_LEN);
-    let cipher = XChaCha20Poly1305::new(Key::from_slice(&key.0));
+    let cipher =
+        XChaCha20Poly1305::new_from_slice(&key.0).expect("ContentKey is exactly KEY_LEN bytes");
+    // `blob.len() >= NONCE_LEN` is checked above, so this slice is exactly NONCE_LEN bytes.
+    // Convert slice → fixed array (std) → XNonce::from(array): works across the
+    // chacha20poly1305 GenericArray→hybrid_array transition (avoids the deprecated from_slice).
+    let nonce: [u8; NONCE_LEN] = nonce.try_into().map_err(|_| CryptoError::Malformed)?;
     cipher
-        .decrypt(XNonce::from_slice(nonce), ciphertext)
+        .decrypt(&XNonce::from(nonce), ciphertext)
         .map_err(|_| CryptoError::Decrypt)
 }
 
