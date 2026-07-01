@@ -2422,7 +2422,18 @@ async fn kb_node_update_survives_daemon_restart() {
     let bc2 = test_broadcaster();
     let mut bob = Client::connect(Arc::clone(&store2), Arc::clone(&bc2)).await;
 
-    let recovered = bob.full_state("kb:durkb:n1").await;
+    // Read the recovered node through the access-gated `kb/join` path — a joining member
+    // pulls full per-node state (raw `sync/full_state` on a `kb:` doc is now denied, A3
+    // confidence-review gate; real KB reads always go through `kb/join` + `kb/node_fetch`).
+    // This exercises recovery MORE thoroughly: both `kbc:durkb` (policy) and `kb:durkb:n1`
+    // must survive the WAL restart for the join to return the node.
+    let join = bob.kb_join("durkb").await;
+    assert!(
+        join.get("error").is_none(),
+        "join after restart failed: {join}"
+    );
+    let recovered =
+        base64_to_update(join["result"]["nodes"][0]["state"].as_str().unwrap()).unwrap();
     let node2 = mae_sync::kb::KbNodeDoc::from_bytes(&recovered).unwrap();
     assert_eq!(
         node2.title(),
