@@ -16,6 +16,15 @@ Work through these lessons to learn the essentials.\n\n\
 11. [[lesson:debugging|Debugging]] — DAP, breakpoints, stepping, inspect\n\
 12. [[lesson:observability|Observability]] — watchdog, event recording, introspect\n\
 13. [[lesson:collab-setup|Collaborative Editing]] — share buffers in real-time\n\n\
+## Sharing a Knowledge Base (E2E)\n\
+- [[lesson:kb-set-encryption|Enabling E2E Encryption]] — owner-only, per-KB\n\
+- [[lesson:kb-join-encrypted|Joining an Encrypted KB]] — get admitted + decrypt\n\
+- [[lesson:kb-manage-members|Managing Members & Roles]] — add/remove/approve, policy\n\
+- [[lesson:collab-rotate-identity|Rotating Your Identity Key]] — move to a fresh key\n\
+- [[lesson:collab-register-recovery-key|Registering a Recovery Key]] — before you need it\n\
+- [[lesson:collab-recover-identity|Recovering a Lost Identity]] — restore access\n\
+- [[lesson:kb-share-p2p|Sharing over P2P]] — mesh, no hub (beta)\n\
+- [[concept:kb-e2e-security-boundaries|What E2E does NOT protect]] — the honest limits\n\n\
 Navigate with **Tab** to move between links, **Enter** to follow.\n\
 **C-o** goes back, **C-i** goes forward.\n\n\
 See also: [[index|Help Index]]\n";
@@ -621,3 +630,229 @@ plaintext config (`collab-psk-command`). For untrusted networks, use a VPN \
 **Index:** [[tutor:index|Tutorial]]\n\n\
 See also: [[concept:collab-architecture]], [[concept:collab-workflows]], \
 [[concept:sync-engine]], [[index]]\n";
+
+// --- E2E KB-sharing workflow lessons (Workstream F, #250) ---
+// Each is a followable step-by-step workflow ending in a Verify step, naming
+// ONLY registered commands/options (enforced by the verifiable-docs guard in
+// mod.rs, `kb_sharing_lessons_name_only_real_commands`).
+
+pub(super) const LESSON_KB_SET_ENCRYPTION: &str = "\
+## Enabling E2E Encryption on a KB\n\n\
+End-to-end encryption is [[concept:kb-e2e-security-boundaries|owner-only]], \
+per-KB, and one-way — once on, it stays on. A per-KB content key is sealed to \
+each member's X25519 wrap key; the daemon, hub, and any relay see only \
+ciphertext (XChaCha20-Poly1305).\n\n\
+### Steps\n\
+1. Share the KB (creates it as a collaborative collection):\n\
+   `:kb-share my-kb`\n\
+2. Set the join policy to **invite** — `permissive` admits keyless members and \
+is incompatible with E2E:\n\
+   `:kb-set-policy my-kb invite`\n\
+3. Turn on encryption. This records a signed SetEncryption op and re-seals the \
+content key to every current member:\n\
+   `:kb-set-encryption my-kb e2e`\n\n\
+Members are named by key **fingerprint** (e.g. `SHA256:abc123…`), never by \
+username. Adding a member re-seals the key to them; removing one rotates the \
+key (new epoch) so future ops are sealed anew.\n\n\
+> Note: enable E2E on the **hub**, not the mesh. See \
+[[lesson:kb-share-p2p|Sharing over P2P]] for the current mesh limitation.\n\n\
+### Verify\n\
+Run `:kb-sharing-status` and confirm `my-kb` shows encryption **e2e** and \
+policy **invite**. The status snapshot lists each member fingerprint with a \
+sealed content key.\n\n\
+**See also:** [[concept:kb-e2e-security-boundaries|What E2E does NOT protect]]\n\n\
+**Prev:** [[tutor:index|Tutorial]]  |  \
+**Next:** [[lesson:kb-join-encrypted|Joining an Encrypted KB]]  |  \
+**Index:** [[tutor:index|Tutorial]]\n";
+
+pub(super) const LESSON_KB_JOIN_ENCRYPTED: &str = "\
+## Joining an Encrypted KB\n\n\
+To read an [[lesson:kb-set-encryption|encrypted KB]] you must be admitted by \
+the owner. Your published X25519 wrap key lets the owner seal the content key \
+to you — without it you can join the roster but cannot decrypt.\n\n\
+### Steps\n\
+1. Make sure you are connected to the daemon hosting the KB:\n\
+   `:collab-connect`\n\
+2. Give the owner your identity fingerprint (`SHA256:…`) out-of-band. Find it \
+in the sharing status of any KB you own, or ask the owner to read it from a \
+pending request.\n\
+3. Request to join:\n\
+   `:kb-join my-kb`\n\
+4. Wait for the owner to approve you as a role (`:kb-approve`). On approval the \
+owner re-seals and you receive the content key automatically.\n\n\
+If decryption is not yet available after joining, confirm the owner approved \
+you *after* E2E was enabled — a stale approval leaves you keyless.\n\n\
+### Verify\n\
+Run `:kb-sharing-status` and confirm `my-kb` lists your fingerprint with a \
+role (owner/editor/viewer) and that node contents render as plaintext, not \
+ciphertext. `:collab-status` should show the KB as synced.\n\n\
+**See also:** [[concept:kb-e2e-security-boundaries|What E2E does NOT protect]]\n\n\
+**Prev:** [[lesson:kb-set-encryption|Enabling E2E Encryption]]  |  \
+**Next:** [[lesson:kb-manage-members|Managing Members & Roles]]  |  \
+**Index:** [[tutor:index|Tutorial]]\n";
+
+pub(super) const LESSON_KB_MANAGE_MEMBERS: &str = "\
+## Managing Members & Roles\n\n\
+Roles nest: **owner ⊇ editor ⊇ viewer**. Only the owner can change membership. \
+Every member is named by key **fingerprint** (`SHA256:…`), not username.\n\n\
+### Add a member\n\
+1. Get the peer's fingerprint out-of-band.\n\
+2. Add them:\n\
+   `:kb-add-member my-kb SHA256:abc123… editor`\n\
+   On an encrypted KB this re-seals the content key to their wrap key.\n\n\
+### Approve a pending request\n\
+1. List who is waiting:\n\
+   `:kb-pending my-kb`\n\
+2. Approve as a role:\n\
+   `:kb-approve my-kb SHA256:def456… viewer`\n\n\
+### Remove a member\n\
+`:kb-remove-member my-kb SHA256:abc123…`\n\
+Removal **rotates the content key** (a new epoch): future ops are sealed to the \
+remaining members only. It does NOT retroactively protect history already \
+sealed under the old key.\n\n\
+### Set the join policy\n\
+`:kb-set-policy my-kb invite`  — one of `restrictive` | `invite` | \
+`permissive`. Use **invite** with E2E; `permissive` admits keyless members and \
+is incompatible with encryption.\n\n\
+### Verify\n\
+Run `:kb-sharing-status` and confirm the member list, each fingerprint's role, \
+the policy, and (after a removal) an incremented epoch.\n\n\
+**See also:** [[concept:kb-e2e-security-boundaries|What E2E does NOT protect]]\n\n\
+**Prev:** [[lesson:kb-join-encrypted|Joining an Encrypted KB]]  |  \
+**Next:** [[lesson:collab-rotate-identity|Rotating Your Identity Key]]  |  \
+**Index:** [[tutor:index|Tutorial]]\n";
+
+pub(super) const LESSON_COLLAB_ROTATE_IDENTITY: &str = "\
+## Rotating Your Identity Key\n\n\
+Your identity is a single 32-byte Ed25519 seed at \
+`~/.local/share/mae/collab/id_ed25519` (mode 0600). Rotation cross-signs a \
+successor: the old key endorses the new one, so peers can verify continuity \
+across the change.\n\n\
+### Steps\n\
+1. While your current identity is healthy, rotate:\n\
+   `:collab-rotate-identity`\n\
+   This mints a new seed, cross-signs it with the old key, and records the \
+rebind.\n\
+2. Your **node-id changes**. Authorize the new key on the daemon \
+**out-of-band** (add its fingerprint to the daemon's trusted peers).\n\
+3. Reconnect:\n\
+   `:collab-disconnect` then `:collab-connect`\n\
+4. Make your first edit. Rotation trips the **epoch fence once** — the first \
+post-rotation op is fenced, then normal sync resumes.\n\n\
+> Register a [[lesson:collab-register-recovery-key|recovery key]] BEFORE you \
+need it — there is no server copy and no password reset.\n\n\
+### Verify\n\
+Run `:collab-doctor` and confirm the new fingerprint is authorized and \
+connected. `:collab-status` should show your peer as active under the new \
+node-id.\n\n\
+**Prev:** [[lesson:kb-manage-members|Managing Members & Roles]]  |  \
+**Next:** [[lesson:collab-register-recovery-key|Registering a Recovery Key]]  |  \
+**Index:** [[tutor:index|Tutorial]]\n";
+
+pub(super) const LESSON_COLLAB_REGISTER_RECOVERY_KEY: &str = "\
+## Registering a Recovery Key\n\n\
+There is no password reset and no server-side copy of your identity. If you \
+lose `~/.local/share/mae/collab/id_ed25519` without a backup or recovery key, \
+it is **unrecoverable**. Register a recovery key WHILE HEALTHY.\n\n\
+### Steps\n\
+1. Back up your primary seed to a safe, offline location first.\n\
+2. Register an offline recovery key:\n\
+   `:collab-register-recovery-key`\n\
+   This writes `~/.local/share/mae/collab/recovery/id_ed25519` and cross-signs \
+it with your primary so it can later author a recovery rebind.\n\
+3. **Move the recovery key OFFLINE** — copy it to removable media or a secrets \
+vault, then delete the on-disk copy. At-rest keys are protected by file perms \
+only, so an online recovery key is as exposed as the primary.\n\n\
+Note your current identity **fingerprint** (`SHA256:…`) and store it alongside \
+the recovery key — you will need it to recover.\n\n\
+### Verify\n\
+Run `:collab-doctor` and confirm it reports a registered recovery key. Then \
+confirm `~/.local/share/mae/collab/recovery/id_ed25519` exists before you move \
+it offline.\n\n\
+**Prev:** [[lesson:collab-rotate-identity|Rotating Your Identity Key]]  |  \
+**Next:** [[lesson:collab-recover-identity|Recovering a Lost Identity]]  |  \
+**Index:** [[tutor:index|Tutorial]]\n";
+
+pub(super) const LESSON_COLLAB_RECOVER_IDENTITY: &str = "\
+## Recovering a Lost Identity\n\n\
+If your primary seed is lost, a [[lesson:collab-register-recovery-key|recovery \
+key registered while healthy]] can author a recovery-signed rebind onto a fresh \
+primary — no server, no password reset.\n\n\
+### Steps\n\
+1. Bring your offline recovery key back online at \
+`~/.local/share/mae/collab/recovery/id_ed25519` (or note the directory it \
+lives in).\n\
+2. Recover, passing the recovery directory and your **old fingerprint**:\n\
+   `:collab-recover-identity ~/.local/share/mae/collab/recovery SHA256:abc123…`\n\
+   This generates a fresh primary seed and records a recovery-signed rebind \
+that peers verify against the old key.\n\
+3. Your node-id is new — authorize it on the daemon **out-of-band**, then \
+reconnect:\n\
+   `:collab-disconnect` then `:collab-connect`\n\
+4. Your first edit trips the **epoch fence once**, then sync resumes.\n\n\
+> After recovering, move the recovery key back offline and consider \
+registering a new one.\n\n\
+### Verify\n\
+Run `:collab-doctor` and confirm the rebind chains from your old fingerprint to \
+the new key and that you are connected. `:collab-status` should show your peer \
+active again.\n\n\
+**Prev:** [[lesson:collab-register-recovery-key|Registering a Recovery Key]]  |  \
+**Next:** [[lesson:kb-share-p2p|Sharing a KB over P2P]]  |  \
+**Index:** [[tutor:index|Tutorial]]\n";
+
+pub(super) const LESSON_KB_SHARE_P2P: &str = "\
+## Sharing a KB over P2P (beta)\n\n\
+P2P mesh sharing lets peers sync a KB directly with **no central hub**. This \
+ships **beta**.\n\n\
+### Steps (owner)\n\
+1. Share the KB normally first:\n\
+   `:kb-share my-kb`\n\
+2. Publish a mesh ticket:\n\
+   `:kb-share-p2p my-kb`\n\
+   This prints a `mae://join/…` ticket. Send it to your peer out-of-band.\n\n\
+### Steps (peer)\n\
+1. Join with the ticket:\n\
+   `:kb-join-p2p mae://join/…`\n\
+2. The owner authorizes your fingerprint, and the KB converges over the mesh.\n\n\
+### Encryption caveat\n\
+E2E content **seals over the mesh** and relaying daemons are **key-blind** \
+(ciphertext only). BUT a member who joins *over the mesh* **cannot decrypt \
+yet** — this is a tracked gap. For encrypted KBs, enable E2E on the **hub** and \
+admit members there (see [[lesson:kb-set-encryption|Enabling E2E]]).\n\n\
+### Verify\n\
+On both peers run `:kb-sharing-status` and confirm `my-kb` lists the same \
+members. `:kb-list-remote` should show the KB, and edits on one peer should \
+appear on the other via `:collab-status`.\n\n\
+**See also:** [[concept:kb-e2e-security-boundaries|What E2E does NOT protect]]\n\n\
+**Prev:** [[lesson:collab-recover-identity|Recovering a Lost Identity]]  |  \
+**Next:** [[tutor:index|Tutorial]]  |  \
+**Index:** [[tutor:index|Tutorial]]\n";
+
+pub(super) const CONCEPT_KB_E2E_SECURITY_BOUNDARIES: &str = "\
+## What E2E Encryption Does NOT Protect\n\n\
+[[lesson:kb-set-encryption|E2E encryption]] hides node **content** from the \
+daemon, hub, and relays. It does not hide everything. Know the boundaries \
+before you rely on it.\n\n\
+### Metadata is visible\n\
+Membership, roles, authorship, op sizes, timing, and the link-graph shape are \
+**not** encrypted. An observer of the daemon can see who is in a KB, who wrote \
+when, and how big each change was — just not the plaintext.\n\n\
+### Insiders can leak\n\
+E2E defends against outsiders and key-blind relays, not members. **Any current \
+member** can read and re-publish the plaintext. Trust is bounded by your \
+[[lesson:kb-manage-members|member list]].\n\n\
+### No forward secrecy / post-compromise security\n\
+There is no ratchet. A leaked content key exposes **all history sealed under \
+it**. Removing a member re-keys **forward only** — it does not protect ops \
+already sealed under the old epoch.\n\n\
+### Keys are plaintext at rest\n\
+Your identity seed (`~/.local/share/mae/collab/id_ed25519`) and any online \
+recovery key are protected by **file permissions only** (0600), not a \
+passphrase. Anyone who reads the file is you.\n\n\
+### Key loss is fatal\n\
+No server copy, no password reset. Losing your seed without a backup or a \
+registered [[lesson:collab-register-recovery-key|recovery key]] is \
+**unrecoverable**.\n\n\
+**See also:** [[lesson:kb-set-encryption|Enabling E2E Encryption]]  |  \
+[[lesson:kb-manage-members|Managing Members & Roles]]\n\n\
+**Index:** [[tutor:index|Tutorial]]\n";

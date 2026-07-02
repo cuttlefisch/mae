@@ -3911,20 +3911,20 @@
       "doc": "Enable E2E content encryption on an owned KB (:kb-set-encryption <kb> e2e)"
     },
     {
-      "name": "kb-member-add",
-      "doc": "Add a member to a KB by fingerprint (:kb-member-add <kb> <fp> [role])"
+      "name": "kb-add-member",
+      "doc": "Add a member to a KB by fingerprint (:kb-add-member <kb> <fp> [role])"
     },
     {
-      "name": "kb-member-remove",
-      "doc": "Remove a member from a KB (:kb-member-remove <kb> <fp>)"
+      "name": "kb-remove-member",
+      "doc": "Remove a member from a KB (:kb-remove-member <kb> <fp>)"
     },
     {
-      "name": "kb-member-block",
-      "doc": "Locally block a principal on a KB — self-protection, ADR-039 (:kb-member-block <kb> <fp>)"
+      "name": "kb-block-member",
+      "doc": "Locally block a principal on a KB — self-protection, ADR-039 (:kb-block-member <kb> <fp>)"
     },
     {
-      "name": "kb-member-unblock",
-      "doc": "Unblock a locally-blocked principal (:kb-member-unblock <kb> <fp>)"
+      "name": "kb-unblock-member",
+      "doc": "Unblock a locally-blocked principal (:kb-unblock-member <kb> <fp>)"
     },
     {
       "name": "kb-approve",
@@ -3935,12 +3935,20 @@
       "doc": "List pending join requests for a KB (:kb-pending <kb>)"
     },
     {
-      "name": "kb-policy",
-      "doc": "Set a KB's join policy: restrictive | invite | permissive (:kb-policy <kb> <policy>)"
+      "name": "kb-set-policy",
+      "doc": "Set a KB's join policy: restrictive | invite | permissive (:kb-set-policy <kb> <policy>)"
     },
     {
       "name": "kb-list-remote",
       "doc": "List KBs shared on the connected daemon (:kb-list-remote)"
+    },
+    {
+      "name": "kb-sharing",
+      "doc": "Open the *KB Sharing* management buffer (members, roles, policy, pending)"
+    },
+    {
+      "name": "kb-sharing-status",
+      "doc": "Show this peer's KB-sharing status in the *KB Sharing* buffer (:kb-sharing-status)"
     },
     {
       "name": "move-down",

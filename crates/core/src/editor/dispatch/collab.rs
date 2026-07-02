@@ -190,8 +190,11 @@ impl Editor {
                 self.mark_full_redraw();
                 Some(true)
             }
-            "kb-member-add" | "kb-member-remove" => {
-                // :kb-member-add <kb-id> <fingerprint> [role]  (args via command_line).
+            // Accept both the editor's historical `kb-member-*` spelling AND the
+            // canonical `kb-add-member`/`kb-remove-member` names used by the docs,
+            // the Scheme prims, and the MCP tools (three-surface parity, #3).
+            "kb-member-add" | "kb-member-remove" | "kb-add-member" | "kb-remove-member" => {
+                // :kb-add-member <kb-id> <fingerprint> [role]  (args via command_line).
                 let line = self.vi.command_line.trim().to_string();
                 let mut parts = line.split_whitespace();
                 let kb_id = parts.next().unwrap_or("").to_string();
@@ -206,7 +209,7 @@ impl Editor {
                     );
                     return Some(true);
                 }
-                let add = name == "kb-member-add";
+                let add = matches!(name, "kb-member-add" | "kb-add-member");
                 self.collab.pending_intent = Some(if add {
                     CollabIntent::KbAddMember {
                         kb_id: kb_id.clone(),
@@ -226,8 +229,8 @@ impl Editor {
                 ));
                 Some(true)
             }
-            "kb-member-block" | "kb-member-unblock" => {
-                // :kb-member-block <kb-id> <fingerprint> — ADR-039 A2 (#162) local
+            "kb-member-block" | "kb-member-unblock" | "kb-block-member" | "kb-unblock-member" => {
+                // :kb-block-member <kb-id> <fingerprint> — ADR-039 A2 (#162) local
                 // self-protection deny-list. Local-only to the daemon; not owner-gated.
                 let line = self.vi.command_line.trim().to_string();
                 let mut parts = line.split_whitespace();
@@ -241,7 +244,7 @@ impl Editor {
                     );
                     return Some(true);
                 }
-                let blocked = name == "kb-member-block";
+                let blocked = matches!(name, "kb-member-block" | "kb-block-member");
                 self.collab.pending_intent = Some(CollabIntent::KbSetBlock {
                     kb_id: kb_id.clone(),
                     member: member.clone(),
@@ -290,8 +293,8 @@ impl Editor {
                 self.collab.pending_intent = Some(CollabIntent::KbListPending { kb_id });
                 Some(true)
             }
-            "kb-policy" => {
-                // :kb-policy <kb-id> <restrictive|invite|permissive>
+            "kb-policy" | "kb-set-policy" => {
+                // :kb-set-policy <kb-id> <restrictive|invite|permissive>
                 let line = self.vi.command_line.trim().to_string();
                 let mut parts = line.split_whitespace();
                 let kb_id = parts.next().unwrap_or("").to_string();
@@ -398,6 +401,49 @@ mod tests {
             }
             other => panic!("expected KbAddMember, got: {other:?}"),
         }
+    }
+
+    /// Three-surface parity (#3): the canonical `kb-add-member` / `kb-remove-member`
+    /// / `kb-block-member` / `kb-unblock-member` / `kb-set-policy` names — the ones
+    /// the docs, Scheme prims, and MCP tools use — must route through dispatch too,
+    /// not just the historical `kb-member-*` / `kb-policy` spellings. This is the
+    /// exact gap the verifiable-docs guard caught: a user following the manual and
+    /// typing `:kb-add-member` must not hit "unknown command".
+    #[test]
+    fn dispatch_accepts_canonical_member_and_policy_names() {
+        let mut editor = Editor::new();
+
+        editor.vi.command_line = "my-kb SHA256:alice editor".to_string();
+        assert_eq!(editor.dispatch_collab("kb-add-member"), Some(true));
+        assert!(matches!(
+            editor.collab.pending_intent,
+            Some(CollabIntent::KbAddMember { .. })
+        ));
+
+        editor.collab.pending_intent = None;
+        editor.vi.command_line = "my-kb SHA256:bob".to_string();
+        assert_eq!(editor.dispatch_collab("kb-remove-member"), Some(true));
+        assert!(matches!(
+            editor.collab.pending_intent,
+            Some(CollabIntent::KbRemoveMember { .. })
+        ));
+
+        editor.collab.pending_intent = None;
+        editor.vi.command_line = "my-kb invite".to_string();
+        assert_eq!(editor.dispatch_collab("kb-set-policy"), Some(true));
+        assert!(matches!(
+            editor.collab.pending_intent,
+            Some(CollabIntent::KbSetPolicy { .. })
+        ));
+
+        // The legacy spellings still resolve (back-compat).
+        editor.collab.pending_intent = None;
+        editor.vi.command_line = "my-kb SHA256:carol".to_string();
+        assert_eq!(editor.dispatch_collab("kb-member-add"), Some(true));
+        assert!(matches!(
+            editor.collab.pending_intent,
+            Some(CollabIntent::KbAddMember { .. })
+        ));
     }
 
     #[test]

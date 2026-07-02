@@ -1739,13 +1739,13 @@ policy; editor reads + edits; **viewer is read-only**.\n\
 - Per-KB join policy (default `invite`): `restrictive` (owner + added members \
 only), `invite` (join → pending → owner approves), `permissive` (any \
 authorized peer auto-joins as viewer).\n\
-- `:kb-policy <kb> <restrictive|invite|permissive>`, `:kb-pending <kb>` (lists \
+- `:kb-set-policy <kb> <restrictive|invite|permissive>`, `:kb-pending <kb>` (lists \
 label + fingerprint), `:kb-approve <kb> <fingerprint> [role]`, \
-`:kb-member-add <kb> <fingerprint> [role]`, `:kb-member-remove <kb> <fingerprint>`.\n\
-- **Local self-protection (ADR-039 A2)**: `:kb-member-block <kb> <fingerprint>` / \
-`:kb-member-unblock <kb> <fingerprint>` (or `b` in *KB Sharing*) add/remove a \
+`:kb-add-member <kb> <fingerprint> [role]`, `:kb-remove-member <kb> <fingerprint>`.\n\
+- **Local self-protection (ADR-039 A2)**: `:kb-block-member <kb> <fingerprint>` / \
+`:kb-unblock-member <kb> <fingerprint>` (or `b` in *KB Sharing*) add/remove a \
 principal on **this daemon's LOCAL deny-list** — never propagated to peers (unlike \
-`:kb-member-remove`, a global removal) and **not owner-gated** (you may block even \
+`:kb-remove-member`, a global removal) and **not owner-gated** (you may block even \
 the owner). Use it to stop trusting a principal you cannot get globally removed.\n\
 - Members are managed by **fingerprint** (from `:kb-pending` or, for admins, \
 `mae-daemon authorized`). Admin: `mae-daemon authorize <line> <unique-label>`, \
@@ -1777,5 +1777,13 @@ establishes a mesh share on your daemon and mints a `mae://join/…` ticket; a p
 `:kb-join-p2p <ticket>`, their daemon dials yours, you approve the peer daemon's \
 fingerprint, and the KB converges peer-to-peer. Enable with `[collab.p2p]` + \
 `mae setup-collab --p2p`; see `docs/DAEMON_ADMIN.md §3b`.\n\n\
+** Step-by-step workflows (in-manual)\n\
+Follow these lessons end-to-end (each ends with a Verify step):\n\
+- [[lesson:kb-set-encryption|Enable E2E on a KB]] · [[lesson:kb-join-encrypted|Join an encrypted KB]]\n\
+- [[lesson:kb-manage-members|Manage members & roles]]\n\
+- [[lesson:collab-rotate-identity|Rotate identity]] · [[lesson:collab-register-recovery-key|Register a recovery key]] · [[lesson:collab-recover-identity|Recover a lost identity]]\n\
+- [[lesson:kb-share-p2p|Share over P2P (beta)]]\n\
+- [[concept:kb-e2e-security-boundaries|What E2E does NOT protect]] — read before relying on it.\n\n\
 See also: [[concept:knowledge-base]], [[concept:collab-architecture]], \
-[[concept:sync-engine]], [[concept:adr-kb-crdt]], [[index]]\n";
+[[concept:sync-engine]], [[concept:adr-kb-crdt]], \
+[[concept:kb-e2e-security-boundaries]], [[index]]\n";
