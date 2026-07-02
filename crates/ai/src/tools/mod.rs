@@ -134,12 +134,15 @@ mod tests {
         let tools = tools_from_registry(&reg);
         let move_down = tools.iter().find(|t| t.name == "command_move_down");
         assert!(move_down.is_some(), "should have command_move_down");
-        // All names should match [a-z_]+
+        // Sanitized tool names must match the documented provider contract:
+        // alphanumeric + underscore (LLM providers allow digits, e.g. the `2`
+        // in `command_kb_share_p2p`). Uppercase and hyphens are what the
+        // sanitizer removes, so they must NOT survive.
         for tool in &tools {
             assert!(
                 tool.name
                     .chars()
-                    .all(|c| c.is_ascii_lowercase() || c == '_'),
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'),
                 "bad tool name: {}",
                 tool.name
             );
