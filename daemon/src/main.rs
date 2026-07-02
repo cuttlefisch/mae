@@ -358,7 +358,8 @@ async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState
         doc_store::DocStore::new(backend.clone(), collab.storage.compact_threshold)
             .with_max_documents(collab.sync.max_documents)
             .with_max_wal_entries(collab.storage.max_wal_entries)
-            .with_max_document_size(collab.sync.max_document_size_bytes),
+            .with_max_document_size(collab.sync.max_document_size_bytes)
+            .with_max_update_size(collab.sync.max_update_size_bytes),
     );
     // ADR-039 A2 (#162): hydrate the local self-protection blocklist from durable storage
     // so a block set in a prior session is enforced from the first op this session derives.

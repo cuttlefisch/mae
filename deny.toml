@@ -26,6 +26,14 @@ ignore = [
     # ttf-parser unmaintained (winit → sctk-adwaita → ab_glyph → owned_ttf_parser → ttf-parser);
     # GUI-only font path, no safe upgrade available upstream (advisory says so explicitly)
     { id = "RUSTSEC-2026-0192", reason = "winit transitive dep (GUI font parsing), no upstream fix" },
+    # quick-xml DoS advisories (winit → wayland-client/wayland-scanner → quick-xml, pinned
+    # ^0.39 so the >=0.41 fix is unreachable without a winit ecosystem bump). wayland-scanner
+    # uses quick-xml at BUILD TIME to parse the TRUSTED, crate-shipped Wayland protocol XML —
+    # never attacker-controlled input — so both DoS threat models (untrusted XML) do not
+    # apply. GUI/Wayland-only. 0194 = quadratic duplicate-attribute check; 0195 = unbounded
+    # namespace-declaration allocation.
+    { id = "RUSTSEC-2026-0194", reason = "wayland-scanner build-time parse of trusted protocol XML; not attacker input; quick-xml pinned ^0.39 upstream" },
+    { id = "RUSTSEC-2026-0195", reason = "wayland-scanner build-time parse of trusted protocol XML; not attacker input; quick-xml pinned ^0.39 upstream" },
 ]
 
 [licenses]

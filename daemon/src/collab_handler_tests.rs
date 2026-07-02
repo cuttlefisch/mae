@@ -608,8 +608,8 @@ async fn sync_update_oversized_rejected() {
     let store = test_doc_store();
     let bc = test_broadcaster();
 
-    // Create a base64 string that decodes to > 1 MB.
-    let big_data = vec![0u8; MAX_UPDATE_SIZE + 1];
+    // Create a base64 string that decodes to > the effective per-update gate.
+    let big_data = vec![0u8; store.max_update_size() + 1];
     let big_b64 = mae_sync::encoding::update_to_base64(&big_data);
 
     let msg = serde_json::json!({
@@ -4587,5 +4587,78 @@ async fn derive_cache_hits_but_never_serves_stale_membership() {
     assert!(
         dm5.members.contains_key(&owner_fp),
         "unblock invalidates + restores the owner"
+    );
+}
+
+/// ADR-042 fail-open guard: the derive cache must DROP a timeboxed-out member the
+/// moment wall-clock passes their `expires_at`, EVEN on a cache-warm, op-log-unchanged
+/// collection. The cache's `valid_until` horizon is the ONLY thing that expires a
+/// member without an op-log/blocklist change — a regression there (wrong horizon, a
+/// `<=` boundary slip) would keep serving a TTL-expired member as valid indefinitely.
+/// The prior derive-cache test freezes `now` and never crosses an expiry boundary, so
+/// this is the adversarial case that was missing (principle #14).
+#[tokio::test]
+async fn derive_cache_drops_a_timeboxed_out_member_when_wallclock_passes_expiry() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::content_crypto::{wrap_public_for, wrap_to_member, ContentKey};
+    use mae_sync::kb::KbCollectionDoc;
+    use mae_sync::membership::MembershipAction;
+
+    let store = test_doc_store();
+    let owner = Identity::from_seed(&[1u8; 32], "owner");
+    let owner_fp = owner.fingerprint();
+    let opk = owner.public().to_bytes();
+    let osec = owner.secret_bytes();
+    let anchor = opk;
+    let member = Identity::from_seed(&[2u8; 32], "member");
+    let mfp = member.fingerprint();
+    let expiry = 5_000u64;
+
+    // E2e KB with a signed owner genesis (the anchor the derive resolves from).
+    let k = ContentKey::generate();
+    let self_wrap = wrap_to_member(&k, &wrap_public_for(&osec)).unwrap();
+    let mut coll = KbCollectionDoc::new_owned("kbc", &owner_fp, "owner");
+    coll.author_e2e_genesis("kbc", &owner_fp, &osec, &opk, self_wrap, 1_000);
+
+    // Admit the member with a TIMEBOX (expires_at = 5000), owner-signed.
+    coll.upsert_member(&mfp, "member", SyncRole::Editor);
+    let epoch = coll.epoch_of(&mfp);
+    let mut op = coll.build_membership_op(
+        "kbc",
+        MembershipAction::Admit,
+        &mfp,
+        Some(SyncRole::Editor),
+        false,
+        &owner_fp,
+        1_001,
+        Some(expiry),
+        epoch,
+    );
+    op.wrapped_key = Some(wrap_to_member(&k, &wrap_public_for(&member.secret_bytes())).unwrap());
+    let sig = op.sign(&osec);
+    coll.append_signed_op(&op, &sig, &opk);
+
+    // Derive BEFORE expiry — member present; this WARMS the cache (valid_until = 5000).
+    let before = store
+        .derived_membership("kbc", &coll, &anchor, expiry - 1)
+        .await;
+    assert!(
+        before.members.contains_key(&mfp),
+        "timeboxed member is present before their expiry"
+    );
+
+    // Derive AFTER expiry with the SAME op-log (SV unchanged, no block) — the cache must
+    // NOT serve the stale 'present' set; the timebox drops the member.
+    let after = store
+        .derived_membership("kbc", &coll, &anchor, expiry + 1)
+        .await;
+    assert!(
+        !after.members.contains_key(&mfp),
+        "a timeboxed-out member MUST be dropped once wall-clock passes expires_at, \
+         even when the op-log is unchanged and the cache is warm (fail-open guard)"
+    );
+    assert!(
+        after.members.contains_key(&owner_fp),
+        "the owner (no timebox) remains a member across the expiry boundary"
     );
 }

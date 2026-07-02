@@ -706,6 +706,20 @@ pub(crate) const SCHEME_API_FUNCTIONS: &[(&str, &str, &str, &str, &str)] = &[
             "kb-sharing",
         ),
         (
+            "collab-share",
+            "(collab-share)",
+            "Share the active buffer for collaborative editing (parity with the :collab-share command and the collab_share MCP tool).",
+            "(collab-share)",
+            "kb-sharing",
+        ),
+        (
+            "collab-sync",
+            "(collab-sync)",
+            "Force a sync of shared buffers with the daemon now.",
+            "(collab-sync)",
+            "kb-sharing",
+        ),
+        (
             "collab-doctor",
             "(collab-doctor)",
             "Run collaboration connectivity diagnostics and report the results.",

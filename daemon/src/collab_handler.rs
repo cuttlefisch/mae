@@ -34,12 +34,6 @@ use mae_mcp::auth::AuthProvider;
 const WRITE_TIMEOUT_SECS: u64 = 5;
 /// Disconnect client after this many consecutive write failures.
 const MAX_CONSECUTIVE_WRITE_FAILURES: u32 = 3;
-/// Maximum allowed size for a single sync update payload (bytes). This is a fixed
-/// protocol/DoS safety bound (a hostile or buggy peer cannot force an unbounded
-/// per-message allocation), not a user preference — so it stays a documented const
-/// rather than an option (principle #7 corollary). 1 MiB comfortably fits a large
-/// CRDT delta while capping worst-case memory per inbound frame.
-const MAX_UPDATE_SIZE: usize = 1_048_576; // 1 MiB
 
 /// Run the client handler with an authentication handshake before the main loop.
 ///
@@ -1430,13 +1424,14 @@ async fn handle_doc_request_inner(
                     );
                 }
             };
-            if update_bytes.len() > MAX_UPDATE_SIZE {
+            let max_update = doc_store.max_update_size();
+            if update_bytes.len() > max_update {
                 return JsonRpcResponse::error(
                     id,
                     McpError::parse_error(format!(
                         "update too large: {} bytes (max {})",
                         update_bytes.len(),
-                        MAX_UPDATE_SIZE
+                        max_update
                     )),
                 );
             }
@@ -2566,13 +2561,14 @@ async fn handle_doc_request_inner(
                 update_len = update_bytes.len(),
                 "kb/node_update: received"
             );
-            if update_bytes.len() > MAX_UPDATE_SIZE {
+            let max_update = doc_store.max_update_size();
+            if update_bytes.len() > max_update {
                 return JsonRpcResponse::error(
                     id,
                     McpError::parse_error(format!(
                         "update too large: {} bytes (max {})",
                         update_bytes.len(),
-                        MAX_UPDATE_SIZE
+                        max_update
                     )),
                 );
             }
@@ -2749,11 +2745,12 @@ async fn handle_doc_request_inner(
                     );
                 }
             };
-            if update.len() > MAX_UPDATE_SIZE {
+            let max_update = doc_store.max_update_size();
+            if update.len() > max_update {
                 return JsonRpcResponse::error(
                     id,
                     McpError::internal_error(format!(
-                        "collection update exceeds {MAX_UPDATE_SIZE} bytes"
+                        "collection update exceeds {max_update} bytes"
                     )),
                 );
             }
