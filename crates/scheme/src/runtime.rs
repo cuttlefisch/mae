@@ -1847,6 +1847,14 @@ saved recovery key OFFLINE — it can later authorize a rebind if the primary is
             "Discover MAE collaboration peers on the local network via mDNS."
         );
         register_collab_command_prim!(
+            "collab-share",
+            "Share the active buffer for collaborative editing (parity with the command + collab_share MCP tool)."
+        );
+        register_collab_command_prim!(
+            "collab-sync",
+            "Force a sync of shared buffers with the daemon now."
+        );
+        register_collab_command_prim!(
             "kb-list-remote",
             "List shared KBs advertised by the connected daemon."
         );

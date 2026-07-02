@@ -19,6 +19,13 @@ use tracing::{debug, info, warn};
 
 use crate::storage::{StorageBackend, StorageError};
 
+/// Built-in default for the per-update size gate (bytes), used when the operator
+/// has not set `[collab.sync] max_update_size_bytes` in `daemon.toml`. A fixed
+/// DoS/allocation safety bound (a hostile or buggy peer cannot force an unbounded
+/// per-message allocation); 1 MiB comfortably fits a large CRDT delta. Operators
+/// can raise it via config (see [`DocStore::with_max_update_size`]).
+pub const DEFAULT_MAX_UPDATE_SIZE: usize = 1_048_576; // 1 MiB
+
 /// Per-document state.
 struct DocEntry {
     sync: TextSync,
@@ -74,6 +81,10 @@ pub struct DocStore {
     max_wal_entries: u64,
     /// Maximum document size in bytes before warning (0 = unlimited).
     max_document_size_bytes: usize,
+    /// Maximum single sync-update payload size in bytes (0 = use the built-in
+    /// default). Operator-tunable via `daemon.toml` `[collab.sync]
+    /// max_update_size_bytes`; enforced by the collab handler's per-update gate.
+    max_update_size_bytes: usize,
     /// KB metadata registry (kb_id → metadata JSON).
     kb_metas: RwLock<HashMap<String, serde_json::Value>>,
     /// The daemon's signing identity (ADR-026), set in key-auth mode. Present ⇒ the
@@ -179,6 +190,7 @@ impl DocStore {
             max_documents: 0,
             max_wal_entries: 0,
             max_document_size_bytes: 0,
+            max_update_size_bytes: 0,
             kb_metas: RwLock::new(HashMap::new()),
             signer: std::sync::OnceLock::new(),
             kb_anchors: RwLock::new(HashMap::new()),
@@ -398,6 +410,24 @@ impl DocStore {
     pub fn with_max_document_size(mut self, max: usize) -> Self {
         self.max_document_size_bytes = max;
         self
+    }
+
+    /// Set the maximum single sync-update payload size (bytes). 0 = use the
+    /// built-in default ([`DEFAULT_MAX_UPDATE_SIZE`]).
+    pub fn with_max_update_size(mut self, max: usize) -> Self {
+        self.max_update_size_bytes = max;
+        self
+    }
+
+    /// The effective per-update size gate: the operator-configured value, or the
+    /// built-in default when unset (0). Consulted by the collab handler on every
+    /// inbound sync/collection update.
+    pub fn max_update_size(&self) -> usize {
+        if self.max_update_size_bytes == 0 {
+            DEFAULT_MAX_UPDATE_SIZE
+        } else {
+            self.max_update_size_bytes
+        }
     }
 
     /// Get or create a document. Loads from storage if not in memory.
@@ -1004,6 +1034,20 @@ mod tests {
     fn test_store() -> DocStore {
         let backend = Arc::new(SqliteBackend::open_memory().unwrap());
         DocStore::new(backend, 500)
+    }
+
+    #[test]
+    fn max_update_size_honors_config_and_falls_back_to_default() {
+        let backend = Arc::new(SqliteBackend::open_memory().unwrap());
+        // Unset (0) → the built-in default, not zero-length.
+        let store = DocStore::new(backend.clone(), 500);
+        assert_eq!(store.max_update_size(), DEFAULT_MAX_UPDATE_SIZE);
+
+        // A configured value is actually consulted (the bug this guards: the
+        // daemon.toml `max_update_size_bytes` field used to be dead — the gate
+        // ignored it and always used the hardcoded const).
+        let tuned = DocStore::new(backend, 500).with_max_update_size(4096);
+        assert_eq!(tuned.max_update_size(), 4096);
     }
 
     #[tokio::test]

@@ -53,7 +53,12 @@ pub struct AwarenessMap {
     users: HashMap<u64, RemoteUser>,
 }
 
-/// Timeout for stale user cleanup (30 seconds).
+/// Drop a collaborator's presence (cursor/selection) after this long without an
+/// awareness update. A fixed liveness bound, not a user option: it trades a brief
+/// window of a departed peer's cursor lingering against flapping a flaky peer's
+/// cursor on/off. 30s comfortably exceeds the heartbeat/awareness cadence so a
+/// still-connected-but-idle peer is never dropped. (Presence is cosmetic — this
+/// gates no authorization — so it stays a documented const per principle #7.)
 const STALE_TIMEOUT_SECS: u64 = 30;
 
 impl AwarenessMap {
