@@ -1,9 +1,10 @@
 use mae_kb::{KnowledgeBase, Node, NodeKind};
 
-/// Install `scheme:<name>` nodes for all Scheme API functions and variables.
-pub(super) fn install_scheme_nodes(kb: &mut KnowledgeBase) {
-    // Each entry: (name, signature, doc, example, category)
-    let functions: &[(&str, &str, &str, &str, &str)] = &[
+/// Every documented Scheme API function: (name, signature, doc, example, category).
+/// Module-level so parity guards (and any tooling) can iterate the exact set that
+/// becomes `scheme:<name>` help nodes — see the `kb_sharing_actions_have_scheme_api_docs`
+/// test that ties this to the command surface (principle #3).
+pub(crate) const SCHEME_API_FUNCTIONS: &[(&str, &str, &str, &str, &str)] = &[
         // Buffer editing
         (
             "buffer-insert",
@@ -626,6 +627,119 @@ pub(super) fn install_scheme_nodes(kb: &mut KnowledgeBase) {
             "(kb-sharing-status)",
             "kb-sharing",
         ),
+        (
+            "kb-set-encryption",
+            "(kb-set-encryption KB-ID MODE)",
+            "Enable E2E content encryption on an owned KB (owner-only, one-way): MODE = \"e2e\". Protects node CONTENT from non-members/relay; does NOT provide forward secrecy, hide metadata, or protect already-shared plaintext — enable before sharing. Lost identity key = permanent loss.",
+            "(kb-set-encryption \"team-kb\" \"e2e\")",
+            "kb-sharing",
+        ),
+        (
+            "kb-block-member",
+            "(kb-block-member KB-ID FINGERPRINT)",
+            "Block a peer from a shared KB by fingerprint (owner-only). A block is stronger than remove: it fences the fingerprint out even if re-invited.",
+            "(kb-block-member \"my-kb\" \"ab:cd:ef\")",
+            "kb-sharing",
+        ),
+        (
+            "kb-unblock-member",
+            "(kb-unblock-member KB-ID FINGERPRINT)",
+            "Lift a block on a peer's fingerprint (owner-only). They can be re-added or re-approved afterward.",
+            "(kb-unblock-member \"my-kb\" \"ab:cd:ef\")",
+            "kb-sharing",
+        ),
+        (
+            "kb-share-p2p",
+            "(kb-share-p2p [KB-ID])",
+            "Mint a shareable P2P join ticket (magnet link) for a KB and RETURN the mae://join/… string (defaults to the primary KB). Synchronous daemon control-socket call; requires a daemon with P2P enabled.",
+            "(kb-share-p2p \"notes\")",
+            "kb-sharing",
+        ),
+        (
+            "kb-join-ticket",
+            "(kb-join-ticket TICKET)",
+            "Queue a P2P join from a mae://join/… ticket and RETURN the daemon's confirmation; the background dialer connects + pulls the KB after the owner approves. Alias: kb-join-p2p.",
+            "(kb-join-ticket \"mae://join/…\")",
+            "kb-sharing",
+        ),
+        (
+            "kb-join-p2p",
+            "(kb-join-p2p TICKET)",
+            "Parity alias of kb-join-ticket (matches the kb-join-p2p command surface). Queue a P2P join from a mae://join/… ticket.",
+            "(kb-join-p2p \"mae://join/…\")",
+            "kb-sharing",
+        ),
+        // Identity / collab actions (ADR-040 identity arc)
+        (
+            "collab-rotate-identity",
+            "(collab-rotate-identity)",
+            "Rotate this peer's collab identity key across every KB it owns/belongs to (ADR-040). Cross-signs the successor; for owned KBs also re-wraps the content key. Authorize the new key on the daemon out-of-band, then reconnect.",
+            "(collab-rotate-identity)",
+            "kb-sharing",
+        ),
+        (
+            "collab-register-recovery-key",
+            "(collab-register-recovery-key)",
+            "Register an offline recovery key across your KBs (ADR-040 §Recovery-key). Back up the saved recovery key OFFLINE — it can later authorize a rebind onto a fresh primary if the current key is lost or compromised.",
+            "(collab-register-recovery-key)",
+            "kb-sharing",
+        ),
+        (
+            "collab-recover-identity",
+            "(collab-recover-identity RECOVERY-KEY-PATH OLD-FINGERPRINT)",
+            "Recover a lost identity via a pre-registered offline recovery key. RECOVERY-KEY-PATH is the dir holding the restored recovery id_ed25519; OLD-FINGERPRINT is the lost key's SHA256:…. Authors a recovery-signed rebind so a fresh primary inherits the lost seats.",
+            "(collab-recover-identity \"/mnt/usb/recovery\" \"SHA256:abc…\")",
+            "kb-sharing",
+        ),
+        (
+            "collab-connect",
+            "(collab-connect [ADDR])",
+            "Connect to a collaboration daemon. Optional ADDR (host:port) overrides the configured server.",
+            "(collab-connect \"127.0.0.1:9473\")",
+            "kb-sharing",
+        ),
+        (
+            "collab-disconnect",
+            "(collab-disconnect)",
+            "Disconnect from the collaboration daemon.",
+            "(collab-disconnect)",
+            "kb-sharing",
+        ),
+        (
+            "collab-doctor",
+            "(collab-doctor)",
+            "Run collaboration connectivity diagnostics and report the results.",
+            "(collab-doctor)",
+            "kb-sharing",
+        ),
+        (
+            "collab-list",
+            "(collab-list)",
+            "List shared documents advertised by the connected daemon.",
+            "(collab-list)",
+            "kb-sharing",
+        ),
+        (
+            "collab-discover",
+            "(collab-discover)",
+            "Discover MAE collaboration peers on the local network via mDNS.",
+            "(collab-discover)",
+            "kb-sharing",
+        ),
+        (
+            "kb-pending",
+            "(kb-pending KB-ID)",
+            "List pending join requests for a shared KB by id (owner-only view; the same set surfaced in kb-sharing-status).",
+            "(kb-pending \"team-kb\")",
+            "kb-sharing",
+        ),
+        (
+            "kb-list-remote",
+            "(kb-list-remote)",
+            "List shared KBs advertised by the connected daemon.",
+            "(kb-list-remote)",
+            "kb-sharing",
+        ),
         // Daemon capability model (ADR-035)
         (
             "daemon-available?",
@@ -868,6 +982,11 @@ pub(super) fn install_scheme_nodes(kb: &mut KnowledgeBase) {
         ),
     ];
 
+/// Install `scheme:<name>` nodes for all Scheme API functions and variables.
+pub(super) fn install_scheme_nodes(kb: &mut KnowledgeBase) {
+    // Each entry: (name, signature, doc, example, category)
+    let functions = SCHEME_API_FUNCTIONS;
+
     // Variables (injected from editor state before each eval)
     let variables: &[(&str, &str, &str)] = &[
         ("*buffer-name*", "string", "Name of the active buffer."),
@@ -972,5 +1091,75 @@ pub(super) fn install_scheme_nodes(kb: &mut KnowledgeBase) {
             Node::new(id, title, NodeKind::SchemeApi, body)
                 .with_tags(["scheme", "api", "variable"]),
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Principle #3 (peer parity): every KB-sharing / collab / identity action
+    /// must be documented as a `scheme:<name>` help node so the human, the AI
+    /// peer, and Scheme scripts all discover the same surface. This guard fails
+    /// if a new action lands on the command/MCP surfaces without a Scheme doc
+    /// node (the historical parity regression — dispatch-only, invisible to
+    /// `:help scheme:*`). The matching command-surface guard lives in
+    /// `commands.rs::with_builtins_has_kb_sharing_commands`.
+    #[test]
+    fn kb_sharing_actions_have_scheme_api_docs() {
+        let documented: std::collections::HashSet<&str> =
+            SCHEME_API_FUNCTIONS.iter().map(|e| e.0).collect();
+        let required = [
+            "kb-share",
+            "kb-join",
+            "kb-leave",
+            "kb-share-p2p",
+            "kb-join-ticket",
+            "kb-join-p2p",
+            "kb-set-encryption",
+            "kb-add-member",
+            "kb-remove-member",
+            "kb-block-member",
+            "kb-unblock-member",
+            "kb-approve",
+            "kb-set-policy",
+            "kb-pending",
+            "kb-list-remote",
+            "kb-sharing-status",
+            "collab-rotate-identity",
+            "collab-register-recovery-key",
+            "collab-recover-identity",
+            "collab-connect",
+            "collab-disconnect",
+            "collab-doctor",
+            "collab-list",
+            "collab-discover",
+        ];
+        let missing: Vec<&str> = required
+            .iter()
+            .copied()
+            .filter(|a| !documented.contains(a))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "KB-sharing/collab actions missing a scheme:<name> doc node (principle #3 parity): {missing:?}"
+        );
+    }
+
+    /// Guard the doc table itself stays well-formed: no duplicate names, and
+    /// every entry has a non-empty signature/doc/example (a doc node with an
+    /// empty body is worse than none — it reads as "documented" while helping
+    /// nobody).
+    #[test]
+    fn scheme_api_entries_are_well_formed() {
+        let mut seen = std::collections::HashSet::new();
+        for &(name, sig, doc, example, category) in SCHEME_API_FUNCTIONS {
+            assert!(seen.insert(name), "duplicate scheme_api entry: {name}");
+            assert!(!name.is_empty(), "empty name");
+            assert!(!sig.is_empty(), "empty signature for {name}");
+            assert!(!doc.is_empty(), "empty doc for {name}");
+            assert!(!example.is_empty(), "empty example for {name}");
+            assert!(!category.is_empty(), "empty category for {name}");
+        }
     }
 }

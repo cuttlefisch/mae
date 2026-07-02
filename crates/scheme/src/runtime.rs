@@ -1776,6 +1776,138 @@ sharing. Lost identity key = permanent loss. See :help concept:kb-encryption.",
             },
         );
 
+        // (kb-join-p2p TICKET) — parity alias for (kb-join-ticket): the P2P
+        // join command surface is `kb-join-p2p`, so the same name resolves in
+        // Scheme (principle #3 — one action, same name on every surface). Same
+        // single backend (daemon control-socket `join_p2p_ticket`).
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-join-p2p",
+            "Queue a P2P join from a mae://join/… ticket (alias of kb-join-ticket).",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let ticket = arg_string(args, 0, "kb-join-p2p")?;
+                let control = s.lock().unwrap().daemon_control.clone();
+                match control {
+                    Some(c) => c
+                        .join_p2p_ticket(&ticket)
+                        .map(Value::string)
+                        .map_err(|e| LispError::user(e, vec![])),
+                    None => Err(LispError::user(
+                        "not connected to a daemon — start one and enable P2P with \
+                         `mae setup-collab --p2p`"
+                            .to_string(),
+                        vec![],
+                    )),
+                }
+            },
+        );
+
+        // --- Collab/identity ACTION primitives (first-class parity, #3) ---
+        // These editor actions have a command + an MCP tool; give them a named
+        // Scheme prim too (instead of forcing generic (run-command …)) so they
+        // are discoverable via :help scheme:* and self-documenting. Each just
+        // routes the confirmed command name through the same dispatch the
+        // command surface uses (no-arg → pending_commands; arg-taking →
+        // pending_ex_commands / the ex parser). The action runs on the next
+        // editor-loop drain.
+        macro_rules! register_collab_command_prim {
+            ($name:literal, $doc:literal) => {{
+                let s = shared.clone();
+                vm.register_fn($name, $doc, Arity::Fixed(0), move |_args: &[Value]| {
+                    s.lock().unwrap().pending_commands.push($name.to_string());
+                    Ok(Value::Void)
+                });
+            }};
+        }
+        register_collab_command_prim!(
+            "collab-rotate-identity",
+            "Rotate this peer's collab identity key across every KB it owns/belongs to (ADR-040). \
+Authorize the new key on the daemon out-of-band, then reconnect."
+        );
+        register_collab_command_prim!(
+            "collab-register-recovery-key",
+            "Register an offline recovery key across your KBs (ADR-040 §Recovery-key). Back up the \
+saved recovery key OFFLINE — it can later authorize a rebind if the primary is lost."
+        );
+        register_collab_command_prim!(
+            "collab-disconnect",
+            "Disconnect from the collaboration daemon."
+        );
+        register_collab_command_prim!(
+            "collab-doctor",
+            "Run collaboration connectivity diagnostics and report the results."
+        );
+        register_collab_command_prim!(
+            "collab-list",
+            "List shared documents advertised by the connected daemon."
+        );
+        register_collab_command_prim!(
+            "collab-discover",
+            "Discover MAE collaboration peers on the local network via mDNS."
+        );
+        register_collab_command_prim!(
+            "kb-list-remote",
+            "List shared KBs advertised by the connected daemon."
+        );
+
+        // (kb-pending KB-ID) — list pending join requests for a shared KB you own
+        // (the same set surfaced in kb-sharing-status). Arg-taking → ex parser.
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-pending",
+            "List pending join requests for a shared KB by id (owner-only view).",
+            Arity::Fixed(1),
+            move |args: &[Value]| {
+                let kb_id = arg_string(args, 0, "kb-pending")?;
+                s.lock()
+                    .unwrap()
+                    .pending_ex_commands
+                    .push(format!("kb-pending {kb_id}"));
+                Ok(Value::Void)
+            },
+        );
+
+        // (collab-connect [ADDR]) — connect to a daemon; ADDR optional (defaults
+        // to the configured server). Arg-taking → route through the ex parser.
+        let s = shared.clone();
+        vm.register_fn(
+            "collab-connect",
+            "Connect to a collaboration daemon. Optional ADDR (host:port) overrides the configured server.",
+            Arity::Variadic(0),
+            move |args: &[Value]| {
+                let cmd = if args.is_empty() {
+                    "collab-connect".to_string()
+                } else {
+                    format!("collab-connect {}", arg_string(args, 0, "collab-connect")?)
+                };
+                s.lock().unwrap().pending_ex_commands.push(cmd);
+                Ok(Value::Void)
+            },
+        );
+
+        // (collab-recover-identity RECOVERY-KEY-PATH OLD-FINGERPRINT) — recover a
+        // lost identity via a pre-registered offline recovery key (ADR-040
+        // §Recovery-key). Arg-taking → ex parser (parsed in editor/command.rs).
+        // Closes the G5 parity gap (had an MCP tool + command but no Scheme peer).
+        let s = shared.clone();
+        vm.register_fn(
+            "collab-recover-identity",
+            "Recover a lost identity via an offline recovery key: RECOVERY-KEY-PATH (dir holding the \
+restored recovery id_ed25519) + OLD-FINGERPRINT (the lost key's SHA256:…). Authors a recovery-signed \
+rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key).",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let path = arg_string(args, 0, "collab-recover-identity")?;
+                let old_fp = arg_string(args, 1, "collab-recover-identity")?;
+                s.lock()
+                    .unwrap()
+                    .pending_ex_commands
+                    .push(format!("collab-recover-identity {path} {old_fp}"));
+                Ok(Value::Void)
+            },
+        );
+
         // (kb-remove-link! SOURCE-ID TARGET-ID)
         let s = shared.clone();
         vm.register_fn(

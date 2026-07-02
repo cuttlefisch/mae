@@ -500,6 +500,10 @@ Source: `shared/sync/src/lib.rs`
 | `kb-block-member` | `crates/scheme/src/runtime.rs` |
 | `kb-unblock-member` | `crates/scheme/src/runtime.rs` |
 | `kb-set-encryption` | `crates/scheme/src/runtime.rs` |
+| `kb-join-p2p` | `crates/scheme/src/runtime.rs` |
+| `kb-pending` | `crates/scheme/src/runtime.rs` |
+| `collab-connect` | `crates/scheme/src/runtime.rs` |
+| `collab-recover-identity` | `crates/scheme/src/runtime.rs` |
 | `kb-remove-link!` | `crates/scheme/src/runtime.rs` |
 | `kb-add-meta-member!` | `crates/scheme/src/runtime.rs` |
 | `kb-remove-meta-member!` | `crates/scheme/src/runtime.rs` |

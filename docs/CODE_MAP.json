@@ -1364,6 +1364,22 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "kb-join-p2p",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-pending",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "collab-connect",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "collab-recover-identity",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "kb-remove-link!",
       "source": "crates/scheme/src/runtime.rs"
     },
