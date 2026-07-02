@@ -1364,6 +1364,22 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "kb-join-p2p",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-pending",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "collab-connect",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "collab-recover-identity",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "kb-remove-link!",
       "source": "crates/scheme/src/runtime.rs"
     },
@@ -3869,6 +3885,62 @@
     {
       "name": "collab-discover",
       "doc": "Discover MAE peers on the local network via mDNS"
+    },
+    {
+      "name": "kb-share",
+      "doc": "Share a KB for collaborative editing (:kb-share <kb>)"
+    },
+    {
+      "name": "kb-join",
+      "doc": "Join a shared KB (:kb-join <kb>)"
+    },
+    {
+      "name": "kb-leave",
+      "doc": "Leave a shared KB (local copy preserved)"
+    },
+    {
+      "name": "kb-share-p2p",
+      "doc": "Share a KB over the P2P mesh + mint a join ticket (:kb-share-p2p [kb])"
+    },
+    {
+      "name": "kb-join-p2p",
+      "doc": "Join a KB from a P2P ticket (:kb-join-p2p <mae://join/…>)"
+    },
+    {
+      "name": "kb-set-encryption",
+      "doc": "Enable E2E content encryption on an owned KB (:kb-set-encryption <kb> e2e)"
+    },
+    {
+      "name": "kb-member-add",
+      "doc": "Add a member to a KB by fingerprint (:kb-member-add <kb> <fp> [role])"
+    },
+    {
+      "name": "kb-member-remove",
+      "doc": "Remove a member from a KB (:kb-member-remove <kb> <fp>)"
+    },
+    {
+      "name": "kb-member-block",
+      "doc": "Locally block a principal on a KB — self-protection, ADR-039 (:kb-member-block <kb> <fp>)"
+    },
+    {
+      "name": "kb-member-unblock",
+      "doc": "Unblock a locally-blocked principal (:kb-member-unblock <kb> <fp>)"
+    },
+    {
+      "name": "kb-approve",
+      "doc": "Approve a pending join request as a role (:kb-approve <kb> <fp> [role])"
+    },
+    {
+      "name": "kb-pending",
+      "doc": "List pending join requests for a KB (:kb-pending <kb>)"
+    },
+    {
+      "name": "kb-policy",
+      "doc": "Set a KB's join policy: restrictive | invite | permissive (:kb-policy <kb> <policy>)"
+    },
+    {
+      "name": "kb-list-remote",
+      "doc": "List KBs shared on the connected daemon (:kb-list-remote)"
     },
     {
       "name": "move-down",
