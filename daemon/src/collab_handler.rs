@@ -2603,32 +2603,66 @@ async fn handle_doc_request_inner(
             // (kb_id, node_id, payload). This is what makes a *relayed* edit
             // peer-verifiable: a hostile relay can neither forge an edit nor
             // mis-attribute one (the node_id is signed, so a header claiming a
-            // different node than it carries fails `verify_signed`). Enforced for an
-            // ANCHORED (joined) KB, whose authority IS the signed op-log; an owned KB
-            // over the trusted local socket keeps the legacy gate below. An unsigned
-            // op (no header) falls through to that legacy epoch fence — the migration
-            // path (mesh-side require-signed lands with the dialer-relay slice).
-            // When verified, the authorship header is carried into the broadcast (and
-            // thus the dialer's relay to peers) so a downstream peer re-verifies the
-            // same op — `verify_content_op` is the single check shared with the mesh
-            // relay path (principle #8).
+            // different node than it carries fails `verify_signed`). Resolved via
+            // `resolve_content_anchor`, which anchors on the registered op-log key
+            // for a JOINED KB AND on this daemon's own signer key for an OWNED KB —
+            // #255: an owned KB that is ALSO mesh-shared must attach the header to
+            // its OWNER's signed ops, or the owner's edit reaches a mesh-joined
+            // member stripped of its signature and is rejected by the member's
+            // require-signed relay gate (`verify_relayed_content_op`, which already
+            // uses the SAME resolver — the send side was the lone asymmetry). An
+            // unsigned op (no header) falls through to the legacy epoch fence. When
+            // verified, the authorship header is carried into the broadcast (and thus
+            // the dialer's relay to peers) so a downstream peer re-verifies the same
+            // op — `verify_content_op` is the single check shared with the mesh relay
+            // path (principle #8).
+            // A JOINED KB (an external `kb_anchor` is registered) has NO authority
+            // beyond its signed op-log, so a signed op is verified STRICTLY and a bad
+            // one is hard-rejected. An OWNED KB is additionally authenticated by the
+            // trusted local connection (the sender already passed `kb_access` as the
+            // owner), so `resolve_content_anchor` falls back to the owner's own key and
+            // we attach the header for mesh relay WHEN the op verifies — but on a verify
+            // miss (e.g. the genesis owner-self-admit isn't seeded yet, so the owner
+            // isn't yet a *derived* member) we fall through to the legacy epoch fence
+            // rather than reject a trusted local edit. #255: without this attach, an
+            // owned-AND-mesh-shared KB relays the owner's signed edit STRIPPED of its
+            // header, and the mesh-joined member rejects it as unsigned.
             let mut content_header: Option<serde_json::Value> = None;
-            if let Some(anchor) = doc_store.kb_anchor(&kb_id).await {
+            let joined_anchor = doc_store.kb_anchor(&kb_id).await; // Some ⇒ joined ⇒ strict
+            let content_anchor = match joined_anchor {
+                Some(a) => Some(a),
+                None => resolve_content_anchor(doc_store, &kb_id).await, // owned fallback (lenient)
+            };
+            if let Some(anchor) = content_anchor {
                 if let Some(signed) = SignedContentOp::from_params(&params, update_bytes.clone()) {
-                    if let Err(e) = verify_content_op(doc_store, &kb_id, &anchor, &signed).await {
-                        warn!(
-                            session = session_id, kb_id = %kb_id, node_id = %node_id,
-                            author = %signed.op.author, reason = %e,
-                            "kb/node_update: SIGNED CONTENT OP REJECTED (ADR-036)"
-                        );
-                        return JsonRpcResponse::error(id, McpError::internal_error(e));
+                    match verify_content_op(doc_store, &kb_id, &anchor, &signed).await {
+                        Ok(()) => {
+                            info!(
+                                session = session_id, kb_id = %kb_id, node_id = %node_id,
+                                author = %signed.op.author,
+                                "kb/node_update: signed content op verified (ADR-036)"
+                            );
+                            content_header = Some(signed.header_params());
+                        }
+                        Err(e) if joined_anchor.is_some() => {
+                            warn!(
+                                session = session_id, kb_id = %kb_id, node_id = %node_id,
+                                author = %signed.op.author, reason = %e,
+                                "kb/node_update: SIGNED CONTENT OP REJECTED (ADR-036)"
+                            );
+                            return JsonRpcResponse::error(id, McpError::internal_error(e));
+                        }
+                        Err(e) => {
+                            // Owned KB, trusted local connection: don't hard-reject a
+                            // not-yet-verifiable signed op — fall through to the legacy
+                            // epoch fence with no header (pre-#255 behavior preserved).
+                            debug!(
+                                session = session_id, kb_id = %kb_id, node_id = %node_id,
+                                reason = %e,
+                                "kb/node_update: owned-KB signed op not yet verifiable; legacy gate"
+                            );
+                        }
                     }
-                    info!(
-                        session = session_id, kb_id = %kb_id, node_id = %node_id,
-                        author = %signed.op.author,
-                        "kb/node_update: signed content op verified (ADR-036)"
-                    );
-                    content_header = Some(signed.header_params());
                 }
             }
 

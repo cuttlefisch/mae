@@ -47,16 +47,31 @@ on a re-share (the widen path leaves an existing op-log untouched, B-12).
   reads it). This is the property the genesis anchor delivers — E2E now *seals* over the mesh, which
   was impossible before.
 
-## What verify surfaced (a deeper gap — #255)
+## What verify surfaced (a deeper gap — #255), and how it was closed
 
-The gate also revealed that the genesis seed is **necessary but not sufficient** for a *member* to
-read over the mesh: a joining member's published wrap pubkey does not reach the owner through the
-mesh join path (`kb/approve: E2e KB but the pending request carries no pubkey`), so members are
-admitted **keyless** and cannot decrypt yet. The gate pins this honestly (KNOWN-GAP #255, non-fatal)
-so the *sealing/key-blindness* property is a green regression guard while member key-delivery over
-the mesh is tracked + fixed separately. (A related finding: the **permissive** auto-join path records
-a member without their wrap pubkey even on the hub — permissive is incompatible with E2E membership
-as-is; use invite. Also #255.)
+The gate revealed that the genesis seed is **necessary but not sufficient** for a *member* to read
+over the mesh. Two blockers, now both fixed:
+
+1. **Member key delivery (#256):** a joining member's published wrap pubkey did not reach the owner
+   through the mesh join path, so members were admitted **keyless**. Fixed — the dialer forwards the
+   local pending members (their wrap pubkeys) on `pull_kb`, and the owner wraps the content key to
+   them.
+2. **Signed-op relay (#255 layer-3):** the owner's genuinely *signed* content op reached the mesh
+   member **stripped of its authorship header**, so the member's require-signed relay gate
+   (`verify_relayed_content_op`, ADR-036) rejected it — the member got the key but never valid
+   ciphertext. Root cause: `kb/node_update` attached the header only when a `kb_anchor` was registered
+   (set solely when a daemon *joins* a KB), so an **owner** editing its own mesh-shared KB never
+   attached it. Fixed — the header attach now resolves the anchor via `resolve_content_anchor` (the
+   same resolver the mesh *receive* side already uses), which falls back to the owner's own signer key
+   for an owned KB; a verify miss on a trusted-local owned edit falls through to the legacy gate rather
+   than hard-rejecting. Unit-guarded by
+   `owned_kb_signed_op_broadcast_carries_content_header_for_mesh_relay`.
+
+**Remaining:** the *end-to-end* proof — a live-edit-after-join arm on the `MAE_E2E_MESH` gate that
+asserts a mesh-joined member actually **decrypts** — is a fast-follow. Until it is green, E2E stays
+**hub-recommended** for the guaranteed path. (Related: the **permissive** auto-join path records a
+member without their wrap pubkey even on the hub — permissive is incompatible with E2E membership;
+use invite.)
 
 ## Consequences
 
