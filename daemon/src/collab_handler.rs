@@ -34,8 +34,12 @@ use mae_mcp::auth::AuthProvider;
 const WRITE_TIMEOUT_SECS: u64 = 5;
 /// Disconnect client after this many consecutive write failures.
 const MAX_CONSECUTIVE_WRITE_FAILURES: u32 = 3;
-/// Maximum allowed size for a single sync update payload (bytes).
-const MAX_UPDATE_SIZE: usize = 1_048_576; // 1 MB
+/// Maximum allowed size for a single sync update payload (bytes). This is a fixed
+/// protocol/DoS safety bound (a hostile or buggy peer cannot force an unbounded
+/// per-message allocation), not a user preference — so it stays a documented const
+/// rather than an option (principle #7 corollary). 1 MiB comfortably fits a large
+/// CRDT delta while capping worst-case memory per inbound frame.
+const MAX_UPDATE_SIZE: usize = 1_048_576; // 1 MiB
 
 /// Run the client handler with an authentication handshake before the main loop.
 ///

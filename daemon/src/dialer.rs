@@ -31,10 +31,21 @@ use mae_mcp::broadcast::{EditorEvent, SharedBroadcaster};
 use mae_sync::encoding::{base64_to_update, update_to_base64};
 use mae_sync::kb::KbCollectionDoc;
 
+// Daemon-side dialer timings. These live in the daemon workspace (no editor
+// OptionRegistry here); they are fixed operational constants, not user options.
+// Kept as named consts with rationale per the no-magic-number principle (#7
+// corollary). If a deployment ever needs these tunable, promote them to
+// `daemon.toml`, not to hardcoded literals at the use site.
+/// Timeout for establishing an outbound peer connection (TCP/QUIC dial).
+/// Distinct from the editor's host-key *prompt* wait (`collab_host_key_prompt_timeout_secs`).
 const DIAL_TIMEOUT: Duration = Duration::from_secs(20);
+/// Per-message write timeout to a peer; a slow/stuck peer is dropped, not blocked on.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+/// How often the dialer re-scans for newly-authorized peers / pending shares to dial.
 const POLL_INTERVAL: Duration = Duration::from_secs(10);
+/// Reconnect backoff floor after a peer drop (grows toward RECONNECT_MAX).
 const RECONNECT_MIN: Duration = Duration::from_secs(2);
+/// Reconnect backoff ceiling — cap so a long-down peer is still retried ~1/min.
 const RECONNECT_MAX: Duration = Duration::from_secs(60);
 
 /// A broadcaster session-id for a dialer's LOCAL subscription, drawn from the top of
