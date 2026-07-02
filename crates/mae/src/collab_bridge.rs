@@ -103,8 +103,9 @@ fn is_epoch_fence_rejection(message: &str) -> bool {
     message.contains(EPOCH_FENCE_MARKER)
 }
 
-/// Capacity for the command channel (main thread -> collab background task).
-const COLLAB_CMD_CHANNEL_CAP: usize = 256;
+/// Capacity for the command channel (main thread -> collab background task) is
+/// user-tunable via the `collab_command_queue_size` option (default 256); see
+/// `spawn_collab_task`. Raise it for very high local edit throughput.
 /// Capacity for the event channel (collab background task -> main thread).
 /// Must be large enough to absorb bursts during main-thread stalls (e.g. scheme
 /// init, heavy rendering). If the channel fills, events are dropped and gap
@@ -2230,6 +2231,10 @@ pub(crate) struct CollabSpawn {
     backoff_factor: u64,
     max_reconnect_attempts: u64,
     heartbeat_secs: u64,
+    /// Minimum seconds between force-sync gathers for the same doc (debounce).
+    force_sync_debounce_secs: u64,
+    /// Milliseconds to wait after spawning a local daemon before connecting.
+    daemon_start_grace_ms: u64,
     /// How this editor authenticates to the daemon (psk / key+mTLS / key+JSON).
     transport: ClientTransport,
 }
@@ -2276,7 +2281,8 @@ pub(crate) fn setup_collab_channels(
     mpsc::Sender<CollabCommand>,
     CollabSpawn,
 ) {
-    let (cmd_tx, cmd_rx) = mpsc::channel::<CollabCommand>(COLLAB_CMD_CHANNEL_CAP);
+    let cmd_channel_cap = (editor.collab.command_queue_size as usize).max(1);
+    let (cmd_tx, cmd_rx) = mpsc::channel::<CollabCommand>(cmd_channel_cap);
     let (evt_tx, evt_rx) = mpsc::channel::<CollabEvent>(COLLAB_EVT_CHANNEL_CAP);
 
     let reconnect_secs = editor.collab.reconnect_interval;
@@ -2292,6 +2298,8 @@ pub(crate) fn setup_collab_channels(
     let backoff_factor = editor.collab.reconnect_backoff_factor;
     let max_reconnect_attempts = editor.collab.max_reconnect_attempts;
     let heartbeat_secs = editor.collab.heartbeat_interval;
+    let force_sync_debounce_secs = editor.collab.force_sync_debounce_secs;
+    let daemon_start_grace_ms = editor.collab.daemon_start_grace_ms;
 
     let transport = resolve_client_transport(editor, &evt_tx);
 
@@ -2305,6 +2313,8 @@ pub(crate) fn setup_collab_channels(
         backoff_factor,
         max_reconnect_attempts,
         heartbeat_secs,
+        force_sync_debounce_secs,
+        daemon_start_grace_ms,
         transport,
     };
 
@@ -2346,7 +2356,9 @@ fn resolve_client_transport(
                         std::sync::Arc::new(PromptingHostKeyVerifier {
                             known_hosts,
                             evt_tx: evt_tx.clone(),
-                            timeout: std::time::Duration::from_secs(120),
+                            timeout: std::time::Duration::from_secs(
+                                editor.collab.host_key_prompt_timeout_secs,
+                            ),
                             policy: editor.collab.host_key_policy_live.clone(),
                         });
                     let identity = std::sync::Arc::new(id);
@@ -2381,6 +2393,8 @@ pub(crate) fn spawn_collab_task(spawn: CollabSpawn) {
         spawn.backoff_factor,
         spawn.max_reconnect_attempts,
         spawn.heartbeat_secs,
+        spawn.force_sync_debounce_secs,
+        spawn.daemon_start_grace_ms,
         spawn.transport,
     ));
 
@@ -2950,6 +2964,8 @@ async fn run_collab_task(
     backoff_factor: u64,
     max_reconnect_attempts: u64,
     heartbeat_secs: u64,
+    force_sync_debounce_secs: u64,
+    daemon_start_grace_ms: u64,
     transport: ClientTransport,
 ) {
     use mae_mcp::write_framed;
@@ -3448,11 +3464,13 @@ async fn run_collab_task(
                             }
                         }
                         CollabCommand::ForceSync { doc_id } => {
-                            // Debounce: skip if we sent ForceSync for this doc within 2s.
+                            // Debounce: skip if we sent ForceSync for this doc within
+                            // the configured window (collab_force_sync_debounce_secs).
                             let now = std::time::Instant::now();
                             if let Some(last) = last_force_sync.get(&doc_id) {
-                                if now.duration_since(*last).as_secs() < 2 {
-                                    debug!(doc = %doc_id, "ForceSync debounced (within 2s)");
+                                if now.duration_since(*last).as_secs() < force_sync_debounce_secs {
+                                    debug!(doc = %doc_id, window_secs = force_sync_debounce_secs,
+                                        "ForceSync debounced");
                                     continue;
                                 }
                             }
@@ -4537,7 +4555,7 @@ async fn run_collab_task(
                                 &mut target_address, &mut reconnect_enabled,
                                 &mut shared_docs, &mut next_request_id,
                                 &mut pending_responses, write_timeout,
-                                &transport,
+                                daemon_start_grace_ms, &transport,
                             ).await;
                         }
                         _ = tokio::time::sleep(std::time::Duration::from_secs(
@@ -4603,6 +4621,7 @@ async fn run_collab_task(
                     &mut next_request_id,
                     &mut pending_responses,
                     write_timeout,
+                    daemon_start_grace_ms,
                     &transport,
                 )
                 .await;
@@ -5936,6 +5955,7 @@ async fn handle_disconnected_cmd(
     next_request_id: &mut u64,
     pending_responses: &mut std::collections::HashMap<u64, PendingResponseKind>,
     write_timeout: std::time::Duration,
+    daemon_start_grace_ms: u64,
     transport: &ClientTransport,
 ) {
     match cmd {
@@ -6004,7 +6024,8 @@ async fn handle_disconnected_cmd(
                     if let Err(e) = evt_tx.try_send(CollabEvent::ServerStarted { pid }) {
                         warn!("failed to send ServerStarted event: {}", e);
                     }
-                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    tokio::time::sleep(std::time::Duration::from_millis(daemon_start_grace_ms))
+                        .await;
                     let default_addr = mae_core::DEFAULT_COLLAB_ADDRESS.to_string();
                     let addr = target_address
                         .clone()

@@ -337,6 +337,14 @@ pub struct CollabState {
     pub max_reconnect_attempts: u64,
     /// Milliseconds to batch local updates before sending (0 = immediate).
     pub batch_update_ms: u64,
+    /// Bounded capacity of the editor→network command channel.
+    pub command_queue_size: u64,
+    /// Minimum seconds between force-sync gathers for the same doc (debounce).
+    pub force_sync_debounce_secs: u64,
+    /// Milliseconds to wait after spawning a local daemon before connecting.
+    pub daemon_start_grace_ms: u64,
+    /// Seconds to wait for a response to an unknown-daemon host-key trust prompt.
+    pub host_key_prompt_timeout_secs: u64,
     /// When joining a doc, prompt to map to local project path.
     pub auto_resolve_paths: bool,
     /// Default directory for :saveas on joined buffers (empty = CWD).
@@ -468,6 +476,10 @@ impl CollabState {
             reconnect_backoff_factor: 2,
             max_reconnect_attempts: 0,
             batch_update_ms: 0,
+            command_queue_size: 256,
+            force_sync_debounce_secs: 2,
+            daemon_start_grace_ms: 500,
+            host_key_prompt_timeout_secs: 120,
             auto_resolve_paths: false,
             default_save_dir: String::new(),
             save_on_remote_update: false,
