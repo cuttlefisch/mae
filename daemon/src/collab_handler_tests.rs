@@ -3559,6 +3559,131 @@ async fn signed_content_op_verified_or_rejected_on_anchored_kb() {
     );
 }
 
+/// #255 (E2E-on-mesh member decrypt) — the fix. On an OWNED KB that is ALSO mesh-
+/// shared, the owner's OWN signed content op must attach its authorship header to
+/// the broadcast (which the dialer relays to mesh peers). Before the fix the header
+/// was gated on `kb_anchor` — set only when a daemon JOINS a KB, which an owner
+/// never does for its own KB — so the owner's genuinely-signed edit reached a mesh-
+/// joined member STRIPPED of its signature and was rejected at the member's
+/// require-signed relay gate (the member got the content key but never usable
+/// ciphertext). `resolve_content_anchor` now anchors an owned KB on the owner's own
+/// signer key, so the header is attached and re-verifiable downstream. The failing
+/// assertion here (header present) is exactly what regressed the mesh member.
+#[tokio::test]
+async fn owned_kb_signed_op_broadcast_carries_content_header_for_mesh_relay() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::content_ops::{ContentOp, SignedContentOp};
+
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut docs = HashSet::new();
+
+    let owner = Identity::generate("owner");
+    let owner_fp = owner.fingerprint();
+    let owner_pub = owner.public().to_bytes();
+    let owner_secret = owner.secret_bytes();
+    store.set_signer(Arc::new(owner));
+
+    // Owner OWNS the KB. Crucially we do NOT set_kb_anchor — an owner never "joins"
+    // its own KB, so before the fix `kb_anchor()` was None and the header was never
+    // attached. `resolve_content_anchor` falls back to the owner's own signer key.
+    kb_share_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&owner_fp),
+        "kbc",
+        "owner",
+        &mut docs,
+    )
+    .await;
+
+    // Add a member — this seeds the signed owner-self-admit GENESIS (owner becomes a
+    // derived Owner member) plus admits bob, exactly as a real E2E-owner flow does
+    // before editing. Without a genesis the owner isn't a *derived* member and the
+    // trusted-local edit falls through to the legacy gate (still applies, just no
+    // header) — this test exercises the header-attach SUCCESS path.
+    let bob = Identity::generate("bob");
+    let bob_fp = bob.fingerprint();
+    dispatch_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&owner_fp),
+        kb_member_msg("kb/add_member", "kbc", &bob_fp, Some("editor")),
+        &mut docs,
+    )
+    .await;
+
+    // A peer session subscribes so we can capture the relayed broadcast (dispatch_as
+    // broadcasts under session 0 → everyone else receives it).
+    let peer_sid = 999u64;
+    let mut rx = {
+        let mut b = bc.lock().unwrap();
+        b.subscribe_doc(peer_sid, "kb:concept:n");
+        b.subscribe(peer_sid, vec!["sync_update".to_string()])
+    };
+
+    // Owner authors a SIGNED edit under its own epoch-0 KB client_id (so the ADR-023
+    // fence also passes — signing is an ADDITIONAL gate, not a bypass).
+    let cid = mae_sync::kb::derive_kb_client_id(&owner_fp, 0);
+    let mut ts = TextSync::with_client_id("", cid);
+    let upd = ts.insert(0, "owner edit destined for the mesh");
+    let op = ContentOp {
+        kb_id: "kbc".to_string(),
+        node_id: "concept:n".to_string(),
+        base_sv: vec![],
+        author: owner_fp.clone(),
+        epoch: 0,
+        issued_at: 1_700_000_000,
+    };
+    let sig = op.sign(&owner_secret, &upd);
+    let signed = SignedContentOp {
+        op,
+        payload: upd.clone(),
+        sig,
+        author_pubkey: owner_pub,
+    };
+
+    let resp = dispatch_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&owner_fp),
+        signed_node_update_msg("kbc", "concept:n", &upd, &signed),
+        &mut docs,
+    )
+    .await;
+    assert!(
+        resp.error.is_none(),
+        "owner's signed edit on its own KB applies: {:?}",
+        resp.error
+    );
+
+    // THE FIX: the broadcast for kb:concept:n MUST carry a content_header (Some), so
+    // the dialer relays a re-verifiable op to mesh peers. Before the fix it was None
+    // and the mesh joiner's require-signed gate rejected it (#255).
+    let mut saw = false;
+    while let Ok(ev) = rx.try_recv() {
+        if let EditorEvent::SyncUpdate {
+            buffer_name,
+            content_header,
+            ..
+        } = ev
+        {
+            if buffer_name == "kb:concept:n" {
+                assert!(
+                    content_header.is_some(),
+                    "owned-KB signed op MUST broadcast WITH a content_header for mesh \
+                     relay (#255) — got None, which a mesh member rejects as unsigned"
+                );
+                saw = true;
+            }
+        }
+    }
+    assert!(saw, "expected a SyncUpdate broadcast for kb:concept:n");
+}
+
 /// Unit coverage for the shared relay verifier on an OWNED KB (the B→A direction —
 /// the owner re-verifying a joiner's relayed op, anchor = its own signer key). Drives
 /// every branch: a valid member's op verifies; an unsigned op is rejected under

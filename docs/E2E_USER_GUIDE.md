@@ -236,12 +236,15 @@ It is deliberately *not* more than that. Be honest with yourself about the bound
 - **Key loss without a backup or recovery key** — unrecoverable (§1, §5).
 
 **v0.15 scope limits (tracked, being tightened):**
-- **E2E on the P2P mesh** — content now **seals over the mesh** and the relaying daemons are
-  key-blind (gated: ADR-043 + the `MAE_E2E_MESH` CI gate). But a member **joining over the mesh
-  cannot decrypt yet** — their wrap key doesn't reach the owner through the mesh join path, so they
-  are admitted keyless (tracked, #255). So: **enable E2E on the hub** for now; mesh E2E is
-  seal-capable but not member-readable end-to-end. (Also: the **permissive** join policy is
-  incompatible with E2E — it admits keyless members; use **invite** with E2E.)
+- **E2E on the P2P mesh** — content **seals over the mesh** and the relaying daemons are key-blind
+  (gated: ADR-043 + the `MAE_E2E_MESH` CI gate). The two member-readability blockers are now fixed:
+  a mesh-joining member's wrap key reaches the owner (#256), and the owner's signed content op keeps
+  its authorship header through the mesh relay so the member's require-signed gate accepts it (#255).
+  What remains is the **end-to-end proof**: a live-edit-after-join arm on the `MAE_E2E_MESH` gate
+  asserting a mesh-joined member actually **decrypts**. Until that gate arm is green, **enable E2E on
+  the hub** for the guaranteed path; mesh E2E-decrypt is code-complete but not yet CI-proven end to
+  end. (Also: the **permissive** join policy is incompatible with E2E — it admits keyless members;
+  use **invite** with E2E.)
 - **Joining after a removal + rotation** cannot decrypt ops sealed before you had access.
 
 If your threat model needs metadata privacy, insider protection, or forward secrecy, MAE's E2E is
