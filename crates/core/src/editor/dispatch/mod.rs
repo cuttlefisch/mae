@@ -197,7 +197,10 @@ impl Editor {
         if let Some(v) = self.dispatch_notifications(name) {
             return v;
         }
-        if name == "kb-sharing" {
+        // `:kb-sharing` and the documented `:kb-sharing-status` both open the
+        // *KB Sharing* buffer — the human status surface (the same snapshot the
+        // `(kb-sharing-status)` Scheme prim and `kb_sharing_status` MCP tool read).
+        if name == "kb-sharing" || name == "kb-sharing-status" {
             self.open_kb_sharing();
             return true;
         }

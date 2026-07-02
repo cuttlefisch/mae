@@ -321,6 +321,63 @@ fn tutor_nodes() -> Vec<Node> {
             LESSON_COLLAB_SETUP,
         )
         .with_tags(["tutorial", "collaboration", "daemon", "sync"]),
+        // E2E KB-sharing workflow lessons (Workstream F, #250).
+        Node::new(
+            "lesson:kb-set-encryption",
+            "Enabling E2E Encryption on a KB",
+            NodeKind::Lesson,
+            LESSON_KB_SET_ENCRYPTION,
+        )
+        .with_tags(["tutorial", "collaboration", "kb", "e2e", "encryption"]),
+        Node::new(
+            "lesson:kb-join-encrypted",
+            "Joining an Encrypted KB",
+            NodeKind::Lesson,
+            LESSON_KB_JOIN_ENCRYPTED,
+        )
+        .with_tags(["tutorial", "collaboration", "kb", "e2e", "encryption"]),
+        Node::new(
+            "lesson:kb-manage-members",
+            "Managing Members & Roles",
+            NodeKind::Lesson,
+            LESSON_KB_MANAGE_MEMBERS,
+        )
+        .with_tags(["tutorial", "collaboration", "kb", "membership"]),
+        Node::new(
+            "lesson:collab-rotate-identity",
+            "Rotating Your Identity Key",
+            NodeKind::Lesson,
+            LESSON_COLLAB_ROTATE_IDENTITY,
+        )
+        .with_tags(["tutorial", "collaboration", "identity", "rotation"]),
+        Node::new(
+            "lesson:collab-register-recovery-key",
+            "Registering a Recovery Key",
+            NodeKind::Lesson,
+            LESSON_COLLAB_REGISTER_RECOVERY_KEY,
+        )
+        .with_tags(["tutorial", "collaboration", "identity", "recovery"]),
+        Node::new(
+            "lesson:collab-recover-identity",
+            "Recovering a Lost Identity",
+            NodeKind::Lesson,
+            LESSON_COLLAB_RECOVER_IDENTITY,
+        )
+        .with_tags(["tutorial", "collaboration", "identity", "recovery"]),
+        Node::new(
+            "lesson:kb-share-p2p",
+            "Sharing a KB over P2P (beta)",
+            NodeKind::Lesson,
+            LESSON_KB_SHARE_P2P,
+        )
+        .with_tags(["tutorial", "collaboration", "kb", "p2p", "mesh"]),
+        Node::new(
+            "concept:kb-e2e-security-boundaries",
+            "What E2E Encryption Does NOT Protect",
+            NodeKind::Concept,
+            CONCEPT_KB_E2E_SECURITY_BOUNDARIES,
+        )
+        .with_tags(["concept", "collaboration", "e2e", "encryption", "security"]),
     ]
 }
 
@@ -1060,6 +1117,86 @@ mod tests {
         let links = kb.links_from("tutor:index");
         assert!(links.contains(&"lesson:navigation".to_string()));
         assert!(links.contains(&"lesson:leader".to_string()));
+    }
+
+    /// Verifiable docs (Workstream F, #250): the E2E KB-sharing workflow lessons
+    /// and the security-boundaries concept must exist AND name ONLY real,
+    /// registered commands. This ties the manual to the command surface — if a
+    /// lesson references a `:command` that isn't registered (a typo, a renamed
+    /// command, a Workstream-D regression), the build fails instead of shipping
+    /// a doc that tells the user to run something that doesn't exist.
+    #[test]
+    fn kb_sharing_lessons_exist_and_name_only_real_commands() {
+        let reg = CommandRegistry::with_builtins();
+        let kb = seed_kb_default(&reg);
+
+        let workflow_nodes = [
+            "lesson:kb-set-encryption",
+            "lesson:kb-join-encrypted",
+            "lesson:kb-manage-members",
+            "lesson:collab-rotate-identity",
+            "lesson:collab-register-recovery-key",
+            "lesson:collab-recover-identity",
+            "lesson:kb-share-p2p",
+            "concept:kb-e2e-security-boundaries",
+            // The central hub concept must also name only real commands.
+            "concept:kb-sharing",
+        ];
+
+        // Extract every `:command` token from an inline-code span: a backtick
+        // followed by ':' then the command name ([a-z0-9-]+).
+        fn commands_in(body: &str) -> Vec<String> {
+            let mut out = Vec::new();
+            let bytes = body.as_bytes();
+            let mut i = 0;
+            while i + 1 < bytes.len() {
+                if bytes[i] == b'`' && bytes[i + 1] == b':' {
+                    let start = i + 2;
+                    let mut j = start;
+                    while j < bytes.len()
+                        && (bytes[j].is_ascii_lowercase()
+                            || bytes[j].is_ascii_digit()
+                            || bytes[j] == b'-')
+                    {
+                        j += 1;
+                    }
+                    if j > start {
+                        out.push(body[start..j].to_string());
+                    }
+                    i = j;
+                } else {
+                    i += 1;
+                }
+            }
+            out
+        }
+
+        for id in workflow_nodes {
+            let node = kb
+                .get(id)
+                .unwrap_or_else(|| panic!("missing manual node: {id}"));
+            assert!(
+                node.body.len() > 200,
+                "manual node {id} is suspiciously short ({} bytes) — a stub is worse than nothing",
+                node.body.len()
+            );
+            for cmd in commands_in(&node.body) {
+                assert!(
+                    reg.contains(&cmd),
+                    "manual node {id} references `:{cmd}` which is NOT a registered command \
+                     (fix the doc or register the command — a manual must not name commands that don't exist)"
+                );
+            }
+        }
+
+        // The workflow lessons must be discoverable from the tutorial index.
+        let index_links = kb.links_from("tutor:index");
+        for id in ["lesson:kb-set-encryption", "lesson:kb-share-p2p"] {
+            assert!(
+                index_links.contains(&id.to_string()),
+                "tutor:index does not link to {id} — the lesson exists but is undiscoverable"
+            );
+        }
     }
 
     #[test]

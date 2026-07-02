@@ -1420,21 +1420,25 @@ impl CommandRegistry {
             "kb-set-encryption",
             "Enable E2E content encryption on an owned KB (:kb-set-encryption <kb> e2e)",
         );
+        // Canonical member/policy command names — match the Scheme prims, the MCP
+        // tools, and the docs (three-surface parity, #3). The editor dispatch also
+        // still accepts the historical `kb-member-*` / `kb-policy` spellings so
+        // existing muscle memory / configs keep working (see dispatch/collab.rs).
         reg.register_builtin(
-            "kb-member-add",
-            "Add a member to a KB by fingerprint (:kb-member-add <kb> <fp> [role])",
+            "kb-add-member",
+            "Add a member to a KB by fingerprint (:kb-add-member <kb> <fp> [role])",
         );
         reg.register_builtin(
-            "kb-member-remove",
-            "Remove a member from a KB (:kb-member-remove <kb> <fp>)",
+            "kb-remove-member",
+            "Remove a member from a KB (:kb-remove-member <kb> <fp>)",
         );
         reg.register_builtin(
-            "kb-member-block",
-            "Locally block a principal on a KB — self-protection, ADR-039 (:kb-member-block <kb> <fp>)",
+            "kb-block-member",
+            "Locally block a principal on a KB — self-protection, ADR-039 (:kb-block-member <kb> <fp>)",
         );
         reg.register_builtin(
-            "kb-member-unblock",
-            "Unblock a locally-blocked principal (:kb-member-unblock <kb> <fp>)",
+            "kb-unblock-member",
+            "Unblock a locally-blocked principal (:kb-unblock-member <kb> <fp>)",
         );
         reg.register_builtin(
             "kb-approve",
@@ -1445,12 +1449,20 @@ impl CommandRegistry {
             "List pending join requests for a KB (:kb-pending <kb>)",
         );
         reg.register_builtin(
-            "kb-policy",
-            "Set a KB's join policy: restrictive | invite | permissive (:kb-policy <kb> <policy>)",
+            "kb-set-policy",
+            "Set a KB's join policy: restrictive | invite | permissive (:kb-set-policy <kb> <policy>)",
         );
         reg.register_builtin(
             "kb-list-remote",
             "List KBs shared on the connected daemon (:kb-list-remote)",
+        );
+        reg.register_builtin(
+            "kb-sharing",
+            "Open the *KB Sharing* management buffer (members, roles, policy, pending)",
+        );
+        reg.register_builtin(
+            "kb-sharing-status",
+            "Show this peer's KB-sharing status in the *KB Sharing* buffer (:kb-sharing-status)",
         );
 
         reg
@@ -1524,13 +1536,14 @@ mod tests {
             "kb-share-p2p",
             "kb-join-p2p",
             "kb-set-encryption",
-            "kb-member-add",
-            "kb-member-remove",
-            "kb-member-block",
-            "kb-member-unblock",
+            // Canonical member/policy names (match Scheme + MCP + docs).
+            "kb-add-member",
+            "kb-remove-member",
+            "kb-block-member",
+            "kb-unblock-member",
             "kb-approve",
             "kb-pending",
-            "kb-policy",
+            "kb-set-policy",
             "kb-list-remote",
         ] {
             assert!(

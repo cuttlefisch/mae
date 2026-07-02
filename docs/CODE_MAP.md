@@ -606,7 +606,7 @@ Source: `shared/sync/src/lib.rs`
 | `undo-available?` | `crates/scheme/src/runtime.rs` |
 | `redo-available?` | `crates/scheme/src/runtime.rs` |
 
-## Commands (544 built-in)
+## Commands (546 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -1141,14 +1141,16 @@ Source: `shared/sync/src/lib.rs`
 | `kb-share-p2p` | Share a KB over the P2P mesh + mint a join ticket (:kb-share-p2p [kb]) |
 | `kb-join-p2p` | Join a KB from a P2P ticket (:kb-join-p2p <mae://join/…>) |
 | `kb-set-encryption` | Enable E2E content encryption on an owned KB (:kb-set-encryption <kb> e2e) |
-| `kb-member-add` | Add a member to a KB by fingerprint (:kb-member-add <kb> <fp> [role]) |
-| `kb-member-remove` | Remove a member from a KB (:kb-member-remove <kb> <fp>) |
-| `kb-member-block` | Locally block a principal on a KB — self-protection, ADR-039 (:kb-member-block <kb> <fp>) |
-| `kb-member-unblock` | Unblock a locally-blocked principal (:kb-member-unblock <kb> <fp>) |
+| `kb-add-member` | Add a member to a KB by fingerprint (:kb-add-member <kb> <fp> [role]) |
+| `kb-remove-member` | Remove a member from a KB (:kb-remove-member <kb> <fp>) |
+| `kb-block-member` | Locally block a principal on a KB — self-protection, ADR-039 (:kb-block-member <kb> <fp>) |
+| `kb-unblock-member` | Unblock a locally-blocked principal (:kb-unblock-member <kb> <fp>) |
 | `kb-approve` | Approve a pending join request as a role (:kb-approve <kb> <fp> [role]) |
 | `kb-pending` | List pending join requests for a KB (:kb-pending <kb>) |
-| `kb-policy` | Set a KB's join policy: restrictive | invite | permissive (:kb-policy <kb> <policy>) |
+| `kb-set-policy` | Set a KB's join policy: restrictive | invite | permissive (:kb-set-policy <kb> <policy>) |
 | `kb-list-remote` | List KBs shared on the connected daemon (:kb-list-remote) |
+| `kb-sharing` | Open the *KB Sharing* management buffer (members, roles, policy, pending) |
+| `kb-sharing-status` | Show this peer's KB-sharing status in the *KB Sharing* buffer (:kb-sharing-status) |
 | `move-down` | Move cursor down |
 | `move-down` | Move down |
 | `zzz` | Last |
