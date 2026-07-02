@@ -166,6 +166,12 @@ impl super::Editor {
             "collab_reconnect_backoff_factor" => self.collab.reconnect_backoff_factor.to_string(),
             "collab_max_reconnect_attempts" => self.collab.max_reconnect_attempts.to_string(),
             "collab_batch_update_ms" => self.collab.batch_update_ms.to_string(),
+            "collab_command_queue_size" => self.collab.command_queue_size.to_string(),
+            "collab_force_sync_debounce_secs" => self.collab.force_sync_debounce_secs.to_string(),
+            "collab_daemon_start_grace_ms" => self.collab.daemon_start_grace_ms.to_string(),
+            "collab_host_key_prompt_timeout_secs" => {
+                self.collab.host_key_prompt_timeout_secs.to_string()
+            }
             "collab_auto_resolve_paths" => self.collab.auto_resolve_paths.to_string(),
             "collab_default_save_dir" => self.collab.default_save_dir.clone(),
             "collab_save_on_remote_update" => self.collab.save_on_remote_update.to_string(),
@@ -689,6 +695,25 @@ impl super::Editor {
             }
             "collab_batch_update_ms" => {
                 self.collab.batch_update_ms = parse_option_int(value)? as u64;
+            }
+            "collab_command_queue_size" => {
+                let v = parse_option_int(value)? as u64;
+                // Bounded channel capacity: keep at least 1 slot; cap to avoid an
+                // unbounded-in-practice queue that would defeat backpressure.
+                self.collab.command_queue_size = v.clamp(1, 65_536);
+            }
+            "collab_force_sync_debounce_secs" => {
+                self.collab.force_sync_debounce_secs = parse_option_int(value)? as u64;
+            }
+            "collab_daemon_start_grace_ms" => {
+                let v = parse_option_int(value)? as u64;
+                self.collab.daemon_start_grace_ms = v.clamp(0, 60_000);
+            }
+            "collab_host_key_prompt_timeout_secs" => {
+                let v = parse_option_int(value)? as u64;
+                // Fail-closed prompt wait; keep a sane floor so it can't be set to
+                // effectively "never prompt / instantly reject".
+                self.collab.host_key_prompt_timeout_secs = v.clamp(5, 3600);
             }
             "collab_auto_resolve_paths" => {
                 self.collab.auto_resolve_paths = parse_option_bool(value)?;
@@ -1722,6 +1747,94 @@ mod daemon_mode_tests {
         // Invalid value is rejected, state unchanged.
         assert!(editor.set_option("daemon_mode", "nonsense").is_err());
         assert_eq!(editor.kb.daemon_mode, DaemonMode::OnDemand);
+    }
+
+    #[test]
+    fn collab_config_options_roundtrip_and_reach_editor_state() {
+        let mut editor = Editor::new();
+
+        // Defaults match the wired editor.collab fields (single source of truth).
+        assert_eq!(
+            editor.get_option("collab_command_queue_size").unwrap().0,
+            "256"
+        );
+        assert_eq!(
+            editor
+                .get_option("collab_force_sync_debounce_secs")
+                .unwrap()
+                .0,
+            "2"
+        );
+        assert_eq!(
+            editor.get_option("collab_daemon_start_grace_ms").unwrap().0,
+            "500"
+        );
+        assert_eq!(
+            editor
+                .get_option("collab_host_key_prompt_timeout_secs")
+                .unwrap()
+                .0,
+            "120"
+        );
+
+        // set_option round-trips through both get_option AND the editor.collab
+        // field the network task actually reads (the parity that matters — an
+        // option that doesn't reach its use site is theatre).
+        editor
+            .set_option("collab_command_queue_size", "1024")
+            .unwrap();
+        assert_eq!(editor.collab.command_queue_size, 1024);
+        assert_eq!(
+            editor.get_option("collab_command_queue_size").unwrap().0,
+            "1024"
+        );
+
+        editor
+            .set_option("collab_force_sync_debounce_secs", "9")
+            .unwrap();
+        assert_eq!(editor.collab.force_sync_debounce_secs, 9);
+
+        editor
+            .set_option("collab_daemon_start_grace_ms", "0")
+            .unwrap();
+        assert_eq!(editor.collab.daemon_start_grace_ms, 0);
+
+        editor
+            .set_option("collab_host_key_prompt_timeout_secs", "300")
+            .unwrap();
+        assert_eq!(editor.collab.host_key_prompt_timeout_secs, 300);
+    }
+
+    #[test]
+    fn collab_config_options_clamp_hostile_values() {
+        let mut editor = Editor::new();
+
+        // Queue size must keep at least one slot even if set to 0 (else the
+        // bounded channel would panic / deadlock).
+        editor.set_option("collab_command_queue_size", "0").unwrap();
+        assert!(
+            editor.collab.command_queue_size >= 1,
+            "queue size floored to >=1, got {}",
+            editor.collab.command_queue_size
+        );
+
+        // The host-key prompt wait must not be settable to an instant-reject
+        // value (fail-closed floor) — that would silently defeat the trust prompt.
+        editor
+            .set_option("collab_host_key_prompt_timeout_secs", "0")
+            .unwrap();
+        assert!(
+            editor.collab.host_key_prompt_timeout_secs >= 5,
+            "prompt wait floored, got {}",
+            editor.collab.host_key_prompt_timeout_secs
+        );
+
+        // Non-numeric input is rejected, state unchanged.
+        let before = editor.collab.daemon_start_grace_ms;
+        assert!(editor
+            .set_option("collab_daemon_start_grace_ms", "not-a-number")
+            .is_err());
+        assert_eq!(editor.collab.daemon_start_grace_ms, before);
     }
 
     #[test]
