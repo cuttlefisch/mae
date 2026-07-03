@@ -244,9 +244,24 @@ impl Editor {
                             (kb, report, health)
                         }
                         Err(e) => {
+                            // #265: a persistent-store ingestion failure must NOT swap silently
+                            // to an unpersisted in-memory KB — the user would lose everything on
+                            // restart with no warning. (Per-node parse errors no longer land here;
+                            // `import_org_dir_to_store` now tolerates those and reports them in
+                            // `report.errors`. Reaching this arm means a catastrophic store
+                            // failure.) Surface it prominently, then fall back so the editor is
+                            // still usable — but the user KNOWS this KB is in-memory only.
                             tracing::warn!(
                                 error = %e,
                                 "CozoDB ingestion failed, falling back to in-memory import"
+                            );
+                            self.message_log.push(
+                                crate::messages::MessageLevel::Error,
+                                "kb-import",
+                                format!(
+                                    "KB '{uuid}' could NOT be persisted ({e}) — loaded IN-MEMORY only; \
+                                     changes will be LOST on restart. Fix the store and re-import."
+                                ),
                             );
                             mae_kb::federation::import_org_dir(org_dir)
                         }

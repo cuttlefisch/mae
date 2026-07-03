@@ -544,10 +544,24 @@ pub fn import_org_dir_to_store(
             report.links_created += node.links().len();
 
             if seen_ids.insert(node.id.clone()) {
-                file_node_ids.push(node.id.clone());
-
-                // Write to CozoDB.
-                store.insert_node(&node)?;
+                // #265: write to CozoDB FIRST and tolerate a single bad node — do NOT
+                // `?`-abort the whole import. A failure at node k of N used to leave the
+                // persistent store partially populated (no rollback) while the caller
+                // silently swapped to an unpersisted in-memory copy; instead record the
+                // error and keep importing the rest. Only track the node (dedup id, kb
+                // mirror, counts) once it actually persisted.
+                let node_id = node.id.clone();
+                if let Err(e) = store.insert_node(&node) {
+                    report.errors.push((
+                        path.to_path_buf(),
+                        format!("node '{node_id}': persist failed: {e}"),
+                    ));
+                    seen_ids.remove(&node_id);
+                    // links were counted optimistically at parse time; undo this node's.
+                    report.links_created = report.links_created.saturating_sub(node.links().len());
+                    continue;
+                }
+                file_node_ids.push(node_id);
                 kb.insert(node);
 
                 // Check if this was an update or new node.
