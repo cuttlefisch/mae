@@ -55,7 +55,6 @@ defaults.
 # data_dir = "~/.local/share/mae"               # CozoDB store + WAL live here
 log_level = "info"                              # e.g. "mae_daemon=debug,info"
 # maintenance_interval_secs = 3600
-# sync_interval_secs = 30
 # health_interval_secs = 300
 
 [collab]
@@ -79,9 +78,24 @@ max_wal_entries = 5000                          # …or N WAL rows
 
 [collab.sync]
 compaction_interval_secs = 60
-max_update_size_bytes = 1048576                 # 1 MB — a single update is rejected above this
+# max_documents = 4096                          # working-set cap: ONE yrs doc per KB node
+                                                #   (kb:{node}) + one kbc:{kb} doc. Set ABOVE
+                                                #   your largest KB's node count to avoid
+                                                #   reload churn during sync. LRU cap only —
+                                                #   raising it costs memory only when exceeded.
+max_update_size_bytes = 4194304                 # 4 MiB — a single update is REJECTED above this
+                                                #   (DoS bound). Raise for KBs with large
+                                                #   individual nodes (a node's full-state push
+                                                #   on reseal/share must fit under it).
 max_document_size_bytes = 10485760              # 10 MB — WARN-only (CRDT convergence; see §6)
 ```
+
+> [!TIP]
+> **Tuning for a large KB.** Each KB *node* is its own CRDT document, so a KB with N nodes
+> is ~N+1 documents. For a multi-thousand-node KB set `max_documents` above N (default 4096
+> covers a few thousand). If a large node fails to sync with an "update too large" error,
+> raise `max_update_size_bytes`. Both are safe to raise — `max_documents` is a memory/LRU
+> cap, `max_update_size_bytes` is a per-message allocation bound.
 
 ### Auth modes
 

@@ -22,9 +22,10 @@ use crate::storage::{StorageBackend, StorageError};
 /// Built-in default for the per-update size gate (bytes), used when the operator
 /// has not set `[collab.sync] max_update_size_bytes` in `daemon.toml`. A fixed
 /// DoS/allocation safety bound (a hostile or buggy peer cannot force an unbounded
-/// per-message allocation); 1 MiB comfortably fits a large CRDT delta. Operators
-/// can raise it via config (see [`DocStore::with_max_update_size`]).
-pub const DEFAULT_MAX_UPDATE_SIZE: usize = 1_048_576; // 1 MiB
+/// per-message allocation) with headroom for a large node's full-state push.
+/// Kept in sync with `SyncConfig::default().max_update_size_bytes`. Operators can
+/// raise it via config (see [`DocStore::with_max_update_size`]).
+pub const DEFAULT_MAX_UPDATE_SIZE: usize = 4_194_304; // 4 MiB
 
 /// Per-document state.
 struct DocEntry {
