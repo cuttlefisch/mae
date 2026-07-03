@@ -44,9 +44,10 @@ pub struct DaemonConfig {
     pub watcher_interval_ms: u64,
     /// DB maintenance interval in seconds.
     pub maintenance_interval_secs: u64,
-    /// CRDT sync push interval in seconds.
+    /// RESERVED — not consumed by any task today (CRDT sync is event-driven, not
+    /// polled). Kept for forward-compat + config stability; see issue #263.
     pub sync_interval_secs: u64,
-    /// Activity decay interval in seconds.
+    /// RESERVED — not consumed by any task today. See issue #263.
     pub decay_interval_secs: u64,
     /// Health check interval in seconds.
     pub health_interval_secs: u64,
@@ -244,15 +245,24 @@ impl Default for StorageConfig {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct SyncConfig {
-    /// Heartbeat interval in seconds.
+    /// RESERVED — not consumed by any server-side task today. The live client
+    /// keepalive is the EDITOR-side `collab_heartbeat_interval` option, not this.
+    /// Kept for forward-compat + config stability; see issue #263.
     pub heartbeat_interval_secs: u64,
-    /// Maximum concurrent documents in memory.
+    /// Working-set cap: max concurrent yrs documents held in memory (LRU-evicted;
+    /// evicted docs lazily reload from SQLite on next access — a cap, not a limit
+    /// on KB size). NOTE: each KB **node** is its own doc (`kb:{node}`) plus one
+    /// `kbc:{kb}` collection doc, so a 2,800-node KB is ~2,801 docs — set this
+    /// above your largest KB's node count to avoid reload churn during active sync.
     pub max_documents: usize,
     /// Idle eviction timeout in seconds (0 = disabled).
     pub idle_eviction_secs: u64,
     /// Background compaction interval in seconds.
     pub compaction_interval_secs: u64,
-    /// Maximum update payload size in bytes (0 = unlimited).
+    /// Hard cap on a single sync-update payload (bytes; 0 = built-in default). A
+    /// DoS/allocation safety bound — an over-cap update is REJECTED, not truncated,
+    /// so a large node's full-state push (e.g. on reseal/share) must fit under it.
+    /// Raise for KBs with large individual nodes.
     pub max_update_size_bytes: usize,
     /// Maximum document size in bytes before warning (0 = unlimited).
     pub max_document_size_bytes: usize,
@@ -262,10 +272,15 @@ impl Default for SyncConfig {
     fn default() -> Self {
         SyncConfig {
             heartbeat_interval_secs: 30,
-            max_documents: 1000,
+            // Covers a few-thousand-node KB out of the box (one doc per node); a
+            // pure LRU cap, so raising it only costs memory when the working set
+            // actually exceeds it. Tune up in daemon.toml for very large KBs.
+            max_documents: 4096,
             idle_eviction_secs: 300,
             compaction_interval_secs: 60,
-            max_update_size_bytes: 1_048_576,    // 1 MB
+            // 4 MiB: headroom for a large node's full-state push while still bounding
+            // per-message allocation. Over-cap updates are rejected — see the field doc.
+            max_update_size_bytes: 4_194_304,    // 4 MiB
             max_document_size_bytes: 10_485_760, // 10 MB
         }
     }

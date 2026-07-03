@@ -1477,7 +1477,17 @@ impl Editor {
                 blocked,
             },
         };
-        self.collab.pending_intent = Some(intent);
+        // The command + MCP surfaces queue one action per apply cycle, but the
+        // Scheme/AI surface can lower SEVERAL lifecycle calls in a single eval
+        // (e.g. bulk member onboarding: `(kb-add-member …)(kb-add-member …)`).
+        // The single `pending_intent` slot only holds the LAST, silently dropping
+        // the rest. Fan the overflow through the same one-per-tick `reconnect_intents`
+        // queue the reconnect path uses (see collab_bridge drain), preserving order.
+        if self.collab.pending_intent.is_none() {
+            self.collab.pending_intent = Some(intent);
+        } else {
+            self.collab.reconnect_intents.push_back(intent);
+        }
     }
 
     /// Build this peer's KB-sharing introspection snapshot — the single source of
@@ -4947,5 +4957,44 @@ mod tests {
             advisory2, 0,
             "no advisory should fire for a non-e2e SetEncryption mode"
         );
+    }
+
+    /// Pre-dogfood review: the Scheme/AI surface can lower several lifecycle
+    /// actions in ONE apply cycle (bulk member onboarding). The single
+    /// `pending_intent` slot used to keep only the LAST, silently dropping the
+    /// rest — an owner who scripted "add a, add b, add c" got only c, with no
+    /// error. Assert all N survive (1 in the slot + the rest fanned out through
+    /// `reconnect_intents`, the same one-per-tick queue the reconnect path drains).
+    #[test]
+    fn batched_kb_collab_actions_do_not_collapse_to_the_last() {
+        use crate::editor::{CollabIntent, KbCollabAction};
+        let mut editor = Editor::new();
+        for fp in ["SHA256:a", "SHA256:b", "SHA256:c"] {
+            editor.queue_kb_collab_action(KbCollabAction::AddMember {
+                kb_id: "kb".into(),
+                member: fp.into(),
+                role: "editor".into(),
+            });
+        }
+        // 1 in the active slot + 2 fanned out = 3 total, none dropped.
+        assert!(
+            editor.collab.pending_intent.is_some(),
+            "first action in the slot"
+        );
+        assert_eq!(
+            editor.collab.reconnect_intents.len(),
+            2,
+            "the other two batched actions must be queued, not overwritten"
+        );
+
+        // FIFO order preserved: slot = a, queue = [b, c].
+        let members: Vec<String> = std::iter::once(editor.collab.pending_intent.clone().unwrap())
+            .chain(editor.collab.reconnect_intents.iter().cloned())
+            .map(|i| match i {
+                CollabIntent::KbAddMember { member, .. } => member,
+                other => panic!("expected KbAddMember, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(members, vec!["SHA256:a", "SHA256:b", "SHA256:c"]);
     }
 }
