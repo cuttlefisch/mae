@@ -223,7 +223,7 @@ A unit file is provided at `assets/mae-daemon.service`. The recommended
 way to install it is:
 
 ```bash
-make install-service
+make install-daemon-service
 # Builds binary, installs unit file, runs daemon-reload
 ```
 

@@ -87,7 +87,43 @@ pub fn lookup(model: &str) -> Option<ModelPrice> {
 /// the first match wins. Keep sorted within each provider by specificity.
 const TABLE: &[(&str, ModelPrice)] = &[
     // ---- Anthropic ----
-    // Claude Opus 4.6 (and 4.x opus family)
+    // Longest-prefix wins. Claude Fable 5 is the priciest tier — without an
+    // entry `lookup` returned None and the budget tracker treated it as free.
+    (
+        "claude-fable-5",
+        ModelPrice {
+            input_per_mtok: 10.0,
+            cache_read_per_mtok: 1.0, // 10% rate for cached input
+            output_per_mtok: 50.0,
+        },
+    ),
+    // Opus 4.6/4.7/4.8 dropped to $5/$25 (from the 4.0/4.1/4.5 $15/$75).
+    (
+        "claude-opus-4-8",
+        ModelPrice {
+            input_per_mtok: 5.0,
+            cache_read_per_mtok: 0.50,
+            output_per_mtok: 25.0,
+        },
+    ),
+    (
+        "claude-opus-4-7",
+        ModelPrice {
+            input_per_mtok: 5.0,
+            cache_read_per_mtok: 0.50,
+            output_per_mtok: 25.0,
+        },
+    ),
+    (
+        "claude-opus-4-6",
+        ModelPrice {
+            input_per_mtok: 5.0,
+            cache_read_per_mtok: 0.50,
+            output_per_mtok: 25.0,
+        },
+    ),
+    // Older Opus (4.0/4.1/4.5) — kept at $15/$75 so the budget tracker
+    // errs on the overestimate side for any pinned legacy revision.
     (
         "claude-opus-4",
         ModelPrice {
@@ -96,7 +132,7 @@ const TABLE: &[(&str, ModelPrice)] = &[
             output_per_mtok: 75.0,
         },
     ),
-    // Claude Sonnet 4.x (4-5, 4-6, dated revisions)
+    // Claude Sonnet 4.x (4-5, 4-6, dated revisions) — all $3/$15
     (
         "claude-sonnet-4",
         ModelPrice {
@@ -257,6 +293,27 @@ mod tests {
         let p = lookup("claude-sonnet-4-5").unwrap();
         assert_eq!(p.input_per_mtok, 3.0);
         assert_eq!(p.output_per_mtok, 15.0);
+    }
+
+    #[test]
+    fn fable_5_is_priced_not_free() {
+        // Regression: without an entry, lookup returned None and the budget
+        // tracker treated the priciest model as free/unmetered.
+        let p = lookup("claude-fable-5").expect("fable 5 must be priced");
+        assert_eq!(p.input_per_mtok, 10.0);
+        assert_eq!(p.output_per_mtok, 50.0);
+    }
+
+    #[test]
+    fn opus_4_6_plus_cheaper_than_legacy_opus() {
+        // 4.6/4.7/4.8 dropped to $5/$25; the bare claude-opus-4 prefix (older
+        // revisions) stays at $15/$75.
+        let new = lookup("claude-opus-4-8").unwrap();
+        let old = lookup("claude-opus-4-1").unwrap();
+        assert_eq!(new.input_per_mtok, 5.0);
+        assert_eq!(new.output_per_mtok, 25.0);
+        assert_eq!(old.input_per_mtok, 15.0);
+        assert_eq!(old.output_per_mtok, 75.0);
     }
 
     #[test]
