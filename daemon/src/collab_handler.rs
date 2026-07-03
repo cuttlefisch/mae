@@ -1107,6 +1107,67 @@ async fn current_member_set(
 /// each successor into the owned-KB roster (inheriting the predecessor's role), giving it
 /// access on a roster-model daemon — the derive-based peers already alias it via the PR2a/PR3
 /// post-pass.
+/// Extract the `(successor, predecessor)` pairs of the authenticated principal's OWN
+/// self-`Rebind`s from a collection `update`, for mirroring an **owner's** rotation into
+/// the roster (#265).
+///
+/// Unlike [`verify_member_self_service_update`] — which requires the WHOLE update be a bare
+/// self-service op and is only reached when `Manage` DENIES — an owner reaches the caller
+/// via `Manage = Allow` and is authorized to make OTHER changes in the same update (e.g.
+/// re-wrapping the E2E content key to the new key). So we cannot run the strict
+/// append-only/every-op-is-self-service gate; instead we scan for JUST the caller's own
+/// valid self-`Rebind`s and ignore the rest. A pair is emitted ONLY when the new `Rebind`
+/// is authored by `principal`, self-signed by `principal`'s primary, and binds a fresh
+/// successor key to its fingerprint — so this can never inject an arbitrary member (the
+/// predecessor is always the authenticated caller, and the successor inherits the caller's
+/// own role). Best-effort: any decode/apply failure yields no pairs (the op-log write still
+/// happens; only the roster mirror is skipped).
+async fn owner_self_rebind_pairs(
+    doc_store: &DocStore,
+    kb_id: &str,
+    principal: &str,
+    update: &[u8],
+) -> Vec<(String, String)> {
+    if principal.is_empty() {
+        return Vec::new();
+    }
+    let collection_doc = format!("kbc:{kb_id}");
+    let Ok((state, _sv)) = doc_store.encode_state_and_sv(&collection_doc).await else {
+        return Vec::new();
+    };
+    let Ok(before) = KbCollectionDoc::from_bytes(&state) else {
+        return Vec::new();
+    };
+    let Ok(mut after) = KbCollectionDoc::from_bytes(&state) else {
+        return Vec::new();
+    };
+    if after.apply_update(update).is_err() {
+        return Vec::new();
+    }
+    let before_hashes: HashSet<String> =
+        before.oplog_ops().iter().map(|o| o.chain_hash()).collect();
+    let mut pairs = Vec::new();
+    for o in after.oplog_ops() {
+        if before_hashes.contains(&o.chain_hash()) {
+            continue; // only NEW ops
+        }
+        if o.op.action != MembershipAction::Rebind {
+            continue;
+        }
+        let Some(npk) = o.op.new_pubkey else { continue };
+        // The caller's OWN self-rotation: predecessor (author) is the authenticated
+        // principal, self-signed by its primary, successor bound to a fresh key.
+        if o.op.author != principal || o.op.subject == o.op.author {
+            continue;
+        }
+        if fingerprint_of(&npk) != o.op.subject || !o.verify_signed() {
+            continue;
+        }
+        pairs.push((o.op.subject.clone(), o.op.author.clone()));
+    }
+    pairs
+}
+
 async fn verify_member_self_service_update(
     doc_store: &DocStore,
     kb_id: &str,
@@ -2795,12 +2856,26 @@ async fn handle_doc_request_inner(
             // (`verify_member_self_service_update`) and nothing else.
             let manage =
                 kb_access(doc_store, &kb_id, auth_principal, KbOp::Manage, transport).await;
-            // The `(successor, predecessor)` pairs of an accepted member rotation/recovery,
-            // empty for the owner path and for a bare recovery-key registration — used to
-            // mirror the successor into the roster below.
-            let mut rebind_pairs: Vec<(String, String)> = Vec::new();
-            match manage {
-                Ok(AccessDecision::Allow) => {}
+            // The `(successor, predecessor)` pairs of an accepted rotation/recovery — used to
+            // mirror each successor into the roster below. On the OWNER path (#265) these are
+            // the owner's own self-`Rebind`s; on the member path they are the verified member
+            // self-service rebinds; a bare recovery-key registration contributes none.
+            let rebind_pairs: Vec<(String, String)> = match manage {
+                Ok(AccessDecision::Allow) => {
+                    // #265: an OWNER's self-rotation reaches HERE (Manage = Allow), and its
+                    // `Rebind` must ALSO be mirrored into the roster — otherwise on an
+                    // un-anchored (owned/hub) KB the owner is locked out of their own KB after
+                    // reconnecting under the new key (`role_of(new_fp) = None`). The member
+                    // branch below already does this for non-owner rotations; do the same for
+                    // the owner. (Scans only the caller's own self-`Rebind`s — see the helper.)
+                    owner_self_rebind_pairs(
+                        doc_store,
+                        &kb_id,
+                        auth_principal.unwrap_or(""),
+                        &update,
+                    )
+                    .await
+                }
                 other => {
                     match verify_member_self_service_update(
                         doc_store,
@@ -2818,7 +2893,7 @@ async fn handle_doc_request_inner(
                                 rebinds = pairs.len(),
                                 "kb/collection_op: accepted a member self-service identity op (ADR-040 PR2c/PR3)"
                             );
-                            rebind_pairs = pairs;
+                            pairs
                         }
                         Err(rebind_reason) => {
                             let base = match other {
@@ -2834,7 +2909,7 @@ async fn handle_doc_request_inner(
                         }
                     }
                 }
-            }
+            };
             // #156 F5: the owner sets `scrub` on the enable-time manifest-title-blank op so
             // the daemon force-COMPACTS the `kbc:` doc after applying — re-snapshotting the
             // title-blanked state and trimming + TRUNCATE-checkpointing the WAL (secure_delete

@@ -4066,6 +4066,102 @@ async fn member_cannot_smuggle_a_non_rebind_op() {
     );
 }
 
+/// #265: an OWNER's self-rotation reaches the write gate via `Manage = Allow` (not the
+/// member self-service branch), so its `Rebind` was NEVER mirrored into the roster — on an
+/// un-anchored (owned/hub) KB the owner was locked out of their own KB after reconnecting
+/// under the new key (`role_of(new_fp) = None` → Deny). This asserts the successor now
+/// inherits Owner in the roster, so there is no self-lockout.
+#[tokio::test]
+async fn owner_self_rebind_is_mirrored_into_the_roster_no_lockout() {
+    use mae_sync::kb::Role;
+    use mae_sync::membership::MembershipAction;
+
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut docs = HashSet::new();
+    let o = rotor_keys(31); // REAL-keyed owner (must sign its own Rebind)
+    let o2 = rotor_keys(32); // the owner's fresh successor key
+
+    // Owner shares an un-anchored (roster-model / hub) KB — no set_kb_anchor.
+    kb_share_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&o.2),
+        "kbo1",
+        "owner",
+        &mut docs,
+    )
+    .await;
+    assert_eq!(
+        load_coll(&store, "kbo1").await.role_of(&o.2),
+        Some(Role::Owner),
+        "sanity: the owner holds Owner in the roster on an un-anchored KB"
+    );
+
+    // The owner rotates into o2 (the OLD owner key signs the Rebind).
+    let mut coll = load_coll(&store, "kbo1").await;
+    let update = coll.author_rebind("kbo1", &o.2, &o2.2, &o2.1, &o2.3, &o.0, &o.1, 1000);
+    let r = dispatch_as(
+        &store,
+        &bc,
+        Some("owner"),
+        Some(&o.2),
+        kb_collection_op_msg("kbo1", &update),
+        &mut docs,
+    )
+    .await;
+    assert!(
+        r.error.is_none(),
+        "the owner's own self-rotation must be accepted: {:?}",
+        r.error
+    );
+
+    let stored = load_coll(&store, "kbo1").await;
+    assert_eq!(
+        stored.role_of(&o2.2),
+        Some(Role::Owner),
+        "the rotated owner successor MUST inherit Owner in the roster — no self-lockout (#265)"
+    );
+    assert!(
+        stored
+            .oplog_ops()
+            .iter()
+            .any(|op| op.op.action == MembershipAction::Rebind
+                && op.op.author == o.2
+                && op.op.subject == o2.2),
+        "the owner's Rebind is durably in the op-log"
+    );
+}
+
+/// Adversarial (#265): the owner-path roster mirror must only ever mirror the AUTHENTICATED
+/// principal's OWN self-`Rebind` — it can never be a vector to inject an arbitrary member.
+/// A `Rebind` authored by a DIFFERENT principal (here the member's own rotation, carried in
+/// an update) yields NO pair for a caller who isn't its author.
+#[tokio::test]
+async fn owner_path_does_not_mirror_a_rebind_authored_by_another_principal() {
+    let (store, _bc, m, _docs) = kb_with_member("kbo2", 41).await;
+    let m2 = rotor_keys(42);
+    // The MEMBER authors their own valid self-rotation (author = m).
+    let mut coll = load_coll(&store, "kbo2").await;
+    let update = coll.author_rebind("kbo2", &m.2, &m2.2, &m2.1, &m2.3, &m.0, &m.1, 1000);
+
+    // The owner-path extractor, invoked with the OWNER as principal, must NOT surface the
+    // member's rebind (author m ≠ principal) — so the owner can't mirror someone else's key.
+    let pairs = owner_self_rebind_pairs(&store, "kbo2", &fp("owner"), &update).await;
+    assert!(
+        pairs.is_empty(),
+        "the owner path must not mirror a Rebind authored by another principal, got {pairs:?}"
+    );
+    // But the member's OWN principal does surface it (sanity that the filter is author-based).
+    let self_pairs = owner_self_rebind_pairs(&store, "kbo2", &m.2, &update).await;
+    assert_eq!(
+        self_pairs,
+        vec![(m2.2.clone(), m.2.clone())],
+        "author-matched self-rebind is surfaced"
+    );
+}
+
 #[tokio::test]
 async fn forged_rebind_signature_is_rejected() {
     use mae_sync::membership::MembershipAction;

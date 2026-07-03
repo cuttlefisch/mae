@@ -4020,6 +4020,26 @@ async fn run_collab_task(
                                 }
                             }
                             if !shipped_e2e {
+                                // #265: adding a member by FINGERPRINT to an E2e KB cannot wrap
+                                // the content key (we don't hold their published X25519 wrap key),
+                                // so they'd be admitted KEYLESS — in the roster but unable to
+                                // decrypt any content. Don't let that pass silently: warn the
+                                // owner and steer them to the join→approve path, which DOES seal
+                                // the key to the member's published wrap key. (The add still
+                                // proceeds so the member can be re-keyed on a later approve.)
+                                if add && content_keys.contains_key(&kb_id) {
+                                    try_send_evt(
+                                        &evt_tx,
+                                        CollabEvent::StatusReport {
+                                            lines: vec![
+                                                format!("⚠  '{member}' added to ENCRYPTED KB '{kb_id}' by fingerprint — they are KEYLESS and cannot decrypt content."),
+                                                "   A fingerprint add can't seal the content key (no published wrap key to seal to).".to_string(),
+                                                "   Have the member run  :kb-join  and approve them with  :kb-approve  — that seals the key.".to_string(),
+                                            ],
+                                        },
+                                    );
+                                    warn!(kb = %kb_id, member = %member, "kb/add_member on an E2e KB by fingerprint — member is KEYLESS until they join+approve (#265)");
+                                }
                                 if let Some(ref mut w) = writer {
                                     let req_id = next_request_id;
                                     next_request_id += 1;
