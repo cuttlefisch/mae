@@ -1,6 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 use tracing::{debug, error, info, warn};
 
@@ -373,7 +375,7 @@ impl SchemeRuntime {
             "Return GC statistics as an association list.",
             Arity::Fixed(0),
             move |_args| {
-                let st = s.lock().unwrap();
+                let st = s.lock();
                 let stats = &st.gc_stats_snapshot;
                 Ok(Value::list(vec![
                     Value::cons(
@@ -412,7 +414,7 @@ impl SchemeRuntime {
                 let map = arg_string(args, 0, "define-key")?;
                 let key = arg_string(args, 1, "define-key")?;
                 let cmd = arg_string(args, 2, "define-key")?;
-                s.lock().unwrap().keymap_bindings.push((map, key, cmd));
+                s.lock().keymap_bindings.push((map, key, cmd));
                 Ok(Value::Void)
             },
         );
@@ -426,7 +428,7 @@ impl SchemeRuntime {
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "define-keymap")?;
                 let parent = arg_string(args, 1, "define-keymap")?;
-                s.lock().unwrap().keymap_defs.push((name, parent));
+                s.lock().keymap_defs.push((name, parent));
                 Ok(Value::Void)
             },
         );
@@ -446,7 +448,6 @@ impl SchemeRuntime {
                 let selector_value = arg_string(args, 1, "bind-context-keymap")?;
                 let keymap = arg_string(args, 2, "bind-context-keymap")?;
                 s.lock()
-                    .unwrap()
                     .context_bindings
                     .push((selector_type, selector_value, keymap));
                 Ok(Value::Void)
@@ -463,7 +464,7 @@ impl SchemeRuntime {
                 let name = arg_string(args, 0, "define-command")?;
                 let doc = arg_string(args, 1, "define-command")?;
                 let fn_name = arg_string(args, 2, "define-command")?;
-                s.lock().unwrap().command_defs.push((name, doc, fn_name));
+                s.lock().command_defs.push((name, doc, fn_name));
                 Ok(Value::Void)
             },
         );
@@ -476,7 +477,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let msg = arg_string(args, 0, "set-status")?;
-                s.lock().unwrap().status_message = Some(msg);
+                s.lock().status_message = Some(msg);
                 Ok(Value::Void)
             },
         );
@@ -489,7 +490,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "set-theme")?;
-                s.lock().unwrap().theme_request = Some(name);
+                s.lock().theme_request = Some(name);
                 Ok(Value::Void)
             },
         );
@@ -504,7 +505,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let text = arg_string(args, 0, "buffer-insert")?;
-                s.lock().unwrap().pending_insert = Some(text);
+                s.lock().pending_insert = Some(text);
                 Ok(Value::Void)
             },
         );
@@ -518,7 +519,7 @@ impl SchemeRuntime {
             move |args: &[Value]| {
                 let row = arg_int(args, 0, "cursor-goto")?;
                 let col = arg_int(args, 1, "cursor-goto")?;
-                s.lock().unwrap().pending_cursor = Some((row.max(0) as usize, col.max(0) as usize));
+                s.lock().pending_cursor = Some((row.max(0) as usize, col.max(0) as usize));
                 Ok(Value::Void)
             },
         );
@@ -531,7 +532,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let path = arg_string(args, 0, "open-file")?;
-                s.lock().unwrap().pending_open_file = Some(path);
+                s.lock().pending_open_file = Some(path);
                 Ok(Value::Void)
             },
         );
@@ -544,7 +545,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "run-command")?;
-                s.lock().unwrap().pending_commands.push(name);
+                s.lock().pending_commands.push(name);
                 Ok(Value::Void)
             },
         );
@@ -557,7 +558,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let cmd = arg_string(args, 0, "execute-ex")?;
-                s.lock().unwrap().pending_ex_commands.push(cmd);
+                s.lock().pending_ex_commands.push(cmd);
                 Ok(Value::Void)
             },
         );
@@ -570,7 +571,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let text = arg_string(args, 0, "message")?;
-                s.lock().unwrap().pending_messages.push(text);
+                s.lock().pending_messages.push(text);
                 Ok(Value::Void)
             },
         );
@@ -586,7 +587,7 @@ impl SchemeRuntime {
             move |args: &[Value]| {
                 let hook = arg_string(args, 0, "add-hook!")?;
                 let fn_name = arg_string(args, 1, "add-hook!")?;
-                s.lock().unwrap().pending_hook_adds.push((hook, fn_name));
+                s.lock().pending_hook_adds.push((hook, fn_name));
                 Ok(Value::Void)
             },
         );
@@ -600,7 +601,7 @@ impl SchemeRuntime {
             move |args: &[Value]| {
                 let hook = arg_string(args, 0, "remove-hook!")?;
                 let fn_name = arg_string(args, 1, "remove-hook!")?;
-                s.lock().unwrap().pending_hook_removes.push((hook, fn_name));
+                s.lock().pending_hook_removes.push((hook, fn_name));
                 Ok(Value::Void)
             },
         );
@@ -616,7 +617,7 @@ impl SchemeRuntime {
             move |args: &[Value]| {
                 let key = arg_string(args, 0, "set-option!")?;
                 let value = arg_string(args, 1, "set-option!")?;
-                s.lock().unwrap().pending_options.push((key, value));
+                s.lock().pending_options.push((key, value));
                 Ok(Value::Void)
             },
         );
@@ -630,7 +631,7 @@ impl SchemeRuntime {
             move |args: &[Value]| {
                 let key = arg_string(args, 0, "set-local-option!")?;
                 let value = arg_string(args, 1, "set-local-option!")?;
-                s.lock().unwrap().pending_local_options.push((key, value));
+                s.lock().pending_local_options.push((key, value));
                 Ok(Value::Void)
             },
         );
@@ -664,7 +665,7 @@ impl SchemeRuntime {
             move |args: &[Value]| {
                 let kind = arg_string(args, 0, "set-display-rule!")?;
                 let action = arg_string(args, 1, "set-display-rule!")?;
-                s.lock().unwrap().pending_display_rules.push((kind, action));
+                s.lock().pending_display_rules.push((kind, action));
                 Ok(Value::Void)
             },
         );
@@ -678,10 +679,7 @@ impl SchemeRuntime {
             move |args: &[Value]| {
                 let kind = arg_string(args, 0, "set-buffer-kind-replaceable!")?;
                 let enable = arg_bool(args, 1, "set-buffer-kind-replaceable!")?;
-                s.lock()
-                    .unwrap()
-                    .pending_replaceable_kinds
-                    .push((kind, enable));
+                s.lock().pending_replaceable_kinds.push((kind, enable));
                 Ok(Value::Void)
             },
         );
@@ -698,10 +696,7 @@ impl SchemeRuntime {
                 let buf_idx = arg_int(args, 0, "shell-send-input")?;
                 let text = arg_string(args, 1, "shell-send-input")?;
                 if buf_idx >= 0 {
-                    s.lock()
-                        .unwrap()
-                        .pending_shell_inputs
-                        .push((buf_idx as usize, text));
+                    s.lock().pending_shell_inputs.push((buf_idx as usize, text));
                 }
                 Ok(Value::Void)
             },
@@ -714,7 +709,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let path = arg_string(args, 0, "recent-files-add!")?;
-                s.lock().unwrap().pending_recent_files.push(path);
+                s.lock().pending_recent_files.push(path);
                 Ok(Value::Void)
             },
         );
@@ -726,7 +721,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let path = arg_string(args, 0, "recent-projects-add!")?;
-                s.lock().unwrap().pending_recent_projects.push(path);
+                s.lock().pending_recent_projects.push(path);
                 Ok(Value::Void)
             },
         );
@@ -740,7 +735,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let path = arg_string(args, 0, "agenda-add!")?;
-                s.lock().unwrap().pending_agenda_adds.push(path);
+                s.lock().pending_agenda_adds.push(path);
                 Ok(Value::Void)
             },
         );
@@ -752,7 +747,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let path = arg_string(args, 0, "agenda-remove!")?;
-                s.lock().unwrap().pending_agenda_removes.push(path);
+                s.lock().pending_agenda_removes.push(path);
                 Ok(Value::Void)
             },
         );
@@ -763,7 +758,7 @@ impl SchemeRuntime {
             "Display agenda file list",
             Arity::Fixed(0),
             move |_args: &[Value]| {
-                s.lock().unwrap().pending_agenda_list = true;
+                s.lock().pending_agenda_list = true;
                 Ok(Value::Void)
             },
         );
@@ -782,17 +777,14 @@ impl SchemeRuntime {
                 let h = arg_float(args, 3, "visual-buffer-add-rect!")? as f32;
                 let fill = arg_opt_string(args, 4, "visual-buffer-add-rect!");
                 let stroke = arg_opt_string(args, 5, "visual-buffer-add-rect!");
-                s.lock()
-                    .unwrap()
-                    .pending_visual_ops
-                    .push(VisualOp::AddRect {
-                        x,
-                        y,
-                        w,
-                        h,
-                        fill,
-                        stroke,
-                    });
+                s.lock().pending_visual_ops.push(VisualOp::AddRect {
+                    x,
+                    y,
+                    w,
+                    h,
+                    fill,
+                    stroke,
+                });
                 Ok(Value::Void)
             },
         );
@@ -803,7 +795,7 @@ impl SchemeRuntime {
             "Clear all visual elements",
             Arity::Fixed(0),
             move |_args: &[Value]| {
-                s.lock().unwrap().pending_visual_ops.push(VisualOp::Clear);
+                s.lock().pending_visual_ops.push(VisualOp::Clear);
                 Ok(Value::Void)
             },
         );
@@ -820,17 +812,14 @@ impl SchemeRuntime {
                 let y2 = arg_float(args, 3, "visual-buffer-add-line!")? as f32;
                 let color = arg_string(args, 4, "visual-buffer-add-line!")?;
                 let thickness = arg_float(args, 5, "visual-buffer-add-line!")? as f32;
-                s.lock()
-                    .unwrap()
-                    .pending_visual_ops
-                    .push(VisualOp::AddLine {
-                        x1,
-                        y1,
-                        x2,
-                        y2,
-                        color,
-                        thickness,
-                    });
+                s.lock().pending_visual_ops.push(VisualOp::AddLine {
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    color,
+                    thickness,
+                });
                 Ok(Value::Void)
             },
         );
@@ -846,16 +835,13 @@ impl SchemeRuntime {
                 let r = arg_float(args, 2, "visual-buffer-add-circle!")? as f32;
                 let fill = arg_opt_string(args, 3, "visual-buffer-add-circle!");
                 let stroke = arg_opt_string(args, 4, "visual-buffer-add-circle!");
-                s.lock()
-                    .unwrap()
-                    .pending_visual_ops
-                    .push(VisualOp::AddCircle {
-                        cx,
-                        cy,
-                        r,
-                        fill,
-                        stroke,
-                    });
+                s.lock().pending_visual_ops.push(VisualOp::AddCircle {
+                    cx,
+                    cy,
+                    r,
+                    fill,
+                    stroke,
+                });
                 Ok(Value::Void)
             },
         );
@@ -871,16 +857,13 @@ impl SchemeRuntime {
                 let text = arg_string(args, 2, "visual-buffer-add-text!")?;
                 let font_size = arg_float(args, 3, "visual-buffer-add-text!")? as f32;
                 let color = arg_string(args, 4, "visual-buffer-add-text!")?;
-                s.lock()
-                    .unwrap()
-                    .pending_visual_ops
-                    .push(VisualOp::AddText {
-                        x,
-                        y,
-                        text,
-                        font_size,
-                        color,
-                    });
+                s.lock().pending_visual_ops.push(VisualOp::AddText {
+                    x,
+                    y,
+                    text,
+                    font_size,
+                    color,
+                });
                 Ok(Value::Void)
             },
         );
@@ -896,8 +879,7 @@ impl SchemeRuntime {
             move |args: &[Value]| {
                 let start = arg_int(args, 0, "buffer-delete-range")?;
                 let end = arg_int(args, 1, "buffer-delete-range")?;
-                s.lock().unwrap().pending_delete_range =
-                    Some((start.max(0) as usize, end.max(0) as usize));
+                s.lock().pending_delete_range = Some((start.max(0) as usize, end.max(0) as usize));
                 Ok(Value::Void)
             },
         );
@@ -912,7 +894,7 @@ impl SchemeRuntime {
                 let start = arg_int(args, 0, "buffer-replace-range")?;
                 let end = arg_int(args, 1, "buffer-replace-range")?;
                 let text = arg_string(args, 2, "buffer-replace-range")?;
-                s.lock().unwrap().pending_replace_range =
+                s.lock().pending_replace_range =
                     Some((start.max(0) as usize, end.max(0) as usize, text));
                 Ok(Value::Void)
             },
@@ -925,7 +907,7 @@ impl SchemeRuntime {
             "Undo the last edit",
             Arity::Fixed(0),
             move |_args: &[Value]| {
-                s.lock().unwrap().pending_undo = true;
+                s.lock().pending_undo = true;
                 Ok(Value::Void)
             },
         );
@@ -937,7 +919,7 @@ impl SchemeRuntime {
             "Redo the last undone edit",
             Arity::Fixed(0),
             move |_args: &[Value]| {
-                s.lock().unwrap().pending_redo = true;
+                s.lock().pending_redo = true;
                 Ok(Value::Void)
             },
         );
@@ -949,7 +931,7 @@ impl SchemeRuntime {
             "Mark an undo boundary",
             Arity::Fixed(0),
             move |_args: &[Value]| {
-                s.lock().unwrap().pending_undo_boundary = true;
+                s.lock().pending_undo_boundary = true;
                 Ok(Value::Void)
             },
         );
@@ -962,7 +944,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let idx = arg_int(args, 0, "switch-to-buffer")?;
-                s.lock().unwrap().pending_switch_buffer = Some(idx.max(0) as usize);
+                s.lock().pending_switch_buffer = Some(idx.max(0) as usize);
                 Ok(Value::Void)
             },
         );
@@ -976,7 +958,7 @@ impl SchemeRuntime {
             move |args: &[Value]| {
                 let map = arg_string(args, 0, "undefine-key!")?;
                 let key = arg_string(args, 1, "undefine-key!")?;
-                s.lock().unwrap().pending_key_removals.push((map, key));
+                s.lock().pending_key_removals.push((map, key));
                 Ok(Value::Void)
             },
         );
@@ -991,10 +973,7 @@ impl SchemeRuntime {
                 let map = arg_string(args, 0, "set-group-name")?;
                 let prefix = arg_string(args, 1, "set-group-name")?;
                 let label = arg_string(args, 2, "set-group-name")?;
-                s.lock()
-                    .unwrap()
-                    .pending_group_names
-                    .push((map, prefix, label));
+                s.lock().pending_group_names.push((map, prefix, label));
                 Ok(Value::Void)
             },
         );
@@ -1061,7 +1040,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let feature = arg_string(args, 0, "provide-feature")?;
-                s.lock().unwrap().loaded_features.insert(feature);
+                s.lock().loaded_features.insert(feature);
                 Ok(Value::Void)
             },
         );
@@ -1074,9 +1053,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let feature = arg_string(args, 0, "featurep")?;
-                Ok(Value::Bool(
-                    s.lock().unwrap().loaded_features.contains(&feature),
-                ))
+                Ok(Value::Bool(s.lock().loaded_features.contains(&feature)))
             },
         );
 
@@ -1088,7 +1065,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let feature = arg_string(args, 0, "require-feature")?;
-                let mut state = s.lock().unwrap();
+                let mut state = s.lock();
                 if !state.loaded_features.contains(&feature) {
                     state.pending_requires.push(feature);
                 }
@@ -1103,7 +1080,7 @@ impl SchemeRuntime {
             "Return current load-path",
             Arity::Fixed(0),
             move |_args: &[Value]| {
-                let state = s.lock().unwrap();
+                let state = s.lock();
                 let items: Vec<Value> = state
                     .load_path
                     .iter()
@@ -1121,7 +1098,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let dir = arg_string(args, 0, "add-to-load-path!")?;
-                s.lock().unwrap().load_path.insert(0, PathBuf::from(dir));
+                s.lock().load_path.insert(0, PathBuf::from(dir));
                 Ok(Value::Void)
             },
         );
@@ -1136,10 +1113,7 @@ impl SchemeRuntime {
                 let cmd_name = arg_string(args, 0, "autoload")?;
                 let feature = arg_string(args, 1, "autoload")?;
                 let doc = arg_string(args, 2, "autoload")?;
-                s.lock()
-                    .unwrap()
-                    .pending_autoloads
-                    .push((cmd_name, feature, doc));
+                s.lock().pending_autoloads.push((cmd_name, feature, doc));
                 Ok(Value::Void)
             },
         );
@@ -1167,7 +1141,6 @@ impl SchemeRuntime {
                 let default = arg_string(args, 2, "define-option!")?;
                 let doc = arg_string(args, 3, "define-option!")?;
                 s.lock()
-                    .unwrap()
                     .pending_dynamic_options
                     .push((name, kind, default, doc));
                 Ok(Value::Void)
@@ -1182,9 +1155,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "module-loaded?")?;
-                Ok(Value::Bool(
-                    s.lock().unwrap().active_modules.contains_key(&name),
-                ))
+                Ok(Value::Bool(s.lock().active_modules.contains_key(&name)))
             },
         );
 
@@ -1196,7 +1167,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "module-version")?;
-                match s.lock().unwrap().active_modules.get(&name) {
+                match s.lock().active_modules.get(&name) {
                     Some(v) => Ok(Value::string(v.clone())),
                     None => Ok(Value::Bool(false)),
                 }
@@ -1210,7 +1181,7 @@ impl SchemeRuntime {
             "List all active module names",
             Arity::Fixed(0),
             move |_args: &[Value]| {
-                let state = s.lock().unwrap();
+                let state = s.lock();
                 Ok(Value::list(
                     state
                         .active_modules
@@ -1230,7 +1201,7 @@ impl SchemeRuntime {
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "register-module!")?;
                 let version = arg_string(args, 1, "register-module!")?;
-                s.lock().unwrap().active_modules.insert(name, version);
+                s.lock().active_modules.insert(name, version);
                 Ok(Value::Void)
             },
         );
@@ -1268,7 +1239,7 @@ impl SchemeRuntime {
                 } else {
                     vec![]
                 };
-                s.lock().unwrap().declared_modules.insert(name, flags);
+                s.lock().declared_modules.insert(name, flags);
                 Ok(Value::Void)
             },
         );
@@ -1280,7 +1251,7 @@ impl SchemeRuntime {
             "List declared module names",
             Arity::Fixed(0),
             move |_args: &[Value]| {
-                let state = s.lock().unwrap();
+                let state = s.lock();
                 Ok(Value::list(
                     state
                         .declared_modules
@@ -1302,7 +1273,7 @@ impl SchemeRuntime {
                 let source = arg_string(args, 1, "mae-declare-package!")?;
                 let pin = arg_string(args, 2, "mae-declare-package!")?;
                 let disable = arg_bool(args, 3, "mae-declare-package!")?;
-                s.lock().unwrap().declared_packages.push(DeclaredPackage {
+                s.lock().declared_packages.push(DeclaredPackage {
                     name,
                     source: if source.is_empty() {
                         None
@@ -1378,7 +1349,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "undefine-command!")?;
-                s.lock().unwrap().pending_command_unregisters.push(name);
+                s.lock().pending_command_unregisters.push(name);
                 Ok(Value::Void)
             },
         );
@@ -1391,7 +1362,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "undefine-option!")?;
-                s.lock().unwrap().pending_option_unregisters.push(name);
+                s.lock().pending_option_unregisters.push(name);
                 Ok(Value::Void)
             },
         );
@@ -1404,7 +1375,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "unload-feature")?;
-                let removed = s.lock().unwrap().loaded_features.remove(&name);
+                let removed = s.lock().loaded_features.remove(&name);
                 Ok(Value::Bool(removed))
             },
         );
@@ -1419,7 +1390,7 @@ impl SchemeRuntime {
                 let id = arg_string(args, 0, "define-kb-node!")?;
                 let title = arg_string(args, 1, "define-kb-node!")?;
                 let body = arg_string(args, 2, "define-kb-node!")?;
-                s.lock().unwrap().pending_kb_nodes.push((id, title, body));
+                s.lock().pending_kb_nodes.push((id, title, body));
                 Ok(Value::Void)
             },
         );
@@ -1438,7 +1409,7 @@ impl SchemeRuntime {
                 } else {
                     format!("kb-agenda {} {}", filter, extra)
                 };
-                s.lock().unwrap().pending_ex_commands.push(cmd);
+                s.lock().pending_ex_commands.push(cmd);
                 Ok(Value::Void)
             },
         );
@@ -1452,7 +1423,6 @@ impl SchemeRuntime {
             move |args: &[Value]| {
                 let id = arg_string(args, 0, "kb-history")?;
                 s.lock()
-                    .unwrap()
                     .pending_ex_commands
                     .push(format!("kb-history {}", id));
                 Ok(Value::Void)
@@ -1472,7 +1442,6 @@ impl SchemeRuntime {
                     other => return Err(LispError::type_error("integer", format!("{}", other))),
                 };
                 s.lock()
-                    .unwrap()
                     .pending_ex_commands
                     .push(format!("kb-restore {} {}", id, version));
                 Ok(Value::Void)
@@ -1488,7 +1457,6 @@ impl SchemeRuntime {
             move |args: &[Value]| {
                 let query = arg_string(args, 0, "kb-raw-query")?;
                 s.lock()
-                    .unwrap()
                     .pending_ex_commands
                     .push(format!("kb-raw-query {}", query));
                 Ok(Value::Void)
@@ -1507,7 +1475,7 @@ impl SchemeRuntime {
                 let src = arg_string(args, 0, "kb-add-link!")?;
                 let dst = arg_string(args, 1, "kb-add-link!")?;
                 let rel = arg_string(args, 2, "kb-add-link!")?;
-                s.lock().unwrap().pending_kb_links.push((src, dst, rel));
+                s.lock().pending_kb_links.push((src, dst, rel));
                 Ok(Value::Void)
             },
         );
@@ -1527,7 +1495,6 @@ impl SchemeRuntime {
                     arg_string(args, 0, "kb-share")?
                 };
                 s.lock()
-                    .unwrap()
                     .pending_kb_collab_actions
                     .push(mae_core::KbCollabAction::Share { kb_name });
                 Ok(Value::Void)
@@ -1552,7 +1519,7 @@ impl SchemeRuntime {
                 };
                 // Clone the Arc out before the blocking call so the SharedState
                 // lock is not held across daemon I/O.
-                let control = s.lock().unwrap().daemon_control.clone();
+                let control = s.lock().daemon_control.clone();
                 match control {
                     Some(c) => c
                         .mint_p2p_ticket(&kb_id)
@@ -1580,7 +1547,7 @@ impl SchemeRuntime {
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let ticket = arg_string(args, 0, "kb-join-ticket")?;
-                let control = s.lock().unwrap().daemon_control.clone();
+                let control = s.lock().daemon_control.clone();
                 match control {
                     Some(c) => c
                         .join_p2p_ticket(&ticket)
@@ -1605,7 +1572,6 @@ impl SchemeRuntime {
             move |args: &[Value]| {
                 let kb_id = arg_string(args, 0, "kb-join")?;
                 s.lock()
-                    .unwrap()
                     .pending_kb_collab_actions
                     .push(mae_core::KbCollabAction::Join { kb_id });
                 Ok(Value::Void)
@@ -1621,7 +1587,6 @@ impl SchemeRuntime {
             move |args: &[Value]| {
                 let kb_id = arg_string(args, 0, "kb-leave")?;
                 s.lock()
-                    .unwrap()
                     .pending_kb_collab_actions
                     .push(mae_core::KbCollabAction::Leave { kb_id });
                 Ok(Value::Void)
@@ -1642,13 +1607,13 @@ impl SchemeRuntime {
                 } else {
                     "editor".to_string()
                 };
-                s.lock().unwrap().pending_kb_collab_actions.push(
-                    mae_core::KbCollabAction::AddMember {
+                s.lock()
+                    .pending_kb_collab_actions
+                    .push(mae_core::KbCollabAction::AddMember {
                         kb_id,
                         member,
                         role,
-                    },
-                );
+                    });
                 Ok(Value::Void)
             },
         );
@@ -1663,7 +1628,6 @@ impl SchemeRuntime {
                 let kb_id = arg_string(args, 0, "kb-remove-member")?;
                 let member = arg_string(args, 1, "kb-remove-member")?;
                 s.lock()
-                    .unwrap()
                     .pending_kb_collab_actions
                     .push(mae_core::KbCollabAction::RemoveMember { kb_id, member });
                 Ok(Value::Void)
@@ -1684,13 +1648,13 @@ impl SchemeRuntime {
                 } else {
                     "editor".to_string()
                 };
-                s.lock().unwrap().pending_kb_collab_actions.push(
-                    mae_core::KbCollabAction::Approve {
+                s.lock()
+                    .pending_kb_collab_actions
+                    .push(mae_core::KbCollabAction::Approve {
                         kb_id,
                         principal,
                         role,
-                    },
-                );
+                    });
                 Ok(Value::Void)
             },
         );
@@ -1705,7 +1669,6 @@ impl SchemeRuntime {
                 let kb_id = arg_string(args, 0, "kb-set-policy")?;
                 let policy = arg_string(args, 1, "kb-set-policy")?;
                 s.lock()
-                    .unwrap()
                     .pending_kb_collab_actions
                     .push(mae_core::KbCollabAction::SetPolicy { kb_id, policy });
                 Ok(Value::Void)
@@ -1723,7 +1686,7 @@ impl SchemeRuntime {
             move |args: &[Value]| {
                 let kb_id = arg_string(args, 0, "kb-block-member")?;
                 let member = arg_string(args, 1, "kb-block-member")?;
-                s.lock().unwrap().pending_kb_collab_actions.push(
+                s.lock().pending_kb_collab_actions.push(
                     mae_core::KbCollabAction::SetBlock {
                         kb_id,
                         member,
@@ -1744,7 +1707,7 @@ impl SchemeRuntime {
             move |args: &[Value]| {
                 let kb_id = arg_string(args, 0, "kb-unblock-member")?;
                 let member = arg_string(args, 1, "kb-unblock-member")?;
-                s.lock().unwrap().pending_kb_collab_actions.push(
+                s.lock().pending_kb_collab_actions.push(
                     mae_core::KbCollabAction::SetBlock {
                         kb_id,
                         member,
@@ -1769,7 +1732,6 @@ sharing. Lost identity key = permanent loss. See :help concept:kb-encryption.",
                 let kb_id = arg_string(args, 0, "kb-set-encryption")?;
                 let mode = arg_string(args, 1, "kb-set-encryption")?;
                 s.lock()
-                    .unwrap()
                     .pending_kb_collab_actions
                     .push(mae_core::KbCollabAction::SetEncryption { kb_id, mode });
                 Ok(Value::Void)
@@ -1787,7 +1749,7 @@ sharing. Lost identity key = permanent loss. See :help concept:kb-encryption.",
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let ticket = arg_string(args, 0, "kb-join-p2p")?;
-                let control = s.lock().unwrap().daemon_control.clone();
+                let control = s.lock().daemon_control.clone();
                 match control {
                     Some(c) => c
                         .join_p2p_ticket(&ticket)
@@ -1815,7 +1777,7 @@ sharing. Lost identity key = permanent loss. See :help concept:kb-encryption.",
             ($name:literal, $doc:literal) => {{
                 let s = shared.clone();
                 vm.register_fn($name, $doc, Arity::Fixed(0), move |_args: &[Value]| {
-                    s.lock().unwrap().pending_commands.push($name.to_string());
+                    s.lock().pending_commands.push($name.to_string());
                     Ok(Value::Void)
                 });
             }};
@@ -1869,7 +1831,6 @@ saved recovery key OFFLINE — it can later authorize a rebind if the primary is
             move |args: &[Value]| {
                 let kb_id = arg_string(args, 0, "kb-pending")?;
                 s.lock()
-                    .unwrap()
                     .pending_ex_commands
                     .push(format!("kb-pending {kb_id}"));
                 Ok(Value::Void)
@@ -1889,7 +1850,7 @@ saved recovery key OFFLINE — it can later authorize a rebind if the primary is
                 } else {
                     format!("collab-connect {}", arg_string(args, 0, "collab-connect")?)
                 };
-                s.lock().unwrap().pending_ex_commands.push(cmd);
+                s.lock().pending_ex_commands.push(cmd);
                 Ok(Value::Void)
             },
         );
@@ -1909,7 +1870,6 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
                 let path = arg_string(args, 0, "collab-recover-identity")?;
                 let old_fp = arg_string(args, 1, "collab-recover-identity")?;
                 s.lock()
-                    .unwrap()
                     .pending_ex_commands
                     .push(format!("collab-recover-identity {path} {old_fp}"));
                 Ok(Value::Void)
@@ -1925,7 +1885,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             move |args: &[Value]| {
                 let src = arg_string(args, 0, "kb-remove-link!")?;
                 let dst = arg_string(args, 1, "kb-remove-link!")?;
-                s.lock().unwrap().pending_kb_link_removals.push((src, dst));
+                s.lock().pending_kb_link_removals.push((src, dst));
                 Ok(Value::Void)
             },
         );
@@ -1942,10 +1902,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
                 let meta = arg_string(args, 0, "kb-add-meta-member!")?;
                 let member = arg_string(args, 1, "kb-add-meta-member!")?;
                 let role = arg_string(args, 2, "kb-add-meta-member!")?;
-                s.lock()
-                    .unwrap()
-                    .pending_kb_meta_adds
-                    .push((meta, member, role));
+                s.lock().pending_kb_meta_adds.push((meta, member, role));
                 Ok(Value::Void)
             },
         );
@@ -1959,10 +1916,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             move |args: &[Value]| {
                 let meta = arg_string(args, 0, "kb-remove-meta-member!")?;
                 let member = arg_string(args, 1, "kb-remove-meta-member!")?;
-                s.lock()
-                    .unwrap()
-                    .pending_kb_meta_removes
-                    .push((meta, member));
+                s.lock().pending_kb_meta_removes.push((meta, member));
                 Ok(Value::Void)
             },
         );
@@ -1976,7 +1930,6 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             move |args: &[Value]| {
                 let id = arg_string(args, 0, "kb-compose-meta")?;
                 s.lock()
-                    .unwrap()
                     .pending_ex_commands
                     .push(format!("kb-compose-meta {}", id));
                 Ok(Value::Void)
@@ -2000,7 +1953,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
                     Value::Bool(b) => *b,
                     _ => true,
                 };
-                s.lock().unwrap().pending_ex_commands.push(format!(
+                s.lock().pending_ex_commands.push(format!(
                     "kb-add-rel-type {} {} {} {} {}",
                     name, label, desc, inverse, directed
                 ));
@@ -2018,7 +1971,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let id = arg_string(args, 0, "kb-links-from")?;
-                let state = s.lock().unwrap();
+                let state = s.lock();
                 if let Some(ref store) = state.kb_store {
                     match store.links_from(&id) {
                         Ok(links) => Ok(Value::list(
@@ -2049,7 +2002,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let id = arg_string(args, 0, "kb-links-to")?;
-                let state = s.lock().unwrap();
+                let state = s.lock();
                 if let Some(ref store) = state.kb_store {
                     match store.links_to(&id) {
                         Ok(links) => Ok(Value::list(
@@ -2081,7 +2034,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             move |args: &[Value]| {
                 let id = arg_string(args, 0, "kb-links-typed")?;
                 let rel_type = arg_string(args, 1, "kb-links-typed")?;
-                let state = s.lock().unwrap();
+                let state = s.lock();
                 if let Some(ref store) = state.kb_store {
                     match store.links_typed(&id, &rel_type) {
                         Ok(links) => Ok(Value::list(
@@ -2111,7 +2064,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let id = arg_string(args, 0, "kb-meta-members")?;
-                let state = s.lock().unwrap();
+                let state = s.lock();
                 if let Some(ref store) = state.kb_store {
                     match store.meta_members(&id) {
                         Ok(members) => Ok(Value::list(
@@ -2141,7 +2094,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "Return all known relationship type names",
             Arity::Fixed(0),
             move |_args: &[Value]| {
-                let state = s.lock().unwrap();
+                let state = s.lock();
                 if let Some(ref store) = state.kb_store {
                     match store.known_rel_types() {
                         Ok(types) => Ok(Value::list(
@@ -2164,7 +2117,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             move |args: &[Value]| {
                 let id = arg_string(args, 0, "kb-get-block")?;
                 let index = arg_int(args, 1, "kb-get-block")? as usize;
-                let state = s.lock().unwrap();
+                let state = s.lock();
                 if let Some(ref store) = state.kb_store {
                     match store.get_block(&id, index) {
                         Ok(Some(block)) => Ok(Value::string(block.content)),
@@ -2185,7 +2138,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let id = arg_string(args, 0, "kb-block-count")?;
-                let state = s.lock().unwrap();
+                let state = s.lock();
                 if let Some(ref store) = state.kb_store {
                     match store.get_blocks(&id) {
                         Ok(blocks) => Ok(Value::Int(blocks.len() as i64)),
@@ -2208,7 +2161,6 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
                 let new_name = arg_string(args, 1, "deprecate-function!")?;
                 let since = arg_string(args, 2, "deprecate-function!")?;
                 s.lock()
-                    .unwrap()
                     .deprecated_functions
                     .insert(old_name, (new_name, since));
                 Ok(Value::Void)
@@ -2226,7 +2178,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
                 let desc = arg_string(args, 1, "register-ai-tool!")?;
                 let handler = arg_string(args, 2, "register-ai-tool!")?;
                 let perm = arg_string(args, 3, "register-ai-tool!")?;
-                let mut st = s.lock().unwrap();
+                let mut st = s.lock();
                 let params = st.pending_ai_tool_params.remove(&name).unwrap_or_default();
                 let required = st
                     .pending_ai_tool_required
@@ -2256,7 +2208,6 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
                 let ptype = arg_string(args, 2, "ai-tool-param!")?;
                 let pdesc = arg_string(args, 3, "ai-tool-param!")?;
                 s.lock()
-                    .unwrap()
                     .pending_ai_tool_params
                     .entry(tool)
                     .or_default()
@@ -2275,7 +2226,6 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
                 let tool = arg_string(args, 0, "ai-tool-require!")?;
                 let pname = arg_string(args, 1, "ai-tool-require!")?;
                 s.lock()
-                    .unwrap()
                     .pending_ai_tool_required
                     .entry(tool)
                     .or_default()
@@ -2293,10 +2243,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "register-splash-art!")?;
                 let art = arg_string(args, 1, "register-splash-art!")?;
-                s.lock()
-                    .unwrap()
-                    .pending_splash_arts
-                    .push((name, art, None));
+                s.lock().pending_splash_arts.push((name, art, None));
                 Ok(Value::Void)
             },
         );
@@ -2310,7 +2257,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "register-splash-art-image!")?;
                 let path = arg_string(args, 1, "register-splash-art-image!")?;
-                let mut st = s.lock().unwrap();
+                let mut st = s.lock();
                 let resolved = {
                     let p = PathBuf::from(&path);
                     if p.is_relative() {
@@ -2440,7 +2387,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "create-buffer")?;
-                s.lock().unwrap().pending_create_buffer = Some(name);
+                s.lock().pending_create_buffer = Some(name);
                 Ok(Value::Void)
             },
         );
@@ -2452,7 +2399,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "kill-buffer-by-name")?;
-                s.lock().unwrap().pending_kill_buffer = Some(name);
+                s.lock().pending_kill_buffer = Some(name);
                 Ok(Value::Void)
             },
         );
@@ -2468,10 +2415,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
                 let command = arg_string(args, 0, "advice-add!")?;
                 let kind = arg_string(args, 1, "advice-add!")?;
                 let fn_name = arg_string(args, 2, "advice-add!")?;
-                s.lock()
-                    .unwrap()
-                    .pending_advice_adds
-                    .push((command, kind, fn_name));
+                s.lock().pending_advice_adds.push((command, kind, fn_name));
                 Ok(Value::Void)
             },
         );
@@ -2484,10 +2428,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             move |args: &[Value]| {
                 let command = arg_string(args, 0, "advice-remove!")?;
                 let fn_name = arg_string(args, 1, "advice-remove!")?;
-                s.lock()
-                    .unwrap()
-                    .pending_advice_removes
-                    .push((command, fn_name));
+                s.lock().pending_advice_removes.push((command, fn_name));
                 Ok(Value::Void)
             },
         );
@@ -2500,7 +2441,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "check-deprecated")?;
-                let mut state = s.lock().unwrap();
+                let mut state = s.lock();
                 if let Some((new_name, since)) = state.deprecated_functions.get(&name).cloned() {
                     if state.deprecated_warned.insert(name.clone()) {
                         warn!(
@@ -2528,7 +2469,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let code = arg_int(args, 0, "exit")?;
-                s.lock().unwrap().pending_exit_code = Some(code as i32);
+                s.lock().pending_exit_code = Some(code as i32);
                 Ok(Value::Void)
             },
         );
@@ -2541,7 +2482,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             move |args: &[Value]| {
                 let path = arg_string(args, 0, "write-file")?;
                 let content = arg_string(args, 1, "write-file")?;
-                s.lock().unwrap().pending_write_files.push((path, content));
+                s.lock().pending_write_files.push((path, content));
                 Ok(Value::Void)
             },
         );
@@ -2554,7 +2495,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let offset = arg_int(args, 0, "goto-char")?;
-                s.lock().unwrap().pending_cursor = Some((usize::MAX, offset.max(0) as usize));
+                s.lock().pending_cursor = Some((usize::MAX, offset.max(0) as usize));
                 Ok(Value::Void)
             },
         );
@@ -2566,7 +2507,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "current-mode",
             "Read the current mode",
             Arity::Fixed(0),
-            move |_args: &[Value]| Ok(Value::string(s.lock().unwrap().current_mode.clone())),
+            move |_args: &[Value]| Ok(Value::string(s.lock().current_mode.clone())),
         );
 
         // --- E2E key-injection (test harness) ---
@@ -2577,7 +2518,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let keys = arg_string(args, 0, "feed-keys")?;
-                s.lock().unwrap().pending_feed_keys.push(keys);
+                s.lock().pending_feed_keys.push(keys);
                 Ok(Value::Void)
             },
         );
@@ -2587,7 +2528,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "which-key-open?",
             "E2E test: is the transient leader keypad / which-key popup active?",
             Arity::Fixed(0),
-            move |_args: &[Value]| Ok(Value::Bool(s.lock().unwrap().leader_active)),
+            move |_args: &[Value]| Ok(Value::Bool(s.lock().leader_active)),
         );
 
         let s = shared.clone();
@@ -2595,7 +2536,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "which-key-entry-count",
             "E2E test: number of which-key entries for the current keymap",
             Arity::Fixed(0),
-            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().which_key_count as i64)),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().which_key_count as i64)),
         );
 
         let s = shared.clone();
@@ -2603,7 +2544,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "test-buffer-string",
             "Read active buffer text",
             Arity::Fixed(0),
-            move |_args: &[Value]| Ok(Value::string(s.lock().unwrap().current_buffer_text.clone())),
+            move |_args: &[Value]| Ok(Value::string(s.lock().current_buffer_text.clone())),
         );
 
         let s = shared.clone();
@@ -2613,7 +2554,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "test-buffer-text")?;
-                let state = s.lock().unwrap();
+                let state = s.lock();
                 match state
                     .all_buffer_texts
                     .iter()
@@ -2631,7 +2572,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "Read *messages* buffer content",
             Arity::Fixed(0),
             move |_args: &[Value]| {
-                let state = s.lock().unwrap();
+                let state = s.lock();
                 Ok(Value::string(
                     state
                         .all_buffer_texts
@@ -2648,7 +2589,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "test-sync-enabled?",
             "Whether sync is enabled",
             Arity::Fixed(0),
-            move |_args: &[Value]| Ok(Value::Bool(s.lock().unwrap().sync_enabled)),
+            move |_args: &[Value]| Ok(Value::Bool(s.lock().sync_enabled)),
         );
 
         let s = shared.clone();
@@ -2656,7 +2597,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "test-pending-updates",
             "Number of pending sync updates",
             Arity::Fixed(0),
-            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().pending_update_count as i64)),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().pending_update_count as i64)),
         );
 
         let s = shared.clone();
@@ -2664,7 +2605,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "test-sync-content",
             "Sync doc content or #f",
             Arity::Fixed(0),
-            move |_args: &[Value]| match &s.lock().unwrap().sync_content {
+            move |_args: &[Value]| match &s.lock().sync_content {
                 Some(c) => Ok(Value::string(c.clone())),
                 None => Ok(Value::Bool(false)),
             },
@@ -2675,7 +2616,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "test-encode-state",
             "Encoded sync state or #f",
             Arity::Fixed(0),
-            move |_args: &[Value]| match &s.lock().unwrap().encoded_state {
+            move |_args: &[Value]| match &s.lock().encoded_state {
                 Some(s) => Ok(Value::string(s.clone())),
                 None => Ok(Value::Bool(false)),
             },
@@ -2688,7 +2629,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "test-get-buffer-by-name")?;
-                let state = s.lock().unwrap();
+                let state = s.lock();
                 match state.buffer_names.iter().find(|(_, n)| n == &name) {
                     Some((i, _)) => Ok(Value::Int(*i as i64)),
                     None => Ok(Value::Bool(false)),
@@ -2703,7 +2644,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "test-get-option")?;
-                let state = s.lock().unwrap();
+                let state = s.lock();
                 match state.option_values.iter().find(|(n, _)| n == &name) {
                     Some((_, v)) => Ok(Value::string(v.clone())),
                     None => Ok(Value::Bool(false)),
@@ -2716,7 +2657,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "test-region-active?",
             "Whether visual selection is active",
             Arity::Fixed(0),
-            move |_args: &[Value]| Ok(Value::Bool(s.lock().unwrap().region_active)),
+            move |_args: &[Value]| Ok(Value::Bool(s.lock().region_active)),
         );
 
         let s = shared.clone();
@@ -2724,7 +2665,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "test-region-start",
             "Start offset of visual selection",
             Arity::Fixed(0),
-            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().region_start as i64)),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().region_start as i64)),
         );
 
         let s = shared.clone();
@@ -2732,7 +2673,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "test-region-end",
             "End offset of visual selection",
             Arity::Fixed(0),
-            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().region_end as i64)),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().region_end as i64)),
         );
 
         let s = shared.clone();
@@ -2742,7 +2683,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let pattern = arg_string(args, 0, "test-search-forward")?;
-                let state = s.lock().unwrap();
+                let state = s.lock();
                 match state.current_buffer_text.find(&pattern) {
                     Some(byte_offset) => {
                         let char_offset = state.current_buffer_text[..byte_offset].chars().count();
@@ -2758,7 +2699,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "test-cursor-row",
             "Cursor row (0-indexed)",
             Arity::Fixed(0),
-            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().cursor_row as i64)),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().cursor_row as i64)),
         );
 
         let s = shared.clone();
@@ -2766,7 +2707,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "test-cursor-col",
             "Cursor column (0-indexed)",
             Arity::Fixed(0),
-            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().cursor_col as i64)),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().cursor_col as i64)),
         );
 
         let s = shared.clone();
@@ -2774,7 +2715,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "test-status-message",
             "Last status bar message",
             Arity::Fixed(0),
-            move |_args: &[Value]| Ok(Value::string(s.lock().unwrap().last_status_message.clone())),
+            move |_args: &[Value]| Ok(Value::string(s.lock().last_status_message.clone())),
         );
 
         // --- CRDT/sync test primitives ---
@@ -2786,7 +2727,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let client_id = arg_int(args, 0, "buffer-enable-sync")?;
-                s.lock().unwrap().pending_enable_sync = Some(client_id.max(1) as u64);
+                s.lock().pending_enable_sync = Some(client_id.max(1) as u64);
                 Ok(Value::Void)
             },
         );
@@ -2797,7 +2738,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "Disable sync on active buffer",
             Arity::Fixed(0),
             move |_args: &[Value]| {
-                s.lock().unwrap().pending_disable_sync = true;
+                s.lock().pending_disable_sync = true;
                 Ok(Value::Void)
             },
         );
@@ -2813,10 +2754,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
                 use base64::Engine as _;
                 match base64::engine::general_purpose::STANDARD.decode(&update_b64) {
                     Ok(bytes) => {
-                        s.lock()
-                            .unwrap()
-                            .pending_sync_applies
-                            .push((buf_name, bytes));
+                        s.lock().pending_sync_applies.push((buf_name, bytes));
                         Ok(Value::Bool(true))
                     }
                     Err(e) => Ok(Value::string(format!("base64 decode error: {}", e))),
@@ -2835,8 +2773,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
                 use base64::Engine as _;
                 match base64::engine::general_purpose::STANDARD.decode(&state_b64) {
                     Ok(bytes) => {
-                        s.lock().unwrap().pending_load_sync_state =
-                            Some((bytes, client_id.max(1) as u64));
+                        s.lock().pending_load_sync_state = Some((bytes, client_id.max(1) as u64));
                         Ok(Value::Bool(true))
                     }
                     Err(e) => Ok(Value::string(format!("base64 decode error: {}", e))),
@@ -2850,7 +2787,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "Request encoding state vector",
             Arity::Fixed(0),
             move |_args: &[Value]| {
-                s.lock().unwrap().pending_encode_state_vector = true;
+                s.lock().pending_encode_state_vector = true;
                 Ok(Value::Void)
             },
         );
@@ -2860,7 +2797,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "buffer-get-state-vector",
             "Retrieve encoded state vector",
             Arity::Fixed(0),
-            move |_args: &[Value]| match &s.lock().unwrap().encoded_state_vector {
+            move |_args: &[Value]| match &s.lock().encoded_state_vector {
                 Some(sv) => Ok(Value::string(sv.clone())),
                 None => Ok(Value::Bool(false)),
             },
@@ -2873,7 +2810,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let sv_b64 = arg_string(args, 0, "buffer-compute-diff")?;
-                s.lock().unwrap().pending_compute_diff = Some(sv_b64);
+                s.lock().pending_compute_diff = Some(sv_b64);
                 Ok(Value::Void)
             },
         );
@@ -2883,7 +2820,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "buffer-get-diff",
             "Retrieve computed diff",
             Arity::Fixed(0),
-            move |_args: &[Value]| match &s.lock().unwrap().computed_diff {
+            move |_args: &[Value]| match &s.lock().computed_diff {
                 Some(d) => Ok(Value::string(d.clone())),
                 None => Ok(Value::Bool(false)),
             },
@@ -2896,7 +2833,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let text = arg_string(args, 0, "buffer-reconcile-to")?;
-                s.lock().unwrap().pending_reconcile_to = Some(text);
+                s.lock().pending_reconcile_to = Some(text);
                 Ok(Value::Void)
             },
         );
@@ -2906,7 +2843,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "buffer-get-reconcile-result",
             "Retrieve reconcile result",
             Arity::Fixed(0),
-            move |_args: &[Value]| match &s.lock().unwrap().reconcile_result {
+            move |_args: &[Value]| match &s.lock().reconcile_result {
                 Some(r) => Ok(Value::string(r.clone())),
                 None => Ok(Value::Bool(false)),
             },
@@ -2940,7 +2877,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
 
         // Seed SharedState load_path
         {
-            let mut state = shared.lock().unwrap();
+            let mut state = shared.lock();
             state.load_path = default_load_path.clone();
         }
 
@@ -2958,47 +2895,47 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
     /// Return declared modules from `(mae! ...)` — name → enabled flags.
     /// Empty if no `mae!` block was evaluated.
     pub fn declared_modules(&self) -> HashMap<String, Vec<String>> {
-        self.shared.lock().unwrap().declared_modules.clone()
+        self.shared.lock().declared_modules.clone()
     }
 
     /// Return declared packages from `(package! ...)`.
     pub fn declared_packages(&self) -> Vec<DeclaredPackage> {
-        self.shared.lock().unwrap().declared_packages.clone()
+        self.shared.lock().declared_packages.clone()
     }
 
     /// Set the current module directory for relative path resolution.
     /// Called by the module loader before evaluating each module's autoloads.
     pub fn set_module_dir(&mut self, dir: Option<&Path>) {
-        self.shared.lock().unwrap().current_module_dir = dir.map(|d| d.to_path_buf());
+        self.shared.lock().current_module_dir = dir.map(|d| d.to_path_buf());
     }
 
     /// Drain pending KB nodes registered via `(define-kb-node! ...)`.
     pub fn drain_kb_nodes(&mut self) -> Vec<(String, String, String)> {
-        let mut state = self.shared.lock().unwrap();
+        let mut state = self.shared.lock();
         std::mem::take(&mut state.pending_kb_nodes)
     }
 
     /// Drain pending typed link additions: (source, target, rel_type).
     pub fn drain_kb_links(&mut self) -> Vec<(String, String, String)> {
-        let mut state = self.shared.lock().unwrap();
+        let mut state = self.shared.lock();
         std::mem::take(&mut state.pending_kb_links)
     }
 
     /// Drain pending link removals: (source, target).
     pub fn drain_kb_link_removals(&mut self) -> Vec<(String, String)> {
-        let mut state = self.shared.lock().unwrap();
+        let mut state = self.shared.lock();
         std::mem::take(&mut state.pending_kb_link_removals)
     }
 
     /// Drain pending meta-member additions: (meta_id, member_id, role).
     pub fn drain_kb_meta_adds(&mut self) -> Vec<(String, String, String)> {
-        let mut state = self.shared.lock().unwrap();
+        let mut state = self.shared.lock();
         std::mem::take(&mut state.pending_kb_meta_adds)
     }
 
     /// Drain pending meta-member removals: (meta_id, member_id).
     pub fn drain_kb_meta_removes(&mut self) -> Vec<(String, String)> {
-        let mut state = self.shared.lock().unwrap();
+        let mut state = self.shared.lock();
         std::mem::take(&mut state.pending_kb_meta_removes)
     }
 
@@ -3006,22 +2943,22 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
 
     /// Take the pending exit code set by `(exit CODE)`, if any.
     pub fn take_exit_code(&mut self) -> Option<i32> {
-        self.shared.lock().unwrap().pending_exit_code.take()
+        self.shared.lock().pending_exit_code.take()
     }
 
     /// Update the current mode string in SharedState (for test runner).
     pub fn set_current_mode(&self, mode: &str) {
-        self.shared.lock().unwrap().current_mode = mode.to_string();
+        self.shared.lock().current_mode = mode.to_string();
     }
 
     /// Update the active buffer text in SharedState (for test runner).
     pub fn set_current_buffer_text(&self, text: &str) {
-        self.shared.lock().unwrap().current_buffer_text = text.to_string();
+        self.shared.lock().current_buffer_text = text.to_string();
     }
 
     /// Update all buffer texts in SharedState (for test runner).
     pub fn set_all_buffer_texts(&self, texts: Vec<(String, String)>) {
-        self.shared.lock().unwrap().all_buffer_texts = texts;
+        self.shared.lock().all_buffer_texts = texts;
     }
 
     /// Update sync state in SharedState (for test runner).
@@ -3032,7 +2969,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
         content: Option<String>,
         encoded: Option<String>,
     ) {
-        let mut state = self.shared.lock().unwrap();
+        let mut state = self.shared.lock();
         state.sync_enabled = enabled;
         state.pending_update_count = pending_count;
         state.sync_content = content;
@@ -3041,17 +2978,17 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
 
     /// Update buffer names in SharedState for `(get-buffer-by-name)` across tests.
     pub fn set_buffer_names(&self, names: Vec<(usize, String)>) {
-        self.shared.lock().unwrap().buffer_names = names;
+        self.shared.lock().buffer_names = names;
     }
 
     /// Update option values in SharedState for test runner.
     pub fn set_option_values(&self, values: Vec<(String, String)>) {
-        self.shared.lock().unwrap().option_values = values;
+        self.shared.lock().option_values = values;
     }
 
     /// Update region (visual selection) state in SharedState for test runner.
     pub fn set_region_state(&self, active: bool, start: usize, end: usize) {
-        let mut state = self.shared.lock().unwrap();
+        let mut state = self.shared.lock();
         state.region_active = active;
         state.region_start = start;
         state.region_end = end;
@@ -3059,19 +2996,19 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
 
     /// Update cursor position in SharedState (called by test runner).
     pub fn set_cursor_position(&self, row: usize, col: usize) {
-        let mut state = self.shared.lock().unwrap();
+        let mut state = self.shared.lock();
         state.cursor_row = row;
         state.cursor_col = col;
     }
 
     /// Update last status message in SharedState (called by test runner).
     pub fn set_last_status_message(&self, msg: &str) {
-        self.shared.lock().unwrap().last_status_message = msg.to_string();
+        self.shared.lock().last_status_message = msg.to_string();
     }
 
     /// Drain pending file writes from `(write-file PATH CONTENT)`.
     pub fn drain_write_files(&mut self) -> Vec<(String, String)> {
-        std::mem::take(&mut self.shared.lock().unwrap().pending_write_files)
+        std::mem::take(&mut self.shared.lock().pending_write_files)
     }
 
     /// Always accumulate pending sync updates from the active buffer into
@@ -3079,7 +3016,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
     /// retrieve updates via `(buffer-drain-updates)` without a two-step flag
     /// dance. Clones (not drains) so `drain_and_broadcast` still forwards them.
     pub fn capture_pending_sync_updates(&mut self, editor: &mae_core::Editor) {
-        let mut state = self.shared.lock().unwrap();
+        let mut state = self.shared.lock();
         let idx = editor.active_buffer_idx();
         for u in &editor.buffers[idx].pending_sync_updates {
             use base64::Engine as _;
@@ -3091,9 +3028,9 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
 
     /// Update cached GC stats in SharedState for Scheme-callable `(gc-stats)`.
     fn sync_gc_stats(&self) {
-        if let Ok(mut st) = self.shared.lock() {
-            st.gc_stats_snapshot = self.vm.gc_stats.clone();
-        }
+        // parking_lot::Mutex::lock() returns the guard directly (no poisoning).
+        let mut st = self.shared.lock();
+        st.gc_stats_snapshot = self.vm.gc_stats.clone();
     }
 
     /// Evaluate a Scheme expression and return the result as a string.
@@ -3310,7 +3247,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
     pub fn inject_editor_state(&mut self, editor: &Editor) {
         // Keep the daemon control channel current so `(kb-share-p2p)` drives the
         // live backend (cheap Arc clone; None when no daemon is wired).
-        self.shared.lock().unwrap().daemon_control = editor.kb.daemon_control();
+        self.shared.lock().daemon_control = editor.kb.daemon_control();
 
         let buf = editor.active_buffer();
         let win = editor.window_mgr.focused_window();
@@ -3529,7 +3466,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "region-active?",
             "Whether visual selection is active",
             Arity::Fixed(0),
-            move |_args: &[Value]| Ok(Value::Bool(s.lock().unwrap().region_active)),
+            move |_args: &[Value]| Ok(Value::Bool(s.lock().region_active)),
         );
 
         let s = self.shared.clone();
@@ -3537,14 +3474,14 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "region-beginning",
             "Start of region",
             Arity::Fixed(0),
-            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().region_start as i64)),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().region_start as i64)),
         );
         let s = self.shared.clone();
         self.vm.register_fn(
             "region-end",
             "End of region",
             Arity::Fixed(0),
-            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().region_end as i64)),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().region_end as i64)),
         );
 
         let is_visual = matches!(editor.mode, mae_core::Mode::Visual(_));
@@ -3617,7 +3554,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "get-buffer-by-name")?;
-                let state = s.lock().unwrap();
+                let state = s.lock();
                 match state.buffer_names.iter().find(|(_, n)| n == &name) {
                     Some((i, _)) => Ok(Value::Int(*i as i64)),
                     None => Ok(Value::Bool(false)),
@@ -3676,7 +3613,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
                         .map(|(v, _)| (o.name.to_string(), v))
                 })
                 .collect();
-            self.shared.lock().unwrap().option_values = values;
+            self.shared.lock().option_values = values;
         }
 
         // (get-option NAME)
@@ -3687,7 +3624,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "get-option")?;
-                let state = s.lock().unwrap();
+                let state = s.lock();
                 match state.option_values.iter().find(|(n, _)| n == &name) {
                     Some((_, v)) => Ok(Value::string(v.clone())),
                     None => Ok(Value::Bool(false)),
@@ -3780,7 +3717,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "buffer-string",
             "Full text of active buffer",
             Arity::Fixed(0),
-            move |_args: &[Value]| Ok(Value::string(s.lock().unwrap().current_buffer_text.clone())),
+            move |_args: &[Value]| Ok(Value::string(s.lock().current_buffer_text.clone())),
         );
 
         // (buffer-text NAME)
@@ -3790,7 +3727,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
                 .iter()
                 .map(|b| (b.name.clone(), b.text()))
                 .collect();
-            self.shared.lock().unwrap().all_buffer_texts = all_buf_texts;
+            self.shared.lock().all_buffer_texts = all_buf_texts;
         }
         let s = self.shared.clone();
         self.vm.register_fn(
@@ -3799,7 +3736,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             Arity::Fixed(1),
             move |args: &[Value]| {
                 let name = arg_string(args, 0, "buffer-text")?;
-                let state = s.lock().unwrap();
+                let state = s.lock();
                 match state
                     .all_buffer_texts
                     .iter()
@@ -3951,7 +3888,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "buffer-sync-enabled?",
             "Whether sync is enabled",
             Arity::Fixed(0),
-            move |_args: &[Value]| Ok(Value::Bool(s.lock().unwrap().sync_enabled)),
+            move |_args: &[Value]| Ok(Value::Bool(s.lock().sync_enabled)),
         );
 
         let s = self.shared.clone();
@@ -3959,7 +3896,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "buffer-pending-updates",
             "Number of pending sync updates",
             Arity::Fixed(0),
-            move |_args: &[Value]| Ok(Value::Int(s.lock().unwrap().pending_update_count as i64)),
+            move |_args: &[Value]| Ok(Value::Int(s.lock().pending_update_count as i64)),
         );
 
         let s = self.shared.clone();
@@ -3967,7 +3904,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "buffer-sync-content",
             "Sync doc content",
             Arity::Fixed(0),
-            move |_args: &[Value]| match &s.lock().unwrap().sync_content {
+            move |_args: &[Value]| match &s.lock().sync_content {
                 Some(c) => Ok(Value::string(c.clone())),
                 None => Ok(Value::Bool(false)),
             },
@@ -3979,7 +3916,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "Take accumulated sync updates",
             Arity::Fixed(0),
             move |_args: &[Value]| {
-                let mut state = s.lock().unwrap();
+                let mut state = s.lock();
                 let updates = std::mem::take(&mut state.accumulated_sync_updates);
                 Ok(Value::list(
                     updates.into_iter().map(Value::string).collect::<Vec<_>>(),
@@ -3992,7 +3929,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
             "buffer-encode-state",
             "Full yrs document state as base64",
             Arity::Fixed(0),
-            move |_args: &[Value]| match &s.lock().unwrap().encoded_state {
+            move |_args: &[Value]| match &s.lock().encoded_state {
                 Some(st) => Ok(Value::string(st.clone())),
                 None => Ok(Value::Bool(false)),
             },
@@ -4017,7 +3954,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
         // Update SharedState so SharedState-backed functions (buffer-string,
         // region-active?, get-buffer-by-name, etc.) return fresh data.
         {
-            let mut state = self.shared.lock().unwrap();
+            let mut state = self.shared.lock();
             state.current_buffer_text = text;
             state.current_mode = mode_str.to_string();
             state.leader_active = editor.leader_active;
@@ -4056,7 +3993,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
         }
     }
     pub fn apply_to_editor(&mut self, editor: &mut Editor) {
-        let mut state = self.shared.lock().unwrap();
+        let mut state = self.shared.lock();
 
         // Create new keymaps (must come before bindings so define-key can target them)
         for (name, parent) in state.keymap_defs.drain(..) {
@@ -4797,7 +4734,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
 
         // Also check SharedState (provide may have been called during a previous eval).
         {
-            let state = self.shared.lock().unwrap();
+            let state = self.shared.lock();
             if state.loaded_features.contains(name) {
                 // Sync to our own set.
                 drop(state);
@@ -4839,7 +4776,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
 
         // Check if provide was called during loading.
         {
-            let state = self.shared.lock().unwrap();
+            let state = self.shared.lock();
             if !state.loaded_features.contains(name) {
                 return Err(format!(
                     "Feature '{}' was loaded but did not call (provide-feature \"{}\")",
@@ -4858,13 +4795,13 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
     /// engine is available.
     pub fn process_requires(&mut self) -> Vec<String> {
         let requires: Vec<String> = {
-            let mut state = self.shared.lock().unwrap();
+            let mut state = self.shared.lock();
             std::mem::take(&mut state.pending_requires)
         };
 
         // Sync load_path from SharedState (add-to-load-path! may have modified it).
         {
-            let state = self.shared.lock().unwrap();
+            let state = self.shared.lock();
             self.load_path = state.load_path.clone();
         }
 
@@ -4882,7 +4819,7 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
     /// real `handle_key` pipeline, so it pulls these and dispatches each parsed
     /// key against the live editor + loaded keymaps (true E2E key injection).
     pub fn take_pending_feed_keys(&mut self) -> Vec<String> {
-        std::mem::take(&mut self.shared.lock().unwrap().pending_feed_keys)
+        std::mem::take(&mut self.shared.lock().pending_feed_keys)
     }
 
     // --- Debugger introspection methods ---
@@ -4890,13 +4827,13 @@ rebind so a fresh primary inherits the lost key's seats (ADR-040 §Recovery-key)
     /// List all Scheme-defined commands accumulated via `(define-command ...)`.
     /// Returns (name, doc, scheme_fn_name) triples.
     pub fn list_user_commands(&self) -> Vec<(String, String, String)> {
-        self.shared.lock().unwrap().command_defs.clone()
+        self.shared.lock().command_defs.clone()
     }
 
     /// List all keybindings accumulated via `(define-key ...)`.
     /// Returns (keymap_name, key_string, command_name) triples.
     pub fn list_keybindings(&self) -> Vec<(String, String, String)> {
-        self.shared.lock().unwrap().keymap_bindings.clone()
+        self.shared.lock().keymap_bindings.clone()
     }
 
     /// Return recent eval errors for debugger display.
@@ -5954,7 +5891,7 @@ mod tests {
         // provide-feature is the Rust-registered canonical name.
         rt.eval(r#"(provide-feature "my-feature")"#).unwrap();
         {
-            let state = rt.shared.lock().unwrap();
+            let state = rt.shared.lock();
             assert!(
                 state.loaded_features.contains("my-feature"),
                 "SharedState should contain 'my-feature', got: {:?}",
@@ -6156,7 +6093,7 @@ mod tests {
         assert!(result.contains("f"), "expected false, got: {}", result);
 
         // Verify a warning message was queued
-        let state = rt.shared.lock().unwrap();
+        let state = rt.shared.lock();
         assert!(
             state
                 .pending_messages

@@ -46,6 +46,7 @@ hex = "0.4"
 tree-sitter-c = "0.24"
 tree-sitter-cpp = "0.23"
 tree-sitter-ruby = "0.23"
+parking_lot = "0.12"
 
 [dev-dependencies]
 tempfile = "3"

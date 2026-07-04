@@ -1,5 +1,7 @@
 use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+
+use parking_lot::Mutex;
 
 /// Severity level for in-editor messages.
 /// Mirrors tracing levels but is independent of the tracing crate.
@@ -68,7 +70,7 @@ impl MessageLog {
 
     /// Push a new log entry. Evicts oldest if at capacity.
     pub fn push(&self, level: MessageLevel, target: impl Into<String>, message: impl Into<String>) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         let seq = inner.next_seq;
         inner.next_seq += 1;
         if inner.entries.len() >= inner.max_entries {
@@ -84,13 +86,13 @@ impl MessageLog {
 
     /// Get a snapshot of all entries (for rendering).
     pub fn entries(&self) -> Vec<LogEntry> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         inner.entries.iter().cloned().collect()
     }
 
     /// Get entries at or above a minimum level.
     pub fn entries_filtered(&self, min_level: MessageLevel) -> Vec<LogEntry> {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         inner
             .entries
             .iter()
@@ -101,7 +103,7 @@ impl MessageLog {
 
     /// Number of entries.
     pub fn len(&self) -> usize {
-        let inner = self.inner.lock().unwrap();
+        let inner = self.inner.lock();
         inner.entries.len()
     }
 
@@ -126,7 +128,7 @@ pub struct MessageLogHandle {
 
 impl MessageLogHandle {
     pub fn push(&self, level: MessageLevel, target: impl Into<String>, message: impl Into<String>) {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
         let seq = inner.next_seq;
         inner.next_seq += 1;
         if inner.entries.len() >= inner.max_entries {
