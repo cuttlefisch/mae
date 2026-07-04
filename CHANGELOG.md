@@ -4,6 +4,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- *(keymap)* Mode-aware local leader — restore the global SPC menu in org/markdown buffers (#279) ([2bec8e7](https://github.com/cuttlefisch/mae/commit/2bec8e71166fe840ffa9544b532730884c87a3d2))
+
+## [0.14.23] - 2026-07-04
+
+### Miscellaneous
+
+- Bump version to 0.14.23 ([3b0a3a4](https://github.com/cuttlefisch/mae/commit/3b0a3a4c6a712b32aaa51f0f21e6149b0ca8b819))
+
 ### Performance
 
 - *(gui)* Skip per-wrap-continuation-row rope walks in buffer_render (#278) ([2d67046](https://github.com/cuttlefisch/mae/commit/2d67046ae8e63e72dea56b776e3019787d6e7874))
