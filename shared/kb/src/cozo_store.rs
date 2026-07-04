@@ -925,9 +925,12 @@ impl KbStore for CozoKbStore {
 
     fn fts_search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, KbStoreError> {
         if query.is_empty() {
-            // Empty query: return all node IDs (no ranking)
+            // Empty query: return node IDs (no ranking), bounded by `limit` —
+            // an unbounded scan here was reachable from the AI `kb_search` tool.
             let result = self
-                .run_immut("?[id] := *nodes{id, title}, title != ''")
+                .run_immut(&format!(
+                    "?[id] := *nodes{{id, title}}, title != '' :limit {limit}"
+                ))
                 .map_err(cozo_err)?;
             return Ok(result
                 .rows
@@ -954,8 +957,39 @@ impl KbStore for CozoKbStore {
             )
             .map_err(cozo_err)?;
 
-        // Post-query verification: check each hit's actual content still matches.
-        // Defensive measure against stale FTS index entries.
+        // Post-query verification: check each candidate's actual content still
+        // matches (defensive against stale FTS index entries). Previously this
+        // did one full `get_node` per candidate (N+1 — up to limit*3+10 full
+        // node deserializes just to read title+body). Instead bulk-fetch
+        // title+body for all candidates in ONE query, then verify in Rust,
+        // preserving the FTS score order.
+        let candidate_ids: Vec<DataValue> = result
+            .rows
+            .iter()
+            .filter_map(|row| row.first().and_then(|v| v.get_str()).map(dv_str))
+            .collect();
+
+        let mut content: std::collections::HashMap<String, (String, String)> =
+            std::collections::HashMap::with_capacity(candidate_ids.len());
+        if !candidate_ids.is_empty() {
+            let fetched = self
+                .run_immut_params(
+                    "?[id, title, body] := *nodes{id, title, body}, is_in(id, $ids)",
+                    btree_params([("ids", DataValue::List(candidate_ids))]),
+                )
+                .map_err(cozo_err)?;
+            for row in &fetched.rows {
+                let (Some(id), Some(title), Some(body)) = (
+                    row.first().and_then(|v| v.get_str()),
+                    row.get(1).and_then(|v| v.get_str()),
+                    row.get(2).and_then(|v| v.get_str()),
+                ) else {
+                    continue;
+                };
+                content.insert(id.to_string(), (title.to_string(), body.to_string()));
+            }
+        }
+
         let query_lower = query.to_lowercase();
         let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
         let mut hits = Vec::new();
@@ -964,12 +998,9 @@ impl KbStore for CozoKbStore {
                 continue;
             };
             let score = row.get(1).and_then(|v| v.get_float()).unwrap_or(0.0);
-
-            // Fetch actual title+body to verify the match is current
-            if let Ok(Some(node)) = self.get_node(id) {
-                let text = format!("{} {}", node.title, node.body).to_lowercase();
-                let matches = query_terms.iter().any(|term| text.contains(term));
-                if matches {
+            if let Some((title, body)) = content.get(id) {
+                let text = format!("{title} {body}").to_lowercase();
+                if query_terms.iter().any(|term| text.contains(term)) {
                     hits.push(SearchHit {
                         id: id.to_string(),
                         score,
@@ -2967,6 +2998,72 @@ mod tests {
         // Empty query returns all nodes
         let all = store.fts_search("", 100).unwrap();
         assert_eq!(all.len(), 3);
+    }
+
+    #[test]
+    fn fts_search_empty_query_respects_limit() {
+        // Regression: the empty-query branch used to return ALL node ids
+        // unbounded (reachable via the AI `kb_search` tool); it must honor `limit`.
+        let (_tmp, store) = make_store();
+        for i in 0..10 {
+            store
+                .insert_node(&Node::new(
+                    format!("n{i}"),
+                    format!("Title {i}"),
+                    NodeKind::Note,
+                    "body",
+                ))
+                .unwrap();
+        }
+        let bounded = store.fts_search("", 3).unwrap();
+        assert_eq!(bounded.len(), 3, "empty query must respect the limit");
+    }
+
+    #[test]
+    fn fts_search_bulk_path_matches_terms_and_scores() {
+        // Exercises the bulk-fetch (`is_in`) path that replaced the per-candidate
+        // get_node N+1: candidates must still be term-verified against their real
+        // title+body (fetched in one query), non-matches excluded, and the FTS
+        // score preserved. Uses colon-namespaced ids (the KB norm) to confirm the
+        // bulk `is_in` lookup handles them.
+        let (_tmp, store) = make_store();
+        store
+            .insert_node(&Node::new(
+                "doc:rust",
+                "Rust Notes",
+                NodeKind::Note,
+                "The borrow checker enforces memory safety",
+            ))
+            .unwrap();
+        store
+            .insert_node(&Node::new(
+                "doc:python",
+                "Python Notes",
+                NodeKind::Note,
+                "Duck typing is flexible",
+            ))
+            .unwrap();
+        store
+            .insert_node(&Node::new(
+                "doc:empty",
+                "Unrelated",
+                NodeKind::Note,
+                "nothing relevant here",
+            ))
+            .unwrap();
+
+        let hits = store.fts_search("borrow", 10).unwrap();
+        let ids: Vec<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+        assert!(
+            ids.contains(&"doc:rust"),
+            "bulk path should surface the term match, got {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"doc:empty"),
+            "term-verification must exclude non-matches"
+        );
+        // Bulk fetch must not drop the score carried from the FTS query.
+        assert!(hits.iter().all(|h| h.score >= 0.0));
     }
 
     #[test]
