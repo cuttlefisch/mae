@@ -909,28 +909,44 @@ impl Editor {
             return;
         }
 
-        // Count children checkboxes
-        let line_count = self.buffers[buf_idx].rope().len_lines();
+        // Count children checkboxes. Iterate the subtree with a SEQUENTIAL rope
+        // line cursor (`lines_at`) rather than `rope.line(r)` per index — the
+        // latter re-descends the rope B-tree on every line, so a single toggle
+        // under a large subtree took seconds (per-line O(log n) + a full String
+        // alloc + a regex, times thousands of lines). Here each line is a cheap
+        // advance, borrowed as `&str` for the common single-chunk line (no alloc),
+        // and `parent_level` is computed once instead of per iteration.
         let parent_indent = parent_line.len() - parent_line.trim_start().len();
         let is_heading = heading_re.is_match(&parent_line);
+        let parent_level = if is_heading {
+            heading_re
+                .captures(&parent_line)
+                .and_then(|c| c.get(1))
+                .map(|m| m.as_str().len())
+                .unwrap_or(0)
+        } else {
+            0
+        };
 
         let mut total = 0usize;
         let mut checked = 0usize;
 
-        for r in (parent + 1)..line_count {
-            let l: String = self.buffers[buf_idx].rope().line(r).chars().collect();
+        for line in self.buffers[buf_idx].rope().lines_at(parent + 1) {
+            let owned;
+            let l: &str = match line.as_str() {
+                Some(s) => s,
+                None => {
+                    owned = line.to_string();
+                    &owned
+                }
+            };
             let trimmed = l.trim_start();
             let indent = l.len() - trimmed.len();
 
-            // Stop at same-level or higher heading
-            if is_heading && heading_re.is_match(&l) {
-                let parent_level = heading_re
-                    .captures(&parent_line)
-                    .and_then(|c| c.get(1))
-                    .map(|m| m.as_str().len())
-                    .unwrap_or(0);
+            // Stop at same-level or higher heading (subtree boundary).
+            if is_heading && heading_re.is_match(l) {
                 let this_level = heading_re
-                    .captures(&l)
+                    .captures(l)
                     .and_then(|c| c.get(1))
                     .map(|m| m.as_str().len())
                     .unwrap_or(0);
@@ -938,19 +954,19 @@ impl Editor {
                     break;
                 }
             }
-            // Stop at same or lower indent for list items
-            if !is_heading && indent <= parent_indent && !l.trim().is_empty() {
+            // Stop at same or lower indent for list items.
+            if !is_heading && indent <= parent_indent && !trimmed.is_empty() {
                 break;
             }
 
-            if let Some(caps) = checkbox_re.captures(&l) {
+            if let Some(caps) = checkbox_re.captures(l) {
                 total += 1;
                 let state = caps.get(1).unwrap().as_str();
                 if state == "x" || state == "X" {
                     checked += 1;
                 }
-            } else if is_heading && heading_re.is_match(&l) {
-                // Count child headings with TODO/DONE keywords
+            } else if is_heading && heading_re.is_match(l) {
+                // Count child headings with TODO/DONE keywords.
                 if trimmed.contains("TODO ") || trimmed.contains("DONE ") {
                     total += 1;
                     if trimmed.contains("DONE ") {
@@ -1145,5 +1161,21 @@ mod tests {
         editor.window_mgr.focused_window_mut().cursor_row = 1;
         editor.toggle_checkbox_at_cursor();
         assert!(editor.buffers[0].text().contains("[50%]"));
+    }
+
+    #[test]
+    fn statistics_cookie_count_stops_at_subtree_boundary() {
+        // Guards the sequential-iterator rewrite of the subtree scan: the count
+        // must include only the parent's OWN subtree and stop at a sibling
+        // heading — the checkboxes under `* Other` must NOT be counted.
+        let mut editor =
+            org_editor("* Parent [0/2]\n- [ ] a\n- [ ] b\n* Other [0/2]\n- [x] c\n- [x] d\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 1; // toggle `a`
+        editor.toggle_checkbox_at_cursor();
+        let text = editor.buffers[0].text();
+        assert!(text.contains("* Parent [1/2]"), "got: {text}");
+        // The sibling section's cookie is untouched (its checkboxes weren't
+        // folded into Parent's count).
+        assert!(text.contains("* Other [0/2]"), "got: {text}");
     }
 }
