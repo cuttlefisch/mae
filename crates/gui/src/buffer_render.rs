@@ -188,27 +188,29 @@ pub fn render_buffer_content(
         let is_cursor_line = focused && line_idx == win.cursor_row;
         let is_stopped_line = stopped_line == Some(line_idx as u32);
 
-        // For span mapping we always need the rope-level positions.
-        let rope_line_char_start = buf.rope().line_to_char(line_idx);
-        let rope_line_text = buf.rope().line(line_idx);
-        let rope_char_count = rope_line_text
-            .chars()
-            .filter(|c| *c != '\n' && *c != '\r')
-            .count();
-
         let full_count = full_chars.len();
-        let line_char_start = rope_line_char_start;
-        let line_char_end = line_char_start + rope_char_count;
-        let line_byte_start = buf.rope().char_to_byte(line_char_start);
-        let line_byte_end = buf.rope().char_to_byte(line_char_end);
         let base_fg = if is_stopped_line {
             stopped_line_fg
         } else {
             text_fg
         };
 
-        // Only rebuild char_styles for the first segment of each line.
+        // Only rebuild char_styles for the first segment of each line. The
+        // rope-level positions below feed span/selection mapping, which happens
+        // only on that first segment — computing them inside the guard (rather
+        // than before it) skips several rope B-tree walks per wrap-continuation
+        // row while scrolling a word-wrapped buffer.
         if !is_wrap_cont {
+            let rope_line_char_start = buf.rope().line_to_char(line_idx);
+            let rope_line_text = buf.rope().line(line_idx);
+            let rope_char_count = rope_line_text
+                .chars()
+                .filter(|c| *c != '\n' && *c != '\r')
+                .count();
+            let line_char_start = rope_line_char_start;
+            let line_char_end = line_char_start + rope_char_count;
+            let line_byte_start = buf.rope().char_to_byte(line_char_start);
+            let line_byte_end = buf.rope().char_to_byte(line_char_end);
             char_styles.clear();
             let init_bg = if !needs_spans && show_cursorline && is_cursor_line {
                 cursorline_style.bg.map(|c| theme::theme_color_to_skia(&c))
