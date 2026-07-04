@@ -8,6 +8,14 @@ All notable changes to this project will be documented in this file.
 
 - *(lang)* Ruby support + default LSP servers (yaml/json/toml/bash) + pyright; document C++/babel (#271) ([5177986](https://github.com/cuttlefisch/mae/commit/5177986f261cbd9cec4baee845f7630143d158ca))
 
+### Miscellaneous
+
+- Bump version to 0.14.17 ([a996ef2](https://github.com/cuttlefisch/mae/commit/a996ef2478c93ebf75fc8bd49f2d7c2647a5497f))
+
+### Performance
+
+- Safe mechanical wins (render alloc, per-node query, daemon existence lookup) (#272) ([28b9c81](https://github.com/cuttlefisch/mae/commit/28b9c811095c2e6a747e7043066d84820b208bdb))
+
 ## [0.14.16] - 2026-07-04
 
 ### Bug Fixes
