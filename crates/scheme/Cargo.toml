@@ -12,3 +12,4 @@ mae-sync = { path = "../../shared/sync" }
 base64 = "0.22"
 tracing = { workspace = true }
 libc = "0.2"
+parking_lot = "0.12"
