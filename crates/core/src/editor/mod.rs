@@ -1544,6 +1544,28 @@ impl Editor {
         // which-key tree), regardless of the underlying mode (Normal for the doom
         // flavor, Insert for the non-modal flavor). See `Editor::leader_active`.
         if self.leader_active {
+            // Mode-aware local leader: if the active buffer's context has a
+            // local-leader keymap (which parents on `leader`), the keypad
+            // consults it FIRST — so `SPC m` is the major-mode local leader (org
+            // babel/export in an org buffer) while `SPC b/f/w/…` still fall
+            // through to the global `leader`. Only used when the keymap actually
+            // exists (a module opted in by creating it); otherwise the plain
+            // global leader, exactly as before.
+            let idx = self.active_buffer_idx();
+            let kind = self.buffers[idx].kind;
+            let local_leader = self
+                .keymap_registry
+                .local_leader_for_kind(kind)
+                .or_else(|| {
+                    self.syntax
+                        .language_of(idx)
+                        .and_then(|l| self.keymap_registry.local_leader_for_language(l))
+                });
+            if let Some(ll) = local_leader {
+                if self.keymaps.contains_key(ll) {
+                    return Some((ll, None));
+                }
+            }
             return Some(("leader", None));
         }
 
