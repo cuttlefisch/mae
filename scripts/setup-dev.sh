@@ -61,6 +61,37 @@ install_rust_analyzer() {
     fi
 }
 
+install_clangd() {
+    if check_cmd clangd; then
+        echo -e "  $OK clangd already installed"
+        summary+=("clangd: installed")
+        return
+    fi
+
+    echo "  Installing clangd (LSP server for C/C++)..."
+    if check_cmd dnf; then
+        sudo dnf install -y clang-tools-extra
+    elif check_cmd apt-get; then
+        sudo apt-get install -y clangd
+    elif check_cmd pacman; then
+        sudo pacman -S --noconfirm clang
+    elif check_cmd brew; then
+        brew install llvm
+    else
+        echo -e "  $FAIL Unknown package manager — install clangd manually"
+        summary+=("clangd: MISSING (install clangd manually)")
+        return
+    fi
+
+    if check_cmd clangd; then
+        echo -e "  $OK clangd installed"
+        summary+=("clangd: installed")
+    else
+        echo -e "  $WARN clangd installed but not found in PATH (may need PATH tweak)"
+        summary+=("clangd: installed (check PATH)")
+    fi
+}
+
 install_debugpy() {
     if python3 -c "import debugpy" 2>/dev/null; then
         echo -e "  $OK debugpy already installed"
@@ -125,19 +156,23 @@ echo "MAE Development Dependencies"
 echo "============================"
 echo ""
 
-echo "[1/4] clang (required for GUI build — skia-safe FFI)"
+echo "[1/5] clang (required for GUI build — skia-safe FFI)"
 install_clang
 echo ""
 
-echo "[2/4] lldb-dap (DAP adapter for C/C++/Rust)"
+echo "[2/5] lldb-dap (DAP adapter for C/C++/Rust)"
 install_lldb
 echo ""
 
-echo "[3/4] rust-analyzer (LSP server for Rust)"
+echo "[3/5] rust-analyzer (LSP server for Rust)"
 install_rust_analyzer
 echo ""
 
-echo "[4/4] debugpy (DAP adapter for Python)"
+echo "[4/5] clangd (LSP server for C/C++)"
+install_clangd
+echo ""
+
+echo "[5/5] debugpy (DAP adapter for Python)"
 install_debugpy
 echo ""
 

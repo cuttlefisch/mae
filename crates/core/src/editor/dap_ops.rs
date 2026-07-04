@@ -797,7 +797,9 @@ fn env_or(var: &str, default: &str) -> String {
 /// environment variable if the preset doesn't match the user's setup.
 fn default_spawn_for_adapter(adapter: &str) -> Option<DapSpawnConfig> {
     match adapter {
-        "lldb" | "lldb-dap" => Some(DapSpawnConfig {
+        // lldb-dap debugs any native binary; `cpp`/`c` are convenience aliases so
+        // `dap_start(adapter="cpp", program=<compiled -g binary>)` resolves here.
+        "lldb" | "lldb-dap" | "cpp" | "c" => Some(DapSpawnConfig {
             command: env_or("MAE_DAP_LLDB", "lldb-dap"),
             args: vec![],
             adapter_id: "lldb".into(),

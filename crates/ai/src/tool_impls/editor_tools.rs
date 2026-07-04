@@ -874,7 +874,11 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
         .collect();
 
     // DAP adapters
-    let dap_adapters = [("lldb-dap", "lldb"), ("debugpy", "pip install debugpy")];
+    let dap_adapters = [
+        ("lldb-dap", "lldb"),
+        ("codelldb", "CodeLLDB (C/C++/Rust alt)"),
+        ("debugpy", "pip install debugpy"),
+    ];
     let dap_json: Vec<serde_json::Value> = dap_adapters
         .iter()
         .map(|(cmd, install_hint)| {

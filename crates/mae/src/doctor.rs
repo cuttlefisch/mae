@@ -203,6 +203,13 @@ pub fn run_doctor() -> i32 {
             "npm install -g typescript-language-server",
         ),
         ("gopls", "Go", "go install golang.org/x/tools/gopls@latest"),
+        // Label "Cpp" so the env-var check resolves to MAE_LSP_CPP (a "C/C++"
+        // label would produce the invalid key MAE_LSP_C/C++). clangd serves both.
+        (
+            "clangd",
+            "Cpp",
+            "sudo dnf install clang-tools-extra (Fedora) / sudo apt install clangd (Debian) / brew install llvm (macOS)",
+        ),
     ];
 
     for (binary, lang, install) in &lsp_servers {
@@ -222,6 +229,7 @@ pub fn run_doctor() -> i32 {
 
     let dap_adapters = [
         ("lldb-dap", "C/C++/Rust", "sudo dnf install lldb (Fedora) / sudo apt install lldb (Debian) / brew install llvm (macOS)"),
+        ("codelldb", "C/C++/Rust (alt)", "install the CodeLLDB extension's codelldb binary, or set MAE_DAP_CODELLDB"),
         ("debugpy", "Python", "pip install debugpy"),
     ];
 

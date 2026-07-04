@@ -1635,6 +1635,11 @@ pub fn setup_lsp(
             &["--stdio"],
         ),
         ("go", "MAE_LSP_GO", "gopls", &[]),
+        // clangd serves both C and C++ (file-extension → language id happens in
+        // lsp_intent::language_id_from_path). Missing clangd degrades gracefully
+        // (find_binary skip). Override via MAE_LSP_CPP / MAE_LSP_C or [lsp.cpp].
+        ("cpp", "MAE_LSP_CPP", "clangd", &[]),
+        ("c", "MAE_LSP_C", "clangd", &[]),
     ];
 
     let mut configs: HashMap<String, LspServerConfig> = HashMap::new();
