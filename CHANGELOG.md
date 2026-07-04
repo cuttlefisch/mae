@@ -8,6 +8,14 @@ All notable changes to this project will be documented in this file.
 
 - *(scheme)* Parking_lot::Mutex for shared state — remove the lock-poison cascade (#274) ([e26bbf2](https://github.com/cuttlefisch/mae/commit/e26bbf24c4bcb9e9825072d09ff4048648222929))
 
+### Miscellaneous
+
+- Bump version to 0.14.19 ([1d092a5](https://github.com/cuttlefisch/mae/commit/1d092a546ae39573f78ab30d414c37bba95a429b))
+
+### Performance
+
+- *(daemon)* Load the KB collection once per node_update, not 4× through the gates (#275) ([16fa65f](https://github.com/cuttlefisch/mae/commit/16fa65f173332effc11e8340669877f7a10aceb2))
+
 ## [0.14.18] - 2026-07-04
 
 ### Miscellaneous
