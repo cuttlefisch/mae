@@ -129,6 +129,11 @@ impl super::Editor {
             "degrade_threshold_line_length" => self.degrade_threshold_line_length.to_string(),
             "display_region_debounce_ms" => self.display_region_debounce_ms.to_string(),
             "syntax_reparse_debounce_ms" => self.syntax_reparse_debounce_ms.to_string(),
+            "babel_confirm" => self.babel_confirm.to_string(),
+            "babel_timeout" => self.babel_timeout.to_string(),
+            "babel_cxx_compiler" => self.babel_cxx_compiler.clone(),
+            "babel_c_compiler" => self.babel_c_compiler.clone(),
+            "babel_cxx_std" => self.babel_cxx_std.clone(),
             "org_agenda_files" => self.org_agenda_files.join(", "),
             "kb_watcher_enabled" => self.kb.watcher_enabled.to_string(),
             "kb_watcher_debounce_ms" => self.kb.watcher_debounce_ms.to_string(),
@@ -554,6 +559,26 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.syntax_reparse_debounce_ms = v.clamp(0, 5000);
+            }
+            // Babel options were registered + persisted but never applied to
+            // their editor fields (dead config); wire them here so `:set` works.
+            "babel_confirm" => {
+                self.babel_confirm = parse_option_bool(value)?;
+            }
+            "babel_timeout" => {
+                let v: u64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.babel_timeout = v.clamp(1, 3600);
+            }
+            "babel_cxx_compiler" => {
+                self.babel_cxx_compiler = value.to_string();
+            }
+            "babel_c_compiler" => {
+                self.babel_c_compiler = value.to_string();
+            }
+            "babel_cxx_std" => {
+                self.babel_cxx_std = value.to_string();
             }
             "org_agenda_files" => {
                 return Err("Use :agenda-add / :agenda-remove to manage agenda files".to_string());
@@ -1619,7 +1644,7 @@ impl super::Editor {
 
         // DAP Adapters
         lines.push("DAP Adapters:".to_string());
-        for cmd in &["lldb-dap", "debugpy"] {
+        for cmd in &["lldb-dap", "codelldb", "debugpy"] {
             let found = find_on_path(cmd);
             lines.push(format!(
                 "  {:<28} [{}]  {}",

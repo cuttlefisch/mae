@@ -224,13 +224,16 @@ Required for full self-test coverage (DAP and LSP categories):
 |---------|---------|---------|
 | `lldb` | DAP adapter for C/C++/Rust (provides `lldb-dap`) | `sudo dnf install lldb` (Fedora), `sudo apt install lldb` (Debian/Ubuntu), `brew install llvm` (macOS) |
 | `rust-analyzer` | LSP server for Rust | `rustup component add rust-analyzer` |
+| `clangd` | LSP server for C/C++ | `sudo dnf install clang-tools-extra` (Fedora), `sudo apt install clangd` (Debian/Ubuntu), `brew install llvm` (macOS) |
 | `debugpy` | DAP adapter for Python | `pip install debugpy` |
+| C/C++ compiler (`g++`/`clang++`) | org-babel `c`/`c++`/`cpp` block execution | `sudo dnf install gcc-c++` (Fedora), `sudo apt install g++` (Debian/Ubuntu), Xcode CLT (macOS) |
 
 Quick setup: `make setup-dev` (auto-detects package manager).
 
 Environment variable overrides for adapter/server paths:
 - **DAP:** `MAE_DAP_LLDB`, `MAE_DAP_CODELLDB`, `MAE_DAP_DEBUGPY`
-- **LSP:** `MAE_LSP_RUST`, `MAE_LSP_PYTHON`, `MAE_LSP_TYPESCRIPT`, `MAE_LSP_GO`
+- **LSP:** `MAE_LSP_RUST`, `MAE_LSP_PYTHON`, `MAE_LSP_TYPESCRIPT`, `MAE_LSP_GO`, `MAE_LSP_CPP`, `MAE_LSP_C`
+- **Babel compilers:** `MAE_BABEL_CXX` (C++), `MAE_BABEL_CC` (C) — or the `babel_cxx_compiler` / `babel_c_compiler` / `babel_cxx_std` options, or a per-block `:cmd`
 
 ## Scheme Testing Framework
 

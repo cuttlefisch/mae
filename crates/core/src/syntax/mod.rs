@@ -497,6 +497,31 @@ mod tests {
     }
 
     #[test]
+    fn c_highlights_keyword_and_string() {
+        let spans = languages::compute_spans(
+            Language::C,
+            "#include <stdio.h>\nint main(void) { printf(\"hi\"); return 0; }\n",
+        );
+        assert!(spans.iter().any(|s| s.theme_key == "keyword"));
+        assert!(spans.iter().any(|s| s.theme_key == "string"));
+    }
+
+    #[test]
+    fn cpp_highlights_keyword_string_and_cpp_construct() {
+        // Exercises the C + C++ concatenated query: `class`/`return` come from the
+        // C base, the templated call + qualified id are C++-specific captures.
+        let src = "#include <vector>\ntemplate<class T> T id(T x){ return x; }\n\
+                   int main(){ std::vector<int> v; return id(0); }\n";
+        let spans = languages::compute_spans(Language::Cpp, src);
+        assert!(
+            !spans.is_empty(),
+            "cpp combined query must build a valid HighlightConfiguration"
+        );
+        assert!(spans.iter().any(|s| s.theme_key == "keyword"));
+        assert!(spans.iter().any(|s| s.theme_key == "type"));
+    }
+
+    #[test]
     fn bash_highlights_produce_spans() {
         let spans = languages::compute_spans(Language::Bash, "echo \"hello $USER\"\n");
         assert!(!spans.is_empty());

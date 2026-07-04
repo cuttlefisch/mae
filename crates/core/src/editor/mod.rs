@@ -1012,6 +1012,12 @@ pub struct Editor {
     pub babel_trust_paths: Vec<String>,
     /// Babel: execution timeout in seconds (default 30).
     pub babel_timeout: u64,
+    /// Babel: C++ compiler for c++/cpp blocks (default "c++").
+    pub babel_cxx_compiler: String,
+    /// Babel: C compiler for c blocks (default "cc").
+    pub babel_c_compiler: String,
+    /// Babel: C++ standard passed as -std=<value> (default "c++17"; empty omits).
+    pub babel_cxx_std: String,
     /// Babel: persistent REPL session manager.
     pub babel_sessions: crate::babel::session::SessionManager,
     // --- Snippet session ---
@@ -1375,6 +1381,9 @@ impl Editor {
             babel_confirm: true,
             babel_trust_paths: Vec::new(),
             babel_timeout: 30,
+            babel_cxx_compiler: "c++".to_string(),
+            babel_c_compiler: "cc".to_string(),
+            babel_cxx_std: "c++17".to_string(),
             babel_sessions: crate::babel::session::SessionManager::new(),
             snippet_session: None,
             snippet_store: mae_snippets::SnippetStore::new(),

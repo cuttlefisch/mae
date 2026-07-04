@@ -528,6 +528,29 @@ fn set_option_performance_aliases() {
 }
 
 #[test]
+fn set_option_babel_compilers_apply_to_fields() {
+    // Regression: babel options were registered + persisted but never applied
+    // to the editor fields. `:set` (and its aliases) must now take effect.
+    let mut editor = Editor::new();
+    assert_eq!(editor.babel_cxx_compiler, "c++");
+
+    editor.set_option("babel_cxx_compiler", "g++").unwrap();
+    assert_eq!(editor.babel_cxx_compiler, "g++");
+
+    editor.set_option("babel-c-compiler", "clang").unwrap();
+    assert_eq!(editor.babel_c_compiler, "clang");
+
+    editor.set_option("babel-cxx-std", "c++20").unwrap();
+    assert_eq!(editor.babel_cxx_std, "c++20");
+
+    editor.set_option("babel-timeout", "90").unwrap();
+    assert_eq!(editor.babel_timeout, 90);
+
+    editor.set_option("babel-confirm", "false").unwrap();
+    assert!(!editor.babel_confirm);
+}
+
+#[test]
 fn get_option_performance() {
     let editor = Editor::new();
     let (val, def) = editor.get_option("large_file_lines").unwrap();

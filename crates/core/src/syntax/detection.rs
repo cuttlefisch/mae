@@ -26,6 +26,10 @@ pub fn language_for_path(path: &std::path::Path) -> Option<Language> {
         "scm" | "ss" | "sld" | "sls" => Language::Scheme,
         "yaml" | "yml" => Language::Yaml,
         "org" => Language::Org,
+        // `.h` is treated as C (matches the LSP `language_id_from_path` mapping);
+        // clangd handles C and C++ headers regardless.
+        "c" | "h" => Language::C,
+        "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => Language::Cpp,
         _ => return None,
     })
 }

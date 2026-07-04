@@ -7,6 +7,21 @@ use crate::babel::{self, execute::BabelExecutor, results, tangle};
 use crate::export::{self, html::HtmlExporter, markdown::MarkdownExporter, Exporter};
 
 impl Editor {
+    /// Build a babel executor seeded from the editor's babel options: the
+    /// persistent sessions, timeout, and the configurable compiler binaries /
+    /// C++ standard for compiled blocks (principle #8 — no hardcoded `c++`/`cc`).
+    fn new_babel_executor(&mut self) -> BabelExecutor {
+        let mut executor = BabelExecutor {
+            sessions: std::mem::take(&mut self.babel_sessions),
+            timeout_secs: self.babel_timeout,
+            ..BabelExecutor::default()
+        };
+        executor.compiled.cxx = self.babel_cxx_compiler.clone();
+        executor.compiled.cc = self.babel_c_compiler.clone();
+        executor.compiled.cxx_std = self.babel_cxx_std.clone();
+        executor
+    }
+
     /// Execute the source block at the cursor position.
     /// Uses AI-aware buffer/cursor targeting so the AI agent can execute
     /// blocks in a non-focused buffer via `set_ai_target`.
@@ -57,11 +72,7 @@ impl Editor {
             .and_then(|p| p.parent())
             .unwrap_or_else(|| std::path::Path::new("."));
 
-        let mut executor = BabelExecutor {
-            sessions: std::mem::take(&mut self.babel_sessions),
-            timeout_secs: self.babel_timeout,
-            ..BabelExecutor::default()
-        };
+        let mut executor = self.new_babel_executor();
 
         let result = executor.execute_block(&block, buf_dir, &resolved_vars);
         self.babel_sessions = executor.sessions;
@@ -142,11 +153,7 @@ impl Editor {
                 .unwrap_or_else(|| std::path::Path::new("."));
 
             let resolved_vars = babel::vars::resolve_vars(block, &current_blocks, &current_source);
-            let mut executor = BabelExecutor {
-                sessions: std::mem::take(&mut self.babel_sessions),
-                timeout_secs: self.babel_timeout,
-                ..BabelExecutor::default()
-            };
+            let mut executor = self.new_babel_executor();
 
             let result = executor.execute_block(block, buf_dir, &resolved_vars);
             self.babel_sessions = executor.sessions;

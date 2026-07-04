@@ -64,6 +64,8 @@ pub enum Language {
     Scheme,
     Yaml,
     Org,
+    C,
+    Cpp,
 }
 
 impl Language {
@@ -83,6 +85,8 @@ impl Language {
             Language::Scheme => "scheme",
             Language::Yaml => "yaml",
             Language::Org => "org",
+            Language::C => "c",
+            Language::Cpp => "cpp",
         }
     }
 
@@ -130,6 +134,8 @@ impl Language {
             Language::Bash => tree_sitter_bash::LANGUAGE.into(),
             Language::Scheme => tree_sitter_scheme::LANGUAGE.into(),
             Language::Yaml => tree_sitter_yaml::LANGUAGE.into(),
+            Language::C => tree_sitter_c::LANGUAGE.into(),
+            Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
             Language::Org => return None,
         })
     }
@@ -174,6 +180,22 @@ pub(crate) fn build_configuration(lang: Language) -> Option<HighlightConfigurati
             )
         }
         Language::Go => (tree_sitter_go::HIGHLIGHTS_QUERY, "", ""),
+        Language::C => (tree_sitter_c::HIGHLIGHT_QUERY, "", ""),
+        // The tree-sitter-cpp highlights query only carries C++-specific
+        // captures (templates, qualified ids, …) and assumes the C captures are
+        // in scope — the C++ grammar is a superset of C. Concatenate C + C++
+        // highlights, the same combine pattern TypeScript uses over JavaScript.
+        Language::Cpp => {
+            static CPP_COMBINED: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+            let combined = CPP_COMBINED.get_or_init(|| {
+                format!(
+                    "{}\n{}",
+                    tree_sitter_c::HIGHLIGHT_QUERY,
+                    tree_sitter_cpp::HIGHLIGHT_QUERY
+                )
+            });
+            (combined.as_str(), "", "")
+        }
         Language::Json => (tree_sitter_json::HIGHLIGHTS_QUERY, "", ""),
         Language::Bash => (tree_sitter_bash::HIGHLIGHT_QUERY, "", ""),
         Language::Scheme => (tree_sitter_scheme::HIGHLIGHTS_QUERY, "", ""),

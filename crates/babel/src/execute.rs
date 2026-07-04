@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
+use super::backend::compiled::CompiledBackend;
+use super::backend::LanguageBackend;
 use super::session::SessionManager;
 use super::{expand_tilde, EvalPolicy, HeaderArgs, SrcBlock};
 
@@ -26,6 +28,9 @@ pub struct BabelExecutor {
     pub sessions: SessionManager,
     pub timeout_secs: u64,
     pub max_output_bytes: usize,
+    /// Compile-cache-execute backend for compiled languages (rust/go/c/c++).
+    /// Its compiler options are set from the editor's babel options.
+    pub compiled: CompiledBackend,
 }
 
 impl Default for BabelExecutor {
@@ -34,6 +39,7 @@ impl Default for BabelExecutor {
             sessions: SessionManager::new(),
             timeout_secs: 30,
             max_output_bytes: 100 * 1024, // 100KB
+            compiled: CompiledBackend::new(),
         }
     }
 }
@@ -67,6 +73,15 @@ impl BabelExecutor {
             "scheme" | "elisp" => ExecResult::PendingSchemeEval(body),
             "datalog" | "cozodb" => ExecResult::PendingDatalogQuery(body),
             lang => {
+                // Compiled languages (rust/go/c/c++/cpp) compile→cache→run via the
+                // dedicated backend, ahead of the session/shell paths (they can't
+                // pipe-and-run, and `repl_command` errors on them). Uses the raw
+                // body — `:var` injection is undefined for compiled sources.
+                if self.compiled.can_handle(lang) {
+                    self.compiled.timeout_secs = self.timeout_secs;
+                    self.compiled.max_output_bytes = self.max_output_bytes;
+                    return self.compiled.execute(block, &working_dir, resolved_vars);
+                }
                 // Route through session if `:session` header arg is set
                 if let Some(session_name) = &block.header_args.session {
                     match self
@@ -199,21 +214,8 @@ fn resolve_command(language: &str, args: &HeaderArgs) -> (String, Vec<String>) {
         "node" | "javascript" | "js" => ("node".to_string(), Vec::new()),
         "lua" => ("lua".to_string(), Vec::new()),
         "R" | "r" => ("Rscript".to_string(), vec!["--vanilla".to_string()]),
-        "go" => (
-            "go".to_string(),
-            vec!["run".to_string(), "/dev/stdin".to_string()],
-        ),
-        "rust" => {
-            // For Rust, we'd need to write to temp file — handled specially
-            (
-                "rustc".to_string(),
-                vec![
-                    "-".to_string(),
-                    "-o".to_string(),
-                    "/tmp/mae-babel-rust".to_string(),
-                ],
-            )
-        }
+        // NOTE: compiled languages (rust/go/c/c++) are handled by CompiledBackend
+        // before reaching execute_shell — they never resolve here.
         _ => (language.to_string(), Vec::new()),
     }
 }
@@ -256,7 +258,7 @@ impl SrcBlock {
 }
 
 /// Trait for `wait_timeout` on Child (mirrors wait-timeout crate).
-trait WaitTimeout {
+pub(crate) trait WaitTimeout {
     fn wait_timeout(
         &mut self,
         timeout: Duration,
@@ -357,6 +359,91 @@ mod tests {
             ExecResult::Error(e) if e.contains("not found") => {
                 // python3 not installed, skip
             }
+            other => panic!("Expected Output, got {:?}", other),
+        }
+    }
+
+    // --- Compiled languages (CompiledBackend) ---
+    // Each skips cleanly when the toolchain is absent so CI without g++/rustc
+    // stays green (the "not found" arm), but asserts real behavior when present.
+
+    fn compiled_block(language: &str, body: &str) -> SrcBlock {
+        SrcBlock {
+            name: None,
+            language: language.to_string(),
+            header_args: HeaderArgs::default(),
+            body: body.to_string(),
+            line_range: (0, 2),
+            body_byte_range: (0, body.len()),
+        }
+    }
+
+    #[test]
+    fn execute_cpp_hello() {
+        let mut executor = BabelExecutor::new();
+        let block = compiled_block(
+            "cpp",
+            "#include <iostream>\nint main(){ std::cout << \"hi-cpp\"; return 0; }",
+        );
+        match executor.execute_block(&block, Path::new("/tmp"), &[]) {
+            ExecResult::Output(s) => assert_eq!(s.trim(), "hi-cpp"),
+            ExecResult::Error(e) if e.contains("not found") => { /* no C++ toolchain, skip */ }
+            other => panic!("Expected Output, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn execute_cpp_uppercase_alias() {
+        // `#+begin_src C++` must route to the compiled backend, not run a
+        // program literally named `C++`.
+        let mut executor = BabelExecutor::new();
+        let block = compiled_block(
+            "C++",
+            "#include <iostream>\nint main(){ std::cout << \"up\"; }",
+        );
+        match executor.execute_block(&block, Path::new("/tmp"), &[]) {
+            ExecResult::Output(s) => assert_eq!(s.trim(), "up"),
+            ExecResult::Error(e) if e.contains("not found") => { /* skip */ }
+            other => panic!("Expected Output, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn execute_cpp_compile_error_is_reported() {
+        // A block that fails to compile must surface a "Compilation failed"
+        // error, NOT silently succeed (#14: the failure path).
+        let mut executor = BabelExecutor::new();
+        let block = compiled_block("cpp", "int main(){ this is not valid c++ }");
+        match executor.execute_block(&block, Path::new("/tmp"), &[]) {
+            ExecResult::Error(e) if e.contains("Compilation failed") => { /* expected */ }
+            ExecResult::Error(e) if e.contains("not found") => { /* no toolchain, skip */ }
+            other => panic!("Expected a compilation error, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn execute_c_hello() {
+        let mut executor = BabelExecutor::new();
+        let block = compiled_block(
+            "c",
+            "#include <stdio.h>\nint main(void){ printf(\"hi-c\"); return 0; }",
+        );
+        match executor.execute_block(&block, Path::new("/tmp"), &[]) {
+            ExecResult::Output(s) => assert_eq!(s.trim(), "hi-c"),
+            ExecResult::Error(e) if e.contains("not found") => { /* skip */ }
+            other => panic!("Expected Output, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn execute_rust_now_runs_the_binary() {
+        // Regression: Rust babel previously compiled then captured rustc's empty
+        // stdout instead of running the binary. It must now print program output.
+        let mut executor = BabelExecutor::new();
+        let block = compiled_block("rust", "fn main(){ print!(\"hi-rust\"); }");
+        match executor.execute_block(&block, Path::new("/tmp"), &[]) {
+            ExecResult::Output(s) => assert_eq!(s.trim(), "hi-rust"),
+            ExecResult::Error(e) if e.contains("not found") => { /* no rustc, skip */ }
             other => panic!("Expected Output, got {:?}", other),
         }
     }
