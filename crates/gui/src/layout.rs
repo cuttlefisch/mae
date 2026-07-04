@@ -524,9 +524,10 @@ pub fn compute_layout(
         }
 
         if wrap {
-            let full_chars = full_chars.to_vec();
+            // `full_chars` is already `&[char]`; all consumers below take a
+            // slice, so avoid a per-wrapped-line heap copy.
             let indent_len = if editor.break_indent {
-                content_indent_len(&full_chars)
+                content_indent_len(full_chars)
             } else {
                 0
             };
@@ -557,7 +558,7 @@ pub fn compute_layout(
                 } else {
                     base_avail
                 };
-                let end = find_wrap_break(&full_chars, pos, avail);
+                let end = find_wrap_break(full_chars, pos, avail);
 
                 let seg_glyph_advance = if seg_scale != 1.0 {
                     glyph_advance_fn

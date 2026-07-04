@@ -539,6 +539,14 @@ pub fn import_org_dir_to_store(
         }
 
         let mut file_node_ids = Vec::new();
+        // The source-file hash is per-file (constant across this file's nodes),
+        // so look it up ONCE instead of re-querying per heading. Capturing it
+        // before the loop also fixes a miscount: an insert mid-loop could make
+        // later nodes of a brand-new file look like updates.
+        let file_already_known = matches!(
+            store.get_source_file_hash(&file_path_str),
+            Ok(Some(ref h)) if !h.is_empty()
+        );
         for mut node in parse_result.nodes {
             node.source_file = Some(path.to_path_buf());
             report.links_created += node.links().len();
@@ -564,13 +572,9 @@ pub fn import_org_dir_to_store(
                 file_node_ids.push(node_id);
                 kb.insert(node);
 
-                // Check if this was an update or new node.
-                if let Ok(Some(old_hash)) = store.get_source_file_hash(&file_path_str) {
-                    if !old_hash.is_empty() {
-                        report.nodes_updated += 1;
-                    } else {
-                        report.nodes_imported += 1;
-                    }
+                // Update vs new is a per-file property (captured before the loop).
+                if file_already_known {
+                    report.nodes_updated += 1;
                 } else {
                     report.nodes_imported += 1;
                 }
