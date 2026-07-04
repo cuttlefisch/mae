@@ -238,75 +238,82 @@ impl TextSync {
         let update_decoded =
             yrs::Update::decode_v1(update).map_err(|e| SyncError::Encoding(e.to_string()))?;
 
-        // Diagnostic: log update contents and state vector before apply.
-        let update_sv = update_decoded.state_vector();
-        for (&client_id, &clock) in update_sv.iter() {
-            tracing::info!(
-                client_id = client_id.get(),
-                clock,
-                "  update contains ops from"
-            );
-        }
-        let sv_before = {
-            let txn = self.doc.transact();
-            txn.state_vector()
-        };
-        let content_before = self.content();
-
-        // Check for overlap: update's client_ids already in our state vector.
-        for (&client_id, &update_clock) in update_sv.iter() {
-            let local_clock = sv_before.get(&client_id);
-            if local_clock > 0 {
-                tracing::warn!(
+        // Verbose per-op sync diagnostics: the two full-document `content()`
+        // materializations + per-client state-vector dumps below cost O(doc) per
+        // remote op and only feed logging (this fn returns `Ok(())` regardless),
+        // so compute them ONLY when DEBUG tracing is enabled. The apply +
+        // `rebuild_rope` are the sole functional work.
+        let diag = tracing::enabled!(tracing::Level::DEBUG);
+        let pre = if diag {
+            let update_sv = update_decoded.state_vector();
+            for (&client_id, &clock) in update_sv.iter() {
+                tracing::debug!(
                     client_id = client_id.get(),
-                    update_clock,
-                    local_clock,
-                    "OVERLAP: update client already in local state vector"
+                    clock,
+                    "  update contains ops from"
                 );
             }
-        }
+            let sv_before = {
+                let txn = self.doc.transact();
+                txn.state_vector()
+            };
+            // Overlap: update client_ids already in our state vector.
+            for (&client_id, &update_clock) in update_sv.iter() {
+                let local_clock = sv_before.get(&client_id);
+                if local_clock > 0 {
+                    tracing::debug!(
+                        client_id = client_id.get(),
+                        update_clock,
+                        local_clock,
+                        "OVERLAP: update client already in local state vector"
+                    );
+                }
+            }
+            Some((sv_before, self.content()))
+        } else {
+            None
+        };
 
         {
             let mut txn = self.doc.transact_mut();
             txn.apply_update(update_decoded)
                 .map_err(|e| SyncError::Encoding(e.to_string()))?;
         }
-
-        // Diagnostic: log state vector after apply.
-        let sv_after = {
-            let txn = self.doc.transact();
-            txn.state_vector()
-        };
-
         self.rebuild_rope();
-        let content_after = self.content();
-        let content_changed = content_before != content_after;
-        // Heuristic: if SV didn't advance and content didn't change,
-        // likely the update items are stuck in yrs pending queue.
-        let sv_unchanged = sv_before == sv_after;
 
-        if content_changed {
-            tracing::info!(
-                local_client_id = self.doc.client_id().get(),
-                update_len = update.len(),
-                content_len_before = content_before.len(),
-                content_len_after = content_after.len(),
-                "TextSync::apply_update — content CHANGED"
-            );
-        } else {
-            tracing::warn!(
-                local_client_id = self.doc.client_id().get(),
-                update_len = update.len(),
-                sv_unchanged,
-                sv_before_entries = sv_before.len(),
-                sv_after_entries = sv_after.len(),
-                "TextSync::apply_update — content UNCHANGED (no-op)"
-            );
-            for (&client_id, &clock) in sv_before.iter() {
-                tracing::warn!(client_id = client_id.get(), clock, "  sv_before entry");
-            }
-            for (&client_id, &clock) in sv_after.iter() {
-                tracing::warn!(client_id = client_id.get(), clock, "  sv_after entry");
+        if let Some((sv_before, content_before)) = pre {
+            let sv_after = {
+                let txn = self.doc.transact();
+                txn.state_vector()
+            };
+            let content_after = self.content();
+            let content_changed = content_before != content_after;
+            // Heuristic: if SV didn't advance and content didn't change, the
+            // update items are likely stuck in the yrs pending queue.
+            let sv_unchanged = sv_before == sv_after;
+            if content_changed {
+                tracing::debug!(
+                    local_client_id = self.doc.client_id().get(),
+                    update_len = update.len(),
+                    content_len_before = content_before.len(),
+                    content_len_after = content_after.len(),
+                    "TextSync::apply_update — content CHANGED"
+                );
+            } else {
+                tracing::debug!(
+                    local_client_id = self.doc.client_id().get(),
+                    update_len = update.len(),
+                    sv_unchanged,
+                    sv_before_entries = sv_before.len(),
+                    sv_after_entries = sv_after.len(),
+                    "TextSync::apply_update — content UNCHANGED (no-op)"
+                );
+                for (&client_id, &clock) in sv_before.iter() {
+                    tracing::debug!(client_id = client_id.get(), clock, "  sv_before entry");
+                }
+                for (&client_id, &clock) in sv_after.iter() {
+                    tracing::debug!(client_id = client_id.get(), clock, "  sv_after entry");
+                }
             }
         }
 
