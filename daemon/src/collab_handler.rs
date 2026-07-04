@@ -632,9 +632,29 @@ pub async fn verify_content_op(
     anchor: &[u8; 32],
     signed: &SignedContentOp,
 ) -> Result<(), String> {
-    let coll = load_collection(doc_store, kb_id).await?;
+    verify_content_op_with_coll(doc_store, kb_id, anchor, signed, None).await
+}
+
+/// As [`verify_content_op`], but accepts a pre-loaded collection snapshot so a
+/// handler that runs several gates on one request loads `kbc:{kb_id}` once. When
+/// `coll` is `None` it loads itself — identical to [`verify_content_op`].
+pub async fn verify_content_op_with_coll(
+    doc_store: &DocStore,
+    kb_id: &str,
+    anchor: &[u8; 32],
+    signed: &SignedContentOp,
+    coll: Option<&KbCollectionDoc>,
+) -> Result<(), String> {
+    let loaded;
+    let coll = match coll {
+        Some(c) => c,
+        None => {
+            loaded = load_collection(doc_store, kb_id).await?;
+            &loaded
+        }
+    };
     let dm = doc_store
-        .derived_membership(kb_id, &coll, anchor, now_unix())
+        .derived_membership(kb_id, coll, anchor, now_unix())
         .await;
     signed
         .admit(&dm.members)
@@ -646,11 +666,28 @@ pub async fn verify_content_op(
 /// collection's owner (an OWNED KB — A is its own authority). `None` when neither
 /// holds (un-anchored + not ours), in which case the caller applies the legacy gate.
 pub async fn resolve_content_anchor(doc_store: &DocStore, kb_id: &str) -> Option<[u8; 32]> {
+    resolve_content_anchor_with_coll(doc_store, kb_id, None).await
+}
+
+/// As [`resolve_content_anchor`], but accepts a pre-loaded collection snapshot
+/// (used only in the owned-fallback branch). `None` loads itself — identical.
+pub async fn resolve_content_anchor_with_coll(
+    doc_store: &DocStore,
+    kb_id: &str,
+    coll: Option<&KbCollectionDoc>,
+) -> Option<[u8; 32]> {
     if let Some(a) = doc_store.kb_anchor(kb_id).await {
         return Some(a);
     }
     let signer = doc_store.signer()?;
-    let coll = load_collection(doc_store, kb_id).await.ok()?;
+    let loaded;
+    let coll = match coll {
+        Some(c) => c,
+        None => {
+            loaded = load_collection(doc_store, kb_id).await.ok()?;
+            &loaded
+        }
+    };
     if !coll.owner().is_empty() && coll.owner() == signer.fingerprint() {
         Some(signer.public().to_bytes())
     } else {
@@ -936,10 +973,41 @@ pub async fn enforce_epoch_fence(
     update_bytes: &[u8],
     principal: &str,
 ) -> Result<(), String> {
-    let coll = load_collection(doc_store, kb_id)
-        .await
-        .map_err(|e| format!("epoch lookup failed for KB '{kb_id}': {e}"))?;
-    let epoch_now = kb_member_epoch(doc_store, kb_id, &coll, principal).await;
+    enforce_epoch_fence_with_coll(
+        doc_store,
+        kb_id,
+        node_id,
+        node_doc,
+        update_bytes,
+        principal,
+        None,
+    )
+    .await
+}
+
+/// As [`enforce_epoch_fence`], but accepts a pre-loaded collection snapshot.
+/// `None` loads itself — identical to [`enforce_epoch_fence`].
+#[allow(clippy::too_many_arguments)]
+pub async fn enforce_epoch_fence_with_coll(
+    doc_store: &DocStore,
+    kb_id: &str,
+    node_id: &str,
+    node_doc: &str,
+    update_bytes: &[u8],
+    principal: &str,
+    coll: Option<&KbCollectionDoc>,
+) -> Result<(), String> {
+    let loaded;
+    let coll = match coll {
+        Some(c) => c,
+        None => {
+            loaded = load_collection(doc_store, kb_id)
+                .await
+                .map_err(|e| format!("epoch lookup failed for KB '{kb_id}': {e}"))?;
+            &loaded
+        }
+    };
+    let epoch_now = kb_member_epoch(doc_store, kb_id, coll, principal).await;
     let c_now = derive_kb_client_id(principal, epoch_now);
     // Full authoritative state (not just the SV) so the fence detects a contiguous-clock
     // continuation of an already-canonical client (B-20) that the update's own SV hides.
@@ -971,11 +1039,33 @@ async fn kb_access(
     op: KbOp,
     transport: Transport,
 ) -> Result<AccessDecision, String> {
+    kb_access_with_coll(doc_store, kb_id, principal, op, transport, None).await
+}
+
+/// As [`kb_access`], but accepts a pre-loaded collection snapshot so a handler
+/// running several gates on one request loads `kbc:{kb_id}` once. `None` loads
+/// itself — identical to [`kb_access`]. The `None`-principal (loopback) case
+/// returns before any load either way.
+async fn kb_access_with_coll(
+    doc_store: &DocStore,
+    kb_id: &str,
+    principal: Option<&str>,
+    op: KbOp,
+    transport: Transport,
+    coll: Option<&KbCollectionDoc>,
+) -> Result<AccessDecision, String> {
     let principal = match principal {
         Some(p) => p,
         None => return Ok(AccessDecision::Allow),
     };
-    let coll = load_collection(doc_store, kb_id).await?;
+    let loaded;
+    let coll = match coll {
+        Some(c) => c,
+        None => {
+            loaded = load_collection(doc_store, kb_id).await?;
+            &loaded
+        }
+    };
     // ADR-026: for a KB JOINED from a relay we don't trust, an external anchor (the
     // join-ticket node-id) is registered — derive membership from the SIGNED op-log
     // rather than the relay-supplied `member_roles`. Owned / un-anchored KBs keep
@@ -992,7 +1082,7 @@ async fn kb_access(
             // without re-decoding the whole op-log. This gate runs on every anchored/E2E access;
             // the cache is what keeps it O(1) at membership-churn scale.
             doc_store
-                .derived_membership(kb_id, &coll, &anchor, now_unix())
+                .derived_membership(kb_id, coll, &anchor, now_unix())
                 .await
                 .members
                 .get(principal)
@@ -2640,7 +2730,23 @@ async fn handle_doc_request_inner(
             // doc, so it requires Manage (owner-only) — a mere Editor cannot purge/replace
             // another's node lineage.
             let required_op = if reseal { KbOp::Manage } else { KbOp::Edit };
-            match kb_access(doc_store, &kb_id, auth_principal, required_op, transport).await {
+            // Perf: the `kbc:{kb_id}` collection doc is NOT mutated by this handler
+            // arm (only the `kb:{node}` doc is), so load it ONCE and share the
+            // snapshot across all four gates below instead of re-encoding+decoding
+            // it 4× (kb_access / resolve_content_anchor / verify_content_op /
+            // enforce_epoch_fence). `None` (a failed load) makes each gate load
+            // itself, reproducing its exact original semantics.
+            let pre_coll = load_collection(doc_store, &kb_id).await.ok();
+            match kb_access_with_coll(
+                doc_store,
+                &kb_id,
+                auth_principal,
+                required_op,
+                transport,
+                pre_coll.as_ref(),
+            )
+            .await
+            {
                 Ok(AccessDecision::Allow) => {}
                 Ok(AccessDecision::Deny(msg)) | Err(msg) => {
                     warn!(session = session_id, kb_id = %kb_id, reseal, reason = %msg, "kb/node_update denied");
@@ -2692,11 +2798,21 @@ async fn handle_doc_request_inner(
             let joined_anchor = doc_store.kb_anchor(&kb_id).await; // Some ⇒ joined ⇒ strict
             let content_anchor = match joined_anchor {
                 Some(a) => Some(a),
-                None => resolve_content_anchor(doc_store, &kb_id).await, // owned fallback (lenient)
+                None => {
+                    resolve_content_anchor_with_coll(doc_store, &kb_id, pre_coll.as_ref()).await
+                } // owned fallback (lenient)
             };
             if let Some(anchor) = content_anchor {
                 if let Some(signed) = SignedContentOp::from_params(&params, update_bytes.clone()) {
-                    match verify_content_op(doc_store, &kb_id, &anchor, &signed).await {
+                    match verify_content_op_with_coll(
+                        doc_store,
+                        &kb_id,
+                        &anchor,
+                        &signed,
+                        pre_coll.as_ref(),
+                    )
+                    .await
+                    {
                         Ok(()) => {
                             info!(
                                 session = session_id, kb_id = %kb_id, node_id = %node_id,
@@ -2741,13 +2857,14 @@ async fn handle_doc_request_inner(
             // anyway, so the fence is skipped for it (owner-gated above).
             if !reseal {
                 if let Some(principal) = auth_principal {
-                    if let Err(reason) = enforce_epoch_fence(
+                    if let Err(reason) = enforce_epoch_fence_with_coll(
                         doc_store,
                         &kb_id,
                         &node_id,
                         &node_doc,
                         &update_bytes,
                         principal,
+                        pre_coll.as_ref(),
                     )
                     .await
                     {
