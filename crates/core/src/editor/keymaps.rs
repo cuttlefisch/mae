@@ -321,6 +321,21 @@ impl Editor {
         // Created empty in the kernel so any module can bind into it regardless
         // of load order, and so it survives reset_keymaps_to_kernel.
         maps.insert("leader".to_string(), Keymap::new("leader"));
+        // Mode-local-leader trees (parent `leader`). The transient keypad consults
+        // `<mode>-leader` BEFORE the global leader in that mode's buffers, so
+        // `SPC m` is a major-mode local leader (org babel/export, markdown, table
+        // editing) WITHOUT the mode binding `SPC …` into its own keymap — which
+        // used to shadow `SPC → leader-dispatch` and leave only `m` visible.
+        // Kernel-created (like `leader`) so org/markdown/tables can bind into them
+        // regardless of load order and they survive reset_keymaps_to_kernel.
+        maps.insert(
+            "org-leader".to_string(),
+            Keymap::with_parent("org-leader", "leader"),
+        );
+        maps.insert(
+            "markdown-leader".to_string(),
+            Keymap::with_parent("markdown-leader", "leader"),
+        );
         // The shared `navigation` context keymap: flavor-independent movement and
         // leader access for read-only nav buffers (dashboard, file tree, modules,
         // help, …). Created empty in the kernel (parent `normal`) so it survives
@@ -479,6 +494,30 @@ mod tests {
         );
         // Display (which-key/describe-bindings) iterates the SAME chain, so it is
         // guaranteed to surface the same binding — divergence is impossible.
+    }
+
+    #[test]
+    fn leader_keypad_uses_mode_local_leader_in_org_buffers() {
+        // Regression for the "SPC only shows m" bug: in an org buffer the keypad
+        // chain must be [org-leader, leader] (mode-local leader first, then the
+        // global leader) — NOT the org buffer keymap (which used to own `SPC m`
+        // and shadow `SPC → leader-dispatch`).
+        let mut editor = Editor::new();
+        editor
+            .syntax
+            .set_language(0, crate::syntax::languages::Language::Org);
+        editor.leader_active = true;
+        assert_eq!(
+            editor.keymap_chain(),
+            vec!["org-leader".to_string(), "leader".to_string()],
+            "org keypad must consult org-leader then the global leader"
+        );
+
+        // A non-org buffer with no local leader keeps the plain global leader.
+        editor
+            .syntax
+            .set_language(0, crate::syntax::languages::Language::Rust);
+        assert_eq!(editor.keymap_chain(), vec!["leader".to_string()]);
     }
 
     #[test]

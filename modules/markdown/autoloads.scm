@@ -33,12 +33,21 @@
 ;; Smart enter
 (define-key "markdown" "Enter" "smart-enter")
 
+;; --- Markdown LOCAL LEADER (SPC m …) ---
+;; Kernel-created `markdown-leader` keymap (parent `leader`) consulted first by
+;; the keypad in markdown buffers, so `SPC m` is markdown's local leader without
+;; shadowing the global `SPC → leader-dispatch` (see the org module for details).
+
 ;; Narrow/widen
-(define-key "markdown" "SPC m s n" "md-narrow-subtree")
-(define-key "markdown" "SPC m s N" "md-widen")
-(define-key "markdown" "SPC m s w" "md-widen")
+(define-key "markdown-leader" "m s n" "md-narrow-subtree")
+(define-key "markdown-leader" "m s N" "md-widen")
+(define-key "markdown-leader" "m s w" "md-widen")
 
 ;; Link editing
-(define-key "markdown" "SPC m l" "edit-link")
+(define-key "markdown-leader" "m l" "edit-link")
+
+;; which-key group labels.
+(set-group-name "markdown-leader" "m" "+markdown")
+(set-group-name "markdown-leader" "m s" "+narrow")
 
 (provide-feature "markdown-autoloads")
