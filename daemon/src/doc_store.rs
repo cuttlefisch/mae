@@ -682,11 +682,7 @@ impl DocStore {
         if self.has_doc(name).await {
             return true;
         }
-        self.storage
-            .list_documents()
-            .await
-            .map(|names| names.iter().any(|n| n == name))
-            .unwrap_or(false)
+        self.storage.doc_exists(name).await.unwrap_or(false)
     }
 
     /// Find a document by suffix matching. Returns the full doc name if exactly

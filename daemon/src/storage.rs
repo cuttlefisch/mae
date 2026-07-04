@@ -79,6 +79,13 @@ pub trait StorageBackend: Send + Sync {
     /// List all known documents.
     async fn list_documents(&self) -> Result<Vec<String>, StorageError>;
 
+    /// Fast existence check for a single document. The default scans
+    /// `list_documents`; `SqliteBackend` overrides it with an indexed point
+    /// lookup so per-read existence guards don't materialize every doc name.
+    async fn doc_exists(&self, doc_name: &str) -> Result<bool, StorageError> {
+        Ok(self.list_documents().await?.iter().any(|n| n == doc_name))
+    }
+
     /// Delete all data for a document (snapshot + WAL entries).
     async fn delete_document(&self, doc_name: &str) -> Result<(), StorageError>;
 
@@ -446,6 +453,20 @@ impl StorageBackend for SqliteBackend {
         Ok(names)
     }
 
+    async fn doc_exists(&self, doc_name: &str) -> Result<bool, StorageError> {
+        let conn = self.pool.lock_shard(doc_name);
+        // Indexed point lookup (idx_wal_doc + snapshots PK) instead of a full
+        // DISTINCT scan of every doc just to test one name.
+        let mut stmt = conn.prepare(
+            "SELECT 1 FROM snapshots WHERE doc_name = ?1
+             UNION ALL
+             SELECT 1 FROM wal WHERE doc_name = ?1
+             LIMIT 1",
+        )?;
+        stmt.bind((1, doc_name))?;
+        Ok(matches!(stmt.next(), Ok(sqlite::State::Row)))
+    }
+
     async fn delete_document(&self, doc_name: &str) -> Result<(), StorageError> {
         let conn = self.pool.lock_shard(doc_name);
 
@@ -528,6 +549,26 @@ mod tests {
     async fn load_nonexistent_returns_none() {
         let backend = SqliteBackend::open_memory().unwrap();
         assert!(backend.load_document("nope").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn doc_exists_point_lookup_agrees_with_list() {
+        let backend = SqliteBackend::open_memory().unwrap();
+        assert!(!backend.doc_exists("missing").await.unwrap());
+
+        backend.wal_append("d-wal", b"u", None).await.unwrap();
+        backend.compact("d-snap", b"snap", 0).await.unwrap();
+
+        // Present via WAL and via snapshot; absent otherwise.
+        assert!(backend.doc_exists("d-wal").await.unwrap());
+        assert!(backend.doc_exists("d-snap").await.unwrap());
+        assert!(!backend.doc_exists("d-nope").await.unwrap());
+
+        // The fast path must agree with the list-based fallback.
+        let listed = backend.list_documents().await.unwrap();
+        assert!(listed.contains(&"d-wal".to_string()));
+        assert!(listed.contains(&"d-snap".to_string()));
+        assert!(!listed.contains(&"d-nope".to_string()));
     }
 
     #[tokio::test]
