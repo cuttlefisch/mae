@@ -4,6 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Miscellaneous
+
+- Bump version to 0.14.20 ([88e8548](https://github.com/cuttlefisch/mae/commit/88e8548c32491d59eff54764c38b17b98f24d67f))
+- Bump version to 0.14.21 ([60f37b6](https://github.com/cuttlefisch/mae/commit/60f37b66d1737a3641d2c6602f9fadbfdedcdc95))
+- *(ai)* Extract executor's 1346-line inline test module to a sibling file (#277) ([5fde5ba](https://github.com/cuttlefisch/mae/commit/5fde5ba04c9aa54d25f66a1d98ab4c77109cf28b))
+
+### Performance
+
+- *(daemon)* Load the KB collection once per node_update, not 4× through the gates (#275) ([16fa65f](https://github.com/cuttlefisch/mae/commit/16fa65f173332effc11e8340669877f7a10aceb2))
+- *(kb,sync)* Bulk-fetch FTS candidates (kill N+1) + debug-gate per-op sync logging (#276) ([b445127](https://github.com/cuttlefisch/mae/commit/b4451278097373794206a1c9e2d8f454ddd84037))
+
+## [0.14.19] - 2026-07-04
+
 ### Bug Fixes
 
 - *(scheme)* Parking_lot::Mutex for shared state — remove the lock-poison cascade (#274) ([e26bbf2](https://github.com/cuttlefisch/mae/commit/e26bbf24c4bcb9e9825072d09ff4048648222929))
@@ -11,12 +24,6 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - Bump version to 0.14.19 ([1d092a5](https://github.com/cuttlefisch/mae/commit/1d092a546ae39573f78ab30d414c37bba95a429b))
-- Bump version to 0.14.20 ([88e8548](https://github.com/cuttlefisch/mae/commit/88e8548c32491d59eff54764c38b17b98f24d67f))
-
-### Performance
-
-- *(daemon)* Load the KB collection once per node_update, not 4× through the gates (#275) ([16fa65f](https://github.com/cuttlefisch/mae/commit/16fa65f173332effc11e8340669877f7a10aceb2))
-- *(kb,sync)* Bulk-fetch FTS candidates (kill N+1) + debug-gate per-op sync logging (#276) ([b445127](https://github.com/cuttlefisch/mae/commit/b4451278097373794206a1c9e2d8f454ddd84037))
 
 ## [0.14.18] - 2026-07-04
 
