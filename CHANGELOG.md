@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Features
+
+- *(lang)* Ruby support + default LSP servers (yaml/json/toml/bash) + pyright; document C++/babel (#271) ([5177986](https://github.com/cuttlefisch/mae/commit/5177986f261cbd9cec4baee845f7630143d158ca))
+
+## [0.14.16] - 2026-07-04
+
 ### Bug Fixes
 
 - *(daemon)* Unified op-log epoch fence on every write path (#157 A1+N1) (#163) ([debeda0](https://github.com/cuttlefisch/mae/commit/debeda0c867a373a8fcfe06a517f020bed6cdddc))
@@ -83,6 +89,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - *(pre-dogfood)* Quality pass — AI cost tables, collab status badge, daemon poison-recovery, doc/metadata drift (#268) ([b1bd6a9](https://github.com/cuttlefisch/mae/commit/b1bd6a9eea372944863777f3fe9a53778627e6ea))
+- Bump version to 0.14.16 ([f270ac3](https://github.com/cuttlefisch/mae/commit/f270ac3f3e12a43789d2e790d37926a88235a942))
 
 ### Performance
 
