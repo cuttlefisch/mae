@@ -660,6 +660,20 @@ fn static_nodes() -> Vec<Node> {
         .with_tags(["terminal", "shell", "phase-6"])
         .with_aliases(["console", "command-line", "bash"]),
         Node::new(
+            "concept:babel",
+            "Concept: Org-Babel Code Execution",
+            NodeKind::Concept,
+            CONCEPT_BABEL,
+        )
+        .with_tags(["babel", "org", "execution", "literate-programming"])
+        .with_aliases([
+            "code blocks",
+            "source blocks",
+            "execute code",
+            "run code",
+            "begin_src",
+        ]),
+        Node::new(
             "concept:hooks",
             "Concept: Hooks",
             NodeKind::Concept,

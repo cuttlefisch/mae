@@ -30,6 +30,7 @@ pub fn language_for_path(path: &std::path::Path) -> Option<Language> {
         // clangd handles C and C++ headers regardless.
         "c" | "h" => Language::C,
         "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => Language::Cpp,
+        "rb" | "rake" | "gemspec" => Language::Ruby,
         _ => return None,
     })
 }
@@ -50,6 +51,9 @@ pub fn language_from_id(id: &str) -> Option<Language> {
         "scheme" | "scm" => Language::Scheme,
         "yaml" | "yml" => Language::Yaml,
         "org" => Language::Org,
+        "c" => Language::C,
+        "cpp" | "c++" | "cxx" | "cc" => Language::Cpp,
+        "ruby" | "rb" => Language::Ruby,
         _ => return None,
     })
 }

@@ -203,6 +203,23 @@ pub fn run_doctor() -> i32 {
             "npm install -g typescript-language-server",
         ),
         ("gopls", "Go", "go install golang.org/x/tools/gopls@latest"),
+        ("ruby-lsp", "Ruby", "gem install ruby-lsp"),
+        (
+            "yaml-language-server",
+            "Yaml",
+            "npm install -g yaml-language-server",
+        ),
+        (
+            "vscode-json-language-server",
+            "Json",
+            "npm install -g vscode-langservers-extracted",
+        ),
+        ("taplo", "Toml", "cargo install taplo-cli --locked"),
+        (
+            "bash-language-server",
+            "Bash",
+            "npm install -g bash-language-server",
+        ),
         // Label "Cpp" so the env-var check resolves to MAE_LSP_CPP (a "C/C++"
         // label would produce the invalid key MAE_LSP_C/C++). clangd serves both.
         (

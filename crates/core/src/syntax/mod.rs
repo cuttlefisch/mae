@@ -497,6 +497,16 @@ mod tests {
     }
 
     #[test]
+    fn ruby_highlights_keyword_and_string() {
+        let spans = languages::compute_spans(
+            Language::Ruby,
+            "def greet(name)\n  puts \"hello #{name}\"\nend\n",
+        );
+        assert!(spans.iter().any(|s| s.theme_key == "keyword"));
+        assert!(spans.iter().any(|s| s.theme_key == "string"));
+    }
+
+    #[test]
     fn c_highlights_keyword_and_string() {
         let spans = languages::compute_spans(
             Language::C,

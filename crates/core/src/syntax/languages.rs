@@ -66,6 +66,7 @@ pub enum Language {
     Org,
     C,
     Cpp,
+    Ruby,
 }
 
 impl Language {
@@ -87,6 +88,7 @@ impl Language {
             Language::Org => "org",
             Language::C => "c",
             Language::Cpp => "cpp",
+            Language::Ruby => "ruby",
         }
     }
 
@@ -136,6 +138,7 @@ impl Language {
             Language::Yaml => tree_sitter_yaml::LANGUAGE.into(),
             Language::C => tree_sitter_c::LANGUAGE.into(),
             Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
+            Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
             Language::Org => return None,
         })
     }
@@ -196,6 +199,7 @@ pub(crate) fn build_configuration(lang: Language) -> Option<HighlightConfigurati
             });
             (combined.as_str(), "", "")
         }
+        Language::Ruby => (tree_sitter_ruby::HIGHLIGHTS_QUERY, "", ""),
         Language::Json => (tree_sitter_json::HIGHLIGHTS_QUERY, "", ""),
         Language::Bash => (tree_sitter_bash::HIGHLIGHT_QUERY, "", ""),
         Language::Scheme => (tree_sitter_scheme::HIGHLIGHTS_QUERY, "", ""),

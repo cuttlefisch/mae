@@ -792,6 +792,37 @@ reads the terminal grid and converts cells to ratatui spans with full color and 
 support. A 30fps render tick ensures smooth output.\n\n\
 See also: [[concept:mode]], [[concept:ai-as-peer]], [[index]]\n";
 
+pub(super) const CONCEPT_BABEL: &str =
+    "MAE executes **org-mode babel** source blocks — code inside \
+`#+begin_src <lang> ... #+end_src` — and inserts the captured output as a \
+`#+RESULTS:` block. Run the block at the cursor with `:babel-execute` \
+(`SPC c e`); tangle a file's blocks to disk with `:babel-tangle`.\n\n\
+** Supported languages\n\
+- **Interpreted** (piped to the interpreter): python, ruby, perl, bash/sh, zsh, \
+fish, javascript (node), lua, R.\n\
+- **Compiled** (compile → cache → run): rust, go, c, c++/cpp. The compiled \
+binary is cached by a hash of the source under `$XDG_CACHE_HOME/mae/babel`, so \
+an unchanged block re-runs without recompiling. A runaway binary is killed at \
+the babel timeout.\n\
+- **In-editor:** scheme/elisp (evaluated in the Scheme runtime) and \
+datalog/cozodb (run against the KB store).\n\n\
+** Header arguments\n\
+- `:cmd <path>` — override the interpreter/compiler for this block.\n\
+- `:var name=value` — bind variables (interpreted languages only; compiled \
+blocks use the raw body).\n\
+- `:session <name>` — persistent REPL session (interpreted languages).\n\
+- `:tangle <file>` — write the block to a file on `:babel-tangle`.\n\
+- `:eval never` — block execution (safety policy).\n\n\
+** Configuration\n\
+- [[option:babel_timeout]] — per-block execution timeout (seconds).\n\
+- [[option:babel_confirm]] — prompt before executing a block.\n\
+- [[option:babel_cxx_compiler]] / [[option:babel_c_compiler]] — the C++/C \
+compiler (default `c++` / `cc`); also overridable by the `MAE_BABEL_CXX` / \
+`MAE_BABEL_CC` env vars or a per-block `:cmd`.\n\
+- [[option:babel_cxx_std]] — C++ standard, passed as `-std=<value>` (default \
+`c++17`).\n\n\
+See also: [[concept:scheme-api]], [[concept:knowledge-base]], [[index]]\n";
+
 pub(super) const CONCEPT_HOOKS: &str =
     "**Hooks** are MAE's primary extensibility mechanism — they let Scheme code react to \
 editor events without the core knowing anything about Scheme.\n\n\

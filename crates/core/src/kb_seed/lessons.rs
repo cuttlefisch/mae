@@ -204,10 +204,12 @@ LSP server paths are one of the few settings that live in the legacy \
 [lsp.rust]\n\
 command = \"rust-analyzer\"\n\n\
 [lsp.python]\n\
-command = \"pylsp\"\n\
+command = \"pyright-langserver\"\n\
 ```\n\
-You can also override a server path per-launch with an env var \
-(`MAE_LSP_RUST`, `MAE_LSP_PYTHON`, `MAE_LSP_TYPESCRIPT`, `MAE_LSP_GO`). \
+Default servers ship for Rust, Python (pyright), TypeScript/JS, Go, C/C++ \
+(clangd), Ruby, YAML, JSON, TOML, and Bash — each starts automatically when \
+its binary is on PATH. Override a server path per-launch with an env var \
+(`MAE_LSP_RUST`, `MAE_LSP_PYTHON`, `MAE_LSP_CPP`, `MAE_LSP_RUBY`, …). \
 General editor behavior, by contrast, is configured in `init.scm` via \
 `(set-option!)` / `:set` / `:set-save` — not config.toml.\n\n\
 **Prev:** [[lesson:scheme|Lesson 6]]  |  \

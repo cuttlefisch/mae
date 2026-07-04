@@ -151,6 +151,7 @@ pub fn language_id_from_path(path: &std::path::Path) -> Option<String> {
         "rb" => "ruby",
         "scm" | "ss" => "scheme",
         "lua" => "lua",
+        "sh" | "bash" => "bash",
         "json" => "json",
         "md" => "markdown",
         "toml" => "toml",
