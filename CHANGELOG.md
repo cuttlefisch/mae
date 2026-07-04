@@ -11,10 +11,12 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - Bump version to 0.14.19 ([1d092a5](https://github.com/cuttlefisch/mae/commit/1d092a546ae39573f78ab30d414c37bba95a429b))
+- Bump version to 0.14.20 ([88e8548](https://github.com/cuttlefisch/mae/commit/88e8548c32491d59eff54764c38b17b98f24d67f))
 
 ### Performance
 
 - *(daemon)* Load the KB collection once per node_update, not 4× through the gates (#275) ([16fa65f](https://github.com/cuttlefisch/mae/commit/16fa65f173332effc11e8340669877f7a10aceb2))
+- *(kb,sync)* Bulk-fetch FTS candidates (kill N+1) + debug-gate per-op sync logging (#276) ([b445127](https://github.com/cuttlefisch/mae/commit/b4451278097373794206a1c9e2d8f454ddd84037))
 
 ## [0.14.18] - 2026-07-04
 
