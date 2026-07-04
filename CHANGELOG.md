@@ -8,6 +8,14 @@ All notable changes to this project will be documented in this file.
 
 - *(keymap)* Mode-aware local leader — restore the global SPC menu in org/markdown buffers (#279) ([2bec8e7](https://github.com/cuttlefisch/mae/commit/2bec8e71166fe840ffa9544b532730884c87a3d2))
 
+### Miscellaneous
+
+- Bump version to 0.14.24 ([2d86c94](https://github.com/cuttlefisch/mae/commit/2d86c94afdc8476e182bd612e2057f99cb0ff324))
+
+### Performance
+
+- *(org)* Fix multi-second checklist-toggle hitch — sequential subtree scan (#280) ([09f5f34](https://github.com/cuttlefisch/mae/commit/09f5f3416a70fc531c224262f97411dda54fe04b))
+
 ## [0.14.23] - 2026-07-04
 
 ### Miscellaneous
