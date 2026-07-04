@@ -183,7 +183,13 @@ impl Editor {
                 match args.map(str::trim).filter(|s| !s.is_empty()) {
                     None => self.set_status("Usage: :kb-ingest <directory>"),
                     Some(dir) => {
-                        let report = self.kb.primary.ingest_org_dir(dir);
+                        // Expand a leading `~` to $HOME — parity with `kb-register`
+                        // / `kb-reimport`, which expand tilde before touching the
+                        // filesystem. Without this, `:kb-ingest ~/Notes` reads a
+                        // literal `~/Notes` directory (never exists) and silently
+                        // indexes 0 files.
+                        let dir = crate::file_picker::expand_tilde(dir);
+                        let report = self.kb.primary.ingest_org_dir(&dir);
                         self.set_status(format!(
                             "kb: indexed {}, skipped {} (no :ID:), errors {}",
                             report.indexed,
@@ -1383,6 +1389,43 @@ mod tests {
         editor.execute_command(&format!("ai-load {}", path.display()));
         assert!(editor.status_msg.contains("Loaded 1 entries"));
         assert_eq!(editor.conversation().unwrap().entries.len(), 1);
+    }
+
+    #[test]
+    fn kb_ingest_expands_tilde_in_directory_arg() {
+        // Regression: `:kb-ingest ~/Notes` must expand `~` to $HOME before
+        // reading the directory. Before the fix the handler passed the raw
+        // "~/Notes" string straight to ingest_org_dir, which then read a
+        // *literal* `~/Notes` directory (never exists) and silently reported
+        // "indexed 0" — exactly what bit the RoamNotes dogfood re-ingest.
+        let home = tempfile::tempdir().unwrap();
+        let notes = home.path().join("RoamNotesFixture");
+        std::fs::create_dir_all(&notes).unwrap();
+        // Org-roam header shape: an :ID: inside a top-level PROPERTIES drawer.
+        std::fs::write(
+            notes.join("note.org"),
+            ":PROPERTIES:\n:ID: 11111111-2222-3333-4444-555555555555\n:END:\n#+title: Tilde Fixture\n* Heading\nbody\n",
+        )
+        .unwrap();
+
+        let orig_home = std::env::var_os("HOME");
+        std::env::set_var("HOME", home.path());
+
+        let mut editor = Editor::new();
+        editor.execute_command("kb-ingest ~/RoamNotesFixture");
+        let tilde_status = editor.status_msg.clone();
+
+        // Restore env before asserting so a panicking assert can't leak HOME
+        // into sibling tests (env is process-global).
+        match orig_home {
+            Some(v) => std::env::set_var("HOME", v),
+            None => std::env::remove_var("HOME"),
+        }
+
+        assert!(
+            tilde_status.contains("indexed 1"),
+            "tilde path must resolve to $HOME and index the fixture note, got: {tilde_status}"
+        );
     }
 
     #[test]
