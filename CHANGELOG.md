@@ -4,16 +4,36 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Performance
+
+- *(gui)* Skip per-wrap-continuation-row rope walks in buffer_render (#278) ([2d67046](https://github.com/cuttlefisch/mae/commit/2d67046ae8e63e72dea56b776e3019787d6e7874))
+
+## [0.14.22] - 2026-07-04
+
+### Miscellaneous
+
+- *(ai)* Extract executor's 1346-line inline test module to a sibling file (#277) ([5fde5ba](https://github.com/cuttlefisch/mae/commit/5fde5ba04c9aa54d25f66a1d98ab4c77109cf28b))
+- Bump version to 0.14.22 ([281e00d](https://github.com/cuttlefisch/mae/commit/281e00d32bd373437f3da95a1fcbfa04f51a4343))
+
+## [0.14.21] - 2026-07-04
+
+### Miscellaneous
+
+- Bump version to 0.14.21 ([60f37b6](https://github.com/cuttlefisch/mae/commit/60f37b66d1737a3641d2c6602f9fadbfdedcdc95))
+
+### Performance
+
+- *(kb,sync)* Bulk-fetch FTS candidates (kill N+1) + debug-gate per-op sync logging (#276) ([b445127](https://github.com/cuttlefisch/mae/commit/b4451278097373794206a1c9e2d8f454ddd84037))
+
+## [0.14.20] - 2026-07-04
+
 ### Miscellaneous
 
 - Bump version to 0.14.20 ([88e8548](https://github.com/cuttlefisch/mae/commit/88e8548c32491d59eff54764c38b17b98f24d67f))
-- Bump version to 0.14.21 ([60f37b6](https://github.com/cuttlefisch/mae/commit/60f37b66d1737a3641d2c6602f9fadbfdedcdc95))
-- *(ai)* Extract executor's 1346-line inline test module to a sibling file (#277) ([5fde5ba](https://github.com/cuttlefisch/mae/commit/5fde5ba04c9aa54d25f66a1d98ab4c77109cf28b))
 
 ### Performance
 
 - *(daemon)* Load the KB collection once per node_update, not 4× through the gates (#275) ([16fa65f](https://github.com/cuttlefisch/mae/commit/16fa65f173332effc11e8340669877f7a10aceb2))
-- *(kb,sync)* Bulk-fetch FTS candidates (kill N+1) + debug-gate per-op sync logging (#276) ([b445127](https://github.com/cuttlefisch/mae/commit/b4451278097373794206a1c9e2d8f454ddd84037))
 
 ## [0.14.19] - 2026-07-04
 
