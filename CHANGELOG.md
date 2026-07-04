@@ -4,46 +4,114 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-> **v0.15.0 — Collaborative E2E KB Sharing.** The headline is end-to-end encrypted knowledge-base
-> sharing with a full identity lifecycle. The **mTLS hub is production-ready (GA)**; the **P2P mesh
-> ships as beta** (two-daemon convergence is CI-gated, but E2E-on-mesh and single-command mesh share
-> are follow-ups). Read [`docs/E2E_USER_GUIDE.md`](docs/E2E_USER_GUIDE.md) §7 for the honest
-> limitations (no forward secrecy / PCS, metadata is visible, at-rest keys are plaintext, key loss
-> without a backup/recovery key is unrecoverable) before relying on the encryption.
+### Bug Fixes
 
-### Features
+- *(daemon)* Unified op-log epoch fence on every write path (#157 A1+N1) (#163) ([debeda0](https://github.com/cuttlefisch/mae/commit/debeda0c867a373a8fcfe06a517f020bed6cdddc))
+- *(daemon)* Gate kb: docs on sync/update — close the fence/membership bypass (#169 M1) (#174) ([b2cf70b](https://github.com/cuttlefisch/mae/commit/b2cf70b66b164f47a887ea053e8473b4082f295a))
+- *(collab)* Fail-closed E2e seal on BOTH write paths (CRITICAL #168 + #170) (#172) ([692a1ef](https://github.com/cuttlefisch/mae/commit/692a1efa45c183d343e89990af9fbf80b2ec34d9))
+- *(collab)* Re-derive the content key on collection updates — deliver rotated keys to members (HIGH #173) (#175) ([8ca94e1](https://github.com/cuttlefisch/mae/commit/8ca94e1a1c68ecd9d221d19a591b1e87c82559fc))
+- *(test)* Derive local_kb_client_id in the --test runner — unblock scenario KB-node sync (#166) (#177) ([e28bab2](https://github.com/cuttlefisch/mae/commit/e28bab296e8218a83478ced97abe25f4c62f7263))
+- *(collab)* Joiner can decrypt E2e content — approve op-log integrity + re-seal on enable (3d gate green) (#178) ([5d78748](https://github.com/cuttlefisch/mae/commit/5d78748399324352b52966fa99b07cd78707d3ac))
+- *(collab)* Fail-closed approve base — never author membership against a divergent snapshot (#179) ([77ea1f3](https://github.com/cuttlefisch/mae/commit/77ea1f300ecd030e13367bf54d62e2fec6f9562f))
+- *(kb)* Route instance-prefixed kb-create to its instance, not primary (#165) (#181) ([60fdac9](https://github.com/cuttlefisch/mae/commit/60fdac930942109bcbd1d874ab8052e39b638575))
+- *(collab)* Purge the pre-enable plaintext base on E2E enable — reseal-as-replace (#171) ([8936857](https://github.com/cuttlefisch/mae/commit/8936857100f747f12605d9bebc165598f261a71f))
+- *(daemon)* Scrub the pre-enable manifest title from the kbc: WAL at rest (#156 F5) (#196) ([0fb9b06](https://github.com/cuttlefisch/mae/commit/0fb9b06897f82a543e1a55757fc576d1ee92d0d1))
+- *(collab)* Suppress spurious join local-ahead push that breaks recovery (ADR-040 #225) (#229) ([45a91dc](https://github.com/cuttlefisch/mae/commit/45a91dc187068d4ba7a0f80c2a36ae4065952625))
+- *(collab)* Close two confidence-review blockers — append-only op-log gate + raw-sync read gate (A1, A3) (#236) ([a8cb998](https://github.com/cuttlefisch/mae/commit/a8cb998e1e9c2f649fbc7e64e33673dc821e16c7))
+- *(collab)* Reactive member re-wrap after the owner has itself rotated (#237) (#239) ([22e5688](https://github.com/cuttlefisch/mae/commit/22e5688842e3f7f99e856ef714f45bd754b5196e))
+- *(crypto)* Use non-deprecated AEAD constructors (unblocks chacha20poly1305 bump) (#245) ([29d0190](https://github.com/cuttlefisch/mae/commit/29d019065bcd60d3bef11de0d95d934076f611ca))
+- *(collab)* Forward a mesh member's wrap pubkey to the owner (#255 part 1/3) (#256) ([e466f8b](https://github.com/cuttlefisch/mae/commit/e466f8b06e2f4003e1dcf19b3b55d472487a3d1c))
+- *(collab)* Checkpoint-3 remediation — dead config + timebox coverage + parity (#187) (#261) ([becc9f8](https://github.com/cuttlefisch/mae/commit/becc9f85ac7b8c9c5f0cafa14f558fd91817244e))
+- *(collab)* #255 layer-3 — relay the owner's signed content op WITH its header over the mesh (#262) ([89fc8b7](https://github.com/cuttlefisch/mae/commit/89fc8b7de03cb33bebc77998aa010a087d3d3bd2))
+- *(collab)* Pre-dogfood hull patch — batch-collapse bug + scale defaults + config honesty (#188) (#264) ([0e3980c](https://github.com/cuttlefisch/mae/commit/0e3980cd46979113fce36e7fc873f4bf0ad062fa))
+- *(collab)* Hull-patch part 2 — the three daemon-security bugs from the review (#265) (#266) ([fdcea97](https://github.com/cuttlefisch/mae/commit/fdcea97853f9db3f5d59aa68c8dfe3f34e3586e5))
 
-- **E2E content encryption** — per-KB content key, key-blind daemon/hub/relay, transport-agnostic
-  over hub + mesh; owner-only `:kb-set-encryption <kb> e2e` (ADR-037/038/039).
-- **Identity arc (ADR-040/041)** — cross-signed key **rotation** (`:collab-rotate-identity`) and
-  **recovery** via a pre-registered offline key (`:collab-register-recovery-key` /
-  `:collab-recover-identity`), across every KB you own or belong to; published X25519 wrap key so a
-  signing-key compromise does not imply a content-key compromise. Rotation/recovery are CI-gated
-  (`MAE_E2E_ROTATE`, `MAE_E2E_RECOVER`).
-- **P2P mesh (beta)** — two-daemon iroh convergence with no central server, CI-gated by
-  `scripts/collab-p2p-mesh-e2e.sh`.
-- **Peer parity** — rotation/recovery are first-class across the human command, Scheme, and MCP
-  surfaces (`collab_rotate_identity` / `collab_register_recovery_key` / `collab_recover_identity`).
-- E2E enable flow — owner key lifecycle, daemon key-blind (ADR-037/038/039, #151 Phase 3b PR A) (#160) ([8dc9cc9](https://github.com/cuttlefisch/mae/commit/8dc9cc9813a04bff1551c55fc48c85b16cf3ffe8))
+### CI
 
-### Security
-
-- **Append-only membership op-log gate (A1)** — the daemon's member self-service write gate now
-  rejects any update that deletes a prior op, closing an ADR-039 encryption-downgrade / co-member
-  eviction vector.
-- **Access-gated raw sync reads (A3)** — `sync/full_state` / `sync/state_vector` now enforce
-  `kb_access(Read)` on KB docs, so a non-member can no longer pull node plaintext or the roster +
-  pending-join pubkeys via the generic sync path.
-- **Crash-atomic collection op-log persistence (A2)** — a member's recovery-critical op-log is now
-  written temp+fsync+rename, so a crash cannot corrupt it.
-- The `collab / docker e2e` gate set (mTLS + membership + encrypted + removal + rotate + recover +
-  mesh) is now a **required** branch-protection check.
+- Run the E2E encrypted KB-sharing lifecycle gate (ADR-037 Phase 3d, #153) (#180) ([cd90fcc](https://github.com/cuttlefisch/mae/commit/cd90fcc6fccf245b35f57f0ec20a0fa6a378ab95))
 
 ### Documentation
 
-- New [`docs/E2E_USER_GUIDE.md`](docs/E2E_USER_GUIDE.md) (enable / members / rotate / recover +
-  honest limitations) and [`docs/RELEASING.md`](docs/RELEASING.md); in-editor `concept:kb-sharing`
-  covers the E2E/rotation/recovery/mesh material.
+- *(collab)* Bound derive_content_key to owner wraps — close #169 L1 (#182) ([f9eb270](https://github.com/cuttlefisch/mae/commit/f9eb270aefd45c127ea1ca70ee75a6522e4c7467))
+- *(e2e)* Correct the re-encryption-on-enable limitation after #171 shipped (#183) ([89b86db](https://github.com/cuttlefisch/mae/commit/89b86db1dbefa446087d85961ea4139bc5e96f97))
+- *(adr)* ADR-040 identity key rotation & rebind (cross-signed, history-preserving) — closes I2 design (#192) ([aa0fbd8](https://github.com/cuttlefisch/mae/commit/aa0fbd8abb941b602b0e0b89155ebf9348647099))
+- *(adr)* Finalize ADR-040 (rotation, Accepted) + ADR-041 (I1 key separation) — the identity arc (#197) ([7cc5e55](https://github.com/cuttlefisch/mae/commit/7cc5e5589798d46aa140c248ec0cad9e0f6d1dc4))
+- *(security)* V0.15 maintainability & wild-usability review (§6) (#208) ([e68b152](https://github.com/cuttlefisch/mae/commit/e68b152190c009f6840dacfb1b34bf2c98dc98b6))
+- Reconcile E2E doc/code drift — wrap-key separation + F5 (CF2/CF3) (#212) ([b37791a](https://github.com/cuttlefisch/mae/commit/b37791afa87396bf7f2a967598388793fa100a27))
+- *(adr-040)* Implementation addendum — PR2 splits into PR2a/PR2b/PR2c (#214) ([c63feeb](https://github.com/cuttlefisch/mae/commit/c63feeb3c7e9c3907c5969cb7fd80e45ef8a6193))
+- *(collab)* Owner-mediated key recovery runbook (recovery v1, ADR-040) (#215) ([9252d7f](https://github.com/cuttlefisch/mae/commit/9252d7f51295739a1d437ae265644d8a81fe35a4))
+- DAEMON_ADMIN.md — operator runbook (admin config + maintenance, #201) (#217) ([da47196](https://github.com/cuttlefisch/mae/commit/da47196010c51576ceb3afd5d64a33772af10fe6))
+- *(daemon)* Backup must include collections/ + recovery/ for identity recovery (ADR-040 B2) (#227) ([23fbd61](https://github.com/cuttlefisch/mae/commit/23fbd61d7b713d1909a17f925647746707c8a96d))
+- *(daemon)* P2P mesh setup runbook + troubleshooting (ADR-025, Phase 5) (#232) ([2782f92](https://github.com/cuttlefisch/mae/commit/2782f92648d357c5a41a574dcd83b4113fb599c5))
+- *(manual)* In-editor concept coverage for v0.15 features (Phase 4 parity) (#233) ([968d189](https://github.com/cuttlefisch/mae/commit/968d189ea342c4442213b5e9b1c95eab0d7b256a))
+- E2E user guide + RELEASING runbook + v0.15 changelog (Phase 5) (#238) ([808fa8a](https://github.com/cuttlefisch/mae/commit/808fa8a894fe73c3f18e0676e5916ab72d59ac48))
+- Drop the owner-then-member rotation caveat — fixed in #239 (#242) ([2668dfd](https://github.com/cuttlefisch/mae/commit/2668dfd173152cc70281a426738dd4157359a956))
+- *(collab)* Workstream F — in-manual E2E KB-sharing lessons + verifiable guard (#250) (#259) ([492f359](https://github.com/cuttlefisch/mae/commit/492f359c2bf5dc0a256e268667ee23d4daf1d151))
+- *(collab)* V0.15 two-machine (alice/bob) hub test plan + per-machine note templates (#267) ([a84d017](https://github.com/cuttlefisch/mae/commit/a84d017749801d4d463d15f7ee5e14d6e7da36f3))
+
+### Features
+
+- E2E member key delivery — wrap-on-approve (ADR-037/038, #151 Phase 3b PR B) (#161) ([fedc62c](https://github.com/cuttlefisch/mae/commit/fedc62c1dad64c35b05c369b78db9068526efc3b))
+- Content-key rotation on member removal (ADR-037 §D3 Phase 3c, #152) (#164) ([79a29f5](https://github.com/cuttlefisch/mae/commit/79a29f5b310cf7312174aff41929bde029ad511a))
+- *(daemon)* Local self-protection blocklist — enforce at every membership-derivation site (#162 A2a/A2c) (#186) ([e91b691](https://github.com/cuttlefisch/mae/commit/e91b691b7e48b3e18f8c9272e3b013df0e4087d0))
+- *(editor)* Block/unblock action + parity surface for the local blocklist (#162 A2b) (#187) ([1e011b9](https://github.com/cuttlefisch/mae/commit/1e011b96472fdd362fcc272e463fa755d90f282c))
+- Blocklist display + introspection — *KB Sharing* Blocked view (closes #162) (#189) ([b3988bb](https://github.com/cuttlefisch/mae/commit/b3988bb3f1bf16dcdfd363d0e01c6b806ae62c50))
+- *(crypto)* Zeroize ContentKey + DH/scalar intermediates (#156 F9) (#190) ([0664e86](https://github.com/cuttlefisch/mae/commit/0664e86cd6c91dd8c8248de59814b6c22d35a287))
+- *(collab)* Blank cleartext node titles in the E2e manifest (#156 F5, forward case) (#191) ([3f8ba65](https://github.com/cuttlefisch/mae/commit/3f8ba653837067661d7a082a817bbd784c6d7bf2))
+- *(mcp)* Warn (not silently no-op) when key files can't be 0600'd off-unix (#158 I4) (#193) ([410f874](https://github.com/cuttlefisch/mae/commit/410f8743983bc3af7893948f3ba1db8b55f9687b))
+- *(collab)* Scrub existing manifest titles when E2e is enabled on a KB (#156 F5, enable-time) (#194) ([0412d99](https://github.com/cuttlefisch/mae/commit/0412d991199440f531255f32f17334e23ff1e519))
+- I1 identity key separation — published X25519 wrap key (ADR-041, #158) (#198) ([5095511](https://github.com/cuttlefisch/mae/commit/50955117bafd7966f611db8dc235104f5fa05dce))
+- *(sync)* Identity key rotation — Rebind op + derive alias/retire (ADR-040, I2 PR2a) (#210) ([3504ec3](https://github.com/cuttlefisch/mae/commit/3504ec38eb841ec93813aed480f56b675dd3586b))
+- *(collab)* Surface E2E caveats at the point of enable (#204, CF1) (#209) ([3f1b0e0](https://github.com/cuttlefisch/mae/commit/3f1b0e084d2b87fe54ca55737570d0ea0573f7fb))
+- *(collab)* Identity-key backup advisory on first generation (#203, KL1) (#211) ([c91ba43](https://github.com/cuttlefisch/mae/commit/c91ba4333ae5ef01c89f1233d9ea4a37c3c05009))
+- *(collab)* I2 PR2b — owner identity rotation ((rotate-identity)) (#216) ([68e6ca3](https://github.com/cuttlefisch/mae/commit/68e6ca3be473b846bb0fdbbc7e61552a044cdcb2))
+- *(collab)* I2 PR2c-1 — daemon member-authored Rebind write gate (#213) (#218) ([88ea493](https://github.com/cuttlefisch/mae/commit/88ea493edd9ffe7828b893e319bedbea20c28482))
+- *(collab)* I2 PR2c-2 — non-owner member rotation + owner reactive re-wrap (#213) (#221) ([f019ebe](https://github.com/cuttlefisch/mae/commit/f019ebe05da85ab44f889a75aa88f0dc3fc3e9b4))
+- *(collab)* I2 PR3 core — recovery-key v2 derive + crypto (ADR-040 §Recovery-key) (#222) ([927a69a](https://github.com/cuttlefisch/mae/commit/927a69ad1b956e03d15c6d1b6dcd0e28e164cc70))
+- *(collab)* I2 PR3b — recovery surface (daemon accept-gate + editor register/recover commands) (#223) ([dcc5cde](https://github.com/cuttlefisch/mae/commit/dcc5cdec1194c47499e7ed849cd3d3abe4d26259))
+- *(collab)* Surface identity rotation/recovery in the leader menu (ADR-040) (#224) ([3878b4a](https://github.com/cuttlefisch/mae/commit/3878b4aeb1cc8c7b18302f4b577dc91c82e8face))
+- *(collab)* B2 durable collection op-log persistence + robust join-decrypt (ADR-040 recovery bootstrap) (#226) ([4d305e3](https://github.com/cuttlefisch/mae/commit/4d305e338e37c7c291f9c5158d09303ad17d9af9))
+- *(collab)* Wire daemon-control into --test + WIP two-daemon mesh e2e scaffold (Phase 3) ([29a0df1](https://github.com/cuttlefisch/mae/commit/29a0df1d10a91d3d0a4c6e69e420614aec77bda8))
+- *(ai)* First-class MCP tools for identity rotation + recovery (ADR-040, Phase 4 parity) (#234) ([aea38f8](https://github.com/cuttlefisch/mae/commit/aea38f8209a86e8cfe8d6d5efa95d67c937d448d))
+- *(collab)* Describe the setup-collab mode choices (Phase 4 UX) (#235) ([572d4db](https://github.com/cuttlefisch/mae/commit/572d4db0dcaad9110861c3f325613357f658870d))
+- *(kb)* PII-safe dogfood metrics harness (Phase 7, #243) (#244) ([afb5cbc](https://github.com/cuttlefisch/mae/commit/afb5cbccf65c59d0584da98ca7e5b2b40a5eac5d))
+- *(collab)* Workstream C — seed signed genesis on P2P mesh share (ADR-043, #182) (#254) ([f5034ed](https://github.com/cuttlefisch/mae/commit/f5034edd07f5bbcefd3410c710b5d45875b8131e))
+- *(collab)* Workstream D pt.1 — register KB-sharing commands (parity, #248) (#257) ([f6d50e0](https://github.com/cuttlefisch/mae/commit/f6d50e0cbf5a3640ee9f693d37494b8336f6487f))
+- *(collab)* Workstream E — wire collab config options + de-hardcode (#249) (#258) ([f2679b6](https://github.com/cuttlefisch/mae/commit/f2679b64edae3cc87ec8a5d3b2d7bdac923956df))
+- *(cpp)* First-class C++ support — babel + clangd LSP + lldb DAP + tree-sitter highlighting (#270) ([272681a](https://github.com/cuttlefisch/mae/commit/272681ac149e0a655a402ee1b5d2d78629004645))
+
+### Miscellaneous
+
+- *(pre-dogfood)* Quality pass — AI cost tables, collab status badge, daemon poison-recovery, doc/metadata drift (#268) ([b1bd6a9](https://github.com/cuttlefisch/mae/commit/b1bd6a9eea372944863777f3fe9a53778627e6ea))
+
+### Performance
+
+- *(collab)* Workstream B — membership-derivation cache + O(n) causal order (ADR-042, #247) (#253) ([63d023a](https://github.com/cuttlefisch/mae/commit/63d023a9335eb3c6765be7319766e695e0ae98ea))
+
+### Refactor
+
+- *(collab)* Workstream A — code-review flags index + safe fixes (#246) (#252) ([e5fdfda](https://github.com/cuttlefisch/mae/commit/e5fdfda277736128f6012055f261dc4cf9e5e208))
+
+### Testing
+
+- *(collab)* E2e §D3 removal+rotation gate — and fix the rotation it never fired (#184) ([18de5cb](https://github.com/cuttlefisch/mae/commit/18de5cbf4baba49651c8024c0ec87ed716541b56))
+- *(collab)* At-rest title-purge oracle + honest WAL-transient note (#156 F5) (#195) ([1c1380d](https://github.com/cuttlefisch/mae/commit/1c1380d94d880e495d4add41c034b682f3f64719))
+- *(sync)* Op-set reconstruction round-trips under high-clock re-seal + cross-client edit (#228) ([dca88f3](https://github.com/cuttlefisch/mae/commit/dca88f3985c35ce9445c75141a243c92ab6ecc6b))
+- *(collab)* Two-daemon P2P mesh e2e gate — full convergence over iroh, in CI (ADR-025, #200) (#231) ([fc63fa2](https://github.com/cuttlefisch/mae/commit/fc63fa25ed7080c043372973d7661a94adb9e03f))
+
+### Style
+
+- *(daemon)* Cargo fmt the #171 storage scrub test ([c003261](https://github.com/cuttlefisch/mae/commit/c0032617bc6e1620614dcadafc9b1be3f5f5465d))
+
+## [0.14.15] - 2026-06-27
+
+### Features
+
+- E2E enable flow — owner key lifecycle, daemon key-blind (ADR-037/038/039, #151 Phase 3b PR A) (#160) ([8dc9cc9](https://github.com/cuttlefisch/mae/commit/8dc9cc9813a04bff1551c55fc48c85b16cf3ffe8))
+
+### Miscellaneous
+
+- Bump version to 0.14.15 ([c1ff7c0](https://github.com/cuttlefisch/mae/commit/c1ff7c05d9253dc5aad484b889c0ebfd19dba2cc))
 
 ## [0.14.14] - 2026-06-27
 
