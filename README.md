@@ -23,9 +23,10 @@ Rust core with an embedded R7RS-small runtime. GUI + terminal.
   WAL persistence, per-user undo, awareness protocol, PSK authentication, and
   mDNS peer discovery. Collaborative KB sharing enables real-time knowledge base
   sync across instances with offline edit + reconnect support.
-- **Org-mode babel** — Execute code blocks in 12 languages, noweb expansion,
-  `:tangle` directive, `:var` cross-references, safety policies. Export to
-  HTML and Markdown with TOC, syntax highlighting, tag filtering.
+- **Org-mode babel** — Execute code blocks in 14 languages (Python, Ruby, Perl,
+  Bash, JS, Lua, R, Rust, Go, C, C++, Scheme, …), noweb expansion, `:tangle`
+  directive, `:var` cross-references, configurable compilers, safety policies.
+  Export to HTML and Markdown with TOC, syntax highlighting, tag filtering.
 - **Runtime redefinability** — Embedded R7RS Scheme (mae-scheme). Redefine any
   function while running. 45+ primitives, 18 hook points, `init.scm` is a
   real program.
@@ -43,8 +44,8 @@ Rust core with an embedded R7RS-small runtime. GUI + terminal.
   400+ typed nodes, 20 relationship types, agenda queries, node versioning, meta-node
   composition, block-level addressing, HNSW vector index (GraphRAG-ready). Federated
   instances, org-mode parser. Same docs the AI reads.
-- **Tree-sitter** — 13 languages with structural parse trees. AI can query
-  syntax trees for code reasoning.
+- **Tree-sitter** — 16 languages (incl. C, C++, Ruby) with structural parse
+  trees. AI can query syntax trees for code reasoning.
 - **GUI + Terminal** — winit + Skia 2D hardware-accelerated GUI, ratatui
   terminal fallback. Inline images (PNG/JPG/SVG), variable-height rendering,
   inertial scrolling. Desktop launcher for freedesktop environments.
@@ -104,7 +105,7 @@ mae (binary)
  ├── mae-mcp         MCP server — Unix socket, JSON-RPC, stdio shim
  ├── mae-sync        Collaborative sync — yrs CRDT, ropey bridge, encoding helpers
  ├── mae-daemon        Background daemon — KB persistence, collab sync, WAL persistence
- ├── mae-babel       Org-babel executor — 12 languages, persistent sessions, language backends
+ ├── mae-babel       Org-babel executor — 14 languages, persistent sessions, language backends
  ├── mae-export      Org/Markdown export — HTML, Markdown, TOC, syntax highlighting
  ├── mae-canvas      Visual buffer (diagrams, drawings)
  ├── mae-snippets    YASnippet-style templates — tab-stops, mirrors, transforms
@@ -121,7 +122,7 @@ mae (binary)
 - **Rust stable** (1.95+) via [rustup](https://rustup.rs)
 - **GUI deps:** `clang`, `fontconfig-devel`, `freetype-devel` (Fedora) / `clang`, `libclang-dev`, `libfontconfig1-dev`, `libfreetype6-dev` (Debian/Ubuntu) / Xcode CLI Tools (macOS)
 - **TUI-only:** `make build-tui` — no clang or GUI deps needed
-- **Optional:** `make setup-dev` installs `clang`, `lldb`, `rust-analyzer`, `debugpy` for full self-test coverage
+- **Optional:** `make setup-dev` installs `clang`, `lldb`, `rust-analyzer`, `clangd`, `debugpy` for full self-test coverage. A C/C++ compiler (`g++`/`clang++`) enables C/C++ babel execution; per-language LSP servers (`clangd`, `ruby-lsp`, `yaml-language-server`, `taplo`, `bash-language-server`, …) start automatically when installed
 - **Check deps:** `make doctor` — reports all prerequisites with install commands
 
 ### Build & Run
@@ -393,8 +394,8 @@ Full vi modal editing with 450+ commands:
 | AI | Claude / OpenAI / Gemini / DeepSeek | Tool-calling maps 1:1 to command API |
 | Protocols | LSP + DAP | First-class — exposed to Scheme and AI |
 | Knowledge base | CozoDB (Datalog) + SQLite | Graph store, typed relationships, versioning, HNSW vector index |
-| Syntax | tree-sitter | 13 languages, structural parse trees |
-| Literate programming | Org-babel | 12 execution languages, tangle, noweb, export |
+| Syntax | tree-sitter | 16 languages, structural parse trees |
+| Literate programming | Org-babel | 14 execution languages, tangle, noweb, export |
 
 ## Roadmap
 

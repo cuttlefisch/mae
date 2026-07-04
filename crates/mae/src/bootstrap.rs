@@ -1621,7 +1621,15 @@ pub fn setup_lsp(
     // Hardcoded defaults.
     let defaults: &[(&str, &str, &str, &[&str])] = &[
         ("rust", "MAE_LSP_RUST", "rust-analyzer", &[]),
-        ("python", "MAE_LSP_PYTHON", "pylsp", &[]),
+        // pyright is best-in-class for type inference (better AI-peer context,
+        // principle #4) and is what `doctor` already advertises. pylsp users can
+        // set MAE_LSP_PYTHON=pylsp (or [lsp.python] command = "pylsp").
+        (
+            "python",
+            "MAE_LSP_PYTHON",
+            "pyright-langserver",
+            &["--stdio"],
+        ),
         (
             "typescript",
             "MAE_LSP_TYPESCRIPT",
@@ -1640,6 +1648,19 @@ pub fn setup_lsp(
         // (find_binary skip). Override via MAE_LSP_CPP / MAE_LSP_C or [lsp.cpp].
         ("cpp", "MAE_LSP_CPP", "clangd", &[]),
         ("c", "MAE_LSP_C", "clangd", &[]),
+        // These languages already highlight + resolve a language id; a default
+        // server was the only missing piece. Each degrades gracefully when its
+        // binary isn't installed (find_binary skip).
+        ("ruby", "MAE_LSP_RUBY", "ruby-lsp", &[]),
+        ("yaml", "MAE_LSP_YAML", "yaml-language-server", &["--stdio"]),
+        (
+            "json",
+            "MAE_LSP_JSON",
+            "vscode-json-language-server",
+            &["--stdio"],
+        ),
+        ("toml", "MAE_LSP_TOML", "taplo", &["lsp", "stdio"]),
+        ("bash", "MAE_LSP_BASH", "bash-language-server", &["start"]),
     ];
 
     let mut configs: HashMap<String, LspServerConfig> = HashMap::new();
