@@ -251,11 +251,15 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
         segments.push(Segment::new(nyan, 6));
     }
 
-    // Priority 7a: colored AI mode badge (only when AI session is active).
-    if editor.ai.conversation_pair.is_some()
+    // AI session is "active" once a conversation exists or tokens have flowed.
+    // Both the 7a mode badge and the 7b tier badge gate on this so neither
+    // shows when the user has no AI session running.
+    let ai_session_active = editor.ai.conversation_pair.is_some()
         || editor.ai.session_tokens_in > 0
-        || editor.ai.session_tokens_out > 0
-    {
+        || editor.ai.session_tokens_out > 0;
+
+    // Priority 7a: colored AI mode badge (only when AI session is active).
+    if ai_session_active {
         let ai_mode_style = match editor.ai.mode.as_str() {
             "standard" => "ui.statusline.ai.standard",
             "auto-accept" => "ui.statusline.ai.auto",
@@ -282,7 +286,14 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
         format!(" {}", file_type)
     };
     let pct = compute_scroll_pct(buf, win);
-    let tier_str = format!(" [{}]", editor.ai.permission_tier);
+    // Label the AI permission tier explicitly and only surface it when a
+    // session is active, so `[ReadOnly]` isn't mistaken for a collab
+    // write-restriction during KB sharing (#80).
+    let tier_str = if ai_session_active {
+        format!(" [AI:{}]", editor.ai.permission_tier)
+    } else {
+        String::new()
+    };
     let combined_7 = format!("{} {}{}", file_type_str, pct, tier_str);
     if !combined_7.trim().is_empty() {
         segments.push(Segment::new(combined_7, 7));
@@ -744,6 +755,32 @@ mod tests {
     fn lsp_status_empty() {
         let editor = Editor::new();
         assert_eq!(format_lsp_status(&editor), "");
+    }
+
+    #[test]
+    fn ai_tier_badge_hidden_without_session() {
+        // #80: with no AI session, the default `ReadOnly` tier must NOT render
+        // (it read as a collab write-restriction during KB sharing).
+        let editor = Editor::new();
+        let joined: String = build_status_segments(&editor, None)
+            .into_iter()
+            .map(|s| s.text)
+            .collect();
+        assert!(!joined.contains("[ReadOnly]"), "got: {joined}");
+        assert!(!joined.contains("[AI:"), "got: {joined}");
+    }
+
+    #[test]
+    fn ai_tier_badge_labeled_when_session_active() {
+        // Once a session is active the tier is shown, explicitly namespaced so
+        // it can't be confused with a collab role.
+        let mut editor = Editor::new();
+        editor.ai.session_tokens_out = 1;
+        let joined: String = build_status_segments(&editor, None)
+            .into_iter()
+            .map(|s| s.text)
+            .collect();
+        assert!(joined.contains("[AI:ReadOnly]"), "got: {joined}");
     }
 
     #[test]

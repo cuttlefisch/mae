@@ -2,6 +2,7 @@
 name = "keymap-leader"
 version = "0.2.0"
 description = "Shared mae which-key leader tree (the `leader` keymap), used by every keymap flavor"
+mae_version = ">=0.9.0"
 category = "keymap"
 authors = ["MAE"]
 license = "GPL-3.0-or-later"

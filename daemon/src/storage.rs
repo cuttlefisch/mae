@@ -219,6 +219,25 @@ impl SqlitePool {
     pub fn primary(&self) -> &std::sync::Mutex<sqlite::Connection> {
         &self.shards[0]
     }
+
+    /// Lock a document's shard, recovering from a poisoned mutex instead of
+    /// propagating the panic. Without this, a single panic while a connection
+    /// guard was held would poison the shard and turn every subsequent op on
+    /// it into a panic — a daemon-wide crash amplifier on the persistence hot
+    /// path. The `sqlite::Connection` stays usable after an unwind.
+    fn lock_shard(&self, doc_name: &str) -> std::sync::MutexGuard<'_, sqlite::Connection> {
+        self.shard_for(doc_name)
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Lock the primary shard with the same poison-recovery guarantee as
+    /// [`Self::lock_shard`].
+    fn lock_primary(&self) -> std::sync::MutexGuard<'_, sqlite::Connection> {
+        self.primary()
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 }
 
 /// SQLite-backed storage using WAL journal mode with connection pooling.
@@ -253,7 +272,7 @@ impl SqliteBackend {
         doc_name: &str,
         since_seq: u64,
     ) -> Result<Vec<(u64, Vec<u8>)>, StorageError> {
-        let conn = self.pool.shard_for(doc_name).lock().unwrap();
+        let conn = self.pool.lock_shard(doc_name);
         let mut stmt = conn.prepare(
             "SELECT id, update_bytes FROM wal WHERE doc_name = ?1 AND id > ?2 ORDER BY id",
         )?;
@@ -278,7 +297,7 @@ impl StorageBackend for SqliteBackend {
         update: &[u8],
         client_id: Option<u64>,
     ) -> Result<u64, StorageError> {
-        let conn = self.pool.shard_for(doc_name).lock().unwrap();
+        let conn = self.pool.lock_shard(doc_name);
         let mut stmt = conn
             .prepare("INSERT INTO wal (doc_name, update_bytes, client_id) VALUES (?1, ?2, ?3)")?;
         stmt.bind((1, doc_name))?;
@@ -299,7 +318,7 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn load_document(&self, doc_name: &str) -> Result<Option<DocumentState>, StorageError> {
-        let conn = self.pool.shard_for(doc_name).lock().unwrap();
+        let conn = self.pool.lock_shard(doc_name);
 
         // Load snapshot if exists.
         let mut snap_stmt =
@@ -370,7 +389,7 @@ impl StorageBackend for SqliteBackend {
     ) -> Result<(), StorageError> {
         // ADR-032 A5: a content hash committed with the snapshot, verified on load.
         let hash = hex::encode(Sha256::digest(state));
-        let conn = self.pool.shard_for(doc_name).lock().unwrap();
+        let conn = self.pool.lock_shard(doc_name);
         // Atomic: snapshot write + WAL trim in a single transaction.
         conn.execute("BEGIN IMMEDIATE")?;
         let result = (|| -> Result<(), sqlite::Error> {
@@ -412,7 +431,7 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn list_documents(&self) -> Result<Vec<String>, StorageError> {
-        let conn = self.pool.primary().lock().unwrap();
+        let conn = self.pool.lock_primary();
         let mut stmt = conn.prepare(
             "SELECT DISTINCT doc_name FROM (
                  SELECT doc_name FROM wal
@@ -428,7 +447,7 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn delete_document(&self, doc_name: &str) -> Result<(), StorageError> {
-        let conn = self.pool.shard_for(doc_name).lock().unwrap();
+        let conn = self.pool.lock_shard(doc_name);
 
         let mut stmt1 = conn.prepare("DELETE FROM snapshots WHERE doc_name = ?1")?;
         stmt1.bind((1, doc_name))?;
@@ -450,7 +469,7 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn load_blocklist(&self) -> Result<Vec<(String, String)>, StorageError> {
-        let conn = self.pool.primary().lock().unwrap();
+        let conn = self.pool.lock_primary();
         let mut stmt = conn.prepare("SELECT kb_id, principal FROM kb_blocklist")?;
         let mut pairs = Vec::new();
         while let Ok(sqlite::State::Row) = stmt.next() {
@@ -462,7 +481,7 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn add_block(&self, kb_id: &str, principal: &str) -> Result<(), StorageError> {
-        let conn = self.pool.primary().lock().unwrap();
+        let conn = self.pool.lock_primary();
         // Idempotent: re-blocking an already-blocked principal is a no-op.
         let mut stmt =
             conn.prepare("INSERT OR IGNORE INTO kb_blocklist (kb_id, principal) VALUES (?1, ?2)")?;
@@ -473,7 +492,7 @@ impl StorageBackend for SqliteBackend {
     }
 
     async fn remove_block(&self, kb_id: &str, principal: &str) -> Result<(), StorageError> {
-        let conn = self.pool.primary().lock().unwrap();
+        let conn = self.pool.lock_primary();
         let mut stmt =
             conn.prepare("DELETE FROM kb_blocklist WHERE kb_id = ?1 AND principal = ?2")?;
         stmt.bind((1, kb_id))?;
@@ -509,6 +528,40 @@ mod tests {
     async fn load_nonexistent_returns_none() {
         let backend = SqliteBackend::open_memory().unwrap();
         assert!(backend.load_document("nope").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn poisoned_shard_lock_recovers_instead_of_cascading() {
+        // #14: a panic while a connection guard is held must NOT turn every
+        // subsequent op on that shard into a panic — that would be a
+        // daemon-wide crash amplifier on the persistence hot path.
+        let backend = SqliteBackend::open_memory().unwrap();
+        let pool = &backend.pool;
+
+        // Poison the shard by unwinding while holding its guard.
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _g = pool.shard_for("doc-poison").lock().unwrap();
+            panic!("boom while holding the connection guard");
+        }));
+        assert!(caught.is_err());
+        assert!(
+            pool.shard_for("doc-poison").lock().is_err(),
+            "shard should now be poisoned"
+        );
+
+        // The poison-recovering helper still yields a usable connection...
+        {
+            let conn = pool.lock_shard("doc-poison");
+            conn.execute("SELECT 1").unwrap();
+        }
+        // ...and the normal async persistence API keeps working afterward.
+        backend
+            .wal_append("doc-poison", b"after-poison", None)
+            .await
+            .unwrap();
+        let state = backend.load_document("doc-poison").await.unwrap().unwrap();
+        assert_eq!(state.wal_tail.len(), 1);
+        assert_eq!(state.wal_tail[0].update, b"after-poison");
     }
 
     #[tokio::test]

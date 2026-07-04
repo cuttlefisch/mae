@@ -102,13 +102,16 @@ pub fn lookup(model: &str) -> ModelLimits {
 fn verification_status(prefix: &str) -> ModelVerification {
     match prefix {
         // End-to-end tested with self-test suite and production use.
-        "claude-opus-4" | "claude-sonnet-4" | "deepseek-chat" | "deepseek-reasoner" => {
+        "claude-opus-4" | "claude-opus-4-6" | "claude-opus-4-7" | "claude-opus-4-8"
+        | "claude-sonnet-4" | "claude-sonnet-4-6" | "deepseek-chat" | "deepseek-reasoner" => {
             ModelVerification::Verified
         }
         // Basic testing done, may have edge cases.
-        "gemini-2.5-pro"
+        "claude-fable-5"
+        | "gemini-2.5-pro"
         | "gemini-2.5-flash"
         | "gemini-2.5-flash-lite"
+        | "gemini-2.0-flash"
         | "gpt-4o"
         | "gpt-4o-mini"
         | "claude-3-5-sonnet"
@@ -252,7 +255,14 @@ const TABLE: &[(&str, u64, usize, ModelTier)] = &[
     // ---- Anthropic (Claude) ----
     // Anthropic enforced tool loop pauses at ~20, but the API supports
     // more if resumed. We set 50 as a reasonable "deep task" bound.
+    // Longer prefixes first: 4.6+ Opus and Sonnet 4.6 ship a 1M context
+    // window; older 4.0/4.1/4.5 revisions stay at 200K.
+    ("claude-fable-5", 1_000_000, 50, ModelTier::Full),
+    ("claude-opus-4-8", 1_000_000, 50, ModelTier::Full),
+    ("claude-opus-4-7", 1_000_000, 50, ModelTier::Full),
+    ("claude-opus-4-6", 1_000_000, 50, ModelTier::Full),
     ("claude-opus-4", 200_000, 50, ModelTier::Full),
+    ("claude-sonnet-4-6", 1_000_000, 50, ModelTier::Full),
     ("claude-sonnet-4", 200_000, 50, ModelTier::Full),
     ("claude-haiku-4", 200_000, 50, ModelTier::Compact),
     ("claude-3-5-sonnet", 200_000, 50, ModelTier::Full),
@@ -272,6 +282,7 @@ const TABLE: &[(&str, u64, usize, ModelTier)] = &[
     ("gemini-2.5-flash-lite", 1_000_000, 50, ModelTier::Compact),
     ("gemini-2.5-pro", 1_000_000, 50, ModelTier::Full),
     ("gemini-2.5-flash", 1_000_000, 50, ModelTier::Compact),
+    ("gemini-2.0-flash", 1_000_000, 50, ModelTier::Compact),
     // ---- DeepSeek ----
     // DeepSeek is often used for heavy reasoning/tool-chains.
     // 50 rounds matches Claude/Gemini — 25 was too low for self-test (~35 calls).
@@ -312,6 +323,31 @@ mod tests {
         assert_eq!(l.context_window, 200_000);
         assert_eq!(l.max_rounds, 50);
         assert_eq!(l.tier, ModelTier::Full);
+    }
+
+    #[test]
+    fn latest_claude_models_have_1m_context() {
+        // 4.6+ Opus and Sonnet 4.6 ship a 1M window; a dated revision must
+        // still hit the family prefix.
+        assert_eq!(lookup("claude-opus-4-8").context_window, 1_000_000);
+        assert_eq!(lookup("claude-opus-4-7").context_window, 1_000_000);
+        assert_eq!(lookup("claude-opus-4-6").context_window, 1_000_000);
+        assert_eq!(
+            lookup("claude-sonnet-4-6-20251114").context_window,
+            1_000_000
+        );
+        assert_eq!(lookup("claude-fable-5").context_window, 1_000_000);
+        // Older Opus/Sonnet revisions keep the 200K window.
+        assert_eq!(lookup("claude-opus-4-5").context_window, 200_000);
+        assert_eq!(lookup("claude-sonnet-4-5").context_window, 200_000);
+    }
+
+    #[test]
+    fn gemini_2_0_flash_has_limits() {
+        // Previously fell through to the 128K DEFAULT (~8x under-report).
+        let l = lookup("gemini-2.0-flash");
+        assert_eq!(l.context_window, 1_000_000);
+        assert_eq!(l.tier, ModelTier::Compact);
     }
 
     #[test]

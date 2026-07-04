@@ -113,7 +113,7 @@ Ask the AI: "connect to the collab server and share this buffer" to have it set 
 
 Install and enable the daemon as a systemd user service:
 #+begin_src bash
-make install-service
+make install-daemon-service
 systemctl --user enable --now mae-daemon
 journalctl --user -u mae-daemon -f  # view logs
 #+end_src
