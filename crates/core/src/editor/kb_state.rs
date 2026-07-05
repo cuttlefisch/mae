@@ -125,6 +125,14 @@ pub struct KbContext {
     /// consumes it on an idle tick. `Some` while loading (keeps the ~10s load off the
     /// main thread, which otherwise tripped the startup watchdog on large stores).
     pub pending_preload: Option<std::sync::mpsc::Receiver<Result<Vec<mae_kb::Node>, String>>>,
+    /// Phase 4: watches the durable primary store for changes by OTHER daemon-less
+    /// processes. `Some` only for a locally-owned sqlite primary (the multi-instance
+    /// case); `None` for sled or a daemon-hosted primary.
+    pub store_watcher: Option<mae_kb::watch::StoreWatcher>,
+    /// Phase 4: timestamp of our last local write to the durable store. The store
+    /// watcher skips a reload within a short cooldown of this so our OWN writes don't
+    /// trigger churn (their file events are drained-and-ignored, not reloaded).
+    pub last_local_store_write: Option<std::time::Instant>,
     /// Pre-built manual KB store (read-only, shipped with MAE binary).
     pub manual_cozo: Option<Arc<mae_kb::CozoKbStore>>,
     /// Standardized KB data directory layout (XDG-compliant).
@@ -419,6 +427,8 @@ impl KbContext {
             primary_cozo: None,
             store_unavailable: false,
             pending_preload: None,
+            store_watcher: None,
+            last_local_store_write: None,
             manual_cozo: None,
             data_dir: None,
             registry: mae_kb::federation::KbRegistry::default(),

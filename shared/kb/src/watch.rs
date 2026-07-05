@@ -156,6 +156,61 @@ impl OrgDirWatcher {
     }
 }
 
+/// Watches a single durable KB store file (e.g. `primary.cozo`) for changes made by
+/// OTHER processes — the basis of daemon-less cross-instance freshness. When another
+/// mae process commits to the shared sqlite store, this fires so the editor can reload
+/// its in-memory mirror. `drain_changed()` coalesces all pending events into one bool.
+pub struct StoreWatcher {
+    // Owns the watcher thread; dropping tears it down.
+    _watcher: RecommendedWatcher,
+    rx: mpsc::Receiver<notify::Result<Event>>,
+    errors: Arc<AtomicU64>,
+}
+
+impl StoreWatcher {
+    /// Start watching the store `file` (non-recursive). The file must exist.
+    pub fn new(file: impl AsRef<Path>) -> notify::Result<Self> {
+        let (tx, rx) = mpsc::channel();
+        let mut watcher = notify::recommended_watcher(move |res| {
+            let _ = tx.send(res);
+        })?;
+        watcher.watch(file.as_ref(), RecursiveMode::NonRecursive)?;
+        Ok(Self {
+            _watcher: watcher,
+            rx,
+            errors: Arc::new(AtomicU64::new(0)),
+        })
+    }
+
+    /// Cumulative watcher errors since creation.
+    pub fn error_count(&self) -> u64 {
+        self.errors.load(Ordering::Relaxed)
+    }
+
+    /// Drain all pending events; return true if the store changed (create/modify/
+    /// remove). Non-blocking. Always consumes the queued events so a caller that
+    /// chooses NOT to act (e.g. within its own-write cooldown) doesn't reprocess them.
+    pub fn drain_changed(&self) -> bool {
+        let mut changed = false;
+        while let Ok(res) = self.rx.try_recv() {
+            match res {
+                Ok(ev) => {
+                    if matches!(
+                        ev.kind,
+                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+                    ) {
+                        changed = true;
+                    }
+                }
+                Err(_) => {
+                    self.errors.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+        changed
+    }
+}
+
 fn is_org(p: &Path) -> bool {
     p.extension().and_then(|e| e.to_str()) == Some("org")
 }
@@ -190,6 +245,23 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
         false
+    }
+
+    #[test]
+    fn store_watcher_detects_external_modification() {
+        // The basis of cross-instance freshness: another process modifying the shared
+        // store file must be observable via drain_changed().
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("primary.cozo");
+        std::fs::write(&path, b"v1").unwrap();
+        let w = StoreWatcher::new(&path).unwrap();
+
+        // Simulate another process committing to the store.
+        std::fs::write(&path, b"v2-committed-by-another-process").unwrap();
+        assert!(
+            wait_for(|| w.drain_changed()),
+            "store watcher must detect an external modification of the store file"
+        );
     }
 
     #[test]
