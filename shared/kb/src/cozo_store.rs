@@ -404,6 +404,170 @@ impl CozoKbStore {
         Ok(())
     }
 
+    /// Upsert one row into `nodes`. Shared by `insert_node` (single) and
+    /// `bulk_import` (many rows, one transaction). Touches NO links.
+    const NODE_PUT_SCRIPT: &'static str = r#"?[id, title, kind, body, tags_json, todo_state, priority, source, source_version,
+                aliases_json, properties_json, crdt_doc, has_crdt, origin_instance, assignee, due_date, sprint,
+                created_at, updated_at] <- [[
+                $id, $title, $kind, $body, $tags_json, $todo_state, $priority, $source, $source_version,
+                $aliases_json, $properties_json, $crdt_doc, $has_crdt, "", "", 0, "",
+                $now, $now
+            ]]
+            :put nodes {
+                id => title, kind, body, tags_json, todo_state, priority, source, source_version,
+                aliases_json, properties_json, crdt_doc, has_crdt, origin_instance, assignee, due_date, sprint,
+                created_at, updated_at
+            }"#;
+
+    /// Bulk upsert into `nodes` from a `$rows` list (one script = one transaction =
+    /// one fsync). Column order MUST match [`Self::node_row`].
+    const NODE_BULK_SCRIPT: &'static str = r#"?[id, title, kind, body, tags_json, todo_state, priority, source, source_version, aliases_json, properties_json, crdt_doc, has_crdt, origin_instance, assignee, due_date, sprint, created_at, updated_at] <- $rows
+            :put nodes {id => title, kind, body, tags_json, todo_state, priority, source, source_version, aliases_json, properties_json, crdt_doc, has_crdt, origin_instance, assignee, due_date, sprint, created_at, updated_at}"#;
+
+    /// Bulk upsert into `links` from a `$rows` list, preserving ALL fields
+    /// (rel_type/display/weight/confidence) — links are migrated verbatim (unlike
+    /// `update_links_for_node`, which re-derives only body links as `related_to`).
+    const LINK_BULK_SCRIPT: &'static str = r#"?[src, dst, rel_type, display, weight, confidence, created_at] <- $rows
+            :put links {src, dst, rel_type => display, weight, confidence, created_at}"#;
+
+    /// Positional column values for one `nodes` row, matching [`Self::NODE_BULK_SCRIPT`].
+    fn node_row(&self, node: &Node, now: i64) -> Result<Vec<DataValue>, KbStoreError> {
+        let tags_json =
+            serde_json::to_string(&node.tags).map_err(|e| KbStoreError::Storage(e.to_string()))?;
+        let aliases_json = serde_json::to_string(&node.aliases)
+            .map_err(|e| KbStoreError::Storage(e.to_string()))?;
+        let properties_json = serde_json::to_string(&node.properties)
+            .map_err(|e| KbStoreError::Storage(e.to_string()))?;
+        let pri_str = node.priority.map(|c| c.to_string()).unwrap_or_default();
+        let source_str = node
+            .source
+            .map(|s| match s {
+                crate::NodeSource::Seed => "seed",
+                crate::NodeSource::UserOrg => "user_org",
+                crate::NodeSource::Manual => "manual",
+                crate::NodeSource::Federation => "federation",
+            })
+            .unwrap_or("");
+        let (crdt_bytes, has_crdt) = match &node.crdt_doc {
+            Some(doc) => (doc.clone(), true),
+            None => (vec![], false),
+        };
+        Ok(vec![
+            dv_str(&node.id),
+            dv_str(&node.title),
+            dv_str(kind_to_str(node.kind)),
+            dv_str(&node.body),
+            dv_str(&tags_json),
+            dv_str(node.todo_state.as_deref().unwrap_or("")),
+            dv_str(&pri_str),
+            dv_str(source_str),
+            DataValue::from(node.source_version.unwrap_or(0) as i64),
+            dv_str(&aliases_json),
+            dv_str(&properties_json),
+            DataValue::Bytes(crdt_bytes),
+            DataValue::Bool(has_crdt),
+            dv_str(""),            // origin_instance
+            dv_str(""),            // assignee
+            DataValue::from(0i64), // due_date
+            dv_str(""),            // sprint
+            DataValue::from(now),  // created_at
+            DataValue::from(now),  // updated_at
+        ])
+    }
+
+    /// Build the parameter map for [`Self::NODE_PUT_SCRIPT`] from a node.
+    fn node_put_params(&self, node: &Node) -> Result<BTreeMap<String, DataValue>, KbStoreError> {
+        let now = self.now_epoch();
+        let tags_json =
+            serde_json::to_string(&node.tags).map_err(|e| KbStoreError::Storage(e.to_string()))?;
+        let aliases_json = serde_json::to_string(&node.aliases)
+            .map_err(|e| KbStoreError::Storage(e.to_string()))?;
+        let properties_json = serde_json::to_string(&node.properties)
+            .map_err(|e| KbStoreError::Storage(e.to_string()))?;
+        let pri_str = node.priority.map(|c| c.to_string()).unwrap_or_default();
+        let source_str = node
+            .source
+            .map(|s| match s {
+                crate::NodeSource::Seed => "seed",
+                crate::NodeSource::UserOrg => "user_org",
+                crate::NodeSource::Manual => "manual",
+                crate::NodeSource::Federation => "federation",
+            })
+            .unwrap_or("");
+        let (crdt_bytes, has_crdt) = match &node.crdt_doc {
+            Some(doc) => (doc.clone(), true),
+            None => (vec![], false),
+        };
+        Ok(btree_params([
+            ("id", dv_str(&node.id)),
+            ("title", dv_str(&node.title)),
+            ("kind", dv_str(kind_to_str(node.kind))),
+            ("body", dv_str(&node.body)),
+            ("tags_json", dv_str(&tags_json)),
+            (
+                "todo_state",
+                dv_str(node.todo_state.as_deref().unwrap_or("")),
+            ),
+            ("priority", dv_str(&pri_str)),
+            ("source", dv_str(source_str)),
+            (
+                "source_version",
+                DataValue::from(node.source_version.unwrap_or(0) as i64),
+            ),
+            ("aliases_json", dv_str(&aliases_json)),
+            ("properties_json", dv_str(&properties_json)),
+            ("crdt_doc", DataValue::Bytes(crdt_bytes)),
+            ("has_crdt", DataValue::Bool(has_crdt)),
+            ("now", DataValue::from(now)),
+        ]))
+    }
+
+    /// Bulk-import `nodes` + `links` into this (fresh) store — nodes in one `:put`
+    /// and links in another (two transactions, two fsyncs total) — for FAST
+    /// migration. Unlike repeated `insert_node`, it does NOT re-derive links from
+    /// node bodies: it writes the exact `links` given, so AI-authored /
+    /// non-`related_to` edges survive verbatim.
+    pub fn bulk_import(
+        &self,
+        nodes: &[Node],
+        links: &[Link],
+    ) -> Result<(usize, usize), KbStoreError> {
+        let now = self.now_epoch();
+        if !nodes.is_empty() {
+            let mut rows = Vec::with_capacity(nodes.len());
+            for node in nodes {
+                rows.push(DataValue::List(self.node_row(node, now)?));
+            }
+            self.run_mut_params(
+                Self::NODE_BULK_SCRIPT,
+                btree_params([("rows", DataValue::List(rows))]),
+            )
+            .map_err(cozo_err)?;
+        }
+        if !links.is_empty() {
+            let rows: Vec<DataValue> = links
+                .iter()
+                .map(|l| {
+                    DataValue::List(vec![
+                        dv_str(&l.src),
+                        dv_str(&l.dst),
+                        dv_str(&l.rel_type),
+                        dv_str(l.display.as_deref().unwrap_or("")),
+                        DataValue::from(l.weight),
+                        DataValue::from(l.confidence),
+                        DataValue::from(now),
+                    ])
+                })
+                .collect();
+            self.run_mut_params(
+                Self::LINK_BULK_SCRIPT,
+                btree_params([("rows", DataValue::List(rows))]),
+            )
+            .map_err(cozo_err)?;
+        }
+        Ok((nodes.len(), links.len()))
+    }
+
     /// Run a mutable CozoScript, retrying on SQLite BUSY/locked contention.
     fn run_mut(&self, script: &str) -> Result<NamedRows, cozo::Error> {
         self.run_with_busy_retry(|| {
@@ -846,63 +1010,8 @@ impl CozoKbStore {
 
 impl KbStore for CozoKbStore {
     fn insert_node(&self, node: &Node) -> Result<(), KbStoreError> {
-        let now = self.now_epoch();
-        let tags_json =
-            serde_json::to_string(&node.tags).map_err(|e| KbStoreError::Storage(e.to_string()))?;
-        let aliases_json = serde_json::to_string(&node.aliases)
-            .map_err(|e| KbStoreError::Storage(e.to_string()))?;
-        let properties_json = serde_json::to_string(&node.properties)
-            .map_err(|e| KbStoreError::Storage(e.to_string()))?;
-        let pri_str = node.priority.map(|c| c.to_string()).unwrap_or_default();
-        let source_str = node
-            .source
-            .map(|s| match s {
-                crate::NodeSource::Seed => "seed",
-                crate::NodeSource::UserOrg => "user_org",
-                crate::NodeSource::Manual => "manual",
-                crate::NodeSource::Federation => "federation",
-            })
-            .unwrap_or("");
-        let (crdt_bytes, has_crdt) = match &node.crdt_doc {
-            Some(doc) => (doc.clone(), true),
-            None => (vec![], false),
-        };
-
-        self.run_mut_params(
-            r#"?[id, title, kind, body, tags_json, todo_state, priority, source, source_version,
-                aliases_json, properties_json, crdt_doc, has_crdt, origin_instance, assignee, due_date, sprint,
-                created_at, updated_at] <- [[
-                $id, $title, $kind, $body, $tags_json, $todo_state, $priority, $source, $source_version,
-                $aliases_json, $properties_json, $crdt_doc, $has_crdt, "", "", 0, "",
-                $now, $now
-            ]]
-            :put nodes {
-                id => title, kind, body, tags_json, todo_state, priority, source, source_version,
-                aliases_json, properties_json, crdt_doc, has_crdt, origin_instance, assignee, due_date, sprint,
-                created_at, updated_at
-            }"#,
-            btree_params([
-                ("id", dv_str(&node.id)),
-                ("title", dv_str(&node.title)),
-                ("kind", dv_str(kind_to_str(node.kind))),
-                ("body", dv_str(&node.body)),
-                ("tags_json", dv_str(&tags_json)),
-                ("todo_state", dv_str(node.todo_state.as_deref().unwrap_or(""))),
-                ("priority", dv_str(&pri_str)),
-                ("source", dv_str(source_str)),
-                (
-                    "source_version",
-                    DataValue::from(node.source_version.unwrap_or(0) as i64),
-                ),
-                ("aliases_json", dv_str(&aliases_json)),
-                ("properties_json", dv_str(&properties_json)),
-                ("crdt_doc", DataValue::Bytes(crdt_bytes)),
-                ("has_crdt", DataValue::Bool(has_crdt)),
-                ("now", DataValue::from(now)),
-            ]),
-        )
-        .map_err(cozo_err)?;
-
+        self.run_mut_params(Self::NODE_PUT_SCRIPT, self.node_put_params(node)?)
+            .map_err(cozo_err)?;
         self.update_links_for_node(node)?;
         Ok(())
     }
