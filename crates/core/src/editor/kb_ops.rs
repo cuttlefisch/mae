@@ -2969,82 +2969,76 @@ impl Editor {
             }
         };
 
-        let store = match &self.kb.store {
-            Some(s) => s.clone(),
-            None => {
-                self.set_status("No persistent KB store (CozoDB required)");
-                return;
-            }
+        // Phase 3: route the agenda through the query layer so it resolves uniformly
+        // in BOTH modes (daemon-less → local cozo store; daemon-hosted → daemon read
+        // layer, closing part of the #118 thin-client gap). Fall back to the primary
+        // store directly if no query layer is built yet.
+        let nodes = if let Some(q) = self.kb.query_layer() {
+            q.agenda(&filter)
+        } else if let Some(ref store) = self.kb.store {
+            store.agenda_query(&filter).unwrap_or_default()
+        } else {
+            self.set_status("No persistent KB store (CozoDB required)");
+            return;
         };
 
-        match store.agenda_query(&filter) {
-            Ok(nodes) => {
-                let mut lines = Vec::new();
-                lines.push(format!("KB Agenda: {} results", nodes.len()));
-                lines.push("=".repeat(40));
-                lines.push(String::new());
-                for node in &nodes {
-                    let todo = match &node.todo_state {
-                        Some(s) if !s.is_empty() => format!(" [{}]", s),
-                        _ => String::new(),
-                    };
-                    let prio = match node.priority {
-                        Some(c) => format!(" #{}", c),
-                        None => String::new(),
-                    };
-                    lines.push(format!("  {}{}{} — {}", node.id, todo, prio, node.title));
-                }
-                if nodes.is_empty() {
-                    lines.push("  (no matching nodes)".to_string());
-                }
-                self.show_scratch_buffer("*KB Agenda*", &lines.join("\n"));
-            }
-            Err(e) => {
-                self.set_status(format!("Agenda query failed: {}", e));
-            }
+        let mut lines = Vec::new();
+        lines.push(format!("KB Agenda: {} results", nodes.len()));
+        lines.push("=".repeat(40));
+        lines.push(String::new());
+        for node in &nodes {
+            let todo = match &node.todo_state {
+                Some(s) if !s.is_empty() => format!(" [{}]", s),
+                _ => String::new(),
+            };
+            let prio = match node.priority {
+                Some(c) => format!(" #{}", c),
+                None => String::new(),
+            };
+            lines.push(format!("  {}{}{} — {}", node.id, todo, prio, node.title));
         }
+        if nodes.is_empty() {
+            lines.push("  (no matching nodes)".to_string());
+        }
+        self.show_scratch_buffer("*KB Agenda*", &lines.join("\n"));
     }
 
     /// Dispatch `:kb-history <node-id>`.
     pub fn dispatch_kb_history(&mut self, id: &str) {
-        let store = match &self.kb.store {
-            Some(s) => s.clone(),
-            None => {
-                self.set_status("No persistent KB store (CozoDB required)");
-                return;
-            }
+        // Phase 3: route history through the query layer (uniform in both modes),
+        // falling back to the primary store directly if no query layer is built.
+        let versions = if let Some(q) = self.kb.query_layer() {
+            q.history(id, 50)
+        } else if let Some(ref store) = self.kb.store {
+            store.node_history(id, 50).unwrap_or_default()
+        } else {
+            self.set_status("No persistent KB store (CozoDB required)");
+            return;
         };
 
-        match store.node_history(id, 50) {
-            Ok(versions) => {
-                let mut lines = Vec::new();
-                lines.push(format!(
-                    "Version History: {} ({} versions)",
-                    id,
-                    versions.len()
-                ));
-                lines.push("=".repeat(50));
-                lines.push(String::new());
-                for v in &versions {
-                    let ts = if v.created_at > 0 {
-                        format!(" @{}", v.created_at)
-                    } else {
-                        String::new()
-                    };
-                    lines.push(format!(
-                        "  v{}: {} [{}]{} — {}",
-                        v.version, v.title, v.author, ts, v.change_summary
-                    ));
-                }
-                if versions.is_empty() {
-                    lines.push("  (no version history)".to_string());
-                }
-                self.show_scratch_buffer("*KB History*", &lines.join("\n"));
-            }
-            Err(e) => {
-                self.set_status(format!("History query failed: {}", e));
-            }
+        let mut lines = Vec::new();
+        lines.push(format!(
+            "Version History: {} ({} versions)",
+            id,
+            versions.len()
+        ));
+        lines.push("=".repeat(50));
+        lines.push(String::new());
+        for v in &versions {
+            let ts = if v.created_at > 0 {
+                format!(" @{}", v.created_at)
+            } else {
+                String::new()
+            };
+            lines.push(format!(
+                "  v{}: {} [{}]{} — {}",
+                v.version, v.title, v.author, ts, v.change_summary
+            ));
         }
+        if versions.is_empty() {
+            lines.push("  (no version history)".to_string());
+        }
+        self.show_scratch_buffer("*KB History*", &lines.join("\n"));
     }
 
     /// Dispatch `:kb-restore <node-id> <version>`.
@@ -3815,6 +3809,66 @@ mod tests {
             "still-loading must remain pending"
         );
         drop(tx);
+    }
+
+    #[test]
+    fn kb_agenda_routes_through_query_layer() {
+        // Phase 3: :kb-agenda must resolve via the query layer (uniform read path in
+        // both daemon modes), returning the same TODO set as a direct store query.
+        let mut editor = Editor::new();
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store.seed_type_system().unwrap();
+        let mut n = mae_kb::Node::new("user:task1", "Do the thing", mae_kb::NodeKind::Note, "b");
+        n.todo_state = Some("TODO".to_string());
+        store.insert_node(&n).unwrap();
+        let arc = std::sync::Arc::new(store);
+        editor.kb.primary_cozo = Some(arc.clone());
+        editor.kb.store = Some(arc.clone());
+        editor.kb.rebuild_query_layer();
+
+        let direct = arc.agenda_query(&mae_kb::AgendaFilter::Todo(None)).unwrap();
+        let via_ql = editor
+            .kb
+            .query_layer()
+            .unwrap()
+            .agenda(&mae_kb::AgendaFilter::Todo(None));
+        let direct_ids: Vec<String> = direct.iter().map(|n| n.id.clone()).collect();
+        let ql_ids: Vec<String> = via_ql.iter().map(|n| n.id.clone()).collect();
+        assert_eq!(
+            direct_ids,
+            vec!["user:task1".to_string()],
+            "store has the TODO"
+        );
+        assert_eq!(
+            direct_ids, ql_ids,
+            "query-layer agenda must match the store's agenda"
+        );
+    }
+
+    #[test]
+    fn kb_history_routes_through_query_layer() {
+        // Phase 3: :kb-history routing parity — the query layer returns the same
+        // version set as a direct store query (routing property, whatever the count).
+        let mut editor = Editor::new();
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store.seed_type_system().unwrap();
+        let n = mae_kb::Node::new("user:h1", "V1", mae_kb::NodeKind::Note, "b1");
+        store.insert_node(&n).unwrap();
+        let mut n2 = n.clone();
+        n2.body = "b2".to_string();
+        store.update_node(&n2).unwrap();
+        let arc = std::sync::Arc::new(store);
+        editor.kb.primary_cozo = Some(arc.clone());
+        editor.kb.store = Some(arc.clone());
+        editor.kb.rebuild_query_layer();
+
+        let direct = arc.node_history("user:h1", 50).unwrap();
+        let via_ql = editor.kb.query_layer().unwrap().history("user:h1", 50);
+        assert_eq!(
+            via_ql.iter().map(|v| v.version).collect::<Vec<_>>(),
+            direct.iter().map(|v| v.version).collect::<Vec<_>>(),
+            "query-layer history must match the store's history"
+        );
     }
 
     #[test]

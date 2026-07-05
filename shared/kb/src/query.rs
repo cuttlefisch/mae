@@ -92,6 +92,21 @@ pub trait KbQueryLayer: Send + Sync {
         Vec::new()
     }
 
+    /// Agenda query (todo/priority/tag/orphan/stale/dead-end/custom) resolved via the
+    /// store's Datalog. Phase 3: routes `:kb-agenda` uniformly through the query layer
+    /// instead of reaching into the primary store directly. Default empty so non-cozo
+    /// layers degrade gracefully; `CozoQueryLayer` delegates to the store.
+    fn agenda(&self, _filter: &crate::AgendaFilter) -> Vec<Node> {
+        Vec::new()
+    }
+
+    /// Version history (snapshots) for a node, newest first. Phase 3: routes
+    /// `:kb-history` through the query layer. Default empty; `CozoQueryLayer` delegates
+    /// to the store.
+    fn history(&self, _id: &str, _limit: usize) -> Vec<crate::NodeVersion> {
+        Vec::new()
+    }
+
     /// Return all known namespace prefixes (e.g., "cmd:", "concept:").
     fn namespace_prefixes(&self) -> Vec<String> {
         let mut prefixes = std::collections::HashSet::new();
@@ -179,6 +194,14 @@ impl KbQueryLayer for CozoQueryLayer {
             .agenda_query(&crate::AgendaFilter::Todo(None))
             .unwrap_or_default()
     }
+
+    fn agenda(&self, filter: &crate::AgendaFilter) -> Vec<Node> {
+        self.store.agenda_query(filter).unwrap_or_default()
+    }
+
+    fn history(&self, id: &str, limit: usize) -> Vec<crate::NodeVersion> {
+        self.store.node_history(id, limit).unwrap_or_default()
+    }
 }
 
 /// Multi-store query layer that fans out reads across primary + instances.
@@ -258,6 +281,34 @@ impl KbQueryLayer for FederatedQuery {
             links.extend(inst.links_to(id));
         }
         links
+    }
+
+    fn agenda(&self, filter: &crate::AgendaFilter) -> Vec<Node> {
+        // Merge agenda matches across primary + instances, de-duped by id.
+        let mut nodes = self.primary.agenda(filter);
+        let mut seen: std::collections::HashSet<String> =
+            nodes.iter().map(|n| n.id.clone()).collect();
+        for (_, inst) in &self.instances {
+            for n in inst.agenda(filter) {
+                if seen.insert(n.id.clone()) {
+                    nodes.push(n);
+                }
+            }
+        }
+        nodes
+    }
+
+    fn history(&self, id: &str, limit: usize) -> Vec<crate::NodeVersion> {
+        // History lives in whichever store owns the node.
+        if self.primary.contains(id) {
+            return self.primary.history(id, limit);
+        }
+        for (_, inst) in &self.instances {
+            if inst.contains(id) {
+                return inst.history(id, limit);
+            }
+        }
+        Vec::new()
     }
 
     fn list_ids(&self, prefix: Option<&str>) -> Vec<String> {
