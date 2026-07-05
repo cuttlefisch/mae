@@ -49,6 +49,8 @@ pub struct KbWatcherStats {
     pub reimports_total: u64,
     /// Watcher errors encountered.
     pub errors: u64,
+    /// Durable-store write-through failures during watcher/reimport drain.
+    pub store_write_errors: u64,
     /// Duration of the last drain operation in microseconds.
     pub last_drain_us: u64,
     /// Number of events processed in the last drain.
@@ -480,6 +482,57 @@ impl Editor {
             }
         }
         n
+    }
+
+    /// Write freshly-ingested federated-instance nodes through to their durable
+    /// instance store. The counterpart of [`Editor::kb_persist_ingested`] for a
+    /// registered instance: `ingest_org_file` (file watcher / reimport) only fills
+    /// the in-memory instance mirror, so without this the watcher/reimport edits are
+    /// lost on restart — the same class of bug as the `:kb-ingest` durability gap.
+    /// Returns the count persisted; counts failures into `watcher_stats`.
+    fn kb_persist_instance_ids(&mut self, uuid: &str, ids: &[String]) -> usize {
+        let Some(store) = self.kb.instance_stores.get(uuid).cloned() else {
+            return 0;
+        };
+        let mut ok = 0usize;
+        let mut errs = 0u64;
+        if let Some(kb) = self.kb.instances.get(uuid) {
+            for id in ids {
+                if let Some(node) = kb.get(id) {
+                    match store.update_node(node) {
+                        Ok(()) => ok += 1,
+                        Err(e) => {
+                            errs += 1;
+                            tracing::warn!(node_id = %id, error = %e, "KB instance store write-through (watcher/reimport) failed");
+                        }
+                    }
+                }
+            }
+        }
+        self.kb.watcher_stats.store_write_errors += errs;
+        ok
+    }
+
+    /// Phase 0c: guard for KB mutations when the durable primary store failed to
+    /// open (e.g. a second daemon-less process hit the sled single-writer lock, or
+    /// corruption). Returns an actionable error to surface to the user instead of
+    /// silently writing to a mirror that will never persist. No-op when the daemon
+    /// hosts the primary (the daemon is the store of record then).
+    pub fn kb_write_blocked(&self) -> Result<(), String> {
+        if self.kb.store_unavailable && !self.kb.daemon_hosts_primary() {
+            return Err("KB store unavailable — the durable store failed to open (another mae instance may hold it, or it is corrupt). Changes cannot be saved; see *Messages*.".into());
+        }
+        Ok(())
+    }
+
+    /// Mirror a watcher-driven removal into the durable instance store so a node
+    /// deleted from an org file does not resurrect on restart. Best-effort.
+    fn kb_persist_instance_delete(&self, uuid: &str, id: &str) {
+        if let Some(store) = self.kb.instance_stores.get(uuid) {
+            if let Err(e) = store.delete_node(id) {
+                tracing::warn!(node_id = %id, error = %e, "KB instance store delete (watcher) failed");
+            }
+        }
     }
 
     /// Phase D3b: snapshot the in-memory primary mirror back to the local store so
@@ -1127,6 +1180,7 @@ impl Editor {
         body: &str,
         kind: mae_kb::NodeKind,
     ) -> Result<(), String> {
+        self.kb_write_blocked()?;
         // Guard: refuse to overwrite seed nodes
         if let Some(existing) = self.kb.primary.get(id) {
             if existing.source == Some(mae_kb::NodeSource::Seed) {
@@ -1181,6 +1235,7 @@ impl Editor {
     /// Delete a KB node from the local knowledge base.
     /// Rejects deleting seed nodes (built-in help).
     pub fn kb_delete_node(&mut self, id: &str) -> Result<(), String> {
+        self.kb_write_blocked()?;
         // Phase D3: lazily load the node into the thin-startup mirror so it resolves.
         self.kb_ensure_node_loaded(id);
         // Resolve across primary ∪ federated instances (I-9), like update/read.
@@ -1372,6 +1427,7 @@ impl Editor {
         body: Option<&str>,
         tags: Option<Vec<String>>,
     ) -> Result<(), String> {
+        self.kb_write_blocked()?;
         // Phase D3: thin-startup mirror may not hold this node yet — lazily load it
         // (with its CRDT lineage) from the open store before resolving the owner.
         self.kb_ensure_node_loaded(id);
@@ -1834,10 +1890,15 @@ impl Editor {
             .map(|i| (i.uuid.clone(), i.org_dir.clone()))
         {
             if path.starts_with(&inst) {
-                if let Some(kb) = self.kb.instances.get_mut(&uuid) {
-                    kb.ingest_org_file(path);
-                    return;
-                }
+                let ids = match self.kb.instances.get_mut(&uuid) {
+                    Some(kb) => kb.ingest_org_file(path),
+                    None => return,
+                };
+                // Phase 0b: persist the reimported nodes to the durable instance
+                // store — parity with the watcher drain (0a); otherwise a save-driven
+                // reimport is lost on restart.
+                self.kb_persist_instance_ids(&uuid, &ids);
+                return;
             }
         }
     }
@@ -1991,6 +2052,45 @@ impl Editor {
         None
     }
 
+    /// Phase 1a: consume the background primary-store preload on an idle tick.
+    ///
+    /// The loader thread (spawned at startup) runs the O(n) `load_all` off the UI
+    /// thread — a synchronous load on a large store (thousands of nodes) blocked the
+    /// main thread long enough to trip the 10s startup watchdog. Here we drain the
+    /// finished node set into the in-memory mirror. No-op until the loader completes;
+    /// `Empty` means still loading. Idempotent (clears `pending_preload` when done).
+    pub fn drain_kb_preload(&mut self) {
+        if self.kb.pending_preload.is_none() {
+            return;
+        }
+        let recv = self.kb.pending_preload.as_ref().map(|rx| rx.try_recv());
+        match recv {
+            Some(Ok(Ok(nodes))) => {
+                let count = nodes.len();
+                for node in nodes {
+                    self.kb.primary.insert(node);
+                }
+                self.kb.pending_preload = None;
+                if count > 0 {
+                    self.set_status(format!("KB loaded: {} nodes", count));
+                }
+                tracing::debug!(count, "background KB preload complete");
+            }
+            Some(Ok(Err(e))) => {
+                self.kb.pending_preload = None;
+                self.set_status(format!("KB load failed: {}", e));
+                tracing::warn!(error = %e, "background KB preload failed");
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
+                // Still loading — check again next idle tick.
+            }
+            Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) | None => {
+                self.kb.pending_preload = None;
+                tracing::warn!("background KB preload thread disconnected before sending");
+            }
+        }
+    }
+
     /// Drain KB file watchers — apply changes from filesystem events.
     /// Called from `idle_work()` to pick up org file edits without `:kb-reimport`.
     ///
@@ -2061,20 +2161,32 @@ impl Editor {
                             total_processed += 1;
                             continue;
                         }
-                        if let Some(kb) = self.kb.instances.get_mut(&uuid) {
-                            let ids = kb.ingest_org_file(&path);
-                            if let Some(w) = self.kb.watchers.get(&uuid) {
-                                w.record_ids(path, ids);
-                            }
-                            self.kb.watcher_stats.events_upserted += 1;
-                            changed = true;
-                            total_processed += 1;
+                        let ids = match self.kb.instances.get_mut(&uuid) {
+                            Some(kb) => kb.ingest_org_file(&path),
+                            None => continue,
+                        };
+                        // Phase 0a: write-through to the durable instance store BEFORE
+                        // handing ownership of `ids` to the watcher record. Without this
+                        // the watcher-ingested nodes live only in the in-memory mirror
+                        // and are lost on restart (same class as the :kb-ingest bug).
+                        self.kb_persist_instance_ids(&uuid, &ids);
+                        if let Some(w) = self.kb.watchers.get(&uuid) {
+                            w.record_ids(path, ids);
                         }
+                        self.kb.watcher_stats.events_upserted += 1;
+                        changed = true;
+                        total_processed += 1;
                     }
                     mae_kb::watch::OrgChange::Removed(ids) => {
-                        if let Some(kb) = self.kb.instances.get_mut(&uuid) {
-                            for id in ids {
-                                kb.remove(&id);
+                        if self.kb.instances.contains_key(&uuid) {
+                            if let Some(kb) = self.kb.instances.get_mut(&uuid) {
+                                for id in &ids {
+                                    kb.remove(id);
+                                }
+                            }
+                            // Phase 0a: mirror the removals into the durable instance store.
+                            for id in &ids {
+                                self.kb_persist_instance_delete(&uuid, id);
                             }
                             self.kb.watcher_stats.events_removed += 1;
                             changed = true;
@@ -3600,6 +3712,109 @@ mod tests {
         assert_eq!(node.title, "Test Note");
         assert_eq!(node.body, "Hello");
         assert_eq!(node.source, Some(mae_kb::NodeSource::Manual));
+    }
+
+    #[test]
+    fn kb_reimport_file_persists_to_instance_store() {
+        // Phase 0b regression: kb_reimport_file must write THROUGH to the durable
+        // instance store, not just the in-memory instance mirror — else a save-driven
+        // reimport of a federated KB is lost on restart (same class as the :kb-ingest
+        // durability bug). Oracle = the DURABLE store read, not the mirror.
+        let dir = TempDir::new().unwrap();
+        let mut editor = Editor::new();
+        let _td = with_test_dirs(&mut editor);
+        let uuid = editor.kb_register("TestNotes", dir.path()).unwrap().uuid;
+        // Write an org file AFTER registration so the reimport is what ingests it.
+        let f = dir.path().join("fresh.org");
+        std::fs::write(
+            &f,
+            ":PROPERTIES:\n:ID: reimport-durable-id\n:END:\n#+title: Reimport Me\n* H\nbody\n",
+        )
+        .unwrap();
+        editor.kb_reimport_file(&f);
+        // In-memory instance mirror has it...
+        assert!(editor
+            .kb
+            .instances
+            .get(&uuid)
+            .unwrap()
+            .get("reimport-durable-id")
+            .is_some());
+        // ...AND the durable instance store has it (the regression oracle).
+        let durable = editor
+            .kb
+            .instance_stores
+            .get(&uuid)
+            .unwrap()
+            .get_node("reimport-durable-id")
+            .unwrap();
+        assert!(
+            durable.is_some(),
+            "reimported node must be persisted to the durable instance store"
+        );
+        assert_eq!(durable.unwrap().title, "Reimport Me");
+    }
+
+    #[test]
+    fn kb_mutations_refuse_when_store_unavailable() {
+        // Phase 0c: when the durable store failed to open, mutations must refuse with
+        // an actionable error instead of silently writing to a mirror that never
+        // persists. The negative case that MUST fail (principle #14).
+        let mut editor = Editor::new();
+        editor.kb.store_unavailable = true;
+        let e = editor
+            .kb_create_node("user:x", "X", "b", mae_kb::NodeKind::Note)
+            .unwrap_err();
+        assert!(e.contains("unavailable"), "create must refuse: {e}");
+        let e = editor
+            .kb_update_node("user:x", Some("Y"), None, None)
+            .unwrap_err();
+        assert!(e.contains("unavailable"), "update must refuse: {e}");
+        let e = editor.kb_delete_node("user:x").unwrap_err();
+        assert!(e.contains("unavailable"), "delete must refuse: {e}");
+        // And nothing leaked into the mirror.
+        assert!(editor.kb.primary.get("user:x").is_none());
+    }
+
+    #[test]
+    fn drain_kb_preload_populates_mirror_from_background_channel() {
+        // Phase 1a: the idle-tick drain consumes the background loader's node set and
+        // populates the mirror, then clears the pending channel.
+        let mut editor = Editor::new();
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok(vec![mae_kb::Node::new(
+            "preload:1",
+            "One",
+            mae_kb::NodeKind::Note,
+            "b",
+        )]))
+        .unwrap();
+        editor.kb.pending_preload = Some(rx);
+        assert!(editor.kb.primary.get("preload:1").is_none());
+        editor.drain_kb_preload();
+        assert!(
+            editor.kb.primary.get("preload:1").is_some(),
+            "preload must populate the mirror"
+        );
+        assert!(
+            editor.kb.pending_preload.is_none(),
+            "channel cleared once drained"
+        );
+    }
+
+    #[test]
+    fn drain_kb_preload_is_noop_while_still_loading() {
+        // Empty channel = loader still running: drain must be a no-op and keep the
+        // pending handle so the next tick retries.
+        let mut editor = Editor::new();
+        let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<mae_kb::Node>, String>>();
+        editor.kb.pending_preload = Some(rx);
+        editor.drain_kb_preload();
+        assert!(
+            editor.kb.pending_preload.is_some(),
+            "still-loading must remain pending"
+        );
+        drop(tx);
     }
 
     #[test]

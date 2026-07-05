@@ -442,6 +442,9 @@ impl super::Editor {
 
         // 4. Drain KB file watchers for federated instances.
         self.drain_kb_watchers();
+
+        // 5. Consume the background primary-store preload (Phase 1a) if it finished.
+        self.drain_kb_preload();
     }
 
     /// Switch focus to whichever window contains the given cell coordinates.
