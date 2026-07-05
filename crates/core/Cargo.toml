@@ -9,7 +9,7 @@ license.workspace = true
 mae-babel = { path = "../babel" }
 mae-export = { path = "../export" }
 mae-format = { path = "../format" }
-mae-kb = { path = "../../shared/kb", features = ["storage-sled", "crdt"] }
+mae-kb = { path = "../../shared/kb", features = ["storage-sled", "storage-sqlite", "crdt"] }
 mae-lookup = { path = "../lookup" }
 mae-make = { path = "../make" }
 mae-snippets = { path = "../snippets" }

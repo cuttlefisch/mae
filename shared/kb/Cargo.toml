@@ -8,6 +8,11 @@ license = "GPL-3.0-or-later"
 [features]
 default = ["storage-sled"]
 storage-sled = ["cozo/storage-sled"]
+# SQLite (WAL) backend — lets N processes share one on-disk store safely (multiple
+# readers + serialized writer). Compiled ALONGSIDE sled so the one-time sled→sqlite
+# migration can read the old store. Editor pulls no rusqlite, so cozo's sqlite3
+# native lib has no `links` conflict.
+storage-sqlite = ["cozo/storage-sqlite"]
 crdt = ["dep:mae-sync"]
 
 [dependencies]

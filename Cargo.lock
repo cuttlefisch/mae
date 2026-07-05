@@ -904,6 +904,7 @@ dependencies = [
  "sled",
  "smallvec",
  "smartstring",
+ "sqlite",
  "swapvec",
  "thiserror 1.0.69",
  "twox-hash",
@@ -2792,7 +2793,7 @@ dependencies = [
 
 [[package]]
 name = "mae"
-version = "0.14.28"
+version = "0.14.29"
 dependencies = [
  "base64 0.22.1",
  "crossterm",
@@ -2828,7 +2829,7 @@ dependencies = [
 
 [[package]]
 name = "mae-ai"
-version = "0.14.28"
+version = "0.14.29"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2846,11 +2847,11 @@ dependencies = [
 
 [[package]]
 name = "mae-babel"
-version = "0.14.28"
+version = "0.14.29"
 
 [[package]]
 name = "mae-canvas"
-version = "0.14.28"
+version = "0.14.29"
 dependencies = [
  "serde",
  "serde_json",
@@ -2858,7 +2859,7 @@ dependencies = [
 
 [[package]]
 name = "mae-core"
-version = "0.14.28"
+version = "0.14.29"
 dependencies = [
  "criterion",
  "hex",
@@ -2907,7 +2908,7 @@ dependencies = [
 
 [[package]]
 name = "mae-dap"
-version = "0.14.28"
+version = "0.14.29"
 dependencies = [
  "mae-core",
  "serde",
@@ -2918,18 +2919,18 @@ dependencies = [
 
 [[package]]
 name = "mae-export"
-version = "0.14.28"
+version = "0.14.29"
 dependencies = [
  "mae-babel",
 ]
 
 [[package]]
 name = "mae-format"
-version = "0.14.28"
+version = "0.14.29"
 
 [[package]]
 name = "mae-gui"
-version = "0.14.28"
+version = "0.14.29"
 dependencies = [
  "mae-core",
  "mae-renderer",
@@ -2943,7 +2944,7 @@ dependencies = [
 
 [[package]]
 name = "mae-kb"
-version = "0.14.28"
+version = "0.14.29"
 dependencies = [
  "cozo",
  "hex",
@@ -2963,14 +2964,14 @@ dependencies = [
 
 [[package]]
 name = "mae-lookup"
-version = "0.14.28"
+version = "0.14.29"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-lsp"
-version = "0.14.28"
+version = "0.14.29"
 dependencies = [
  "serde",
  "serde_json",
@@ -2980,14 +2981,14 @@ dependencies = [
 
 [[package]]
 name = "mae-make"
-version = "0.14.28"
+version = "0.14.29"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-mcp"
-version = "0.14.28"
+version = "0.14.29"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3010,7 +3011,7 @@ dependencies = [
 
 [[package]]
 name = "mae-renderer"
-version = "0.14.28"
+version = "0.14.29"
 dependencies = [
  "crossterm",
  "mae-core",
@@ -3022,7 +3023,7 @@ dependencies = [
 
 [[package]]
 name = "mae-scheme"
-version = "0.14.28"
+version = "0.14.29"
 dependencies = [
  "base64 0.22.1",
  "libc",
@@ -3035,7 +3036,7 @@ dependencies = [
 
 [[package]]
 name = "mae-shell"
-version = "0.14.28"
+version = "0.14.29"
 dependencies = [
  "alacritty_terminal",
  "portable-pty",
@@ -3044,15 +3045,15 @@ dependencies = [
 
 [[package]]
 name = "mae-snippets"
-version = "0.14.28"
+version = "0.14.29"
 
 [[package]]
 name = "mae-spell"
-version = "0.14.28"
+version = "0.14.29"
 
 [[package]]
 name = "mae-sync"
-version = "0.14.28"
+version = "0.14.29"
 dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
@@ -5472,6 +5473,36 @@ checksum = "d91ed6c858b01f942cd56b37a94b3e0a1798290327d1236e4d9cf4eaca44d29d"
 dependencies = [
  "base64ct",
  "der",
+]
+
+[[package]]
+name = "sqlite"
+version = "0.32.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "03801c10193857d6a4a71ec46cee198a15cbc659622aabe1db0d0bdbefbcf8e6"
+dependencies = [
+ "libc",
+ "sqlite3-sys",
+]
+
+[[package]]
+name = "sqlite3-src"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bfc95a51a1ee38839599371685b9d4a926abb51791f0bc3bf8c3bb7867e6e454"
+dependencies = [
+ "cc",
+ "pkg-config",
+]
+
+[[package]]
+name = "sqlite3-sys"
+version = "0.15.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2752c669433e40ebb08fde824146f50d9628aa0b66a3b7fc6be34db82a8063b"
+dependencies = [
+ "libc",
+ "sqlite3-src",
 ]
 
 [[package]]
