@@ -6,7 +6,19 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- *(kb)* Persist :kb-ingest through to the durable store (#282) ([bb87d0c](https://github.com/cuttlefisch/mae/commit/bb87d0ce9fd3d3d6e3e026db759762372a112a72))
+
+## [0.14.26] - 2026-07-04
+
+### Bug Fixes
+
 - *(kb)* Expand ~ in :kb-ingest directory arg (#281) ([8c4a2e8](https://github.com/cuttlefisch/mae/commit/8c4a2e854a3c9c73b859971b6ba3484f41cb0249))
+
+### Miscellaneous
+
+- Bump version to 0.14.26 ([a135d72](https://github.com/cuttlefisch/mae/commit/a135d7298f7531ba27ee45537f94c15671b2c4c5))
+
+## [0.14.25] - 2026-07-04
 
 ### Miscellaneous
 
