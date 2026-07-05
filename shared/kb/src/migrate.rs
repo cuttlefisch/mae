@@ -432,28 +432,27 @@ pub fn migrate_sled_to_sqlite(path: &Path) -> Result<SledToSqliteOutcome, KbStor
         (nodes, links)
     };
 
-    // 2. Build a fresh sqlite store at a temp path alongside the target.
+    // 2. Build a fresh sqlite store at a temp path alongside the target. Bulk-import
+    //    in ONE transaction (one fsync) so a large KB migrates in ~a second instead of
+    //    minutes; `bulk_import` writes links verbatim (no body re-derivation), so
+    //    AI-authored / non-`related_to` edges survive. Clean up the temp on failure.
     let tmp = suffixed(path, ".sqlite.tmp");
     let _ = std::fs::remove_file(&tmp); // clear a stale temp from any prior aborted run
-    {
+    let build = || -> Result<(usize, usize), KbStoreError> {
         let sqlite = crate::CozoKbStore::open_with_engine(&tmp, "sqlite")?;
         sqlite.seed_type_system()?;
         let _ = sqlite.seed_typed_relationships();
         let _ = sqlite.seed_views();
-        for n in &nodes {
-            sqlite.insert_node(n)?;
-        }
-        for l in &links {
-            sqlite.add_typed_link_with_confidence(
-                &l.src,
-                &l.dst,
-                &l.rel_type,
-                l.weight,
-                l.confidence,
-            )?;
-        }
+        sqlite.bulk_import(&nodes, &links)
         // `sqlite` drops here → the temp store is complete + consistent on disk.
-    }
+    };
+    let (n_nodes, n_links) = match build() {
+        Ok(counts) => counts,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+    };
 
     // 3. Atomic-ish swap: sled dir → timestamped backup, then temp → canonical path.
     //    If the final rename fails, restore the sled dir so the editor still opens it.
@@ -469,8 +468,8 @@ pub fn migrate_sled_to_sqlite(path: &Path) -> Result<SledToSqliteOutcome, KbStor
     }
 
     Ok(SledToSqliteOutcome::Migrated {
-        nodes: nodes.len(),
-        links: links.len(),
+        nodes: n_nodes,
+        links: n_links,
         backup,
     })
 }
@@ -727,13 +726,49 @@ mod tests {
                 "node user:{i} present after migration"
             );
         }
+        // Fidelity: the link is a non-body, non-`related_to` ("ref") edge — exactly the
+        // kind `update_links_for_node` would DROP if the migration re-derived from body.
+        // bulk_import writes it verbatim, so it must survive with its rel_type intact.
+        let out_links = reopened.links_from("user:0").unwrap();
+        assert_eq!(out_links.len(), 1, "outgoing link preserved");
         assert_eq!(
-            reopened.links_from("user:0").unwrap().len(),
-            1,
-            "outgoing link preserved with fidelity"
+            out_links[0].rel_type, "ref",
+            "non-body / non-related_to link preserved verbatim (not re-derived)"
         );
         // The sled data is preserved (reversible), not deleted.
         assert!(backup.is_dir(), "sled store preserved as a .bak directory");
+    }
+
+    #[test]
+    #[ignore] // slow fixture (3k inserts) — run explicitly with --ignored
+    fn bulk_migration_is_fast_not_per_commit() {
+        // Regression guard: the bulk `$rows` path must migrate thousands of nodes in
+        // ~a second. A per-node (per-commit-fsync) migration took ~13s for 3k here,
+        // which would freeze startup + trip the watchdog for a real KB.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("primary.cozo");
+        let n = 3000usize;
+        let sled = crate::CozoKbStore::open_with_engine(&path, "sled").unwrap();
+        sled.seed_type_system().unwrap();
+        for i in 0..n {
+            sled.insert_node(&Node::new(
+                format!("user:{i}"),
+                format!("Note {i}"),
+                NodeKind::Note,
+                "some body text",
+            ))
+            .unwrap();
+        }
+        drop(sled);
+        let start = std::time::Instant::now();
+        let out = migrate_sled_to_sqlite(&path).unwrap();
+        let elapsed = start.elapsed();
+        eprintln!("migrate {n} nodes took {elapsed:?} — {out:?}");
+        assert!(
+            elapsed.as_secs() < 6,
+            "bulk migration of {n} nodes must be fast (was {elapsed:?}); a regression to \
+             per-commit inserts would freeze startup"
+        );
     }
 
     #[test]
