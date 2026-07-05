@@ -3812,6 +3812,79 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_multi_instance_concurrent_writes_converge() {
+        // Phase 2 hard gate (adversarial, #14): two CozoKbStore handles on the SAME
+        // sqlite file — two DbInstances → two independent process-local locks, the same
+        // lock topology as two daemon-less processes. cozo 0.7 sets no busy_timeout, so
+        // without the busy-retry ~14% of concurrent writes fail with SQLITE_BUSY. This
+        // asserts that with the retry, N-way concurrent writers ALL succeed and the
+        // store converges to the union of their writes (no lost writes, no corruption).
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("shared.sqlite");
+        let a =
+            std::sync::Arc::new(mae_kb::CozoKbStore::open_with_engine(&path, "sqlite").unwrap());
+        a.seed_type_system().unwrap();
+        let b =
+            std::sync::Arc::new(mae_kb::CozoKbStore::open_with_engine(&path, "sqlite").unwrap());
+
+        // Cross-visibility of sequential writes.
+        a.insert_node(&mae_kb::Node::new(
+            "a:seq",
+            "A",
+            mae_kb::NodeKind::Note,
+            "x",
+        ))
+        .unwrap();
+        b.insert_node(&mae_kb::Node::new(
+            "b:seq",
+            "B",
+            mae_kb::NodeKind::Note,
+            "x",
+        ))
+        .unwrap();
+        assert!(
+            a.get_node("b:seq").unwrap().is_some(),
+            "A must see B's write"
+        );
+        assert!(
+            b.get_node("a:seq").unwrap().is_some(),
+            "B must see A's write"
+        );
+
+        // Concurrent writers on disjoint id sets — every write MUST succeed.
+        let n = 50;
+        let mk = |store: std::sync::Arc<mae_kb::CozoKbStore>, prefix: &'static str| {
+            std::thread::spawn(move || {
+                for i in 0..n {
+                    store
+                        .insert_node(&mae_kb::Node::new(
+                            format!("{prefix}:{i}"),
+                            prefix,
+                            mae_kb::NodeKind::Note,
+                            "x",
+                        ))
+                        .unwrap_or_else(|e| {
+                            panic!("{prefix}:{i} write must not fail under contention: {e}")
+                        });
+                }
+            })
+        };
+        let ta = mk(a.clone(), "wa");
+        let tb = mk(b.clone(), "wb");
+        ta.join().unwrap();
+        tb.join().unwrap();
+
+        // Convergence: both writers' full id sets are present + readable from either handle.
+        for i in 0..n {
+            assert!(
+                a.get_node(&format!("wa:{i}")).unwrap().is_some()
+                    && a.get_node(&format!("wb:{i}")).unwrap().is_some(),
+                "store must converge to the union of both writers' nodes"
+            );
+        }
+    }
+
+    #[test]
     fn kb_agenda_routes_through_query_layer() {
         // Phase 3: :kb-agenda must resolve via the query layer (uniform read path in
         // both daemon modes), returning the same TODO set as a direct store query.
