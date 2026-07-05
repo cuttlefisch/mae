@@ -190,9 +190,14 @@ impl Editor {
                         // indexes 0 files.
                         let dir = crate::file_picker::expand_tilde(dir);
                         let report = self.kb.primary.ingest_org_dir(&dir);
+                        // ingest_org_dir only fills the in-memory mirror; write the
+                        // nodes through to the durable store so the import survives a
+                        // restart (daemon-less primary — nothing else snapshots it).
+                        let persisted = self.kb_persist_ingested(&report.ingested_ids);
                         self.set_status(format!(
-                            "kb: indexed {}, skipped {} (no :ID:), errors {}",
+                            "kb: indexed {}, persisted {}, skipped {} (no :ID:), errors {}",
                             report.indexed,
+                            persisted,
                             report.skipped_no_id,
                             report.read_errors.len()
                         ));
@@ -1425,6 +1430,61 @@ mod tests {
         assert!(
             tilde_status.contains("indexed 1"),
             "tilde path must resolve to $HOME and index the fixture note, got: {tilde_status}"
+        );
+    }
+
+    #[test]
+    fn kb_ingest_persists_to_durable_store() {
+        // Regression: `:kb-ingest` must write nodes THROUGH to the durable store,
+        // not just the in-memory mirror. Before the fix the ingested nodes lived
+        // only in `kb.primary`; on a daemon-less primary nothing snapshots that to
+        // disk, so the import silently vanished on the next launch (`load_all`
+        // reads the durable store, which never saw them). The oracle here is the
+        // DURABLE store read — an in-memory-only assert would pass on the bug.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("note.org"),
+            ":PROPERTIES:\n:ID: aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n:END:\n#+title: Durable Note\n* H\nbody\n",
+        )
+        .unwrap();
+
+        let mut editor = Editor::new();
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store.seed_type_system().unwrap();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        assert!(
+            !editor.kb.daemon_hosts_primary(),
+            "test assumes daemon-less primary"
+        );
+
+        editor.execute_command(&format!("kb-ingest {}", dir.path().display()));
+
+        // In-memory mirror has it (immediate queryability)...
+        assert!(
+            editor
+                .kb
+                .primary
+                .get("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+                .is_some(),
+            "ingested node must be in the in-memory mirror"
+        );
+        // ...AND the durable store has it — the real regression oracle.
+        let durable = editor
+            .kb
+            .store
+            .as_ref()
+            .unwrap()
+            .get_node("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+            .unwrap();
+        assert!(
+            durable.is_some(),
+            "ingested node must be written THROUGH to the durable store (survives restart)"
+        );
+        assert_eq!(durable.unwrap().title, "Durable Note");
+        assert!(
+            editor.status_msg.contains("persisted 1"),
+            "status must report the durable write, got: {}",
+            editor.status_msg
         );
     }
 

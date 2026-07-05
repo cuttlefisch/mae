@@ -59,6 +59,10 @@ pub struct IngestReport {
     pub indexed: usize,
     pub skipped_no_id: usize,
     pub read_errors: Vec<PathBuf>,
+    /// Ids of every node inserted this run, in ingest order. The caller uses
+    /// these to write the freshly-ingested nodes through to a durable store
+    /// (`ingest_org_dir` itself only touches the in-memory mirror).
+    pub ingested_ids: Vec<String>,
 }
 
 /// Parse a single org file's text into a `Node` from the *file-level*
@@ -940,9 +944,11 @@ impl KnowledgeBase {
                         continue;
                     }
                     for node in nodes {
-                        if seen_ids.insert(node.id.clone()) {
+                        let id = node.id.clone();
+                        if seen_ids.insert(id.clone()) {
                             self.insert(node);
                             report.indexed += 1;
+                            report.ingested_ids.push(id);
                         } else {
                             report.read_errors.push(path.to_path_buf());
                         }
