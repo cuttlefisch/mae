@@ -452,6 +452,36 @@ impl Editor {
         }
     }
 
+    /// Write freshly-ingested nodes through to the durable primary store.
+    ///
+    /// `KnowledgeBase::ingest_org_dir` only populates the in-memory mirror. On a
+    /// daemon-less primary nothing else flushes that mirror to disk (the shutdown
+    /// snapshot is gated on `daemon_hosts_primary`), so without this a
+    /// `:kb-ingest <dir>` import silently vanishes on the next launch — `load_all`
+    /// reads the durable store, which never saw the nodes. Persist the exact set
+    /// the ingest reported (looked up from the mirror, which now holds them).
+    ///
+    /// No-op when the daemon hosts the primary: there the daemon's CRDT is the
+    /// source of truth and the local store is refreshed via snapshot-back instead
+    /// (mirrors the `kb_persist_node` write-through guard).
+    pub fn kb_persist_ingested(&self, ids: &[String]) -> usize {
+        if self.kb.daemon_hosts_primary() {
+            return 0;
+        }
+        let Some(ref store) = self.kb.store else {
+            return 0;
+        };
+        let mut n = 0usize;
+        for id in ids {
+            if let Some(node) = self.kb.primary.get(id) {
+                if store.update_node(node).is_ok() {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
     /// Phase D3b: snapshot the in-memory primary mirror back to the local store so
     /// the daemon-less fallback stays coherent after the per-edit write-through is
     /// retired. Bypasses the retire guard (writes the store directly). Bounded by the
