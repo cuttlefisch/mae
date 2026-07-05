@@ -116,6 +116,15 @@ pub struct KbContext {
     pub store: Option<Arc<dyn mae_kb::KbStore>>,
     /// Typed CozoDB store handle (same as `store`, but typed for query layer construction).
     pub primary_cozo: Option<Arc<mae_kb::CozoKbStore>>,
+    /// Set when the durable primary store FAILED to open (e.g. a second daemon-less
+    /// process hit the sled single-writer lock, or corruption). KB mutations refuse
+    /// loudly instead of silently writing to a mirror that will never persist.
+    pub store_unavailable: bool,
+    /// Phase 1a: background primary-store preload. The loader thread runs the O(n)
+    /// `load_all` off the UI thread and sends the node set here; `drain_kb_preload`
+    /// consumes it on an idle tick. `Some` while loading (keeps the ~10s load off the
+    /// main thread, which otherwise tripped the startup watchdog on large stores).
+    pub pending_preload: Option<std::sync::mpsc::Receiver<Result<Vec<mae_kb::Node>, String>>>,
     /// Pre-built manual KB store (read-only, shipped with MAE binary).
     pub manual_cozo: Option<Arc<mae_kb::CozoKbStore>>,
     /// Standardized KB data directory layout (XDG-compliant).
@@ -408,6 +417,8 @@ impl KbContext {
             primary,
             store: None,
             primary_cozo: None,
+            store_unavailable: false,
+            pending_preload: None,
             manual_cozo: None,
             data_dir: None,
             registry: mae_kb::federation::KbRegistry::default(),

@@ -88,6 +88,11 @@ pub(crate) async fn run_terminal_loop(
             .heartbeat
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
+        // Phase 1a: consume the background primary-store preload when it finishes
+        // (the GUI drains this in idle_work; the TUI loop has no idle_work, so do it
+        // here — cheap Option check, populates the mirror once loading completes).
+        editor.drain_kb_preload();
+
         // Watchdog recovery: cancel pending AI work after prolonged stall (>10s).
         if editor
             .watchdog_stall_recovery

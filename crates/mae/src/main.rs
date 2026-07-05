@@ -1299,34 +1299,42 @@ fn main() -> io::Result<()> {
                             warn!(error = %e, "failed to seed KB views");
                         }
 
+                        info!(path = %cozo_path.display(), "primary KB store opened (CozoDB)");
+                        let arc_store = std::sync::Arc::new(store);
+                        editor.kb.primary_cozo = Some(arc_store.clone());
+                        editor.kb.store = Some(arc_store.clone());
+
                         // Load user nodes into the in-memory mirror — UNLESS the daemon
                         // hosts the primary (Phase D3): skip the bulk preload; nodes load
                         // lazily from this open store on edit (`kb_ensure_node_loaded`).
                         if daemon_hosts_primary {
                             info!("Phase D3: mirror preload skipped (daemon-hosted primary)");
                         } else {
-                            match store.load_all() {
-                                Ok(user_nodes) if !user_nodes.is_empty() => {
-                                    let count = user_nodes.len();
-                                    for node in user_nodes {
-                                        editor.kb.primary.insert(node);
-                                    }
-                                    debug!(count, "loaded user KB nodes from primary store");
-                                }
-                                Ok(_) => {} // empty store, nothing to load
-                                Err(e) => {
-                                    warn!(error = %e, "failed to load user nodes from primary store");
-                                }
-                            }
+                            // Phase 1a: run the O(n) load_all OFF the UI thread. A
+                            // synchronous load on a large store (thousands of nodes)
+                            // blocked the main thread long enough to trip the 10s startup
+                            // watchdog. The loader thread streams the node set back via a
+                            // channel drained on the idle tick (`drain_kb_preload`).
+                            let store_for_load = arc_store.clone();
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            std::thread::spawn(move || {
+                                let result = store_for_load.load_all().map_err(|e| e.to_string());
+                                let _ = tx.send(result);
+                            });
+                            editor.kb.pending_preload = Some(rx);
                         }
-
-                        info!(path = %cozo_path.display(), "primary KB store opened (CozoDB)");
-                        let arc_store = std::sync::Arc::new(store);
-                        editor.kb.primary_cozo = Some(arc_store.clone());
-                        editor.kb.store = Some(arc_store);
                     }
                     Err(e) => {
-                        warn!(error = %e, "failed to open CozoDB KB store");
+                        // Phase 0c: surface the failure LOUDLY instead of booting with a
+                        // silent empty KB. A second daemon-less process hits the sled
+                        // single-writer lock here; flag the store unavailable so KB
+                        // mutations refuse rather than write to a mirror that will never
+                        // persist.
+                        error!(error = %e, path = %cozo_path.display(), "failed to open primary KB store");
+                        editor.kb.store_unavailable = true;
+                        editor.set_status(format!(
+                            "KB store unavailable: {e} — another mae instance may hold it, or it is corrupt. KB changes cannot be saved."
+                        ));
                     }
                 }
                 editor.kb.data_dir = Some(kb_data_dir);
