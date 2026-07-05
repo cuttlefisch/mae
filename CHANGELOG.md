@@ -4,9 +4,19 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Features
+
+- *(kb)* Route agenda + history through the query layer (Phase 3 read unification) (#284) ([0eaab91](https://github.com/cuttlefisch/mae/commit/0eaab91f291223ffdfffdbc4e98c4d332db716fa))
+
+## [0.14.28] - 2026-07-05
+
 ### Bug Fixes
 
 - *(kb)* Durability + startup hardening (Phase 0+1 of KB lifecycle rework) (#283) ([0311aad](https://github.com/cuttlefisch/mae/commit/0311aada51b218da8f2ffca36bd3a4552340c918))
+
+### Miscellaneous
+
+- Bump version to 0.14.28 ([0486d7d](https://github.com/cuttlefisch/mae/commit/0486d7d816cf75505d600151edd60b070888980a))
 
 ## [0.14.27] - 2026-07-05
 
