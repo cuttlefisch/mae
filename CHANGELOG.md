@@ -6,7 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- *(kb)* Sled→sqlite migration module + kb_storage_engine option (Phase 2b, opt-in) (#286) ([a5c8095](https://github.com/cuttlefisch/mae/commit/a5c8095c115461a133296c9874ab3839abc65d6e))
+
+## [0.14.30] - 2026-07-05
+
+### Features
+
 - *(kb)* Sqlite backend foundation + multi-writer busy-retry (Phase 2a) (#285) ([a428a59](https://github.com/cuttlefisch/mae/commit/a428a59dbc60d2c492a3aa6e9dc43b4f1e274fe2))
+
+### Miscellaneous
+
+- Bump version to 0.14.30 ([fb21a44](https://github.com/cuttlefisch/mae/commit/fb21a443109202f3cb4e35fd6b8204a3101b2141))
 
 ## [0.14.29] - 2026-07-05
 
