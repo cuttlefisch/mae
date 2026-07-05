@@ -6,7 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- *(kb)* Sqlite backend foundation + multi-writer busy-retry (Phase 2a) (#285) ([a428a59](https://github.com/cuttlefisch/mae/commit/a428a59dbc60d2c492a3aa6e9dc43b4f1e274fe2))
+
+## [0.14.29] - 2026-07-05
+
+### Features
+
 - *(kb)* Route agenda + history through the query layer (Phase 3 read unification) (#284) ([0eaab91](https://github.com/cuttlefisch/mae/commit/0eaab91f291223ffdfffdbc4e98c4d332db716fa))
+
+### Miscellaneous
+
+- Bump version to 0.14.29 ([139f2b8](https://github.com/cuttlefisch/mae/commit/139f2b86c1c805aac1faeecacdae3371eec8cd8b))
 
 ## [0.14.28] - 2026-07-05
 
