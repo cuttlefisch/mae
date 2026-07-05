@@ -187,6 +187,14 @@ impl KbQueryLayer for CachedQueryLayer {
     fn neighborhood(&self, id: &str, depth: u32) -> Option<SubGraph> {
         self.inner.neighborhood(id, depth)
     }
+
+    fn agenda(&self, filter: &crate::AgendaFilter) -> Vec<Node> {
+        self.inner.agenda(filter)
+    }
+
+    fn history(&self, id: &str, limit: usize) -> Vec<crate::NodeVersion> {
+        self.inner.history(id, limit)
+    }
 }
 
 #[cfg(test)]
