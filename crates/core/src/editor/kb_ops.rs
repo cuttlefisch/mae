@@ -1228,6 +1228,9 @@ impl Editor {
                 }
             }
         }
+        // Phase 4: record the local write so the store watcher's cooldown skips a
+        // redundant cross-instance reload of our own change.
+        self.kb.last_local_store_write = Some(std::time::Instant::now());
         self.set_status(format!("KB node created: {}", id));
         Ok(())
     }
@@ -1278,6 +1281,7 @@ impl Editor {
         if let Some(kb_id) = self.kb_sync_target(&owner) {
             self.kb_enqueue_manifest_op(&kb_id, id, "", false);
         }
+        self.kb.last_local_store_write = Some(std::time::Instant::now());
         self.set_status(format!("KB node deleted: {}", id));
         Ok(())
     }
@@ -1506,6 +1510,7 @@ impl Editor {
             }
         }
 
+        self.kb.last_local_store_write = Some(std::time::Instant::now());
         self.set_status(format!("KB node updated: {}", id));
         Ok(())
     }
@@ -2089,6 +2094,42 @@ impl Editor {
                 tracing::warn!("background KB preload thread disconnected before sending");
             }
         }
+    }
+
+    /// Phase 4: cross-instance freshness. When ANOTHER daemon-less process commits to
+    /// the shared sqlite primary store, reload our in-memory mirror so search/find/get
+    /// reflect it. Called on the idle tick. Reflects external adds + edits (upsert via
+    /// the background loader); cross-instance deletes are not reflected until a full
+    /// reload/restart. No-op when no store watcher is active (sled / daemon-hosted) or
+    /// a preload is already in flight.
+    pub fn drain_kb_store_watch(&mut self) {
+        // Always drain the events (so ignored own-writes don't accumulate).
+        let changed = match &self.kb.store_watcher {
+            Some(w) => w.drain_changed(),
+            None => return,
+        };
+        if !changed || self.kb.pending_preload.is_some() {
+            return;
+        }
+        // Suppress reloads caused by our OWN recent writes: their file events are
+        // drained above and ignored here, so we don't churn on local edits.
+        if let Some(t) = self.kb.last_local_store_write {
+            if t.elapsed() < std::time::Duration::from_millis(1500) {
+                return;
+            }
+        }
+        let Some(store) = self.kb.primary_cozo.clone() else {
+            return;
+        };
+        // Reload off the UI thread (same path as the startup preload), drained by
+        // `drain_kb_preload` on a later idle tick.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = store.load_all().map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
+        self.kb.pending_preload = Some(rx);
+        tracing::debug!("external KB store change — reloading mirror in background");
     }
 
     /// Drain KB file watchers — apply changes from filesystem events.
@@ -3881,6 +3922,87 @@ mod tests {
                     && a.get_node(&format!("wb:{i}")).unwrap().is_some(),
                 "store must converge to the union of both writers' nodes"
             );
+        }
+    }
+
+    #[test]
+    fn external_store_change_arms_a_background_reload() {
+        // Phase 4: when another process commits to the shared sqlite store, the store
+        // watcher fires and `drain_kb_store_watch` arms a background mirror reload.
+        let mut editor = Editor::new();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("primary.cozo");
+        let store =
+            std::sync::Arc::new(mae_kb::CozoKbStore::open_with_engine(&path, "sqlite").unwrap());
+        store.seed_type_system().unwrap();
+        editor.kb.primary_cozo = Some(store.clone());
+        editor.kb.store_watcher = Some(mae_kb::watch::StoreWatcher::new(&path).unwrap());
+        assert!(
+            editor.kb.last_local_store_write.is_none(),
+            "no cooldown active"
+        );
+
+        // Another "process" commits to the store (modifies the file).
+        store
+            .insert_node(&mae_kb::Node::new(
+                "user:ext",
+                "Ext",
+                mae_kb::NodeKind::Note,
+                "b",
+            ))
+            .unwrap();
+
+        // Poll: the external change must arm a background reload (notify is async).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut armed = false;
+        while std::time::Instant::now() < deadline {
+            editor.drain_kb_store_watch();
+            if editor.kb.pending_preload.is_some() {
+                armed = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(
+            armed,
+            "external store change must arm a background mirror reload"
+        );
+    }
+
+    #[test]
+    fn store_watch_reload_suppressed_within_local_write_cooldown() {
+        // Phase 4: a reload must NOT fire when WE just wrote (cooldown) — otherwise
+        // local edits would churn the mirror. With a fresh local-write timestamp and a
+        // changed store, drain must leave `pending_preload` unset.
+        let mut editor = Editor::new();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("primary.cozo");
+        let store =
+            std::sync::Arc::new(mae_kb::CozoKbStore::open_with_engine(&path, "sqlite").unwrap());
+        store.seed_type_system().unwrap();
+        editor.kb.primary_cozo = Some(store.clone());
+        editor.kb.store_watcher = Some(mae_kb::watch::StoreWatcher::new(&path).unwrap());
+        // Pretend WE just wrote.
+        editor.kb.last_local_store_write = Some(std::time::Instant::now());
+
+        store
+            .insert_node(&mae_kb::Node::new(
+                "user:x",
+                "X",
+                mae_kb::NodeKind::Note,
+                "b",
+            ))
+            .unwrap();
+
+        // Give notify time to deliver, draining each tick; the cooldown must keep the
+        // reload from arming for the whole window.
+        for _ in 0..20 {
+            editor.drain_kb_store_watch();
+            assert!(
+                editor.kb.pending_preload.is_none(),
+                "reload must be suppressed within the local-write cooldown"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(15));
         }
     }
 

@@ -445,6 +445,10 @@ impl super::Editor {
 
         // 5. Consume the background primary-store preload (Phase 1a) if it finished.
         self.drain_kb_preload();
+
+        // 6. Cross-instance freshness (Phase 4): if another process changed the shared
+        //    store, kick a background mirror reload.
+        self.drain_kb_store_watch();
     }
 
     /// Switch focus to whichever window contains the given cell coordinates.

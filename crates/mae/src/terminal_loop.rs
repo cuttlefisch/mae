@@ -92,6 +92,8 @@ pub(crate) async fn run_terminal_loop(
         // (the GUI drains this in idle_work; the TUI loop has no idle_work, so do it
         // here — cheap Option check, populates the mirror once loading completes).
         editor.drain_kb_preload();
+        // Phase 4: cross-instance mirror refresh on external store change.
+        editor.drain_kb_store_watch();
 
         // Watchdog recovery: cancel pending AI work after prolonged stall (>10s).
         if editor

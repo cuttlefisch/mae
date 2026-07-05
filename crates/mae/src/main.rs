@@ -1361,6 +1361,18 @@ fn main() -> io::Result<()> {
                             });
                             editor.kb.pending_preload = Some(rx);
                         }
+
+                        // Phase 4: watch the sqlite store file so this process reloads
+                        // its mirror when ANOTHER daemon-less process commits. Skip for
+                        // sled (single-writer) and daemon-hosted primaries.
+                        if engine == "sqlite" && !daemon_hosts_primary {
+                            match mae_kb::watch::StoreWatcher::new(&cozo_path) {
+                                Ok(w) => editor.kb.store_watcher = Some(w),
+                                Err(e) => {
+                                    warn!(error = %e, "KB store watcher failed to start (cross-instance refresh off)")
+                                }
+                            }
+                        }
                     }
                     Err(e) => {
                         // Phase 0c: surface the failure LOUDLY instead of booting with a
