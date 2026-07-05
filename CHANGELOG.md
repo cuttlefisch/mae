@@ -6,7 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- *(kb)* Cross-instance mirror refresh (Phase 4) + multi-instance docs (Phase 5) (#288) ([b5959fc](https://github.com/cuttlefisch/mae/commit/b5959fc03632be5933ee1b47579677a7df8edeff))
+
+## [0.14.32] - 2026-07-05
+
+### Features
+
 - *(kb)* Fast bulk sled→sqlite migration + default engine → sqlite (Phase 2c) (#287) ([9c38db5](https://github.com/cuttlefisch/mae/commit/9c38db55f892af91a80f4a8f497cd6d1f814aed1))
+
+### Miscellaneous
+
+- Bump version to 0.14.32 ([cb1949b](https://github.com/cuttlefisch/mae/commit/cb1949b3aa1a5ca547b5b40678d655c62f1f6c11))
 
 ## [0.14.31] - 2026-07-05
 
