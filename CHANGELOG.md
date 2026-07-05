@@ -6,7 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ### Features
 
+- *(kb)* Fast bulk sled→sqlite migration + default engine → sqlite (Phase 2c) (#287) ([9c38db5](https://github.com/cuttlefisch/mae/commit/9c38db55f892af91a80f4a8f497cd6d1f814aed1))
+
+## [0.14.31] - 2026-07-05
+
+### Features
+
 - *(kb)* Sled→sqlite migration module + kb_storage_engine option (Phase 2b, opt-in) (#286) ([a5c8095](https://github.com/cuttlefisch/mae/commit/a5c8095c115461a133296c9874ab3839abc65d6e))
+
+### Miscellaneous
+
+- Bump version to 0.14.31 ([7f988c8](https://github.com/cuttlefisch/mae/commit/7f988c8883731216998da08ad70e79bae6444e05))
 
 ## [0.14.30] - 2026-07-05
 
