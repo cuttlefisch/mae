@@ -6,7 +6,17 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- *(kb)* Durability + startup hardening (Phase 0+1 of KB lifecycle rework) (#283) ([0311aad](https://github.com/cuttlefisch/mae/commit/0311aada51b218da8f2ffca36bd3a4552340c918))
+
+## [0.14.27] - 2026-07-05
+
+### Bug Fixes
+
 - *(kb)* Persist :kb-ingest through to the durable store (#282) ([bb87d0c](https://github.com/cuttlefisch/mae/commit/bb87d0ce9fd3d3d6e3e026db759762372a112a72))
+
+### Miscellaneous
+
+- Bump version to 0.14.27 ([bc06745](https://github.com/cuttlefisch/mae/commit/bc067457aa4cf8bcb683e2515af7ab25d52bf589))
 
 ## [0.14.26] - 2026-07-04
 
