@@ -1284,7 +1284,45 @@ fn main() -> io::Result<()> {
                 // Initialize primary KB store (CozoDB) for user data.
                 let kb_root = kb_data_dir.root();
                 let cozo_path = kb_root.join("primary.cozo");
-                match mae_kb::CozoKbStore::open(&cozo_path) {
+
+                // Phase 2b: resolve the storage engine (default sqlite — lets multiple
+                // daemon-less mae processes share the store). Orthogonal to daemon_mode.
+                let mut engine = editor
+                    .get_option("kb_storage_engine")
+                    .map(|(v, _)| v)
+                    .unwrap_or_else(|| "sqlite".to_string());
+
+                // One-time, reversible sled→sqlite migration when sqlite is selected and
+                // a legacy sled store (a directory) is present. On failure the intact
+                // sled store is opened as-is this session, so the KB keeps working.
+                if engine == "sqlite" {
+                    match mae_kb::migrate::migrate_sled_to_sqlite(&cozo_path) {
+                        Ok(mae_kb::migrate::SledToSqliteOutcome::Migrated {
+                            nodes,
+                            links,
+                            backup,
+                        }) => {
+                            info!(nodes, links, backup = %backup.display(), "migrated primary KB store: sled → sqlite");
+                            editor.set_status(format!(
+                                "KB migrated to sqlite ({nodes} nodes) — old store backed up alongside"
+                            ));
+                        }
+                        Ok(mae_kb::migrate::SledToSqliteOutcome::NotNeeded) => {}
+                        Err(e) => {
+                            error!(error = %e, "sled→sqlite migration failed; opening the existing store");
+                            editor.set_status(format!(
+                                "KB migration failed ({e}); opened existing store"
+                            ));
+                            // The sled store is intact (a directory) — open it as sled so
+                            // the KB still works; the user can retry the migration later.
+                            if cozo_path.is_dir() {
+                                engine = "sled".to_string();
+                            }
+                        }
+                    }
+                }
+
+                match mae_kb::CozoKbStore::open_with_engine(&cozo_path, &engine) {
                     Ok(store) => {
                         if let Err(e) = store.seed_type_system() {
                             warn!(error = %e, "failed to seed KB type system");

@@ -319,6 +319,10 @@ impl OptionRegistry {
                     "C++ standard passed as -std=<value> for c++/cpp blocks (empty to omit)",
                     OptionKind::String, "c++17", Some("babel.cxx_std"), &[]),
                 // --- Knowledge Base ---
+                opt!("kb_storage_engine", &["kb-storage-engine"],
+                    "Durable KB store backend. sled = single-writer (exclusive dir lock; a 2nd daemon-less instance can't open it) — current default. sqlite = WAL, lets multiple daemon-less mae processes share one store safely (opt-in). Setting sqlite auto-migrates an existing sled store ONCE on next launch (the old store is renamed to a .sled.bak, never deleted); this may take up to ~a minute for a large KB. Orthogonal to daemon_mode. The default will move to sqlite once migration is backgrounded.",
+                    OptionKind::String, "sled", Some("kb.storage_engine"),
+                    &["sqlite", "sled"]),
                 opt!("kb_watcher_enabled", &["kb-watcher-enabled"],
                     "Enable/disable file watchers for registered KB instances",
                     OptionKind::Bool, "true", Some("kb.watcher_enabled"), &[]),

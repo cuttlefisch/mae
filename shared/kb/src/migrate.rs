@@ -385,6 +385,110 @@ pub fn migrate_between_stores(
     Ok(report)
 }
 
+// ---------------------------------------------------------------------------
+// Backend migration: sled → sqlite (one-time, reversible)
+// ---------------------------------------------------------------------------
+
+/// Result of a [`migrate_sled_to_sqlite`] attempt.
+#[derive(Debug)]
+pub enum SledToSqliteOutcome {
+    /// `path` is not a sled store (already sqlite, or a fresh install) — no-op.
+    NotNeeded,
+    /// A sled store was converted to sqlite. The old sled directory is preserved at
+    /// `backup` (reversible; never deleted).
+    Migrated {
+        nodes: usize,
+        links: usize,
+        backup: PathBuf,
+    },
+}
+
+/// Migrate a cozo **sled** store at `path` (a directory) to a cozo **sqlite** store
+/// at the same `path` (a file). This is the one-time conversion that lets N
+/// daemon-less processes share one KB store (sled takes an exclusive dir lock;
+/// sqlite/WAL allows multiple processes — see `CozoKbStore`'s busy-retry).
+///
+/// Safety:
+/// - **Atomic-ish**: the sqlite store is built at a temp path, then the sled dir is
+///   renamed to `<path>.sled.bak-<ts>` and the temp renamed into place; a failure at
+///   the final step restores the sled dir.
+/// - **Never destructive**: the sled data is *renamed* to a backup, never deleted.
+/// - **Idempotent**: a sqlite file (or an absent path) returns `NotNeeded`.
+pub fn migrate_sled_to_sqlite(path: &Path) -> Result<SledToSqliteOutcome, KbStoreError> {
+    // A sled store is a DIRECTORY; a sqlite store is a FILE. Only a directory needs
+    // migrating — this doubles as the idempotency check (post-migration = a file).
+    if !path.is_dir() {
+        return Ok(SledToSqliteOutcome::NotNeeded);
+    }
+
+    // 1. Read everything out of the sled store, then release its exclusive dir lock
+    //    (the `sled` handle drops at the end of this block, BEFORE we rename the dir).
+    let (nodes, links) = {
+        let sled = crate::CozoKbStore::open_with_engine(path, "sled")?;
+        // `load_all` tolerates short-arity rows (the corrupt-store repair path), so a
+        // partially-damaged sled store still migrates what it can.
+        let nodes = sled.load_all()?;
+        let links = sled.load_all_links()?;
+        (nodes, links)
+    };
+
+    // 2. Build a fresh sqlite store at a temp path alongside the target.
+    let tmp = suffixed(path, ".sqlite.tmp");
+    let _ = std::fs::remove_file(&tmp); // clear a stale temp from any prior aborted run
+    {
+        let sqlite = crate::CozoKbStore::open_with_engine(&tmp, "sqlite")?;
+        sqlite.seed_type_system()?;
+        let _ = sqlite.seed_typed_relationships();
+        let _ = sqlite.seed_views();
+        for n in &nodes {
+            sqlite.insert_node(n)?;
+        }
+        for l in &links {
+            sqlite.add_typed_link_with_confidence(
+                &l.src,
+                &l.dst,
+                &l.rel_type,
+                l.weight,
+                l.confidence,
+            )?;
+        }
+        // `sqlite` drops here → the temp store is complete + consistent on disk.
+    }
+
+    // 3. Atomic-ish swap: sled dir → timestamped backup, then temp → canonical path.
+    //    If the final rename fails, restore the sled dir so the editor still opens it.
+    let backup = suffixed(path, &format!(".sled.bak-{}", unix_ts()));
+    std::fs::rename(path, &backup)
+        .map_err(|e| KbStoreError::Storage(format!("sled→sqlite: backup rename failed: {e}")))?;
+    if let Err(e) = std::fs::rename(&tmp, path) {
+        let _ = std::fs::rename(&backup, path); // roll back to the sled store
+        let _ = std::fs::remove_file(&tmp);
+        return Err(KbStoreError::Storage(format!(
+            "sled→sqlite: final rename failed (sled store restored): {e}"
+        )));
+    }
+
+    Ok(SledToSqliteOutcome::Migrated {
+        nodes: nodes.len(),
+        links: links.len(),
+        backup,
+    })
+}
+
+/// Append a suffix to a path's file name (preserves the parent directory).
+fn suffixed(path: &Path, suffix: &str) -> PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(suffix);
+    PathBuf::from(s)
+}
+
+fn unix_ts() -> u64 {
+    SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -573,5 +677,87 @@ mod tests {
         let pending = dst.drain_pending_updates().unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].update_bytes, vec![10, 20]);
+    }
+
+    fn seed_sled(path: &Path, n_nodes: usize) {
+        let sled = crate::CozoKbStore::open_with_engine(path, "sled").unwrap();
+        sled.seed_type_system().unwrap();
+        for i in 0..n_nodes {
+            sled.insert_node(&Node::new(
+                format!("user:{i}"),
+                format!("Note {i}"),
+                NodeKind::Note,
+                "body",
+            ))
+            .unwrap();
+        }
+        if n_nodes >= 2 {
+            sled.add_typed_link_with_confidence("user:0", "user:1", "ref", 1.0, 0.9)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn sled_to_sqlite_preserves_nodes_links_and_backs_up() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("primary.cozo");
+        seed_sled(&path, 5);
+        assert!(path.is_dir(), "sled store is a directory");
+
+        let backup = match migrate_sled_to_sqlite(&path).unwrap() {
+            SledToSqliteOutcome::Migrated {
+                nodes,
+                links,
+                backup,
+            } => {
+                assert_eq!(nodes, 5, "all nodes migrated");
+                assert_eq!(links, 1, "the link migrated");
+                backup
+            }
+            other => panic!("expected Migrated, got {other:?}"),
+        };
+
+        // Post-migration the store is a sqlite FILE; a fresh open (i.e. "restart")
+        // sees every node + the link — the migration is durable.
+        assert!(path.is_file(), "post-migration store is a sqlite file");
+        let reopened = crate::CozoKbStore::open_with_engine(&path, "sqlite").unwrap();
+        for i in 0..5 {
+            assert!(
+                reopened.get_node(&format!("user:{i}")).unwrap().is_some(),
+                "node user:{i} present after migration"
+            );
+        }
+        assert_eq!(
+            reopened.links_from("user:0").unwrap().len(),
+            1,
+            "outgoing link preserved with fidelity"
+        );
+        // The sled data is preserved (reversible), not deleted.
+        assert!(backup.is_dir(), "sled store preserved as a .bak directory");
+    }
+
+    #[test]
+    fn sled_to_sqlite_is_idempotent_and_noop_when_not_sled() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("primary.cozo");
+
+        // Absent path → NotNeeded.
+        assert!(matches!(
+            migrate_sled_to_sqlite(&path).unwrap(),
+            SledToSqliteOutcome::NotNeeded
+        ));
+
+        // Seed + migrate once.
+        seed_sled(&path, 3);
+        assert!(matches!(
+            migrate_sled_to_sqlite(&path).unwrap(),
+            SledToSqliteOutcome::Migrated { .. }
+        ));
+
+        // Second run sees a sqlite file → NotNeeded (no double-migration).
+        assert!(matches!(
+            migrate_sled_to_sqlite(&path).unwrap(),
+            SledToSqliteOutcome::NotNeeded
+        ));
     }
 }
