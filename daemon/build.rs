@@ -37,17 +37,24 @@ fn main() {
 
     println!("cargo:rustc-env=MAE_BUILD_SHA={build}");
 
-    // Rebuild when HEAD moves so the embedded SHA stays current. `--git-path`
-    // resolves the real HEAD location (handles worktrees) portably.
-    if let Some(head) = Command::new("git")
-        .args(["rev-parse", "--git-path", "HEAD"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-    {
-        println!("cargo:rerun-if-changed={head}");
+    // Rebuild when HEAD moves. `.git/HEAD` only changes on a branch switch (its
+    // content is `ref: refs/heads/<branch>`, which a same-branch commit doesn't
+    // touch) — watching just that left the embedded SHA silently stale after every
+    // commit that didn't also switch branches, exactly the deploy-discipline gap
+    // this exists to close. `.git/logs/HEAD` (the reflog) is appended on every
+    // commit/checkout/merge/reset, so watch both. `--git-path` resolves the real
+    // location portably (handles worktrees).
+    for path in ["HEAD", "logs/HEAD"] {
+        if let Some(resolved) = Command::new("git")
+            .args(["rev-parse", "--git-path", path])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+        {
+            println!("cargo:rerun-if-changed={resolved}");
+        }
     }
 }
