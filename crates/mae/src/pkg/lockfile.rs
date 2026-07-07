@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::io;
 use std::path::{Path, PathBuf};
 
 /// A single package pin in the lockfile.
@@ -81,6 +82,29 @@ impl Lockfile {
     /// Get a package pin.
     pub fn get(&self, name: &str) -> Option<&PackagePin> {
         self.packages.get(name)
+    }
+
+    /// Reload-fresh -> mutate -> save, under a cross-process advisory lock.
+    /// Same rationale as `KbRegistry::update`/`ProjectList::update`: `mae
+    /// sync`/`upgrade`/`purge` invocations in different terminals shouldn't
+    /// clobber each other's pins on save.
+    ///
+    /// Deliberately NOT used to wrap the whole `sync`/`upgrade`/`purge`
+    /// command — those do per-package git network I/O in a loop that can
+    /// take minutes and don't read back from the loaded lockfile to make any
+    /// decisions (it's purely an accumulator for this run's own pins). Only
+    /// the final apply-and-persist step needs the lock; callers should apply
+    /// just the pins/unpins this run actually decided on inside `mutate`.
+    pub fn update<R>(
+        path: &Path,
+        mutate: impl FnOnce(&mut Self) -> R,
+    ) -> (Self, R, io::Result<()>) {
+        mae_mcp::file_lock::with_locked_update(
+            path,
+            || Self::load(path),
+            mutate,
+            |lf| lf.save(path).map_err(io::Error::other),
+        )
     }
 
     /// Default lockfile path.

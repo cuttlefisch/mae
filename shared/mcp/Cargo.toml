@@ -26,6 +26,12 @@ rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"]
 x509-parser = "0.16"
 # Optional reuse of an existing OpenSSH Ed25519 key as the collab identity.
 ssh-key = { version = "0.6", default-features = false, features = ["ed25519", "alloc", "std"] }
+# Advisory file locking (file_lock module — LockInfo hostname stamp + liveness check).
+hostname = "0.4"
+libc = "0.2"
+
+[dev-dependencies]
+tempfile = "3"
 
 [[bin]]
 name = "mae-mcp-shim"

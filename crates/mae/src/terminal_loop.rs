@@ -13,7 +13,7 @@ use mae_scheme::SchemeRuntime;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::ai_event_handler;
-use crate::bootstrap::{debug_dump, find_conversation_buffer_mut, save_history};
+use crate::bootstrap::{debug_dump, find_conversation_buffer_mut, save_history_on_exit};
 use crate::config;
 use crate::dap_bridge::{drain_dap_intents, handle_dap_event};
 use crate::key_handling::handle_key;
@@ -293,12 +293,12 @@ pub(crate) async fn run_terminal_loop(
 
             // Persist history (skipped in clean mode)
             if !editor.clean_mode {
-                if let Err(e) = save_history(editor) {
+                if let Err(e) = save_history_on_exit(editor) {
                     error!(error = %e, "failed to save history");
                 }
                 // Save persistent project list
                 if let Some(data_dir) = editor.mae_data_dir() {
-                    let _ = editor.project_list.save(&data_dir);
+                    crate::bootstrap::save_project_list_on_exit(editor, &data_dir);
                 }
             }
 

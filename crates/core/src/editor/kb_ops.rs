@@ -225,43 +225,22 @@ impl Editor {
         mae_kb::CozoKbStore::open_with_engine(path, &engine)
     }
 
-    /// Register an external org directory as a federated KB instance.
-    ///
-    /// Recursively imports all `.org` files, computes health metrics,
-    /// and reports results via the status bar.
-    pub fn kb_register(&mut self, name: &str, org_dir: &Path) -> Option<KbImportResult> {
-        if !org_dir.exists() {
-            self.set_status(format!(
-                "KB register error: path does not exist: {}",
-                org_dir.display()
-            ));
-            return None;
-        }
-        if !org_dir.is_dir() {
-            self.set_status(format!(
-                "KB register error: not a directory: {}",
-                org_dir.display()
-            ));
-            return None;
-        }
-
-        let Some(data_dir) = self.mae_data_dir() else {
-            self.set_status("KB register error: cannot determine data directory");
-            return None;
-        };
-        let _ = std::fs::create_dir_all(&data_dir);
-
-        let uuid = self.kb.registry.register(
-            name.to_string(),
-            org_dir.to_path_buf(),
-            &data_dir,
-            self.kb.data_dir.as_ref(),
-        );
-
-        // Import org files — try CozoDB-direct ingestion first.
-        let inst_ref = self.kb.registry.find(&uuid).cloned();
-        let (kb, report, health) = if let Some(inst) = inst_ref {
-            match self.kb_open_instance_store(&inst.db_path) {
+    /// Open the durable store for a registered org-dir KB instance, import
+    /// its org files, insert it into `self.kb.instances`, and start a file
+    /// watcher for live updates — the common "adopt this instance" tail
+    /// shared by `kb_register()` (an instance this process just registered)
+    /// and `drain_kb_registry_watch()` (an instance that appeared via
+    /// another `mae` process's registration). Returns the import report and
+    /// health so callers building a `KbImportResult` don't need to duplicate
+    /// the try-CozoDB-then-fall-back-to-in-memory logic.
+    fn kb_adopt_instance(
+        &mut self,
+        uuid: &str,
+        org_dir: &Path,
+        db_path: Option<&Path>,
+    ) -> (ImportReport, ImportHealth) {
+        let (kb, report, health) = if let Some(db_path) = db_path {
+            match self.kb_open_instance_store(db_path) {
                 Ok(store) => {
                     match mae_kb::federation::import_org_dir_to_store(
                         org_dir,
@@ -273,7 +252,7 @@ impl Editor {
                             // Retain the CozoDB store handle for runtime queries.
                             self.kb
                                 .instance_stores
-                                .insert(uuid.clone(), std::sync::Arc::new(store));
+                                .insert(uuid.to_string(), std::sync::Arc::new(store));
                             (kb, report, health)
                         }
                         Err(e) => {
@@ -307,7 +286,7 @@ impl Editor {
         };
 
         // Store the instance
-        self.kb.instances.insert(uuid.clone(), kb);
+        self.kb.instances.insert(uuid.to_string(), kb);
 
         // Start file watcher for live updates (if enabled)
         if self.kb.watcher_enabled {
@@ -319,7 +298,7 @@ impl Editor {
                             .iter()
                             .map(|(p, ids)| (p.clone(), ids.clone())),
                     );
-                    self.kb.watchers.insert(uuid.clone(), watcher);
+                    self.kb.watchers.insert(uuid.to_string(), watcher);
                 }
                 Err(e) => {
                     let msg = e.to_string();
@@ -335,19 +314,66 @@ impl Editor {
             }
         }
 
-        // Update last_import timestamp
-        if let Some(inst) = self
-            .kb
-            .registry
-            .instances
-            .iter_mut()
-            .find(|i| i.uuid == uuid)
-        {
-            inst.last_import = Some(chrono_now());
+        (report, health)
+    }
+
+    /// Register an external org directory as a federated KB instance.
+    ///
+    /// Recursively imports all `.org` files, computes health metrics,
+    /// and reports results via the status bar.
+    pub fn kb_register(&mut self, name: &str, org_dir: &Path) -> Option<KbImportResult> {
+        if !org_dir.exists() {
+            self.set_status(format!(
+                "KB register error: path does not exist: {}",
+                org_dir.display()
+            ));
+            return None;
+        }
+        if !org_dir.is_dir() {
+            self.set_status(format!(
+                "KB register error: not a directory: {}",
+                org_dir.display()
+            ));
+            return None;
         }
 
-        // Persist registry
-        let _ = self.kb.registry.save(&data_dir);
+        let Some(data_dir) = self.mae_data_dir() else {
+            self.set_status("KB register error: cannot determine data directory");
+            return None;
+        };
+        let _ = std::fs::create_dir_all(&data_dir);
+
+        let (registry, uuid, saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+            reg.register(
+                name.to_string(),
+                org_dir.to_path_buf(),
+                &data_dir,
+                self.kb.data_dir.as_ref(),
+            )
+        });
+        if let Err(e) = saved {
+            tracing::warn!(error = %e, "failed to persist KB registry");
+        }
+        self.kb.registry = registry;
+        self.kb.last_local_registry_write = Some(std::time::Instant::now());
+
+        // Import org files, open the durable store, start a watcher — shared
+        // with `drain_kb_registry_watch` (an instance appearing via another
+        // process's registration goes through the exact same adoption path).
+        let db_path = self.kb.registry.find(&uuid).map(|i| i.db_path.clone());
+        let (report, health) = self.kb_adopt_instance(&uuid, org_dir, db_path.as_deref());
+
+        // Update last_import timestamp and persist.
+        let (registry, (), saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+            if let Some(inst) = reg.instances.iter_mut().find(|i| i.uuid == uuid) {
+                inst.last_import = Some(chrono_now());
+            }
+        });
+        if let Err(e) = saved {
+            tracing::warn!(error = %e, "failed to persist KB registry");
+        }
+        self.kb.registry = registry;
+        self.kb.last_local_registry_write = Some(std::time::Instant::now());
 
         let result = KbImportResult {
             name: name.to_string(),
@@ -371,9 +397,18 @@ impl Editor {
                 self.kb.instances.remove(&uuid);
                 self.kb.instance_stores.remove(&uuid);
                 self.kb.watchers.remove(&uuid);
-                self.kb.registry.unregister(name_or_uuid);
                 if let Some(data_dir) = self.mae_data_dir() {
-                    let _ = self.kb.registry.save(&data_dir);
+                    let (registry, (), saved) =
+                        mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+                            reg.unregister(name_or_uuid)
+                        });
+                    if let Err(e) = saved {
+                        tracing::warn!(error = %e, "failed to persist KB registry");
+                    }
+                    self.kb.registry = registry;
+                    self.kb.last_local_registry_write = Some(std::time::Instant::now());
+                } else {
+                    self.kb.registry.unregister(name_or_uuid);
                 }
                 // Rebuild query layer without the removed instance.
                 self.kb.rebuild_query_layer();
@@ -446,18 +481,21 @@ impl Editor {
                     self.kb.instance_stores.insert(instance.uuid.clone(), store);
                 }
 
-                // Update timestamp
-                if let Some(reg_inst) = self
-                    .kb
-                    .registry
-                    .instances
-                    .iter_mut()
-                    .find(|i| i.uuid == instance.uuid)
-                {
-                    reg_inst.last_import = Some(chrono_now());
-                }
+                // Update timestamp and persist.
                 if let Some(data_dir) = self.mae_data_dir() {
-                    let _ = self.kb.registry.save(&data_dir);
+                    let (registry, (), saved) =
+                        mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+                            if let Some(reg_inst) =
+                                reg.instances.iter_mut().find(|i| i.uuid == instance.uuid)
+                            {
+                                reg_inst.last_import = Some(chrono_now());
+                            }
+                        });
+                    if let Err(e) = saved {
+                        tracing::warn!(error = %e, "failed to persist KB registry");
+                    }
+                    self.kb.registry = registry;
+                    self.kb.last_local_registry_write = Some(std::time::Instant::now());
                 }
 
                 // Rebuild the query layer so kb-find and other query-layer
@@ -825,36 +863,37 @@ impl Editor {
         }
 
         // Durable registry marker (idempotent).
-        let now = mae_kb::data_dir::chrono_now_iso();
-        match self.kb.registry.find_mut(&uuid) {
-            Some(inst) => {
-                inst.shared = true;
-                inst.collab_id = Some(kb_id.to_string());
-                inst.last_sync = Some(now);
-            }
-            None => {
-                self.kb
-                    .registry
-                    .instances
-                    .push(mae_kb::federation::KbInstance {
-                        uuid: uuid.clone(),
-                        name: kb_id.to_string(),
-                        org_dir: std::path::PathBuf::new(),
-                        db_path,
-                        primary: false,
-                        enabled: true,
-                        last_import: None,
-                        collab_id: Some(kb_id.to_string()),
-                        shared: true,
-                        remote_peers: Vec::new(),
-                        last_sync: Some(now),
-                    });
-            }
-        }
         if let Some(dir) = self.mae_data_dir() {
-            if let Err(e) = self.kb.registry.save(&dir) {
+            let (registry, (), saved) = mae_kb::federation::KbRegistry::update(&dir, |reg| {
+                let now = mae_kb::data_dir::chrono_now_iso();
+                match reg.find_mut(&uuid) {
+                    Some(inst) => {
+                        inst.shared = true;
+                        inst.collab_id = Some(kb_id.to_string());
+                        inst.last_sync = Some(now);
+                    }
+                    None => {
+                        reg.instances.push(mae_kb::federation::KbInstance {
+                            uuid: uuid.clone(),
+                            name: kb_id.to_string(),
+                            org_dir: std::path::PathBuf::new(),
+                            db_path,
+                            primary: false,
+                            enabled: true,
+                            last_import: None,
+                            collab_id: Some(kb_id.to_string()),
+                            shared: true,
+                            remote_peers: Vec::new(),
+                            last_sync: Some(now),
+                        });
+                    }
+                }
+            });
+            if let Err(e) = saved {
                 tracing::warn!(kb = %kb_id, error = %e, "failed to persist joined-KB registry marker");
             }
+            self.kb.registry = registry;
+            self.kb.last_local_registry_write = Some(std::time::Instant::now());
         }
         self.kb.rebuild_query_layer();
         tracing::debug!(target: "kb_sync", kb_id = %kb_id, uuid = %uuid, node_count = nodes.len(), merged = merged.len(), "join: registered first-class instance (reconciled)");
@@ -2184,6 +2223,71 @@ impl Editor {
         });
         self.kb.pending_preload = Some(rx);
         tracing::debug!("external KB store change — reloading mirror in background");
+    }
+
+    /// Cross-process freshness for `kb-registry.toml`: if another `mae`
+    /// process registered/unregistered a KB instance, pick it up here so
+    /// `kb-find`/`SPC n f` sees it without this process needing to run a
+    /// local KB operation first. Called on the idle tick, mirroring
+    /// `drain_kb_store_watch` above. Unlike that primary-store watcher, this
+    /// reloads synchronously — `kb-registry.toml` is a small TOML file, not
+    /// a full KB store, so no background thread is needed.
+    pub fn drain_kb_registry_watch(&mut self) {
+        // Always drain the events (so ignored own-writes don't accumulate).
+        let changed = match &self.kb.registry_watcher {
+            Some(w) => w.drain_changed(),
+            None => return,
+        };
+        if !changed {
+            return;
+        }
+        // Suppress reloads caused by our OWN recent writes (KbRegistry::update
+        // stamps this on every registry-mutating call in this process).
+        if let Some(t) = self.kb.last_local_registry_write {
+            if t.elapsed() < std::time::Duration::from_millis(1500) {
+                return;
+            }
+        }
+        let Some(data_dir) = self.mae_data_dir() else {
+            return;
+        };
+        let fresh = mae_kb::federation::KbRegistry::load(&data_dir);
+
+        let mut changed_any = false;
+        for inst in fresh.instances.clone() {
+            // Shared/joined instances (empty org_dir) are adopted via the
+            // collab join flow, not by importing an org directory — skip.
+            if inst.enabled
+                && !inst.org_dir.as_os_str().is_empty()
+                && !self.kb.instances.contains_key(&inst.uuid)
+            {
+                self.kb_adopt_instance(&inst.uuid, &inst.org_dir, Some(&inst.db_path));
+                changed_any = true;
+                tracing::info!(
+                    name = %inst.name, uuid = %inst.uuid,
+                    "picked up KB instance registered by another mae process"
+                );
+            }
+        }
+        let fresh_uuids: std::collections::HashSet<&str> =
+            fresh.instances.iter().map(|i| i.uuid.as_str()).collect();
+        let stale: Vec<String> = self
+            .kb
+            .instances
+            .keys()
+            .filter(|u| !fresh_uuids.contains(u.as_str()))
+            .cloned()
+            .collect();
+        for uuid in stale {
+            self.kb.instances.remove(&uuid);
+            self.kb.instance_stores.remove(&uuid);
+            self.kb.watchers.remove(&uuid);
+            changed_any = true;
+        }
+        self.kb.registry = fresh;
+        if changed_any {
+            self.kb.rebuild_query_layer();
+        }
     }
 
     /// Drain KB file watchers — apply changes from filesystem events.
@@ -4183,6 +4287,101 @@ mod tests {
             editor.drain_kb_store_watch();
             assert!(
                 editor.kb.pending_preload.is_none(),
+                "reload must be suppressed within the local-write cooldown"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(15));
+        }
+    }
+
+    #[test]
+    fn external_registry_change_adopts_new_instance() {
+        // Live-refresh (section D): another mae process registers a KB
+        // org-dir directly against the shared kb-registry.toml; this
+        // process's registry watcher must pick it up on a later idle tick
+        // without any local KB operation being run first.
+        let mut editor = Editor::new();
+        let data_dir = tempfile::tempdir().unwrap();
+        editor.data_dir_override = Some(data_dir.path().to_path_buf());
+
+        // Seed an empty registry file so StoreWatcher has something to watch
+        // (mirrors the real startup wiring in main.rs).
+        mae_kb::federation::KbRegistry::default()
+            .save(data_dir.path())
+            .unwrap();
+        editor.kb.registry_watcher = Some(
+            mae_kb::watch::StoreWatcher::new(data_dir.path().join("kb-registry.toml")).unwrap(),
+        );
+        assert!(
+            editor.kb.last_local_registry_write.is_none(),
+            "no cooldown active"
+        );
+
+        // "Another process" registers a KB directly against the same data dir
+        // — this editor's in-memory registry never saw it.
+        let org_dir = tempfile::tempdir().unwrap();
+        let (_, uuid, saved) = mae_kb::federation::KbRegistry::update(data_dir.path(), |reg| {
+            reg.register(
+                "External".to_string(),
+                org_dir.path().to_path_buf(),
+                data_dir.path(),
+                None,
+            )
+        });
+        saved.unwrap();
+
+        // Poll: the external change must get adopted (notify is async).
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut adopted = false;
+        while std::time::Instant::now() < deadline {
+            editor.drain_kb_registry_watch();
+            if editor.kb.instances.contains_key(&uuid) {
+                adopted = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        assert!(
+            adopted,
+            "external KB registration must be adopted via the registry watcher"
+        );
+        assert!(
+            editor.kb.registry.find(&uuid).is_some(),
+            "in-memory registry must also reflect the externally-registered instance"
+        );
+    }
+
+    #[test]
+    fn registry_watch_reload_suppressed_within_local_write_cooldown() {
+        // A reload must NOT fire when WE just wrote (cooldown) — otherwise a
+        // command that just registered/unregistered a KB would immediately
+        // re-adopt/re-scan against its own fresh write.
+        let mut editor = Editor::new();
+        let data_dir = tempfile::tempdir().unwrap();
+        editor.data_dir_override = Some(data_dir.path().to_path_buf());
+        mae_kb::federation::KbRegistry::default()
+            .save(data_dir.path())
+            .unwrap();
+        editor.kb.registry_watcher = Some(
+            mae_kb::watch::StoreWatcher::new(data_dir.path().join("kb-registry.toml")).unwrap(),
+        );
+        // Pretend WE just wrote.
+        editor.kb.last_local_registry_write = Some(std::time::Instant::now());
+
+        let org_dir = tempfile::tempdir().unwrap();
+        let (_, uuid, saved) = mae_kb::federation::KbRegistry::update(data_dir.path(), |reg| {
+            reg.register(
+                "External".to_string(),
+                org_dir.path().to_path_buf(),
+                data_dir.path(),
+                None,
+            )
+        });
+        saved.unwrap();
+
+        for _ in 0..20 {
+            editor.drain_kb_registry_watch();
+            assert!(
+                !editor.kb.instances.contains_key(&uuid),
                 "reload must be suppressed within the local-write cooldown"
             );
             std::thread::sleep(std::time::Duration::from_millis(15));

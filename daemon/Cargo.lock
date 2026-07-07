@@ -1774,6 +1774,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostname"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "617aaa3557aef3810a6369d0a99fac8a080891b68bd9f9812a1eeda0c0730cbd"
+dependencies = [
+ "cfg-if",
+ "libc",
+ "windows-link",
+]
+
+[[package]]
 name = "http"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2565,7 +2576,7 @@ checksum = "d3d25b0e0b648a86960ac23b7ad4abb9717601dec6f66c165f5b037f3f03065f"
 
 [[package]]
 name = "mae-daemon"
-version = "0.14.33"
+version = "0.14.34"
 dependencies = [
  "async-trait",
  "cozo",
@@ -2589,7 +2600,7 @@ dependencies = [
 
 [[package]]
 name = "mae-kb"
-version = "0.14.33"
+version = "0.14.34"
 dependencies = [
  "cozo",
  "hex",
@@ -2608,13 +2619,15 @@ dependencies = [
 
 [[package]]
 name = "mae-mcp"
-version = "0.14.33"
+version = "0.14.34"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
  "ed25519-dalek 2.2.0",
  "hex",
  "hmac 0.13.0",
+ "hostname",
+ "libc",
  "rand 0.10.1",
  "rcgen",
  "rustls",
@@ -2631,7 +2644,7 @@ dependencies = [
 
 [[package]]
 name = "mae-sync"
-version = "0.14.33"
+version = "0.14.34"
 dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",

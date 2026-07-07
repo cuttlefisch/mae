@@ -92,11 +92,12 @@ impl Editor {
         if path.is_dir() {
             self.recent_projects.push(path.clone());
             let proj = crate::project::Project::from_root(path.clone());
-            self.project_list.touch(path.clone(), proj.name.clone());
+            self.update_project_list(|pl| {
+                pl.touch(path.clone(), proj.name.clone());
+            });
             self.project = Some(proj);
             self.refresh_git_branch();
             self.lsp.pending_root_change = Some(format!("file://{}", path.display()));
-            self.save_project_list();
             self.set_status(format!("Added & switched to project: {}", path.display()));
         } else {
             self.set_status(format!("Not a directory: {}", path_str));
@@ -108,9 +109,8 @@ impl Editor {
         let path = std::path::PathBuf::from(crate::file_picker::expand_tilde(path_str));
         let before = self.recent_projects.len();
         self.recent_projects.remove(&path);
-        self.project_list.remove(&path);
         if self.recent_projects.len() < before {
-            self.save_project_list();
+            self.update_project_list(|pl| pl.remove(&path));
             self.set_status(format!("Removed project: {}", path.display()));
         } else {
             self.set_status(format!("Project not found: {}", path_str));
@@ -125,8 +125,10 @@ impl Editor {
             .iter()
             .map(|e| e.root.display().to_string())
             .collect();
-        self.project_list.prune_subprojects();
-        self.project_list.prune_missing();
+        self.update_project_list(|pl| {
+            pl.prune_subprojects();
+            pl.prune_missing();
+        });
         let after: std::collections::HashSet<String> = self
             .project_list
             .projects
@@ -141,7 +143,6 @@ impl Editor {
         // Sync back to in-memory recent_projects
         self.recent_projects = crate::project::RecentProjects::default();
         self.project_list.sync_to_recent(&mut self.recent_projects);
-        self.save_project_list();
         if removed.is_empty() {
             self.set_status(format!(
                 "Project list clean: {} projects, nothing removed",
@@ -173,11 +174,21 @@ impl Editor {
         self.set_mode(Mode::CommandPalette);
     }
 
-    /// Best-effort save of `projects.toml` to XDG data dir.
-    fn save_project_list(&self) {
-        if let Some(data_dir) = self.mae_data_dir() {
-            let _ = self.project_list.save(&data_dir);
+    /// Apply `mutate` to the freshest on-disk `projects.toml` and persist it
+    /// (see `ProjectList::update`), replacing `self.project_list` with the
+    /// merged result so concurrent additions from other `mae` processes
+    /// aren't lost. Best-effort: a save failure is logged, not fatal — the
+    /// in-memory mutation still applies.
+    fn update_project_list(&mut self, mutate: impl FnOnce(&mut crate::project::ProjectList)) {
+        let Some(data_dir) = self.mae_data_dir() else {
+            mutate(&mut self.project_list);
+            return;
+        };
+        let (project_list, (), saved) = crate::project::ProjectList::update(&data_dir, mutate);
+        if let Err(e) = saved {
+            tracing::warn!(error = %e, "failed to persist project list");
         }
+        self.project_list = project_list;
     }
 
     /// `recent-files` — palette with all recent files.

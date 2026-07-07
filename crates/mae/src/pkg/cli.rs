@@ -236,6 +236,7 @@ fn cmd_sync() -> i32 {
     let pkg_dir = packages_dir();
     let lockfile_path = Lockfile::default_path();
     let mut lockfile = Lockfile::load(&lockfile_path);
+    let mut touched_pins: Vec<String> = Vec::new();
     let mut synced = 0;
     let mut errors = 0;
 
@@ -297,6 +298,7 @@ fn cmd_sync() -> i32 {
                 }
             }
             lockfile.pin(&pkg.name, source_spec, "local", "");
+            touched_pins.push(pkg.name.clone());
             synced += 1;
         } else if !target.exists() {
             // Clone
@@ -327,6 +329,7 @@ fn cmd_sync() -> i32 {
                         String::new()
                     };
                     lockfile.pin(&pkg.name, source_spec, &sha, &integrity);
+                    touched_pins.push(pkg.name.clone());
                     synced += 1;
                 }
                 Err(e) => {
@@ -357,6 +360,7 @@ fn cmd_sync() -> i32 {
                         String::new()
                     };
                     lockfile.pin(&pkg.name, source_spec, &sha, &integrity);
+                    touched_pins.push(pkg.name.clone());
                     synced += 1;
                 }
                 Err(e) => {
@@ -369,8 +373,18 @@ fn cmd_sync() -> i32 {
     // Also run doctor validation
     let all_modules = discover_all_modules();
 
-    // Write lockfile
-    if let Err(e) = lockfile.save(&lockfile_path) {
+    // Persist this run's pins against the freshest on-disk lockfile (rather
+    // than blindly overwriting it with our load-time snapshot) — a
+    // concurrent `mae sync`/`upgrade`/`purge` in another terminal shouldn't
+    // have its pins clobbered.
+    let (_, (), saved) = Lockfile::update(&lockfile_path, |fresh| {
+        for name in &touched_pins {
+            if let Some(pin) = lockfile.get(name) {
+                fresh.packages.insert(name.clone(), pin.clone());
+            }
+        }
+    });
+    if let Err(e) = saved {
         eprintln!("Failed to write lockfile: {}", e);
         errors += 1;
     }
@@ -398,6 +412,7 @@ pub(crate) fn cmd_upgrade() -> i32 {
     let pkg_dir = packages_dir();
     let lockfile_path = Lockfile::default_path();
     let mut lockfile = Lockfile::load(&lockfile_path);
+    let mut touched_pins: Vec<String> = Vec::new();
     let mut updated = 0;
 
     for pkg in &packages {
@@ -443,6 +458,7 @@ pub(crate) fn cmd_upgrade() -> i32 {
                         String::new()
                     };
                     lockfile.pin(&pkg.name, source_spec, &new_sha, &integrity);
+                    touched_pins.push(pkg.name.clone());
                     updated += 1;
                 } else {
                     println!(" already up to date");
@@ -452,7 +468,14 @@ pub(crate) fn cmd_upgrade() -> i32 {
         }
     }
 
-    if let Err(e) = lockfile.save(&lockfile_path) {
+    let (_, (), saved) = Lockfile::update(&lockfile_path, |fresh| {
+        for name in &touched_pins {
+            if let Some(pin) = lockfile.get(name) {
+                fresh.packages.insert(name.clone(), pin.clone());
+            }
+        }
+    });
+    if let Err(e) = saved {
         eprintln!("Failed to write lockfile: {}", e);
     }
 
@@ -469,11 +492,11 @@ fn cmd_purge() -> i32 {
     let packages = parse_declared_packages();
     let pkg_dir = packages_dir();
     let lockfile_path = Lockfile::default_path();
-    let mut lockfile = Lockfile::load(&lockfile_path);
 
     let declared_names: std::collections::HashSet<&str> =
         packages.iter().map(|p| p.name.as_str()).collect();
 
+    let mut touched_unpins: Vec<String> = Vec::new();
     let mut removed = 0;
 
     if pkg_dir.exists() {
@@ -488,7 +511,7 @@ fn cmd_purge() -> i32 {
                     match std::fs::remove_dir_all(entry.path()) {
                         Ok(()) => {
                             println!(" done");
-                            lockfile.unpin(&name);
+                            touched_unpins.push(name);
                             removed += 1;
                         }
                         Err(e) => eprintln!(" failed: {}", e),
@@ -498,7 +521,15 @@ fn cmd_purge() -> i32 {
         }
     }
 
-    if let Err(e) = lockfile.save(&lockfile_path) {
+    // Persist against the freshest on-disk lockfile — a concurrent `mae
+    // sync`/`upgrade`/`purge` in another terminal shouldn't have its pins
+    // clobbered by this run's unpins.
+    let (_, (), saved) = Lockfile::update(&lockfile_path, |fresh| {
+        for name in &touched_unpins {
+            fresh.unpin(name);
+        }
+    });
+    if let Err(e) = saved {
         eprintln!("Failed to write lockfile: {}", e);
     }
 

@@ -449,6 +449,10 @@ impl super::Editor {
         // 6. Cross-instance freshness (Phase 4): if another process changed the shared
         //    store, kick a background mirror reload.
         self.drain_kb_store_watch();
+
+        // 7. Cross-process freshness for kb-registry.toml: pick up a KB
+        //    registered/unregistered by another mae process.
+        self.drain_kb_registry_watch();
     }
 
     /// Switch focus to whichever window contains the given cell coordinates.

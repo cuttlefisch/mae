@@ -185,6 +185,10 @@ impl RecentProjects {
     pub fn len(&self) -> usize {
         self.roots.len()
     }
+
+    pub fn cap(&self) -> usize {
+        self.cap
+    }
 }
 
 /// Bounded list of recently opened files.
@@ -234,6 +238,10 @@ impl RecentFiles {
         self.files.len()
     }
 
+    pub fn cap(&self) -> usize {
+        self.cap
+    }
+
     /// Filter recent files to those within a given directory.
     pub fn filter_by_dir(&self, dir: &Path) -> Vec<&PathBuf> {
         self.files.iter().filter(|p| p.starts_with(dir)).collect()
@@ -275,6 +283,27 @@ impl ProjectList {
         let _ = std::fs::create_dir_all(data_dir);
         let content = toml::to_string_pretty(self).map_err(io::Error::other)?;
         std::fs::write(&path, content)
+    }
+
+    /// Reload-fresh -> mutate -> save, under a cross-process advisory lock.
+    /// Same rationale as `KbRegistry::update` (`shared/kb/src/federation.rs`):
+    /// users routinely run multiple `mae` processes concurrently (one per
+    /// project directory), and a process holding a stale in-memory
+    /// `ProjectList` would silently clobber another process's concurrent
+    /// `add-project`/`remove-project`/prune on save. Returns the merged list
+    /// and whatever `mutate` returned; callers should replace their
+    /// long-lived in-memory list with the returned value.
+    pub fn update<R>(
+        data_dir: &Path,
+        mutate: impl FnOnce(&mut Self) -> R,
+    ) -> (Self, R, io::Result<()>) {
+        let path = data_dir.join("projects.toml");
+        mae_kb::file_lock::with_locked_update(
+            &path,
+            || Self::load(data_dir),
+            mutate,
+            |pl| pl.save(data_dir),
+        )
     }
 
     /// Upsert: add or update timestamp.  Returns `true` if this is a new entry.
@@ -673,6 +702,42 @@ link = "FOO.org"
         assert_eq!(loaded.projects.len(), 2);
         assert_eq!(loaded.projects[0].name, "Alpha");
         assert_eq!(loaded.projects[1].name, "Beta");
+    }
+
+    /// Regression test mirroring `mae_kb::federation`'s
+    /// `concurrent_update_preserves_both_writers_instances`: two long-lived
+    /// `mae` processes, each holding its own stale in-memory `ProjectList`,
+    /// must not clobber each other's `add-project` on save.
+    #[test]
+    fn concurrent_update_preserves_both_writers_projects() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data_dir = tmp.path();
+
+        // Both "processes" load a snapshot before either one writes anything.
+        let _stale_a = ProjectList::load(data_dir);
+        let _stale_b = ProjectList::load(data_dir);
+
+        let (_, (), saved_a) = ProjectList::update(data_dir, |pl| {
+            pl.touch(PathBuf::from("/proj/alpha"), "Alpha".into());
+        });
+        saved_a.unwrap();
+
+        // "Process B" — its own in-memory copy never saw A's write, but
+        // update() reloads fresh internally, so A's project must survive.
+        let (final_list, (), saved_b) = ProjectList::update(data_dir, |pl| {
+            pl.touch(PathBuf::from("/proj/beta"), "Beta".into());
+        });
+        saved_b.unwrap();
+
+        assert!(final_list.projects.iter().any(|e| e.name == "Alpha"));
+        assert!(final_list.projects.iter().any(|e| e.name == "Beta"));
+
+        let reloaded = ProjectList::load(data_dir);
+        assert_eq!(
+            reloaded.projects.len(),
+            2,
+            "on-disk file must contain BOTH projects, not just Beta"
+        );
     }
 
     #[test]
