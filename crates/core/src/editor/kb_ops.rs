@@ -370,9 +370,18 @@ impl Editor {
             Some(instance) => {
                 let mode = mode.unwrap_or_default();
 
-                // Try CozoDB-direct ingestion for the instance's DB.
-                let (kb, report, health) = match mae_kb::CozoKbStore::open(&instance.db_path) {
-                    Ok(store) => {
+                // Reuse the already-open store handle if this instance's store
+                // was opened at startup (or a prior register/reimport) — sled is
+                // single-writer with an exclusive dir lock, so opening a second
+                // handle to the same store from within this same process fails
+                // and silently falls back to a non-persistent in-memory import.
+                let existing_store = self.kb.instance_stores.get(&instance.uuid).cloned();
+                let (kb, report, health, store_for_layer) = match existing_store.or_else(|| {
+                    mae_kb::CozoKbStore::open(&instance.db_path)
+                        .ok()
+                        .map(std::sync::Arc::new)
+                }) {
+                    Some(store) => {
                         match mae_kb::federation::import_org_dir_to_store(
                             &instance.org_dir,
                             &store,
@@ -380,24 +389,31 @@ impl Editor {
                         ) {
                             Ok((kb, report)) => {
                                 let health = mae_kb::ImportHealth::from_kb(&kb);
-                                (kb, report, health)
+                                (kb, report, health, Some(store))
                             }
                             Err(e) => {
                                 tracing::warn!(
                                     error = %e,
                                     "CozoDB ingestion failed, falling back to in-memory import"
                                 );
-                                mae_kb::federation::import_org_dir(&instance.org_dir)
+                                let (kb, report, health) =
+                                    mae_kb::federation::import_org_dir(&instance.org_dir);
+                                (kb, report, health, None)
                             }
                         }
                     }
-                    Err(_) => {
+                    None => {
                         // No CozoDB store for this instance — use in-memory import.
-                        mae_kb::federation::import_org_dir(&instance.org_dir)
+                        let (kb, report, health) =
+                            mae_kb::federation::import_org_dir(&instance.org_dir);
+                        (kb, report, health, None)
                     }
                 };
 
                 self.kb.instances.insert(instance.uuid.clone(), kb);
+                if let Some(store) = store_for_layer {
+                    self.kb.instance_stores.insert(instance.uuid.clone(), store);
+                }
 
                 // Update timestamp
                 if let Some(reg_inst) = self
@@ -412,6 +428,13 @@ impl Editor {
                 if let Some(data_dir) = self.mae_data_dir() {
                     let _ = self.kb.registry.save(&data_dir);
                 }
+
+                // Rebuild the query layer so kb-find and other query-layer
+                // consumers see the reimported nodes immediately (matches
+                // kb_register/kb_unregister — previously missing here, so
+                // reimports were invisible to kb-find whenever a query layer
+                // was active).
+                self.kb.rebuild_query_layer();
 
                 let result = KbImportResult {
                     name: instance.name.clone(),
@@ -3460,6 +3483,49 @@ mod tests {
             result2.report.nodes_imported, result2.report.nodes_updated
         );
         assert!(editor.kb.instances[&uuid].get("test-note-3").is_some());
+    }
+
+    #[test]
+    fn kb_reimport_refreshes_query_layer() {
+        // Regression: kb_reimport used to update `self.kb.instances` but never
+        // call `rebuild_query_layer()` (unlike kb_register/kb_unregister), so
+        // kb-find — which reads through the query layer whenever one is active
+        // (e.g. once a primary CozoDB store is open) — never saw reimported
+        // nodes from federated instances until the process restarted.
+        let mut editor = Editor::new();
+        let primary = mae_kb::CozoKbStore::open_mem().unwrap();
+        primary.seed_type_system().unwrap();
+        let primary = std::sync::Arc::new(primary);
+        editor.kb.primary_cozo = Some(primary.clone());
+        editor.kb.store = Some(primary);
+        editor.kb.rebuild_query_layer();
+        assert!(
+            editor.kb.query_layer().is_some(),
+            "query layer must be active"
+        );
+
+        let dir = create_test_org_dir();
+        let _test_dirs = with_test_dirs(&mut editor);
+        editor.kb_register("TestNotes", dir.path()).unwrap();
+
+        // New file added after registration, picked up by reimport.
+        std::fs::write(
+            dir.path().join("note3.org"),
+            ":PROPERTIES:\n:ID: test-note-3\n:END:\n#+title: Note Three\n\nNew note.\n",
+        )
+        .unwrap();
+        editor.kb_reimport("TestNotes", None).unwrap();
+
+        let triples = editor
+            .kb
+            .query_layer()
+            .unwrap()
+            .id_title_body_triples(None, 500);
+        assert!(
+            triples.iter().any(|(id, _, _)| id == "test-note-3"),
+            "reimported node must be visible through the query layer (kb-find's read path), got: {:?}",
+            triples.iter().map(|(id, _, _)| id).collect::<Vec<_>>()
+        );
     }
 
     #[test]
