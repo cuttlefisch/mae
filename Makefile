@@ -85,8 +85,7 @@ install: build manual-kb
 	@echo "Installed manual KB -> $(DATADIR)/mae/mae-manual.cozo"
 	@mkdir -p $(DATADIR)/applications
 	@sed 's|Exec=mae|Exec=$(PREFIX)/$(BINARY)|' $(DESKTOP_FILE) > $(DATADIR)/applications/mae.desktop
-	@sed 's|Exec=mae |Exec=$(PREFIX)/$(BINARY) |' assets/mae-connect.desktop > $(DATADIR)/applications/mae-connect.desktop
-	@echo "Installed desktop entries -> $(DATADIR)/applications/mae*.desktop"
+	@echo "Installed desktop entry -> $(DATADIR)/applications/mae.desktop"
 	@mkdir -p $(DATADIR)/icons/hicolor/scalable/apps
 	@install -m 644 $(ICON_FILE) $(DATADIR)/icons/hicolor/scalable/apps/mae.svg
 	@echo "Installed icon -> $(DATADIR)/icons/hicolor/scalable/apps/mae.svg"
@@ -178,12 +177,11 @@ uninstall:
 	@rm -f $(PREFIX)/$(SHIM_BINARY)
 	@rm -f $(PREFIX)/mae-daemon
 	@rm -f $(DATADIR)/applications/mae.desktop
-	@rm -f $(DATADIR)/applications/mae-connect.desktop
 	@rm -f $(DATADIR)/icons/hicolor/scalable/apps/mae.svg
 	@echo "Removed $(PREFIX)/$(BINARY)"
 	@echo "Removed $(PREFIX)/$(SHIM_BINARY)"
 	@echo "Removed $(PREFIX)/mae-daemon"
-	@echo "Removed $(DATADIR)/applications/mae*.desktop"
+	@echo "Removed $(DATADIR)/applications/mae.desktop"
 	@echo "Removed $(DATADIR)/icons/hicolor/scalable/apps/mae.svg"
 	@rm -rf $(DATADIR)/mae/modules
 	@echo "Removed $(DATADIR)/mae/modules/"

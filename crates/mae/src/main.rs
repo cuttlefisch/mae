@@ -124,15 +124,14 @@ fn parse_truthy(v: &str) -> bool {
     )
 }
 
-/// Apply **per-launch** collaboration overrides (env vars, then CLI `--connect`)
-/// AFTER the config files (config.toml + init.scm) have been applied, so they
-/// take precedence per the standard chain: defaults < config files < env < CLI.
+/// Apply **per-launch** collaboration overrides (env vars) AFTER the config
+/// files (config.toml + init.scm) have been applied, so they take precedence
+/// per the standard chain: defaults < config files < env.
 ///
-/// Before this, `init.scm` (loaded last) could override `--connect` and the env
-/// vars were either ignored entirely (GUI/TUI path never read
-/// `MAE_COLLAB_AUTO_CONNECT`) or beaten by a later `(set-option! …)` in
-/// `init.scm`. Env: `MAE_COLLAB_SERVER` (address), `MAE_COLLAB_AUTO_CONNECT`
-/// (parsed truthy/falsy). CLI `--connect` wins last.
+/// Before this, `init.scm` (loaded last) could beat the env vars, which were
+/// either ignored entirely (GUI/TUI path never read `MAE_COLLAB_AUTO_CONNECT`)
+/// or beaten by a later `(set-option! …)` in `init.scm`. Env: `MAE_COLLAB_SERVER`
+/// (address), `MAE_COLLAB_AUTO_CONNECT` (parsed truthy/falsy).
 /// ADR-020 B-16 / ADR-023: derive this peer's STABLE yrs `client_id` (and remember its
 /// principal fingerprint) from the durable collab identity, so KB node edits + the
 /// share lineage author under `derive_kb_client_id(fp, epoch)` — the SAME id the daemon's
@@ -161,7 +160,7 @@ fn init_collab_kb_client_id(editor: &mut Editor) {
     }
 }
 
-fn apply_collab_launch_overrides(editor: &mut Editor, connect_addr: Option<&str>) {
+fn apply_collab_launch_overrides(editor: &mut Editor) {
     if let Ok(addr) = std::env::var("MAE_COLLAB_SERVER") {
         if !addr.trim().is_empty() {
             let _ = editor.set_option("collab_server_address", addr.trim());
@@ -173,11 +172,6 @@ fn apply_collab_launch_overrides(editor: &mut Editor, connect_addr: Option<&str>
             auto_connect = v,
             "env MAE_COLLAB_AUTO_CONNECT override applied"
         );
-    }
-    if let Some(addr) = connect_addr {
-        let _ = editor.set_option("collab_server_address", addr);
-        let _ = editor.set_option("collab_auto_connect", "true");
-        info!(address = %addr, "CLI --connect: auto-connect enabled");
     }
 }
 
@@ -395,7 +389,6 @@ fn main() -> io::Result<()> {
         println!("                          Queue a P2P join from a mae://join/… ticket (the dialer pulls the KB)");
         println!("  --gui                   Force GUI backend (default on a desktop session; auto-off over SSH/tty)");
         println!("  --no-gui, --tui, -nw    Force terminal mode (like emacs -nw)");
-        println!("  --connect [ADDR]        Connect to daemon (like emacsclient -c)");
         println!("  --debug                 Enable debug mode (RSS/CPU/frame time in status bar)");
         println!("  --setup-agents [DIR]    Write .mcp.json & agent settings for discovery");
         println!("  --check-config          Validate init.scm + config.toml and exit (for CI)");
@@ -831,8 +824,7 @@ fn main() -> io::Result<()> {
 
         // Per-launch collab overrides (env vars) win over init.scm — applied AFTER
         // it, with value parsing (so MAE_COLLAB_AUTO_CONNECT=false disables).
-        // `--test` has no `--connect`. See apply_collab_launch_overrides.
-        apply_collab_launch_overrides(&mut editor, None);
+        apply_collab_launch_overrides(&mut editor);
 
         // #166: derive the KB CRDT client_id from the collab identity here too (the
         // interactive path does this) so scenario node edits author under the daemon's
@@ -915,28 +907,12 @@ fn main() -> io::Result<()> {
     // --clean / -q: skip user config, init.scm, history, and project detection (like emacs -q)
     let clean_mode = args.iter().any(|a| a == "--clean" || a == "-q");
 
-    // --connect [ADDR]: connect to collab server on startup (emacsclient -c equivalent)
-    let connect_addr: Option<String> = {
-        let pos = args.iter().position(|a| a == "--connect");
-        if let Some(i) = pos {
-            let addr = args
-                .get(i + 1)
-                .filter(|a| !a.starts_with('-'))
-                .cloned()
-                .unwrap_or_else(|| mae_core::DEFAULT_COLLAB_ADDRESS.to_string());
-            Some(addr)
-        } else {
-            None
-        }
-    };
-
-    // Find the first positional argument (not a flag), skipping --connect's address arg.
-    let connect_pos = args.iter().position(|a| a == "--connect");
+    // Find the first positional argument (not a flag).
     let file_arg = args
         .iter()
         .enumerate()
         .skip(1)
-        .find(|(i, a)| !a.starts_with('-') && connect_pos.is_none_or(|ci| *i != ci + 1))
+        .find(|(_, a)| !a.starts_with('-'))
         .map(|(_, a)| a.as_str());
 
     debug!("creating editor instance");
@@ -1099,11 +1075,10 @@ fn main() -> io::Result<()> {
     // and stable across restarts (so a peer's edits chain on one lineage).
     init_collab_kb_client_id(&mut editor);
 
-    // NB: per-launch collab overrides (env + CLI `--connect`) are applied AFTER
-    // init.scm loads (below), so they win over config files — see
-    // `apply_collab_launch_overrides`. (They used to be set here, before init.scm,
-    // which let a `(set-option! "collab_auto_connect" …)` in init.scm clobber the
-    // CLI flag and ignore the env var.)
+    // NB: per-launch collab overrides (env) are applied AFTER init.scm loads
+    // (below), so they win over config files — see `apply_collab_launch_overrides`.
+    // (They used to be set here, before init.scm, which let a
+    // `(set-option! "collab_auto_connect" …)` in init.scm clobber the env var.)
 
     // Apply daemon settings from config → OptionRegistry.
     if let Some(enabled) = app_config.daemon.enabled {
@@ -1155,8 +1130,8 @@ fn main() -> io::Result<()> {
     }
 
     // Per-launch overrides win over config files (config.toml + init.scm):
-    // defaults < config files < env < CLI. Must run AFTER init.scm.
-    apply_collab_launch_overrides(&mut editor, connect_addr.as_deref());
+    // defaults < config files < env. Must run AFTER init.scm.
+    apply_collab_launch_overrides(&mut editor);
 
     // Load KB federation registry and import enabled instances.
     if !clean_mode {

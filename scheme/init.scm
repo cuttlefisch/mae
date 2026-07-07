@@ -117,16 +117,51 @@
 ;; (set-option! "ai-tier" "ReadOnly")
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-;; 6. Collaborative Editing
+;; 6. Daemon (KB persistence & hosting)
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-;; Connect to a collaborative daemon for multi-user editing.
+;; ADR-035: the embedded, in-process KB store is the FLOOR — daemon_mode
+;; "off" (the default) needs no daemon at all. The daemon (mae-daemon) is
+;; opt-in and only worth it for a specific value: SHARED across multiple
+;; frontends, OUTLIVES this editor session, COORDINATES peers, or adds
+;; DURABILITY beyond the local store. This is a *separate* axis from
+;; §7 Collaborative Editing below — that governs live buffer sync (yrs
+;; CRDT) over the daemon's TCP port; this governs whether KB reads/writes
+;; (kb-find, kb-search, notes) route through the daemon's Unix socket at
+;; all. Run `:eval (daemon-status)` any time to see what's active and why.
+;;
+;; off        — in-process embedded KB only, no daemon (default)
+;; on-demand  — attach to a running daemon, or auto-spawn a co-located
+;;              one — persistence/collab without extra ceremony
+;; shared     — attach to an existing OS-supervised/remote daemon only,
+;;              never auto-spawn — for multi-session/multi-machine setups
+;; (set-option! "daemon-mode" "off")
+
+;; Unix socket path for daemon communication.
+;; Empty = auto ($XDG_RUNTIME_DIR/mae-daemon.sock, matching the daemon's
+;; default bind path). Only needed for a non-default daemon location.
+;; (set-option! "daemon-socket" "")
+
+;; Max nodes cached in the daemon-backed LRU query layer (0 = unbounded).
+;; (set-option! "daemon-cache-size" "200")
+
+;; EXPERIMENTAL (ADR-029): when a local daemon hosts the primary KB, host
+;; + thin-start it there (CRDT source of truth) instead of the editor's
+;; on-disk store. Known gaps: agenda + ranked KB search aren't yet
+;; daemon-routed and read empty under a thin mirror.
+;; (set-option! "daemon-default" "false")
+
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; 7. Collaborative Editing
+;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+;; Connect to a collaborative daemon for multi-user buffer sync (yrs
+;; CRDT) — independent of §6 above; requires a reachable mae-daemon.
 ;; See :help concept:collab-architecture for details.
 ;; (set-option! "collab-server-address" "127.0.0.1:9473")
 ;; (set-option! "collab-auto-connect" "true")
 ;; (set-option! "collab-user-name" "alice")
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-;; 7. Shell
+;; 8. Shell
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;; The embedded shell (SPC o s) runs your $SHELL inside the editor.
 ;; Exit shell-insert mode with the configured exit sequence (default:
@@ -138,7 +173,7 @@
 ;;   (shell-read-output BUF-IDX)    — read recent shell output
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-;; 8. Hooks
+;; 9. Hooks
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ;; Available hooks:
 ;;   before-save, after-save, buffer-open, buffer-close,
@@ -161,7 +196,7 @@
 ;; (add-hook! "mode-change" "on-mode-change")
 
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-;; 9. Custom commands
+;; 10. Custom commands
 ;; ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ;; Insert a timestamp at the cursor.

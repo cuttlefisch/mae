@@ -598,15 +598,16 @@ systemctl --user enable --now mae-daemon\n\
 journalctl --user -u mae-daemon -f  # view logs\n\
 ```\n\n\
 ### Client-Frame Workflow\n\n\
-Use `mae --connect` to open a frame that auto-connects to the server \
-(like `emacsclient -c`):\n\
-```bash\n\
-mae --connect              # connects to 127.0.0.1:9473\n\
-mae --connect 10.0.0.5:9473  # connects to a remote server\n\
-```\n\n\
-Add a sway/i3 keybind for instant connected frames:\n\
+Connect a running editor with `:collab-connect` (`SPC C c`), after setting \
+`collab-server-address`:\n\
 ```\n\
-bindsym $mod+Shift+e exec mae --connect\n\
+:set collab-server-address 10.0.0.5:9473\n\
+:collab-connect\n\
+```\n\n\
+To auto-connect on every launch, set it in `init.scm` instead:\n\
+```scheme\n\
+(set-option! \"collab-server-address\" \"10.0.0.5:9473\")\n\
+(set-option! \"collab-auto-connect\" \"true\")\n\
 ```\n\n\
 ### Network & Firewall\n\n\
 For multi-machine collaboration, bind to all interfaces:\n\

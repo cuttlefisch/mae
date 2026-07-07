@@ -164,10 +164,10 @@ the `:kb-share <name>` command, or the `(kb-share "team-notes")` Scheme primitiv
 | `MAE_COLLAB_AUTO_CONNECT` | `collab-auto-connect` — read by **value**: `1/true/yes/on` enable, `0/false/no/off`/empty disable |
 
 **Precedence:** defaults < config files (`config.toml`, then `init.scm`) < environment
-variables < CLI flags (`--connect`). Per-launch overrides (env + CLI) are applied *after*
-`init.scm`, so e.g. `MAE_COLLAB_AUTO_CONNECT=false ./mae` starts offline even if your
-`init.scm` calls `(set-option! "collab-auto-connect" "true")`. (Note: the env var is read by
-value — `=false` disables — not by mere presence.)
+variables. Per-launch env overrides are applied *after* `init.scm`, so e.g.
+`MAE_COLLAB_AUTO_CONNECT=false ./mae` starts offline even if your `init.scm` calls
+`(set-option! "collab-auto-connect" "true")`. (Note: the env var is read by value —
+`=false` disables — not by mere presence.)
 
 ---
 
@@ -258,22 +258,20 @@ cargo install --path daemon
 
 ### Client-Frame Workflow
 
-Once the service is running, use `mae --connect` to open a new editor frame
-that auto-connects to the daemon — similar to `emacsclient -c`:
-
-```bash
-mae --connect                    # GUI, auto-connects to 127.0.0.1:9473
-mae --connect 10.0.0.5:9473     # GUI, connects to remote server
-mae --connect -nw                # terminal mode + auto-connect
-```
-
-Desktop launcher: `mae-connect.desktop` is installed by `make install`. It
-shows up as "MAE (Connected)" in application launchers.
-
-Add a sway/i3 keybind for instant connected frames:
+Once the service is running, connect a running editor to it with the
+`:collab-connect` command (`SPC C c`) — reads `collab-server-address`, so set
+that first (or export `MAE_COLLAB_SERVER`):
 
 ```
-bindsym $mod+Shift+e exec mae --connect
+:set collab-server-address 10.0.0.5:9473
+:collab-connect
+```
+
+To auto-connect on every launch, set it in `init.scm` instead:
+
+```scheme
+(set-option! "collab-server-address" "10.0.0.5:9473")
+(set-option! "collab-auto-connect" "true")
 ```
 
 ---

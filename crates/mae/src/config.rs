@@ -409,6 +409,12 @@ fn default_init_template() -> &'static str {
 ;; ── AI ──────────────────────────────────────────────────
 ;; (set-option! "ai-provider" "claude")
 
+;; ── Daemon (KB persistence & hosting, ADR-035) ───────────
+;; off (default) = in-process embedded KB only, no daemon needed.
+;; on-demand = attach to / auto-spawn a daemon. shared = attach to an
+;; existing daemon only, never spawn. Try `:eval (daemon-status)`.
+;; (set-option! "daemon-mode" "off")
+
 ;; ── Keybindings ─────────────────────────────────────────
 ;; (define-key "normal" "SPC t t" "cycle-theme")
 
@@ -897,8 +903,8 @@ pub fn run_wizard() -> io::Result<()> {
     let daemon_enabled = !matches!(enable_daemon.to_lowercase().as_str(), "n" | "no");
     if daemon_enabled {
         cfg.daemon.enabled = Some(true);
-        init_options.push(("daemon_enabled".into(), "true".into()));
-        writeln!(out, "    Daemon enabled.")?;
+        init_options.push(("daemon_mode".into(), "on-demand".into()));
+        writeln!(out, "    Daemon enabled (daemon_mode = on-demand).")?;
         let svc = detect_platform_service_manager();
         match svc {
             ServiceManager::Homebrew => {
