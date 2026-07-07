@@ -15,7 +15,8 @@
 #   make build-tui    — terminal-only build (no skia dependency)
 #   make test-tui     — run tests without GUI (no skia dependency)
 #   make install-tui  — terminal-only install
-#   make setup-hooks  — configure git to use .githooks/ (pre-commit fmt check)
+#   make setup-hooks  — configure git to use .githooks/ (pre-commit fmt+clippy check)
+#   make setup-dev    — install dev deps (rustfmt/clippy/lldb/rust-analyzer/…) + hooks
 #
 # Configuration (override on the command line or in the environment):
 #
@@ -295,9 +296,10 @@ setup-hooks:
 	git config core.hooksPath .githooks
 	@echo "Git hooks configured to use .githooks/"
 
-## setup-dev: install development dependencies for full self-test coverage
+## setup-dev: install dev dependencies (rustfmt/clippy + DAP/LSP tools) + git hooks
 setup-dev:
 	@scripts/setup-dev.sh
+	@$(MAKE) setup-hooks
 
 ## check-config: validate init.scm + config.toml without launching the editor
 check-config: build-tui
