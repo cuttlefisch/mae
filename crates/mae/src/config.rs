@@ -651,24 +651,62 @@ pub fn resolve_permission_policy(config: &Config) -> PermissionPolicy {
 
 /// Update a single editor preference in the config file (load → modify → save).
 /// Silently logs on failure — preference persistence is best-effort.
+///
+/// Goes through the reload-fresh-then-mutate-then-save helper (rather than a
+/// bare `load_config()` + `save_config()`) since multiple `mae` processes
+/// commonly run concurrently and a stale `load_config()` snapshot held across
+/// this call would clobber another process's own preference change on save.
 pub fn persist_editor_preference(key: &str, value: &str) {
-    let (mut cfg, _) = load_config();
-    match key {
-        "theme" => cfg.editor.theme = Some(value.to_string()),
-        "splash_art" => cfg.editor.splash_art = Some(value.to_string()),
-        "ai_editor" => cfg.ai.editor = Some(value.to_string()),
-        "font_family" => cfg.editor.font_family = Some(value.to_string()),
-        "icon_font_family" => cfg.editor.icon_font_family = Some(value.to_string()),
-        "font_size" => cfg.editor.font_size = value.parse().ok(),
-        "org_hide_emphasis_markers" => cfg.editor.org_hide_emphasis_markers = Some(value == "true"),
-        "restore_session" => cfg.editor.restore_session = Some(value == "true"),
-        "autosave_interval" => cfg.editor.autosave_interval = value.parse().ok(),
-        _ => {
-            warn!(key, value, "unknown editor preference key");
-            return;
-        }
+    let path = config_path();
+    let (_, known, saved) = mae_mcp::file_lock::with_locked_update(
+        &path,
+        || load_config().0,
+        |cfg| match key {
+            "theme" => {
+                cfg.editor.theme = Some(value.to_string());
+                true
+            }
+            "splash_art" => {
+                cfg.editor.splash_art = Some(value.to_string());
+                true
+            }
+            "ai_editor" => {
+                cfg.ai.editor = Some(value.to_string());
+                true
+            }
+            "font_family" => {
+                cfg.editor.font_family = Some(value.to_string());
+                true
+            }
+            "icon_font_family" => {
+                cfg.editor.icon_font_family = Some(value.to_string());
+                true
+            }
+            "font_size" => {
+                cfg.editor.font_size = value.parse().ok();
+                true
+            }
+            "org_hide_emphasis_markers" => {
+                cfg.editor.org_hide_emphasis_markers = Some(value == "true");
+                true
+            }
+            "restore_session" => {
+                cfg.editor.restore_session = Some(value == "true");
+                true
+            }
+            "autosave_interval" => {
+                cfg.editor.autosave_interval = value.parse().ok();
+                true
+            }
+            _ => false,
+        },
+        |cfg| save_config(cfg).map(|_| ()),
+    );
+    if !known {
+        warn!(key, value, "unknown editor preference key");
+        return;
     }
-    if let Err(e) = save_config(&cfg) {
+    if let Err(e) = saved {
         warn!(key, value, error = %e, "failed to persist editor preference");
     } else {
         debug!(key, value, "persisted editor preference");

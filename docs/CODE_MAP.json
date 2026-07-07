@@ -809,6 +809,10 @@
           "kind": "mod"
         },
         {
+          "name": "file_lock",
+          "kind": "mod"
+        },
+        {
           "name": "identity",
           "kind": "mod"
         },

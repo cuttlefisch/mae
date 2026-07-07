@@ -164,8 +164,12 @@ pub fn history_file_path() -> Option<PathBuf> {
     Some(dir.join("history.scm"))
 }
 
-/// Serialize editor history (recent files/projects) into executable Scheme.
-pub fn save_history(editor: &Editor) -> std::io::Result<()> {
+/// Serialize `(files, projects)` MRU lists into the executable-Scheme history
+/// format. Used by the exit-time merge path (`save_history_on_exit`).
+fn save_history_lists(
+    files: &mae_core::RecentFiles,
+    projects: &mae_core::RecentProjects,
+) -> std::io::Result<()> {
     let Some(path) = history_file_path() else {
         return Ok(());
     };
@@ -175,7 +179,7 @@ pub fn save_history(editor: &Editor) -> std::io::Result<()> {
 
     // We write them in reverse order, so that when executed, the
     // push operation preserves the same MRU ordering.
-    for file in editor.recent_files.list().iter().rev() {
+    for file in files.list().iter().rev() {
         script.push_str(&format!(
             "(recent-files-add! \"{}\")\n",
             file.to_string_lossy()
@@ -184,7 +188,7 @@ pub fn save_history(editor: &Editor) -> std::io::Result<()> {
         ));
     }
 
-    for project in editor.recent_projects.list().iter().rev() {
+    for project in projects.list().iter().rev() {
         script.push_str(&format!(
             "(recent-projects-add! \"{}\")\n",
             project
@@ -195,6 +199,121 @@ pub fn save_history(editor: &Editor) -> std::io::Result<()> {
     }
 
     std::fs::write(path, script)
+}
+
+/// Parse a history.scm file's `(recent-files-add! "...")` /
+/// `(recent-projects-add! "...")` lines back into plain path lists, in file
+/// order (oldest -> newest, the inverse of `save_history_lists`'s `.rev()`).
+/// A small, symmetric twin of the hand-rolled writer above — used to load a
+/// scratch snapshot of on-disk history without evaluating Scheme against a
+/// live `Editor` (needed by the exit-time merge, which must not run
+/// arbitrary Scheme mid-shutdown).
+fn parse_history_lists(path: &std::path::Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
+    let mut files = Vec::new();
+    let mut projects = Vec::new();
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return (files, projects);
+    };
+    for line in content.lines() {
+        let line = line.trim();
+        let (prefix, target) = if let Some(rest) = line.strip_prefix("(recent-files-add! \"") {
+            (true, rest)
+        } else if let Some(rest) = line.strip_prefix("(recent-projects-add! \"") {
+            (false, rest)
+        } else {
+            continue;
+        };
+        let Some(quoted) = target.strip_suffix("\")") else {
+            continue;
+        };
+        let path = PathBuf::from(unescape_scheme_string(quoted));
+        if prefix {
+            files.push(path);
+        } else {
+            projects.push(path);
+        }
+    }
+    (files, projects)
+}
+
+/// Inverse of `.replace('\\', "\\\\").replace('"', "\\\"")`.
+fn unescape_scheme_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some(next) => out.push(next),
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Merge on-disk MRU lists (oldest -> newest, as returned by
+/// `parse_history_lists`) with this session's own lists, ranking the
+/// session's entries as most recent. Pure (no I/O) so it's testable without
+/// touching `history_file_path()`'s real `XDG_STATE_HOME`/`HOME`-derived path.
+///
+/// `RecentFiles`/`RecentProjects::push` already dedups + moves-to-front +
+/// caps, so replaying disk entries first (so they rank as "older") and then
+/// this session's own entries on top (so this session's recency wins for
+/// anything it touched) produces a proper merged MRU list, not a naive
+/// concatenation.
+///
+/// Cross-process ordering is best-effort (there's no shared per-entry
+/// timestamp): this session's entries are always ranked at least as recent
+/// as anything disk-only. The *set* of entries is what's guaranteed
+/// preserved, not exact global recency across processes.
+fn merge_history_lists(
+    disk_files: Vec<PathBuf>,
+    disk_projects: Vec<PathBuf>,
+    session_files: &mae_core::RecentFiles,
+    session_projects: &mae_core::RecentProjects,
+) -> (mae_core::RecentFiles, mae_core::RecentProjects) {
+    let mut merged_files = mae_core::RecentFiles::new(session_files.cap());
+    for file in disk_files {
+        merged_files.push(file);
+    }
+    for file in session_files.list().iter().rev() {
+        merged_files.push(file.clone());
+    }
+
+    let mut merged_projects = mae_core::RecentProjects::new(session_projects.cap());
+    for project in disk_projects {
+        merged_projects.push(project);
+    }
+    for project in session_projects.list().iter().rev() {
+        merged_projects.push(project.clone());
+    }
+
+    (merged_files, merged_projects)
+}
+
+/// Persist history (recent files/projects) at exit, merging with whatever's
+/// currently on disk rather than blindly overwriting it.
+///
+/// By exit, `editor.recent_files`/`recent_projects` already hold this whole
+/// session's MRU state — but another concurrently-running `mae` process (a
+/// normal way to use MAE) may have opened files/projects of its own since
+/// this session started. A bare `save_history_lists` overwrite here would
+/// silently drop those; `merge_history_lists` (above) folds them together
+/// instead.
+pub fn save_history_on_exit(editor: &Editor) -> std::io::Result<()> {
+    let Some(path) = history_file_path() else {
+        return Ok(());
+    };
+    let (disk_files, disk_projects) = parse_history_lists(&path);
+    let (merged_files, merged_projects) = merge_history_lists(
+        disk_files,
+        disk_projects,
+        &editor.recent_files,
+        &editor.recent_projects,
+    );
+    save_history_lists(&merged_files, &merged_projects)
 }
 
 /// Load and evaluate the history Scheme file.
@@ -211,6 +330,31 @@ pub fn load_history(scheme: &mut SchemeRuntime, editor: &mut Editor) {
                 }
             }
         }
+    }
+}
+
+/// Persist `editor.project_list` at exit, merging with whatever's currently
+/// on disk rather than blindly overwriting it.
+///
+/// By exit, `editor.project_list` already holds this whole session's
+/// accumulated state — but another concurrently-running `mae` process (a
+/// normal way to use MAE: one process per project directory) may have added
+/// projects of its own since this session started. A bare `save()` here
+/// would silently drop those. Reload fresh and upsert (by `root`) each of
+/// this session's entries on top, so a concurrent process's additions
+/// survive alongside this session's.
+pub fn save_project_list_on_exit(editor: &Editor, data_dir: &std::path::Path) {
+    let mine = editor.project_list.projects.clone();
+    let (_, (), saved) = mae_core::ProjectList::update(data_dir, |pl| {
+        for entry in mine {
+            match pl.projects.iter_mut().find(|e| e.root == entry.root) {
+                Some(existing) => *existing = entry,
+                None => pl.projects.push(entry),
+            }
+        }
+    });
+    if let Err(e) = saved {
+        error!(error = %e, "failed to save project list");
     }
 }
 
@@ -1799,6 +1943,84 @@ pub fn setup_dap() -> (
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_history_lists_round_trips_escaped_paths() {
+        let mut files = mae_core::RecentFiles::new(100);
+        files.push(PathBuf::from("/home/user/say \"hi\".txt"));
+        files.push(PathBuf::from(r"C:\weird\backslash\path.txt"));
+        let mut projects = mae_core::RecentProjects::new(20);
+        projects.push(PathBuf::from("/home/user/proj a"));
+
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("history.scm");
+        std::fs::write(
+            &path,
+            format!(
+                ";; MAE generated history file. Do not edit by hand.\n\n{}",
+                {
+                    let mut s = String::new();
+                    for f in files.list().iter().rev() {
+                        s.push_str(&format!(
+                            "(recent-files-add! \"{}\")\n",
+                            f.to_string_lossy()
+                                .replace('\\', "\\\\")
+                                .replace('"', "\\\"")
+                        ));
+                    }
+                    for p in projects.list().iter().rev() {
+                        s.push_str(&format!(
+                            "(recent-projects-add! \"{}\")\n",
+                            p.to_string_lossy()
+                                .replace('\\', "\\\\")
+                                .replace('"', "\\\"")
+                        ));
+                    }
+                    s
+                }
+            ),
+        )
+        .unwrap();
+
+        let (parsed_files, parsed_projects) = parse_history_lists(&path);
+        // File-order (oldest -> newest) is the reverse of MRU `.list()` order.
+        let expected_files: Vec<PathBuf> = files.list().iter().rev().cloned().collect();
+        let expected_projects: Vec<PathBuf> = projects.list().iter().rev().cloned().collect();
+        assert_eq!(parsed_files, expected_files);
+        assert_eq!(parsed_projects, expected_projects);
+    }
+
+    /// Adversarial case for the exit-time merge: a naive "just serialize the
+    /// session's own list" implementation would silently drop `old2` (added
+    /// by a different, concurrently-running `mae` process) because this
+    /// session's in-memory list never saw it. `merge_history_lists` must
+    /// preserve it — the session's recency wins for anything it touched,
+    /// but disk-only entries survive as "older", not vanish.
+    #[test]
+    fn merge_history_lists_preserves_disk_only_entries() {
+        let disk_files = vec![PathBuf::from("/old1"), PathBuf::from("/old2")];
+        let mut session_files = mae_core::RecentFiles::new(100);
+        session_files.push(PathBuf::from("/old1")); // re-touched this session
+        session_files.push(PathBuf::from("/new1"));
+
+        let (merged, _) = merge_history_lists(
+            disk_files,
+            vec![],
+            &session_files,
+            &mae_core::RecentProjects::new(20),
+        );
+
+        let result: Vec<PathBuf> = merged.list().iter().cloned().collect();
+        assert_eq!(
+            result,
+            vec![
+                PathBuf::from("/new1"),
+                PathBuf::from("/old1"),
+                PathBuf::from("/old2"),
+            ],
+            "session recency wins for touched entries; disk-only entries survive as older, not dropped"
+        );
+    }
 
     macro_rules! require_scheme {
         () => {

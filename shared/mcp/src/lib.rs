@@ -46,6 +46,7 @@ pub mod client_mgr;
 pub mod collection_store;
 pub mod content_key_store;
 pub mod daemon_client;
+pub mod file_lock;
 pub mod identity;
 pub mod keystore;
 pub mod protocol;

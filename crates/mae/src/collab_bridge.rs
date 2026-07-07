@@ -1920,19 +1920,24 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
                 // editor restart / reconnect (the transient `shared_kbs` set above is
                 // only a cache; the emit gate now reads these markers). Persisted to
                 // the XDG-first registry. Only on a confirmed share.
-                let now = mae_kb::data_dir::chrono_now_iso();
-                if kb_id == mae_core::KB_DEFAULT_NAME || kb_id == "primary" {
-                    editor.kb.registry.primary_shared = true;
-                    editor.kb.registry.primary_collab_id = Some(kb_id.clone());
-                } else if let Some(inst) = editor.kb.registry.find_mut(&kb_id) {
-                    inst.shared = true;
-                    inst.collab_id = Some(kb_id.clone());
-                    inst.last_sync = Some(now);
-                }
                 if let Some(dir) = editor.mae_data_dir() {
-                    if let Err(e) = editor.kb.registry.save(&dir) {
+                    let (registry, (), saved) =
+                        mae_kb::federation::KbRegistry::update(&dir, |reg| {
+                            let now = mae_kb::data_dir::chrono_now_iso();
+                            if kb_id == mae_core::KB_DEFAULT_NAME || kb_id == "primary" {
+                                reg.primary_shared = true;
+                                reg.primary_collab_id = Some(kb_id.clone());
+                            } else if let Some(inst) = reg.find_mut(&kb_id) {
+                                inst.shared = true;
+                                inst.collab_id = Some(kb_id.clone());
+                                inst.last_sync = Some(now);
+                            }
+                        });
+                    if let Err(e) = saved {
                         warn!(kb = %kb_id, error = %e, "failed to persist shared-KB registry marker");
                     }
+                    editor.kb.registry = registry;
+                    editor.kb.last_local_registry_write = Some(std::time::Instant::now());
                 }
                 tracing::debug!(target: "kb_sync", kb_id = %kb_id, node_count, "share: durable marker stamped");
                 editor.set_status(format!("KB '{}' shared ({} nodes)", kb_id, node_count));

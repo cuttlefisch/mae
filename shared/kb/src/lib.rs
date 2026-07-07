@@ -43,6 +43,14 @@ pub mod hygiene;
 pub mod lru_query;
 pub mod query;
 
+// Advisory file locking + the reload-fresh-then-mutate-then-save helper
+// (`with_locked_update`) live in `mae-mcp`, which this crate already
+// depends on. Re-exported here so `federation::KbRegistry` can use it, and
+// so `mae-core` (which depends on `mae-kb` but deliberately does not depend
+// on `mae-mcp` directly, per `editor::kb_state`) can reach it too via
+// `mae_kb::file_lock` without adding a new Cargo dependency edge.
+pub use mae_mcp::file_lock;
+
 pub use cache::{CachedQueryLayer, NodeCache};
 pub use cozo_store::CozoKbStore;
 pub use federation::{

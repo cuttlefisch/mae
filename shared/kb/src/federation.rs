@@ -126,6 +126,38 @@ impl KbRegistry {
         std::fs::write(&path, content)
     }
 
+    /// Reload-fresh -> mutate -> save, under a cross-process advisory lock
+    /// (see `mae_mcp::file_lock::with_locked_update`).
+    ///
+    /// Multiple `mae` processes commonly run concurrently (one per project
+    /// directory). Calling `load()` once at startup and blindly `save()`-ing
+    /// a long-held in-memory copy loses concurrent registrations from other
+    /// processes — this happened for real (a KB registration was silently
+    /// wiped by another process's stale save). `update()` always reloads the
+    /// freshest on-disk registry immediately before applying `mutate`, so a
+    /// save reflects "current disk state + my change", not "my stale
+    /// snapshot + my change". Callers should replace their long-lived
+    /// in-memory registry with the returned value so it also absorbs any
+    /// concurrent additions from other processes.
+    ///
+    /// Returns the merged registry, whatever `mutate` returned, and the save
+    /// outcome as a separate `Result` — a save failure does NOT discard the
+    /// in-memory mutation (matches the pre-existing best-effort persistence
+    /// semantics: callers always apply the change in memory, and log rather
+    /// than abort on a disk-write failure).
+    pub fn update<R>(
+        data_dir: &Path,
+        mutate: impl FnOnce(&mut Self) -> R,
+    ) -> (Self, R, io::Result<()>) {
+        let path = data_dir.join("kb-registry.toml");
+        mae_mcp::file_lock::with_locked_update(
+            &path,
+            || Self::load(data_dir),
+            mutate,
+            |reg| reg.save(data_dir),
+        )
+    }
+
     /// Register a new org-roam directory.
     ///
     /// If a `KbDataDir` is provided, the SQLite database is placed in the
@@ -769,6 +801,61 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&tmp);
         let _ = std::fs::remove_dir_all(&data);
+    }
+
+    /// Regression test for the incident that motivated `KbRegistry::update`:
+    /// a KB registration was silently wiped when a second, independently
+    /// loaded in-memory registry saved over it. Simulates two long-lived
+    /// `mae` processes, each holding its own stale snapshot from before
+    /// either one registered anything, both going through `update()`.
+    #[test]
+    fn concurrent_update_preserves_both_writers_instances() {
+        let data = tempfile::TempDir::new().unwrap();
+        let org_a = tempfile::TempDir::new().unwrap();
+        let org_b = tempfile::TempDir::new().unwrap();
+
+        // Both "processes" load a snapshot before either one writes anything.
+        let _stale_a = KbRegistry::load(data.path());
+        let _stale_b = KbRegistry::load(data.path());
+
+        // "Process A" registers via the locked-update path.
+        let (_, uuid_a, saved_a) = KbRegistry::update(data.path(), |reg| {
+            reg.register(
+                "A".to_string(),
+                org_a.path().to_path_buf(),
+                data.path(),
+                None,
+            )
+        });
+        saved_a.unwrap();
+
+        // "Process B" registers next — even though ITS OWN in-memory copy
+        // (_stale_b) never saw A's write, update() reloads fresh internally,
+        // so A's registration must survive.
+        let (final_reg, uuid_b, saved_b) = KbRegistry::update(data.path(), |reg| {
+            reg.register(
+                "B".to_string(),
+                org_b.path().to_path_buf(),
+                data.path(),
+                None,
+            )
+        });
+        saved_b.unwrap();
+
+        assert!(
+            final_reg.find(&uuid_a).is_some(),
+            "A's registration must survive B's save"
+        );
+        assert!(final_reg.find(&uuid_b).is_some());
+
+        // Re-load independently from disk to prove it's actually persisted,
+        // not just true of the in-memory return value.
+        let reloaded = KbRegistry::load(data.path());
+        assert_eq!(
+            reloaded.instances.len(),
+            2,
+            "on-disk file must contain BOTH instances, not just B"
+        );
     }
 
     #[test]

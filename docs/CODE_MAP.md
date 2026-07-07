@@ -324,6 +324,7 @@ Source: `shared/mcp/src/lib.rs`
 | `collection_store` | mod |
 | `content_key_store` | mod |
 | `daemon_client` | mod |
+| `file_lock` | mod |
 | `identity` | mod |
 | `keystore` | mod |
 | `protocol` | mod |

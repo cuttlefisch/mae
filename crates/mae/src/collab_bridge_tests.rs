@@ -2413,6 +2413,11 @@ fn collab_kb_shared_named_instance_tracks_nodes_by_uuid() {
             remote_peers: Vec::new(),
             last_sync: None,
         });
+    // The handler now reloads the registry fresh from disk before stamping
+    // the durable marker (KbRegistry::update) — persist the fixture instance
+    // first so it's actually there to find, matching the real precondition
+    // (an instance can only be shared once it's already registered+persisted).
+    editor.kb.registry.save(&tmp).unwrap();
 
     handle_collab_event(
         &mut editor,
@@ -2477,6 +2482,11 @@ fn adr019_share_marker_survives_registry_reload() {
             remote_peers: Vec::new(),
             last_sync: None,
         });
+    // The handler reloads the registry fresh from disk before stamping the
+    // durable marker (KbRegistry::update) — persist the fixture instance
+    // first so it's actually there to find (an instance can only be shared
+    // once it's already registered+persisted).
+    editor.kb.registry.save(&tmp).unwrap();
 
     handle_collab_event(
         &mut editor,

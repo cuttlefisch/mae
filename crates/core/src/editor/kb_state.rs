@@ -139,6 +139,15 @@ pub struct KbContext {
     pub data_dir: Option<mae_kb::data_dir::KbDataDir>,
     /// KB federation: registry of external KB instances (org-roam dirs etc.).
     pub registry: mae_kb::federation::KbRegistry,
+    /// Watches `kb-registry.toml` for changes by OTHER `mae` processes (e.g. a
+    /// KB registered from a second concurrently-running editor), so this
+    /// process's `self.registry` can pick it up without a local KB operation
+    /// having to trigger a reload. Mirrors `store_watcher` above.
+    pub registry_watcher: Option<mae_kb::watch::StoreWatcher>,
+    /// Timestamp of our last local write to `kb-registry.toml` (via
+    /// `KbRegistry::update`). The registry watcher skips a reload within a
+    /// short cooldown of this so our OWN writes don't trigger churn.
+    pub last_local_registry_write: Option<std::time::Instant>,
     /// KB federation: loaded KB instances keyed by registry UUID.
     pub instances: HashMap<String, mae_kb::KnowledgeBase>,
     /// CozoDB store handles for federated KB instances (retained for runtime queries).
@@ -432,6 +441,8 @@ impl KbContext {
             manual_cozo: None,
             data_dir: None,
             registry: mae_kb::federation::KbRegistry::default(),
+            registry_watcher: None,
+            last_local_registry_write: None,
             instances: HashMap::new(),
             instance_stores: HashMap::new(),
             watchers: HashMap::new(),

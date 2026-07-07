@@ -947,12 +947,17 @@ fn main() -> io::Result<()> {
     // Load persistent project list from XDG data dir.
     if !clean_mode {
         if let Some(data_dir) = editor.mae_data_dir() {
-            editor.project_list = mae_core::ProjectList::load(&data_dir);
-
             // Prune stale entries (nonexistent dirs, temp dirs) and notify.
-            let pruned = editor.project_list.prune_stale();
+            // Goes through the locked reload-fresh-then-mutate path (rather
+            // than a bare load+save) since another `mae` process could be
+            // starting up and writing this same file at the same moment.
+            let (project_list, pruned, saved) =
+                mae_core::ProjectList::update(&data_dir, |pl| pl.prune_stale());
+            editor.project_list = project_list;
             if !pruned.is_empty() {
-                let _ = editor.project_list.save(&data_dir);
+                if let Err(e) = saved {
+                    tracing::warn!(error = %e, "failed to persist pruned project list");
+                }
                 let msg = format!(
                     "Pruned {} stale project(s): {}",
                     pruned.len(),
@@ -1438,6 +1443,18 @@ fn main() -> io::Result<()> {
         }
         editor.kb.registry = registry;
 
+        // Phase 4 (KB): watch kb-registry.toml itself for changes by OTHER
+        // mae processes (e.g. a KB registered from a second concurrently
+        // running editor), so this process's registry stays fresh without
+        // needing a local KB operation to trigger a reload (see
+        // `drain_kb_registry_watch`). `StoreWatcher::new` requires its
+        // target to already exist — write an empty registry first if this
+        // is a brand-new install with no KB ever registered.
+        if !new_registry.exists() {
+            let _ = mae_kb::federation::KbRegistry::default().save(&data_dir);
+        }
+        editor.kb.registry_watcher = mae_kb::watch::StoreWatcher::new(&new_registry).ok();
+
         // ADR-020 recovery: reconstruct shared-KB instances present on disk but
         // MISSING from the registry (e.g. a clobbered registry — the exact failure
         // that lost a joined KB mid-session). Collect candidates first (immutable
@@ -1459,7 +1476,12 @@ fn main() -> io::Result<()> {
             } else {
                 Vec::new()
             };
-        let mut recovered_any = false;
+        // Collect recovered instances locally (rather than pushing into
+        // `editor.kb.registry` directly) so the eventual persist goes through
+        // `KbRegistry::update`'s reload-fresh-then-mutate path — startup is
+        // still a moment another concurrently-starting `mae` process could be
+        // writing the same registry file.
+        let mut recovered_instances = Vec::new();
         for (collab_id, name, db_path, last_sync) in recoveries {
             if collab_id.is_empty()
                 || editor.kb.registry.find_by_collab_id(&collab_id).is_some()
@@ -1480,36 +1502,46 @@ fn main() -> io::Result<()> {
                         .kb
                         .instance_stores
                         .insert(uuid.clone(), std::sync::Arc::new(store));
-                    editor
-                        .kb
-                        .registry
-                        .instances
-                        .push(mae_kb::federation::KbInstance {
-                            uuid,
-                            name: if name.is_empty() {
-                                collab_id.clone()
-                            } else {
-                                name.clone()
-                            },
-                            org_dir: std::path::PathBuf::new(),
-                            db_path,
-                            primary: false,
-                            enabled: true,
-                            last_import: None,
-                            collab_id: Some(collab_id.clone()),
-                            shared: true,
-                            remote_peers: Vec::new(),
-                            last_sync,
-                        });
-                    recovered_any = true;
+                    recovered_instances.push(mae_kb::federation::KbInstance {
+                        uuid,
+                        name: if name.is_empty() {
+                            collab_id.clone()
+                        } else {
+                            name.clone()
+                        },
+                        org_dir: std::path::PathBuf::new(),
+                        db_path,
+                        primary: false,
+                        enabled: true,
+                        last_import: None,
+                        collab_id: Some(collab_id.clone()),
+                        shared: true,
+                        remote_peers: Vec::new(),
+                        last_sync,
+                    });
                     info!(kb = %collab_id, nodes = count, "recovered shared KB instance from disk (registry rescan)");
                 }
             }
         }
-        if recovered_any {
-            if let Err(e) = editor.kb.registry.save(&data_dir) {
+        if !recovered_instances.is_empty() {
+            let (registry, (), saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+                for inst in recovered_instances {
+                    // Re-check against the freshly-reloaded registry: another
+                    // process may have already added this collab_id since we
+                    // loaded ours at the top of this function.
+                    if reg
+                        .find_by_collab_id(inst.collab_id.as_deref().unwrap_or_default())
+                        .is_none()
+                    {
+                        reg.instances.push(inst);
+                    }
+                }
+            });
+            if let Err(e) = saved {
                 warn!(error = %e, "failed to persist recovered shared-KB registry");
             }
+            editor.kb.registry = registry;
+            editor.kb.last_local_registry_write = Some(std::time::Instant::now());
         }
 
         // Build the CozoDB-first query layer AFTER all stores are loaded
@@ -2305,12 +2337,12 @@ impl GuiApp {
 
         // Persist history (skipped in clean mode)
         if !self.editor.clean_mode {
-            if let Err(e) = bootstrap::save_history(&self.editor) {
+            if let Err(e) = bootstrap::save_history_on_exit(&self.editor) {
                 error!(error = %e, "failed to save history");
             }
             // Save persistent project list
             if let Some(data_dir) = self.editor.mae_data_dir() {
-                let _ = self.editor.project_list.save(&data_dir);
+                bootstrap::save_project_list_on_exit(&self.editor, &data_dir);
             }
         }
 
