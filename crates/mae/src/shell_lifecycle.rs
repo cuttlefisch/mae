@@ -123,7 +123,12 @@ pub fn spawn_pending_shells(
             .or_else(|| editor.active_project_root().map(|p| p.to_path_buf()));
         let extra_env = build_extra_env(mcp_socket_path);
         match mae_shell::ShellTerminal::spawn_command(
-            inner_cols, inner_rows, &command, cwd, extra_env,
+            inner_cols,
+            inner_rows,
+            &command,
+            cwd,
+            extra_env,
+            editor.ai.agent_login_shell,
         ) {
             Ok(shell) => {
                 shell.set_theme_colors(&color_entries);

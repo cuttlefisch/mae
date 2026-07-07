@@ -990,6 +990,26 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
         );
     }
 
+    // Agent shell startup-file environment diff: what would `.bashrc`/
+    // `.zshrc` etc. add or change for the open-ai-agent shell, versus what
+    // this process already sees ambiently. Turns "why doesn't my agent
+    // shell have the right env" (e.g. an auth token only set in shell
+    // startup files) into a concrete, data-backed diff instead of guesswork.
+    let agent_shell_path = mae_shell::resolve_user_shell();
+    let ambient_env: std::collections::HashMap<String, String> = std::env::vars().collect();
+    let (
+        agent_shell_probe_ok,
+        agent_shell_probe_error,
+        added_by_shell_startup,
+        changed_by_shell_startup,
+    ) = match mae_shell::probe_login_shell_env(&agent_shell_path) {
+        Ok(login_env) => {
+            let (added, changed) = mae_shell::diff_envs(&ambient_env, &login_env);
+            (true, None, added, changed)
+        }
+        Err(e) => (false, Some(e), Vec::new(), Vec::new()),
+    };
+
     // Setup status for AI agent guidance
     let ai_configured = !provider.is_empty() && (api_key_set || provider == "ollama");
     let kb_notes_dir_set = editor.kb.notes_dir.is_some();
@@ -1031,6 +1051,14 @@ pub fn execute_audit_configuration(editor: &Editor) -> Result<String, String> {
         "ai_agent": {
             "command": ai_cmd,
             "binary_found": ai_agent_found,
+        },
+        "agent_shell_env": {
+            "login_wrap_enabled": editor.ai.agent_login_shell,
+            "shell": agent_shell_path,
+            "probe_succeeded": agent_shell_probe_ok,
+            "probe_error": agent_shell_probe_error,
+            "added_by_shell_startup": added_by_shell_startup.iter().map(|(k, v)| serde_json::json!({"key": k, "value": v})).collect::<Vec<_>>(),
+            "changed_by_shell_startup": changed_by_shell_startup.iter().map(|(k, v)| serde_json::json!({"key": k, "value": v})).collect::<Vec<_>>(),
         },
         "ai_chat": {
             "provider": provider,
@@ -1178,6 +1206,26 @@ mod tests {
         let lsp = json["lsp_servers"].as_array().unwrap();
         assert!(lsp.len() >= 4, "should list at least 4 LSP servers");
         let _ = issues; // suppress unused
+    }
+
+    #[test]
+    fn audit_configuration_includes_agent_shell_env_section() {
+        let mut editor = Editor::new();
+        let result = execute_audit_configuration(&editor).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let section = json
+            .get("agent_shell_env")
+            .expect("agent_shell_env section must be present");
+        assert_eq!(section["login_wrap_enabled"], true);
+        assert!(section.get("shell").is_some());
+        assert!(section.get("probe_succeeded").is_some());
+        assert!(section["added_by_shell_startup"].is_array());
+        assert!(section["changed_by_shell_startup"].is_array());
+
+        editor.ai.agent_login_shell = false;
+        let result = execute_audit_configuration(&editor).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(json["agent_shell_env"]["login_wrap_enabled"], false);
     }
 
     #[test]

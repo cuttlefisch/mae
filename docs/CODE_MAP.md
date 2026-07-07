@@ -19,6 +19,7 @@ graph TD
     mae --> mae_sync
     mae_ai --> mae_core
     mae_ai --> mae_kb
+    mae_ai --> mae_shell
     mae_ai --> mae_sync
     mae_babel[mae-babel]
     mae_canvas[mae-canvas]
@@ -374,6 +375,7 @@ Source: `crates/shell/src/lib.rs`
 | Item | Kind |
 |------|------|
 | `path` | mod |
+| `shell_invocation` | mod |
 | `grid_types` | mod |
 
 ## mae-snippets

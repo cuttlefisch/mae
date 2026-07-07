@@ -153,6 +153,12 @@ impl OptionRegistry {
                 opt!("ai_editor", &["ai-editor"],
                     "Command to launch for AI agent shell sessions (e.g. claude, aider)",
                     OptionKind::String, "claude", Some("ai.editor"), &[]),
+                opt!("ai_agent_login_shell", &["ai-agent-login-shell"],
+                    "Wrap the AI agent shell command in the user's login+interactive shell \
+                     (sources ~/.bashrc, ~/.zshrc, etc.) so exported env vars — auth tokens, \
+                     PATH additions — reach the agent process, matching what a normal \
+                     terminal gets. Disable if a slow/noisy shell rc delays agent launch.",
+                    OptionKind::Bool, "true", Some("ai.agent_login_shell"), &[]),
                 opt!("ai_provider", &["ai-provider"],
                     "AI API provider: claude, openai, gemini, ollama, deepseek",
                     OptionKind::String, "", Some("ai.provider"), &["claude", "openai", "gemini", "ollama", "deepseek"]),

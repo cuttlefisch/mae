@@ -81,6 +81,7 @@ impl super::Editor {
             "clipboard" => self.clipboard.clone(),
             "ai_tier" => self.ai.permission_tier.clone(),
             "ai_editor" => self.ai.editor_name.clone(),
+            "ai_agent_login_shell" => self.ai.agent_login_shell.to_string(),
             "ai_provider" => self.ai.provider.clone(),
             "ai_model" => self.ai.model.clone(),
             "ai_api_key_command" => self.ai.api_key_command.clone(),
@@ -334,6 +335,9 @@ impl super::Editor {
             },
             "ai_editor" => {
                 self.ai.editor_name = value.to_string();
+            }
+            "ai_agent_login_shell" => {
+                self.ai.agent_login_shell = crate::options::parse_option_bool(value)?;
             }
             "ai_provider" => {
                 self.ai.provider = value.to_string();
@@ -1890,5 +1894,37 @@ mod daemon_mode_tests {
         // Setting the mode reflects back through the legacy bool.
         editor.set_option("daemon_mode", "shared").unwrap();
         assert_eq!(editor.get_option("daemon_enabled").unwrap().0, "true");
+    }
+}
+
+#[cfg(test)]
+mod ai_option_tests {
+    use crate::editor::Editor;
+
+    #[test]
+    fn ai_agent_login_shell_option_registered_and_roundtrips() {
+        let mut editor = Editor::new();
+        assert!(editor
+            .option_registry
+            .find("ai_agent_login_shell")
+            .is_some());
+        assert!(editor
+            .option_registry
+            .find("ai-agent-login-shell")
+            .is_some());
+
+        // Defaults to enabled (fixes the reported bug out of the box).
+        assert_eq!(editor.get_option("ai_agent_login_shell").unwrap().0, "true");
+        assert!(editor.ai.agent_login_shell);
+
+        editor.set_option("ai_agent_login_shell", "false").unwrap();
+        assert_eq!(
+            editor.get_option("ai_agent_login_shell").unwrap().0,
+            "false"
+        );
+        assert!(!editor.ai.agent_login_shell);
+
+        editor.set_option("ai_agent_login_shell", "true").unwrap();
+        assert!(editor.ai.agent_login_shell);
     }
 }

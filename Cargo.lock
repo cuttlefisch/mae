@@ -2836,6 +2836,7 @@ dependencies = [
  "glob",
  "mae-core",
  "mae-kb",
+ "mae-shell",
  "mae-sync",
  "reqwest",
  "serde",
@@ -3043,6 +3044,7 @@ version = "0.14.34"
 dependencies = [
  "alacritty_terminal",
  "portable-pty",
+ "tempfile",
  "tracing",
 ]
 
