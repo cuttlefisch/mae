@@ -1391,7 +1391,7 @@ fn main() -> io::Result<()> {
             // a real `db_path`). Previously gated on `org_dir.exists()`, so joined
             // instances were skipped ("dir missing") and lost their nodes (B-10).
             let loaded_via_cozo = if inst.db_path.exists() {
-                match mae_kb::CozoKbStore::open(&inst.db_path) {
+                match editor.kb_open_instance_store(&inst.db_path) {
                     Ok(store) => match store.load_all() {
                         Ok(nodes) => {
                             let count = nodes.len();
@@ -1467,7 +1467,7 @@ fn main() -> io::Result<()> {
             {
                 continue;
             }
-            if let Ok(store) = mae_kb::CozoKbStore::open(&db_path) {
+            if let Ok(store) = editor.kb_open_instance_store(&db_path) {
                 if let Ok(nodes) = store.load_all() {
                     let uuid = mae_kb::federation::generate_uuid();
                     let mut kb = mae_kb::KnowledgeBase::new();

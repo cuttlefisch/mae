@@ -194,6 +194,37 @@ impl Editor {
         }
     }
 
+    /// Open a federated KB instance's durable store, honoring the configured
+    /// `kb_storage_engine` (default sqlite) and auto-migrating an existing sled
+    /// store once — the same multi-process-safe path the primary store takes
+    /// (main.rs). Without this, callers using `CozoKbStore::open()` directly
+    /// get sled unconditionally (its hardcoded default), permanently stuck on
+    /// sled's single-writer exclusive lock regardless of `kb_storage_engine`.
+    pub fn kb_open_instance_store(
+        &self,
+        path: &Path,
+    ) -> Result<mae_kb::CozoKbStore, mae_kb::KbStoreError> {
+        let mut engine = self
+            .get_option("kb_storage_engine")
+            .map(|(v, _)| v)
+            .unwrap_or_else(|| "sqlite".to_string());
+
+        if engine == "sqlite" {
+            if let Err(e) = mae_kb::migrate::migrate_sled_to_sqlite(path) {
+                tracing::warn!(
+                    error = %e,
+                    path = %path.display(),
+                    "sled→sqlite migration failed; opening existing store"
+                );
+                if path.is_dir() {
+                    engine = "sled".to_string();
+                }
+            }
+        }
+
+        mae_kb::CozoKbStore::open_with_engine(path, &engine)
+    }
+
     /// Register an external org directory as a federated KB instance.
     ///
     /// Recursively imports all `.org` files, computes health metrics,
@@ -230,7 +261,7 @@ impl Editor {
         // Import org files — try CozoDB-direct ingestion first.
         let inst_ref = self.kb.registry.find(&uuid).cloned();
         let (kb, report, health) = if let Some(inst) = inst_ref {
-            match mae_kb::CozoKbStore::open(&inst.db_path) {
+            match self.kb_open_instance_store(&inst.db_path) {
                 Ok(store) => {
                     match mae_kb::federation::import_org_dir_to_store(
                         org_dir,
@@ -377,7 +408,7 @@ impl Editor {
                 // and silently falls back to a non-persistent in-memory import.
                 let existing_store = self.kb.instance_stores.get(&instance.uuid).cloned();
                 let (kb, report, health, store_for_layer) = match existing_store.or_else(|| {
-                    mae_kb::CozoKbStore::open(&instance.db_path)
+                    self.kb_open_instance_store(&instance.db_path)
                         .ok()
                         .map(std::sync::Arc::new)
                 }) {
@@ -635,7 +666,7 @@ impl Editor {
                     sync_mode: crate::editor::KB_SYNC_MODE_DEFAULT.to_string(),
                 };
                 if let Ok(path) = data_dir.init_shared_kb(&slug, &meta) {
-                    if let Ok(store) = mae_kb::CozoKbStore::open(&path) {
+                    if let Ok(store) = self.kb_open_instance_store(&path) {
                         db_path = path;
                         self.kb
                             .instance_stores
@@ -3529,6 +3560,92 @@ mod tests {
     }
 
     #[test]
+    fn kb_open_instance_store_defaults_to_sqlite_not_sled() {
+        // Regression: kb_register/kb_reimport/the federation loader used the bare
+        // `CozoKbStore::open()`, which is hardcoded to the sled engine — ignoring
+        // `kb_storage_engine` (default sqlite) entirely. Every registered federated
+        // instance was permanently stuck on sled's single-writer exclusive lock, so
+        // a second mae frontend could never open the same instance concurrently —
+        // regardless of the option the user configured. A sled store is a
+        // directory; a sqlite store is a file — that's the discriminator.
+        let editor = Editor::new();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("instance.cozo");
+        editor.kb_open_instance_store(&path).unwrap();
+        assert!(
+            path.is_file(),
+            "default engine must be sqlite (a file), not sled (a directory)"
+        );
+    }
+
+    #[test]
+    fn kb_open_instance_store_migrates_an_existing_sled_instance() {
+        // A pre-existing legacy sled federated instance (e.g. registered before
+        // Phase 2c, or hand-created) must be auto-migrated to sqlite on next open —
+        // matching the primary store's behavior — not opened as sled forever.
+        let editor = Editor::new();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("instance.cozo");
+
+        {
+            let sled = mae_kb::CozoKbStore::open_with_engine(&path, "sled").unwrap();
+            sled.seed_type_system().unwrap();
+            sled.insert_node(&mae_kb::Node::new(
+                "user:legacy",
+                "Legacy",
+                mae_kb::NodeKind::Note,
+                "pre-migration content",
+            ))
+            .unwrap();
+        }
+        assert!(path.is_dir(), "sanity: sled store is a directory");
+
+        let migrated = editor.kb_open_instance_store(&path).unwrap();
+        assert!(path.is_file(), "path must be a sqlite file after migration");
+        assert!(
+            migrated.get_node("user:legacy").unwrap().is_some(),
+            "migration must preserve existing nodes, not drop them"
+        );
+    }
+
+    #[test]
+    fn kb_register_allows_a_second_concurrent_frontend_to_open_the_same_instance() {
+        // The actual user-facing bug: two mae GUI frontends both pointed at the same
+        // registered KB instance. Before the fix, the FIRST frontend's kb_register
+        // opened the instance as sled and kept the handle open for the process
+        // lifetime; a SECOND frontend's attempt to open the same instance store hit
+        // sled's exclusive dir lock and failed (silently falling back to a
+        // non-persistent in-memory import — the exact bug reported against the
+        // "arisnova" KB). With sqlite as the engine, a second handle must succeed
+        // while the first is still open — the same topology that already lets N
+        // daemon-less processes share the primary store.
+        let dir = create_test_org_dir();
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+        let result = editor.kb_register("TestNotes", dir.path()).unwrap();
+        let uuid = result.uuid.clone();
+        // The first "frontend"'s handle is still held open here (in instance_stores).
+        assert!(editor.kb.instance_stores.contains_key(&uuid));
+
+        let db_path = editor.kb.registry.find(&uuid).unwrap().db_path.clone();
+        let second_frontend = mae_kb::CozoKbStore::open_with_engine(&db_path, "sqlite");
+        assert!(
+            second_frontend.is_ok(),
+            "a second frontend must be able to open the same registered instance \
+             concurrently: {:?}",
+            second_frontend.err()
+        );
+        assert!(
+            second_frontend
+                .unwrap()
+                .get_node("test-note-1")
+                .unwrap()
+                .is_some(),
+            "the second frontend must see the first frontend's imported nodes"
+        );
+    }
+
+    #[test]
     fn kb_federated_search_finds_across_instances() {
         let dir = create_test_org_dir();
         let mut editor = Editor::new();
@@ -4982,10 +5099,11 @@ mod tests {
             inst.db_path.clone()
         };
 
-        // Drop the editor (and its live store) to release the sled lock, then
-        // open fresh from db_path exactly as the startup loader does on restart.
+        // Drop the editor (and its live store), then open fresh from db_path
+        // exactly as the startup loader does on restart (sqlite by default —
+        // kb_open_instance_store — not the hardcoded-sled CozoKbStore::open()).
         drop(editor);
-        let store = mae_kb::CozoKbStore::open(&db_path).unwrap();
+        let store = mae_kb::CozoKbStore::open_with_engine(&db_path, "sqlite").unwrap();
         let nodes = store.load_all().unwrap();
         assert!(
             nodes.iter().any(|n| n.id == "ct:overview"),
