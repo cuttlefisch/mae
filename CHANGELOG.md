@@ -4,9 +4,35 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- *(ci)* Resolve fmt, code-map, and security-advisory failures blocking PR #289 ([e77ea4b](https://github.com/cuttlefisch/mae/commit/e77ea4ba7fdba47bcc7877cba7fb8af805a6ddaf))
+- *(kb)* Kb_reimport must refresh the query layer for kb-find to see it ([c539b6d](https://github.com/cuttlefisch/mae/commit/c539b6d30b8737f5d5beee40ceab459beaa23583))
+- *(kb)* Federated KB instances were hardcoded to sled, blocking multi-frontend sharing ([43acda9](https://github.com/cuttlefisch/mae/commit/43acda99bfbc62116d26914f6d14c3160720c141))
+- *(build)* Embedded build SHA went stale after same-branch commits ([46afe08](https://github.com/cuttlefisch/mae/commit/46afe082bd6a1611ae624b491ff616fbb0b427fa))
+- *(ci)* Encrypted e2e canary oracle assumed sled's leftover LSM bytes ([112e2ad](https://github.com/cuttlefisch/mae/commit/112e2adaecf36ba8944335ddd9e0b9d55516ede0))
+
+### Features
+
+- *(ai)* Add ai_thinking option + native Ollama provider ([325e5a7](https://github.com/cuttlefisch/mae/commit/325e5a7b2a9a66d4a79b631c2b0163b48c53f31f))
+
+### Miscellaneous
+
+- *(dev)* Install rustfmt/clippy in setup-dev; wire git hooks automatically ([104a097](https://github.com/cuttlefisch/mae/commit/104a09754115a129bdfbef6082b10882616a8455))
+
+### Refactor
+
+- *(cli)* Remove --connect launch flag; surface daemon-mode in init.scm ([7ee56de](https://github.com/cuttlefisch/mae/commit/7ee56ded606cc46f8dca293e3ddcd2f894993d0e))
+
+## [0.14.33] - 2026-07-05
+
 ### Features
 
 - *(kb)* Cross-instance mirror refresh (Phase 4) + multi-instance docs (Phase 5) (#288) ([b5959fc](https://github.com/cuttlefisch/mae/commit/b5959fc03632be5933ee1b47579677a7df8edeff))
+
+### Miscellaneous
+
+- Bump version to 0.14.33 ([8d004d5](https://github.com/cuttlefisch/mae/commit/8d004d5f569528d10278321c4a0ae3686d8b520c))
 
 ## [0.14.32] - 2026-07-05
 
