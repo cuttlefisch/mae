@@ -170,8 +170,7 @@ impl OllamaProvider {
         };
 
         // Native API reports counts at the top level, not nested under "usage".
-        let usage = if body.get("prompt_eval_count").is_some() || body.get("eval_count").is_some()
-        {
+        let usage = if body.get("prompt_eval_count").is_some() || body.get("eval_count").is_some() {
             Some(Usage {
                 prompt_tokens: body
                     .get("prompt_eval_count")
@@ -240,7 +239,10 @@ impl AgentProvider for OllamaProvider {
 
         debug!(model = %self.config.model, url = %url, message_count = messages.len(), tool_count = tools.len(), "sending Ollama API request");
 
-        let mut request = self.client.post(&url).header("content-type", "application/json");
+        let mut request = self
+            .client
+            .post(&url)
+            .header("content-type", "application/json");
         if let Some(key) = self.config.api_key.as_deref().filter(|k| !k.is_empty()) {
             request = request.header("Authorization", format!("Bearer {}", key));
         }

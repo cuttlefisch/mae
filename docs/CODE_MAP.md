@@ -74,6 +74,7 @@ Source: `crates/ai/src/lib.rs`
 | `context_limits` | mod |
 | `executor` | mod |
 | `gemini` | mod |
+| `ollama` | mod |
 | `openai` | mod |
 | `pricing` | mod |
 | `provider` | mod |
