@@ -327,9 +327,25 @@ if [ "$NEG" != "1" ]; then
   # (2) CONVERGENCE: the JOINER DECRYPTED the sealed snapshot on join. Joined KBs get a
   # durable CozoKbStore under the joiner's data dir, so the materialized PLAINTEXT lands on
   # disk — the canary is PRESENT in bob's KB store iff he decrypted it (was ciphertext-only
-  # before the join-decrypt fix). Owner authored it (also present).
-  grep -rqaF "$CANARY" "$WORK/alice/.local/share" 2>/dev/null && echo "PASS: canary PRESENT in OWNER's KB (authored)" || { echo "FAIL: canary absent from owner's KB"; fail=1; }
-  if grep -rqaF "$CANARY" "$WORK/bob/.local/share" 2>/dev/null; then echo "PASS: canary PRESENT in JOINER's KB store (decrypted on join + converged)"
+  # before the join-decrypt fix). Owner authored it (also present) — UNLESS a later phase
+  # (REMOVAL/ROTATE) overwrites the same node with CANARY2/CANARY3: the owner's own store is a
+  # live document, not a history log (kb-update overwrites in place; automatic version
+  # snapshotting is a separate, not-yet-wired-up feature — see node_versions/snapshot_version).
+  # A backing store that reclaims overwritten pages on write (sqlite, correctly) has no reason
+  # to keep the stale bytes around; only the REMOVED member's copy is expected to still show
+  # CANARY1, because he never received a decryptable update past it (checked in the §D3 block).
+  if [ "$REMOVAL" = "1" ] || [ "$ROTATE" = "1" ]; then
+    echo "SKIP: owner's copy of CANARY1 was legitimately superseded by a later edit (checked as CANARY2/CANARY3 below)"
+  else
+    grep -rqaF "$CANARY" "$WORK/alice/.local/share" 2>/dev/null && echo "PASS: canary PRESENT in OWNER's KB (authored)" || { echo "FAIL: canary absent from owner's KB"; fail=1; }
+  fi
+  # ROTATE has bob do a FRESH re-join partway through (a snapshot pull of current state, not
+  # an incremental sync — see "re-joins to pull post-rotation content ... (snapshot, like
+  # CANARY1)" above), so his materialized copy is refreshed to CANARY3 and no longer carries
+  # CANARY1. That convergence is what "member CONVERGED on post-rotation content" checks below.
+  if [ "$ROTATE" = "1" ]; then
+    echo "SKIP: joiner re-joined mid-run and refreshed to the current snapshot (checked as CANARY3 below)"
+  elif grep -rqaF "$CANARY" "$WORK/bob/.local/share" 2>/dev/null; then echo "PASS: canary PRESENT in JOINER's KB store (decrypted on join + converged)"
   else echo "FAIL: joiner did NOT decrypt the sealed snapshot — only ciphertext in bob's store"; fail=1; fi
   # (3) RESIDUAL #171 PURGE (the attacker's test): the PRE-enable plaintext canary was
   # shipped to the daemon in the clear, then enable RE-SEALED the node. With reseal-as-

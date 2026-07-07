@@ -409,6 +409,12 @@ fn default_init_template() -> &'static str {
 ;; ── AI ──────────────────────────────────────────────────
 ;; (set-option! "ai-provider" "claude")
 
+;; ── Daemon (KB persistence & hosting, ADR-035) ───────────
+;; off (default) = in-process embedded KB only, no daemon needed.
+;; on-demand = attach to / auto-spawn a daemon. shared = attach to an
+;; existing daemon only, never spawn. Try `:eval (daemon-status)`.
+;; (set-option! "daemon-mode" "off")
+
 ;; ── Keybindings ─────────────────────────────────────────
 ;; (define-key "normal" "SPC t t" "cycle-theme")
 
@@ -458,6 +464,7 @@ pub struct SchemeAiOverrides {
     pub model: String,
     pub api_key_command: String,
     pub base_url: String,
+    pub thinking: String,
 }
 
 impl SchemeAiOverrides {
@@ -468,6 +475,7 @@ impl SchemeAiOverrides {
             model: editor.ai.model.clone(),
             api_key_command: editor.ai.api_key_command.clone(),
             base_url: editor.ai.base_url.clone(),
+            thinking: editor.ai.thinking.clone(),
         }
     }
 
@@ -477,6 +485,7 @@ impl SchemeAiOverrides {
             "model" => &self.model,
             "api_key_command" => &self.api_key_command,
             "base_url" => &self.base_url,
+            "thinking" => &self.thinking,
             _ => return None,
         };
         if val.is_empty() {
@@ -505,11 +514,15 @@ pub fn resolve_ai_config_with_scheme(
         .or_else(|| file.provider.clone())
         .unwrap_or_else(|| "claude".into());
 
-    // "ollama" and "deepseek" are syntactic sugar for openai-compatible endpoints.
+    // "deepseek" is syntactic sugar for an openai-compatible endpoint. "ollama"
+    // keeps its own provider_type — it has a real native API (`/api/chat`)
+    // that OllamaProvider talks to directly, distinct from its OpenAI-compatible
+    // shim (which exists but doesn't forward the `think` field). See
+    // bootstrap.rs::setup_ai for the dispatch and crates/ai/src/ollama.rs.
     let (provider_type, sugar_default_url) = match raw_provider.as_str() {
         "ollama" => (
-            "openai".to_string(),
-            Some("http://localhost:11434/v1".to_string()),
+            "ollama".to_string(),
+            Some("http://localhost:11434".to_string()),
         ),
         "deepseek" => (
             "openai".to_string(),
@@ -529,6 +542,9 @@ pub fn resolve_ai_config_with_scheme(
         _ => match provider_type.as_str() {
             "openai" => std::env::var("OPENAI_API_KEY").ok().or_else(file_key),
             "gemini" => std::env::var("GEMINI_API_KEY").ok().or_else(file_key),
+            // Local Ollama has no auth by default; still honor an explicit
+            // key/command for authenticated deployments (reverse-proxied, etc).
+            "ollama" => file_key(),
             _ => std::env::var("ANTHROPIC_API_KEY").ok().or_else(file_key),
         },
     };
@@ -563,6 +579,9 @@ pub fn resolve_ai_config_with_scheme(
             _ => match provider_type.as_str() {
                 "openai" => "gpt-4o".to_string(),
                 "gemini" => "gemini-2.5-flash".to_string(),
+                // No universal default makes sense for locally-installed
+                // models; this is a placeholder most users will override.
+                "ollama" => "llama3.1".to_string(),
                 _ => "claude-sonnet-4-20250514".to_string(),
             },
         });
@@ -575,6 +594,13 @@ pub fn resolve_ai_config_with_scheme(
 
     let max_tokens = file.max_tokens.unwrap_or(8192);
 
+    // Thinking: env > scheme > unset (provider default). No TOML field —
+    // this is a Scheme-first option (see options.rs `ai_thinking`), matching
+    // ai_mode/ai_profile rather than the legacy config.toml-backed fields.
+    let thinking = std::env::var("MAE_AI_THINKING")
+        .ok()
+        .or_else(|| scheme.opt("thinking"));
+
     Some(ProviderConfig {
         provider_type,
         api_key,
@@ -584,6 +610,7 @@ pub fn resolve_ai_config_with_scheme(
         temperature: file.temperature,
         timeout_secs,
         budget: file.budget.clone(),
+        thinking,
     })
 }
 
@@ -596,6 +623,7 @@ pub fn resolve_ai_config(file_config: &Config) -> Option<ProviderConfig> {
         model: String::new(),
         api_key_command: String::new(),
         base_url: String::new(),
+        thinking: String::new(),
     };
     resolve_ai_config_with_scheme(file_config, &empty)
 }
@@ -733,7 +761,7 @@ pub fn run_wizard() -> io::Result<()> {
         "1" | "claude" => ("claude", true, "claude-sonnet-4-20250514", None),
         "2" | "openai" => ("openai", true, "gpt-4o", None),
         "3" | "gemini" => ("gemini", true, "gemini-2.5-flash", None),
-        "4" | "ollama" => ("ollama", false, "llama3", Some("http://localhost:11434/v1")),
+        "4" | "ollama" => ("ollama", false, "llama3", Some("http://localhost:11434")),
         "5" | "deepseek" => ("deepseek", true, "deepseek-chat", None),
         _ => ("", false, "", None),
     };
@@ -875,8 +903,8 @@ pub fn run_wizard() -> io::Result<()> {
     let daemon_enabled = !matches!(enable_daemon.to_lowercase().as_str(), "n" | "no");
     if daemon_enabled {
         cfg.daemon.enabled = Some(true);
-        init_options.push(("daemon_enabled".into(), "true".into()));
-        writeln!(out, "    Daemon enabled.")?;
+        init_options.push(("daemon_mode".into(), "on-demand".into()));
+        writeln!(out, "    Daemon enabled (daemon_mode = on-demand).")?;
         let svc = detect_platform_service_manager();
         match svc {
             ServiceManager::Homebrew => {
@@ -1261,9 +1289,17 @@ mod tests {
         std::env::remove_var("MAE_AI_BASE_URL");
         std::env::remove_var("MAE_AI_MODEL");
         let resolved = resolve_ai_config(&cfg).expect("ollama without key should still work");
-        assert_eq!(resolved.provider_type, "openai");
+        // "ollama" keeps its own provider_type now — OllamaProvider talks to
+        // the native /api/chat endpoint, not the OpenAI-compatible shim
+        // (which doesn't forward the `think` field). See ollama.rs.
+        assert_eq!(resolved.provider_type, "ollama");
         assert_eq!(resolved.model, "llama3");
-        assert!(resolved.base_url.as_deref().unwrap().contains("localhost"));
+        let base_url = resolved.base_url.as_deref().unwrap();
+        assert!(base_url.contains("localhost"));
+        assert!(
+            !base_url.ends_with("/v1"),
+            "native Ollama endpoint is unversioned, unlike the OpenAI-compat shim"
+        );
     }
 
     #[test]

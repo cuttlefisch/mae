@@ -10,7 +10,7 @@ use std::sync::Mutex;
 
 use mae_ai::{
     ai_specific_tools, tools_from_registry, AgentSession, AiCommand, AiEvent, ClaudeProvider,
-    GeminiProvider, OpenAiProvider, ProviderConfig,
+    GeminiProvider, OllamaProvider, OpenAiProvider, ProviderConfig,
 };
 use mae_core::Editor;
 use mae_dap::{run_dap_task, DapCommand, DapTaskEvent};
@@ -356,9 +356,12 @@ impl tracing::field::Visit for MessageVisitor {
 /// 2. Add a public constructor in your provider module under `crates/ai/src/`.
 /// 3. Add a match arm in the `provider_name.as_str()` block below.
 ///
-/// Note: the `"ollama"` provider name is remapped to `"openai"` in
-/// `config.rs::resolve_ai_config()` because Ollama speaks the OpenAI-compatible
-/// API. By the time we reach this function, `provider_type` is already `"openai"`.
+/// Note: `"deepseek"` is remapped to `"openai"` in
+/// `config.rs::resolve_ai_config()` because DeepSeek speaks the OpenAI-compatible
+/// API with no native alternative. `"ollama"` keeps its own identity — it has
+/// an OpenAI-compatible endpoint too, but that shim doesn't forward Ollama's
+/// `think` field (the thinking-mode toggle), so `OllamaProvider` talks to
+/// Ollama's native `/api/chat` endpoint instead. See `crates/ai/src/ollama.rs`.
 pub fn setup_ai(
     editor: &Editor,
 ) -> (
@@ -398,6 +401,7 @@ pub fn setup_ai(
         let provider: Box<dyn mae_ai::AgentProvider> = match provider_name.as_str() {
             "openai" => Box::new(OpenAiProvider::new(config)),
             "gemini" => Box::new(GeminiProvider::new(config)),
+            "ollama" => Box::new(OllamaProvider::new(config)),
             _ => Box::new(ClaudeProvider::new(config)), // default to Claude
         };
 

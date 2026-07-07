@@ -152,27 +152,75 @@ install_clang() {
     fi
 }
 
+install_rustfmt_clippy() {
+    local need=()
+    check_cmd cargo-fmt || need+=("rustfmt")
+    if ! cargo clippy --version &>/dev/null; then
+        need+=("clippy")
+    fi
+
+    if [ ${#need[@]} -eq 0 ]; then
+        echo -e "  $OK rustfmt + clippy already installed"
+        summary+=("rustfmt/clippy: installed")
+        return
+    fi
+
+    if check_cmd rustup; then
+        echo "  Installing ${need[*]} via rustup..."
+        rustup component add "${need[@]}"
+    else
+        # No rustup (e.g. Rust installed via the system package manager) —
+        # fall back to distro packages, same pattern as the other installers.
+        echo "  rustup not found — installing ${need[*]} via system package manager..."
+        if check_cmd dnf; then
+            sudo dnf install -y "${need[@]}"
+        elif check_cmd apt-get; then
+            sudo apt-get install -y "${need[@]}"
+        elif check_cmd pacman; then
+            sudo pacman -S --noconfirm "${need[@]}"
+        elif check_cmd brew; then
+            brew install "${need[@]}"
+        else
+            echo -e "  $FAIL Unknown package manager — install rustfmt/clippy manually"
+            summary+=("rustfmt/clippy: MISSING (install manually)")
+            return
+        fi
+    fi
+
+    if check_cmd cargo-fmt && cargo clippy --version &>/dev/null; then
+        echo -e "  $OK rustfmt + clippy installed"
+        summary+=("rustfmt/clippy: installed")
+    else
+        echo -e "  $WARN install attempted but rustfmt/clippy still not found"
+        summary+=("rustfmt/clippy: install failed (check PATH/toolchain)")
+    fi
+}
+
 echo "MAE Development Dependencies"
 echo "============================"
 echo ""
 
-echo "[1/5] clang (required for GUI build — skia-safe FFI)"
+echo "[1/6] rustfmt + clippy (required to run 'make fmt'/'make clippy' and the pre-commit hook)"
+install_rustfmt_clippy
+echo ""
+
+echo "[2/6] clang (required for GUI build — skia-safe FFI)"
 install_clang
 echo ""
 
-echo "[2/5] lldb-dap (DAP adapter for C/C++/Rust)"
+echo "[3/6] lldb-dap (DAP adapter for C/C++/Rust)"
 install_lldb
 echo ""
 
-echo "[3/5] rust-analyzer (LSP server for Rust)"
+echo "[4/6] rust-analyzer (LSP server for Rust)"
 install_rust_analyzer
 echo ""
 
-echo "[4/5] clangd (LSP server for C/C++)"
+echo "[5/6] clangd (LSP server for C/C++)"
 install_clangd
 echo ""
 
-echo "[5/5] debugpy (DAP adapter for Python)"
+echo "[6/6] debugpy (DAP adapter for Python)"
 install_debugpy
 echo ""
 
