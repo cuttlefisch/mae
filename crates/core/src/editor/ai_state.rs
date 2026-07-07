@@ -52,6 +52,9 @@ pub struct AiState {
     pub base_url: String,
     /// AI operating mode (standard, auto-accept, plan).
     pub mode: String,
+    /// Reasoning/thinking mode override for supported providers:
+    /// "true", "false", "high", "medium", "low". Empty = provider default.
+    pub thinking: String,
     /// Active prompt profile name.
     pub profile: String,
     /// True while the AI session is actively streaming.
@@ -105,6 +108,7 @@ impl AiState {
             api_key_command: String::new(),
             base_url: String::new(),
             mode: "standard".to_string(),
+            thinking: String::new(),
             profile: "pair-programmer".to_string(),
             streaming: false,
             cancel_requested: false,

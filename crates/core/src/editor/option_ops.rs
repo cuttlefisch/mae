@@ -87,6 +87,7 @@ impl super::Editor {
             "ai_base_url" => self.ai.base_url.clone(),
             "ai_mode" => self.ai.mode.clone(),
             "ai_profile" => self.ai.profile.clone(),
+            "ai_thinking" => self.ai.thinking.clone(),
             "restore_session" => self.restore_session.to_string(),
             "insert_ctrl_d" => self.insert_ctrl_d.clone(),
             "heading_scale" => self.heading_scale.to_string(),
@@ -358,6 +359,16 @@ impl super::Editor {
             }
             "ai_profile" => {
                 self.ai.profile = value.to_string();
+            }
+            "ai_thinking" => {
+                let valid = ["", "true", "false", "high", "medium", "low"];
+                if !valid.contains(&value) {
+                    return Err(format!(
+                        "Invalid ai_thinking: '{}' (expected: true, false, high, medium, low, or empty for provider default)",
+                        value
+                    ));
+                }
+                self.ai.thinking = value.to_string();
             }
             "restore_session" => {
                 self.restore_session = parse_option_bool(value)?;

@@ -8,6 +8,7 @@ pub mod connectivity;
 pub mod context_limits;
 pub mod executor;
 pub mod gemini;
+pub mod ollama;
 pub mod openai;
 pub mod pricing;
 pub mod provider;
@@ -22,6 +23,7 @@ pub use connectivity::ConnectivityResult;
 pub use context_limits::{lookup as lookup_context_limit, ModelVerification};
 pub use executor::{execute_tool, DeferredKind, ExecuteResult};
 pub use gemini::GeminiProvider;
+pub use ollama::OllamaProvider;
 pub use openai::OpenAiProvider;
 pub use pricing::{lookup as lookup_price, ModelPrice};
 pub use provider::{

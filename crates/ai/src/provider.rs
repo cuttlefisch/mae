@@ -63,6 +63,12 @@ pub struct ProviderConfig {
     pub base_url: Option<String>,
     pub max_tokens: u32,
     pub temperature: Option<f64>,
+    /// Reasoning/thinking mode override for supported providers.
+    /// `Some("true"|"false")` or `Some("high"|"medium"|"low")`; `None` = provider default.
+    /// Currently wired for the OpenAI-compatible transport (covers `openai`, `ollama`,
+    /// `deepseek`) — Ollama's own `think` request field. Native Claude/Gemini reasoning
+    /// controls use different wire shapes and are not yet mapped from this option.
+    pub thinking: Option<String>,
     /// HTTP request timeout in seconds. Defaults to 300 (5 min) for slow
     /// local inference (Ollama on CPU can take 60-120+ seconds per turn).
     pub timeout_secs: u64,
