@@ -108,29 +108,11 @@ fn render_kb_node_for_query(
     }
     out.push('\n');
 
-    // Body — parse [[target|display]] link markers, strip property drawers
-    let mut in_drawer = false;
-    let header_lines = out.lines().count();
-    for body_line in node.body.lines() {
-        let trimmed = body_line.trim();
-        if trimmed.eq_ignore_ascii_case(":PROPERTIES:") || trimmed.eq_ignore_ascii_case(":LOGBOOK:")
-        {
-            in_drawer = true;
-            continue;
-        }
-        if in_drawer {
-            if trimmed.eq_ignore_ascii_case(":END:") {
-                in_drawer = false;
-            }
-            continue;
-        }
-        // Strip #+keyword lines near top (already in header metadata)
-        if trimmed.starts_with("#+") && out.lines().count() < header_lines + 4 {
-            continue;
-        }
-        render_body_line(body_line, &mut out, &mut links);
-        out.push('\n');
-    }
+    // Body — strip property drawers + leading #+keywords, then scan the
+    // whole filtered body for [[...]] links (not per already-split line —
+    // a link whose display text spans a line break must still resolve).
+    let filtered_body = strip_kb_body_noise(&node.body);
+    render_kb_body(&filtered_body, &mut out, &mut links);
 
     // Neighborhood — query layer returns typed links directly
     let outgoing = query.links_from(node_id);
@@ -248,27 +230,8 @@ fn render_kb_node_with_store(
     }
     out.push('\n');
 
-    let mut in_drawer = false;
-    let header_lines = out.lines().count();
-    for body_line in node.body.lines() {
-        let trimmed = body_line.trim();
-        if trimmed.eq_ignore_ascii_case(":PROPERTIES:") || trimmed.eq_ignore_ascii_case(":LOGBOOK:")
-        {
-            in_drawer = true;
-            continue;
-        }
-        if in_drawer {
-            if trimmed.eq_ignore_ascii_case(":END:") {
-                in_drawer = false;
-            }
-            continue;
-        }
-        if trimmed.starts_with("#+") && out.lines().count() < header_lines + 4 {
-            continue;
-        }
-        render_body_line(body_line, &mut out, &mut links);
-        out.push('\n');
-    }
+    let filtered_body = strip_kb_body_noise(&node.body);
+    render_kb_body(&filtered_body, &mut out, &mut links);
 
     let (outgoing_typed, incoming_typed) = if let Some(st) = store {
         let out_links = st.links_from(node_id).unwrap_or_default();
@@ -368,51 +331,99 @@ fn render_kb_node_with_store(
     (out, links)
 }
 
-/// Render a single body line, stripping `[[target|display]]` markers and
-/// recording link spans.
-fn render_body_line(line: &str, out: &mut String, links: &mut Vec<KbLinkSpan>) {
-    let bytes = line.as_bytes();
-    let mut cursor = 0usize;
-    let mut i = 0usize;
-    while i + 1 < bytes.len() {
-        if bytes[i] == b'[' && bytes[i + 1] == b'[' {
-            if let Some(end_rel) = line[i + 2..].find("]]") {
-                let inner = &line[i + 2..i + 2 + end_rel];
-                let (target_raw, display_opt) = match inner.find('|') {
-                    Some(bar) => (inner[..bar].trim(), Some(inner[bar + 1..].trim())),
-                    None => (inner.trim(), None),
-                };
-                // Strip the ADR-030 `?query` relationship metadata from the target:
-                // it's authored CRDT truth (read by the projector + AI peer), never
-                // shown. The `#fragment` (before `?`) is kept for node resolution.
-                let target = match target_raw.find('?') {
-                    Some(p) => target_raw[..p].trim_end(),
-                    None => target_raw,
-                };
-                // Bare links (no `|display`) show the clean node id, not the query.
-                let display = display_opt.unwrap_or(target);
-                if !target.is_empty() {
-                    // Emit text before the link
-                    out.push_str(&line[cursor..i]);
-                    // Emit link display text
-                    let link_start = out.len();
-                    out.push_str(display);
-                    let link_end = out.len();
-                    links.push(KbLinkSpan {
-                        byte_start: link_start,
-                        byte_end: link_end,
-                        target: target.to_string(),
-                    });
-                    cursor = i + 2 + end_rel + 2; // past the closing ]]
-                    i = cursor;
-                    continue;
-                }
-            }
+/// Strip `:PROPERTIES:`/`:LOGBOOK:` drawers and leading `#+`-keyword lines
+/// from a KB node body, joining the kept lines back with `\n`. Hoisted out
+/// of the render functions into its own pre-pass so link-scanning
+/// (`render_kb_body`) can run over the *whole* filtered body at once instead
+/// of one already-split line at a time — needed for a link whose display
+/// text spans a line break (#301/#302).
+fn strip_kb_body_noise(body: &str) -> String {
+    let mut out = String::with_capacity(body.len());
+    let mut in_drawer = false;
+    let mut kept_lines = 0usize;
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if trimmed.eq_ignore_ascii_case(":PROPERTIES:") || trimmed.eq_ignore_ascii_case(":LOGBOOK:")
+        {
+            in_drawer = true;
+            continue;
         }
-        i += 1;
+        if in_drawer {
+            if trimmed.eq_ignore_ascii_case(":END:") {
+                in_drawer = false;
+            }
+            continue;
+        }
+        // Strip #+keyword lines near top (already shown in header metadata).
+        if trimmed.starts_with("#+") && kept_lines < 4 {
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+        kept_lines += 1;
     }
-    // Remainder
-    out.push_str(&line[cursor..]);
+    out
+}
+
+/// Render a KB node body (or any already-filtered multi-line text): resolve
+/// every `[[...]]` link to plain display text + a `KbLinkSpan` (byte-accurate
+/// against `out`), copying everything else through unchanged.
+///
+/// Whole-string-aware via `mae_kb::org::next_link_span` (ADR-030: "the
+/// parser is the canonical projector"), so a link whose display text spans a
+/// `\n` is still recognized — the bug class behind #301/#302.
+///
+/// Accepts two link grammars, since node bodies aren't uniform in this
+/// codebase: native/primary nodes store the raw ADR-030 `[[TARGET][DISPLAY]]`
+/// form directly (`kb_update` writes user-provided body text verbatim, no
+/// rewrite step), while federated/org-dir-imported nodes were pre-rewritten
+/// at import time to the older `[[TARGET|DISPLAY]]` pipe form
+/// (`org::rewrite_links`). Try `|` first (the unambiguous legacy separator
+/// for already-imported bodies), falling back to the canonical `][` split.
+fn render_kb_body(body: &str, out: &mut String, links: &mut Vec<KbLinkSpan>) {
+    let code_ranges = mae_kb::compute_code_block_ranges(body);
+    let mut cursor = 0usize;
+    while let Some(m) = mae_kb::org::next_link_span(body, cursor, &code_ranges) {
+        // Emit literal text before the link (char-boundary-safe: `cursor`
+        // and `m.full_start` only ever land on ASCII '[' bytes or a prior
+        // match's end, both always valid UTF-8 boundaries).
+        out.push_str(&body[cursor..m.full_start]);
+
+        let (target_raw, display_opt) = match m.inner.find('|') {
+            Some(bar) => (m.inner[..bar].trim(), Some(m.inner[bar + 1..].trim())),
+            None => match m.inner.find("][") {
+                Some(sep) => (m.inner[..sep].trim(), Some(m.inner[sep + 2..].trim())),
+                None => (m.inner.trim(), None),
+            },
+        };
+        // Strip the ADR-030 `?query` relationship metadata from the target:
+        // it's authored CRDT truth (read by the projector + AI peer), never
+        // shown. The `#fragment` (before `?`) is kept for node resolution.
+        let target = match target_raw.find('?') {
+            Some(p) => target_raw[..p].trim_end(),
+            None => target_raw,
+        };
+        // Bare links (no display) show the clean node id, not the query.
+        let display = display_opt.unwrap_or(target);
+        if !target.is_empty() {
+            let link_start = out.len();
+            out.push_str(display);
+            let link_end = out.len();
+            links.push(KbLinkSpan {
+                byte_start: link_start,
+                byte_end: link_end,
+                target: target.to_string(),
+            });
+        } else {
+            // Empty target: not a real link — keep the literal markup
+            // (matches the historical stray-`[[]]` behavior).
+            out.push_str("[[");
+            out.push_str(m.inner);
+            out.push_str("]]");
+        }
+        cursor = m.full_end;
+    }
+    out.push_str(&body[cursor..]);
 }
 
 impl Editor {
@@ -586,11 +597,10 @@ impl Editor {
                     }
                     out.push('\n');
                 }
-                // Parse the live text for links
-                for body_line in live_text.lines() {
-                    render_body_line(body_line, &mut out, &mut links);
-                    out.push('\n');
-                }
+                // Parse the live text for links (whole-string scan — see
+                // render_kb_body — so a link whose display text spans a
+                // line break is still recognized).
+                render_kb_body(live_text.as_str(), &mut out, &mut links);
                 // Add neighborhood from KB (federation-aware, typed links)
                 let outgoing_links = if let Some(q) = self.kb.query_layer() {
                     q.links_from(&node_id)
@@ -1384,6 +1394,80 @@ mod tests {
     }
 
     #[test]
+    fn help_follow_link_after_multiline_display_link_no_byte_drift() {
+        // #302: a link earlier in the body whose display text spans a line
+        // break used to leave raw brackets in the rendered text (#301),
+        // shifting byte offsets for every link after it. Once #301 is
+        // fixed, a link positioned after a multi-line-display link must
+        // still be followable from the cursor position it's actually
+        // rendered at.
+        let mut e = Editor::new();
+        e.kb.primary.insert(mae_kb::Node::new(
+            "user:target-a",
+            "Target A",
+            mae_kb::NodeKind::Note,
+            "",
+        ));
+        e.kb.primary.insert(mae_kb::Node::new(
+            "user:target-b",
+            "Target B",
+            mae_kb::NodeKind::Note,
+            "",
+        ));
+        e.kb.primary.insert(mae_kb::Node::new(
+            "user:source",
+            "Source",
+            mae_kb::NodeKind::Note,
+            "First [[user:target-a|a\nlink]] then [[user:target-b|another link]].",
+        ));
+
+        e.open_help_at("user:source");
+        let buf_idx = e
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Kb)
+            .unwrap();
+
+        // The rendered buffer also lists both targets again under
+        // "Outgoing:" in the Neighborhood section, so don't assume an exact
+        // total count — find each target's *first* (body) occurrence,
+        // which is what appears before the neighborhood section.
+        let rendered_links = e.kb_view().unwrap().rendered_links.clone();
+        let link_a = rendered_links
+            .iter()
+            .find(|l| l.target == "user:target-a")
+            .expect("target-a link recognized");
+        let link_b = rendered_links
+            .iter()
+            .find(|l| l.target == "user:target-b")
+            .expect("target-b link recognized");
+        assert!(
+            link_a.byte_end <= link_b.byte_start,
+            "the body's first link byte range must not overlap the second: {:?} vs {:?}",
+            link_a,
+            link_b
+        );
+
+        // Position the cursor precisely on the second link's rendered text
+        // and follow it directly (no help_next_link focus-cycling).
+        let target_byte = link_b.byte_start;
+        let rope = e.buffers[buf_idx].rope();
+        let row = rope.byte_to_line(target_byte);
+        let col = target_byte - rope.line_to_byte(row);
+        {
+            let win = e.window_mgr.focused_window_mut();
+            win.cursor_row = row;
+            win.cursor_col = col;
+        }
+        e.help_follow_link();
+        assert_eq!(
+            e.kb_view().unwrap().current,
+            "user:target-b",
+            "cursor on the second link's visible text must resolve to its real target"
+        );
+    }
+
+    #[test]
     fn help_back_and_forward() {
         let mut e = Editor::new();
         e.open_help_at("index");
@@ -1506,10 +1590,10 @@ mod tests {
     }
 
     #[test]
-    fn render_body_line_strips_brackets() {
+    fn render_kb_body_strips_brackets() {
         let mut out = String::new();
         let mut links = Vec::new();
-        render_body_line("see [[concept:buffer]] for details", &mut out, &mut links);
+        render_kb_body("see [[concept:buffer]] for details", &mut out, &mut links);
         assert_eq!(out, "see concept:buffer for details");
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].target, "concept:buffer");
@@ -1520,22 +1604,22 @@ mod tests {
     }
 
     #[test]
-    fn render_body_line_display_override() {
+    fn render_kb_body_display_override() {
         let mut out = String::new();
         let mut links = Vec::new();
-        render_body_line("goto [[concept:buffer|the buffer]]", &mut out, &mut links);
+        render_kb_body("goto [[concept:buffer|the buffer]]", &mut out, &mut links);
         assert_eq!(out, "goto the buffer");
         assert_eq!(links[0].target, "concept:buffer");
         assert_eq!(&out[links[0].byte_start..links[0].byte_end], "the buffer");
     }
 
     #[test]
-    fn render_body_line_strips_query_metadata() {
+    fn render_kb_body_strips_query_metadata() {
         // ADR-030 (Phase C): the in-target `?rel=…&w=…` metadata is hidden from the
         // rendered view — only the display shows; the span target is the clean id.
         let mut out = String::new();
         let mut links = Vec::new();
-        render_body_line(
+        render_kb_body(
             "see [[concept:buffer?rel=teaches&w=0.8|the buffer]] now",
             &mut out,
             &mut links,
@@ -1548,14 +1632,14 @@ mod tests {
         // A bare link (no |display) shows the clean node id, query stripped.
         let mut out2 = String::new();
         let mut links2 = Vec::new();
-        render_body_line("[[concept:x?rel=cites]]", &mut out2, &mut links2);
+        render_kb_body("[[concept:x?rel=cites]]", &mut out2, &mut links2);
         assert_eq!(out2, "concept:x");
         assert_eq!(links2[0].target, "concept:x");
 
         // Fragment (before the query) is retained for node resolution.
         let mut out3 = String::new();
         let mut links3 = Vec::new();
-        render_body_line(
+        render_kb_body(
             "[[concept:rope#arch?rel=implements|ropes]]",
             &mut out3,
             &mut links3,
@@ -1565,11 +1649,98 @@ mod tests {
     }
 
     #[test]
-    fn render_body_line_empty_target_is_plain() {
+    fn render_kb_body_empty_target_is_plain() {
         let mut out = String::new();
         let mut links = Vec::new();
-        render_body_line("[[]] stays", &mut out, &mut links);
+        render_kb_body("[[]] stays", &mut out, &mut links);
         assert_eq!(out, "[[]] stays");
+        assert!(links.is_empty());
+    }
+
+    // --- #301/#302: whole-string-aware render_kb_body ---
+
+    #[test]
+    fn render_kb_body_multiline_display_text_no_raw_brackets() {
+        let mut out = String::new();
+        let mut links = Vec::new();
+        render_kb_body(
+            "see [[concept:buffer|the\nbuffer]] now",
+            &mut out,
+            &mut links,
+        );
+        assert_eq!(out, "see the\nbuffer now");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "concept:buffer");
+        assert_eq!(&out[links[0].byte_start..links[0].byte_end], "the\nbuffer");
+        assert!(!out.contains("[["));
+        assert!(!out.contains("]]"));
+    }
+
+    #[test]
+    fn render_kb_body_native_bracket_bracket_grammar() {
+        // Native/primary nodes store the raw ADR-030 `[[TARGET][DISPLAY]]`
+        // form directly (`kb_update` never rewrites it) — render_kb_body
+        // must accept this grammar too, not just the legacy federated-import
+        // pipe form.
+        let mut out = String::new();
+        let mut links = Vec::new();
+        render_kb_body("goto [[concept:buffer][the buffer]]", &mut out, &mut links);
+        assert_eq!(out, "goto the buffer");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "concept:buffer");
+        assert_eq!(&out[links[0].byte_start..links[0].byte_end], "the buffer");
+    }
+
+    #[test]
+    fn render_kb_body_native_bracket_bracket_multiline_display() {
+        let mut out = String::new();
+        let mut links = Vec::new();
+        render_kb_body(
+            "see [[concept:buffer][the\nbuffer]] now",
+            &mut out,
+            &mut links,
+        );
+        assert_eq!(out, "see the\nbuffer now");
+        assert_eq!(links.len(), 1);
+        assert!(!out.contains("[["));
+    }
+
+    #[test]
+    fn render_kb_body_back_to_back_links_no_byte_collision() {
+        let mut out = String::new();
+        let mut links = Vec::new();
+        render_kb_body("[[concept:a|A]][[concept:b|B]]", &mut out, &mut links);
+        assert_eq!(out, "AB");
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].target, "concept:a");
+        assert_eq!(&out[links[0].byte_start..links[0].byte_end], "A");
+        assert_eq!(links[1].target, "concept:b");
+        assert_eq!(&out[links[1].byte_start..links[1].byte_end], "B");
+        assert!(links[0].byte_end <= links[1].byte_start);
+    }
+
+    #[test]
+    fn render_kb_body_bracket_lookalike_before_real_link() {
+        // A `]]`-lookalike (unrelated bracket pair) appearing in prose
+        // before the real link must not confuse the scanner.
+        let mut out = String::new();
+        let mut links = Vec::new();
+        render_kb_body(
+            "array[i]] then [[concept:buffer|buffer]]",
+            &mut out,
+            &mut links,
+        );
+        assert_eq!(out, "array[i]] then buffer");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "concept:buffer");
+    }
+
+    #[test]
+    fn render_kb_body_unterminated_bracket_is_literal() {
+        let mut out = String::new();
+        let mut links = Vec::new();
+        render_kb_body("see [[concept:buffer no close", &mut out, &mut links);
+        assert_eq!(out, "see [[concept:buffer no close");
         assert!(links.is_empty());
     }
 
@@ -2003,6 +2174,53 @@ mod tests {
             links.iter().any(|l| l.target == "concept:buffer"),
             "concept:buffer should be a navigable link"
         );
+    }
+
+    #[test]
+    fn render_for_query_multiline_display_text_no_raw_brackets() {
+        use mae_kb::query::CozoQueryLayer;
+        use mae_kb::store::KbStore;
+        use mae_kb::{CozoKbStore, Node, NodeKind};
+        use std::sync::Arc;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(CozoKbStore::open(tmp.path().join("test.cozo")).unwrap());
+        store
+            .insert_node(&Node::new(
+                "lesson:wrap",
+                "Wrap test",
+                NodeKind::Lesson,
+                "See [[concept:buffer|the\nbuffer]] and then [[concept:rope|the rope]] too.",
+            ))
+            .unwrap();
+        store
+            .insert_node(&Node::new(
+                "concept:buffer",
+                "Buffer",
+                NodeKind::Concept,
+                "A text buffer.",
+            ))
+            .unwrap();
+        store
+            .insert_node(&Node::new(
+                "concept:rope",
+                "Rope",
+                NodeKind::Concept,
+                "A rope.",
+            ))
+            .unwrap();
+
+        let layer = CozoQueryLayer::new(store);
+        let (text, links) = render_kb_node_for_query(&layer, "lesson:wrap");
+
+        assert!(
+            !text.contains("[[") && !text.contains("]]"),
+            "no raw link markup should leak, got:\n{}",
+            text
+        );
+        let targets: Vec<_> = links.iter().map(|l| l.target.as_str()).collect();
+        assert!(targets.contains(&"concept:buffer"));
+        assert!(targets.contains(&"concept:rope"));
     }
 
     #[test]

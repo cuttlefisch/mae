@@ -612,7 +612,7 @@ Source: `shared/sync/src/lib.rs`
 | `undo-available?` | `crates/scheme/src/runtime.rs` |
 | `redo-available?` | `crates/scheme/src/runtime.rs` |
 
-## Commands (547 built-in)
+## Commands (546 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -943,7 +943,6 @@ Source: `shared/sync/src/lib.rs`
 | `kb-unregister` | Remove a registered KB instance |
 | `kb-reimport` | Re-import KB instance from org files |
 | `kb-instances` | List all registered KB instances |
-| `kb-promote` | Promote the current KB-view node from a federated instance into the primary KB (#303) |
 | `insert-newline-smart` | Insert newline with list continuation |
 | `table-next-cell` | Move to next table cell (Tab) |
 | `table-prev-cell` | Move to previous table cell (S-Tab) |
