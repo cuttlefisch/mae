@@ -393,7 +393,12 @@ pub fn parse_links(body: &str) -> Vec<(String, String)> {
 /// Matches Emacs behavior: `#+begin_src`, `#+begin_example`, and `#+begin_export`
 /// blocks contain literal content — no link extraction, no markup processing.
 /// `#+begin_quote` is intentionally excluded because Emacs parses org markup inside it.
-fn compute_code_block_ranges(body: &str) -> Vec<(usize, usize)> {
+///
+/// `pub` so other link-scanning consumers (e.g. the interactive KB-view
+/// renderer in `mae-core`) can reuse the same code-block-awareness that
+/// `org::rewrite_links_with_types`/`org::next_link_span` already have,
+/// instead of hand-rolling a second, unaware scanner (ADR-030).
+pub fn compute_code_block_ranges(body: &str) -> Vec<(usize, usize)> {
     let mut ranges = Vec::new();
     let lower = body.to_ascii_lowercase();
     // Block types whose content is verbatim (no org markup parsing)

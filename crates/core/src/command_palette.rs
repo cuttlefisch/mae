@@ -159,6 +159,16 @@ pub enum MiniDialogContext {
     Notification {
         notif_id: u64,
     },
+    /// #269: a babel source block whose `:eval` policy resolved to
+    /// `NeedsConfirmation` (interactive path only — the AI/MCP path refuses
+    /// outright instead of opening a dialog, since there's no human to
+    /// answer it). Execution is deferred until the user confirms; `block`
+    /// is a snapshot from when the dialog opened, re-executed against the
+    /// buffer's current content on confirm (`Editor::babel_run_block`).
+    BabelConfirm {
+        buf_idx: usize,
+        block: Box<crate::babel::SrcBlock>,
+    },
 }
 
 /// State for a multi-field mini-dialog (edit-link, rename, etc.)

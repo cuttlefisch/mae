@@ -564,16 +564,50 @@ pub fn rewrite_links(body: &str) -> String {
     rewrite_links_with_types(body)
 }
 
-/// Rewrite links for display, stripping any ADR-030 `?query` metadata from the
-/// target (kept only in the canonical source text for the projector).
-pub fn rewrite_links_with_types(body: &str) -> String {
-    let code_ranges = crate::compute_code_block_ranges(body);
+/// A single `[[...]]` link match found by [`next_link_span`], byte-offset
+/// accurate against the `body` string it was scanned from.
+///
+/// `full_start`/`full_end` bound the *whole* matched span as consumed by the
+/// scanner. Due to the triple-bracket stray-leading-bracket rule (see
+/// `next_link_span`), `full_start` can sit one byte before the link's own
+/// opening `[[` when a spurious extra `[` precedes it — that stray byte is
+/// silently dropped, matching this scanner's long-standing behavior.
+///
+/// `inner` is the *raw, unsplit* content between the outer `[[`/`]]` — this
+/// walker only finds link boundaries; it deliberately does not decide how to
+/// split `inner` into target/display, because that grammar differs by
+/// consumer: `rewrite_links_with_types` splits on the raw org `][` separator
+/// (`[[TARGET][DISPLAY]]`, ADR-030's canonical grammar), while the KB-view
+/// renderer must also accept the older `[[TARGET|DISPLAY]]` pipe form still
+/// stored in already-imported federated node bodies (see
+/// `crate::org::rewrite_links`'s docs on that legacy rewrite).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinkSpanMatch<'a> {
+    pub full_start: usize,
+    pub full_end: usize,
+    pub inner: &'a str,
+}
+
+/// Scan `body` for the next `[[...]]` link at or after byte offset `from`,
+/// skipping code blocks (`code_ranges`, see [`crate::compute_code_block_ranges`])
+/// and org verbatim/code spans (`=...=`/`~...~`). Whole-string-aware: a link
+/// whose display text spans a `\n` is still found, because this scans `body`
+/// as one string rather than one already-split line at a time (the bug class
+/// behind #301/#302).
+///
+/// This is the shared, canonical link-span walker (ADR-030: "the parser is
+/// the canonical projector") — [`rewrite_links_with_types`] and the KB-view
+/// interactive renderer (`mae-core`) both build on it instead of each
+/// hand-rolling their own scan.
+pub fn next_link_span<'a>(
+    body: &'a str,
+    from: usize,
+    code_ranges: &[(usize, usize)],
+) -> Option<LinkSpanMatch<'a>> {
     let in_code_block =
         |pos: usize| -> bool { code_ranges.iter().any(|&(s, e)| pos >= s && pos < e) };
-
-    let mut out = String::with_capacity(body.len());
     let bytes = body.as_bytes();
-    let mut i = 0;
+    let mut i = from;
     while i < body.len() {
         // `[[` is pure ASCII so byte-indexed lookahead is UTF-8-safe.
         if i + 1 < bytes.len()
@@ -596,65 +630,81 @@ pub fn rewrite_links_with_types(body: &str) -> String {
                 // are stray. Skip just ONE `[` so the inner link can be
                 // parsed on the next iteration.
                 if inner.contains("[[") {
-                    out.push('[');
                     i += 1;
                     continue;
                 }
-                {
-                    let (target_raw, display) = match inner.find("][") {
-                        Some(sep) => (&inner[..sep], Some(&inner[sep + 2..])),
-                        None => (inner, None),
-                    };
-                    // Strip ADR-030 `?query` metadata — display/resolution use the
-                    // bare NODE_ID[#FRAGMENT]; the query lives only in source text.
-                    let target_clean = match target_raw.find('?') {
-                        Some(p) => &target_raw[..p],
-                        None => target_raw,
-                    };
-                    if let Some(uuid) = target_clean.strip_prefix("id:") {
-                        let uuid = uuid.trim();
-                        out.push_str("[[");
-                        // Keep fragment for node resolution.
-                        out.push_str(uuid);
-                        if let Some(d) = display {
-                            out.push('|');
-                            out.push_str(d);
-                        }
-                        out.push_str("]]");
-                    } else if is_kb_node_id(target_clean) {
-                        // Internal KB link (concept:buffer, key:normal-mode, etc.)
-                        // — preserve as [[target|display]] for the help renderer.
-                        out.push_str("[[");
-                        out.push_str(target_clean);
-                        if let Some(d) = display {
-                            out.push('|');
-                            out.push_str(d);
-                        }
-                        out.push_str("]]");
-                    } else if let Some(d) = display {
-                        // External link — emit "display (target)" so
-                        // the brackets don't collide with our scanner.
-                        out.push_str(d);
-                        out.push_str(" (");
-                        out.push_str(target_raw);
-                        out.push(')');
-                    } else {
-                        // Bare external link — emit the URL in parens.
-                        out.push('(');
-                        out.push_str(target_raw);
-                        out.push(')');
-                    }
-                    i = link_start + 2 + rel_end + 2;
-                    continue;
-                }
+                return Some(LinkSpanMatch {
+                    full_start: i,
+                    full_end: link_start + 2 + rel_end + 2,
+                    inner,
+                });
             }
         }
-        // Emit one full UTF-8 char. This keeps multibyte bodies
-        // (non-English titles, emoji, etc.) intact.
-        let ch = body[i..].chars().next().expect("i < body.len()");
-        out.push(ch);
-        i += ch.len_utf8();
+        i += 1;
     }
+    None
+}
+
+/// Rewrite links for display, stripping any ADR-030 `?query` metadata from the
+/// target (kept only in the canonical source text for the projector).
+pub fn rewrite_links_with_types(body: &str) -> String {
+    let code_ranges = crate::compute_code_block_ranges(body);
+
+    let mut out = String::with_capacity(body.len());
+    let mut cursor = 0usize;
+    while let Some(m) = next_link_span(body, cursor, &code_ranges) {
+        // Emit literal text before the link (char-boundary-safe: both
+        // `cursor` and `m.full_start` are always valid UTF-8 boundaries —
+        // they only ever land on ASCII '[' bytes or a prior match's end).
+        out.push_str(&body[cursor..m.full_start]);
+
+        // Raw org grammar: `[[TARGET][DISPLAY]]` or bare `[[TARGET]]`.
+        let (target_raw, display) = match m.inner.find("][") {
+            Some(sep) => (&m.inner[..sep], Some(&m.inner[sep + 2..])),
+            None => (m.inner, None),
+        };
+        // Strip ADR-030 `?query` metadata — display/resolution use the
+        // bare NODE_ID[#FRAGMENT]; the query lives only in source text.
+        let target_clean = match target_raw.find('?') {
+            Some(p) => &target_raw[..p],
+            None => target_raw,
+        };
+        if let Some(uuid) = target_clean.strip_prefix("id:") {
+            let uuid = uuid.trim();
+            out.push_str("[[");
+            // Keep fragment for node resolution.
+            out.push_str(uuid);
+            if let Some(d) = display {
+                out.push('|');
+                out.push_str(d);
+            }
+            out.push_str("]]");
+        } else if is_kb_node_id(target_clean) {
+            // Internal KB link (concept:buffer, key:normal-mode, etc.)
+            // — preserve as [[target|display]] for the help renderer.
+            out.push_str("[[");
+            out.push_str(target_clean);
+            if let Some(d) = display {
+                out.push('|');
+                out.push_str(d);
+            }
+            out.push_str("]]");
+        } else if let Some(d) = display {
+            // External link — emit "display (target)" so
+            // the brackets don't collide with our scanner.
+            out.push_str(d);
+            out.push_str(" (");
+            out.push_str(target_raw);
+            out.push(')');
+        } else {
+            // Bare external link — emit the URL in parens.
+            out.push('(');
+            out.push_str(target_raw);
+            out.push(')');
+        }
+        cursor = m.full_end;
+    }
+    out.push_str(&body[cursor..]);
     out
 }
 

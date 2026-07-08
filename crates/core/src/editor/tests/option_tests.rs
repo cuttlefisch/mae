@@ -8,6 +8,56 @@ fn self_test_active_flag_defaults_false() {
     assert!(!editor.self_test_active);
 }
 
+// --- #305: set_status dedups consecutive-identical entries ---
+
+fn status_entries_matching(editor: &Editor, msg: &str) -> usize {
+    editor
+        .message_log
+        .entries()
+        .iter()
+        .filter(|e| e.target == "status" && e.message == msg)
+        .count()
+}
+
+#[test]
+fn set_status_repeated_identical_value_logs_once() {
+    let mut editor = Editor::new();
+    let before = status_entries_matching(&editor, "X");
+    editor.set_status("X");
+    editor.set_status("X");
+    editor.set_status("X");
+    assert_eq!(
+        status_entries_matching(&editor, "X") - before,
+        1,
+        "three consecutive identical calls must log exactly one entry"
+    );
+}
+
+#[test]
+fn set_status_non_consecutive_repeat_logs_both() {
+    // Adversarial: only CONSECUTIVE repeats are deduped. Re-raising an
+    // earlier value after something else was shown in between must still
+    // log — guards against an over-eager global (not consecutive-only) dedup.
+    let mut editor = Editor::new();
+    let before = status_entries_matching(&editor, "X");
+    editor.set_status("X");
+    editor.set_status("Y");
+    editor.set_status("X");
+    assert_eq!(
+        status_entries_matching(&editor, "X") - before,
+        2,
+        "non-consecutive repeats of the same value must both log"
+    );
+}
+
+#[test]
+fn set_status_empty_string_still_does_not_log() {
+    let mut editor = Editor::new();
+    let count_before = editor.message_log.entries().len();
+    editor.set_status("");
+    assert_eq!(editor.message_log.entries().len(), count_before);
+}
+
 #[test]
 fn effective_word_wrap_uses_buffer_local() {
     let mut editor = Editor::new();
@@ -134,6 +184,146 @@ fn handle_link_click_navigates_to_line() {
     assert_eq!(win.cursor_row, 2);
 
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// --- #293: KB-aware link-click resolution ---
+
+#[test]
+fn handle_link_click_resolves_kb_node_to_kb_view() {
+    let mut editor = Editor::new();
+    editor.kb.primary.insert(mae_kb::Node::new(
+        "user:link-target",
+        "Link Target",
+        mae_kb::NodeKind::Note,
+        "body",
+    ));
+    editor.handle_link_click("user:link-target");
+    assert_eq!(
+        editor.buffers[editor.active_buffer_idx()].kind,
+        crate::BufferKind::Kb,
+        "a KB-shaped target must open the *KB* view, not attempt a file open"
+    );
+    assert_eq!(editor.kb_view().unwrap().current, "user:link-target");
+    assert!(!editor.status_msg.to_lowercase().contains("error"));
+}
+
+#[test]
+fn handle_link_click_strips_id_prefix() {
+    let mut editor = Editor::new();
+    editor.kb.primary.insert(mae_kb::Node::new(
+        "user:link-target",
+        "Link Target",
+        mae_kb::NodeKind::Note,
+        "body",
+    ));
+    // org-roam-style `id:` prefix, as chain-fill/daily-note links use.
+    editor.handle_link_click("id:user:link-target");
+    assert_eq!(
+        editor.buffers[editor.active_buffer_idx()].kind,
+        crate::BufferKind::Kb
+    );
+    assert_eq!(editor.kb_view().unwrap().current, "user:link-target");
+}
+
+#[test]
+fn handle_link_click_source_file_mode_opens_raw_file() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(
+        dir.path().join("note1.org"),
+        ":PROPERTIES:\n:ID: click-src-test\n:END:\n#+title: Click Src Test\n\nBody.\n",
+    )
+    .unwrap();
+
+    let mut editor = Editor::new();
+    editor.config_dir_override = Some(dir.path().join("cfgdir"));
+    editor.data_dir_override = Some(dir.path().join("datadir"));
+    editor.kb_register("ClickSrcTest", dir.path()).unwrap();
+    editor.kb_link_follow_mode = "source-file".to_string();
+
+    editor.handle_link_click("click-src-test");
+
+    assert_ne!(
+        editor.buffers[editor.active_buffer_idx()].kind,
+        crate::BufferKind::Kb,
+        "source-file mode must open the raw file, not switch into the *KB* view"
+    );
+    let opened = editor.buffers.iter().any(|b| {
+        b.file_path()
+            .map(|p| p.ends_with("note1.org"))
+            .unwrap_or(false)
+    });
+    assert!(opened, "should have opened the node's raw source file");
+}
+
+#[test]
+fn handle_link_click_relative_file_link_unaffected_by_kb_routing() {
+    // Regression guard: a genuine (non-KB) relative file link must still go
+    // through the ordinary file-open path, not get swallowed by the new
+    // KB-aware branch.
+    let dir = std::env::temp_dir().join("mae_test_non_kb_link");
+    let _ = std::fs::create_dir_all(&dir);
+    let file = dir.join("plan.md");
+    std::fs::write(&file, "# Plan\n").unwrap();
+
+    let mut editor = Editor::new();
+    editor.handle_link_click(&file.display().to_string());
+    let opened = editor.buffers.iter().any(|b| {
+        b.file_path()
+            .map(|p| p.ends_with("plan.md"))
+            .unwrap_or(false)
+    });
+    assert!(opened, "a real file link must still open as a file");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn kb_link_follow_mode_option_round_trip() {
+    let mut editor = Editor::new();
+    assert_eq!(editor.kb_link_follow_mode, "kb-view");
+    editor
+        .set_option("kb_link_follow_mode", "source-file")
+        .unwrap();
+    assert_eq!(editor.kb_link_follow_mode, "source-file");
+    assert_eq!(
+        editor.get_option("kb_link_follow_mode").unwrap().0,
+        "source-file"
+    );
+    let err = editor.set_option("kb_link_follow_mode", "bogus");
+    assert!(err.is_err(), "an unrecognized mode must be rejected");
+}
+
+#[test]
+fn open_link_at_cursor_end_to_end_resolves_kb_link_in_plain_org_buffer() {
+    // #293 end-to-end: a real org buffer (not the *KB* view) with
+    // `link_descriptive` on, containing a daily-note-style `[[id][display]]`
+    // link under the cursor. This is the actual dispatch chain both `gx`
+    // and `smart_enter`'s Enter-to-follow-link fallback exercise via
+    // `open-link-at-cursor`.
+    let mut editor = Editor::new();
+    editor.kb.primary.insert(mae_kb::Node::new(
+        "daily:2026-07-06",
+        "2026-07-06",
+        mae_kb::NodeKind::Note,
+        "",
+    ));
+    editor.buffers[0].insert_text_at(0, "Previous: [[id:daily:2026-07-06][2026-07-06]]\n");
+    editor.buffers[0].recompute_display_regions(true);
+
+    // Cursor on the link's visible display text ("2026-07-06").
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_row = 0;
+    win.cursor_col = 12;
+
+    editor.dispatch_builtin("open-link-at-cursor");
+
+    assert_eq!(
+        editor.buffers[editor.active_buffer_idx()].kind,
+        crate::BufferKind::Kb,
+        "following the link must land in the *KB* view, not attempt a raw file open"
+    );
+    assert_eq!(editor.kb_view().unwrap().current, "daily:2026-07-06");
+    assert!(!editor.status_msg.to_lowercase().contains("error"));
 }
 
 #[test]

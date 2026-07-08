@@ -726,6 +726,16 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
                 editor.dispatch_next_setup_section();
             }
         }
+        MiniDialogContext::BabelConfirm { buf_idx, block } => {
+            // #269: only reached on explicit confirm (y/Enter) — the block
+            // was NOT executed while the dialog was open. Mirrors
+            // FileDelete's confirm-then-effect shape; gets TUI+GUI parity
+            // for free since this apply logic isn't duplicated per backend.
+            if *buf_idx < editor.buffers.len() {
+                let msg = editor.babel_run_block(*buf_idx, block);
+                editor.set_status(msg);
+            }
+        }
     }
 }
 
@@ -748,5 +758,38 @@ fn rewrite_heading_tags(line: &str, tag_input: &str) -> String {
     } else {
         let tags: Vec<&str> = tag_input.split(':').filter(|t| !t.is_empty()).collect();
         format!("{} :{}:\n", base, tags.join(":"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_mini_dialog_babel_confirm_executes_the_deferred_block() {
+        // #269: confirming a BabelConfirm dialog must actually run the
+        // block it deferred — mirrors FileDelete's confirm-then-effect
+        // shape (the file is only deleted once `apply_mini_dialog` runs).
+        let mut editor = Editor::new();
+        editor.buffers[0].insert_text_at(
+            0,
+            "#+begin_src scheme :eval query\n(display \"hi\")\n#+end_src\n",
+        );
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+
+        editor.babel_execute(true).unwrap();
+        assert!(
+            editor.pending_scheme_eval.is_empty(),
+            "must not execute before confirmation"
+        );
+        let dialog = editor.mini_dialog.take().expect("dialog should be open");
+
+        apply_mini_dialog(&mut editor, dialog);
+
+        assert_eq!(
+            editor.pending_scheme_eval.len(),
+            1,
+            "confirming the dialog must run the deferred block"
+        );
     }
 }

@@ -864,6 +864,10 @@ impl CommandRegistry {
         reg.register_builtin("kb-reimport", "Re-import KB instance from org files");
         reg.register_builtin("kb-instances", "List all registered KB instances");
         reg.register_builtin(
+            "kb-promote",
+            "Promote the current KB-view node from a federated instance into the primary KB (#303)",
+        );
+        reg.register_builtin(
             "insert-newline-smart",
             "Insert newline with list continuation",
         );

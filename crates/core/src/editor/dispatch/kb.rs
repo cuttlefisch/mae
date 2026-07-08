@@ -20,6 +20,28 @@ impl Editor {
             "kb-edit-source" => {
                 self.help_edit_source();
             }
+            "kb-promote" => {
+                // Acts on the current KB-view node, mirroring kb-edit-source
+                // (#303 interim bridge — see kb_promote_node's doc comment).
+                match self.kb_view().map(|v| v.current.clone()) {
+                    Some(id) => {
+                        if let Err(e) = self.kb_promote_node(&id) {
+                            self.set_status(e);
+                        } else {
+                            // Refresh the rendered view so it reflects the
+                            // node's new (primary) provenance immediately.
+                            if let Some(buf_idx) = self
+                                .buffers
+                                .iter()
+                                .position(|b| b.kind == crate::BufferKind::Kb)
+                            {
+                                self.kb_populate_buffer(buf_idx);
+                            }
+                        }
+                    }
+                    None => self.set_status("Not in a help buffer"),
+                }
+            }
             "kb-insert-link" => {
                 let nodes = self.kb_all_node_pairs();
                 self.command_palette = Some(

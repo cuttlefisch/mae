@@ -9,23 +9,27 @@ impl Editor {
     /// Cycle: SUBTREE (all visible) → FOLDED (heading only) → CHILDREN
     /// (body + child headings visible, child bodies folded) → SUBTREE.
     /// Leaf headings (no children) cycle: SUBTREE ↔ FOLDED.
-    pub fn org_cycle(&mut self) {
+    pub fn org_cycle(&mut self) -> String {
         let buf_idx = self.active_buffer_idx();
         let lang = self.syntax.language_of(buf_idx);
         if lang != Some(crate::syntax::Language::Org) {
-            return;
+            return "Not an org buffer".to_string();
         }
         // Tab on a table line → cell navigation instead of heading fold.
         let row = self.window_mgr.focused_window().cursor_row;
         if crate::table::table_at_line(self.buffers[buf_idx].rope(), row).is_some() {
             self.table_next_cell();
-            return;
+            // `table_next_cell` sets its own status; no intervening call
+            // between it and this read, so (unlike #304's cross-boundary
+            // bug) there's no clobber risk here.
+            return self.status_msg.clone();
         }
         self.heading_cycle(crate::syntax::Language::Org);
+        self.status_msg.clone()
     }
 
     /// Cycle TODO state for org/markdown headings: none→TODO→DONE→TODO.
-    pub fn org_todo_cycle(&mut self) {
+    pub fn org_todo_cycle(&mut self) -> String {
         let buf_idx = self.active_buffer_idx();
 
         info!(buf_idx, "org todo cycle");
@@ -72,6 +76,13 @@ impl Editor {
             // Update parent heading's statistics cookies ([/] or [%])
             self.update_statistics_cookies(row);
         }
+        // Previously `set_status` (and thus the returned status) was only
+        // reached inside the `if new_line != line_str` block above, so a
+        // non-heading line silently returned whatever status happened to be
+        // set before this call (#304's exact anti-pattern, one level up) —
+        // returning `status` unconditionally fixes that too, not just the
+        // wrapper-level staleness.
+        status.to_string()
     }
 
     /// Promote Org heading (thin wrapper).
@@ -219,10 +230,21 @@ impl Editor {
     }
 
     /// Open the Org link at the cursor.
-    pub fn org_open_link(&mut self) {
+    ///
+    /// Fixed in #306: this used to look up the link via
+    /// `self.syntax.tree_for`, but `Language::Org::ts_language()`
+    /// (`syntax/languages.rs`) deliberately `return None`s — "org is
+    /// highlighted through a fallback path," no tree-sitter grammar exists
+    /// for it in this codebase at all — so the lookup always failed and
+    /// this function was unconditionally dead code. Now uses
+    /// `link_detect::detect_org_links`, the same org-bracket-link scanner
+    /// the interactive concealment pipeline (`link_descriptive`,
+    /// `display_region::compute_link_regions`) already relies on, instead
+    /// of a grammar that was never wired up.
+    pub fn org_open_link(&mut self) -> String {
         let buf_idx = self.active_buffer_idx();
         if self.syntax.language_of(buf_idx) != Some(crate::syntax::Language::Org) {
-            return;
+            return "Not an org buffer".to_string();
         }
 
         info!(buf_idx, "org open link at cursor");
@@ -232,58 +254,49 @@ impl Editor {
         let cursor_byte = self.buffers[buf_idx].rope().char_to_byte(cursor_char);
 
         let source: String = self.buffers[buf_idx].rope().chars().collect();
-        let Some(tree) = self.syntax.tree_for(buf_idx, &source) else {
-            return;
+        let links = crate::link_detect::detect_org_links(&source);
+        let Some(link) = links
+            .iter()
+            .find(|l| cursor_byte >= l.byte_start && cursor_byte < l.byte_end)
+        else {
+            return "No link under cursor".to_string();
         };
-
-        let mut node = tree
-            .root_node()
-            .descendant_for_byte_range(cursor_byte, cursor_byte);
-
-        // Org links often have nested nodes, walk up to find the link node.
-        while let Some(n) = node {
-            if n.kind() == "link" {
-                break;
+        let target = link.target.trim();
+        if target.starts_with("http") {
+            // Open external link
+            let _ = std::process::Command::new("xdg-open").arg(target).spawn();
+            let msg = format!("Opening {}", target);
+            self.set_status(msg.clone());
+            msg
+        } else if self.resolve_kb_link(target) {
+            // #293/#304: KB-shaped targets (id:UUID, namespaced ids like
+            // daily:2026-07-06) route through the same resolver
+            // handle_link_click uses, instead of this function's own
+            // separate, non-KB-aware fallback below ever seeing them.
+            self.status_msg.clone()
+        } else {
+            // Jump to internal heading — search buffer for matching heading
+            let buf = self.active_buffer();
+            let target_lower = target.to_lowercase();
+            let mut found = false;
+            for line_idx in 0..buf.line_count() {
+                let line = buf.line_text(line_idx);
+                let trimmed = line.trim_start_matches('*').trim_start();
+                if trimmed.to_lowercase().starts_with(&target_lower) {
+                    let win = self.window_mgr.focused_window_mut();
+                    win.cursor_row = line_idx;
+                    win.cursor_col = 0;
+                    found = true;
+                    break;
+                }
             }
-            node = n.parent();
-        }
-
-        let Some(link) = node else {
-            return;
-        };
-
-        // Extract target from [[target][label]] or [[target]]
-        let link_text = &source[link.start_byte()..link.end_byte()];
-        if let Some(target) = link_text
-            .strip_prefix("[[")
-            .and_then(|s| s.split(']').next())
-        {
-            let target = target.split('|').next().unwrap_or(target).trim();
-            if target.starts_with("http") {
-                // Open external link
-                let _ = std::process::Command::new("xdg-open").arg(target).spawn();
-                self.set_status(format!("Opening {}", target));
+            let msg = if found {
+                format!("Jumped to: {}", target)
             } else {
-                // Jump to internal heading — search buffer for matching heading
-                let buf = self.active_buffer();
-                let target_lower = target.to_lowercase();
-                let mut found = false;
-                for line_idx in 0..buf.line_count() {
-                    let line = buf.line_text(line_idx);
-                    let trimmed = line.trim_start_matches('*').trim_start();
-                    if trimmed.to_lowercase().starts_with(&target_lower) {
-                        let win = self.window_mgr.focused_window_mut();
-                        win.cursor_row = line_idx;
-                        win.cursor_col = 0;
-                        self.set_status(format!("Jumped to: {}", target));
-                        found = true;
-                        break;
-                    }
-                }
-                if !found {
-                    self.set_status(format!("Heading not found: {}", target));
-                }
-            }
+                format!("Heading not found: {}", target)
+            };
+            self.set_status(msg.clone());
+            msg
         }
     }
 }
@@ -324,6 +337,52 @@ mod tests {
         editor.window_mgr.focused_window_mut().cursor_row = 0;
         editor.org_promote();
         assert_eq!(editor.buffers[0].text(), "* Heading\n");
+    }
+
+    // --- #306: org_open_link, now that its link lookup actually works ---
+
+    #[test]
+    fn org_open_link_resolves_kb_node_via_shared_resolver() {
+        let mut editor = org_editor("See [[user:link-target][Target]] here.\n");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "user:link-target",
+            "Link Target",
+            mae_kb::NodeKind::Note,
+            "body",
+        ));
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.window_mgr.focused_window_mut().cursor_col = 6;
+        editor.org_open_link();
+        assert_eq!(
+            editor.buffers[editor.active_buffer_idx()].kind,
+            crate::BufferKind::Kb,
+            "a KB-shaped org link must resolve through the shared KB resolver, \
+             not fall through to the heading-jump fallback"
+        );
+        assert_eq!(editor.kb_view().unwrap().current, "user:link-target");
+    }
+
+    #[test]
+    fn org_open_link_falls_back_to_heading_jump_for_non_kb_target() {
+        let mut editor = org_editor("* Some Heading\nSee [[Some Heading][link]] here.\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 1;
+        editor.window_mgr.focused_window_mut().cursor_col = 6;
+        let msg = editor.org_open_link();
+        assert_eq!(
+            editor.window_mgr.focused_window().cursor_row,
+            0,
+            "a non-KB link target must fall through to the same-buffer heading-jump"
+        );
+        assert!(msg.contains("Jumped to"), "got: {}", msg);
+    }
+
+    #[test]
+    fn org_open_link_no_link_under_cursor() {
+        let mut editor = org_editor("no links on this line\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor.window_mgr.focused_window_mut().cursor_col = 3;
+        let msg = editor.org_open_link();
+        assert_eq!(msg, "No link under cursor");
     }
 
     #[test]

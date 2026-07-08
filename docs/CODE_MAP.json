@@ -686,6 +686,10 @@
           "kind": "fn"
         },
         {
+          "name": "compute_code_block_ranges",
+          "kind": "fn"
+        },
+        {
           "name": "BrokenLinkKind",
           "kind": "enum"
         },
@@ -3110,6 +3114,10 @@
     {
       "name": "kb-instances",
       "doc": "List all registered KB instances"
+    },
+    {
+      "name": "kb-promote",
+      "doc": "Promote the current KB-view node from a federated instance into the primary KB (#303)"
     },
     {
       "name": "insert-newline-smart",

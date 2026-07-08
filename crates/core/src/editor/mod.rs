@@ -1134,6 +1134,11 @@ pub struct Editor {
     /// module. Read before autoloads run, so it belongs in init.scm/the mae!
     /// block (config.scm is too late); change at runtime via :reload-modules.
     pub keymap_flavor: String,
+    /// How following a KB-graph link (gx/Enter) resolves outside the `*KB*`
+    /// view: "kb-view" (default — open the rendered, federation-aware `*KB*`
+    /// view, same resolver `:help <id>` uses) or "source-file" (jump
+    /// straight to the node's raw `.org` source file instead). #293.
+    pub kb_link_follow_mode: String,
     /// Startup editor mode ("normal" | "insert"), set by the keymap flavor
     /// (non-modal flavors use "insert"). Applied by bootstrap after modules +
     /// config load. See [`leader_active`](Self::leader_active) for the keypad.
@@ -1424,6 +1429,7 @@ impl Editor {
             perf_stats: perf::PerfStats::default(),
             clipboard: "unnamed".to_string(),
             keymap_flavor: "doom".to_string(),
+            kb_link_follow_mode: "kb-view".to_string(),
             default_mode: "normal".to_string(),
             restore_session: false,
             insert_ctrl_d: "dedent".to_string(),
@@ -3079,7 +3085,13 @@ impl Editor {
 
     pub fn set_status(&mut self, msg: impl Into<String>) {
         let s = msg.into();
-        if !s.is_empty() {
+        // #305: only log a genuine change. Without this, a status re-set to
+        // the SAME value on every render tick it remains "current" floods
+        // `*Messages*` with dozens of identical entries for one real
+        // transition. Consecutive-only: re-raising an earlier value after
+        // something else was shown in between still logs (this is not a
+        // global "have we ever seen this string" dedup).
+        if !s.is_empty() && s != self.status_msg {
             self.message_log
                 .push(crate::messages::MessageLevel::Info, "status", &s);
         }

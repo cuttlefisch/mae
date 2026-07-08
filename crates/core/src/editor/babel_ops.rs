@@ -25,7 +25,16 @@ impl Editor {
     /// Execute the source block at the cursor position.
     /// Uses AI-aware buffer/cursor targeting so the AI agent can execute
     /// blocks in a non-focused buffer via `set_ai_target`.
-    pub fn babel_execute(&mut self) {
+    ///
+    /// `interactive` distinguishes the human keybinding path from the
+    /// AI/MCP tool-call path (#269) — it is NOT inferred from
+    /// `self.ai.target_buffer_idx`, which is a buffer-*targeting*
+    /// mechanism, not an invocation-source flag (a human could trigger this
+    /// interactively while an AI target happens to be set from a prior
+    /// session). This matters specifically for `NeedsConfirmation`: the
+    /// interactive path can open a confirm dialog and wait; the AI/MCP path
+    /// has no human to answer one, so it must refuse outright instead.
+    pub fn babel_execute(&mut self, interactive: bool) -> Result<String, String> {
         let buf_idx = self.ai_active_buffer_idx();
         let source = self.buffers[buf_idx].rope().to_string();
         let cursor_line = self.ai_cursor_row();
@@ -34,8 +43,9 @@ impl Editor {
         let block = match babel::find_block_at_line(&blocks, cursor_line) {
             Some(b) => b.clone(),
             None => {
-                self.set_status("No source block at cursor");
-                return;
+                let msg = "No source block at cursor".to_string();
+                self.set_status(msg.clone());
+                return Err(msg);
             }
         };
 
@@ -50,50 +60,75 @@ impl Editor {
 
         match policy {
             babel::safety::EffectivePolicy::Blocked => {
-                self.set_status("Block execution blocked by :eval never");
-                return;
+                let msg = "Block execution blocked by :eval never".to_string();
+                self.set_status(msg.clone());
+                Err(msg)
             }
             babel::safety::EffectivePolicy::NeedsConfirmation => {
-                // For now, show message and allow. TODO: minibuffer confirm
-                self.set_status(format!(
-                    "Executing {} block (confirm not yet implemented)",
-                    block.language
-                ));
+                if interactive {
+                    self.mini_dialog = Some(crate::command_palette::MiniDialogState::confirm(
+                        format!(
+                            "Execute {} block? (:eval requires confirmation)",
+                            block.language
+                        ),
+                        crate::command_palette::MiniDialogContext::BabelConfirm {
+                            buf_idx,
+                            block: Box::new(block),
+                        },
+                    ));
+                    Ok("Waiting for confirmation…".to_string())
+                } else {
+                    Err("Block requires human confirmation (:eval query/confirm) — \
+                         not available via AI/MCP call"
+                        .to_string())
+                }
             }
-            babel::safety::EffectivePolicy::Allow => {}
+            babel::safety::EffectivePolicy::Allow => Ok(self.babel_run_block(buf_idx, &block)),
         }
+    }
 
-        // Resolve variables
-        let resolved_vars = babel::vars::resolve_vars(&block, &blocks, &source);
+    /// Run a babel block for real (post-policy-check execution: resolve
+    /// vars → execute → format results → edit the buffer → status).
+    /// Shared by `babel_execute`'s immediate `Allow` path and the
+    /// `MiniDialogContext::BabelConfirm` apply arm once the user confirms
+    /// (#269) — avoids duplicating this logic between the two trigger
+    /// points. Re-reads the buffer's *current* content rather than trusting
+    /// anything captured when a confirm dialog was opened, since edits may
+    /// have happened in between (the same staleness tradeoff every other
+    /// MiniDialog confirm-then-effect context already accepts).
+    pub fn babel_run_block(&mut self, buf_idx: usize, block: &babel::SrcBlock) -> String {
+        let source = self.buffers[buf_idx].rope().to_string();
+        let blocks = babel::parse_src_blocks(&source);
+        let file_path = self.buffers[buf_idx].file_path().map(PathBuf::from);
+        let resolved_vars = babel::vars::resolve_vars(block, &blocks, &source);
 
-        // Execute
         let buf_dir = file_path
             .as_ref()
             .and_then(|p| p.parent())
             .unwrap_or_else(|| std::path::Path::new("."));
 
         let mut executor = self.new_babel_executor();
-
-        let result = executor.execute_block(&block, buf_dir, &resolved_vars);
+        let result = executor.execute_block(block, buf_dir, &resolved_vars);
         self.babel_sessions = executor.sessions;
 
-        // Format results
         let output_text = match &result {
             babel::execute::ExecResult::Output(s) => s.clone(),
             babel::execute::ExecResult::Value(s) => s.clone(),
             babel::execute::ExecResult::File(p) => format!("[[file:{}]]", p.display()),
             babel::execute::ExecResult::PendingSchemeEval(code) => {
                 self.pending_scheme_eval.push(code.clone());
-                self.set_status("Scheme block queued for evaluation");
-                return;
+                let msg = "Scheme block queued for evaluation".to_string();
+                self.set_status(msg.clone());
+                return msg;
             }
             babel::execute::ExecResult::PendingDatalogQuery(query) => {
                 self.dispatch_kb_raw_query(query);
-                return;
+                return self.status_msg.clone();
             }
             babel::execute::ExecResult::Error(e) => {
-                self.set_status(format!("Babel error: {}", e));
-                return;
+                let msg = format!("Babel error: {}", e);
+                self.set_status(msg.clone());
+                return msg;
             }
         };
 
@@ -117,7 +152,9 @@ impl Editor {
         // Post-insertion fixups
         self.clamp_all_cursors();
         self.mark_full_redraw();
-        self.set_status(format!("Executed {} block", block.language));
+        let msg = format!("Executed {} block", block.language);
+        self.set_status(msg.clone());
+        msg
     }
 
     /// Execute all source blocks in the current buffer.
@@ -190,7 +227,7 @@ impl Editor {
 
     /// Tangle all source blocks in the current buffer.
     /// Uses AI-aware buffer targeting.
-    pub fn babel_tangle(&mut self) {
+    pub fn babel_tangle(&mut self) -> String {
         let buf_idx = self.ai_active_buffer_idx();
         let source = self.buffers[buf_idx].rope().to_string();
 
@@ -207,8 +244,9 @@ impl Editor {
 
         let outputs = tangle::tangle_buffer(&source, base_dir, base_name);
         if outputs.is_empty() {
-            self.set_status("No blocks with :tangle directive");
-            return;
+            let msg = "No blocks with :tangle directive".to_string();
+            self.set_status(msg.clone());
+            return msg;
         }
 
         let results = tangle::write_tangle_outputs(&outputs, true);
@@ -221,16 +259,18 @@ impl Editor {
             }
         }
 
-        if errors.is_empty() {
-            self.set_status(format!("Tangled {} file(s)", success_count));
+        let msg = if errors.is_empty() {
+            format!("Tangled {} file(s)", success_count)
         } else {
-            self.set_status(format!(
+            format!(
                 "Tangled {} file(s), {} error(s): {}",
                 success_count,
                 errors.len(),
                 errors[0]
-            ));
-        }
+            )
+        };
+        self.set_status(msg.clone());
+        msg
     }
 
     /// Kill all babel session processes.
@@ -356,13 +396,13 @@ impl Editor {
     }
 
     /// Export current org buffer to HTML.
-    pub fn org_export_html(&mut self) {
-        self.org_export_to("html");
+    pub fn org_export_html(&mut self) -> String {
+        self.org_export_to("html")
     }
 
     /// Export current org buffer to Markdown.
-    pub fn org_export_markdown(&mut self) {
-        self.org_export_to("markdown");
+    pub fn org_export_markdown(&mut self) -> String {
+        self.org_export_to("markdown")
     }
 
     /// Export subtree at cursor.
@@ -415,7 +455,7 @@ impl Editor {
 
     /// Internal: export to a given format.
     /// Uses AI-aware buffer targeting.
-    fn org_export_to(&mut self, format: &str) {
+    fn org_export_to(&mut self, format: &str) -> String {
         let buf_idx = self.ai_active_buffer_idx();
         let source = self.buffers[buf_idx].rope().to_string();
         let (meta, elements) = export::parse_org_document(&source);
@@ -437,8 +477,9 @@ impl Editor {
                 (exporter.export(&meta, &filtered), "md")
             }
             _ => {
-                self.set_status(format!("Unknown export format: {}", format));
-                return;
+                let msg = format!("Unknown export format: {}", format);
+                self.set_status(msg.clone());
+                return msg;
             }
         };
 
@@ -449,14 +490,12 @@ impl Editor {
             .map(|p| p.with_extension(ext))
             .unwrap_or_else(|| PathBuf::from(format!("export.{}", ext)));
 
-        match std::fs::write(&output_path, &output) {
-            Ok(()) => {
-                self.set_status(format!("Exported to {}", output_path.display()));
-            }
-            Err(e) => {
-                self.set_status(format!("Export failed: {}", e));
-            }
-        }
+        let msg = match std::fs::write(&output_path, &output) {
+            Ok(()) => format!("Exported to {}", output_path.display()),
+            Err(e) => format!("Export failed: {}", e),
+        };
+        self.set_status(msg.clone());
+        msg
     }
 
     /// Convert current Markdown buffer to Org format (in-buffer).
@@ -514,5 +553,130 @@ impl Editor {
         let summary = lines.join("\n");
         self.set_status(&lines[0]);
         summary
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn editor_with_block(src: &str) -> Editor {
+        let mut editor = Editor::new();
+        editor.buffers[0].insert_text_at(0, src);
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        editor
+    }
+
+    // "scheme" blocks resolve to `ExecResult::PendingSchemeEval` (no process
+    // spawn, no compiler) — the fastest, most hermetic way to exercise the
+    // confirm-gate's *decision* logic without depending on an execution
+    // backend. `#269`.
+    const NEEDS_CONFIRM_BLOCK: &str =
+        "#+begin_src scheme :eval query\n(display \"hi\")\n#+end_src\n";
+    const BLOCKED_BLOCK: &str = "#+begin_src scheme :eval never\n(display \"hi\")\n#+end_src\n";
+    const ALLOWED_BLOCK: &str = "#+begin_src scheme\n(display \"hi\")\n#+end_src\n";
+
+    #[test]
+    fn babel_execute_interactive_needs_confirmation_opens_dialog_without_executing() {
+        let mut editor = editor_with_block(NEEDS_CONFIRM_BLOCK);
+        let result = editor.babel_execute(true);
+        assert!(
+            result.is_ok(),
+            "should return Ok (pending), not Err: {:?}",
+            result
+        );
+        assert!(
+            editor.pending_scheme_eval.is_empty(),
+            "the block must NOT execute while awaiting confirmation"
+        );
+        match &editor.mini_dialog {
+            Some(dialog) => match &dialog.context {
+                crate::command_palette::MiniDialogContext::BabelConfirm { .. } => {}
+                other => panic!("expected BabelConfirm context, got {:?}", other),
+            },
+            None => panic!("expected a mini_dialog to be opened"),
+        }
+    }
+
+    #[test]
+    fn babel_execute_ai_needs_confirmation_refuses() {
+        let mut editor = editor_with_block(NEEDS_CONFIRM_BLOCK);
+        let result = editor.babel_execute(false);
+        assert!(
+            result.is_err(),
+            "AI/MCP path must refuse, not silently allow"
+        );
+        assert!(
+            editor.pending_scheme_eval.is_empty(),
+            "a refused block must not execute"
+        );
+        assert!(
+            editor.mini_dialog.is_none(),
+            "the AI path has no human to answer a dialog — none should open"
+        );
+    }
+
+    #[test]
+    fn babel_execute_blocked_refuses_both_paths() {
+        for interactive in [true, false] {
+            let mut editor = editor_with_block(BLOCKED_BLOCK);
+            let result = editor.babel_execute(interactive);
+            assert!(
+                result.is_err(),
+                ":eval never must refuse regardless of interactive={}",
+                interactive
+            );
+            assert!(editor.pending_scheme_eval.is_empty());
+            assert!(
+                editor.mini_dialog.is_none(),
+                "a hard block never needs a confirm dialog"
+            );
+        }
+    }
+
+    #[test]
+    fn babel_execute_allow_executes_immediately_both_paths() {
+        for interactive in [true, false] {
+            let mut editor = editor_with_block(ALLOWED_BLOCK);
+            // `babel_confirm` (global) defaults to true, which would push
+            // even a default-policy block to NeedsConfirmation for an
+            // untrusted/pathless test buffer — set it false to construct a
+            // genuine Allow case, matching a user who has disabled the
+            // global confirm gate.
+            editor.babel_confirm = false;
+            let result = editor.babel_execute(interactive);
+            assert!(
+                result.is_ok(),
+                "an allowed block must execute: {:?}",
+                result
+            );
+            assert_eq!(
+                editor.pending_scheme_eval.len(),
+                1,
+                "an allowed block executes immediately, unchanged from before #269"
+            );
+        }
+    }
+
+    #[test]
+    fn babel_confirm_apply_executes_the_deferred_block() {
+        // Mirrors the resume path `apply_mini_dialog` drives on confirm —
+        // exercised here at the `babel_run_block` level (the shared
+        // execution helper both the Allow path and the confirm-dialog path
+        // call), since `apply_mini_dialog` itself lives in the `mae` binary
+        // crate and is covered by its own test alongside `FileDelete`'s.
+        let mut editor = editor_with_block(NEEDS_CONFIRM_BLOCK);
+        editor.babel_execute(true).unwrap();
+        let block = match editor.mini_dialog.take().unwrap().context {
+            crate::command_palette::MiniDialogContext::BabelConfirm { block, .. } => block,
+            other => panic!("expected BabelConfirm, got {:?}", other),
+        };
+        assert!(editor.pending_scheme_eval.is_empty(), "not yet executed");
+        editor.babel_run_block(0, &block);
+        assert_eq!(
+            editor.pending_scheme_eval.len(),
+            1,
+            "confirming must actually run the deferred block"
+        );
     }
 }
