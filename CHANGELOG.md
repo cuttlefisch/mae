@@ -2,11 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.14.35] - 2026-07-07
 
 ### Bug Fixes
 
 - *(kb)* Stop concurrent mae processes from clobbering shared state files ([2e82e65](https://github.com/cuttlefisch/mae/commit/2e82e65608221ba2ef6bf99228c6f6c2ced08d7b))
+- *(shell)* Open-ai-agent shell didn't inherit login-shell environment ([e05a2af](https://github.com/cuttlefisch/mae/commit/e05a2af136cc7c42e89573ee349860d1bea24bfe))
+- *(kb)* Kb-find lazy branch only searched primary, missing federated instances ([c66197c](https://github.com/cuttlefisch/mae/commit/c66197c18089d04d813f812e2cb5ae08169428f7))
+- *(collab)* SIGKILL-resilient e2e daemon lifecycle (ADR-044) ([005a17f](https://github.com/cuttlefisch/mae/commit/005a17f5e9e1d0ef43f64761cdb9a798e3611720))
+
+### Miscellaneous
+
+- Bump version to 0.14.35 ([2d91b59](https://github.com/cuttlefisch/mae/commit/2d91b593d88d78f928d94852050ea4dc296db9fb))
 
 ## [0.14.34] - 2026-07-07
 
