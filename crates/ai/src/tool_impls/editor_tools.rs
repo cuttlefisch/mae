@@ -474,21 +474,18 @@ pub fn execute_trigger_hook(
 }
 
 pub fn execute_org_cycle(editor: &mut Editor) -> Result<String, String> {
-    editor.org_cycle();
-    Ok(editor.status_msg.clone())
+    Ok(editor.org_cycle())
 }
 
 pub fn execute_org_todo_cycle(
     editor: &mut Editor,
     _args: &serde_json::Value,
 ) -> Result<String, String> {
-    editor.org_todo_cycle();
-    Ok(editor.status_msg.clone())
+    Ok(editor.org_todo_cycle())
 }
 
 pub fn execute_org_open_link(editor: &mut Editor) -> Result<String, String> {
-    editor.org_open_link();
-    Ok(editor.status_msg.clone())
+    Ok(editor.org_open_link())
 }
 
 pub fn execute_babel_execute(editor: &mut Editor) -> Result<String, String> {
@@ -497,8 +494,7 @@ pub fn execute_babel_execute(editor: &mut Editor) -> Result<String, String> {
 }
 
 pub fn execute_babel_tangle(editor: &mut Editor) -> Result<String, String> {
-    editor.babel_tangle();
-    Ok(editor.status_msg.clone())
+    Ok(editor.babel_tangle())
 }
 
 pub fn execute_org_export(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
@@ -507,11 +503,10 @@ pub fn execute_org_export(editor: &mut Editor, args: &serde_json::Value) -> Resu
         .and_then(|v| v.as_str())
         .unwrap_or("html");
     match format {
-        "html" => editor.org_export_html(),
-        "markdown" | "md" => editor.org_export_markdown(),
-        _ => return Err(format!("Unknown export format: {}", format)),
+        "html" => Ok(editor.org_export_html()),
+        "markdown" | "md" => Ok(editor.org_export_markdown()),
+        _ => Err(format!("Unknown export format: {}", format)),
     }
-    Ok(editor.status_msg.clone())
 }
 
 pub fn execute_kb_instances(editor: &mut Editor) -> Result<String, String> {
@@ -1198,6 +1193,55 @@ pub fn execute_keymap_query(editor: &Editor, args: &serde_json::Value) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- #304: wrappers reflect the command's own outcome, not status_msg ---
+
+    #[test]
+    fn execute_org_todo_cycle_reflects_own_outcome_not_clobbered_status() {
+        let mut editor = Editor::new();
+        editor.buffers[0].insert_text_at(0, "* Heading\nBody\n");
+        editor.window_mgr.focused_window_mut().cursor_row = 0;
+        let result = execute_org_todo_cycle(&mut editor, &serde_json::json!({})).unwrap();
+        // Deliberately clobber status_msg AFTER the wrapper already
+        // returned — proves the returned value isn't a lazy read of a
+        // shared field that anything else could still stomp on.
+        editor.set_status("unrelated clobbering status");
+        assert!(
+            result.contains("TODO"),
+            "expected TODO in outcome, got: {}",
+            result
+        );
+        assert_ne!(result, "unrelated clobbering status");
+    }
+
+    #[test]
+    fn execute_org_todo_cycle_on_non_heading_reports_accurately_not_stale() {
+        // Regression: previously a non-heading line never called
+        // `set_status` at all, so the wrapper returned whatever was stale
+        // in `status_msg` from some unrelated prior action.
+        let mut editor = Editor::new();
+        editor.buffers[0].insert_text_at(0, "just plain text\n");
+        editor.set_status("stale from something else");
+        let result = execute_org_todo_cycle(&mut editor, &serde_json::json!({})).unwrap();
+        assert_eq!(result, "Not a heading");
+    }
+
+    #[test]
+    fn execute_babel_tangle_returns_outcome_specific_message() {
+        let mut editor = Editor::new();
+        editor.buffers[0].insert_text_at(0, "no blocks here\n");
+        editor.set_status("stale from something else");
+        let result = execute_babel_tangle(&mut editor).unwrap();
+        assert!(result.contains("No blocks with :tangle directive"));
+    }
+
+    #[test]
+    fn execute_org_export_rejects_unknown_format() {
+        let mut editor = Editor::new();
+        let result = execute_org_export(&mut editor, &serde_json::json!({"format": "bogus"}));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unknown export format"));
+    }
 
     #[test]
     fn audit_configuration_returns_valid_json() {

@@ -190,7 +190,7 @@ impl Editor {
 
     /// Tangle all source blocks in the current buffer.
     /// Uses AI-aware buffer targeting.
-    pub fn babel_tangle(&mut self) {
+    pub fn babel_tangle(&mut self) -> String {
         let buf_idx = self.ai_active_buffer_idx();
         let source = self.buffers[buf_idx].rope().to_string();
 
@@ -207,8 +207,9 @@ impl Editor {
 
         let outputs = tangle::tangle_buffer(&source, base_dir, base_name);
         if outputs.is_empty() {
-            self.set_status("No blocks with :tangle directive");
-            return;
+            let msg = "No blocks with :tangle directive".to_string();
+            self.set_status(msg.clone());
+            return msg;
         }
 
         let results = tangle::write_tangle_outputs(&outputs, true);
@@ -221,16 +222,18 @@ impl Editor {
             }
         }
 
-        if errors.is_empty() {
-            self.set_status(format!("Tangled {} file(s)", success_count));
+        let msg = if errors.is_empty() {
+            format!("Tangled {} file(s)", success_count)
         } else {
-            self.set_status(format!(
+            format!(
                 "Tangled {} file(s), {} error(s): {}",
                 success_count,
                 errors.len(),
                 errors[0]
-            ));
-        }
+            )
+        };
+        self.set_status(msg.clone());
+        msg
     }
 
     /// Kill all babel session processes.
@@ -356,13 +359,13 @@ impl Editor {
     }
 
     /// Export current org buffer to HTML.
-    pub fn org_export_html(&mut self) {
-        self.org_export_to("html");
+    pub fn org_export_html(&mut self) -> String {
+        self.org_export_to("html")
     }
 
     /// Export current org buffer to Markdown.
-    pub fn org_export_markdown(&mut self) {
-        self.org_export_to("markdown");
+    pub fn org_export_markdown(&mut self) -> String {
+        self.org_export_to("markdown")
     }
 
     /// Export subtree at cursor.
@@ -415,7 +418,7 @@ impl Editor {
 
     /// Internal: export to a given format.
     /// Uses AI-aware buffer targeting.
-    fn org_export_to(&mut self, format: &str) {
+    fn org_export_to(&mut self, format: &str) -> String {
         let buf_idx = self.ai_active_buffer_idx();
         let source = self.buffers[buf_idx].rope().to_string();
         let (meta, elements) = export::parse_org_document(&source);
@@ -437,8 +440,9 @@ impl Editor {
                 (exporter.export(&meta, &filtered), "md")
             }
             _ => {
-                self.set_status(format!("Unknown export format: {}", format));
-                return;
+                let msg = format!("Unknown export format: {}", format);
+                self.set_status(msg.clone());
+                return msg;
             }
         };
 
@@ -449,14 +453,12 @@ impl Editor {
             .map(|p| p.with_extension(ext))
             .unwrap_or_else(|| PathBuf::from(format!("export.{}", ext)));
 
-        match std::fs::write(&output_path, &output) {
-            Ok(()) => {
-                self.set_status(format!("Exported to {}", output_path.display()));
-            }
-            Err(e) => {
-                self.set_status(format!("Export failed: {}", e));
-            }
-        }
+        let msg = match std::fs::write(&output_path, &output) {
+            Ok(()) => format!("Exported to {}", output_path.display()),
+            Err(e) => format!("Export failed: {}", e),
+        };
+        self.set_status(msg.clone());
+        msg
     }
 
     /// Convert current Markdown buffer to Org format (in-buffer).
