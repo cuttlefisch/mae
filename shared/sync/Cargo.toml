@@ -21,8 +21,13 @@ rand = "0.10" # #72: unpredictable authorization-epoch tokens (fresh_epoch_token
 # derived from the X25519 ECDH secret with sha2 (already vendored) — no `hkdf` crate,
 # which would pull a second `digest` major and break the #98 crypto coherence.
 chacha20poly1305 = "0.11" # XChaCha20-Poly1305 AEAD (content + key-wrap)
-x25519-dalek = { version = "3", features = ["static_secrets"] } # ECDH for key wrap
-curve25519-dalek = "5" # Ed25519->X25519 public conversion (Edwards->Montgomery)
+# x25519-dalek/curve25519-dalek pinned at 2/4 (not the dependabot-proposed 3/5),
+# same reason as ed25519-dalek in shared/mcp/Cargo.toml: iroh's dependency chain
+# (iroh-base) hard-pins curve25519-dalek = "=5.0.0-rc.0", which conflicts with a
+# plain `^5` requirement here once daemon/Cargo.toml unifies both (daemon depends
+# on both iroh and this crate). Revisit once iroh depends on the stable 5.x/3.x.
+x25519-dalek = { version = "2", features = ["static_secrets"] } # ECDH for key wrap
+curve25519-dalek = "4" # Ed25519->X25519 public conversion (Edwards->Montgomery)
 # #156 F9: zeroize key material on drop (ContentKey + DH/scalar intermediates). Same
 # version the dalek siblings already pull, so no new transitive cost.
 zeroize = { version = "1", features = ["zeroize_derive"] }
