@@ -474,7 +474,12 @@ impl Editor {
     /// doesn't exist. Falls back to the `index` node if the requested id
     /// isn't found.
     /// Check if a node ID exists in the local KB or any federated instance.
-    fn kb_contains_any(&self, id: &str) -> bool {
+    ///
+    /// `pub(crate)` (not module-private) so link-following outside the
+    /// `*KB*` view (`mouse_ops::handle_link_click`, `org_ops::org_open_link`
+    /// — #293) can reuse the same existence check the KB view already uses,
+    /// instead of a third, divergent resolver.
+    pub(crate) fn kb_contains_any(&self, id: &str) -> bool {
         if let Some(q) = self.kb.query_layer() {
             return q.contains(id);
         }
@@ -1079,6 +1084,36 @@ impl Editor {
                 self.set_status(format!("No source file for '{}'", node_id));
             }
         }
+    }
+
+    /// Resolve a link target that may refer to a KB graph node, honoring
+    /// `kb_link_follow_mode` (#293, principle #7 — user-configurable, not
+    /// hardcoded): `"kb-view"` opens the rendered `*KB*` view (the existing
+    /// federation-aware entry point `:help <id>` already uses); `"source-
+    /// file"` jumps straight to the node's current source file instead
+    /// (reusing `kb_node_source_file`'s #303 re-derivation rather than
+    /// trusting a possibly-moved path verbatim).
+    ///
+    /// Returns `true` if `target` resolved as a KB node and was handled
+    /// here; `false` if the caller should fall through to its own non-KB
+    /// behavior (`handle_link_click`'s file/URL opener, `org_open_link`'s
+    /// same-buffer heading jump) — e.g. a link to a not-yet-created daily
+    /// note, which isn't a KB node yet.
+    pub(crate) fn resolve_kb_link(&mut self, target: &str) -> bool {
+        let kb_target = target.strip_prefix("id:").unwrap_or(target);
+        if !self.kb_contains_any(kb_target) {
+            return false;
+        }
+        if self.kb_link_follow_mode == "source-file" {
+            if let Some(path) = self.kb_node_source_file(kb_target) {
+                self.open_file(path.display().to_string());
+                return true;
+            }
+            // No source file at all (native or already-promoted node) —
+            // fall back to the KB view rather than doing nothing.
+        }
+        self.open_help_at(kb_target);
+        true
     }
 
     /// Return to the rendered KB view from source editing.

@@ -72,6 +72,7 @@ impl super::Editor {
             "icon_font_family" => self.gui_icon_font_family.clone(),
             "theme" => self.theme.name.clone(),
             "keymap_flavor" => self.keymap_flavor.clone(),
+            "kb_link_follow_mode" => self.kb_link_follow_mode.clone(),
             "default_mode" => self.default_mode.clone(),
             "splash_art" => self.splash_art.clone().unwrap_or_default(),
             "splash_image_width" => self.splash_image_width.to_string(),
@@ -329,6 +330,17 @@ impl super::Editor {
                 _ => {
                     return Err(format!(
                         "Invalid AI tier: '{}' (expected ReadOnly, Write, Shell, or Privileged)",
+                        value
+                    ))
+                }
+            },
+            "kb_link_follow_mode" => match value {
+                "kb-view" | "source-file" => {
+                    self.kb_link_follow_mode = value.to_string();
+                }
+                _ => {
+                    return Err(format!(
+                        "Invalid kb_link_follow_mode: '{}' (expected kb-view or source-file)",
                         value
                     ))
                 }

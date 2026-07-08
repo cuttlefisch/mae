@@ -269,12 +269,17 @@ impl super::Editor {
         false
     }
 
-    /// Handle a link click: open file paths in the editor, URLs externally.
+    /// Handle a link click: open file paths in the editor, URLs externally,
+    /// or a KB graph node via `resolve_kb_link` (#293 — previously fell
+    /// through to `open_file` and produced a raw ENOENT for KB-shaped
+    /// targets like `daily:2026-07-06`).
     pub(crate) fn handle_link_click(&mut self, target: &str) {
         if target.starts_with("http://") || target.starts_with("https://") {
             // Open URL externally
             let _ = std::process::Command::new("xdg-open").arg(target).spawn();
             self.set_status(format!("Opening {}", target));
+        } else if self.resolve_kb_link(target) {
+            // Handled as a KB graph node.
         } else {
             // Parse :line:col suffix from file paths
             let (path, line, col) = super::file_ops::parse_file_link(target);
