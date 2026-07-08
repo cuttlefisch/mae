@@ -3085,7 +3085,13 @@ impl Editor {
 
     pub fn set_status(&mut self, msg: impl Into<String>) {
         let s = msg.into();
-        if !s.is_empty() {
+        // #305: only log a genuine change. Without this, a status re-set to
+        // the SAME value on every render tick it remains "current" floods
+        // `*Messages*` with dozens of identical entries for one real
+        // transition. Consecutive-only: re-raising an earlier value after
+        // something else was shown in between still logs (this is not a
+        // global "have we ever seen this string" dedup).
+        if !s.is_empty() && s != self.status_msg {
             self.message_log
                 .push(crate::messages::MessageLevel::Info, "status", &s);
         }

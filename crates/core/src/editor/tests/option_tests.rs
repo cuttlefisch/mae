@@ -8,6 +8,56 @@ fn self_test_active_flag_defaults_false() {
     assert!(!editor.self_test_active);
 }
 
+// --- #305: set_status dedups consecutive-identical entries ---
+
+fn status_entries_matching(editor: &Editor, msg: &str) -> usize {
+    editor
+        .message_log
+        .entries()
+        .iter()
+        .filter(|e| e.target == "status" && e.message == msg)
+        .count()
+}
+
+#[test]
+fn set_status_repeated_identical_value_logs_once() {
+    let mut editor = Editor::new();
+    let before = status_entries_matching(&editor, "X");
+    editor.set_status("X");
+    editor.set_status("X");
+    editor.set_status("X");
+    assert_eq!(
+        status_entries_matching(&editor, "X") - before,
+        1,
+        "three consecutive identical calls must log exactly one entry"
+    );
+}
+
+#[test]
+fn set_status_non_consecutive_repeat_logs_both() {
+    // Adversarial: only CONSECUTIVE repeats are deduped. Re-raising an
+    // earlier value after something else was shown in between must still
+    // log — guards against an over-eager global (not consecutive-only) dedup.
+    let mut editor = Editor::new();
+    let before = status_entries_matching(&editor, "X");
+    editor.set_status("X");
+    editor.set_status("Y");
+    editor.set_status("X");
+    assert_eq!(
+        status_entries_matching(&editor, "X") - before,
+        2,
+        "non-consecutive repeats of the same value must both log"
+    );
+}
+
+#[test]
+fn set_status_empty_string_still_does_not_log() {
+    let mut editor = Editor::new();
+    let count_before = editor.message_log.entries().len();
+    editor.set_status("");
+    assert_eq!(editor.message_log.entries().len(), count_before);
+}
+
 #[test]
 fn effective_word_wrap_uses_buffer_local() {
     let mut editor = Editor::new();

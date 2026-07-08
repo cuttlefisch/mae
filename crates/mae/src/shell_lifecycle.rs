@@ -209,9 +209,15 @@ pub fn manage_shell_lifecycle(
         for event in shell.poll_events() {
             match event {
                 mae_shell::ShellEvent::Bell => editor.ring_bell(),
-                mae_shell::ShellEvent::Title(t) => {
-                    editor.set_status(format!("Terminal: {}", t));
-                }
+                // #305: this used to route every title tick through
+                // `set_status`, flooding `*Messages*` (many events/sec for
+                // an animated terminal title) and drowning out real
+                // messages. No replacement plumbing is needed — the title
+                // is already tracked on `ShellTerminal::title` (updated
+                // inside `poll_events` above, `crates/shell/src/terminal.rs`)
+                // and already rendered directly from there (GUI:
+                // `crates/gui/src/shell_render.rs`'s pane border).
+                mae_shell::ShellEvent::Title(_) => {}
                 mae_shell::ShellEvent::ChildExit(code) => {
                     info!(buf_idx, code, "shell process exited");
                     exited_shells.push(*buf_idx);
