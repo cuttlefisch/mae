@@ -29,26 +29,56 @@ pub fn execute_editor_state(editor: &Editor) -> Result<String, String> {
     serde_json::to_string_pretty(&info).map_err(|e| e.to_string())
 }
 
+/// Per-window layout, plus a `shared_buffer_groups` roll-up flagging any
+/// `buffer_idx` shown by more than one window. Two windows sharing a buffer
+/// is sometimes intentional (a singleton browser like `*Help*`), but for a
+/// per-node-identity buffer kind (`Kb`, since the per-window-buffer-bleed
+/// fix) it's the anomaly this surfaces at a glance instead of requiring a
+/// manual cross-reference against `list_buffers`' `window_ids`.
 pub fn execute_window_layout(editor: &Editor) -> Result<String, String> {
+    use std::collections::HashMap;
+
+    let mut by_buffer_idx: HashMap<usize, Vec<u32>> = HashMap::new();
     let windows: Vec<serde_json::Value> = editor
         .window_mgr
         .iter_windows()
         .map(|win| {
-            let buf_name = editor
-                .buffers
-                .get(win.buffer_idx)
-                .map(|b| b.name.as_str())
-                .unwrap_or("<invalid>");
+            by_buffer_idx
+                .entry(win.buffer_idx)
+                .or_default()
+                .push(win.id);
+            let buf = editor.buffers.get(win.buffer_idx);
+            let buf_name = buf.map(|b| b.name.as_str()).unwrap_or("<invalid>");
+            let buffer_kind = buf.map(|b| format!("{:?}", b.kind));
+            let kb_node_id = buf.and_then(|b| b.kb_view()).map(|v| v.current.clone());
             serde_json::json!({
+                "window_id": win.id,
                 "buffer_idx": win.buffer_idx,
                 "buffer_name": buf_name,
+                "buffer_kind": buffer_kind,
+                "kb_node_id": kb_node_id,
                 "cursor_row": win.cursor_row,
                 "cursor_col": win.cursor_col,
                 "scroll_offset": win.scroll_offset,
             })
         })
         .collect();
-    serde_json::to_string_pretty(&windows).map_err(|e| e.to_string())
+
+    let mut shared_buffer_groups: Vec<serde_json::Value> = by_buffer_idx
+        .into_iter()
+        .filter(|(_, window_ids)| window_ids.len() > 1)
+        .map(|(buffer_idx, mut window_ids)| {
+            window_ids.sort();
+            serde_json::json!({ "buffer_idx": buffer_idx, "window_ids": window_ids })
+        })
+        .collect();
+    shared_buffer_groups.sort_by_key(|g| g["buffer_idx"].as_u64());
+
+    let out = serde_json::json!({
+        "windows": windows,
+        "shared_buffer_groups": shared_buffer_groups,
+    });
+    serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
 }
 
 pub fn execute_command_list(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {

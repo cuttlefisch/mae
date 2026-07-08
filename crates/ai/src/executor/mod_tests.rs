@@ -238,9 +238,42 @@ fn window_layout_returns_valid_json() {
         &PermissionPolicy::default(),
     ));
     assert!(result.success);
-    let windows: Vec<serde_json::Value> = serde_json::from_str(&result.output).unwrap();
+    let out: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+    let windows = out["windows"].as_array().unwrap();
     assert_eq!(windows.len(), 1);
     assert_eq!(windows[0]["buffer_name"], "[scratch]");
+    assert!(windows[0]["window_id"].is_number());
+    // A single window can't share its buffer with anything.
+    assert!(out["shared_buffer_groups"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn window_layout_flags_windows_sharing_a_buffer() {
+    // ADR/bug fix regression: two windows pointing at the same buffer_idx
+    // (whether by the intentional *Help*-style singleton or, before the
+    // per-window-buffer-bleed fix, an unintended KB buffer alias) must show
+    // up in shared_buffer_groups instead of requiring a manual cross-check
+    // against list_buffers' window_ids.
+    let mut editor = Editor::new();
+    editor.dispatch_builtin("split-vertical");
+    let call = make_call("window_layout", serde_json::json!({}));
+    let result = unwrap_immediate(execute_tool(
+        &mut editor,
+        &call,
+        &all_tools(),
+        &PermissionPolicy::default(),
+    ));
+    assert!(result.success);
+    let out: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+    let windows = out["windows"].as_array().unwrap();
+    assert_eq!(windows.len(), 2, "split-vertical must produce two windows");
+    let groups = out["shared_buffer_groups"].as_array().unwrap();
+    assert_eq!(
+        groups.len(),
+        1,
+        "the freshly-split windows share one buffer"
+    );
+    assert_eq!(groups[0]["window_ids"].as_array().unwrap().len(), 2);
 }
 
 #[test]

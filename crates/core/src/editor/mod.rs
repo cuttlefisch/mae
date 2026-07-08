@@ -2376,51 +2376,70 @@ impl Editor {
         self.buffers.len() - 1
     }
 
-    /// Find or create the appropriate KB buffer (`*Help*` for builtins,
-    /// `*KB*` for user/federated nodes) and navigate it to `node_id`.
+    /// Find or create the appropriate KB buffer and navigate it to `node_id`.
     /// Returns the buffer index. Does NOT switch focus — callers decide.
+    ///
+    /// Builtin (`cmd:`/`concept:`/...) nodes keep the single shared `*Help*`
+    /// buffer, reused/mutated in place — a deliberate Emacs-style shared docs
+    /// browser: browsing built-in help across windows is meant to feel like
+    /// one help window.
+    ///
+    /// Non-builtin nodes (your own KB notes) instead get one buffer PER node
+    /// id, matching how `:find-file` already treats real files: reuse a `*KB*`
+    /// buffer only if it's already showing this exact node, otherwise create a
+    /// new, distinct one. Before this, ALL non-builtin nodes shared one `*KB*`
+    /// buffer keyed by name alone — navigating to a new node in one window
+    /// silently mutated whatever `*KB*` buffer any OTHER window happened to be
+    /// showing too, since there was only ever one such buffer in existence.
     pub fn ensure_kb_buffer_idx(&mut self, node_id: &str) -> usize {
         use crate::buffer::buffer_names;
         use crate::editor::help_ops::is_builtin_node;
 
-        let target_name = if is_builtin_node(node_id) {
-            buffer_names::HELP
-        } else {
-            buffer_names::KB
-        };
-
-        // Look for an existing buffer with the right name
-        if let Some(idx) = self
-            .buffers
-            .iter()
-            .position(|b| b.kind == crate::buffer::BufferKind::Kb && b.name == target_name)
-        {
-            if let Some(view) = self.buffers[idx].kb_view_mut() {
-                let v: &mut crate::kb_view::KbView = view;
-                v.navigate_to(node_id.to_string());
+        if is_builtin_node(node_id) {
+            if let Some(idx) = self.buffers.iter().position(|b| {
+                b.kind == crate::buffer::BufferKind::Kb && b.name == buffer_names::HELP
+            }) {
+                if let Some(view) = self.buffers[idx].kb_view_mut() {
+                    view.navigate_to(node_id.to_string());
+                }
+                return idx;
             }
+            let mut buf = Buffer::new_kb(node_id);
+            buf.name = buffer_names::HELP.to_string();
+            self.buffers.push(buf);
+            return self.buffers.len() - 1;
+        }
+
+        // Reuse a *KB* buffer only if it's already showing this exact node —
+        // same semantics as opening an already-open file twice.
+        if let Some(idx) = self.buffers.iter().position(|b| {
+            b.kind == crate::buffer::BufferKind::Kb
+                && b.name == buffer_names::KB
+                && b.kb_view().is_some_and(|v| v.current == node_id)
+        }) {
             return idx;
         }
         let mut buf = Buffer::new_kb(node_id);
-        buf.name = target_name.to_string();
+        buf.name = buffer_names::KB.to_string();
         self.buffers.push(buf);
         self.buffers.len() - 1
     }
 
-    /// Mutable view onto the KB buffer's KbView, if any KB buffer exists.
+    /// Mutable view onto the ACTIVE (focused window's) buffer's KbView, if
+    /// it's showing a KB buffer. Scoped to the active buffer rather than "the
+    /// first Kb-kind buffer in the editor" so link-follow/history/TOC
+    /// operations act on whatever KB content you're actually looking at, not
+    /// an arbitrary one — load-bearing now that non-builtin nodes each get
+    /// their own buffer (see `ensure_kb_buffer_idx`) rather than sharing one.
     pub fn kb_view_mut(&mut self) -> Option<&mut crate::kb_view::KbView> {
-        self.buffers
-            .iter_mut()
-            .find(|b| b.kind == crate::buffer::BufferKind::Kb)
-            .and_then(|b| b.kb_view_mut())
+        let idx = self.active_buffer_idx();
+        self.buffers.get_mut(idx).and_then(|b| b.kb_view_mut())
     }
 
-    /// Immutable view onto the KB buffer's KbView, if any KB buffer exists.
+    /// Immutable counterpart of [`Self::kb_view_mut`].
     pub fn kb_view(&self) -> Option<&crate::kb_view::KbView> {
-        self.buffers
-            .iter()
-            .find(|b| b.kind == crate::buffer::BufferKind::Kb)
-            .and_then(|b| b.kb_view())
+        let idx = self.active_buffer_idx();
+        self.buffers.get(idx).and_then(|b| b.kb_view())
     }
 
     /// Switch the focused window to the buffer at the given index.
@@ -2895,22 +2914,31 @@ impl Editor {
 
     /// Find a window showing a buffer of the given kind (non-conversation).
     /// Excludes windows that are part of the conversation pair (output/input).
+    /// Prefers the focused window if it already qualifies (mirrors
+    /// `find_replaceable_window`'s "what you see gets replaced" UX) before
+    /// falling back to scanning all windows in unspecified order.
     fn find_window_with_kind(&self, kind: crate::BufferKind) -> Option<crate::window::WindowId> {
         let conv_ids = self
             .ai
             .conversation_pair
             .as_ref()
             .map(|p| [p.output_window_id, p.input_window_id]);
-        for w in self.window_mgr.iter_windows() {
-            if w.buffer_idx < self.buffers.len()
+        let qualifies = |w: &crate::window::Window| {
+            w.buffer_idx < self.buffers.len()
                 && self.buffers[w.buffer_idx].kind == kind
                 && !self.is_conversation_buffer(w.buffer_idx)
                 && !conv_ids.is_some_and(|ids| ids.contains(&w.id))
-            {
-                return Some(w.id);
+        };
+        let focused_id = self.window_mgr.focused_id();
+        if let Some(fw) = self.window_mgr.window(focused_id) {
+            if qualifies(fw) {
+                return Some(focused_id);
             }
         }
-        None
+        self.window_mgr
+            .iter_windows()
+            .find(|w| qualifies(w))
+            .map(|w| w.id)
     }
 
     /// Split helper for display_buffer: creates a new split.
