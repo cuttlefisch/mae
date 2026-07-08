@@ -45,15 +45,15 @@ for bin in "$MAE_BIN" "$MAE_DAEMON_BIN"; do
   [ -x "$bin" ] || { echo "ERROR: missing binary: $bin"; exit 2; }
 done
 
+# --- Isolation + reliable cleanup (ADR-044): see scripts/lib/e2e-daemon-harness.sh.
+# setsid process-group isolation, EXIT/INT/TERM trap, a kernel-enforced TTL that
+# kills the daemon even if this script is SIGKILLed, and a pre-flight sweep that
+# reaps orphans left by a past run of any collab-*-e2e.sh script.
+source "$ROOT/scripts/lib/e2e-daemon-harness.sh"
+harness_sweep_stale "mae-member-e2e.*" "mae-mtls-e2e.*" "mae-enc-e2e.*" "mae-mesh-e2e.*"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mae-member-e2e.XXXXXX")"
 DAEMON_PID=""
-PIDS=()
-cleanup() {
-  for p in "${PIDS[@]:-}"; do kill "$p" 2>/dev/null || true; done
-  [ -n "$DAEMON_PID" ] && kill "$DAEMON_PID" 2>/dev/null || true
-  rm -rf "$WORK"
-}
-trap cleanup EXIT
+harness_trap_install
 
 mkdir -p "$WORK"/{srv/.config/mae,srv/.local/share,sync,scen}
 mkdir -p "$WORK/alice/.config/mae" "$WORK/alice/.local/share"
@@ -129,25 +129,28 @@ cat > "$WORK/scen/bob.scm" <<EOF
     (it-test "signals joined" (lambda () (write-file "$WORK/sync/bob-joined" "1")))))
 EOF
 
-# --- Start daemon ---
-srv env MAE_LOG=info "$MAE_DAEMON_BIN" > "$WORK/daemon.log" 2>&1 &
-DAEMON_PID=$!
+# --- Start daemon --- (setsid'd + TTL-wrapped via harness_spawn_daemon, ADR-044;
+# flattened to an inline `env` argv since setsid execs its argument and `srv` is a
+# shell function, not something on PATH it could exec directly)
+harness_spawn_daemon DAEMON_PID "$WORK/daemon.log" -- env \
+  HOME="$WORK/srv" XDG_CONFIG_HOME="$WORK/srv/.config" XDG_DATA_HOME="$WORK/srv/.local/share" \
+  MAE_LOG=info "$MAE_DAEMON_BIN"
 for _ in $(seq 1 20); do port_listening "$PORT" && break; sleep 0.25; done
 port_listening "$PORT" || { echo "ERROR: daemon not listening"; cat "$WORK/daemon.log"; exit 1; }
 
-run_editor() {
-  local who="$1" scen="$2" log="$3"
-  "$who" env MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 \
-    MAE_LOG="warn" ${TIMEOUT_BIN:+$TIMEOUT_BIN 120} "$MAE_BIN" --test "$scen" > "$log" 2>&1
-}
-
-# alice first (creates + shares), then bob.
-run_editor alice "$WORK/scen/alice.scm" "$WORK/alice.tap" &
-PIDS+=($!)
+# alice first (creates + shares), then bob. Same inline-env flattening as the daemon
+# above, each in its own session (group-killable) via harness_spawn.
+harness_spawn APID "$WORK/alice.tap" -- env \
+  HOME="$WORK/alice" XDG_CONFIG_HOME="$WORK/alice/.config" XDG_DATA_HOME="$WORK/alice/.local/share" \
+  MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 MAE_LOG="warn" \
+  ${TIMEOUT_BIN:+$TIMEOUT_BIN 120} "$MAE_BIN" --test "$WORK/scen/alice.scm"
 sleep 3
-run_editor bob "$WORK/scen/bob.scm" "$WORK/bob.tap" &
-PIDS+=($!)
-wait "${PIDS[@]}" 2>/dev/null || true
+harness_spawn BPID "$WORK/bob.tap" -- env \
+  HOME="$WORK/bob" XDG_CONFIG_HOME="$WORK/bob/.config" XDG_DATA_HOME="$WORK/bob/.local/share" \
+  MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 MAE_LOG="warn" \
+  ${TIMEOUT_BIN:+$TIMEOUT_BIN 120} "$MAE_BIN" --test "$WORK/scen/bob.scm"
+wait "$APID" 2>/dev/null || true
+wait "$BPID" 2>/dev/null || true
 
 echo "--- alice TAP ---"; grep -E '^(ok|not ok|#)' "$WORK/alice.tap" || true
 echo "--- bob TAP ---";   grep -E '^(ok|not ok|#)' "$WORK/bob.tap" || true

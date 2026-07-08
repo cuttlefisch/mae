@@ -436,18 +436,34 @@ test-scheme-editor: build-tui
 test-scheme-collab-local: build-tui
 	$(RELEASE_BIN) --test tests/collab-local/
 
+# ADR-044: independent, looser backstop for the *script* hanging before it ever
+# reaches the daemon-TTL protection inside scripts/lib/e2e-daemon-harness.sh
+# (default daemon TTL there is 600s) — this is not the leak fix itself, just a
+# belt-and-suspenders cap on a `make test-collab-*-e2e` invocation itself.
+E2E_SCRIPT_TIMEOUT := 750
+
 ## test-collab-mtls-e2e: single-host trusted-peer mTLS e2e (real daemon + editor)
 test-collab-mtls-e2e: build-tui build-daemon
 	MAE_BIN=$(RELEASE_BIN) MAE_DAEMON_BIN=$(CURDIR)/daemon/target/release/mae-daemon \
-		scripts/collab-mtls-e2e.sh
+		timeout -k 30 $(E2E_SCRIPT_TIMEOUT) scripts/collab-mtls-e2e.sh
 
 ## test-collab-membership-e2e: two-editor per-KB membership enforcement e2e
 test-collab-membership-e2e: build-tui build-daemon
 	MAE_BIN=$(RELEASE_BIN) MAE_DAEMON_BIN=$(CURDIR)/daemon/target/release/mae-daemon \
-		scripts/collab-membership-e2e.sh
+		timeout -k 30 $(E2E_SCRIPT_TIMEOUT) scripts/collab-membership-e2e.sh
 
-## test-collab-e2e-all: all trusted-peer e2e tests (mTLS + membership)
-test-collab-e2e-all: test-collab-mtls-e2e test-collab-membership-e2e
+## test-collab-encrypted-e2e: ADR-037 E2E content-encryption lifecycle e2e
+test-collab-encrypted-e2e: build-tui build-daemon
+	MAE_BIN=$(RELEASE_BIN) MAE_DAEMON_BIN=$(CURDIR)/daemon/target/release/mae-daemon \
+		timeout -k 30 $(E2E_SCRIPT_TIMEOUT) scripts/collab-encrypted-e2e.sh
+
+## test-collab-p2p-mesh-e2e: ADR-025 two-daemon P2P mesh e2e (no central hub)
+test-collab-p2p-mesh-e2e: build-tui build-daemon
+	MAE_BIN=$(RELEASE_BIN) MAE_DAEMON_BIN=$(CURDIR)/daemon/target/release/mae-daemon \
+		timeout -k 30 $(E2E_SCRIPT_TIMEOUT) scripts/collab-p2p-mesh-e2e.sh
+
+## test-collab-e2e-all: all trusted-peer e2e tests (mTLS + membership + encrypted + mesh)
+test-collab-e2e-all: test-collab-mtls-e2e test-collab-membership-e2e test-collab-encrypted-e2e test-collab-p2p-mesh-e2e
 
 ## test-scheme-all: run all local Scheme tests (crdt + editor + collab-local)
 test-scheme-all: build-tui
