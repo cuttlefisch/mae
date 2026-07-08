@@ -6,6 +6,12 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- *(kb)* Stop concurrent mae processes from clobbering shared state files ([2e82e65](https://github.com/cuttlefisch/mae/commit/2e82e65608221ba2ef6bf99228c6f6c2ced08d7b))
+
+## [0.14.34] - 2026-07-07
+
+### Bug Fixes
+
 - *(ci)* Resolve fmt, code-map, and security-advisory failures blocking PR #289 ([e77ea4b](https://github.com/cuttlefisch/mae/commit/e77ea4ba7fdba47bcc7877cba7fb8af805a6ddaf))
 - *(kb)* Kb_reimport must refresh the query layer for kb-find to see it ([c539b6d](https://github.com/cuttlefisch/mae/commit/c539b6d30b8737f5d5beee40ceab459beaa23583))
 - *(kb)* Federated KB instances were hardcoded to sled, blocking multi-frontend sharing ([43acda9](https://github.com/cuttlefisch/mae/commit/43acda99bfbc62116d26914f6d14c3160720c141))
@@ -19,6 +25,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - *(dev)* Install rustfmt/clippy in setup-dev; wire git hooks automatically ([104a097](https://github.com/cuttlefisch/mae/commit/104a09754115a129bdfbef6082b10882616a8455))
+- Bump version to 0.14.34 ([3852243](https://github.com/cuttlefisch/mae/commit/38522436f9ddc963412f0f480dd4ab78a05502d2))
 
 ### Refactor
 
