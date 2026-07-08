@@ -120,7 +120,10 @@ impl Editor {
             }
             // Babel commands
             "babel-execute" => {
-                self.babel_execute();
+                // Interactive keybinding path (#269) — may open a confirm
+                // dialog rather than execute immediately; status is already
+                // surfaced via set_status inside babel_execute either way.
+                let _ = self.babel_execute(true);
             }
             "babel-execute-all" => {
                 self.babel_execute_all();

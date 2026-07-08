@@ -489,8 +489,10 @@ pub fn execute_org_open_link(editor: &mut Editor) -> Result<String, String> {
 }
 
 pub fn execute_babel_execute(editor: &mut Editor) -> Result<String, String> {
-    editor.babel_execute();
-    Ok(editor.status_msg.clone())
+    // AI/MCP path (#269, #304) — direct passthrough, not interactive: a
+    // block needing confirmation is refused outright (no dialog, no
+    // silent allow), never sampled from a shared status field.
+    editor.babel_execute(false)
 }
 
 pub fn execute_babel_tangle(editor: &mut Editor) -> Result<String, String> {
