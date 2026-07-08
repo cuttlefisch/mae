@@ -239,6 +239,16 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        ToolDefinition {
+            name: "kb_id_audit".into(),
+            description: "Detect ghost/stale node ids: an id that no longer appears in its own source file's current content (left behind by an in-place :ID: edit/rename). Re-parses each distinct source file on demand — more expensive than kb_health, call when investigating id-rename or duplicate-node symptoms, not routinely.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
         // --- KB federation tools ---
         ToolDefinition {
             name: "kb_instances".into(),

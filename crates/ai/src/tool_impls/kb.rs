@@ -596,6 +596,58 @@ pub fn execute_kb_health(editor: &Editor) -> Result<String, String> {
     serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
 }
 
+fn ghost_ids_json(ghosts: &[mae_kb::GhostNode]) -> serde_json::Value {
+    serde_json::json!(ghosts
+        .iter()
+        .map(|g| serde_json::json!({
+            "id": g.id,
+            "title": g.title,
+            "source_file": g.source_file.display().to_string(),
+            "reason": "id_not_found_in_current_file_content",
+        }))
+        .collect::<Vec<_>>())
+}
+
+/// Detect ghost/stale ids across the primary KB and every federated instance —
+/// see `KnowledgeBase::detect_ghost_ids`. More expensive than `kb_health`
+/// (re-parses each distinct source file), so it's its own on-demand tool
+/// rather than folded into the routinely-called health report.
+pub fn execute_kb_id_audit(editor: &Editor) -> Result<String, String> {
+    let local_ghosts = editor.kb.primary.detect_ghost_ids();
+
+    let instances: Vec<serde_json::Value> = editor
+        .kb
+        .registry
+        .instances
+        .iter()
+        .map(|inst| {
+            let ghosts = editor
+                .kb
+                .instances
+                .get(&inst.uuid)
+                .map(|kb| kb.detect_ghost_ids());
+            match ghosts {
+                Some(g) => serde_json::json!({
+                    "name": inst.name,
+                    "uuid": inst.uuid,
+                    "ghost_ids": ghost_ids_json(&g),
+                }),
+                None => serde_json::json!({
+                    "name": inst.name,
+                    "uuid": inst.uuid,
+                    "status": "not loaded",
+                }),
+            }
+        })
+        .collect();
+
+    let out = serde_json::json!({
+        "local": { "ghost_ids": ghost_ids_json(&local_ghosts) },
+        "instances": instances,
+    });
+    serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
+}
+
 pub fn execute_kb_create(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
     let id = args
         .get("id")

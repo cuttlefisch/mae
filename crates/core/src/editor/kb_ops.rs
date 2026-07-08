@@ -2026,14 +2026,35 @@ impl Editor {
             .map(|i| (i.uuid.clone(), i.org_dir.clone()))
         {
             if path.starts_with(&inst) {
+                let prev_ids = self
+                    .kb
+                    .watchers
+                    .get(&uuid)
+                    .and_then(|w| w.ids_for_path(path));
                 let ids = match self.kb.instances.get_mut(&uuid) {
                     Some(kb) => kb.ingest_org_file(path),
                     None => return,
                 };
+                // Retract ids this path no longer produces (e.g. an in-place `:ID:`
+                // edit followed by a save) — same class of fix as the watcher path.
+                if let Some(prev_ids) = prev_ids {
+                    for old_id in prev_ids.iter().filter(|id| !ids.contains(id)) {
+                        if let Some(kb) = self.kb.instances.get_mut(&uuid) {
+                            kb.remove(old_id);
+                        }
+                        self.kb_persist_instance_delete(&uuid, old_id);
+                    }
+                }
                 // Phase 0b: persist the reimported nodes to the durable instance
                 // store — parity with the watcher drain (0a); otherwise a save-driven
                 // reimport is lost on restart.
                 self.kb_persist_instance_ids(&uuid, &ids);
+                // Keep the watcher's own path->ids map in sync too, so a subsequent
+                // watcher-driven event for this same path diffs against the truth
+                // rather than a stale pre-save mapping.
+                if let Some(w) = self.kb.watchers.get(&uuid) {
+                    w.record_ids(path, ids);
+                }
                 return;
             }
         }
@@ -2398,10 +2419,26 @@ impl Editor {
                             total_processed += 1;
                             continue;
                         }
+                        let prev_ids = self
+                            .kb
+                            .watchers
+                            .get(&uuid)
+                            .and_then(|w| w.ids_for_path(&path));
                         let ids = match self.kb.instances.get_mut(&uuid) {
                             Some(kb) => kb.ingest_org_file(&path),
                             None => continue,
                         };
+                        // Retract ids this path no longer produces (e.g. an in-place
+                        // `:ID:` edit) — otherwise the old id lingers as a ghost node
+                        // in the index/search forever, since re-ingest only upserts.
+                        if let Some(prev_ids) = prev_ids {
+                            for old_id in prev_ids.iter().filter(|id| !ids.contains(id)) {
+                                if let Some(kb) = self.kb.instances.get_mut(&uuid) {
+                                    kb.remove(old_id);
+                                }
+                                self.kb_persist_instance_delete(&uuid, old_id);
+                            }
+                        }
                         // Phase 0a: write-through to the durable instance store BEFORE
                         // handing ownership of `ids` to the watcher record. Without this
                         // the watcher-ingested nodes live only in the in-memory mirror
@@ -4148,6 +4185,56 @@ mod tests {
             "reimported node must be persisted to the durable instance store"
         );
         assert_eq!(durable.unwrap().title, "Reimport Me");
+    }
+
+    #[test]
+    fn kb_reimport_file_retracts_id_dropped_by_in_place_rename() {
+        // Reproduces the reported bug end-to-end through the real editor path:
+        // jenkinsp.org gets its :ID: hand-edited (jenkinsp -> jenkins) across
+        // saves. Each save re-triggers kb_reimport_file (file_ops.rs); it must
+        // retract the id the file no longer produces, in both the in-memory
+        // instance mirror AND the durable instance store — not just upsert the
+        // new one and leave the old as a ghost.
+        let dir = TempDir::new().unwrap();
+        let mut editor = Editor::new();
+        let _td = with_test_dirs(&mut editor);
+        let uuid = editor.kb_register("TestNotes", dir.path()).unwrap().uuid;
+
+        let f = dir.path().join("jenkinsp.org");
+        std::fs::write(
+            &f,
+            ":PROPERTIES:\n:ID: user:t-jenkinsp\n:END:\n#+title: jenkinsp\n\nJenkins\n",
+        )
+        .unwrap();
+        editor.kb_reimport_file(&f);
+        assert!(editor
+            .kb
+            .instances
+            .get(&uuid)
+            .unwrap()
+            .contains("user:t-jenkinsp"));
+
+        // In-place rename, same path, then reimport again (as a save would trigger).
+        std::fs::write(
+            &f,
+            ":PROPERTIES:\n:ID: user:t-jenkins\n:END:\n#+title: jenkins\n\nJenkins\n",
+        )
+        .unwrap();
+        editor.kb_reimport_file(&f);
+
+        let mirror = editor.kb.instances.get(&uuid).unwrap();
+        assert!(
+            !mirror.contains("user:t-jenkinsp"),
+            "old id must be retracted from the in-memory mirror"
+        );
+        assert!(mirror.contains("user:t-jenkins"));
+
+        let store = editor.kb.instance_stores.get(&uuid).unwrap();
+        assert!(
+            store.get_node("user:t-jenkinsp").unwrap().is_none(),
+            "old id must be retracted from the durable instance store too"
+        );
+        assert!(store.get_node("user:t-jenkins").unwrap().is_some());
     }
 
     #[test]
