@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- *(kb)* Ghost/stale node ids survive an in-place :ID: rename ([f4fdef7](https://github.com/cuttlefisch/mae/commit/f4fdef7e3e93aefe509c0889b1d67b3487937c6c))
+- *(editor)* KB node buffers bled across split windows ([ec7e973](https://github.com/cuttlefisch/mae/commit/ec7e9738f7251f5c6042ddc33f84d27ad4c1de53))
+- *(kb)* Node created via SPC n f invisible to other processes/instance search ([02f9126](https://github.com/cuttlefisch/mae/commit/02f912675251bf7514d6082304a2287b4a7d95a0))
+- *(kb)* Kb_id_audit missed a ghost id once its file was itself renamed away ([b00c03f](https://github.com/cuttlefisch/mae/commit/b00c03f80bcb425301011ac2d836e1ea6ef8a1a0))
+- *(deps)* Pin dalek-cryptography family at v2 pending iroh's v3/v5 support ([48905eb](https://github.com/cuttlefisch/mae/commit/48905eb98f2f3d8f83f4ebb8c95fc89de99547c1))
+
+### Miscellaneous
+
+- *(deps)* Bump the rust-dependencies group with 27 updates ([a0dc157](https://github.com/cuttlefisch/mae/commit/a0dc157308011b8d70ad2dc554e6d0fc765d280d))
+
+## [0.14.36] - 2026-07-08
+
+### Miscellaneous
+
+- Bump version to 0.14.36 ([d5ea469](https://github.com/cuttlefisch/mae/commit/d5ea46955da34b3bb775bf2153924c8107fdc27b))
+
 ## [0.14.35] - 2026-07-07
 
 ### Bug Fixes
