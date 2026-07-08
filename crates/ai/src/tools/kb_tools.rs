@@ -240,6 +240,16 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             permission: Some(PermissionTier::ReadOnly),
         },
         ToolDefinition {
+            name: "kb_sync_status".into(),
+            description: "Per-federated-instance sync/freshness diagnostics: whether kb_notes_dir resolves to a registered instance, whether that instance's filesystem watcher is actually attached (not just whether one was ever expected), any watcher attach error, and seconds since its last drain. Use this to diagnose 'why didn't another mae process see my new/changed node'.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
             name: "kb_id_audit".into(),
             description: "Detect ghost/stale node ids: an id that no longer appears in its own source file's current content (left behind by an in-place :ID: edit/rename). Re-parses each distinct source file on demand — more expensive than kb_health, call when investigating id-rename or duplicate-node symptoms, not routinely.".into(),
             parameters: ToolParameters {

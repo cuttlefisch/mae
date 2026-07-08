@@ -7,8 +7,8 @@ use crate::tool_impls::{
     execute_kb_id_audit, execute_kb_links_from, execute_kb_links_to, execute_kb_list,
     execute_kb_neighborhood, execute_kb_raw_query, execute_kb_register, execute_kb_reimport,
     execute_kb_related, execute_kb_restore, execute_kb_search, execute_kb_search_context,
-    execute_kb_shortest_path, execute_kb_unregister, execute_kb_update, execute_kb_vector_search,
-    execute_kb_view_query,
+    execute_kb_shortest_path, execute_kb_sync_status, execute_kb_unregister, execute_kb_update,
+    execute_kb_vector_search, execute_kb_view_query,
 };
 use crate::types::ToolCall;
 
@@ -51,6 +51,7 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         }
         "kb_health" => execute_kb_health(editor),
         "kb_id_audit" => execute_kb_id_audit(editor),
+        "kb_sync_status" => execute_kb_sync_status(editor),
         "kb_create" => execute_kb_create(editor, &call.arguments),
         "kb_update" => execute_kb_update(editor, &call.arguments),
         "kb_delete" => execute_kb_delete(editor, &call.arguments),

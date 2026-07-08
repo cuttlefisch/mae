@@ -299,17 +299,31 @@ impl Editor {
                             .map(|(p, ids)| (p.clone(), ids.clone())),
                     );
                     self.kb.watchers.insert(uuid.to_string(), watcher);
+                    self.kb.watcher_attach_errors.remove(uuid);
                 }
                 Err(e) => {
                     let msg = e.to_string();
+                    // Watcher is optional — registration still succeeds — but every
+                    // attach failure is now surfaced, not just the inotify-limit
+                    // case: `watcher_count: 0` alone is otherwise ambiguous between
+                    // "no instance was ever registered" and "a watcher should exist
+                    // but silently didn't attach." Tracked in watcher_attach_errors
+                    // for kb_sync_status; also always logged/status'd.
+                    tracing::warn!(uuid = %uuid, org_dir = %org_dir.display(), error = %msg, "KB watcher failed to attach");
+                    self.kb
+                        .watcher_attach_errors
+                        .insert(uuid.to_string(), msg.clone());
                     if msg.contains("inotify") || msg.contains("No space left") {
                         self.set_status(
                             "KB watcher failed: inotify limit reached. \
                              Run `sysctl fs.inotify.max_user_watches=65536` \
                              or set `kb_watcher_enabled=false`.",
                         );
+                    } else {
+                        self.set_status(format!(
+                            "KB watcher failed to attach for this instance: {msg}"
+                        ));
                     }
-                    // Watcher is optional — registration still succeeds
                 }
             }
         }
@@ -1778,8 +1792,8 @@ impl Editor {
             std::fs::write(&path, &content)
                 .map_err(|e| format!("Cannot write note file: {}", e))?;
 
-            // Insert into matching KB instance (if registered)
-            self.kb_insert_to_notes_instance(&id, title, &path);
+            // Insert into matching KB instance (if registered) — durably.
+            let matched_instance = self.kb_insert_to_notes_instance(&id, title, &path);
 
             // Record return buffer before opening new file
             let return_idx = self.active_buffer_idx();
@@ -1799,10 +1813,15 @@ impl Editor {
                 return_buffer_idx: return_idx,
             });
 
-            self.set_status(format!(
-                "Capture: {} — SPC n s to finish | SPC n k to abort",
-                title
-            ));
+            let status = if matched_instance {
+                format!("Capture: {} — SPC n s to finish | SPC n k to abort", title)
+            } else {
+                format!(
+                    "Capture: {} — no registered KB instance covers kb_notes_dir; saved to primary only (won't sync to other mae processes). SPC n s to finish | SPC n k to abort",
+                    title
+                )
+            };
+            self.set_status(status);
             Ok((id, Some(path)))
         } else {
             // Ephemeral in-memory node (fallback)
@@ -1811,28 +1830,58 @@ impl Editor {
         }
     }
 
-    /// Insert a node into the KB instance that covers `kb_notes_dir`.
-    /// Falls back to inserting into the local KB if no matching instance.
-    fn kb_insert_to_notes_instance(&mut self, id: &str, title: &str, path: &std::path::Path) {
+    /// Insert a node into the KB instance that covers `kb_notes_dir`, durably
+    /// (not just the in-memory mirror — otherwise it's invisible to this same
+    /// process's own instance-scoped/federated search until some LATER event
+    /// happens to reimport it, and to any other process sharing this KB
+    /// directory forever, since there's no file-write for a watcher to catch:
+    /// the node exists nowhere but this one process's memory).
+    /// Falls back to the local/primary KB (also durably) if no registered
+    /// instance covers `kb_notes_dir` — which means this note won't be picked
+    /// up by that instance's watcher in ANY process, so callers should warn.
+    /// Returns `true` if a registered instance was matched, `false` if it fell
+    /// back to primary.
+    fn kb_insert_to_notes_instance(
+        &mut self,
+        id: &str,
+        title: &str,
+        path: &std::path::Path,
+    ) -> bool {
         let node = mae_kb::Node::new(id, title, mae_kb::NodeKind::Note, "")
             .with_source(mae_kb::NodeSource::UserOrg, 0)
             .with_source_file(path);
 
-        // Try to find a registered instance whose org_dir matches kb_notes_dir
+        // Match by canonicalized path, not raw PathBuf equality -- a trailing
+        // slash, a symlink, or a relative-vs-absolute kb_notes_dir would
+        // otherwise silently fail to match a genuinely-covering instance.
         let notes_dir = self.kb.notes_dir.clone();
         if let Some(ref dir) = notes_dir {
-            for inst in &self.kb.registry.instances {
-                if inst.org_dir == *dir {
-                    if let Some(kb) = self.kb.instances.get_mut(&inst.uuid) {
-                        kb.insert(node);
-                        return;
+            let dir_canon = dir.canonicalize().unwrap_or_else(|_| dir.clone());
+            let matched_uuid = self.kb.registry.instances.iter().find_map(|inst| {
+                let inst_canon = inst
+                    .org_dir
+                    .canonicalize()
+                    .unwrap_or_else(|_| inst.org_dir.clone());
+                (inst_canon == dir_canon).then(|| inst.uuid.clone())
+            });
+            if let Some(uuid) = matched_uuid {
+                if let Some(kb) = self.kb.instances.get_mut(&uuid) {
+                    kb.insert(node.clone());
+                }
+                if let Some(store) = self.kb.instance_stores.get(&uuid) {
+                    if let Err(e) = store.update_node(&node) {
+                        tracing::warn!(node_id = %id, error = %e, "KB instance store write-through (note capture) failed");
                     }
                 }
+                return true;
             }
         }
 
-        // Fallback: insert into local KB
-        self.kb.primary.insert(node);
+        // Fallback: no registered instance covers kb_notes_dir -- insert into
+        // the primary KB, durably, rather than a silent in-memory-only trap.
+        self.kb.primary.insert(node.clone());
+        self.kb_persist_node(&node);
+        false
     }
 
     /// Collect all KB node (id, title) pairs from local + federated instances.
@@ -4235,6 +4284,88 @@ mod tests {
             "old id must be retracted from the durable instance store too"
         );
         assert!(store.get_node("user:t-jenkins").unwrap().is_some());
+    }
+
+    #[test]
+    fn kb_create_note_from_title_persists_durably_to_the_matching_instance() {
+        // Reproduces the reported bug: a node created via SPC n f ("create new
+        // node") must reach the durable instance store immediately, not just
+        // the in-memory mirror -- otherwise there's no file-write for THIS
+        // process's own instance-scoped search to see (until some later event
+        // happens to reimport it) and nothing for any OTHER process sharing
+        // this KB directory to ever pick up via its filesystem watcher.
+        let dir = TempDir::new().unwrap();
+        let mut editor = Editor::new();
+        let _td = with_test_dirs(&mut editor);
+        let uuid = editor.kb_register("TestNotes", dir.path()).unwrap().uuid;
+        editor
+            .set_option("kb_notes_dir", dir.path().to_str().unwrap())
+            .unwrap();
+
+        let (id, path) = editor.kb_create_note_from_title("My New Node").unwrap();
+        let path = path.expect("kb_notes_dir is set, so a real file must be written");
+
+        assert!(
+            path.exists(),
+            "the note must be written as a real .org file on disk"
+        );
+        assert!(
+            editor.kb.instances.get(&uuid).unwrap().get(&id).is_some(),
+            "in-memory instance mirror must have the node"
+        );
+        let durable = editor
+            .kb
+            .instance_stores
+            .get(&uuid)
+            .unwrap()
+            .get_node(&id)
+            .unwrap();
+        assert!(
+            durable.is_some(),
+            "the durable instance store must have the node immediately, not just the mirror"
+        );
+    }
+
+    #[test]
+    fn kb_create_note_from_title_visible_to_a_second_process_after_reimport() {
+        // Simulates two independent mae processes sharing one KB directory:
+        // two separate Editors, each registering the SAME directory. A node
+        // created in "process A" must become visible in "process B" once B
+        // re-ingests the file A wrote -- i.e. the write must actually be a
+        // real file, findable by kb_find_candidates once picked up.
+        let dir = TempDir::new().unwrap();
+
+        let mut editor_a = Editor::new();
+        let _td_a = with_test_dirs(&mut editor_a);
+        editor_a.kb_register("Shared", dir.path()).unwrap();
+        editor_a
+            .set_option("kb_notes_dir", dir.path().to_str().unwrap())
+            .unwrap();
+        let (id, path) = editor_a
+            .kb_create_note_from_title("Cross Process Node")
+            .unwrap();
+        let path = path.unwrap();
+
+        let mut editor_b = Editor::new();
+        let _td_b = with_test_dirs(&mut editor_b);
+        let uuid_b = editor_b.kb_register("Shared", dir.path()).unwrap().uuid;
+        // Process B's registration walk happened AFTER A's write, so a plain
+        // register (not even a reimport) should already have it -- but drive
+        // it through kb_reimport_file too, mirroring a watcher-driven pickup
+        // of a file that changed after B's initial import.
+        editor_b.kb_reimport_file(&path);
+
+        assert!(
+            editor_b
+                .kb
+                .instances
+                .get(&uuid_b)
+                .unwrap()
+                .get(&id)
+                .is_some(),
+            "a node created in process A must become visible in process B \
+             once B re-ingests the file -- it must have actually been written"
+        );
     }
 
     #[test]

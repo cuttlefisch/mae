@@ -248,6 +248,26 @@ fn window_layout_returns_valid_json() {
 }
 
 #[test]
+fn kb_sync_status_returns_valid_json() {
+    let mut editor = Editor::new();
+    let call = make_call("kb_sync_status", serde_json::json!({}));
+    let result = unwrap_immediate(execute_tool(
+        &mut editor,
+        &call,
+        &all_tools(),
+        &PermissionPolicy::default(),
+    ));
+    assert!(result.success);
+    let out: serde_json::Value = serde_json::from_str(&result.output).unwrap();
+    assert!(out["instances"].as_array().unwrap().is_empty());
+    assert_eq!(out["kb_notes_dir"], serde_json::Value::Null);
+    assert_eq!(
+        out["kb_notes_dir_resolves_to_instance"],
+        serde_json::Value::Null
+    );
+}
+
+#[test]
 fn window_layout_flags_windows_sharing_a_buffer() {
     // ADR/bug fix regression: two windows pointing at the same buffer_idx
     // (whether by the intentional *Help*-style singleton or, before the
