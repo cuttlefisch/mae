@@ -1915,23 +1915,61 @@ impl Editor {
     /// Small KBs (≤ `KB_FIND_LAZY_THRESHOLD`): return *all* nodes so the palette
     /// filters client-side (instant, no re-search). Large KBs: return a bounded,
     /// query-driven ranked window via `search_ranked` — full-KB-reachable (the
-    /// ranker scans every node) yet capped, so per-keystroke work stays bounded
-    /// instead of materializing every node. This is the lazy-at-scale path.
+    /// ranker scans primary *and every federated instance*, mirroring
+    /// `kb_federated_search_scoped`) yet capped, so per-keystroke work stays
+    /// bounded instead of materializing every node. This is the lazy-at-scale
+    /// path.
     pub fn kb_find_candidates(&self, query: &str) -> Vec<(String, String, String)> {
         if self.kb_loaded_node_count() <= Self::KB_FIND_LAZY_THRESHOLD {
             return self.kb_all_node_triples();
         }
-        self.kb
-            .primary
-            .search_ranked(query, Self::KB_FIND_LAZY_LIMIT)
-            .into_iter()
-            .filter_map(|(id, _)| {
-                self.kb.primary.get(&id).map(|n| {
-                    let body: String = n.body.chars().take(500).collect();
-                    (n.id.clone(), n.title.clone(), body)
-                })
-            })
-            .collect()
+        let limit = Self::KB_FIND_LAZY_LIMIT;
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut triples: Vec<(String, String, String)> = Vec::new();
+
+        if self.kb.primary_thin() {
+            if let Some(ql) = self.kb.query_layer() {
+                for hit in ql.search(query, limit) {
+                    if let Some(n) = ql.get(&hit.id) {
+                        if seen.insert(n.id.clone()) {
+                            let body: String = n.body.chars().take(500).collect();
+                            triples.push((n.id.clone(), n.title.clone(), body));
+                        }
+                    }
+                }
+            }
+        } else {
+            for (id, _) in self.kb.primary.search_ranked(query, limit) {
+                if let Some(n) = self.kb.primary.get(&id) {
+                    if seen.insert(n.id.clone()) {
+                        let body: String = n.body.chars().take(500).collect();
+                        triples.push((n.id.clone(), n.title.clone(), body));
+                    }
+                }
+            }
+        }
+
+        // Federated instances (kb-register'd directories) participate too —
+        // this is the part `kb_find_candidates` used to skip entirely once a
+        // large KB tipped it into the lazy branch, leaving federated content
+        // permanently unreachable through kb-find regardless of query.
+        if triples.len() < limit {
+            for kb in self.kb.instances.values() {
+                for (id, _) in kb.search_ranked(query, limit) {
+                    if triples.len() >= limit {
+                        break;
+                    }
+                    if let Some(n) = kb.get(&id) {
+                        if seen.insert(n.id.clone()) {
+                            let body: String = n.body.chars().take(500).collect();
+                            triples.push((n.id.clone(), n.title.clone(), body));
+                        }
+                    }
+                }
+            }
+        }
+
+        triples
     }
 
     /// Re-derive the kb-find palette after its query changed: re-search a bounded
@@ -3915,6 +3953,41 @@ mod tests {
         assert!(
             hits.iter().any(|(id, _, _)| id == "note:zebra-marker"),
             "targeted query must find the distinctive node at scale"
+        );
+    }
+
+    #[test]
+    fn kb_find_candidates_reaches_federated_instance_nodes_at_scale() {
+        let mut editor = Editor::new();
+        let mut inst = mae_kb::KnowledgeBase::new();
+        inst.insert(mae_kb::Node::new(
+            "note:federated-zebra",
+            "Federated Zebra Marker",
+            mae_kb::NodeKind::Note,
+            "uniquely findable in a federated instance",
+        ));
+        editor.kb.instances.insert("test-instance".into(), inst);
+
+        // Push primary past the lazy threshold, same as the sibling test above.
+        for i in 0..(Editor::KB_FIND_LAZY_THRESHOLD + 500) {
+            editor.kb.primary.insert(mae_kb::Node::new(
+                format!("note:bulk{i}"),
+                format!("Bulk Note {i}"),
+                mae_kb::NodeKind::Note,
+                "filler body",
+            ));
+        }
+        assert!(editor.kb_loaded_node_count() > Editor::KB_FIND_LAZY_THRESHOLD);
+
+        // A targeted query must still reach a node that lives ONLY in a
+        // federated instance, not primary — this is exactly the bug
+        // kb_find_candidates had: the lazy branch searched primary alone,
+        // making federated content permanently unreachable through kb-find
+        // once the KB tipped past the threshold, regardless of query.
+        let hits = editor.kb_find_candidates("federated zebra");
+        assert!(
+            hits.iter().any(|(id, _, _)| id == "note:federated-zebra"),
+            "targeted query must find a federated-instance-only node at scale"
         );
     }
 

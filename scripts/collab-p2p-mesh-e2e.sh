@@ -40,27 +40,13 @@ EDITOR_TIMEOUT=90
 for b in "$MAE_BIN" "$MAE_DAEMON_BIN"; do [ -x "$b" ] || { echo "ERROR: missing binary: $b"; exit 2; }; done
 
 CANARY="MESH-CANARY-$$-$(od -An -N4 -tx4 /dev/urandom 2>/dev/null | tr -d ' ' || echo dead)"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/mae-mesh-e2e.XXXXXX")"
 
-# --- Isolation + reliable cleanup (same posture as collab-encrypted-e2e.sh) -------
-HARNESS_PIDS=()
-spawn() {
-  local __var="$1" __log="$2"; shift 2; [ "${1:-}" = "--" ] && shift
-  setsid "$@" >"$__log" 2>&1 &
-  local pid=$!
-  HARNESS_PIDS+=("$pid")
-  printf '%s\n' "$pid" >>"$WORK/pids"
-  printf -v "$__var" '%s' "$pid"
-}
-cleanup() {
-  local rc=$? pid
-  for pid in "${HARNESS_PIDS[@]:-}"; do [ -n "$pid" ] && { kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null; } || true; done
-  sleep 0.3
-  for pid in "${HARNESS_PIDS[@]:-}"; do [ -n "$pid" ] && { kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null; } || true; done
-  if [ "${MAE_E2E_KEEP:-0}" = "1" ]; then echo "[harness] KEPT workdir=$WORK pids=(${HARNESS_PIDS[*]:-none})"; else rm -rf "$WORK"; fi
-  return "$rc"
-}
-trap cleanup EXIT INT TERM
+# --- Isolation + reliable cleanup (ADR-044, same posture as collab-encrypted-e2e.sh,
+# now shared via scripts/lib/e2e-daemon-harness.sh) --------------------------------
+source "$ROOT/scripts/lib/e2e-daemon-harness.sh"
+harness_sweep_stale "mae-member-e2e.*" "mae-mtls-e2e.*" "mae-enc-e2e.*" "mae-mesh-e2e.*"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/mae-mesh-e2e.XXXXXX")"
+harness_trap_install
 mkdir -p "$WORK"/{srvA/.config/mae,srvA/.local/share,srvA/data,srvB/.config/mae,srvB/.local/share,srvB/data,alice/.config/mae,alice/.local/share,bob/.config/mae,bob/.local/share,sync,scen}
 
 srvA()  { HOME="$WORK/srvA"  XDG_CONFIG_HOME="$WORK/srvA/.config"  XDG_DATA_HOME="$WORK/srvA/.local/share"  "$@"; }
@@ -174,9 +160,9 @@ $E2E_BOB_PULL
 EOF
 
 # --- Spawn both daemons; wait for their TCP control listeners ---
-spawn DPA "$WORK/daemonA.log" -- env HOME="$WORK/srvA" XDG_CONFIG_HOME="$WORK/srvA/.config" XDG_DATA_HOME="$WORK/srvA/.local/share" \
+harness_spawn_daemon DPA "$WORK/daemonA.log" -- env HOME="$WORK/srvA" XDG_CONFIG_HOME="$WORK/srvA/.config" XDG_DATA_HOME="$WORK/srvA/.local/share" \
   MAE_LOG="${MAE_E2E_DAEMON_LOG:-mae_daemon=info,info}" "$MAE_DAEMON_BIN"
-spawn DPB "$WORK/daemonB.log" -- env HOME="$WORK/srvB" XDG_CONFIG_HOME="$WORK/srvB/.config" XDG_DATA_HOME="$WORK/srvB/.local/share" \
+harness_spawn_daemon DPB "$WORK/daemonB.log" -- env HOME="$WORK/srvB" XDG_CONFIG_HOME="$WORK/srvB/.config" XDG_DATA_HOME="$WORK/srvB/.local/share" \
   MAE_LOG="${MAE_E2E_DAEMON_LOG:-mae_daemon=info,info}" "$MAE_DAEMON_BIN"
 echo "[harness] daemonA pgid=$DPA port=$PORTA | daemonB pgid=$DPB port=$PORTB | workdir=$WORK"
 for _ in $(seq 1 40); do port_listening "$PORTA" && port_listening "$PORTB" && break; sleep 0.25; done
@@ -184,10 +170,10 @@ port_listening "$PORTA" || { echo "ERROR: daemon A never listened"; cat "$WORK/d
 port_listening "$PORTB" || { echo "ERROR: daemon B never listened"; cat "$WORK/daemonB.log"; exit 1; }
 
 # --- Editors: each connects to its OWN daemon over TCP ---
-spawn APID "$WORK/alice.tap" -- env HOME="$WORK/alice" XDG_CONFIG_HOME="$WORK/alice/.config" XDG_DATA_HOME="$WORK/alice/.local/share" \
+harness_spawn APID "$WORK/alice.tap" -- env HOME="$WORK/alice" XDG_CONFIG_HOME="$WORK/alice/.config" XDG_DATA_HOME="$WORK/alice/.local/share" \
   MAE_COLLAB_SERVER="127.0.0.1:$PORTA" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 MAE_LOG="${MAE_E2E_ALICE_LOG:-mae_mcp=warn,info}" \
   ${TIMEOUT_BIN:+$TIMEOUT_BIN $EDITOR_TIMEOUT} "$MAE_BIN" --test "$WORK/scen/alice.scm"
-spawn BPID "$WORK/bob.tap" -- env HOME="$WORK/bob" XDG_CONFIG_HOME="$WORK/bob/.config" XDG_DATA_HOME="$WORK/bob/.local/share" \
+harness_spawn BPID "$WORK/bob.tap" -- env HOME="$WORK/bob" XDG_CONFIG_HOME="$WORK/bob/.config" XDG_DATA_HOME="$WORK/bob/.local/share" \
   MAE_COLLAB_SERVER="127.0.0.1:$PORTB" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 MAE_LOG="${MAE_E2E_BOB_LOG:-mae_mcp=warn,info}" \
   ${TIMEOUT_BIN:+$TIMEOUT_BIN $EDITOR_TIMEOUT} "$MAE_BIN" --test "$WORK/scen/bob.scm"
 echo "[harness] alice pgid=$APID bob pgid=$BPID"

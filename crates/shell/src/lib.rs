@@ -13,9 +13,13 @@
 
 mod event;
 pub mod path;
+pub mod shell_invocation;
 mod terminal;
 
 pub use event::{ShellEvent, ShellEventListener};
+pub use shell_invocation::{
+    diff_envs, login_wrapped_argv, probe_login_shell_env, resolve_user_shell, EnvKeyValues,
+};
 pub use terminal::ShellTerminal;
 
 // Re-export alacritty types needed by the renderer for grid cell access.

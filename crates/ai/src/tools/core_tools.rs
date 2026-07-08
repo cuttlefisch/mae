@@ -1217,7 +1217,7 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
         // --- Configuration audit ---
         ToolDefinition {
             name: "audit_configuration".into(),
-            description: "Audit the editor configuration and return a structured JSON report. Includes AI agent/chat status, LSP servers, DAP adapters, init files (with absolute paths), modified options, prompt tier, and actionable issues. Call FIRST when diagnosing config problems or when you need absolute paths to config files.".into(),
+            description: "Audit the editor configuration and return a structured JSON report. Includes AI agent/chat status, an agent-shell startup-file environment diff (what .bashrc/.zshrc would add/change for the open-ai-agent shell vs. this process's ambient env — diagnoses \"my agent shell is missing an env var/token my normal terminal has\"), LSP servers, DAP adapters, init files (with absolute paths), modified options, prompt tier, and actionable issues. Call FIRST when diagnosing config problems or when you need absolute paths to config files.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::new(),

@@ -27,6 +27,7 @@
       "dependencies": [
         "mae-core",
         "mae-kb",
+        "mae-shell",
         "mae-sync"
       ],
       "public_items": [
@@ -947,6 +948,10 @@
       "public_items": [
         {
           "name": "path",
+          "kind": "mod"
+        },
+        {
+          "name": "shell_invocation",
           "kind": "mod"
         },
         {

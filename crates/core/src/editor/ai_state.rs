@@ -42,6 +42,12 @@ pub struct AiState {
     pub work_window_id: Option<WindowId>,
     /// AI editor/agent command (e.g. "claude", "aider").
     pub editor_name: String,
+    /// Whether `open-ai-agent`'s shell wraps `editor_name` through the
+    /// user's login+interactive shell (sourcing `.bashrc`/`.zshrc` etc.) so
+    /// it inherits the same environment a normal terminal would — auth
+    /// tokens, PATH shims. Disable if a slow/side-effecting shell rc delays
+    /// agent launch.
+    pub agent_login_shell: bool,
     /// AI provider name: "claude", "openai", "gemini", "ollama", "deepseek".
     pub provider: String,
     /// AI model identifier. Empty = use provider default.
@@ -103,6 +109,7 @@ impl AiState {
             last_output_scroll: None,
             work_window_id: None,
             editor_name: "claude".to_string(),
+            agent_login_shell: true,
             provider: String::new(),
             model: String::new(),
             api_key_command: String::new(),

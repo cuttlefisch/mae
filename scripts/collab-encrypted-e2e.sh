@@ -73,39 +73,15 @@ CANARY3="CANARY3-postrotid-$$-$(od -An -N4 -tx4 /dev/urandom 2>/dev/null | tr -d
 # share→enable flow ships it to the key-blind daemon in the clear; reseal-on-enable must
 # PURGE it (share_doc replace, not merge) so it does not survive at rest after encryption.
 PRECANARY="PRECANARY-preenable-$$-$(od -An -N4 -tx4 /dev/urandom 2>/dev/null | tr -d ' ' || echo dead)"
-WORK="$(mktemp -d "${TMPDIR:-/tmp}/mae-enc-e2e.XXXXXX")"
-
 # --- Isolation + reliable cleanup -------------------------------------------------
-# Every process we start runs in its OWN session (setsid → it is its own process-group
-# leader), so cleanup can `kill -- -PGID` the whole group — a forked daemon child can't
-# survive a parent kill. We track only OUR pids (in HARNESS_PIDS + $WORK/pids); we NEVER
-# signal anything we didn't spawn (your `~/.local/bin/mae` + daemon are untouched). The
-# trap fires on normal exit, `set -e` failure, and INT/TERM (incl. when this script is
-# stopped as a background task). MAE_E2E_KEEP=1 preserves the workdir for debugging.
-HARNESS_PIDS=()
-# spawn VAR LOGFILE -- <cmd...> : start <cmd> in a new session, record its pgid in VAR.
-spawn() {
-  local __var="$1" __log="$2"; shift 2; [ "${1:-}" = "--" ] && shift
-  setsid "$@" >"$__log" 2>&1 &
-  local pid=$!
-  HARNESS_PIDS+=("$pid")
-  printf '%s\n' "$pid" >>"$WORK/pids"
-  printf -v "$__var" '%s' "$pid"
-}
-cleanup() {
-  local rc=$?
-  local pid
-  for pid in "${HARNESS_PIDS[@]:-}"; do [ -n "$pid" ] && { kill -TERM -- "-$pid" 2>/dev/null || kill -TERM "$pid" 2>/dev/null; } || true; done
-  sleep 0.3
-  for pid in "${HARNESS_PIDS[@]:-}"; do [ -n "$pid" ] && { kill -KILL -- "-$pid" 2>/dev/null || kill -KILL "$pid" 2>/dev/null; } || true; done
-  if [ "${MAE_E2E_KEEP:-0}" = "1" ]; then
-    echo "[harness] KEPT workdir=$WORK  pids=(${HARNESS_PIDS[*]:-none})"
-  else
-    rm -rf "$WORK"
-  fi
-  return "$rc"
-}
-trap cleanup EXIT INT TERM
+# See scripts/lib/e2e-daemon-harness.sh (ADR-044): every process we start runs in
+# its OWN session (setsid), cleanup group-kills on EXIT/INT/TERM, a kernel-enforced
+# TTL backstops the daemon even if this script is SIGKILLed, and a pre-flight sweep
+# reaps orphans left by a past run of any collab-*-e2e.sh script.
+source "$ROOT/scripts/lib/e2e-daemon-harness.sh"
+harness_sweep_stale "mae-member-e2e.*" "mae-mtls-e2e.*" "mae-enc-e2e.*" "mae-mesh-e2e.*"
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/mae-enc-e2e.XXXXXX")"
+harness_trap_install
 mkdir -p "$WORK"/{srv/.config/mae,srv/.local/share,srv/data,alice/.config/mae,alice/.local/share,bob/.config/mae,bob/.local/share,carol/.config/mae,carol/.local/share,sync,scen}
 srv()   { HOME="$WORK/srv"   XDG_CONFIG_HOME="$WORK/srv/.config"   XDG_DATA_HOME="$WORK/srv/.local/share"   "$@"; }
 alice() { HOME="$WORK/alice" XDG_CONFIG_HOME="$WORK/alice/.config" XDG_DATA_HOME="$WORK/alice/.local/share" "$@"; }
@@ -257,7 +233,7 @@ cat > "$WORK/scen/carol.scm" <<EOF
 EOF
 fi
 
-spawn DP "$WORK/daemon.log" -- env \
+harness_spawn_daemon DP "$WORK/daemon.log" -- env \
   HOME="$WORK/srv" XDG_CONFIG_HOME="$WORK/srv/.config" XDG_DATA_HOME="$WORK/srv/.local/share" \
   MAE_LOG="${MAE_E2E_DAEMON_LOG:-mae_daemon=info,info}" "$MAE_DAEMON_BIN"
 echo "[harness] daemon pgid=$DP port=$PORT workdir=$WORK"
@@ -265,19 +241,19 @@ for _ in $(seq 1 40); do port_listening "$PORT" && break; sleep 0.25; done
 port_listening "$PORT" || { echo "ERROR: daemon never listened"; cat "$WORK/daemon.log"; exit 1; }
 
 # Editors: each in its own session (group-killable), TAP+logs merged to its file.
-spawn APID "$WORK/alice.tap" -- env \
+harness_spawn APID "$WORK/alice.tap" -- env \
   HOME="$WORK/alice" XDG_CONFIG_HOME="$WORK/alice/.config" XDG_DATA_HOME="$WORK/alice/.local/share" \
   MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 \
   MAE_LOG="${MAE_E2E_ALICE_LOG:-mae_mcp=warn,info}" \
   ${TIMEOUT_BIN:+$TIMEOUT_BIN $EDITOR_TIMEOUT} "$MAE_BIN" --test "$WORK/scen/alice.scm"
-spawn BPID "$WORK/bob.tap" -- env \
+harness_spawn BPID "$WORK/bob.tap" -- env \
   HOME="$WORK/bob" XDG_CONFIG_HOME="$WORK/bob/.config" XDG_DATA_HOME="$WORK/bob/.local/share" \
   MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 \
   MAE_LOG="${MAE_E2E_BOB_LOG:-mae_mcp=warn,info}" \
   ${TIMEOUT_BIN:+$TIMEOUT_BIN $EDITOR_TIMEOUT} "$MAE_BIN" --test "$WORK/scen/bob.scm"
 CPID=""
 if [ "$RECOVER" = "1" ]; then
-  spawn CPID "$WORK/carol.tap" -- env \
+  harness_spawn CPID "$WORK/carol.tap" -- env \
     HOME="$WORK/carol" XDG_CONFIG_HOME="$WORK/carol/.config" XDG_DATA_HOME="$WORK/carol/.local/share" \
     MAE_COLLAB_SERVER="127.0.0.1:$PORT" MAE_COLLAB_AUTO_CONNECT=1 MAE_SKIP_WIZARD=1 \
     MAE_LOG="${MAE_E2E_CAROL_LOG:-mae_mcp=warn,info}" \

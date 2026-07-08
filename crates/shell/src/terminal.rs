@@ -227,12 +227,22 @@ impl ShellTerminal {
     /// Spawn a terminal running a specific command (not the user's shell).
     /// When the command exits, the PTY exits — ideal for agent processes
     /// where the lifecycle should be tied to the command, not a shell.
+    ///
+    /// When `login_wrap` is true, `command` is run *through* the user's
+    /// login+interactive shell (see `crate::shell_invocation`) so it
+    /// inherits whatever `.bashrc`/`.zshrc` establishes (auth tokens, PATH
+    /// shims, agent sockets) — matching what a normal terminal in MAE
+    /// already gets via `spawn_with_env`'s default-shell path below. Without
+    /// this, `program` execs directly as the PTY's init process with no
+    /// shell involved at all, silently missing anything shell startup files
+    /// set up.
     pub fn spawn_command(
         cols: u16,
         rows: u16,
         command: &str,
         working_dir: Option<std::path::PathBuf>,
         extra_env: std::collections::HashMap<String, String>,
+        login_wrap: bool,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         let cols = cols.max(2);
         let rows = rows.max(1);
@@ -249,13 +259,19 @@ impl ShellTerminal {
 
         // Parse command into program + args (simple space-split).
         let parts: Vec<&str> = command.split_whitespace().collect();
-        let (program, args) = if parts.is_empty() {
+        let (program, args): (String, Vec<String>) = if parts.is_empty() {
             return Err("empty command".into());
         } else {
             (
                 parts[0].to_string(),
                 parts[1..].iter().map(|s| s.to_string()).collect(),
             )
+        };
+        let (program, args) = if login_wrap {
+            let shell_path = crate::shell_invocation::resolve_user_shell();
+            crate::shell_invocation::login_wrapped_argv(&shell_path, &program, &args)
+        } else {
+            (program, args)
         };
 
         let mut env: std::collections::HashMap<String, String> = std::env::vars().collect();
@@ -719,6 +735,133 @@ mod tests {
         assert_eq!(t.grid().columns(), 120);
         assert_eq!(t.grid().screen_lines(), 40);
         drop(t);
+
+        term.shutdown();
+    }
+
+    /// Write an executable script that prints `MARKER=$MAE_TEST_MARKER` (or
+    /// `MARKER=unset` if unset). `spawn_command`'s `command` parameter is a
+    /// naive `split_whitespace()` (pre-existing, unrelated to this fix) — so
+    /// the test target must be a single bare path, no embedded quoting/args.
+    fn write_marker_check_script(dir: &std::path::Path) -> std::path::PathBuf {
+        let script_path = dir.join("check_marker.sh");
+        std::fs::write(
+            &script_path,
+            "#!/bin/sh\necho \"MARKER=${MAE_TEST_MARKER:-unset}\"\n",
+        )
+        .expect("write marker-check script");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&script_path).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script_path, perms).unwrap();
+        }
+        script_path
+    }
+
+    #[test]
+    fn spawn_command_with_login_wrap_sources_bashrc() {
+        // Regression test for the reported bug: `open-ai-agent`'s spawn path
+        // (spawn_command) used to exec the target program directly with no
+        // shell involved at all, so `.bashrc`-established env vars (e.g. an
+        // auth token pulled from a password manager) never reached it. With
+        // login_wrap=true, the target process must see them, matching what
+        // a normal terminal (spawn_with_env) already gets.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join(".bashrc"),
+            "export MAE_TEST_MARKER=from_bashrc\n",
+        )
+        .expect("write fake .bashrc");
+        let script_path = write_marker_check_script(tmp.path());
+
+        // HOME is overridden only for the *spawned child* via `extra_env`
+        // (merged into the PTY's env — never mutates this test process's
+        // own environment, so this is safe under parallel test execution).
+        // $SHELL, however, is read by `resolve_user_shell()` inside THIS
+        // process before the child spawns — briefly override it here and
+        // restore immediately after, minimizing the window shared with any
+        // other test that happens to read $SHELL (only `path.rs`'s
+        // `test_pull_path_from_shell`, which makes a loose assertion
+        // tolerant of this value).
+        let prev_shell = std::env::var("SHELL").ok();
+        std::env::set_var("SHELL", "/bin/bash");
+        let mut extra_env = std::collections::HashMap::new();
+        extra_env.insert("HOME".to_string(), tmp.path().display().to_string());
+        let spawn_result = ShellTerminal::spawn_command(
+            80,
+            24,
+            script_path.to_str().unwrap(),
+            None,
+            extra_env,
+            true, // login_wrap
+        );
+        match prev_shell {
+            Some(s) => std::env::set_var("SHELL", s),
+            None => std::env::remove_var("SHELL"),
+        }
+        let mut term = spawn_result.expect("failed to spawn agent terminal");
+
+        let mut found = false;
+        for _ in 0..40 {
+            thread::sleep(Duration::from_millis(100));
+            term.poll_events();
+            let viewport = term.read_viewport(24);
+            if viewport.join("\n").contains("MARKER=from_bashrc") {
+                found = true;
+                break;
+            }
+        }
+        assert!(
+            found,
+            "shell-rc-set env var must reach the agent-shell target process"
+        );
+
+        term.shutdown();
+    }
+
+    #[test]
+    fn spawn_command_without_login_wrap_does_not_source_bashrc() {
+        // Confirms the option actually gates the behavior: with
+        // login_wrap=false (today's pre-fix behavior), the marker must NOT
+        // appear, since the target execs directly with no shell in between.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(
+            tmp.path().join(".bashrc"),
+            "export MAE_TEST_MARKER=from_bashrc\n",
+        )
+        .expect("write fake .bashrc");
+        let script_path = write_marker_check_script(tmp.path());
+
+        let mut extra_env = std::collections::HashMap::new();
+        extra_env.insert("HOME".to_string(), tmp.path().display().to_string());
+        let mut term = ShellTerminal::spawn_command(
+            80,
+            24,
+            script_path.to_str().unwrap(),
+            None,
+            extra_env,
+            false, // login_wrap disabled
+        )
+        .expect("failed to spawn agent terminal");
+
+        let mut found_unset = false;
+        for _ in 0..40 {
+            thread::sleep(Duration::from_millis(100));
+            term.poll_events();
+            let viewport = term.read_viewport(24);
+            let joined = viewport.join("\n");
+            if joined.contains("MARKER=unset") {
+                found_unset = true;
+                break;
+            }
+            assert!(
+                !joined.contains("MARKER=from_bashrc"),
+                "without login_wrap, .bashrc must not be sourced"
+            );
+        }
+        assert!(found_unset, "expected to observe the unset marker");
 
         term.shutdown();
     }
