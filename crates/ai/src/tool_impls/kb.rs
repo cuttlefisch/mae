@@ -608,6 +608,43 @@ fn ghost_ids_json(ghosts: &[mae_kb::GhostNode]) -> serde_json::Value {
         .collect::<Vec<_>>())
 }
 
+/// Stale nodes (`source_file` doesn't exist at all) are a DIFFERENT flavor of
+/// the same "index doesn't match reality" problem `detect_ghost_ids` catches —
+/// e.g. exactly what happens if a file with an already-ghosted id (from an
+/// earlier in-place rename) is then itself renamed/deleted: its `source_file`
+/// stops existing, so `detect_ghost_ids` (which only re-parses EXISTING
+/// files) skips it, leaving it invisible to kb_id_audit unless this is
+/// folded in too. Reported with the same shape plus a distinct `reason` so
+/// callers can tell the two cases apart.
+fn stale_nodes_json(stale: &[mae_kb::StaleNode]) -> serde_json::Value {
+    serde_json::json!(stale
+        .iter()
+        .map(|s| serde_json::json!({
+            "id": s.id,
+            "title": s.title,
+            "source_file": s.source_file.display().to_string(),
+            "reason": "source_file_no_longer_exists",
+        }))
+        .collect::<Vec<_>>())
+}
+
+/// Union of ghost ids (id no longer in an existing file) and stale nodes
+/// (file itself is gone) — the full set of "safe to remove" cleanup
+/// candidates `kb_id_audit` surfaces per scope.
+fn cleanup_candidates_json(kb: &mae_kb::KnowledgeBase) -> serde_json::Value {
+    let mut out = ghost_ids_json(&kb.detect_ghost_ids())
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    out.extend(
+        stale_nodes_json(&kb.detect_stale_nodes())
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
+    );
+    serde_json::json!(out)
+}
+
 /// Per-federated-instance sync/freshness diagnostics — the piece that lets you
 /// self-diagnose "why didn't process B see my new node" without a source dive:
 /// is `kb_notes_dir` even resolvable to a registered instance, is that
@@ -672,36 +709,27 @@ pub fn execute_kb_sync_status(editor: &Editor) -> Result<String, String> {
 /// (re-parses each distinct source file), so it's its own on-demand tool
 /// rather than folded into the routinely-called health report.
 pub fn execute_kb_id_audit(editor: &Editor) -> Result<String, String> {
-    let local_ghosts = editor.kb.primary.detect_ghost_ids();
-
     let instances: Vec<serde_json::Value> = editor
         .kb
         .registry
         .instances
         .iter()
-        .map(|inst| {
-            let ghosts = editor
-                .kb
-                .instances
-                .get(&inst.uuid)
-                .map(|kb| kb.detect_ghost_ids());
-            match ghosts {
-                Some(g) => serde_json::json!({
-                    "name": inst.name,
-                    "uuid": inst.uuid,
-                    "ghost_ids": ghost_ids_json(&g),
-                }),
-                None => serde_json::json!({
-                    "name": inst.name,
-                    "uuid": inst.uuid,
-                    "status": "not loaded",
-                }),
-            }
+        .map(|inst| match editor.kb.instances.get(&inst.uuid) {
+            Some(kb) => serde_json::json!({
+                "name": inst.name,
+                "uuid": inst.uuid,
+                "ghost_ids": cleanup_candidates_json(kb),
+            }),
+            None => serde_json::json!({
+                "name": inst.name,
+                "uuid": inst.uuid,
+                "status": "not loaded",
+            }),
         })
         .collect();
 
     let out = serde_json::json!({
-        "local": { "ghost_ids": ghost_ids_json(&local_ghosts) },
+        "local": { "ghost_ids": cleanup_candidates_json(&editor.kb.primary) },
         "instances": instances,
     });
     serde_json::to_string_pretty(&out).map_err(|e| e.to_string())

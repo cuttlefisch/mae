@@ -2518,6 +2518,64 @@ mod tests {
     }
 
     #[test]
+    fn ghost_id_whose_file_is_later_renamed_becomes_a_stale_node_not_invisible() {
+        // Found while cleaning up the live jenkinsp/jenkin/jenkins case: once a
+        // ghost id's file is ITSELF later renamed/deleted (e.g. fixing the
+        // filename to match the corrected :ID:), detect_ghost_ids alone stops
+        // seeing it -- it only re-parses EXISTING files, and this one's
+        // source_file is now gone. It must NOT go invisible: detect_stale_nodes
+        // (source_file no longer exists) is the complementary check, and the
+        // two together (as kb_id_audit's cleanup_candidates union does) must
+        // still surface every such id.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let old_path = tmp.path().join("jenkinsp.org");
+        std::fs::write(
+            &old_path,
+            ":PROPERTIES:\n:ID: user:t-jenkinsp\n:END:\n#+title: jenkinsp\n\nJenkins\n",
+        )
+        .unwrap();
+
+        let mut kb = KnowledgeBase::new();
+        kb.ingest_org_file(&old_path);
+
+        // In-place rename to the current id, same path (creates a ghost).
+        std::fs::write(
+            &old_path,
+            ":PROPERTIES:\n:ID: user:t-jenkins\n:END:\n#+title: jenkins\n\nJenkins\n",
+        )
+        .unwrap();
+        kb.ingest_org_file(&old_path);
+        assert_eq!(
+            kb.detect_ghost_ids().len(),
+            1,
+            "jenkinsp should be a ghost while its file still exists"
+        );
+
+        // Now the FILE itself is renamed away (fixing the filename), exactly
+        // as happened live: the old id's source_file no longer exists at all.
+        let new_path = tmp.path().join("jenkins.org");
+        std::fs::rename(&old_path, &new_path).unwrap();
+        // ingest the new path too, as a real reimport would.
+        kb.ingest_org_file(&new_path);
+
+        assert!(
+            kb.detect_ghost_ids().is_empty(),
+            "detect_ghost_ids alone can't see it anymore -- its source_file is gone, not just outdated"
+        );
+        let stale = kb.detect_stale_nodes();
+        assert_eq!(
+            stale.len(),
+            1,
+            "detect_stale_nodes must pick up what detect_ghost_ids can no longer reach"
+        );
+        assert_eq!(stale[0].id, "user:t-jenkinsp");
+        assert!(
+            kb.contains("user:t-jenkins"),
+            "the current id must be unaffected"
+        );
+    }
+
+    #[test]
     fn link_validation_warns_on_broken_link() {
         let mut kb = KnowledgeBase::new();
         kb.insert(Node::new("a", "A", NodeKind::Note, "[[missing-id]]"));

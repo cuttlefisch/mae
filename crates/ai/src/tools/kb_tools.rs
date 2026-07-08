@@ -251,7 +251,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         },
         ToolDefinition {
             name: "kb_id_audit".into(),
-            description: "Detect ghost/stale node ids: an id that no longer appears in its own source file's current content (left behind by an in-place :ID: edit/rename). Re-parses each distinct source file on demand — more expensive than kb_health, call when investigating id-rename or duplicate-node symptoms, not routinely.".into(),
+            description: "Detect ghost/stale node ids that no longer match reality: either an id no longer produced by its (still-existing) source file's current content (an in-place :ID: edit/rename), or a node whose source_file has been deleted/renamed entirely. Re-parses/stats each distinct source file on demand — more expensive than kb_health, call when investigating id-rename or duplicate-node symptoms, not routinely.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::new(),
