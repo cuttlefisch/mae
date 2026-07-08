@@ -1024,6 +1024,40 @@ impl Editor {
         }
     }
 
+    /// Resolve a KB node's CURRENT source file path, re-deriving against the
+    /// owning instance's current `org_dir` if the stored (possibly stale)
+    /// `source_file` no longer exists on disk (#303: `source_file` is
+    /// stamped once at import time and never re-validated, so it can drift
+    /// from the instance's *current* `org_dir` — a moved directory, a
+    /// non-canonical path at an earlier register call, etc.). Returns
+    /// `None` only if the node has no source file at all (e.g. a native or
+    /// promoted node) — never a stale, unresolvable path.
+    ///
+    /// Shared by `help_edit_source` and `resolve_kb_link` (#293's
+    /// `source-file` follow mode) so there's one re-derivation
+    /// implementation, not two.
+    pub(crate) fn kb_node_source_file(&self, node_id: &str) -> Option<std::path::PathBuf> {
+        let path = self
+            .kb
+            .primary
+            .get(node_id)
+            .or_else(|| self.kb.instances.values().find_map(|kb| kb.get(node_id)))
+            .and_then(|n| n.source_file.clone())?;
+        if path.exists() {
+            return Some(path);
+        }
+        if let Some(Some(uuid)) = self.kb_owner_of(node_id) {
+            if let Some(instance) = self.kb.registry.find(&uuid) {
+                if let Some(resolved) =
+                    mae_kb::federation::resolve_stale_source_file(&instance.org_dir, &path)
+                {
+                    return Some(resolved);
+                }
+            }
+        }
+        Some(path)
+    }
+
     /// Jump from the current KB buffer node to its source `.org` file.
     /// Works for federated nodes that have `source_file` stamped during ingest.
     pub fn help_edit_source(&mut self) {
@@ -1036,15 +1070,7 @@ impl Editor {
             }
         };
 
-        // Look up the node (local first, then federated) and get source_file
-        let source_file = self
-            .kb
-            .primary
-            .get(&node_id)
-            .or_else(|| self.kb.instances.values().find_map(|kb| kb.get(&node_id)))
-            .and_then(|n| n.source_file.clone());
-
-        match source_file {
+        match self.kb_node_source_file(&node_id) {
             Some(path) => {
                 let path_str = path.display().to_string();
                 self.open_file(&path_str);
@@ -1822,6 +1848,108 @@ mod tests {
         });
         assert!(opened, "should have opened the source file");
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn help_edit_source_survives_org_dir_move() {
+        // #303 adversarial repro: the node's `source_file` is stamped once
+        // at import time and never re-validated. If the owning instance's
+        // org_dir later correctly points somewhere else (the directory was
+        // moved and re-registered), the stale absolute `source_file` no
+        // longer resolves — `help_edit_source` must re-derive against the
+        // instance's *current* org_dir instead of ENOENT-ing on the stale
+        // path.
+        let old_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            old_dir.path().join("note1.org"),
+            ":PROPERTIES:\n:ID: moved-note\n:END:\n#+title: Moved Note\n\nBody.\n",
+        )
+        .unwrap();
+
+        let mut e = Editor::new();
+        e.config_dir_override = Some(old_dir.path().join("cfgdir"));
+        e.data_dir_override = Some(old_dir.path().join("datadir"));
+        let result = e
+            .kb_register("MovedNotes", old_dir.path())
+            .expect("registration should succeed");
+        assert!(
+            e.kb.instances[&result.uuid].get("moved-note").is_some(),
+            "note should have imported from the original location"
+        );
+
+        // Simulate the directory having been moved to a new location and
+        // the instance re-pointed at it (the registry's org_dir is now
+        // correct; the node's `source_file` is not).
+        let new_dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            new_dir.path().join("note1.org"),
+            ":PROPERTIES:\n:ID: moved-note\n:END:\n#+title: Moved Note\n\nBody.\n",
+        )
+        .unwrap();
+        e.kb.registry.find_mut(&result.uuid).unwrap().org_dir =
+            new_dir.path().canonicalize().unwrap();
+        // The stale `source_file` must actually be gone — otherwise
+        // `help_edit_source`'s existence check never falls through to
+        // re-derivation, and this test would pass for the wrong reason.
+        std::fs::remove_file(old_dir.path().join("note1.org")).unwrap();
+
+        e.open_help_at("moved-note");
+        e.help_edit_source();
+
+        let opened = e.buffers.iter().find(|b| {
+            b.file_path()
+                .map(|p| p.ends_with("note1.org"))
+                .unwrap_or(false)
+        });
+        let opened =
+            opened.expect("should have re-derived and opened the file at its new location");
+        assert!(
+            opened
+                .file_path()
+                .unwrap()
+                .starts_with(new_dir.path().canonicalize().unwrap()),
+            "must open the file under the CURRENT org_dir, not the stale one"
+        );
+        assert!(
+            !e.status_msg.to_lowercase().contains("error"),
+            "must not report an error once re-derivation succeeds, got: {}",
+            e.status_msg
+        );
+    }
+
+    #[test]
+    fn help_edit_source_after_promotion_shows_no_source() {
+        // #303's concrete regression test: once a federated node has been
+        // promoted to primary (kb_promote_node), it no longer carries
+        // `source_file` at all — `help_edit_source` must report an honest
+        // "No source file" instead of the ENOENT that used to occur when a
+        // *stale* source_file path was trusted verbatim.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("note1.org"),
+            ":PROPERTIES:\n:ID: promote-src-test\n:END:\n#+title: Promote Test\n\nBody.\n",
+        )
+        .unwrap();
+
+        let mut e = Editor::new();
+        e.config_dir_override = Some(dir.path().join("cfgdir"));
+        e.data_dir_override = Some(dir.path().join("datadir"));
+        e.kb_register("PromoteSrcTest", dir.path()).unwrap();
+        e.kb_promote_node("promote-src-test").unwrap();
+
+        e.open_help_at("promote-src-test");
+        e.help_edit_source();
+
+        assert!(
+            e.status_msg.contains("No source file"),
+            "expected an honest 'no source file' status, got: {}",
+            e.status_msg
+        );
+        assert!(
+            !e.status_msg.to_lowercase().contains("error"),
+            "must not surface a raw ENOENT/error for a promoted node, got: {}",
+            e.status_msg
+        );
     }
 
     #[test]

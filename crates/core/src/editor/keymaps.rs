@@ -390,6 +390,7 @@ impl Editor {
         help.bind(parse_key_seq("n"), "help-next-link");
         help.bind(parse_key_seq("p"), "help-prev-link");
         help.bind(parse_key_seq("e"), "kb-edit-source");
+        help.bind(parse_key_seq("P"), "kb-promote");
         help.bind(parse_key_seq("q"), "help-close");
         help.bind(parse_key_seq("C-o"), "help-back");
         help.bind(parse_key_seq("C-i"), "help-forward");

@@ -170,6 +170,16 @@ impl KbRegistry {
         data_dir: &Path,
         kb_data_dir: Option<&crate::data_dir::KbDataDir>,
     ) -> String {
+        // Canonicalize so a symlinked/relative/non-normalized path registers
+        // to the same, stable location every time (#303) — otherwise a
+        // node's `source_file` (stamped from the walked, canonical-ish path
+        // at import time) can drift from what's stored here as `org_dir`,
+        // surfacing later as a spurious ENOENT in `help_edit_source`. Falls
+        // back to the given path if it doesn't exist yet (canonicalize
+        // requires the path to exist) — registration shouldn't hard-fail on
+        // a not-yet-existing directory.
+        let org_dir = org_dir.canonicalize().unwrap_or(org_dir);
+
         // Check for existing registration with same path
         if let Some(existing) = self.instances.iter().find(|i| i.org_dir == org_dir) {
             return existing.uuid.clone();
@@ -423,6 +433,35 @@ impl ImportHealth {
             namespace_counts: report.namespace_counts,
         }
     }
+}
+
+/// Best-effort re-derivation of a node's source file when the stored,
+/// possibly-stale absolute path (`stale_path` — stamped once at import time
+/// and never re-validated, #303) no longer resolves on disk, but the owning
+/// instance's *current* `org_dir` does. Searches `org_dir` for a `.org` file
+/// with the same file name as `stale_path`; returns its path only if the
+/// match is unambiguous (more than one file with that name anywhere under
+/// `org_dir` is treated as unresolvable — reporting "no source file" is
+/// safer than guessing wrong and opening an unrelated file).
+pub fn resolve_stale_source_file(org_dir: &Path, stale_path: &Path) -> Option<PathBuf> {
+    let file_name = stale_path.file_name()?;
+    let mut found: Option<PathBuf> = None;
+    for entry in walkdir::WalkDir::new(org_dir)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
+        let path = entry.path();
+        if path.is_file()
+            && path.extension().and_then(|e| e.to_str()) == Some("org")
+            && path.file_name() == Some(file_name)
+        {
+            if found.is_some() {
+                return None; // ambiguous
+            }
+            found = Some(path.to_path_buf());
+        }
+    }
+    found
 }
 
 /// Import an org-roam directory (recursively) into a MAE KB instance.

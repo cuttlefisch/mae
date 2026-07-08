@@ -70,6 +70,16 @@ pub struct KbImportResult {
     pub health: ImportHealth,
 }
 
+/// Result of promoting a federated/imported node into the primary KB
+/// (#303's interim bridge toward issue #111 / ADR-029's "org dirs are
+/// import-only" direction — see `Editor::kb_promote_node`).
+#[derive(Debug, Clone)]
+pub struct KbPromoteResult {
+    pub node_id: String,
+    pub promoted_from_uuid: String,
+    pub promoted_from_org_dir: PathBuf,
+}
+
 impl KbImportResult {
     /// Format as a user-facing status message.
     pub fn status_summary(&self) -> String {
@@ -1276,6 +1286,101 @@ impl Editor {
                 tracing::warn!(node_id = %id, error = %e, "KB store delete failed");
             }
         }
+    }
+
+    /// Promote a node from a federated/org-dir-imported instance into the
+    /// primary (native, CozoDB-backed) KB, so it no longer depends on
+    /// `source_file`/the instance's `org_dir` to resolve (#303).
+    ///
+    /// This is an interim, editor-side bridge toward issue #111 ("org
+    /// ingestion as import + headless host") / ADR-029's "org dirs are
+    /// import-only" direction — NOT that epic's full daemon-side pipeline.
+    /// Deliberately narrow scope:
+    ///  - Rejects a node already in primary, or one that doesn't exist
+    ///    anywhere.
+    ///  - Copies title/body/tags/kind/aliases; does NOT copy `source_file`
+    ///    (ephemeral anyway, `#[serde(skip)]`) — the promoted copy is no
+    ///    longer file-tethered.
+    ///  - Stamps `promoted_from_{uuid,org_dir,path}`/`promoted_at` into
+    ///    `node.properties` (already durably persisted as `properties_json`
+    ///    — no schema migration) so provenance isn't silently lost.
+    ///  - The node's id is UNCHANGED — nothing elsewhere in the KB graph
+    ///    needs link-rewriting, since resolution is by id string.
+    ///  - Leaves the original org file on disk untouched, and leaves the
+    ///    federated instance's own copy of the node in place (no
+    ///    dedup-on-promote in this first cut) — conservative, Alpha-
+    ///    appropriate defaults.
+    ///
+    /// Persistence mirrors the existing `kb_create_node`/`kb_persist_node`
+    /// idiom exactly (including the daemon-hosted-primary CRDT-enqueue
+    /// path) rather than inventing a new write pattern: best-effort — a
+    /// durable-store write failure is logged and does not roll back the
+    /// in-memory insert, matching how every other primary-node write in
+    /// this codebase already behaves.
+    pub fn kb_promote_node(&mut self, node_id: &str) -> Result<KbPromoteResult, String> {
+        self.kb_write_blocked()?;
+
+        if self.kb.primary.contains(node_id) {
+            return Err(format!("'{}' is already in the primary KB", node_id));
+        }
+        let owner_uuid = self
+            .kb
+            .instances
+            .iter()
+            .find(|(_, kb)| kb.contains(node_id))
+            .map(|(uuid, _)| uuid.clone())
+            .ok_or_else(|| format!("No KB node: {}", node_id))?;
+        let instance = self
+            .kb
+            .registry
+            .find(&owner_uuid)
+            .cloned()
+            .ok_or_else(|| format!("KB instance '{}' not found in registry", owner_uuid))?;
+        let mut node = self
+            .kb
+            .instances
+            .get(&owner_uuid)
+            .and_then(|kb| kb.get(node_id))
+            .cloned()
+            .ok_or_else(|| format!("No KB node: {}", node_id))?;
+
+        let promoted_from_path = node
+            .source_file
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
+        node.source_file = None;
+        node.properties
+            .insert("promoted_from_uuid".to_string(), owner_uuid.clone());
+        node.properties.insert(
+            "promoted_from_org_dir".to_string(),
+            instance.org_dir.display().to_string(),
+        );
+        node.properties
+            .insert("promoted_from_path".to_string(), promoted_from_path);
+        node.properties
+            .insert("promoted_at".to_string(), chrono_now());
+
+        let owner: Option<String> = None; // primary
+        self.kb_persist_node_in(&owner, &node);
+        if let Some(kb_id) = self.kb_sync_target(&owner) {
+            self.kb_enqueue_node_crdt(&owner, &kb_id, node_id, node.clone());
+            self.kb_enqueue_manifest_op(&kb_id, node_id, &node.title, true);
+        } else {
+            self.kb.primary.insert(node);
+        }
+        self.kb.last_local_store_write = Some(std::time::Instant::now());
+        // So `kb_for_node`/`kb_contains_any`/`open_help_at` observe the
+        // promoted (primary) copy on the very next lookup — a stale query
+        // layer here would silently reintroduce a variant of #303.
+        self.kb.rebuild_query_layer();
+
+        self.set_status(format!("Promoted '{}' to the primary KB", node_id));
+        Ok(KbPromoteResult {
+            node_id: node_id.to_string(),
+            promoted_from_uuid: owner_uuid,
+            promoted_from_org_dir: instance.org_dir,
+        })
     }
 
     /// Create a new KB node in the local knowledge base.
@@ -4166,6 +4271,166 @@ mod tests {
         let result = editor.kb_register("Bad", Path::new("/nonexistent/path"));
         assert!(result.is_none());
         assert!(editor.status_msg.contains("does not exist"));
+    }
+
+    #[test]
+    fn kb_register_canonicalizes_org_dir() {
+        // #303: registering with a non-canonical path (here, a redundant
+        // `subdir/..` component) must store the canonical form so a later
+        // comparison/re-derivation against `org_dir` doesn't drift from
+        // what was actually walked at import time.
+        let dir = create_test_org_dir();
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+
+        let canonical = dir.path().canonicalize().unwrap();
+        let noncanonical = dir.path().join("subdir").join("..");
+        assert_ne!(
+            noncanonical, canonical,
+            "test setup must actually be non-canonical"
+        );
+
+        let result = editor
+            .kb_register("TestNotes", &noncanonical)
+            .expect("registration should succeed");
+        let instance = editor.kb.registry.find(&result.uuid).unwrap();
+        assert_eq!(
+            instance.org_dir, canonical,
+            "registry must store the canonicalized org_dir, not the literal argument"
+        );
+    }
+
+    // --- #303: kb_promote_node (interim promote-to-native bridge) ---
+
+    #[test]
+    fn kb_promote_node_copies_into_primary() {
+        let dir = create_test_org_dir();
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+        let reg = editor.kb_register("TestNotes", dir.path()).unwrap();
+        assert!(!editor.kb.primary.contains("test-note-1"));
+
+        let result = editor.kb_promote_node("test-note-1").unwrap();
+        assert_eq!(result.node_id, "test-note-1");
+        assert_eq!(result.promoted_from_uuid, reg.uuid);
+
+        let promoted = editor
+            .kb
+            .primary
+            .get("test-note-1")
+            .expect("node should now live in primary");
+        assert_eq!(promoted.title, "Note One");
+        assert!(promoted.body.contains("Body of note one."));
+        assert!(
+            promoted.source_file.is_none(),
+            "promoted node must not carry the ephemeral source_file forward"
+        );
+
+        // Federated copy is left in place — no dedup-on-promote in v1.
+        assert!(
+            editor.kb.instances[&reg.uuid].get("test-note-1").is_some(),
+            "the federated instance's own copy must remain discoverable"
+        );
+    }
+
+    #[test]
+    fn kb_promote_node_preserves_provenance() {
+        let dir = create_test_org_dir();
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+        let reg = editor.kb_register("TestNotes", dir.path()).unwrap();
+        editor.kb_promote_node("test-note-1").unwrap();
+
+        let promoted = editor.kb.primary.get("test-note-1").unwrap();
+        assert_eq!(
+            promoted.properties.get("promoted_from_uuid"),
+            Some(&reg.uuid)
+        );
+        assert_eq!(
+            promoted.properties.get("promoted_from_org_dir"),
+            Some(&dir.path().canonicalize().unwrap().display().to_string())
+        );
+        assert!(
+            promoted
+                .properties
+                .get("promoted_from_path")
+                .is_some_and(|p| p.ends_with("note1.org")),
+            "promoted_from_path should point at the original file: {:?}",
+            promoted.properties.get("promoted_from_path")
+        );
+        assert!(
+            promoted
+                .properties
+                .get("promoted_at")
+                .is_some_and(|s| !s.is_empty()),
+            "promoted_at should be stamped"
+        );
+    }
+
+    #[test]
+    fn kb_promote_node_leaves_org_file_untouched() {
+        let dir = create_test_org_dir();
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+        editor.kb_register("TestNotes", dir.path()).unwrap();
+
+        let file_path = dir.path().join("note1.org");
+        let before = std::fs::read(&file_path).unwrap();
+        editor.kb_promote_node("test-note-1").unwrap();
+        let after = std::fs::read(&file_path).unwrap();
+
+        assert_eq!(
+            before, after,
+            "promotion must never touch the original org file on disk"
+        );
+    }
+
+    #[test]
+    fn kb_promote_node_rejects_already_primary() {
+        let dir = create_test_org_dir();
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+        editor.kb_register("TestNotes", dir.path()).unwrap();
+        editor.kb_promote_node("test-note-1").unwrap();
+        let first_promoted_at = editor
+            .kb
+            .primary
+            .get("test-note-1")
+            .unwrap()
+            .properties
+            .get("promoted_at")
+            .cloned();
+
+        // Idempotency: a second promote call must not double-insert or
+        // silently overwrite the first promotion's provenance.
+        let second = editor.kb_promote_node("test-note-1");
+        assert!(
+            second.is_err(),
+            "promoting an already-primary node must fail"
+        );
+        assert!(second.unwrap_err().contains("already in the primary KB"));
+        assert_eq!(
+            editor
+                .kb
+                .primary
+                .get("test-note-1")
+                .unwrap()
+                .properties
+                .get("promoted_at")
+                .cloned(),
+            first_promoted_at,
+            "a rejected re-promote must not overwrite the original provenance"
+        );
+    }
+
+    #[test]
+    fn kb_promote_node_rejects_unknown_id() {
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+        let result = editor.kb_promote_node("user:does-not-exist");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("No KB node"));
+        assert!(!editor.kb.primary.contains("user:does-not-exist"));
     }
 
     #[test]
