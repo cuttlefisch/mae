@@ -222,7 +222,7 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
         },
         ToolDefinition {
             name: "window_layout".into(),
-            description: "JSON of all windows with their buffer assignments and dimensions.".into(),
+            description: "JSON of all windows (window_id, buffer_idx/kind/name, kb_node_id if applicable, cursor/scroll) plus shared_buffer_groups: any buffer_idx shown by more than one window, flagged explicitly instead of requiring a manual cross-check against list_buffers.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::new(),

@@ -154,6 +154,11 @@ pub struct KbContext {
     pub instance_stores: HashMap<String, Arc<mae_kb::CozoKbStore>>,
     /// KB federation: live file watchers for registered org directories.
     pub watchers: HashMap<String, mae_kb::watch::OrgDirWatcher>,
+    /// Instance UUIDs whose `OrgDirWatcher::new` failed to attach, with the
+    /// error — otherwise `watcher_count: 0` in introspection is ambiguous
+    /// between "no instance was ever registered" and "a watcher should exist
+    /// but silently didn't." Cleared on a successful (re-)attach.
+    pub watcher_attach_errors: HashMap<String, String>,
     /// KB watcher: last drain timestamp per instance UUID (for debounce).
     pub last_drain: HashMap<String, std::time::Instant>,
     /// KB watcher: cumulative statistics.
@@ -446,6 +451,7 @@ impl KbContext {
             instances: HashMap::new(),
             instance_stores: HashMap::new(),
             watchers: HashMap::new(),
+            watcher_attach_errors: HashMap::new(),
             last_drain: HashMap::new(),
             watcher_stats: KbWatcherStats::default(),
             capture_state: None,

@@ -698,6 +698,10 @@
           "kind": "struct"
         },
         {
+          "name": "GhostNode",
+          "kind": "struct"
+        },
+        {
           "name": "KbHealthReport",
           "kind": "struct"
         },

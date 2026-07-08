@@ -1320,6 +1320,56 @@ mod tests {
     }
 
     #[test]
+    fn kb_navigation_in_one_window_does_not_bleed_into_a_sibling_window() {
+        // Reproduces the reported bug: two split windows each showing a
+        // different (non-builtin) KB node used to silently alias the SAME
+        // singleton `*KB*` buffer, so navigating one window's node bled into
+        // the other. Non-builtin nodes must now each get their own buffer.
+        let mut e = Editor::new();
+        e.kb_create_node("user:node-a", "Node A", "a body", mae_kb::NodeKind::Note)
+            .unwrap();
+        e.kb_create_node("user:node-b", "Node B", "b body", mae_kb::NodeKind::Note)
+            .unwrap();
+        e.kb_create_node("user:node-c", "Node C", "c body", mae_kb::NodeKind::Note)
+            .unwrap();
+
+        // ensure_kb_buffer_idx must give distinct non-builtin nodes distinct buffers.
+        let buf_a = e.ensure_kb_buffer_idx("user:node-a");
+        let buf_b = e.ensure_kb_buffer_idx("user:node-b");
+        assert_ne!(
+            buf_a, buf_b,
+            "distinct non-builtin nodes must get distinct buffers"
+        );
+
+        // Split (focus stays on the original window, per `split_and_focus`), point
+        // the original window at node A's buffer and the new one at node B's.
+        e.dispatch_builtin("split-vertical");
+        assert_eq!(e.window_mgr.window_count(), 2);
+        e.switch_to_buffer(buf_a);
+        e.dispatch_builtin("focus-right");
+        e.switch_to_buffer(buf_b);
+        assert_eq!(e.kb_view().unwrap().current, "user:node-b");
+
+        // Navigate the FOCUSED window (still the new/right one) to a third node.
+        e.open_help_at("user:node-c");
+        assert_eq!(e.kb_view().unwrap().current, "user:node-c");
+        let buf_c = e.active_buffer_idx();
+        assert_ne!(
+            buf_c, buf_b,
+            "navigating to a new node must not mutate node-b's buffer"
+        );
+
+        // Move focus back to the original window: node A must be untouched.
+        e.dispatch_builtin("focus-left");
+        assert_eq!(e.active_buffer_idx(), buf_a);
+        assert_eq!(
+            e.kb_view().unwrap().current,
+            "user:node-a",
+            "the sibling window's node must not change when the other window navigates"
+        );
+    }
+
+    #[test]
     fn help_follow_link_navigates() {
         let mut e = Editor::new();
         e.open_help_at("index");

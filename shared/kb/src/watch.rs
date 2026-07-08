@@ -92,6 +92,15 @@ impl OrgDirWatcher {
         }
     }
 
+    /// The ids this path produced as of the last `record_ids`/`seed` call —
+    /// i.e. what the caller should diff a fresh re-ingest against to find
+    /// ids that no longer belong to this file (e.g. an in-place `:ID:` edit)
+    /// and retract them. Returns `None` if the path was never recorded.
+    pub fn ids_for_path(&self, path: impl AsRef<Path>) -> Option<Vec<String>> {
+        let path = normalize_path(path.as_ref());
+        self.path_to_ids.lock().unwrap().get(&path).cloned()
+    }
+
     /// Record the ids a caller ingested for a given path. This keeps the
     /// removal id map warm after `OrgChange::Upserted` events without
     /// the watcher having to re-read and re-parse the file itself —

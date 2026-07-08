@@ -15,6 +15,12 @@ hmac = "0.13"
 sha2 = "0.11"
 rand = "0.10"
 async-trait = "0.1"
+# Pinned at 2 (not the dependabot-proposed 3): iroh's latest published release
+# (1.0.2) still hard-pins `ed25519-dalek = "=3.0.0-rc.0"` upstream, which cargo
+# cannot unify with a plain `^3` requirement (semver excludes pre-releases from
+# a caret range) -- daemon/Cargo.toml depends on both iroh and this crate
+# (path dep), so bumping to 3 here breaks that workspace's resolution entirely.
+# Revisit once iroh ships a release depending on the stable ed25519-dalek 3.x.
 ed25519-dalek = { version = "2", features = ["pkcs8"] }
 base64 = "0.22"
 hex = "0.4"
@@ -22,8 +28,8 @@ hex = "0.4"
 # CryptoProvider so we never clash with reqwest's aws-lc-rs default in the editor.
 rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "logging"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
-rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
-x509-parser = "0.16"
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
+x509-parser = "0.18"
 # Optional reuse of an existing OpenSSH Ed25519 key as the collab identity.
 ssh-key = { version = "0.6", default-features = false, features = ["ed25519", "alloc", "std"] }
 # Advisory file locking (file_lock module — LockInfo hostname stamp + liveness check).

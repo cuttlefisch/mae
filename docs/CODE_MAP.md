@@ -275,6 +275,7 @@ Source: `shared/kb/src/lib.rs`
 | `BrokenLinkKind` | enum |
 | `BrokenLink` | struct |
 | `StaleNode` | struct |
+| `GhostNode` | struct |
 | `KbHealthReport` | struct |
 | `KnowledgeBase` | struct |
 | `ReconcileAction` | enum |

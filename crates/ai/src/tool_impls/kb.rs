@@ -596,6 +596,145 @@ pub fn execute_kb_health(editor: &Editor) -> Result<String, String> {
     serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
 }
 
+fn ghost_ids_json(ghosts: &[mae_kb::GhostNode]) -> serde_json::Value {
+    serde_json::json!(ghosts
+        .iter()
+        .map(|g| serde_json::json!({
+            "id": g.id,
+            "title": g.title,
+            "source_file": g.source_file.display().to_string(),
+            "reason": "id_not_found_in_current_file_content",
+        }))
+        .collect::<Vec<_>>())
+}
+
+/// Stale nodes (`source_file` doesn't exist at all) are a DIFFERENT flavor of
+/// the same "index doesn't match reality" problem `detect_ghost_ids` catches —
+/// e.g. exactly what happens if a file with an already-ghosted id (from an
+/// earlier in-place rename) is then itself renamed/deleted: its `source_file`
+/// stops existing, so `detect_ghost_ids` (which only re-parses EXISTING
+/// files) skips it, leaving it invisible to kb_id_audit unless this is
+/// folded in too. Reported with the same shape plus a distinct `reason` so
+/// callers can tell the two cases apart.
+fn stale_nodes_json(stale: &[mae_kb::StaleNode]) -> serde_json::Value {
+    serde_json::json!(stale
+        .iter()
+        .map(|s| serde_json::json!({
+            "id": s.id,
+            "title": s.title,
+            "source_file": s.source_file.display().to_string(),
+            "reason": "source_file_no_longer_exists",
+        }))
+        .collect::<Vec<_>>())
+}
+
+/// Union of ghost ids (id no longer in an existing file) and stale nodes
+/// (file itself is gone) — the full set of "safe to remove" cleanup
+/// candidates `kb_id_audit` surfaces per scope.
+fn cleanup_candidates_json(kb: &mae_kb::KnowledgeBase) -> serde_json::Value {
+    let mut out = ghost_ids_json(&kb.detect_ghost_ids())
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    out.extend(
+        stale_nodes_json(&kb.detect_stale_nodes())
+            .as_array()
+            .cloned()
+            .unwrap_or_default(),
+    );
+    serde_json::json!(out)
+}
+
+/// Per-federated-instance sync/freshness diagnostics — the piece that lets you
+/// self-diagnose "why didn't process B see my new node" without a source dive:
+/// is `kb_notes_dir` even resolvable to a registered instance, is that
+/// instance's filesystem watcher actually attached (not just "was one ever
+/// expected" — `watcher_count` alone is ambiguous about that), and how long
+/// since it last drained a real change.
+pub fn execute_kb_sync_status(editor: &Editor) -> Result<String, String> {
+    let notes_dir = editor.kb.notes_dir.clone();
+    let notes_dir_canon = notes_dir
+        .as_ref()
+        .map(|d| d.canonicalize().unwrap_or_else(|_| d.clone()));
+    let notes_dir_resolves_to = notes_dir_canon.as_ref().and_then(|dir_canon| {
+        editor.kb.registry.instances.iter().find_map(|inst| {
+            let inst_canon = inst
+                .org_dir
+                .canonicalize()
+                .unwrap_or_else(|_| inst.org_dir.clone());
+            (&inst_canon == dir_canon).then(|| inst.name.clone())
+        })
+    });
+
+    let instances: Vec<serde_json::Value> = editor
+        .kb
+        .registry
+        .instances
+        .iter()
+        .map(|inst| {
+            let watcher_attached = editor.kb.watchers.contains_key(&inst.uuid);
+            let attach_error = editor.kb.watcher_attach_errors.get(&inst.uuid).cloned();
+            let seconds_since_last_drain = editor
+                .kb
+                .last_drain
+                .get(&inst.uuid)
+                .map(|t| t.elapsed().as_secs());
+            serde_json::json!({
+                "name": inst.name,
+                "uuid": inst.uuid,
+                "org_dir": inst.org_dir.display().to_string(),
+                "watcher_attached": watcher_attached,
+                "watcher_attach_error": attach_error,
+                "seconds_since_last_drain": seconds_since_last_drain,
+            })
+        })
+        .collect();
+
+    let out = serde_json::json!({
+        "kb_notes_dir": notes_dir.map(|d| d.display().to_string()),
+        "kb_notes_dir_resolves_to_instance": notes_dir_resolves_to,
+        "watcher_enabled": editor.kb.watcher_enabled,
+        "watcher_stats": {
+            "drain_count": editor.kb.watcher_stats.drain_count,
+            "reimports_total": editor.kb.watcher_stats.reimports_total,
+            "errors": editor.kb.watcher_stats.errors,
+        },
+        "instances": instances,
+    });
+    serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
+}
+
+/// Detect ghost/stale ids across the primary KB and every federated instance —
+/// see `KnowledgeBase::detect_ghost_ids`. More expensive than `kb_health`
+/// (re-parses each distinct source file), so it's its own on-demand tool
+/// rather than folded into the routinely-called health report.
+pub fn execute_kb_id_audit(editor: &Editor) -> Result<String, String> {
+    let instances: Vec<serde_json::Value> = editor
+        .kb
+        .registry
+        .instances
+        .iter()
+        .map(|inst| match editor.kb.instances.get(&inst.uuid) {
+            Some(kb) => serde_json::json!({
+                "name": inst.name,
+                "uuid": inst.uuid,
+                "ghost_ids": cleanup_candidates_json(kb),
+            }),
+            None => serde_json::json!({
+                "name": inst.name,
+                "uuid": inst.uuid,
+                "status": "not loaded",
+            }),
+        })
+        .collect();
+
+    let out = serde_json::json!({
+        "local": { "ghost_ids": cleanup_candidates_json(&editor.kb.primary) },
+        "instances": instances,
+    });
+    serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
+}
+
 pub fn execute_kb_create(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
     let id = args
         .get("id")

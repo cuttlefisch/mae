@@ -479,6 +479,18 @@ pub struct StaleNode {
     pub source_file: std::path::PathBuf,
 }
 
+/// A node id that no longer appears in its own `source_file`'s *current*
+/// content — left behind by an in-place `:ID:` edit, since re-ingest only
+/// ever upserts whatever a file presently contains and never retracts an id
+/// that quietly disappeared from it. Unlike [`StaleNode`], the file still
+/// exists; it just doesn't produce this id anymore.
+#[derive(Debug, Clone)]
+pub struct GhostNode {
+    pub id: String,
+    pub title: String,
+    pub source_file: std::path::PathBuf,
+}
+
 /// Health report for the knowledge base — orphans, broken links, namespace stats.
 #[derive(Debug, Clone)]
 pub struct KbHealthReport {
@@ -488,6 +500,7 @@ pub struct KbHealthReport {
     pub broken_links: Vec<BrokenLink>,
     pub namespace_counts: HashMap<String, usize>,
     pub stale_nodes: Vec<StaleNode>,
+    pub ghost_ids: Vec<GhostNode>,
 }
 
 /// Pre-lowercased search cache for a single node. Populated at insert
@@ -1588,6 +1601,7 @@ impl KnowledgeBase {
             broken_links: result.broken_links,
             namespace_counts: result.namespace_counts,
             stale_nodes: Vec::new(), // populated lazily by caller via detect_stale_nodes()
+            ghost_ids: Vec::new(),   // populated lazily by caller via detect_ghost_ids()
         }
     }
 
@@ -1629,6 +1643,53 @@ impl KnowledgeBase {
             .collect();
         let count = stale_ids.len();
         for id in stale_ids {
+            self.remove(&id);
+        }
+        count
+    }
+
+    /// Detect ids that no longer appear in their own `source_file`'s current
+    /// content (an in-place `:ID:` rename left them behind). Groups by file
+    /// so each is re-parsed once regardless of how many indexed nodes claim
+    /// it. Intentionally lazy — call on-demand (health report, `:kb-reimport`
+    /// verification), not on every drain tick (a re-parse per distinct file
+    /// is not free).
+    pub fn detect_ghost_ids(&self) -> Vec<GhostNode> {
+        let mut by_file: HashMap<std::path::PathBuf, Vec<&Node>> = HashMap::new();
+        for n in self.nodes.values() {
+            if let Some(path) = &n.source_file {
+                by_file.entry(path.clone()).or_default().push(n);
+            }
+        }
+        let mut ghosts = Vec::new();
+        for (path, nodes) in by_file {
+            // A missing file is `detect_stale_nodes`'s concern, not this one's.
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let current_ids: HashSet<String> = crate::org::parse_org_multi(&content)
+                .into_iter()
+                .map(|n| n.id)
+                .collect();
+            for n in nodes {
+                if !current_ids.contains(&n.id) {
+                    ghosts.push(GhostNode {
+                        id: n.id.clone(),
+                        title: n.title.clone(),
+                        source_file: path.clone(),
+                    });
+                }
+            }
+        }
+        ghosts.sort_by(|a, b| a.id.cmp(&b.id));
+        ghosts
+    }
+
+    /// Remove ghost ids (see [`Self::detect_ghost_ids`]) and return the count removed.
+    pub fn remove_ghost_ids(&mut self) -> usize {
+        let ghost_ids: Vec<String> = self.detect_ghost_ids().into_iter().map(|g| g.id).collect();
+        let count = ghost_ids.len();
+        for id in ghost_ids {
             self.remove(&id);
         }
         count
@@ -2395,6 +2456,123 @@ mod tests {
         assert_eq!(stale.len(), 1);
         assert_eq!(stale[0].id, "stale-test");
         assert_eq!(stale[0].source_file, fake_path);
+    }
+
+    #[test]
+    fn ghost_id_detected_after_in_place_rename() {
+        // Reproduces the reported bug: a file's :ID: is edited in place across
+        // saves (jenkinsp -> jenkin -> jenkins). Re-ingesting only ever upserts
+        // the file's CURRENT id — detect_ghost_ids is what notices the old ones
+        // are still sitting in the index with nothing on disk backing them.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let path = tmp.path().join("jenkinsp.org");
+        std::fs::write(
+            &path,
+            ":PROPERTIES:\n:ID: user:t-jenkinsp\n:END:\n#+title: jenkinsp\n\nJenkins\n",
+        )
+        .unwrap();
+
+        let mut kb = KnowledgeBase::new();
+        kb.ingest_org_file(&path);
+        assert!(kb.contains("user:t-jenkinsp"));
+        assert!(
+            kb.detect_ghost_ids().is_empty(),
+            "freshly-ingested id shouldn't be a ghost"
+        );
+
+        // Rename in place, twice, without ever removing the old ids from the index
+        // (simulating what the buggy watcher/reimport path does today).
+        std::fs::write(
+            &path,
+            ":PROPERTIES:\n:ID: user:t-jenkin\n:END:\n#+title: jenkin\n\nJenkins\n",
+        )
+        .unwrap();
+        kb.ingest_org_file(&path); // upsert only — old id lingers, by design of this test
+        std::fs::write(
+            &path,
+            ":PROPERTIES:\n:ID: user:t-jenkins\n:END:\n#+title: jenkins\n\nJenkins\n",
+        )
+        .unwrap();
+        kb.ingest_org_file(&path);
+
+        assert!(kb.contains("user:t-jenkinsp"));
+        assert!(kb.contains("user:t-jenkin"));
+        assert!(kb.contains("user:t-jenkins"));
+
+        let ghosts = kb.detect_ghost_ids();
+        let ghost_ids: Vec<&str> = ghosts.iter().map(|g| g.id.as_str()).collect();
+        assert_eq!(
+            ghost_ids,
+            vec!["user:t-jenkin", "user:t-jenkinsp"],
+            "the two ids no longer produced by the file should be flagged, sorted"
+        );
+
+        let removed = kb.remove_ghost_ids();
+        assert_eq!(removed, 2);
+        assert!(!kb.contains("user:t-jenkinsp"));
+        assert!(!kb.contains("user:t-jenkin"));
+        assert!(
+            kb.contains("user:t-jenkins"),
+            "the current id must survive cleanup"
+        );
+    }
+
+    #[test]
+    fn ghost_id_whose_file_is_later_renamed_becomes_a_stale_node_not_invisible() {
+        // Found while cleaning up the live jenkinsp/jenkin/jenkins case: once a
+        // ghost id's file is ITSELF later renamed/deleted (e.g. fixing the
+        // filename to match the corrected :ID:), detect_ghost_ids alone stops
+        // seeing it -- it only re-parses EXISTING files, and this one's
+        // source_file is now gone. It must NOT go invisible: detect_stale_nodes
+        // (source_file no longer exists) is the complementary check, and the
+        // two together (as kb_id_audit's cleanup_candidates union does) must
+        // still surface every such id.
+        let tmp = tempfile::TempDir::new().unwrap();
+        let old_path = tmp.path().join("jenkinsp.org");
+        std::fs::write(
+            &old_path,
+            ":PROPERTIES:\n:ID: user:t-jenkinsp\n:END:\n#+title: jenkinsp\n\nJenkins\n",
+        )
+        .unwrap();
+
+        let mut kb = KnowledgeBase::new();
+        kb.ingest_org_file(&old_path);
+
+        // In-place rename to the current id, same path (creates a ghost).
+        std::fs::write(
+            &old_path,
+            ":PROPERTIES:\n:ID: user:t-jenkins\n:END:\n#+title: jenkins\n\nJenkins\n",
+        )
+        .unwrap();
+        kb.ingest_org_file(&old_path);
+        assert_eq!(
+            kb.detect_ghost_ids().len(),
+            1,
+            "jenkinsp should be a ghost while its file still exists"
+        );
+
+        // Now the FILE itself is renamed away (fixing the filename), exactly
+        // as happened live: the old id's source_file no longer exists at all.
+        let new_path = tmp.path().join("jenkins.org");
+        std::fs::rename(&old_path, &new_path).unwrap();
+        // ingest the new path too, as a real reimport would.
+        kb.ingest_org_file(&new_path);
+
+        assert!(
+            kb.detect_ghost_ids().is_empty(),
+            "detect_ghost_ids alone can't see it anymore -- its source_file is gone, not just outdated"
+        );
+        let stale = kb.detect_stale_nodes();
+        assert_eq!(
+            stale.len(),
+            1,
+            "detect_stale_nodes must pick up what detect_ghost_ids can no longer reach"
+        );
+        assert_eq!(stale[0].id, "user:t-jenkinsp");
+        assert!(
+            kb.contains("user:t-jenkins"),
+            "the current id must be unaffected"
+        );
     }
 
     #[test]
