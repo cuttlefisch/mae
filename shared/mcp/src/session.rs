@@ -54,6 +54,14 @@ pub struct ClientSession {
     /// (no-auth) sessions. Authoritative for attribution + KB membership
     /// (ADR-017 strict binding).
     pub peer_identity: Option<crate::identity::PeerIdentity>,
+    /// AI provider this client declared at `initialize` (ADR-048), e.g. `"ollama"`.
+    /// Only ever set when [`Self::authenticated_principal`] is `Some` at the time of
+    /// declaration (i.e. this session completed a PSK handshake) — an unauthenticated
+    /// client's self-report is never stored here, since it would be a spoofable,
+    /// unenforceable claim. Consulted by the AI-residency gate
+    /// (`ai_event_handler::handle_mcp_request`) to decide whether this session may
+    /// touch a `LocalModelsOnly`-flagged KB.
+    pub declared_ai_provider: Option<String>,
 }
 
 impl ClientSession {
@@ -72,6 +80,7 @@ impl ClientSession {
             events_delivered: 0,
             events_dropped: 0,
             peer_identity: None,
+            declared_ai_provider: None,
         }
     }
 

@@ -56,6 +56,7 @@ pub mod tls;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use auth::AuthProvider;
 use protocol::{
     ContentItem, InitializeResult, JsonRpcRequest, JsonRpcResponse, McpError, ServerCapabilities,
     ToolCallResult, ToolInfo,
@@ -69,17 +70,40 @@ use tracing::{debug, error, info, warn};
 /// Maximum allowed Content-Length for a single MCP message (10 MB).
 const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
 
+/// Identity context for the client that issued a tool call (ADR-048), passed
+/// alongside every [`McpToolRequest`] so the AI-residency gate
+/// (`ai_event_handler::handle_mcp_request`) can decide whether this specific
+/// requester may touch a `LocalModelsOnly`-flagged KB. Derived directly from the
+/// issuing [`ClientSession`] at dispatch time — never trust a copy of this that
+/// outlives the session it was read from.
+#[derive(Debug, Clone, Default)]
+pub struct RequesterContext {
+    /// Whether this session completed a PSK handshake (ADR-048). `false` for
+    /// every existing/unmodified MCP client (Claude Code CLI via `mae-mcp-shim`,
+    /// or any other client dialing the plain, unauthenticated tool socket) — they
+    /// structurally have no path to become `true`.
+    pub psk_authenticated: bool,
+    /// The AI provider this session declared at `initialize`, if any. Only ever
+    /// `Some` when `psk_authenticated` was already `true` at declaration time
+    /// (`session.declared_ai_provider`'s own invariant) — a second belt-and-
+    /// suspenders check, not the only enforcement of that invariant.
+    pub declared_provider: Option<String>,
+}
+
 /// A tool call request sent from the MCP server to the main editor thread.
 pub struct McpToolRequest {
     pub tool_name: String,
     pub arguments: serde_json::Value,
     pub reply: oneshot::Sender<McpToolResult>,
+    /// Identity context of the requesting client (ADR-048).
+    pub requester: RequesterContext,
 }
 
 impl std::fmt::Debug for McpToolRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("McpToolRequest")
             .field("tool_name", &self.tool_name)
+            .field("requester", &self.requester)
             .finish_non_exhaustive()
     }
 }
@@ -95,6 +119,12 @@ pub struct McpServer {
     socket_path: PathBuf,
     tool_tx: mpsc::Sender<McpToolRequest>,
     broadcaster: broadcast::SharedBroadcaster,
+    /// Optional PSK handshake (ADR-048), run on the raw stream before the JSON-RPC
+    /// session begins. `None` preserves today's unauthenticated behavior — an
+    /// unmodified external client (Claude Code CLI via `mae-mcp-shim`, or anything
+    /// else dialing the socket) connects exactly as it always has, it just won't be
+    /// able to declare an AI provider that gets trusted for `LocalModelsOnly` KBs.
+    psk_auth: Option<Arc<auth::PskAuth>>,
 }
 
 impl McpServer {
@@ -107,7 +137,21 @@ impl McpServer {
             socket_path: socket_path.into(),
             tool_tx,
             broadcaster,
+            psk_auth: None,
         }
+    }
+
+    /// Require a PSK handshake on every connection to this `McpServer` (ADR-048).
+    /// **This makes the handshake mandatory for this listener** — bind a SEPARATE
+    /// `McpServer`/socket for this (MAE's primary tool socket should stay
+    /// unauthenticated for backward compatibility with existing MCP clients).
+    /// A client that completes the handshake may declare an AI provider at
+    /// `initialize` time that the AI-residency gate trusts for `LocalModelsOnly`
+    /// KBs; any client that can't/won't speak the handshake protocol simply can't
+    /// connect to this socket at all.
+    pub fn with_psk_auth(mut self, psk: auth::PskAuth) -> Self {
+        self.psk_auth = Some(Arc::new(psk));
+        self
     }
 
     /// Run the MCP server, accepting connections on the Unix socket.
@@ -142,9 +186,11 @@ impl McpServer {
                     let tool_tx = self.tool_tx.clone();
                     let tool_defs = Arc::clone(&tool_defs);
                     let broadcaster = Arc::clone(&self.broadcaster);
+                    let psk_auth = self.psk_auth.clone();
 
                     tokio::spawn(async move {
-                        handle_client(stream, tool_tx, &tool_defs, session, broadcaster).await;
+                        handle_client(stream, tool_tx, &tool_defs, session, broadcaster, psk_auth)
+                            .await;
                         info!(session = session_id, "MCP client session ended");
                     });
                 }
@@ -189,10 +235,43 @@ async fn handle_client(
     tool_definitions: &[ToolInfo],
     mut session: ClientSession,
     broadcaster: broadcast::SharedBroadcaster,
+    psk_auth: Option<Arc<auth::PskAuth>>,
 ) {
     let (reader, writer) = stream.into_split();
-    let reader = BufReader::new(reader);
+    let mut reader = BufReader::new(reader);
     let mut writer = writer;
+
+    // ADR-048: run the PSK handshake on the raw stream, before any JSON-RPC
+    // exchange (mirrors `daemon/src/collab_handler.rs::handle_client_with_auth`).
+    // IMPORTANT: this is per-*listener*, not per-connection auto-detected — once a
+    // `McpServer` is built `.with_psk_auth(..)`, EVERY connection to that socket
+    // must complete the handshake or is dropped (there is deliberately no protocol
+    // sniffing to let some clients skip it, which would risk silently misreading a
+    // Content-Length-framed JSON-RPC message as a failed handshake attempt, or
+    // vice versa). MAE therefore runs this on a SEPARATE, second Unix socket
+    // dedicated to first-party local-model harnesses (`crates/mae/src/main.rs`),
+    // while the original `/tmp/mae-{pid}.sock` (used by `mae-mcp-shim`/Claude Code
+    // CLI/etc.) stays on a plain, unauthenticated `McpServer` exactly as before —
+    // zero behavior change for every existing external client.
+    if let Some(psk) = &psk_auth {
+        match psk.server_handshake(&mut reader, &mut writer).await {
+            Ok(result) => {
+                // `synthetic_psk`, not `synthetic` — only this variant makes
+                // `authenticated_principal()` return `Some("psk:...")`, which is
+                // exactly the signal the `initialize` handler checks before trusting
+                // a client's declared AI provider.
+                session.peer_identity = Some(crate::identity::PeerIdentity::synthetic_psk(
+                    &result.client_label,
+                ));
+                info!(session = session.id, client = %result.client_label, "MCP client PSK-authenticated");
+            }
+            Err(e) => {
+                warn!(session = session.id, error = %e, "MCP PSK handshake failed, dropping connection");
+                return;
+            }
+        }
+    }
+
     let write_timeout = std::time::Duration::from_secs(5);
 
     // Spawn a dedicated reader task so read_message always runs to completion
@@ -543,6 +622,23 @@ pub async fn handle_request(
                             .map(|s| s.to_string()),
                     });
                 }
+                // ADR-048: an AI-residency-gated KB may only be touched by a request
+                // attributable to a locally-classified provider (e.g. Ollama). A
+                // self-declared `declaredProvider` is only trustworthy when this
+                // session completed a PSK handshake (`authenticated_principal()` is
+                // `Some` only post-handshake) — an unauthenticated client's claim is
+                // logged but never stored/trusted for gating.
+                if let Some(declared) = params.get("declaredProvider").and_then(|v| v.as_str()) {
+                    if session.authenticated_principal().is_some() {
+                        session.declared_ai_provider = Some(declared.to_string());
+                    } else {
+                        warn!(
+                            session = session.id,
+                            declared_provider = declared,
+                            "MCP client declared an AI provider without PSK auth — ignored, not trusted"
+                        );
+                    }
+                }
             }
 
             let negotiated = match client_requested_version {
@@ -655,6 +751,10 @@ pub async fn handle_request(
                 tool_name: format!("__mcp_{}", request.method.replace('/', "_")),
                 arguments: params,
                 reply: reply_tx,
+                requester: RequesterContext {
+                    psk_authenticated: session.authenticated_principal().is_some(),
+                    declared_provider: session.declared_ai_provider.clone(),
+                },
             };
             debug!(session = session.id, method = %request.method, "sync method dispatched");
             if tool_tx.send(req).await.is_err() {
@@ -700,6 +800,10 @@ pub async fn handle_request(
                 tool_name: tool_name.clone(),
                 arguments,
                 reply: reply_tx,
+                requester: RequesterContext {
+                    psk_authenticated: session.authenticated_principal().is_some(),
+                    declared_provider: session.declared_ai_provider.clone(),
+                },
             };
 
             debug!(session = session.id, tool = %tool_name, "tool call dispatched");
@@ -792,6 +896,40 @@ mod tests {
         let resp = handle_request(msg, &[], &tx, &mut session, &bc).await;
         assert!(resp.result.is_some());
         assert_eq!(session.client_info.as_ref().unwrap().name, "test-client");
+    }
+
+    #[tokio::test]
+    async fn handle_request_initialize_trusts_declared_provider_only_when_psk_authenticated() {
+        // ADR-048: a plain (unauthenticated) session's self-declared provider must be
+        // ignored — this is exactly the boundary that makes an unmodified external MCP
+        // client (no PSK) unable to spoof its way into `LocalModelsOnly` KB access.
+        let (tx, _rx) = mpsc::channel(1);
+        let mut session = ClientSession::new();
+        let bc = dummy_broadcaster();
+        let msg = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"test"},"declaredProvider":"ollama"}}"#;
+        handle_request(msg, &[], &tx, &mut session, &bc).await;
+        assert_eq!(
+            session.declared_ai_provider, None,
+            "an unauthenticated session's declared provider must never be trusted"
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_request_initialize_trusts_declared_provider_when_psk_authenticated() {
+        // A session that already completed a PSK handshake (synthetic_psk identity,
+        // exactly what `handle_client`'s handshake integration produces) IS trusted.
+        let (tx, _rx) = mpsc::channel(1);
+        let mut session =
+            ClientSession::with_identity(crate::identity::PeerIdentity::synthetic_psk("agent-cli"));
+        assert!(
+            session.authenticated_principal().is_some(),
+            "synthetic_psk must produce a principal — this is the exact signal the \
+             initialize handler gates on"
+        );
+        let bc = dummy_broadcaster();
+        let msg = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"agent-cli"},"declaredProvider":"ollama"}}"#;
+        handle_request(msg, &[], &tx, &mut session, &bc).await;
+        assert_eq!(session.declared_ai_provider, Some("ollama".to_string()));
     }
 
     #[tokio::test]

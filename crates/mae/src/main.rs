@@ -1794,9 +1794,41 @@ fn main() -> io::Result<()> {
                     input_schema: serde_json::to_value(&t.parameters).unwrap_or_default(),
                 })
                 .collect();
-            let server = mae_mcp::McpServer::new(&mcp_socket_path, mcp_tool_tx, sync_broadcaster.clone());
-            tokio::spawn(server.run(mcp_tools));
+            let server = mae_mcp::McpServer::new(
+                &mcp_socket_path,
+                mcp_tool_tx.clone(),
+                sync_broadcaster.clone(),
+            );
+            tokio::spawn(server.run(mcp_tools.clone()));
             info!(socket = %mcp_socket_path, "MCP server started");
+
+            // ADR-048: a SECOND, PSK-required socket dedicated to first-party
+            // local-agent harnesses (e.g. `mae-agent-cli`) that want to declare an
+            // AI provider trusted for `LocalModelsOnly` KBs. The primary socket
+            // above is untouched (no PSK, same behavior as always) — every
+            // existing MCP client (Claude Code CLI via `mae-mcp-shim`, etc.) is
+            // completely unaffected by this. The PSK is a fresh per-process
+            // secret, written 0600 so only this OS user's processes can read it
+            // (the same trust boundary SECURITY.md already documents for the
+            // plain tool socket — this does not raise or lower it).
+            let agent_socket_path = format!("/tmp/mae-{}-agent.sock", std::process::id());
+            let psk_path = format!("/tmp/mae-{}.psk", std::process::id());
+            let psk = mae_mcp::auth::generate_psk();
+            match mae_mcp::keystore::write_secure(std::path::Path::new(&psk_path), &psk) {
+                Ok(()) => {
+                    let agent_server = mae_mcp::McpServer::new(
+                        &agent_socket_path,
+                        mcp_tool_tx,
+                        sync_broadcaster.clone(),
+                    )
+                    .with_psk_auth(mae_mcp::auth::PskAuth::new(&psk));
+                    tokio::spawn(agent_server.run(mcp_tools));
+                    info!(socket = %agent_socket_path, psk_file = %psk_path, "MCP agent (PSK-required) server started");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, path = %psk_path, "failed to write PSK file — agent socket not started");
+                }
+            }
         }
 
         (
