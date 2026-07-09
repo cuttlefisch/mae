@@ -673,11 +673,26 @@ pub(crate) async fn run_terminal_loop(
     Ok(())
 }
 
-/// Remove stale MCP socket files from crashed MAE sessions.
+/// Parse the PID out of a `mae-{pid}.sock` / `mae-{pid}-agent.sock` /
+/// `mae-{pid}.psk` file name, or `None` if it doesn't match any of those
+/// shapes. Pure string logic, split out from [`cleanup_stale_mcp_sockets`] so
+/// it's unit-testable without touching the real filesystem.
+fn extract_pid_from_mcp_file_name(name: &str) -> Option<u32> {
+    let rest = name.strip_prefix("mae-")?;
+    let pid_str = rest
+        .strip_suffix("-agent.sock")
+        .or_else(|| rest.strip_suffix(".sock"))
+        .or_else(|| rest.strip_suffix(".psk"))?;
+    pid_str.parse::<u32>().ok()
+}
+
+/// Remove stale MCP socket/PSK files from crashed MAE sessions.
 ///
-/// Scans `/tmp/mae-*.sock` and removes any whose PID no longer exists.
-/// Called on startup so that stale sockets from SIGKILL'd or crashed
-/// sessions don't accumulate.
+/// Scans `/tmp/mae-*.sock`, `/tmp/mae-*-agent.sock` (ADR-048's PSK-required
+/// agent socket), and `/tmp/mae-*.psk` (its per-process secret), removing any
+/// whose PID no longer exists. Called on startup so that stale sockets/secrets
+/// from SIGKILL'd or crashed sessions don't accumulate — a stale `.psk` file is
+/// worth cleaning up promptly since it's a live secret, not just clutter.
 pub(crate) fn cleanup_stale_mcp_sockets() {
     let Ok(entries) = std::fs::read_dir("/tmp") else {
         return;
@@ -687,18 +702,14 @@ pub(crate) fn cleanup_stale_mcp_sockets() {
         let Some(name_str) = name.to_str() else {
             continue;
         };
-        if !name_str.starts_with("mae-") || !name_str.ends_with(".sock") {
+        let Some(pid) = extract_pid_from_mcp_file_name(name_str) else {
             continue;
-        }
-        // Extract PID from mae-{PID}.sock
-        let pid_str = &name_str[4..name_str.len() - 5];
-        if let Ok(pid) = pid_str.parse::<u32>() {
-            // Check if the process is still alive via /proc
-            if !std::path::Path::new(&format!("/proc/{}", pid)).exists() {
-                let path = entry.path();
-                if std::fs::remove_file(&path).is_ok() {
-                    info!(path = %path.display(), "removed stale MCP socket");
-                }
+        };
+        // Check if the process is still alive via /proc
+        if !std::path::Path::new(&format!("/proc/{}", pid)).exists() {
+            let path = entry.path();
+            if std::fs::remove_file(&path).is_ok() {
+                info!(path = %path.display(), "removed stale MCP socket/key file");
             }
         }
     }
@@ -844,5 +855,50 @@ pub(crate) async fn run_headless_self_test(
         2
     } else {
         0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::extract_pid_from_mcp_file_name;
+
+    #[test]
+    fn extracts_pid_from_plain_socket() {
+        assert_eq!(extract_pid_from_mcp_file_name("mae-1234.sock"), Some(1234));
+    }
+
+    #[test]
+    fn extracts_pid_from_agent_socket() {
+        // ADR-048's PSK-required agent socket — must be matched before the
+        // plain `.sock` suffix (a naive `.sock`-only strip would leave a
+        // trailing `-agent` that fails to parse as a PID).
+        assert_eq!(
+            extract_pid_from_mcp_file_name("mae-5678-agent.sock"),
+            Some(5678)
+        );
+    }
+
+    #[test]
+    fn extracts_pid_from_psk_file() {
+        assert_eq!(extract_pid_from_mcp_file_name("mae-9999.psk"), Some(9999));
+    }
+
+    #[test]
+    fn rejects_non_mae_prefixed_names() {
+        assert_eq!(extract_pid_from_mcp_file_name("other-1234.sock"), None);
+        assert_eq!(extract_pid_from_mcp_file_name("1234.sock"), None);
+    }
+
+    #[test]
+    fn rejects_unrecognized_suffixes() {
+        assert_eq!(extract_pid_from_mcp_file_name("mae-1234.txt"), None);
+        assert_eq!(extract_pid_from_mcp_file_name("mae-1234"), None);
+    }
+
+    #[test]
+    fn rejects_non_numeric_pid() {
+        assert_eq!(extract_pid_from_mcp_file_name("mae-abc.sock"), None);
+        assert_eq!(extract_pid_from_mcp_file_name("mae-abc-agent.sock"), None);
+        assert_eq!(extract_pid_from_mcp_file_name("mae-abc.psk"), None);
     }
 }

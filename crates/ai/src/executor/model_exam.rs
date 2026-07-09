@@ -358,13 +358,23 @@ pub struct ExamRun {
     pub grades: Vec<TestGrade>,
 }
 
+/// Directory exam runs are persisted to/loaded from. `MAE_EXAM_RESULTS_DIR` overrides the
+/// default `~/.local/share/mae/exam-results/` — used by tests to isolate from any real exam
+/// data on the host, and available to users who want to relocate exam results.
+fn exam_results_dir() -> PathBuf {
+    if let Ok(dir) = std::env::var("MAE_EXAM_RESULTS_DIR") {
+        return PathBuf::from(dir);
+    }
+    xdg_data_dir()
+        .unwrap_or_else(|| PathBuf::from("/tmp"))
+        .join("mae")
+        .join("exam-results")
+}
+
 /// Save an exam run to `~/.local/share/mae/exam-results/{model}_{timestamp}.json`.
 /// Creates the directory if needed. Returns the path on success.
 pub fn save_exam_run(run: &ExamRun) -> Result<PathBuf, String> {
-    let data_dir = xdg_data_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("mae")
-        .join("exam-results");
+    let data_dir = exam_results_dir();
     std::fs::create_dir_all(&data_dir).map_err(|e| format!("Failed to create dir: {e}"))?;
 
     // Sanitize model name for filename
@@ -379,12 +389,8 @@ pub fn save_exam_run(run: &ExamRun) -> Result<PathBuf, String> {
 }
 
 /// Load all exam runs from `~/.local/share/mae/exam-results/`.
-#[allow(dead_code)]
 pub fn load_exam_runs() -> Vec<ExamRun> {
-    let data_dir = xdg_data_dir()
-        .unwrap_or_else(|| PathBuf::from("/tmp"))
-        .join("mae")
-        .join("exam-results");
+    let data_dir = exam_results_dir();
     let Ok(entries) = std::fs::read_dir(&data_dir) else {
         return Vec::new();
     };

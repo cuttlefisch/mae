@@ -1837,6 +1837,45 @@ saved recovery key OFFLINE — it can later authorize a rebind if the primary is
             },
         );
 
+        // (kb-set-ai-residency KB-ID-OR-PRIMARY POLICY) — open | local_models_only
+        // (ADR-048). NOT a collab/daemon action despite living alongside the KB-sharing
+        // prims above — a plain, freely-toggleable local registry field (one local user's
+        // own KB, not a multi-peer trust problem), so it routes through the ex parser
+        // (`dispatch_kb` in `editor/dispatch/kb.rs`) like `kb-pending` above, not through
+        // `pending_kb_collab_actions`/`CollabIntent`.
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-set-ai-residency",
+            "Set a KB's AI-residency policy: open | local_models_only (ADR-048). Use \"primary\" for the primary/local KB.",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let kb_id = arg_string(args, 0, "kb-set-ai-residency")?;
+                let policy = arg_string(args, 1, "kb-set-ai-residency")?;
+                s.lock()
+                    .pending_ex_commands
+                    .push(format!("kb-set-ai-residency {kb_id} {policy}"));
+                Ok(Value::Void)
+            },
+        );
+
+        // (kb-set-role NODE-ID ROLE) — source | atom | molecule | hub, the molecular-note
+        // classification (Source→Atom→Molecule→Hub). Also NOT a collab/daemon action —
+        // routes through the ex parser like kb-set-ai-residency above.
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-set-role",
+            "Set a KB node's molecular-note role: source | atom | molecule | hub.",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let id = arg_string(args, 0, "kb-set-role")?;
+                let role = arg_string(args, 1, "kb-set-role")?;
+                s.lock()
+                    .pending_ex_commands
+                    .push(format!("kb-set-role {id} {role}"));
+                Ok(Value::Void)
+            },
+        );
+
         // (collab-connect [ADDR]) — connect to a daemon; ADDR optional (defaults
         // to the configured server). Arg-taking → route through the ex parser.
         let s = shared.clone();
@@ -5160,6 +5199,69 @@ mod tests {
             &editor.collab.pending_intent,
             Some(mae_core::CollabIntent::LeaveKb { kb_id }) if kb_id == "team"
         ));
+    }
+
+    #[test]
+    fn kb_set_ai_residency_primitive_mutates_registry_via_ex_command() {
+        // ADR-048: unlike the KB-sharing primitives above, `(kb-set-ai-residency ...)` is
+        // NOT a collab/daemon action — it queues a plain ex-command string
+        // (`pending_ex_commands`) that `apply_to_editor` runs through the same
+        // `execute_command` → `dispatch_kb` path as typing `:kb-set-ai-residency ...`
+        // would, synchronously mutating the local KB registry — no `CollabIntent` involved.
+        let mut rt = new_runtime();
+        let mut editor = Editor::new();
+
+        rt.eval("(kb-set-ai-residency \"primary\" \"local_models_only\")")
+            .unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert_eq!(
+            editor.kb.registry.primary_ai_residency,
+            mae_kb::federation::AiResidency::LocalModelsOnly
+        );
+        assert!(
+            editor.collab.pending_intent.is_none(),
+            "kb-set-ai-residency must not go through the collab-intent path"
+        );
+
+        rt.eval("(kb-set-ai-residency \"primary\" \"open\")")
+            .unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert_eq!(
+            editor.kb.registry.primary_ai_residency,
+            mae_kb::federation::AiResidency::Open
+        );
+    }
+
+    #[test]
+    fn kb_set_role_primitive_stamps_property_via_ex_command() {
+        let mut rt = new_runtime();
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node(
+                "note:role-scheme-test",
+                "Test",
+                "body",
+                mae_kb::NodeKind::Note,
+            )
+            .unwrap();
+
+        rt.eval("(kb-set-role \"note:role-scheme-test\" \"hub\")")
+            .unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert_eq!(
+            editor
+                .kb
+                .primary
+                .get("note:role-scheme-test")
+                .unwrap()
+                .properties
+                .get("role"),
+            Some(&"hub".to_string())
+        );
+        assert!(
+            editor.collab.pending_intent.is_none(),
+            "kb-set-role must not go through the collab-intent path"
+        );
     }
 
     #[test]

@@ -22,6 +22,14 @@
         }
       ]
     },
+    "mae-agent-cli": {
+      "path": "crates/agent-cli/src/main.rs",
+      "dependencies": [
+        "mae-ai",
+        "mae-mcp"
+      ],
+      "public_items": []
+    },
     "mae-ai": {
       "path": "crates/ai/src/lib.rs",
       "dependencies": [
@@ -842,6 +850,10 @@
           "kind": "mod"
         },
         {
+          "name": "RequesterContext",
+          "kind": "struct"
+        },
+        {
           "name": "McpToolRequest",
           "kind": "struct"
         },
@@ -1390,6 +1402,14 @@
     },
     {
       "name": "kb-pending",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-set-ai-residency",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
+      "name": "kb-set-role",
       "source": "crates/scheme/src/runtime.rs"
     },
     {
@@ -3974,6 +3994,14 @@
     {
       "name": "kb-sharing-status",
       "doc": "Show this peer's KB-sharing status in the *KB Sharing* buffer (:kb-sharing-status)"
+    },
+    {
+      "name": "kb-set-ai-residency",
+      "doc": "Set a KB's AI-residency policy (ADR-048): open | local_models_only (:kb-set-ai-residency <kb-id|primary> <policy>)"
+    },
+    {
+      "name": "kb-set-role",
+      "doc": "Set a KB node's molecular-note role: source | atom | molecule | hub (:kb-set-role <node-id> <role>)"
     },
     {
       "name": "move-down",

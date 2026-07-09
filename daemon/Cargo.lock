@@ -105,9 +105,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "approx"
@@ -2604,7 +2604,7 @@ checksum = "d3d25b0e0b648a86960ac23b7ad4abb9717601dec6f66c165f5b037f3f03065f"
 
 [[package]]
 name = "mae-daemon"
-version = "0.14.36"
+version = "0.14.37"
 dependencies = [
  "async-trait",
  "cozo",
@@ -2628,7 +2628,7 @@ dependencies = [
 
 [[package]]
 name = "mae-kb"
-version = "0.14.36"
+version = "0.14.37"
 dependencies = [
  "cozo",
  "hex",
@@ -2647,7 +2647,7 @@ dependencies = [
 
 [[package]]
 name = "mae-mcp"
-version = "0.14.36"
+version = "0.14.37"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -2672,7 +2672,7 @@ dependencies = [
 
 [[package]]
 name = "mae-sync"
-version = "0.14.36"
+version = "0.14.37"
 dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",

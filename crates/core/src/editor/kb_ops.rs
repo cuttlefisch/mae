@@ -447,6 +447,51 @@ impl Editor {
         }
     }
 
+    /// Set a KB's AI-residency policy (ADR-048): `"primary"` for the primary/local KB, or
+    /// an instance name/UUID. A `LocalModelsOnly` KB may only be read/written by a
+    /// locally-classified AI provider (see `ai_event_handler.rs`'s residency gate) — this
+    /// is a plain, freely-toggleable local registry field, not the anti-downgrade signed
+    /// op-log `kb_set_encryption`/`kb_set_policy` use for *shared*-KB peer trust (that
+    /// mechanism doesn't apply here: this is one local user's own KB, not a multi-peer
+    /// trust problem).
+    pub fn kb_set_ai_residency(
+        &mut self,
+        name_or_uuid: &str,
+        policy: mae_kb::federation::AiResidency,
+    ) -> Result<String, String> {
+        let is_primary = name_or_uuid.eq_ignore_ascii_case("primary");
+        let label = if is_primary {
+            "primary".to_string()
+        } else {
+            name_or_uuid.to_string()
+        };
+        let changed = if let Some(data_dir) = self.mae_data_dir() {
+            let (registry, changed, saved) =
+                mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+                    reg.set_ai_residency(name_or_uuid, policy)
+                });
+            if let Err(e) = saved {
+                tracing::warn!(error = %e, "failed to persist KB registry");
+            }
+            self.kb.registry = registry;
+            self.kb.last_local_registry_write = Some(std::time::Instant::now());
+            changed
+        } else {
+            self.kb.registry.set_ai_residency(name_or_uuid, policy)
+        };
+        if !changed {
+            return Err(format!(
+                "KB set-ai-residency: no instance found matching '{}'",
+                label
+            ));
+        }
+        let policy_str = match policy {
+            mae_kb::federation::AiResidency::Open => "open",
+            mae_kb::federation::AiResidency::LocalModelsOnly => "local_models_only",
+        };
+        Ok(format!("KB '{}' AI residency set to {}", label, policy_str))
+    }
+
     /// Re-import an existing KB instance (refresh after org file edits).
     ///
     /// When `mode` is `None`, defaults to `IngestMode::Full`.
@@ -909,6 +954,7 @@ impl Editor {
                             shared: true,
                             remote_peers: Vec::new(),
                             last_sync: Some(now),
+                            ai_residency: mae_kb::federation::AiResidency::default(),
                         });
                     }
                 }
@@ -1643,6 +1689,53 @@ impl Editor {
         body: Option<&str>,
         tags: Option<Vec<String>>,
     ) -> Result<(), String> {
+        self.kb_update_node_with(id, |updated| {
+            if let Some(t) = title {
+                updated.title = t.to_string();
+            }
+            if let Some(b) = body {
+                updated.body = b.to_string();
+            }
+            if let Some(t) = tags {
+                updated.tags = t;
+            }
+        })?;
+        self.set_status(format!("KB node updated: {}", id));
+        Ok(())
+    }
+
+    /// Set a node's molecular-note role (source | atom | molecule | hub), stamped into
+    /// the generic `:role:` PROPERTIES-drawer field — orthogonal to `NodeKind`'s own
+    /// `:kind:` (MAE's doc taxonomy: Concept/Task/etc). A node can be both `:kind:
+    /// concept` and `:role: atom` simultaneously; the two axes are independent. Reuses
+    /// the same generic PROPERTIES-drawer parsing `shared/kb/src/org.rs` already applies
+    /// to any non-`:ID:` heading property — no new parsing code, just a new recognized
+    /// value written through the existing update path.
+    pub fn kb_set_role(&mut self, id: &str, role: &str) -> Result<String, String> {
+        let role = role.to_ascii_lowercase();
+        if !["source", "atom", "molecule", "hub"].contains(&role.as_str()) {
+            return Err(format!(
+                "Invalid role '{}': expected source|atom|molecule|hub",
+                role
+            ));
+        }
+        self.kb_update_node_with(id, |updated| {
+            updated.properties.insert("role".to_string(), role.clone());
+        })?;
+        let msg = format!("KB node '{}' role set to {}", id, role);
+        self.set_status(msg.clone());
+        Ok(msg)
+    }
+
+    /// Shared resolve → mutate → persist skeleton behind `kb_update_node` and
+    /// `kb_set_role` — the CRDT-enqueue-vs-direct-persist branching (ADR-019/ADR-020)
+    /// is real, non-trivial logic; this avoids duplicating it for every field-specific
+    /// update method, letting each just supply its own `mutate` closure.
+    fn kb_update_node_with(
+        &mut self,
+        id: &str,
+        mutate: impl FnOnce(&mut mae_kb::Node),
+    ) -> Result<(), String> {
         self.kb_write_blocked()?;
         // Phase D3: thin-startup mirror may not hold this node yet — lazily load it
         // (with its CRDT lineage) from the open store before resolving the owner.
@@ -1667,15 +1760,7 @@ impl Editor {
             ));
         }
         let mut updated = existing;
-        if let Some(t) = title {
-            updated.title = t.to_string();
-        }
-        if let Some(b) = body {
-            updated.body = b.to_string();
-        }
-        if let Some(t) = tags {
-            updated.tags = t;
-        }
+        mutate(&mut updated);
 
         // Does this node's OWNING KB sync, per durable registry markers
         // (ADR-019)? Derived from the owning instance's `shared`/`collab_id`,
@@ -1723,7 +1808,6 @@ impl Editor {
         }
 
         self.kb.last_local_store_write = Some(std::time::Instant::now());
-        self.set_status(format!("KB node updated: {}", id));
         Ok(())
     }
 
@@ -3824,6 +3908,225 @@ mod tests {
     }
 
     #[test]
+    fn kb_set_role_stamps_properties_and_is_independent_of_kind() {
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node(
+                "note:molecular-test",
+                "Test",
+                "body",
+                mae_kb::NodeKind::Concept,
+            )
+            .unwrap();
+
+        let result = editor.kb_set_role("note:molecular-test", "atom").unwrap();
+        assert!(result.contains("atom"), "result was: {result}");
+
+        let node = editor.kb.primary.get("note:molecular-test").unwrap();
+        assert_eq!(node.properties.get("role"), Some(&"atom".to_string()));
+        // Orthogonal to NodeKind — setting :role: must not disturb :kind:.
+        assert_eq!(node.kind, mae_kb::NodeKind::Concept);
+    }
+
+    #[test]
+    fn kb_set_role_is_case_insensitive_and_overwritable() {
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node("note:role-case", "Test", "body", mae_kb::NodeKind::Note)
+            .unwrap();
+
+        editor.kb_set_role("note:role-case", "MOLECULE").unwrap();
+        assert_eq!(
+            editor
+                .kb
+                .primary
+                .get("note:role-case")
+                .unwrap()
+                .properties
+                .get("role"),
+            Some(&"molecule".to_string())
+        );
+
+        // Freely overwritable — reclassifying a note as understanding matures is
+        // the whole point (a source can be distilled into an atom, etc).
+        editor.kb_set_role("note:role-case", "hub").unwrap();
+        assert_eq!(
+            editor
+                .kb
+                .primary
+                .get("note:role-case")
+                .unwrap()
+                .properties
+                .get("role"),
+            Some(&"hub".to_string())
+        );
+    }
+
+    #[test]
+    fn kb_set_role_rejects_unknown_role() {
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node("note:bad-role", "Test", "body", mae_kb::NodeKind::Note)
+            .unwrap();
+        let err = editor
+            .kb_set_role("note:bad-role", "not-a-real-role")
+            .unwrap_err();
+        assert!(err.contains("Invalid role"), "err was: {err}");
+        // Rejected before touching the node — must not have mutated anything.
+        assert!(!editor
+            .kb
+            .primary
+            .get("note:bad-role")
+            .unwrap()
+            .properties
+            .contains_key("role"));
+    }
+
+    #[test]
+    fn kb_set_role_unknown_node_errors() {
+        let mut editor = Editor::new();
+        let err = editor
+            .kb_set_role("note:does-not-exist", "atom")
+            .unwrap_err();
+        assert!(err.contains("No KB node"), "err was: {err}");
+    }
+
+    #[test]
+    fn kb_instance_defaults_to_open_ai_residency() {
+        // Backward-compat guard (ADR-048): a freshly registered instance — and any
+        // instance loaded from a pre-existing registry file that never had this field —
+        // must default to Open, not silently become restricted.
+        let dir = create_test_org_dir();
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+        editor.kb_register("TestNotes", dir.path()).unwrap();
+        let inst = editor.kb.registry.find("TestNotes").unwrap();
+        assert_eq!(inst.ai_residency, mae_kb::federation::AiResidency::Open);
+        assert_eq!(
+            editor.kb.registry.primary_ai_residency,
+            mae_kb::federation::AiResidency::Open
+        );
+    }
+
+    #[test]
+    fn kb_set_ai_residency_updates_named_instance() {
+        let dir = create_test_org_dir();
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+        editor.kb_register("TestNotes", dir.path()).unwrap();
+
+        let msg = editor
+            .kb_set_ai_residency(
+                "TestNotes",
+                mae_kb::federation::AiResidency::LocalModelsOnly,
+            )
+            .expect("set_ai_residency should succeed for a registered instance");
+        assert!(msg.contains("local_models_only"), "msg was: {msg}");
+        assert_eq!(
+            editor.kb.registry.find("TestNotes").unwrap().ai_residency,
+            mae_kb::federation::AiResidency::LocalModelsOnly
+        );
+
+        // Freely toggleable back to Open — no anti-downgrade for a local, non-shared KB.
+        editor
+            .kb_set_ai_residency("TestNotes", mae_kb::federation::AiResidency::Open)
+            .expect("toggling back to Open should succeed");
+        assert_eq!(
+            editor.kb.registry.find("TestNotes").unwrap().ai_residency,
+            mae_kb::federation::AiResidency::Open
+        );
+    }
+
+    #[test]
+    fn kb_set_ai_residency_updates_primary() {
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+        editor
+            .kb_set_ai_residency("primary", mae_kb::federation::AiResidency::LocalModelsOnly)
+            .expect("set_ai_residency should succeed for the primary KB");
+        assert_eq!(
+            editor.kb.registry.primary_ai_residency,
+            mae_kb::federation::AiResidency::LocalModelsOnly
+        );
+        // Case-insensitive "primary" per the implementation's eq_ignore_ascii_case.
+        editor
+            .kb_set_ai_residency("PRIMARY", mae_kb::federation::AiResidency::Open)
+            .expect("case-insensitive primary should also succeed");
+        assert_eq!(
+            editor.kb.registry.primary_ai_residency,
+            mae_kb::federation::AiResidency::Open
+        );
+    }
+
+    #[test]
+    fn kb_set_ai_residency_via_command_line() {
+        // Exercises the full `:kb-set-ai-residency <kb> <policy>` command-line path
+        // (execute_command → dispatch_builtin → dispatch_kb), not just the Editor method
+        // directly — the human/AI-tool/Scheme-primitive parity this command exists for is
+        // only real if the command-line surface actually works end to end.
+        let dir = create_test_org_dir();
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+        editor.kb_register("TestNotes", dir.path()).unwrap();
+
+        assert!(editor.execute_command("kb-set-ai-residency TestNotes local_models_only"));
+        assert_eq!(
+            editor.kb.registry.find("TestNotes").unwrap().ai_residency,
+            mae_kb::federation::AiResidency::LocalModelsOnly
+        );
+
+        // Bad policy token -> usage message, no mutation, still "handled" (true).
+        assert!(editor.execute_command("kb-set-ai-residency TestNotes not-a-real-policy"));
+        assert_eq!(
+            editor.kb.registry.find("TestNotes").unwrap().ai_residency,
+            mae_kb::federation::AiResidency::LocalModelsOnly,
+            "an invalid policy token must not silently change the stored policy"
+        );
+    }
+
+    #[test]
+    fn kb_set_role_via_command_line() {
+        // Exercises the full `:kb-set-role <node-id> <role>` command-line path
+        // (execute_command → dispatch_builtin → dispatch_kb), matching the
+        // kb-set-ai-residency parity test above.
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node(
+                "note:role-cmdline-test",
+                "Test",
+                "body",
+                mae_kb::NodeKind::Note,
+            )
+            .unwrap();
+
+        assert!(editor.execute_command("kb-set-role note:role-cmdline-test atom"));
+        assert_eq!(
+            editor
+                .kb
+                .primary
+                .get("note:role-cmdline-test")
+                .unwrap()
+                .properties
+                .get("role"),
+            Some(&"atom".to_string())
+        );
+    }
+
+    #[test]
+    fn kb_set_ai_residency_unknown_kb_errors() {
+        // Adversarial case: an unknown KB name must error, not silently no-op or succeed —
+        // a caller relying on a false "success" for a typo'd KB name would believe a
+        // sensitive KB is now protected when nothing was actually changed.
+        let mut editor = Editor::new();
+        let _test_dirs = with_test_dirs(&mut editor);
+        let result = editor.kb_set_ai_residency(
+            "does-not-exist",
+            mae_kb::federation::AiResidency::LocalModelsOnly,
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
     fn kb_reimport_refreshes_nodes() {
         let dir = create_test_org_dir();
         let mut editor = Editor::new();
@@ -5186,6 +5489,7 @@ mod tests {
                 shared: true,
                 remote_peers: Vec::new(),
                 last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
             });
         editor.collab.kb_sync_mode = "on_save".into();
         assert!(
@@ -5234,6 +5538,7 @@ mod tests {
                 shared: false,
                 remote_peers: Vec::new(),
                 last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
             });
         editor.collab.kb_sync_mode = "on_save".into();
         // A stale cache entry must NOT be trusted as authority.
@@ -5606,6 +5911,7 @@ mod tests {
             shared: true,
             remote_peers: Vec::new(),
             last_sync: None,
+            ai_residency: mae_kb::federation::AiResidency::default(),
         }
     }
 

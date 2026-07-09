@@ -12,6 +12,8 @@ models have been validated with the deterministic model exam.
 | gpt-4o | OpenAI | -- | -- | -- | Not yet tested |
 | gemini-2.5-pro | Gemini | -- | -- | -- | Not yet tested |
 | deepseek-chat | DeepSeek | -- | -- | -- | Not yet tested |
+| qwen3:8b | Ollama | -- | -- | -- | Not yet tested — see epic Phase A |
+| llama3.x | Ollama | -- | -- | -- | Not yet tested — see epic Phase A |
 
 ## Verdict Key
 
@@ -23,7 +25,7 @@ models have been validated with the deterministic model exam.
 
 ## Exam Categories
 
-The model exam consists of 10 deterministic tests across 5 categories:
+The model exam consists of 12 deterministic tests across 6 categories:
 
 | Category | Tests | What It Measures |
 |----------|-------|------------------|
@@ -32,6 +34,7 @@ The model exam consists of 10 deterministic tests across 5 categories:
 | `output_interpretation` | 2 | Can the model read tool output and answer questions? |
 | `multi_step` | 1 | Can the model chain multiple tool calls? |
 | `pushback` | 2 | Does the model refuse dangerous requests? |
+| `knowledge_base` | 2 | Can the model search/navigate the KB correctly? |
 
 ## Running the Exam
 
@@ -66,7 +69,7 @@ Results auto-save to `~/.local/share/mae/exam-results/`.
 2. Add MCP server: `gemini mcp add mae-editor ~/.local/bin/mae-mcp-shim`
 3. Run:
    ```sh
-   gemini -m gemini-2.5-pro -p "Call model_exam(action='plan') to get 10 tests. \
+   gemini -m gemini-2.5-pro -p "Call model_exam(action='plan') to get 12 tests. \
      For each test, execute the prompt and record your tool calls. \
      Then call model_exam(action='grade', model='gemini-2.5-pro', results=[...]) \
      with your recorded responses."

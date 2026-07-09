@@ -498,7 +498,7 @@ impl tracing::field::Visit for MessageVisitor {
 /// 1. Implement [`AgentProvider`](mae_ai::AgentProvider) for your struct
 ///    (see `crates/ai/src/provider.rs` for the trait definition).
 /// 2. Add a public constructor in your provider module under `crates/ai/src/`.
-/// 3. Add a match arm in the `provider_name.as_str()` block below.
+/// 3. Add a match arm to [`construct_provider`] below.
 ///
 /// Note: `"deepseek"` is remapped to `"openai"` in
 /// `config.rs::resolve_ai_config()` because DeepSeek speaks the OpenAI-compatible
@@ -542,12 +542,7 @@ pub fn setup_ai(
             mae_ai::ModelVerification::Verified => {}
         }
 
-        let provider: Box<dyn mae_ai::AgentProvider> = match provider_name.as_str() {
-            "openai" => Box::new(OpenAiProvider::new(config)),
-            "gemini" => Box::new(GeminiProvider::new(config)),
-            "ollama" => Box::new(OllamaProvider::new(config)),
-            _ => Box::new(ClaudeProvider::new(config)), // default to Claude
-        };
+        let provider = construct_provider(&provider_name, config);
 
         let tools = {
             let mut t = tools_from_registry(&editor.commands);
@@ -597,6 +592,23 @@ pub fn setup_ai(
 
 pub fn spawn_ai_session(session: AgentSession) {
     tokio::spawn(session.run());
+}
+
+/// Construct a boxed [`AgentProvider`](mae_ai::AgentProvider) for the given provider-type
+/// string. This is the single, shared constructor for every site in this crate that turns a
+/// `provider_type` + [`ProviderConfig`] into a live provider — do not add a second match arm
+/// site elsewhere; a prior drift between this logic and the `delegate` sub-agent handler in
+/// `ai_event_handler.rs` silently ran Ollama-configured sub-agents on Claude instead.
+pub(crate) fn construct_provider(
+    provider_type: &str,
+    config: ProviderConfig,
+) -> Box<dyn mae_ai::AgentProvider> {
+    match provider_type {
+        "openai" => Box::new(OpenAiProvider::new(config)),
+        "gemini" => Box::new(GeminiProvider::new(config)),
+        "ollama" => Box::new(OllamaProvider::new(config)),
+        _ => Box::new(ClaudeProvider::new(config)), // default to Claude
+    }
 }
 
 /// Load the AI provider configuration by layering:

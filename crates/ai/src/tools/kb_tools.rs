@@ -919,6 +919,65 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Write),
         },
+        ToolDefinition {
+            name: "kb_set_role".into(),
+            description: "Set a KB node's molecular-note role: source (raw external material), atom (established knowledge in your own words), molecule (personal synthesis/insight), or hub (organized map-of-content linking related notes). Stamped as a :role: PROPERTIES-drawer field, orthogonal to the node's existing kind (MAE's own doc taxonomy) -- a node can be both kind=concept and role=atom at once. Freely overwritable as understanding matures.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "KB node id".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "role".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Molecular-note role".into(),
+                            enum_values: Some(vec![
+                                "source".into(),
+                                "atom".into(),
+                                "molecule".into(),
+                                "hub".into(),
+                            ]),
+                        },
+                    ),
+                ]),
+                required: vec!["id".into(), "role".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
+        ToolDefinition {
+            name: "kb_set_ai_residency".into(),
+            description: "Set a KB's AI-residency policy (ADR-048): 'open' (any AI provider may read/write this KB, default) or 'local_models_only' (only a locally-classified provider such as Ollama may — enforced at tool dispatch; a hosted/cloud provider like Claude/OpenAI/Gemini/DeepSeek is denied). A plain, freely-toggleable local setting — not the anti-downgrade signed policy used for shared-KB peer trust.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "kb".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "KB instance name/UUID, or \"primary\" for the primary/local KB".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "policy".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "AI-residency policy".into(),
+                            enum_values: Some(vec!["open".into(), "local_models_only".into()]),
+                        },
+                    ),
+                ]),
+                required: vec!["kb".into(), "policy".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
         // --- Graph KB tools (v0.12.0) ---
         ToolDefinition {
             name: "kb_agenda".into(),

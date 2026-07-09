@@ -83,23 +83,62 @@ impl Default for ModelLimits {
 /// Look up a model's limits.
 /// Matches by longest prefix — `deepseek-chat-v2` still hits `deepseek-chat`.
 /// Returns conservative defaults for unknown models.
+///
+/// Verification is resolved independently of the prefix match: real `self_test_suite`/
+/// `model_exam` exam data (`~/.local/share/mae/exam-results/`) is consulted for *any* model
+/// name — including ones with no `TABLE` entry at all (e.g. an Ollama tag like `qwen3:8b` or
+/// a model nobody has added a context-window row for yet) — since it reflects actually-
+/// observed tool-calling behavior rather than a guess. The hardcoded prefix table is only a
+/// fallback verification source for models nobody has exam-run yet.
 pub fn lookup(model: &str) -> ModelLimits {
     let lower = model.to_ascii_lowercase();
-    for (prefix, window, rounds, t) in TABLE {
-        if lower.starts_with(prefix) {
-            return ModelLimits {
-                context_window: *window,
-                max_rounds: *rounds,
-                tier: *t,
-                verification: verification_status(prefix),
-            };
+    let matched = TABLE.iter().find(|(prefix, ..)| lower.starts_with(prefix));
+
+    let (context_window, max_rounds, tier) = match matched {
+        Some((_, window, rounds, t)) => (*window, *rounds, *t),
+        None => {
+            let d = ModelLimits::default();
+            (d.context_window, d.max_rounds, d.tier)
         }
+    };
+
+    let verification = exam_verification_status(model).unwrap_or_else(|| {
+        matched
+            .map(|(prefix, ..)| verification_status_from_prefix(prefix))
+            .unwrap_or(ModelVerification::Untested)
+    });
+
+    ModelLimits {
+        context_window,
+        max_rounds,
+        tier,
+        verification,
     }
-    ModelLimits::default()
 }
 
-/// Determine verification status based on model prefix.
-fn verification_status(prefix: &str) -> ModelVerification {
+/// Look up the most recent saved exam run for this exact model name and translate its
+/// verdict into a [`ModelVerification`]. Returns `None` if no exam has ever been run/graded
+/// for this model — the caller falls back to the static prefix table in that case.
+fn exam_verification_status(model: &str) -> Option<ModelVerification> {
+    let runs = crate::executor::model_exam::load_exam_runs();
+    let most_recent = runs.iter().rev().find(|r| r.result.model == model)?;
+    Some(verdict_to_verification(most_recent.result.verdict))
+}
+
+/// Translate a graded exam's verdict into the coarser [`ModelVerification`] tier consulted
+/// by the rest of the harness. Pure/no I/O so it's unit-testable independent of the
+/// filesystem-backed exam-run lookup above.
+fn verdict_to_verification(verdict: crate::executor::model_exam::ExamVerdict) -> ModelVerification {
+    match verdict {
+        crate::executor::model_exam::ExamVerdict::Pass => ModelVerification::Verified,
+        crate::executor::model_exam::ExamVerdict::Marginal => ModelVerification::Testing,
+        crate::executor::model_exam::ExamVerdict::Fail => ModelVerification::Untested,
+    }
+}
+
+/// Static fallback verification table, keyed by the same longest-match prefix `lookup()`
+/// already resolved. Only consulted when no real exam data exists yet for the queried model.
+fn verification_status_from_prefix(prefix: &str) -> ModelVerification {
     match prefix {
         // End-to-end tested with self-test suite and production use.
         "claude-opus-4" | "claude-opus-4-6" | "claude-opus-4-7" | "claude-opus-4-8"
@@ -673,6 +712,89 @@ mod tests {
             lookup("command-r-plus").verification,
             ModelVerification::Untested
         );
+    }
+
+    #[test]
+    fn verdict_to_verification_mapping() {
+        use crate::executor::model_exam::ExamVerdict;
+        assert_eq!(
+            verdict_to_verification(ExamVerdict::Pass),
+            ModelVerification::Verified
+        );
+        assert_eq!(
+            verdict_to_verification(ExamVerdict::Marginal),
+            ModelVerification::Testing
+        );
+        assert_eq!(
+            verdict_to_verification(ExamVerdict::Fail),
+            ModelVerification::Untested
+        );
+    }
+
+    #[test]
+    fn exam_data_overrides_for_model_with_no_table_entry() {
+        // Regression guard for the real bug caught while writing this: `lookup()` used to
+        // only ever consult exam data for models that ALSO matched a hardcoded TABLE prefix
+        // — a genuinely unrecognized model name (no TABLE entry at all) fell straight to
+        // `ModelLimits::default()` and skipped exam-data lookup entirely, defeating the
+        // point of wiring real exam runs in for exactly the Ollama models nobody has added
+        // rows for yet. This model name deliberately matches nothing in TABLE.
+        use crate::executor::model_exam::{save_exam_run, ExamResult, ExamRun, ExamVerdict};
+        use std::sync::Mutex;
+        static ENV_GUARD: Mutex<()> = Mutex::new(());
+        let _lock = ENV_GUARD.lock().unwrap();
+
+        let tmp = std::env::temp_dir().join(format!(
+            "mae-exam-test-{}-{}",
+            std::process::id(),
+            "no_table_entry"
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let prev = std::env::var("MAE_EXAM_RESULTS_DIR").ok();
+        std::env::set_var("MAE_EXAM_RESULTS_DIR", &tmp);
+
+        let model_name = "totally-unrecognized-local-model-xyz";
+        // No exam data yet -> falls all the way to Untested (not just TABLE-fallback).
+        assert_eq!(lookup(model_name).verification, ModelVerification::Untested);
+
+        let run = ExamRun {
+            timestamp: "2026-07-09T00:00:00Z".into(),
+            runner: "test".into(),
+            mae_version: "test".into(),
+            result: ExamResult {
+                model: model_name.into(),
+                total: 12,
+                passed: 12,
+                failed: 0,
+                rounds_used: 12,
+                tokens_in: 0,
+                tokens_out: 0,
+                hallucinations: 0,
+                wrong_tool: 0,
+                wrong_params: 0,
+                pass_rate: 1.0,
+                verdict: ExamVerdict::Pass,
+            },
+            grades: vec![],
+        };
+        save_exam_run(&run).expect("save_exam_run should succeed against the tempdir override");
+
+        // A real, saved PASS exam run for a model with zero TABLE presence now surfaces as
+        // Verified — proving exam data is genuinely consulted, not silently ignored.
+        assert_eq!(lookup(model_name).verification, ModelVerification::Verified);
+        // Context window/rounds/tier still come from ModelLimits::default() since there's
+        // still no TABLE row for this model — verification is the only field exam data
+        // affects.
+        let default_limits = ModelLimits::default();
+        let limits = lookup(model_name);
+        assert_eq!(limits.context_window, default_limits.context_window);
+        assert_eq!(limits.max_rounds, default_limits.max_rounds);
+
+        match prev {
+            Some(v) => std::env::set_var("MAE_EXAM_RESULTS_DIR", v),
+            None => std::env::remove_var("MAE_EXAM_RESULTS_DIR"),
+        }
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

@@ -174,10 +174,19 @@ lifecycle parity across the human (buffer + Scheme `(kb-…)` primitives) and th
 peers maintain shared KBs with **no central server**. Design = **ADR-025** (iroh QUIC transport, Ed25519
 node IDs reuse trusted-peer fingerprints, + config/install/activation), **ADR-026** (peer-verifiable
 signed, hash-chained membership + signed ops + peer-enforced epoch fence), **ADR-027** (observability built
-alongside). **Tracker: issue #96**; ADR PR **#95**; phased epics #88–#94. **Pre-work first** (chosen
-sequence): #70 split the oversized collab files, settle crypto-deps (#87/#51), then #72 (epoch hardening —
-hard prereq for Phase 4). E2E content encryption + leaderless auth-DAG are deferred. Also still pending:
-hosted-edit (ADR-020 D1).
+alongside). **Tracker: issue #96**; ADR PR **#95**; phased epics #88–#94. Pre-work (crypto-deps #87/#51,
+epoch hardening #72, TOFU deadlock #66) is **done**, as are Phases 1/3/4 (#88/#90/#91). **Current
+bottleneck: Phase 2 / #89** (daemon-as-peer mesh transport — dial + gossip + anti-entropy), with **#70**
+(split oversized collab files) and **#73** (authorized_keys resolver) as its remaining open prerequisites.
+E2E content encryption + leaderless auth-DAG are deferred. Also still pending: hosted-edit (ADR-020 D1).
+
+**Also next — Ollama/local-model parity** (AI-integration initiative): bring self-hosted models to parity
+with hosted providers for agentic MAE work — tool-calling reliability harness, KB-enrichment lifecycle for
+local models, safety rails for unpriced models, and a scoped orchestrator-worker multi-agent path for bulk
+KB batch work. Design = **ADR-045** (provider parity + local-model harness), **ADR-046** (CLI/MCP-shim vs
+embedded-GUI agent surface — embedded window frozen at current feature set, new work targets a CLI harness
+on `mae-mcp-shim`), **ADR-047** (multi-agent orchestration scoped to KB batch work only). Phased epics
+A–G tracked under the epic issue cross-linked from those ADRs.
 
 ## Key Design Decisions Already Made
 

@@ -1468,6 +1468,14 @@ impl CommandRegistry {
             "kb-sharing-status",
             "Show this peer's KB-sharing status in the *KB Sharing* buffer (:kb-sharing-status)",
         );
+        reg.register_builtin(
+            "kb-set-ai-residency",
+            "Set a KB's AI-residency policy (ADR-048): open | local_models_only (:kb-set-ai-residency <kb-id|primary> <policy>)",
+        );
+        reg.register_builtin(
+            "kb-set-role",
+            "Set a KB node's molecular-note role: source | atom | molecule | hub (:kb-set-role <node-id> <role>)",
+        );
 
         reg
     }
@@ -1549,6 +1557,8 @@ mod tests {
             "kb-pending",
             "kb-set-policy",
             "kb-list-remote",
+            "kb-set-ai-residency",
+            "kb-set-role",
         ] {
             assert!(
                 reg.contains(cmd),

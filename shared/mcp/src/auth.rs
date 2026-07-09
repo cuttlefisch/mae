@@ -775,6 +775,16 @@ mod hex {
     }
 }
 
+/// Generate a fresh random pre-shared key (32 bytes, hex-encoded — 64 hex chars).
+/// Used by MAE at startup (ADR-048) to mint a per-process secret for its
+/// first-party local-agent tool socket; not derived from anything persistent, so
+/// it's naturally invalidated whenever the process exits.
+pub fn generate_psk() -> String {
+    let mut bytes = [0u8; 32];
+    rand::rng().fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
+
 /// Load PSK from config: try `psk_command` first, fall back to `psk` string.
 pub async fn load_psk(psk_command: Option<&str>, psk: Option<&str>) -> Option<String> {
     if let Some(cmd) = psk_command {
@@ -924,6 +934,37 @@ mod tests {
         let n2 = PskAuth::generate_nonce();
         assert_ne!(n1, n2);
         assert_eq!(n1.len(), 32); // 16 bytes = 32 hex chars
+    }
+
+    #[test]
+    fn generate_psk_is_unique_and_correct_length() {
+        let k1 = generate_psk();
+        let k2 = generate_psk();
+        assert_ne!(k1, k2, "each call must mint a fresh, unpredictable secret");
+        assert_eq!(k1.len(), 64); // 32 bytes = 64 hex chars
+        assert!(hex::decode(&k1).is_some(), "must be valid hex");
+    }
+
+    #[tokio::test]
+    async fn generate_psk_round_trips_through_a_real_handshake() {
+        // Not just "looks like hex" — prove a freshly generated PSK actually works
+        // as a real PskAuth secret end to end.
+        let psk = generate_psk();
+        let server_auth = PskAuth::new(&psk);
+        let client_auth = PskAuth::new(&psk);
+        let (client_stream, server_stream) = duplex(4096);
+        let (cr, cw) = tokio::io::split(client_stream);
+        let (sr, sw) = tokio::io::split(server_stream);
+        let mut cr = BufReader::new(cr);
+        let mut sr = BufReader::new(sr);
+        let mut cw = tokio::io::BufWriter::new(cw);
+        let mut sw = tokio::io::BufWriter::new(sw);
+        let (server_result, client_result) = tokio::join!(
+            server_auth.server_handshake(&mut sr, &mut sw),
+            client_auth.client_handshake(&mut cr, &mut cw),
+        );
+        assert!(server_result.is_ok(), "server: {:?}", server_result.err());
+        assert!(client_result.is_ok(), "client: {:?}", client_result.err());
     }
 
     /// Run a full handshake between a server provider and a client provider,

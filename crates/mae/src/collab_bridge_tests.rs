@@ -2412,6 +2412,7 @@ fn collab_kb_shared_named_instance_tracks_nodes_by_uuid() {
             shared: false,
             remote_peers: Vec::new(),
             last_sync: None,
+            ai_residency: mae_kb::federation::AiResidency::default(),
         });
     // The handler now reloads the registry fresh from disk before stamping
     // the durable marker (KbRegistry::update) — persist the fixture instance
@@ -2481,6 +2482,7 @@ fn adr019_share_marker_survives_registry_reload() {
             shared: false,
             remote_peers: Vec::new(),
             last_sync: None,
+            ai_residency: mae_kb::federation::AiResidency::default(),
         });
     // The handler reloads the registry fresh from disk before stamping the
     // durable marker (KbRegistry::update) — persist the fixture instance
