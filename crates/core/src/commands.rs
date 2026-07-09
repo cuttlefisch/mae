@@ -1472,6 +1472,10 @@ impl CommandRegistry {
             "kb-set-ai-residency",
             "Set a KB's AI-residency policy (ADR-048): open | local_models_only (:kb-set-ai-residency <kb-id|primary> <policy>)",
         );
+        reg.register_builtin(
+            "kb-set-role",
+            "Set a KB node's molecular-note role: source | atom | molecule | hub (:kb-set-role <node-id> <role>)",
+        );
 
         reg
     }
@@ -1554,6 +1558,7 @@ mod tests {
             "kb-set-policy",
             "kb-list-remote",
             "kb-set-ai-residency",
+            "kb-set-role",
         ] {
             assert!(
                 reg.contains(cmd),

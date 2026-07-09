@@ -1689,6 +1689,53 @@ impl Editor {
         body: Option<&str>,
         tags: Option<Vec<String>>,
     ) -> Result<(), String> {
+        self.kb_update_node_with(id, |updated| {
+            if let Some(t) = title {
+                updated.title = t.to_string();
+            }
+            if let Some(b) = body {
+                updated.body = b.to_string();
+            }
+            if let Some(t) = tags {
+                updated.tags = t;
+            }
+        })?;
+        self.set_status(format!("KB node updated: {}", id));
+        Ok(())
+    }
+
+    /// Set a node's molecular-note role (source | atom | molecule | hub), stamped into
+    /// the generic `:role:` PROPERTIES-drawer field — orthogonal to `NodeKind`'s own
+    /// `:kind:` (MAE's doc taxonomy: Concept/Task/etc). A node can be both `:kind:
+    /// concept` and `:role: atom` simultaneously; the two axes are independent. Reuses
+    /// the same generic PROPERTIES-drawer parsing `shared/kb/src/org.rs` already applies
+    /// to any non-`:ID:` heading property — no new parsing code, just a new recognized
+    /// value written through the existing update path.
+    pub fn kb_set_role(&mut self, id: &str, role: &str) -> Result<String, String> {
+        let role = role.to_ascii_lowercase();
+        if !["source", "atom", "molecule", "hub"].contains(&role.as_str()) {
+            return Err(format!(
+                "Invalid role '{}': expected source|atom|molecule|hub",
+                role
+            ));
+        }
+        self.kb_update_node_with(id, |updated| {
+            updated.properties.insert("role".to_string(), role.clone());
+        })?;
+        let msg = format!("KB node '{}' role set to {}", id, role);
+        self.set_status(msg.clone());
+        Ok(msg)
+    }
+
+    /// Shared resolve → mutate → persist skeleton behind `kb_update_node` and
+    /// `kb_set_role` — the CRDT-enqueue-vs-direct-persist branching (ADR-019/ADR-020)
+    /// is real, non-trivial logic; this avoids duplicating it for every field-specific
+    /// update method, letting each just supply its own `mutate` closure.
+    fn kb_update_node_with(
+        &mut self,
+        id: &str,
+        mutate: impl FnOnce(&mut mae_kb::Node),
+    ) -> Result<(), String> {
         self.kb_write_blocked()?;
         // Phase D3: thin-startup mirror may not hold this node yet — lazily load it
         // (with its CRDT lineage) from the open store before resolving the owner.
@@ -1713,15 +1760,7 @@ impl Editor {
             ));
         }
         let mut updated = existing;
-        if let Some(t) = title {
-            updated.title = t.to_string();
-        }
-        if let Some(b) = body {
-            updated.body = b.to_string();
-        }
-        if let Some(t) = tags {
-            updated.tags = t;
-        }
+        mutate(&mut updated);
 
         // Does this node's OWNING KB sync, per durable registry markers
         // (ADR-019)? Derived from the owning instance's `shared`/`collab_id`,
@@ -1769,7 +1808,6 @@ impl Editor {
         }
 
         self.kb.last_local_store_write = Some(std::time::Instant::now());
-        self.set_status(format!("KB node updated: {}", id));
         Ok(())
     }
 
@@ -3870,6 +3908,90 @@ mod tests {
     }
 
     #[test]
+    fn kb_set_role_stamps_properties_and_is_independent_of_kind() {
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node(
+                "note:molecular-test",
+                "Test",
+                "body",
+                mae_kb::NodeKind::Concept,
+            )
+            .unwrap();
+
+        let result = editor.kb_set_role("note:molecular-test", "atom").unwrap();
+        assert!(result.contains("atom"), "result was: {result}");
+
+        let node = editor.kb.primary.get("note:molecular-test").unwrap();
+        assert_eq!(node.properties.get("role"), Some(&"atom".to_string()));
+        // Orthogonal to NodeKind — setting :role: must not disturb :kind:.
+        assert_eq!(node.kind, mae_kb::NodeKind::Concept);
+    }
+
+    #[test]
+    fn kb_set_role_is_case_insensitive_and_overwritable() {
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node("note:role-case", "Test", "body", mae_kb::NodeKind::Note)
+            .unwrap();
+
+        editor.kb_set_role("note:role-case", "MOLECULE").unwrap();
+        assert_eq!(
+            editor
+                .kb
+                .primary
+                .get("note:role-case")
+                .unwrap()
+                .properties
+                .get("role"),
+            Some(&"molecule".to_string())
+        );
+
+        // Freely overwritable — reclassifying a note as understanding matures is
+        // the whole point (a source can be distilled into an atom, etc).
+        editor.kb_set_role("note:role-case", "hub").unwrap();
+        assert_eq!(
+            editor
+                .kb
+                .primary
+                .get("note:role-case")
+                .unwrap()
+                .properties
+                .get("role"),
+            Some(&"hub".to_string())
+        );
+    }
+
+    #[test]
+    fn kb_set_role_rejects_unknown_role() {
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node("note:bad-role", "Test", "body", mae_kb::NodeKind::Note)
+            .unwrap();
+        let err = editor
+            .kb_set_role("note:bad-role", "not-a-real-role")
+            .unwrap_err();
+        assert!(err.contains("Invalid role"), "err was: {err}");
+        // Rejected before touching the node — must not have mutated anything.
+        assert!(!editor
+            .kb
+            .primary
+            .get("note:bad-role")
+            .unwrap()
+            .properties
+            .contains_key("role"));
+    }
+
+    #[test]
+    fn kb_set_role_unknown_node_errors() {
+        let mut editor = Editor::new();
+        let err = editor
+            .kb_set_role("note:does-not-exist", "atom")
+            .unwrap_err();
+        assert!(err.contains("No KB node"), "err was: {err}");
+    }
+
+    #[test]
     fn kb_instance_defaults_to_open_ai_residency() {
         // Backward-compat guard (ADR-048): a freshly registered instance — and any
         // instance loaded from a pre-existing registry file that never had this field —
@@ -3959,6 +4081,34 @@ mod tests {
             editor.kb.registry.find("TestNotes").unwrap().ai_residency,
             mae_kb::federation::AiResidency::LocalModelsOnly,
             "an invalid policy token must not silently change the stored policy"
+        );
+    }
+
+    #[test]
+    fn kb_set_role_via_command_line() {
+        // Exercises the full `:kb-set-role <node-id> <role>` command-line path
+        // (execute_command → dispatch_builtin → dispatch_kb), matching the
+        // kb-set-ai-residency parity test above.
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node(
+                "note:role-cmdline-test",
+                "Test",
+                "body",
+                mae_kb::NodeKind::Note,
+            )
+            .unwrap();
+
+        assert!(editor.execute_command("kb-set-role note:role-cmdline-test atom"));
+        assert_eq!(
+            editor
+                .kb
+                .primary
+                .get("note:role-cmdline-test")
+                .unwrap()
+                .properties
+                .get("role"),
+            Some(&"atom".to_string())
         );
     }
 

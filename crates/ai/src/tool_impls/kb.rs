@@ -827,6 +827,21 @@ pub fn execute_kb_unregister(
     Ok(editor.status_msg.clone())
 }
 
+pub fn execute_kb_set_role(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: id")?;
+    let role = args
+        .get("role")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: role")?;
+    editor.kb_set_role(id, role)
+}
+
 pub fn execute_kb_set_ai_residency(
     editor: &mut Editor,
     args: &serde_json::Value,
@@ -1092,7 +1107,10 @@ pub fn execute_kb_neighborhood(
     }
 }
 
-pub fn execute_kb_add_link(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+pub fn execute_kb_add_link(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
     let src = args
         .get("src")
         .and_then(|v| v.as_str())
@@ -1106,22 +1124,31 @@ pub fn execute_kb_add_link(editor: &Editor, args: &serde_json::Value) -> Result<
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required argument: rel_type".to_string())?;
     let weight = args.get("weight").and_then(|v| v.as_f64()).unwrap_or(1.0);
-    let store = editor
-        .kb
-        .store
-        .as_ref()
-        .ok_or_else(|| "No KB store configured".to_string())?;
-    match store.add_typed_link(src, dst, rel_type, weight) {
-        Ok(()) => Ok(serde_json::json!({
-            "status": "ok",
-            "src": src,
-            "dst": dst,
-            "rel_type": rel_type,
-            "weight": weight,
-        })
-        .to_string()),
-        Err(e) => Err(e.to_string()),
-    }
+
+    // ADR-030: text is truth. Append the typed link into `src`'s body instead of
+    // writing cozo's `links` relation directly -- the previous implementation did
+    // exactly that (a direct store.add_typed_link call), producing a graph edge
+    // with no corresponding source text: lost on any KB rebuild/reimport, and
+    // per-peer divergent in collab mode since only the cozo projection changed,
+    // never the CRDT text every peer actually converges on. Routing through
+    // kb_update_node means this now round-trips through the same
+    // parse_typed_links + replace_node_links projection every other write path
+    // uses (fixed for the single-user case in the same change that added this).
+    let current_body = node_json(editor, src)
+        .and_then(|v| v.get("body").and_then(|b| b.as_str()).map(str::to_string))
+        .ok_or_else(|| format!("No KB node: {}", src))?;
+    let link_line = format!("\n[[{dst}?rel={rel_type}&w={weight}][{dst}]]");
+    let new_body = format!("{current_body}{link_line}");
+    editor.kb_update_node(src, None, Some(&new_body), None)?;
+
+    Ok(serde_json::json!({
+        "status": "ok",
+        "src": src,
+        "dst": dst,
+        "rel_type": rel_type,
+        "weight": weight,
+    })
+    .to_string())
 }
 
 pub fn execute_kb_raw_query(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
@@ -1453,6 +1480,185 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.contains("no instance found"), "err was: {err}");
+    }
+
+    #[test]
+    fn kb_add_link_writes_adr030_grammar_into_body_not_direct_cozo() {
+        // Regression for the ADR-030 violation this fix closes: kb_add_link used to
+        // call store.add_typed_link() directly -- a graph edge with no corresponding
+        // source text, lost on any KB rebuild/reimport and per-peer divergent in
+        // collab mode. It must now append the typed-link grammar into the source
+        // node's body and go through kb_update_node (the same path M4.1 fixed).
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node(
+                "note:link-src",
+                "Src",
+                "Original body.",
+                mae_kb::NodeKind::Note,
+            )
+            .unwrap();
+        editor
+            .kb_create_node("note:link-dst", "Dst", "", mae_kb::NodeKind::Note)
+            .unwrap();
+
+        let result = execute_kb_add_link(
+            &mut editor,
+            &serde_json::json!({"src": "note:link-src", "dst": "note:link-dst", "rel_type": "teaches", "weight": 0.7}),
+        )
+        .unwrap();
+        assert!(result.contains("teaches"), "result was: {result}");
+
+        let node = editor.kb.primary.get("note:link-src").unwrap();
+        assert!(
+            node.body.contains("Original body."),
+            "existing body content must be preserved, not overwritten"
+        );
+        assert!(
+            node.body.contains("note:link-dst?rel=teaches&w=0.7"),
+            "typed-link grammar must be written into the body text, body was: {}",
+            node.body
+        );
+
+        // And it must actually be PROJECTED correctly (target resolved, `?query`
+        // stripped) -- the in-memory KnowledgeBase's links_from only tracks target
+        // ids, not rel_type/weight; the typed-link grammar's actual rel_type/weight
+        // projection is what `insert_node_projects_adr030_typed_link_grammar_from_body`
+        // (shared/kb/src/cozo_store.rs) verifies at the store level.
+        let links = editor.kb.primary.links_from("note:link-src");
+        assert_eq!(links, vec!["note:link-dst".to_string()]);
+    }
+
+    #[test]
+    fn kb_add_link_appends_without_clobbering_multiple_links() {
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node("note:multi-src", "Src", "Body.", mae_kb::NodeKind::Note)
+            .unwrap();
+        editor
+            .kb_create_node("note:multi-a", "A", "", mae_kb::NodeKind::Note)
+            .unwrap();
+        editor
+            .kb_create_node("note:multi-b", "B", "", mae_kb::NodeKind::Note)
+            .unwrap();
+
+        execute_kb_add_link(
+            &mut editor,
+            &serde_json::json!({"src": "note:multi-src", "dst": "note:multi-a", "rel_type": "references"}),
+        )
+        .unwrap();
+        execute_kb_add_link(
+            &mut editor,
+            &serde_json::json!({"src": "note:multi-src", "dst": "note:multi-b", "rel_type": "extends"}),
+        )
+        .unwrap();
+
+        let links = editor.kb.primary.links_from("note:multi-src");
+        assert_eq!(links.len(), 2);
+        assert!(links.contains(&"note:multi-a".to_string()));
+        assert!(links.contains(&"note:multi-b".to_string()));
+    }
+
+    #[test]
+    fn kb_add_link_unknown_src_is_error() {
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node("note:dst-only", "Dst", "", mae_kb::NodeKind::Note)
+            .unwrap();
+        let err = execute_kb_add_link(
+            &mut editor,
+            &serde_json::json!({"src": "note:does-not-exist", "dst": "note:dst-only", "rel_type": "teaches"}),
+        )
+        .unwrap_err();
+        assert!(err.contains("No KB node"), "err was: {err}");
+    }
+
+    #[test]
+    fn kb_add_link_missing_args_are_errors() {
+        let mut editor = Editor::new();
+        assert!(execute_kb_add_link(
+            &mut editor,
+            &serde_json::json!({"dst": "x", "rel_type": "y"})
+        )
+        .is_err());
+        assert!(execute_kb_add_link(
+            &mut editor,
+            &serde_json::json!({"src": "x", "rel_type": "y"})
+        )
+        .is_err());
+        assert!(
+            execute_kb_add_link(&mut editor, &serde_json::json!({"src": "x", "dst": "y"})).is_err()
+        );
+    }
+
+    #[test]
+    fn kb_set_role_valid_call() {
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node(
+                "note:role-tool-test",
+                "Test",
+                "body",
+                mae_kb::NodeKind::Note,
+            )
+            .unwrap();
+        let result = execute_kb_set_role(
+            &mut editor,
+            &serde_json::json!({"id": "note:role-tool-test", "role": "hub"}),
+        )
+        .unwrap();
+        assert!(result.contains("hub"), "result was: {result}");
+        assert_eq!(
+            editor
+                .kb
+                .primary
+                .get("note:role-tool-test")
+                .unwrap()
+                .properties
+                .get("role"),
+            Some(&"hub".to_string())
+        );
+    }
+
+    #[test]
+    fn kb_set_role_invalid_role_is_error() {
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node("note:role-tool-bad", "Test", "body", mae_kb::NodeKind::Note)
+            .unwrap();
+        let err = execute_kb_set_role(
+            &mut editor,
+            &serde_json::json!({"id": "note:role-tool-bad", "role": "not-a-real-role"}),
+        )
+        .unwrap_err();
+        assert!(err.contains("Invalid role"), "err was: {err}");
+    }
+
+    #[test]
+    fn kb_set_role_missing_id_arg_is_error() {
+        let mut editor = Editor::new();
+        let err =
+            execute_kb_set_role(&mut editor, &serde_json::json!({"role": "atom"})).unwrap_err();
+        assert!(err.contains("id"), "err was: {err}");
+    }
+
+    #[test]
+    fn kb_set_role_missing_role_arg_is_error() {
+        let mut editor = Editor::new();
+        let err =
+            execute_kb_set_role(&mut editor, &serde_json::json!({"id": "index"})).unwrap_err();
+        assert!(err.contains("role"), "err was: {err}");
+    }
+
+    #[test]
+    fn kb_set_role_unknown_node_is_error() {
+        let mut editor = Editor::new();
+        let err = execute_kb_set_role(
+            &mut editor,
+            &serde_json::json!({"id": "does-not-exist", "role": "atom"}),
+        )
+        .unwrap_err();
+        assert!(err.contains("No KB node"), "err was: {err}");
     }
 
     #[test]

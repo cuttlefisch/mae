@@ -1858,6 +1858,24 @@ saved recovery key OFFLINE — it can later authorize a rebind if the primary is
             },
         );
 
+        // (kb-set-role NODE-ID ROLE) — source | atom | molecule | hub, the molecular-note
+        // classification (Source→Atom→Molecule→Hub). Also NOT a collab/daemon action —
+        // routes through the ex parser like kb-set-ai-residency above.
+        let s = shared.clone();
+        vm.register_fn(
+            "kb-set-role",
+            "Set a KB node's molecular-note role: source | atom | molecule | hub.",
+            Arity::Fixed(2),
+            move |args: &[Value]| {
+                let id = arg_string(args, 0, "kb-set-role")?;
+                let role = arg_string(args, 1, "kb-set-role")?;
+                s.lock()
+                    .pending_ex_commands
+                    .push(format!("kb-set-role {id} {role}"));
+                Ok(Value::Void)
+            },
+        );
+
         // (collab-connect [ADDR]) — connect to a daemon; ADDR optional (defaults
         // to the configured server). Arg-taking → route through the ex parser.
         let s = shared.clone();
@@ -5211,6 +5229,38 @@ mod tests {
         assert_eq!(
             editor.kb.registry.primary_ai_residency,
             mae_kb::federation::AiResidency::Open
+        );
+    }
+
+    #[test]
+    fn kb_set_role_primitive_stamps_property_via_ex_command() {
+        let mut rt = new_runtime();
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node(
+                "note:role-scheme-test",
+                "Test",
+                "body",
+                mae_kb::NodeKind::Note,
+            )
+            .unwrap();
+
+        rt.eval("(kb-set-role \"note:role-scheme-test\" \"hub\")")
+            .unwrap();
+        rt.apply_to_editor(&mut editor);
+        assert_eq!(
+            editor
+                .kb
+                .primary
+                .get("note:role-scheme-test")
+                .unwrap()
+                .properties
+                .get("role"),
+            Some(&"hub".to_string())
+        );
+        assert!(
+            editor.collab.pending_intent.is_none(),
+            "kb-set-role must not go through the collab-intent path"
         );
     }
 
