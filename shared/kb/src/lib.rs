@@ -330,14 +330,21 @@ impl Node {
         node
     }
 
-    /// Extract all `[[link]]` and `[[link|display]]` targets from the body.
-    /// Returns the target ids in document order, deduplicated.
+    /// Extract all `[[link]]`, `[[link|display]]`, and ADR-030 typed-link
+    /// (`[[link?rel=X&w=Y][display]]`) targets from the body. Returns the target ids
+    /// in document order, deduplicated. Uses `parse_typed_links` (not the older
+    /// untyped `parse_links`) so a typed link's `?query` is stripped from the
+    /// target id -- previously this returned the raw, query-string-attached target
+    /// verbatim (e.g. `"concept:buffer?rel=teaches&w=0.8"`), which never matches any
+    /// real node id, so graph traversal (`kb_graph` BFS, the "Tab cycles through
+    /// reachable nodes" terminal-help UX, `neighbors()`) silently failed to
+    /// recognize a typed link as a real edge at all.
     pub fn links(&self) -> Vec<String> {
         let mut out = Vec::new();
         let mut seen = HashSet::new();
-        for (target, _) in parse_links(&self.body) {
-            if seen.insert(target.clone()) {
-                out.push(target);
+        for link in crate::org::parse_typed_links(&self.body, &self.id) {
+            if seen.insert(link.target.clone()) {
+                out.push(link.target);
             }
         }
         out

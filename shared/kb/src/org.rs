@@ -444,9 +444,20 @@ pub fn parse_typed_links(body: &str, source_id: &str) -> Vec<ParsedLink> {
                     i += 1;
                     continue;
                 }
+                // `][` (org/bracket display, e.g. authored ADR-030 typed links) and
+                // `|` (the internal pipe-display convention `parse_links` also
+                // handles — see its doc comment) are BOTH real, live conventions in
+                // MAE content today; recognizing only the former silently mangled
+                // any `[[target|display]]` link into a single bogus target id
+                // (`"target|display"`), which never matches any real node — a real
+                // regression this fixes, not a hypothetical one (caught by MAE's own
+                // seed/help content, which uses `|`-display extensively).
                 let (target_raw, display) = match inner.find("][") {
                     Some(sep) => (&inner[..sep], Some(&inner[sep + 2..])),
-                    None => (inner, None),
+                    None => match inner.find('|') {
+                        Some(bar) => (&inner[..bar], Some(&inner[bar + 1..])),
+                        None => (inner, None),
+                    },
                 };
 
                 // Strip id: prefix if present
@@ -1341,6 +1352,37 @@ After example [[id:def][another link]].";
             out.contains("=[[id:fake][verbatim]]="),
             "verbatim span link should NOT be rewritten: {out}"
         );
+    }
+
+    #[test]
+    fn parse_typed_links_handles_pipe_display_syntax() {
+        // Regression: parse_typed_links only understood `[[target][display]]`
+        // (bracket-separated display), silently treating a `[[target|display]]`
+        // pipe-separated link (MAE's dominant convention -- confirmed by its own
+        // seed/help content, which uses `|` extensively) as ONE bogus target id
+        // ("target|display"), matching no real node. Caught by
+        // no_broken_links_in_seed_relationships (crates/mae/tests/kb_graph_validation.rs)
+        // reporting ~127 broken links the moment Node::links() switched to this
+        // function without this fix.
+        let body = "See [[concept:buffer|the buffer]] for details.";
+        let links = parse_typed_links(body, "test");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "concept:buffer");
+        assert_eq!(links[0].display, "the buffer");
+    }
+
+    #[test]
+    fn parse_typed_links_pipe_display_with_typed_query_still_works() {
+        // Pipe-display and the ADR-030 `?query` grammar are independent axes --
+        // confirm both together still parse correctly (query stripped from the
+        // target, pipe used for display).
+        let body = "See [[concept:buffer?rel=teaches&w=0.8|the buffer]] for details.";
+        let links = parse_typed_links(body, "test");
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].target, "concept:buffer");
+        assert_eq!(links[0].rel_type, "teaches");
+        assert_eq!(links[0].weight, 0.8);
+        assert_eq!(links[0].display, "the buffer");
     }
 
     #[test]

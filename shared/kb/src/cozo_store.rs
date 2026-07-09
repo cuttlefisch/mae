@@ -682,41 +682,22 @@ impl CozoKbStore {
         Ok(next)
     }
 
-    /// Insert or replace node links by parsing the body.
+    /// Insert or replace node links by parsing the body (ADR-030: text is truth, this is
+    /// the derived projection). Uses the same typed parse + `replace_node_links` the
+    /// daemon projector uses (`daemon/src/projector.rs::project_node`) — previously this
+    /// called the older untyped `parse_links`, which doesn't strip a link's `?query`
+    /// string and hardcoded every edge to `rel_type="related_to"`, so an AI-authored
+    /// typed link (`[[id?rel=X&w=Y][display]]`) written via `kb_update` in ordinary
+    /// single-user usage produced a dangling/mistyped graph edge. ADR-031 §5 already
+    /// states enrichment is supposed to work in-process without a daemon — this closes
+    /// that conformance gap rather than adding new design.
     fn update_links_for_node(&self, node: &Node) -> Result<(), KbStoreError> {
-        // Remove old links from this node
-        self.run_mut_params(
-            r#"
-            ?[src, dst, rel_type] := *links{src, dst, rel_type}, src = $id
-            :rm links {src, dst, rel_type}
-            "#,
-            btree_params([("id", dv_str(&node.id))]),
-        )
-        .map_err(cozo_err)?;
-
-        // Parse and insert new links
-        let now = self.now_epoch();
-        for (dst_raw, display) in crate::parse_links(&node.body) {
-            // Strip fragment (e.g., "concept:buffer#rope-internals" → "concept:buffer")
-            let dst = dst_raw.split('#').next().unwrap_or(&dst_raw).to_string();
-            let disp = if dst == display {
-                String::new()
-            } else {
-                display
-            };
-            self.run_mut_params(
-                r#"?[src, dst, rel_type, display, weight, confidence, created_at] <- [[$src, $dst, "related_to", $display, 1.0, 1.0, $now]]
-                :put links {src, dst, rel_type => display, weight, confidence, created_at}"#,
-                btree_params([
-                    ("src", dv_str(&node.id)),
-                    ("dst", dv_str(&dst)),
-                    ("display", dv_str(&disp)),
-                    ("now", DataValue::from(now)),
-                ]),
-            )
-            .map_err(cozo_err)?;
-        }
-        Ok(())
+        let links: Vec<(String, String, f64, f64)> =
+            crate::org::parse_typed_links(&node.body, &node.id)
+                .into_iter()
+                .map(|l| (l.target, l.rel_type, l.weight, l.confidence))
+                .collect();
+        self.replace_node_links(&node.id, &links)
     }
 
     // --- Graph queries (Datalog-native) ---
@@ -3001,6 +2982,51 @@ mod tests {
 
         let ref_links = store.links_typed("impl:1", "references").unwrap();
         assert_eq!(ref_links.len(), 1);
+    }
+
+    #[test]
+    fn insert_node_projects_adr030_typed_link_grammar_from_body() {
+        // Regression for the real bug this fix closes: update_links_for_node (the
+        // single-user insert_node/update_node path, NOT the daemon projector) used to
+        // call the untyped parse_links, which doesn't strip a link's `?query` string and
+        // hardcoded every edge to rel_type="related_to" -- so an ADR-030-grammar typed
+        // link written into a node's body via ordinary single-user kb_update produced a
+        // dangling edge to a literal "target?rel=...&w=..." id, always typed
+        // "related_to", regardless of what was actually authored.
+        let (_tmp, store) = make_store();
+        store
+            .insert_node(&Node::new(
+                "concept:buffer",
+                "Buffer",
+                NodeKind::Concept,
+                "",
+            ))
+            .unwrap();
+        store
+            .insert_node(&Node::new(
+                "note:1",
+                "Note",
+                NodeKind::Note,
+                "See [[concept:buffer?rel=teaches&w=0.8][the buffer]] for details.",
+            ))
+            .unwrap();
+
+        let links = store.links_from("note:1").unwrap();
+        assert_eq!(links.len(), 1);
+        // The query string must be stripped from the target -- not a dangling
+        // "concept:buffer?rel=teaches&w=0.8" id.
+        assert_eq!(links[0].dst, "concept:buffer");
+        assert_eq!(
+            links[0].rel_type, "teaches",
+            "authored rel_type must survive, not be forced to related_to"
+        );
+        assert_eq!(links[0].weight, 0.8);
+
+        // Also queryable via the typed-link API, proving it's the same projection
+        // the daemon's project_node uses.
+        let typed = store.links_typed("note:1", "teaches").unwrap();
+        assert_eq!(typed.len(), 1);
+        assert_eq!(typed[0].dst, "concept:buffer");
     }
 
     #[test]

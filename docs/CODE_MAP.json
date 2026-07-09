@@ -1409,6 +1409,10 @@
       "source": "crates/scheme/src/runtime.rs"
     },
     {
+      "name": "kb-set-role",
+      "source": "crates/scheme/src/runtime.rs"
+    },
+    {
       "name": "collab-connect",
       "source": "crates/scheme/src/runtime.rs"
     },
@@ -3994,6 +3998,10 @@
     {
       "name": "kb-set-ai-residency",
       "doc": "Set a KB's AI-residency policy (ADR-048): open | local_models_only (:kb-set-ai-residency <kb-id|primary> <policy>)"
+    },
+    {
+      "name": "kb-set-role",
+      "doc": "Set a KB node's molecular-note role: source | atom | molecule | hub (:kb-set-role <node-id> <role>)"
     },
     {
       "name": "move-down",

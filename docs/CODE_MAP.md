@@ -516,6 +516,7 @@ Source: `shared/sync/src/lib.rs`
 | `kb-join-p2p` | `crates/scheme/src/runtime.rs` |
 | `kb-pending` | `crates/scheme/src/runtime.rs` |
 | `kb-set-ai-residency` | `crates/scheme/src/runtime.rs` |
+| `kb-set-role` | `crates/scheme/src/runtime.rs` |
 | `collab-connect` | `crates/scheme/src/runtime.rs` |
 | `collab-recover-identity` | `crates/scheme/src/runtime.rs` |
 | `kb-remove-link!` | `crates/scheme/src/runtime.rs` |
@@ -620,7 +621,7 @@ Source: `shared/sync/src/lib.rs`
 | `undo-available?` | `crates/scheme/src/runtime.rs` |
 | `redo-available?` | `crates/scheme/src/runtime.rs` |
 
-## Commands (548 built-in)
+## Commands (549 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -1167,6 +1168,7 @@ Source: `shared/sync/src/lib.rs`
 | `kb-sharing` | Open the *KB Sharing* management buffer (members, roles, policy, pending) |
 | `kb-sharing-status` | Show this peer's KB-sharing status in the *KB Sharing* buffer (:kb-sharing-status) |
 | `kb-set-ai-residency` | Set a KB's AI-residency policy (ADR-048): open | local_models_only (:kb-set-ai-residency <kb-id|primary> <policy>) |
+| `kb-set-role` | Set a KB node's molecular-note role: source | atom | molecule | hub (:kb-set-role <node-id> <role>) |
 | `move-down` | Move cursor down |
 | `move-down` | Move down |
 | `zzz` | Last |
