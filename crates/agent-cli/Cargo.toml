@@ -1,0 +1,27 @@
+[package]
+name = "mae-agent-cli"
+description = "Terminal chat harness for driving MAE's tools via any AI provider (ADR-046)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "mae-agent"
+path = "src/main.rs"
+
+[dependencies]
+mae-ai = { path = "../ai" }
+mae-mcp = { path = "../../shared/mcp" }
+ratatui = "0.30"
+crossterm = { version = "0.29", features = ["event-stream"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync", "net", "io-util", "time"] }
+futures = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+anyhow = "1"
+async-trait = "0.1"
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
