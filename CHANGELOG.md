@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.14.37] - 2026-07-08
 
 ### Bug Fixes
 
@@ -11,10 +11,22 @@ All notable changes to this project will be documented in this file.
 - *(kb)* Node created via SPC n f invisible to other processes/instance search ([02f9126](https://github.com/cuttlefisch/mae/commit/02f912675251bf7514d6082304a2287b4a7d95a0))
 - *(kb)* Kb_id_audit missed a ghost id once its file was itself renamed away ([b00c03f](https://github.com/cuttlefisch/mae/commit/b00c03f80bcb425301011ac2d836e1ea6ef8a1a0))
 - *(deps)* Pin dalek-cryptography family at v2 pending iroh's v3/v5 support ([48905eb](https://github.com/cuttlefisch/mae/commit/48905eb98f2f3d8f83f4ebb8c95fc89de99547c1))
+- *(kb)* Render multi-line and native-grammar links in the KB view (#301, #302) ([2ac544e](https://github.com/cuttlefisch/mae/commit/2ac544e16f77e2dc8132149538c9c4142deb2ea5))
+- *(kb)* Interim promote-to-native command for federated nodes (#303) ([90eddd0](https://github.com/cuttlefisch/mae/commit/90eddd0a9ba6515c41c866139cab744f71ef00d5))
+- *(editor)* Route KB-graph links through a shared, configurable resolver (#293) ([43a4b22](https://github.com/cuttlefisch/mae/commit/43a4b22839ceb0d415a8b7d48761f88398b268bf))
+- *(editor)* Consolidate org_open_link onto the KB resolver and fix its dead link lookup (#293, #304, #306) ([155bbbd](https://github.com/cuttlefisch/mae/commit/155bbbd55c48d39fd72d52969de2a94c29ce4b62))
+- *(ai)* Remaining MCP wrappers return their own outcome instead of stale status (#304) ([390b13e](https://github.com/cuttlefisch/mae/commit/390b13e1b04070dc90e95b7c8d57e0a6ab153f42))
+- *(editor)* Stop terminal-title spam and dedupe repeated status messages (#305) ([7eb5ac3](https://github.com/cuttlefisch/mae/commit/7eb5ac3d5bc44c652dc048b8c1f237805d92379d))
+- *(babel)* Gate NeedsConfirmation execution behind a real confirm dialog (#269) ([36bffbe](https://github.com/cuttlefisch/mae/commit/36bffbe3fb0619cb2d368af4ecdf9654ff229d46))
+
+### Documentation
+
+- *(claude)* Add drift-signal review principle ([3e2c973](https://github.com/cuttlefisch/mae/commit/3e2c97336ccf683eda154743771a7dfa70df8cd6))
 
 ### Miscellaneous
 
 - *(deps)* Bump the rust-dependencies group with 27 updates ([a0dc157](https://github.com/cuttlefisch/mae/commit/a0dc157308011b8d70ad2dc554e6d0fc765d280d))
+- Bump version to 0.14.37 ([f04de27](https://github.com/cuttlefisch/mae/commit/f04de27d200e193b7fd11bbc7ae90e57e5b39ed4))
 
 ## [0.14.36] - 2026-07-08
 
