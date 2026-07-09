@@ -13,6 +13,22 @@ use crate::org::parse_org_multi_result;
 use crate::store::KbStoreError;
 use crate::{KnowledgeBase, Node};
 
+/// AI-provider residency policy for a KB (ADR-048). A **provider-trust** axis — deliberately
+/// not named `LocalOnly` to avoid colliding with [`KbScope::LocalOnly`] below, which is an
+/// unrelated **network-locality** axis ("only the primary/local instance participates in this
+/// query"). `LocalModelsOnly` here means "no hosted/cloud AI provider may read or write this
+/// KB's content, only a locally-classified model (e.g. Ollama) may" — enforced at tool
+/// dispatch, not a network property.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum AiResidency {
+    /// No provider restriction (status quo, default — non-breaking for existing KBs).
+    #[default]
+    Open,
+    /// Only a locally-classified AI provider (e.g. Ollama) may read/write this KB's content.
+    LocalModelsOnly,
+}
+
 /// A registered KB instance.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KbInstance {
@@ -36,6 +52,11 @@ pub struct KbInstance {
     /// Last sync timestamp (ISO 8601).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_sync: Option<String>,
+    /// AI-provider residency policy (ADR-048). `#[serde(default)]` for backward compat with
+    /// registry files written before this field existed — they load as `Open`, preserving
+    /// today's behavior for every already-registered KB.
+    #[serde(default)]
+    pub ai_residency: AiResidency,
 }
 
 impl KbInstance {
@@ -101,6 +122,11 @@ pub struct KbRegistry {
     /// Collaborative id the primary KB is shared under (when `primary_shared`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub primary_collab_id: Option<String>,
+    /// AI-provider residency policy for the **primary** KB (ADR-048). The primary KB has no
+    /// `KbInstance` row, so — mirroring `primary_shared`/`primary_collab_id` above — its
+    /// residency policy lives here instead.
+    #[serde(default)]
+    pub primary_ai_residency: AiResidency,
 }
 
 impl KbRegistry {
@@ -225,6 +251,7 @@ impl KbRegistry {
             shared: false,
             remote_peers: Vec::new(),
             last_sync: None,
+            ai_residency: AiResidency::default(),
         };
         self.instances.push(instance);
         uuid
@@ -234,6 +261,24 @@ impl KbRegistry {
     pub fn unregister(&mut self, name_or_uuid: &str) {
         self.instances
             .retain(|i| i.name != name_or_uuid && i.uuid != name_or_uuid);
+    }
+
+    /// Set the AI-residency policy (ADR-048) for `"primary"` (the primary/local KB, which
+    /// has no `KbInstance` row) or a registered instance by name/UUID. Returns `false` if
+    /// `name_or_uuid` isn't `"primary"` and doesn't match any registered instance — the
+    /// caller should treat that as "no such KB", not silently succeed.
+    pub fn set_ai_residency(&mut self, name_or_uuid: &str, policy: AiResidency) -> bool {
+        if name_or_uuid.eq_ignore_ascii_case("primary") {
+            self.primary_ai_residency = policy;
+            return true;
+        }
+        match self.find_mut(name_or_uuid) {
+            Some(inst) => {
+                inst.ai_residency = policy;
+                true
+            }
+            None => false,
+        }
     }
 
     /// Find an instance by name or UUID.
@@ -793,6 +838,7 @@ mod tests {
             shared: false,
             remote_peers: Vec::new(),
             last_sync: None,
+            ai_residency: AiResidency::default(),
         };
         assert!(!inst.is_remote(), "plain local import is not remote");
         inst.shared = true;

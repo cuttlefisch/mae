@@ -123,6 +123,29 @@ impl Editor {
             "kb-narrow" => {
                 self.kb_narrow_meta();
             }
+            "kb-set-ai-residency" => {
+                // :kb-set-ai-residency <kb-id|primary> <open|local_models_only>
+                let line = self.vi.command_line.trim().to_string();
+                let mut parts = line.split_whitespace();
+                let kb_id = parts.next().unwrap_or("").to_string();
+                let policy = parts.next().and_then(|p| match p {
+                    "open" => Some(mae_kb::federation::AiResidency::Open),
+                    "local_models_only" | "local-models-only" => {
+                        Some(mae_kb::federation::AiResidency::LocalModelsOnly)
+                    }
+                    _ => None,
+                });
+                match (kb_id.is_empty(), policy) {
+                    (false, Some(policy)) => match self.kb_set_ai_residency(&kb_id, policy) {
+                        Ok(msg) => self.set_status(msg),
+                        Err(e) => self.set_status(e),
+                    },
+                    _ => self.set_status(
+                        "usage: :kb-set-ai-residency <kb-id|primary> <open|local_models_only>"
+                            .to_string(),
+                    ),
+                }
+            }
             "kb-widen" => {
                 self.kb_widen_meta();
             }

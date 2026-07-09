@@ -827,6 +827,31 @@ pub fn execute_kb_unregister(
     Ok(editor.status_msg.clone())
 }
 
+pub fn execute_kb_set_ai_residency(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let kb = args
+        .get("kb")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: kb")?;
+    let policy_str = args
+        .get("policy")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: policy")?;
+    let policy = match policy_str {
+        "open" => mae_kb::federation::AiResidency::Open,
+        "local_models_only" => mae_kb::federation::AiResidency::LocalModelsOnly,
+        other => {
+            return Err(format!(
+                "Invalid policy '{}': expected 'open' or 'local_models_only'",
+                other
+            ))
+        }
+    };
+    editor.kb_set_ai_residency(kb, policy)
+}
+
 pub fn execute_kb_reimport(
     editor: &mut Editor,
     args: &serde_json::Value,
@@ -1370,6 +1395,64 @@ mod tests {
         let editor = Editor::new();
         let err = execute_kb_get(&editor, &serde_json::json!({})).unwrap_err();
         assert!(err.contains("id"));
+    }
+
+    #[test]
+    fn kb_set_ai_residency_valid_call() {
+        let mut editor = Editor::new();
+        let result = execute_kb_set_ai_residency(
+            &mut editor,
+            &serde_json::json!({"kb": "primary", "policy": "local_models_only"}),
+        )
+        .unwrap();
+        assert!(result.contains("local_models_only"), "result was: {result}");
+        assert_eq!(
+            editor.kb.registry.primary_ai_residency,
+            mae_kb::federation::AiResidency::LocalModelsOnly
+        );
+    }
+
+    #[test]
+    fn kb_set_ai_residency_invalid_policy_is_error() {
+        let mut editor = Editor::new();
+        let err = execute_kb_set_ai_residency(
+            &mut editor,
+            &serde_json::json!({"kb": "primary", "policy": "not-a-real-policy"}),
+        )
+        .unwrap_err();
+        assert!(err.contains("Invalid policy"), "err was: {err}");
+        // Rejected before touching the registry — must not have mutated anything.
+        assert_eq!(
+            editor.kb.registry.primary_ai_residency,
+            mae_kb::federation::AiResidency::Open
+        );
+    }
+
+    #[test]
+    fn kb_set_ai_residency_missing_kb_arg_is_error() {
+        let mut editor = Editor::new();
+        let err = execute_kb_set_ai_residency(&mut editor, &serde_json::json!({"policy": "open"}))
+            .unwrap_err();
+        assert!(err.contains("kb"), "err was: {err}");
+    }
+
+    #[test]
+    fn kb_set_ai_residency_missing_policy_arg_is_error() {
+        let mut editor = Editor::new();
+        let err = execute_kb_set_ai_residency(&mut editor, &serde_json::json!({"kb": "primary"}))
+            .unwrap_err();
+        assert!(err.contains("policy"), "err was: {err}");
+    }
+
+    #[test]
+    fn kb_set_ai_residency_unknown_instance_is_error() {
+        let mut editor = Editor::new();
+        let err = execute_kb_set_ai_residency(
+            &mut editor,
+            &serde_json::json!({"kb": "does-not-exist", "policy": "open"}),
+        )
+        .unwrap_err();
+        assert!(err.contains("no instance found"), "err was: {err}");
     }
 
     #[test]

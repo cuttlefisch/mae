@@ -919,6 +919,33 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::Write),
         },
+        ToolDefinition {
+            name: "kb_set_ai_residency".into(),
+            description: "Set a KB's AI-residency policy (ADR-048): 'open' (any AI provider may read/write this KB, default) or 'local_models_only' (only a locally-classified provider such as Ollama may — enforced at tool dispatch; a hosted/cloud provider like Claude/OpenAI/Gemini/DeepSeek is denied). A plain, freely-toggleable local setting — not the anti-downgrade signed policy used for shared-KB peer trust.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "kb".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "KB instance name/UUID, or \"primary\" for the primary/local KB".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "policy".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "AI-residency policy".into(),
+                            enum_values: Some(vec!["open".into(), "local_models_only".into()]),
+                        },
+                    ),
+                ]),
+                required: vec!["kb".into(), "policy".into()],
+            },
+            permission: Some(PermissionTier::Write),
+        },
         // --- Graph KB tools (v0.12.0) ---
         ToolDefinition {
             name: "kb_agenda".into(),

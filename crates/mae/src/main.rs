@@ -1518,6 +1518,7 @@ fn main() -> io::Result<()> {
                         shared: true,
                         remote_peers: Vec::new(),
                         last_sync,
+                        ai_residency: mae_kb::federation::AiResidency::default(),
                     });
                     info!(kb = %collab_id, nodes = count, "recovered shared KB instance from disk (registry rescan)");
                 }
