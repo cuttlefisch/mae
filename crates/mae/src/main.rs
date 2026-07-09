@@ -1,5 +1,6 @@
 mod agents;
 mod ai_event_handler;
+mod ai_residency;
 mod bootstrap;
 mod collab_bridge;
 mod config;

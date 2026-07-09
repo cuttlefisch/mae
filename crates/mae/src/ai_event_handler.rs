@@ -147,7 +147,26 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             }
 
             let tool_start = std::time::Instant::now();
-            let exec_result = execute_tool(editor, &call, ctx.all_tools, ctx.permission_policy);
+            // ADR-048: the embedded/delegate path's provider is authoritative —
+            // MAE constructed it itself — so the check keys on it directly.
+            let exec_result = match crate::ai_residency::check_kb_residency(
+                editor,
+                &call.name,
+                &call.arguments,
+                Some(editor.ai.provider.as_str()),
+            ) {
+                crate::ai_residency::ResidencyDecision::Deny(reason) => {
+                    ExecuteResult::Immediate(ToolResult {
+                        tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
+                        success: false,
+                        output: reason,
+                    })
+                }
+                crate::ai_residency::ResidencyDecision::Allow => {
+                    execute_tool(editor, &call, ctx.all_tools, ctx.permission_policy)
+                }
+            };
             // Drain any pending Scheme evals queued by the tool (e.g. eval_scheme).
             let scheme_output = drain_pending_scheme_evals(editor, ctx.scheme);
             match exec_result {
@@ -509,11 +528,8 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             let (proxy_tx, mut proxy_rx) = tokio::sync::mpsc::channel::<AiEvent>(32);
             let main_event_tx = ctx.ai_event_tx.clone();
 
-            let provider: Box<dyn mae_ai::AgentProvider> = match config.provider_type.as_str() {
-                "openai" => Box::new(mae_ai::OpenAiProvider::new(config.clone())),
-                "gemini" => Box::new(mae_ai::GeminiProvider::new(config.clone())),
-                _ => Box::new(mae_ai::ClaudeProvider::new(config.clone())),
-            };
+            let provider =
+                crate::bootstrap::construct_provider(&config.provider_type, config.clone());
 
             // Scope verifier tools: read-only + shell, no write/create/modify.
             let all_tools = {
@@ -764,7 +780,33 @@ pub fn handle_mcp_request(
         name: mcp_req.tool_name.clone(),
         arguments: mcp_req.arguments,
     };
-    let exec_result = execute_tool(editor, &fake_call, all_tools, permission_policy);
+    // ADR-048: an external MCP client's declared provider is only ever present
+    // on `requester` when the session actually completed the PSK handshake
+    // (`shared/mcp`'s invariant) — this is a second, defense-in-depth check of
+    // that same invariant, not the only enforcement of it.
+    let requester_provider = if mcp_req.requester.psk_authenticated {
+        mcp_req.requester.declared_provider.as_deref()
+    } else {
+        None
+    };
+    let exec_result = match crate::ai_residency::check_kb_residency(
+        editor,
+        &fake_call.name,
+        &fake_call.arguments,
+        requester_provider,
+    ) {
+        crate::ai_residency::ResidencyDecision::Deny(reason) => {
+            ExecuteResult::Immediate(ToolResult {
+                tool_call_id: fake_call.id.clone(),
+                tool_name: fake_call.name.clone(),
+                success: false,
+                output: reason,
+            })
+        }
+        crate::ai_residency::ResidencyDecision::Allow => {
+            execute_tool(editor, &fake_call, all_tools, permission_policy)
+        }
+    };
     // Drain any pending Scheme evals queued by the tool (e.g. eval_scheme).
     let scheme_output = drain_pending_scheme_evals(editor, scheme);
     match exec_result {
