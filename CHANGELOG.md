@@ -2,6 +2,32 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.38] - 2026-07-08
+
+### Bug Fixes
+
+- *(ai)* Delegate() Ollama dispatch bug + enforce AI-residency gate ([8a022c6](https://github.com/cuttlefisch/mae/commit/8a022c673afb4906da58e16b60450e101a2bde21))
+- *(kb)* ADR-030 typed-link projection for single-user writes + pipe-display ([b57360b](https://github.com/cuttlefisch/mae/commit/b57360b31d1e85396caeb45c8732b3b8992e1273))
+
+### Documentation
+
+- Fix stale P2P-mesh status and MODEL_SUPPORT.md test count ([c460c53](https://github.com/cuttlefisch/mae/commit/c460c531c92654fa71a062f939c05cc690fa4b93))
+- *(adr)* Add ADR-045/046/047 for the Ollama-parity AI epic ([7424ffe](https://github.com/cuttlefisch/mae/commit/7424ffe40ec0a0e2a0ce384523ca3d3f656ff878))
+- *(adr)* Add ADR-048 for AI-residency policy on sensitive KBs ([f058e72](https://github.com/cuttlefisch/mae/commit/f058e72888fe6977fe8eb6ac863c1fe5cb5f8365))
+
+### Features
+
+- *(ai)* Wire ModelVerification to real self_test_suite exam data ([a0eb722](https://github.com/cuttlefisch/mae/commit/a0eb7229bac7b2857806a92ff44afd4aaaffdd36))
+- *(kb)* Add AiResidency policy for sensitive KBs (ADR-048) ([44e4068](https://github.com/cuttlefisch/mae/commit/44e40684db9765ea966a340c1cc41069df0d83d2))
+- *(mcp)* PSK handshake + requester identity threading (ADR-048) ([033d996](https://github.com/cuttlefisch/mae/commit/033d9960c59439937714a0fbdfc97f5845c0c7a9))
+- *(agent-cli)* New mae-agent CLI/TUI harness (ADR-046) ([4b54d27](https://github.com/cuttlefisch/mae/commit/4b54d270d20bbd4d0058a381f7ff2e6f5912a48b))
+- *(kb)* Molecular-note :role: classification + fix kb_add_link's ADR-030 violation ([c5865bc](https://github.com/cuttlefisch/mae/commit/c5865bc05c74215c657d70805bf284b4b80a3a05))
+
+### Miscellaneous
+
+- *(deps)* Bump anyhow to 1.0.103, fixes RUSTSEC-2026-0190 ([5777724](https://github.com/cuttlefisch/mae/commit/57777246c2dfda05d2903870e01b1eb4c540c755))
+- Bump version to 0.14.38 ([8a4c0e1](https://github.com/cuttlefisch/mae/commit/8a4c0e1e057ad5d7fca3151edc52808609db0a6f))
+
 ## [0.14.37] - 2026-07-08
 
 ### Bug Fixes
