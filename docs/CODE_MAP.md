@@ -17,6 +17,8 @@ graph TD
     mae --> mae_scheme
     mae --> mae_shell
     mae --> mae_sync
+    mae_agent_cli --> mae_ai
+    mae_agent_cli --> mae_mcp
     mae_ai --> mae_core
     mae_ai --> mae_kb
     mae_ai --> mae_shell
@@ -63,6 +65,10 @@ Source: `crates/mae/src/main.rs`
 | Item | Kind |
 |------|------|
 | `pkg` | mod |
+
+## mae-agent-cli
+
+Source: `crates/agent-cli/src/main.rs`
 
 ## mae-ai
 
@@ -333,6 +339,7 @@ Source: `shared/mcp/src/lib.rs`
 | `protocol` | mod |
 | `session` | mod |
 | `tls` | mod |
+| `RequesterContext` | struct |
 | `McpToolRequest` | struct |
 | `McpToolResult` | struct |
 | `McpServer` | struct |
@@ -508,6 +515,7 @@ Source: `shared/sync/src/lib.rs`
 | `kb-set-encryption` | `crates/scheme/src/runtime.rs` |
 | `kb-join-p2p` | `crates/scheme/src/runtime.rs` |
 | `kb-pending` | `crates/scheme/src/runtime.rs` |
+| `kb-set-ai-residency` | `crates/scheme/src/runtime.rs` |
 | `collab-connect` | `crates/scheme/src/runtime.rs` |
 | `collab-recover-identity` | `crates/scheme/src/runtime.rs` |
 | `kb-remove-link!` | `crates/scheme/src/runtime.rs` |
@@ -612,7 +620,7 @@ Source: `shared/sync/src/lib.rs`
 | `undo-available?` | `crates/scheme/src/runtime.rs` |
 | `redo-available?` | `crates/scheme/src/runtime.rs` |
 
-## Commands (547 built-in)
+## Commands (548 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -1158,6 +1166,7 @@ Source: `shared/sync/src/lib.rs`
 | `kb-list-remote` | List KBs shared on the connected daemon (:kb-list-remote) |
 | `kb-sharing` | Open the *KB Sharing* management buffer (members, roles, policy, pending) |
 | `kb-sharing-status` | Show this peer's KB-sharing status in the *KB Sharing* buffer (:kb-sharing-status) |
+| `kb-set-ai-residency` | Set a KB's AI-residency policy (ADR-048): open | local_models_only (:kb-set-ai-residency <kb-id|primary> <policy>) |
 | `move-down` | Move cursor down |
 | `move-down` | Move down |
 | `zzz` | Last |
