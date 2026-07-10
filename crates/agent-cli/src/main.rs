@@ -43,7 +43,7 @@ struct Args {
     #[arg(long, default_value = "ollama")]
     provider: String,
     /// Model name.
-    #[arg(long, default_value = "qwen3:8b")]
+    #[arg(long, default_value = "qwen3:latest")]
     model: String,
     /// API key (falls back to the provider's usual env var if omitted).
     #[arg(long)]
