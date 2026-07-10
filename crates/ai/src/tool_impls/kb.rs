@@ -2285,4 +2285,259 @@ mod tests {
         assert!(v["kb"]["watcher_count"].is_number());
         assert!(v["kb"]["watcher_stats"].is_object());
     }
+
+    // --- execute_kb_agenda: filter/value string→enum dispatch tests ---
+    //
+    // The storage-layer `AgendaFilter` semantics (MissingRole/WeaklyLinked/etc)
+    // are covered end-to-end in `shared/kb/src/cozo_store.rs`
+    // (`agenda_missing_role_filter`, `agenda_weakly_linked_filter`). Those
+    // tests never exercise `execute_kb_agenda` itself, so the
+    // filter-string/value-string parsing done here had zero direct coverage.
+    // `editor.kb.store` is `None` by default (`KbContext::new`), so tests that
+    // need `filter`/`value` to actually reach `agenda_query` must wire in a
+    // real `CozoKbStore::open_mem()`; the two error-path tests below return
+    // before `editor.kb.store` is ever consulted, so they use a bare
+    // `Editor::new()` like the rest of this file's error-path tests.
+
+    #[test]
+    fn kb_agenda_missing_filter_arg_is_error() {
+        let editor = Editor::new();
+        let err = execute_kb_agenda(&editor, &serde_json::json!({})).unwrap_err();
+        assert_eq!(err, "Missing required argument: filter");
+    }
+
+    #[test]
+    fn kb_agenda_unknown_filter_type_is_error() {
+        let editor = Editor::new();
+        let err = execute_kb_agenda(&editor, &serde_json::json!({"filter": "not_a_real_filter"}))
+            .unwrap_err();
+        assert_eq!(err, "Unknown filter type: not_a_real_filter");
+    }
+
+    #[test]
+    fn kb_agenda_missing_role_dispatches_to_missing_role_filter() {
+        use mae_kb::KbStore;
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+
+        let mut has_role = mae_core::KbNode::new(
+            "note:agenda-has-role",
+            "Has Role",
+            mae_core::KbNodeKind::Note,
+            "",
+        );
+        has_role
+            .properties
+            .insert("role".to_string(), "atom".to_string());
+        store.insert_node(&has_role).unwrap();
+        store
+            .insert_node(&mae_core::KbNode::new(
+                "note:agenda-no-role",
+                "No Role",
+                mae_core::KbNodeKind::Note,
+                "",
+            ))
+            .unwrap();
+
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+
+        let result =
+            execute_kb_agenda(&editor, &serde_json::json!({"filter": "missing_role"})).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["filter"], "missing_role");
+        let ids: Vec<&str> = v["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap())
+            .collect();
+        assert!(
+            ids.contains(&"note:agenda-no-role"),
+            "node without a role should be picked up by \"missing_role\": {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"note:agenda-has-role"),
+            "node with a role must be excluded: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn kb_agenda_weakly_linked_dispatches_with_parsed_value() {
+        // Proves "value" is actually parsed into `WeaklyLinked(n)` and not
+        // silently ignored: a node with 3 outgoing links is NOT weakly-linked
+        // at threshold 2 (3 < 2 is false) but IS weakly-linked at threshold 5
+        // (3 < 5 is true) -- so which result set we get depends on "value"
+        // actually reaching the store query as 5.
+        use mae_kb::KbStore;
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store
+            .insert_node(&mae_core::KbNode::new(
+                "note:agenda-wl-src",
+                "Src",
+                mae_core::KbNodeKind::Note,
+                "",
+            ))
+            .unwrap();
+        for t in [
+            "note:agenda-wl-t1",
+            "note:agenda-wl-t2",
+            "note:agenda-wl-t3",
+        ] {
+            store
+                .insert_node(&mae_core::KbNode::new(t, t, mae_core::KbNodeKind::Note, ""))
+                .unwrap();
+            store
+                .add_typed_link("note:agenda-wl-src", t, "references", 1.0)
+                .unwrap();
+        }
+
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+
+        let at_2 = execute_kb_agenda(
+            &editor,
+            &serde_json::json!({"filter": "weakly_linked", "value": "2"}),
+        )
+        .unwrap();
+        let v2: serde_json::Value = serde_json::from_str(&at_2).unwrap();
+        let ids2: Vec<&str> = v2["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap())
+            .collect();
+        assert!(
+            !ids2.contains(&"note:agenda-wl-src"),
+            "3 outgoing links should not be weakly-linked at threshold 2: {ids2:?}"
+        );
+
+        let at_5 = execute_kb_agenda(
+            &editor,
+            &serde_json::json!({"filter": "weakly_linked", "value": "5"}),
+        )
+        .unwrap();
+        let v5: serde_json::Value = serde_json::from_str(&at_5).unwrap();
+        let ids5: Vec<&str> = v5["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap())
+            .collect();
+        assert!(
+            ids5.contains(&"note:agenda-wl-src"),
+            "3 outgoing links should be weakly-linked at threshold 5 -- proves \
+             \"value\": \"5\" was actually parsed and dispatched: {ids5:?}"
+        );
+    }
+
+    #[test]
+    fn kb_agenda_weakly_linked_malformed_value_silently_falls_back_to_2() {
+        // Documents existing (deliberately silent, not an error) behavior: an
+        // unparseable "value" for "weakly_linked" falls back to the literal
+        // `.unwrap_or(2)` in execute_kb_agenda's dispatch match arm, rather
+        // than surfacing an error to the caller. A node with exactly 2
+        // outgoing links (2 < 2 is false) is excluded at threshold 2 but
+        // would be included at any larger fallback (e.g. 3), so equality
+        // between the malformed-value result and the explicit "2" result
+        // pins down the fallback constant.
+        use mae_kb::KbStore;
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store
+            .insert_node(&mae_core::KbNode::new(
+                "note:agenda-fb-src",
+                "Src",
+                mae_core::KbNodeKind::Note,
+                "",
+            ))
+            .unwrap();
+        for t in ["note:agenda-fb-t1", "note:agenda-fb-t2"] {
+            store
+                .insert_node(&mae_core::KbNode::new(t, t, mae_core::KbNodeKind::Note, ""))
+                .unwrap();
+            store
+                .add_typed_link("note:agenda-fb-src", t, "references", 1.0)
+                .unwrap();
+        }
+
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+
+        let malformed = execute_kb_agenda(
+            &editor,
+            &serde_json::json!({"filter": "weakly_linked", "value": "not-a-number"}),
+        )
+        .unwrap();
+        let explicit_2 = execute_kb_agenda(
+            &editor,
+            &serde_json::json!({"filter": "weakly_linked", "value": "2"}),
+        )
+        .unwrap();
+        assert_eq!(
+            malformed, explicit_2,
+            "a malformed value should silently fall back to the same threshold \
+             as an explicit \"2\""
+        );
+
+        let v: serde_json::Value = serde_json::from_str(&malformed).unwrap();
+        let ids: Vec<&str> = v["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap())
+            .collect();
+        assert!(
+            !ids.contains(&"note:agenda-fb-src"),
+            "2 outgoing links should not be weakly-linked at fallback threshold 2: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn kb_agenda_stale_malformed_value_does_not_error() {
+        // Same fallback-on-malformed-input shape as "weakly_linked" above:
+        // `.unwrap_or(30)` in execute_kb_agenda's "stale" arm. Real staleness
+        // is timestamp-driven (`updated_at` is set to "now" on every insert
+        // with no public API to backdate it), so this can't distinguish 30
+        // from another fallback constant via node data the way
+        // "weakly_linked" can -- it documents the "no error, same shape as an
+        // explicit numeric value" half of the behavior.
+        use mae_kb::KbStore;
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store
+            .insert_node(&mae_core::KbNode::new(
+                "note:agenda-stale-fresh",
+                "Fresh",
+                mae_core::KbNodeKind::Note,
+                "",
+            ))
+            .unwrap();
+
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+
+        let malformed = execute_kb_agenda(
+            &editor,
+            &serde_json::json!({"filter": "stale", "value": "not-a-number"}),
+        )
+        .unwrap();
+        let explicit_30 = execute_kb_agenda(
+            &editor,
+            &serde_json::json!({"filter": "stale", "value": "30"}),
+        )
+        .unwrap();
+        assert_eq!(
+            malformed, explicit_30,
+            "a malformed value should silently fall back to the same threshold \
+             as an explicit \"30\""
+        );
+        let v: serde_json::Value = serde_json::from_str(&malformed).unwrap();
+        assert_eq!(v["filter"], "stale");
+        assert!(
+            !v["nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n["id"] == "note:agenda-stale-fresh"),
+            "a freshly-inserted node should never be stale"
+        );
+    }
 }
