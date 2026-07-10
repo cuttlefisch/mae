@@ -530,3 +530,220 @@ fn handle_slash_command(app: &mut AppState, cmd: SlashCommand) {
         SlashCommand::Unknown(name) => app.push_system_note(format!("Unknown command: /{name}")),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyEventKind, KeyEventState};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    fn char_key(c: char, mods: KeyModifiers) -> KeyEvent {
+        KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers: mods,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    fn state() -> AppState {
+        AppState::new(
+            "qwen3:latest".into(),
+            "ollama".into(),
+            PermissionMode::default(),
+        )
+    }
+
+    // ---- construct_provider / api_key_env_var / is_local_provider ----
+
+    fn config_for(provider_type: &str) -> ProviderConfig {
+        ProviderConfig {
+            provider_type: provider_type.to_string(),
+            api_key: None,
+            model: "test-model".to_string(),
+            base_url: None,
+            max_tokens: 8192,
+            temperature: None,
+            thinking: None,
+            timeout_secs: 300,
+            budget: Default::default(),
+        }
+    }
+
+    #[test]
+    fn construct_provider_dispatches_by_type_name() {
+        for (provider_type, expected_name) in [
+            ("claude", "claude"),
+            ("openai", "openai"),
+            ("gemini", "gemini"),
+            ("ollama", "ollama"),
+            ("something-unknown", "claude"), // unmatched falls back to Claude
+        ] {
+            let provider = construct_provider(provider_type, config_for(provider_type));
+            assert_eq!(provider.name(), expected_name, "for input {provider_type}");
+        }
+    }
+
+    #[test]
+    fn api_key_env_var_matches_provider_conventions() {
+        assert_eq!(api_key_env_var("claude"), Some("ANTHROPIC_API_KEY"));
+        assert_eq!(api_key_env_var("openai"), Some("OPENAI_API_KEY"));
+        assert_eq!(api_key_env_var("gemini"), Some("GEMINI_API_KEY"));
+        assert_eq!(api_key_env_var("ollama"), None);
+        assert_eq!(api_key_env_var("unknown"), None);
+    }
+
+    #[test]
+    fn is_local_provider_recognizes_ollama_case_insensitively() {
+        assert!(is_local_provider("ollama"));
+        assert!(is_local_provider("Ollama"));
+        assert!(is_local_provider("OLLAMA"));
+        assert!(!is_local_provider("claude"));
+        assert!(!is_local_provider(""));
+    }
+
+    // ---- handle_key ----
+
+    #[test]
+    fn handle_key_types_and_backspaces() {
+        let mut app = state();
+        let mut pending_reply = None;
+        handle_key(
+            &mut app,
+            char_key('h', KeyModifiers::NONE),
+            &mut pending_reply,
+        );
+        handle_key(
+            &mut app,
+            char_key('i', KeyModifiers::NONE),
+            &mut pending_reply,
+        );
+        assert_eq!(app.input, "hi");
+        assert_eq!(app.cursor, 2);
+
+        handle_key(&mut app, key(KeyCode::Backspace), &mut pending_reply);
+        assert_eq!(app.input, "h");
+        assert_eq!(app.cursor, 1);
+    }
+
+    #[test]
+    fn handle_key_enter_submits_and_clears_input() {
+        let mut app = state();
+        let mut pending_reply = None;
+        app.input = "hello".to_string();
+        app.cursor = 5;
+        handle_key(&mut app, key(KeyCode::Enter), &mut pending_reply);
+        assert_eq!(app.pending_submit, Some("hello".to_string()));
+        assert!(app.input.is_empty());
+    }
+
+    #[test]
+    fn handle_key_ctrl_c_sets_should_quit() {
+        let mut app = state();
+        let mut pending_reply = None;
+        handle_key(
+            &mut app,
+            char_key('c', KeyModifiers::CONTROL),
+            &mut pending_reply,
+        );
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn handle_key_tab_toggles_last_tool_call_expansion() {
+        let mut app = state();
+        app.push_tool_call_started("kb_search".into(), serde_json::json!({}));
+        let mut pending_reply = None;
+        handle_key(&mut app, key(KeyCode::Tab), &mut pending_reply);
+        assert!(matches!(
+            app.transcript.last(),
+            Some(tui::TranscriptEntry::ToolCall { expanded: true, .. })
+        ));
+    }
+
+    #[test]
+    fn handle_key_ignores_unrecognized_confirm_key_and_keeps_dialog_open() {
+        let mut app = state();
+        app.pending_confirm = Some(tui::PendingConfirm {
+            tool_name: "shell_exec".into(),
+            arguments: serde_json::json!({}),
+            tier: mae_ai::PermissionTier::Shell,
+        });
+        let (tx, mut rx) = oneshot::channel();
+        let mut pending_reply = Some(tx);
+        // 'z' isn't y/n/a — dialog should stay open, no reply sent.
+        handle_key(
+            &mut app,
+            char_key('z', KeyModifiers::NONE),
+            &mut pending_reply,
+        );
+        assert!(app.pending_confirm.is_some());
+        assert!(pending_reply.is_some());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn handle_key_confirm_key_resolves_pending_dialog() {
+        let mut app = state();
+        app.pending_confirm = Some(tui::PendingConfirm {
+            tool_name: "shell_exec".into(),
+            arguments: serde_json::json!({}),
+            tier: mae_ai::PermissionTier::Shell,
+        });
+        let (tx, mut rx) = oneshot::channel();
+        let mut pending_reply = Some(tx);
+        handle_key(
+            &mut app,
+            char_key('y', KeyModifiers::NONE),
+            &mut pending_reply,
+        );
+        assert!(app.pending_confirm.is_none());
+        assert!(pending_reply.is_none());
+        assert_eq!(rx.try_recv().unwrap(), ConfirmChoice::Approve);
+    }
+
+    // ---- handle_slash_command ----
+
+    #[test]
+    fn handle_slash_command_clear_empties_transcript() {
+        let mut app = state();
+        app.push_user("hi".into());
+        handle_slash_command(&mut app, SlashCommand::Clear);
+        assert!(app.transcript.is_empty());
+    }
+
+    #[test]
+    fn handle_slash_command_quit_sets_should_quit() {
+        let mut app = state();
+        handle_slash_command(&mut app, SlashCommand::Quit);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn handle_slash_command_model_reports_provider_and_model() {
+        let mut app = state();
+        handle_slash_command(&mut app, SlashCommand::Model);
+        assert!(matches!(
+            app.transcript.last(),
+            Some(tui::TranscriptEntry::SystemNote(n)) if n == "ollama/qwen3:latest"
+        ));
+    }
+
+    #[test]
+    fn handle_slash_command_unknown_reports_the_command_name() {
+        let mut app = state();
+        handle_slash_command(&mut app, SlashCommand::Unknown("bogus".to_string()));
+        assert!(matches!(
+            app.transcript.last(),
+            Some(tui::TranscriptEntry::SystemNote(n)) if n == "Unknown command: /bogus"
+        ));
+    }
+}

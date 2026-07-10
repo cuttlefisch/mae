@@ -98,6 +98,7 @@ jobs:
           mkdir -p /tmp/mae-artifacts
           cp target/release/mae /tmp/mae-artifacts/
           cp target/release/mae-mcp-shim /tmp/mae-artifacts/
+          cp target/release/mae-agent /tmp/mae-artifacts/
           cp -r assets/mae-manual.cozo /tmp/mae-artifacts/
           cp assets/mae-manual.cozo.sha256 /tmp/mae-artifacts/
 
@@ -239,7 +240,28 @@ jobs:
         run: |
           mkdir -p target/release
           cp /tmp/mae-dl/mae target/release/mae
-          chmod +x target/release/mae
+          cp /tmp/mae-dl/mae-agent target/release/mae-agent
+          chmod +x target/release/mae target/release/mae-agent
+      - name: mae-agent smoke check (binary runs, fails cleanly with no live socket)
+        # A full live-process e2e (real `mae` + PSK handshake + `mae-agent --check`)
+        # needs a real controlling tty (crossterm's raw-mode enable errors ENXIO
+        # without one) and interacts with the first-run wizard even under a pty —
+        # real, but nontrivial, infra to get right; scoped out of this pass (see
+        # PR discussion). This step is deliberately narrower: it only proves the
+        # compiled `mae-agent` binary starts, parses `--check`, and fails cleanly
+        # (not a panic) when no socket is present — catching a build/link
+        # regression or a crash-instead-of-clean-error regression in the
+        # discovery path, which unit tests alone (mocked transport) can't catch.
+        run: |
+          set +e
+          ./target/release/mae-agent --check --socket /tmp/mae-nonexistent-$$.sock
+          code=$?
+          set -e
+          if [ "$code" -eq 0 ]; then
+            echo "expected a nonzero exit for a nonexistent socket, got 0"
+            exit 1
+          fi
+          echo "OK: mae-agent exited $code (clean failure, no panic)"
       - name: Download daemon binary
         uses: actions/download-artifact@v8
         with:
