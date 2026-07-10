@@ -132,66 +132,57 @@ pub fn render_overlay(frame: &mut Frame, area: Rect, pending: &PendingConfirm) {
 mod tests {
     use super::*;
 
+    /// Full 4-tier x 5-mode `needs_confirmation` matrix, asserted explicitly
+    /// so no combination — including the "higher tier vs. a lower-than-Shell
+    /// ceiling" diagonal (`Write`x`ReadOnly`, `Privileged`x`ReadOnly`,
+    /// `Privileged`x`Write`) that earlier per-tier tests never actually
+    /// exercised — can silently regress. Expected value is simply "does
+    /// `tier` exceed `mode`'s ceiling", with `FullAuto` having no ceiling.
     #[test]
-    fn read_only_and_write_never_confirm_under_any_ceiling_mode() {
-        for mode in [
-            PermissionMode::ReadOnly,
-            PermissionMode::Write,
-            PermissionMode::Shell,
-            PermissionMode::Privileged,
-        ] {
-            assert!(!needs_confirmation(PermissionTier::ReadOnly, mode));
-        }
-        for mode in [
-            PermissionMode::Write,
-            PermissionMode::Shell,
-            PermissionMode::Privileged,
-        ] {
-            assert!(!needs_confirmation(PermissionTier::Write, mode));
-        }
-    }
+    fn needs_confirmation_matrix_covers_all_tier_mode_combinations() {
+        use PermissionMode::{FullAuto, Privileged, ReadOnly, Shell, Write};
+        use PermissionTier::{
+            Privileged as PPriv, ReadOnly as PRead, Shell as PShell, Write as PWrite,
+        };
 
-    #[test]
-    fn shell_confirms_unless_ceiling_covers_it() {
-        assert!(needs_confirmation(
-            PermissionTier::Shell,
-            PermissionMode::ReadOnly
-        ));
-        assert!(needs_confirmation(
-            PermissionTier::Shell,
-            PermissionMode::Write
-        ));
-        assert!(!needs_confirmation(
-            PermissionTier::Shell,
-            PermissionMode::Shell
-        ));
-        assert!(!needs_confirmation(
-            PermissionTier::Shell,
-            PermissionMode::Privileged
-        ));
-    }
+        let cases: &[(PermissionTier, PermissionMode, bool)] = &[
+            // tier = ReadOnly: never needs confirmation, any mode.
+            (PRead, ReadOnly, false),
+            (PRead, Write, false),
+            (PRead, Shell, false),
+            (PRead, Privileged, false),
+            (PRead, FullAuto, false),
+            // tier = Write: needs confirmation only when the ceiling is
+            // below Write (i.e. ReadOnly).
+            (PWrite, ReadOnly, true),
+            (PWrite, Write, false),
+            (PWrite, Shell, false),
+            (PWrite, Privileged, false),
+            (PWrite, FullAuto, false),
+            // tier = Shell: needs confirmation unless the ceiling is Shell
+            // or above.
+            (PShell, ReadOnly, true),
+            (PShell, Write, true),
+            (PShell, Shell, false),
+            (PShell, Privileged, false),
+            (PShell, FullAuto, false),
+            // tier = Privileged: needs confirmation unless the ceiling is
+            // Privileged (the top tier).
+            (PPriv, ReadOnly, true),
+            (PPriv, Write, true),
+            (PPriv, Shell, true),
+            (PPriv, Privileged, false),
+            (PPriv, FullAuto, false),
+        ];
 
-    #[test]
-    fn privileged_confirms_under_default_mode() {
-        assert!(needs_confirmation(
-            PermissionTier::Privileged,
-            PermissionMode::Shell
-        ));
-        assert!(!needs_confirmation(
-            PermissionTier::Privileged,
-            PermissionMode::Privileged
-        ));
-    }
+        assert_eq!(cases.len(), 20, "must cover all 4 tiers x 5 modes");
 
-    #[test]
-    fn full_auto_never_confirms_anything() {
-        for tier in [
-            PermissionTier::ReadOnly,
-            PermissionTier::Write,
-            PermissionTier::Shell,
-            PermissionTier::Privileged,
-        ] {
-            assert!(!needs_confirmation(tier, PermissionMode::FullAuto));
+        for &(tier, mode, expected) in cases {
+            assert_eq!(
+                needs_confirmation(tier, mode),
+                expected,
+                "needs_confirmation({tier:?}, {mode:?}) should be {expected}"
+            );
         }
     }
 

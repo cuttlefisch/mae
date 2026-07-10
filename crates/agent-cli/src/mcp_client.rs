@@ -358,6 +358,58 @@ mod tests {
         assert!(discover_connection_in(dir.path()).is_none());
     }
 
+    #[test]
+    fn discover_connection_in_skips_malformed_pid_with_extra_dash() {
+        let dir = tempdir().unwrap();
+        // `strip_suffix("-agent.sock")` on "mae-1-2-agent.sock" leaves "1-2",
+        // which fails `u32::parse`. Must be skipped silently, not panic.
+        std::fs::write(dir.path().join("mae-1-2-agent.sock"), b"").unwrap();
+        assert!(discover_connection_in(dir.path()).is_none());
+    }
+
+    #[test]
+    fn discover_connection_in_newest_agent_socket_wins_between_two_live_pids() {
+        // Exercise the `is_newer` mtime-comparison branch against a SECOND
+        // genuinely live pid (not just `None`, which every other test above
+        // compares against). PID 1 (init) is always alive on any Linux box,
+        // including containers, so this doesn't depend on any process this
+        // test itself spawns.
+        let own_pid = std::process::id();
+        let init_pid = 1u32;
+
+        // Scenario A: own pid's socket is written second (newer) -> wins.
+        {
+            let dir = tempdir().unwrap();
+            std::fs::write(dir.path().join(format!("mae-{init_pid}-agent.sock")), b"").unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+            std::fs::write(dir.path().join(format!("mae-{own_pid}-agent.sock")), b"").unwrap();
+
+            let (sock, _psk) = discover_connection_in(dir.path()).expect("should find a candidate");
+            assert_eq!(
+                sock,
+                dir.path().join(format!("mae-{own_pid}-agent.sock")),
+                "newer own-pid socket should win over the older pid-1 socket"
+            );
+        }
+
+        // Scenario B: pid 1's socket is written second (newer) -> wins.
+        // Same comparison, opposite direction, so the branch isn't only ever
+        // exercised with "our pid happens to always be newer".
+        {
+            let dir = tempdir().unwrap();
+            std::fs::write(dir.path().join(format!("mae-{own_pid}-agent.sock")), b"").unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+            std::fs::write(dir.path().join(format!("mae-{init_pid}-agent.sock")), b"").unwrap();
+
+            let (sock, _psk) = discover_connection_in(dir.path()).expect("should find a candidate");
+            assert_eq!(
+                sock,
+                dir.path().join(format!("mae-{init_pid}-agent.sock")),
+                "newer pid-1 socket should win over the older own-pid socket"
+            );
+        }
+    }
+
     // ---- real transport, faked in-process (no real filesystem socket) ----
 
     /// Reads framed JSON-RPC messages from `reader` until EOF, replying to
@@ -396,6 +448,107 @@ mod tests {
             seen.push(parsed);
         }
         seen
+    }
+
+    /// Variant of `run_fake_server` whose `respond` closure returns the full
+    /// JSON-RPC response *body* (an object with a top-level `"result"` or
+    /// `"error"` key) rather than always being wrapped in a success
+    /// `"result"` — lets tests drive `McpClient::request`'s error-handling
+    /// branches (`resp.error` set, or neither `result` nor `error` present)
+    /// that `run_fake_server` above has no way to produce.
+    async fn run_fake_server_with_raw_response(
+        mut reader: BufReader<OwnedReadHalf>,
+        mut writer: OwnedWriteHalf,
+        mut respond: impl FnMut(&str, &serde_json::Value) -> serde_json::Value,
+    ) -> Vec<serde_json::Value> {
+        let mut seen = Vec::new();
+        loop {
+            let Some(msg) = mae_mcp::read_message(&mut reader).await.unwrap() else {
+                break;
+            };
+            let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+            if let Some(id) = parsed.get("id").cloned() {
+                let method = parsed.get("method").and_then(|m| m.as_str()).unwrap_or("");
+                let params = parsed
+                    .get("params")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                let mut response = respond(method, &params);
+                response["jsonrpc"] = serde_json::json!("2.0");
+                response["id"] = id;
+                let body = serde_json::to_vec(&response).unwrap();
+                mae_mcp::write_framed(&mut writer, &body, Duration::from_secs(5))
+                    .await
+                    .unwrap();
+            }
+            seen.push(parsed);
+        }
+        seen
+    }
+
+    #[tokio::test]
+    async fn request_error_response_surfaces_code_and_message() {
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let (server_read, server_write) = server_stream.into_split();
+        let server_reader = BufReader::new(server_read);
+
+        let server = tokio::spawn(run_fake_server_with_raw_response(
+            server_reader,
+            server_write,
+            |method, _params| match method {
+                "tools/call" => serde_json::json!({
+                    "error": {"code": -32000, "message": "boom"},
+                }),
+                _ => serde_json::json!({ "result": {} }),
+            },
+        ));
+
+        let mut client = McpClient::from_stream(client_stream, None, None)
+            .await
+            .expect("connect should succeed");
+
+        let err = client
+            .call_tool("kb_search", serde_json::json!({"query": "x"}))
+            .await
+            .expect_err("tools/call error response should surface as Err");
+        // Exact `bail!` format from `McpClient::request`.
+        assert_eq!(err.to_string(), "tools/call failed: boom (-32000)");
+
+        drop(client);
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn request_with_neither_result_nor_error_is_reported_as_such() {
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let (server_read, server_write) = server_stream.into_split();
+        let server_reader = BufReader::new(server_read);
+
+        let server = tokio::spawn(run_fake_server_with_raw_response(
+            server_reader,
+            server_write,
+            |method, _params| match method {
+                // Neither "result" nor "error" — malformed-but-parseable reply.
+                "tools/list" => serde_json::json!({}),
+                _ => serde_json::json!({ "result": {} }),
+            },
+        ));
+
+        let mut client = McpClient::from_stream(client_stream, None, None)
+            .await
+            .expect("connect should succeed");
+
+        let err = client
+            .list_tools()
+            .await
+            .expect_err("response with neither result nor error should be an Err");
+        assert_eq!(
+            err.to_string(),
+            "tools/list response had neither result nor error"
+        );
+
+        drop(client);
+        server.await.unwrap();
     }
 
     #[tokio::test]
