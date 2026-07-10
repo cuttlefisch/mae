@@ -65,6 +65,10 @@ impl<P: AgentProvider> AgentProvider for GuardrailProvider<P> {
             if let Some((remaining_text, calls)) =
                 rescue_parse_stray_tool_call(response.text.as_deref().unwrap_or(""))
             {
+                eprintln!(
+                    "mae-agent guardrail: rescued a stray tool-call ({}) the provider emitted as prose instead of a structured call",
+                    calls.first().map(|c| c.name.as_str()).unwrap_or("?")
+                );
                 response.text = (!remaining_text.is_empty()).then_some(remaining_text);
                 response.tool_calls = calls;
                 response.stop_reason = StopReason::ToolUse;
@@ -77,6 +81,7 @@ impl<P: AgentProvider> AgentProvider for GuardrailProvider<P> {
         if response.tool_calls.is_empty()
             && response.text.as_deref().unwrap_or("").trim().is_empty()
         {
+            eprintln!("mae-agent guardrail: empty response -- sending one corrective retry nudge");
             let mut nudge_messages = compacted.clone();
             nudge_messages.push(Message {
                 role: Role::User,
@@ -108,6 +113,9 @@ impl<P: AgentProvider> AgentProvider for GuardrailProvider<P> {
             {
                 let name = call.name.clone();
                 drop(recent);
+                eprintln!(
+                    "mae-agent guardrail: loop detected -- '{name}' called {LOOP_DETECTION_THRESHOLD} times in a row with identical arguments, stopping"
+                );
                 return Ok(ProviderResponse {
                     text: Some(format!(
                         "Guardrail: '{name}' was called {LOOP_DETECTION_THRESHOLD} times in a \

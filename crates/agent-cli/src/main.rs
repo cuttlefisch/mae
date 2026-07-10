@@ -55,6 +55,26 @@ struct Args {
     /// (mirrors `mae-mcp-shim --check`).
     #[arg(long)]
     check: bool,
+    /// Run one turn non-interactively (no TUI): send this prompt, print each
+    /// tool call/result and the final text to stdout, then exit. Every tool
+    /// call is auto-approved -- there's no human to answer a confirm prompt
+    /// in scripted/automated use, which is the intended use case (e.g.
+    /// driving a real provider through `model_exam` for compatibility data).
+    #[arg(long)]
+    prompt: Option<String>,
+    /// Max tool-calling rounds for `--prompt` mode (default: 50).
+    #[arg(long)]
+    max_rounds: Option<usize>,
+    /// Comma-separated tool names to expose -- everything else is hidden
+    /// from the model. MAE's real tool surface (700+ tools) reliably
+    /// overwhelms smaller/local models into never attempting a tool call at
+    /// all (confirmed directly: the same model that ignores 730 tools calls
+    /// the right one immediately when only 1-2 are offered) -- this mirrors
+    /// the same restricted allowlist MAE's own embedded `verifier` delegate
+    /// profile already uses for exactly this reason
+    /// (`ai_event_handler.rs`'s `AiEvent::Delegate` handling).
+    #[arg(long, value_delimiter = ',')]
+    only_tools: Vec<String>,
 }
 
 fn construct_provider(provider_type: &str, config: ProviderConfig) -> Box<dyn AgentProvider> {
@@ -77,6 +97,50 @@ fn api_key_env_var(provider_type: &str) -> Option<&'static str> {
 
 fn is_local_provider(provider_type: &str) -> bool {
     provider_type.eq_ignore_ascii_case("ollama")
+}
+
+/// Convert MCP `ToolInfo`s into `ToolDefinition`s, dropping (with a stderr
+/// warning) any whose `input_schema` doesn't parse as `ToolParameters`.
+fn convert_tool_infos(tool_infos: Vec<mae_mcp::protocol::ToolInfo>) -> Vec<ToolDefinition> {
+    tool_infos
+        .into_iter()
+        .filter_map(|t| {
+            let parameters = match serde_json::from_value(t.input_schema.clone()) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!(
+                        "mae-agent: dropping tool {} -- schema parse failed: {e}",
+                        t.name
+                    );
+                    return None;
+                }
+            };
+            Some(ToolDefinition {
+                name: t.name,
+                description: t.description,
+                parameters,
+                permission: None, // populated below once we know each tool's tier
+            })
+        })
+        .collect()
+}
+
+/// Restrict `tools` to `only` by name (empty `only` means no filtering).
+/// MAE's real tool surface (700+ tools) reliably overwhelms smaller/local
+/// models into never attempting a tool call at all -- confirmed directly:
+/// the same model that ignores 730 tools calls the right one immediately
+/// when only 1-2 are offered. Mirrors the same restricted allowlist MAE's
+/// own embedded `verifier` delegate profile already uses for exactly this
+/// reason (`ai_event_handler.rs`'s `AiEvent::Delegate` handling).
+fn filter_tools(tools: Vec<ToolDefinition>, only: &[String]) -> Vec<ToolDefinition> {
+    if only.is_empty() {
+        return tools;
+    }
+    let allowed: std::collections::HashSet<&str> = only.iter().map(String::as_str).collect();
+    tools
+        .into_iter()
+        .filter(|t| allowed.contains(t.name.as_str()))
+        .collect()
 }
 
 #[tokio::main]
@@ -103,18 +167,8 @@ async fn main() -> anyhow::Result<()> {
 
     let mut mcp = McpClient::connect(&socket_path, psk.as_deref(), declared_provider).await?;
     let tool_infos = mcp.list_tools().await?;
-    let tools: Vec<ToolDefinition> = tool_infos
-        .into_iter()
-        .filter_map(|t| {
-            let parameters = serde_json::from_value(t.input_schema).ok()?;
-            Some(ToolDefinition {
-                name: t.name,
-                description: t.description,
-                parameters,
-                permission: None, // populated below once we know each tool's tier
-            })
-        })
-        .collect();
+    let tools = convert_tool_infos(tool_infos);
+    let tools = filter_tools(tools, &args.only_tools);
 
     let api_key = args
         .api_key
@@ -140,6 +194,10 @@ async fn main() -> anyhow::Result<()> {
             Arc::new(GuardrailProvider::wrap(BoxedProvider(raw_provider)))
         };
 
+    if let Some(prompt) = args.prompt.clone() {
+        return run_once(&args, prompt, mcp, tools, provider).await;
+    }
+
     let permission_mode = PermissionMode::parse(&args.permission_mode).unwrap_or_default();
     let mut app = AppState::new(args.model.clone(), args.provider.clone(), permission_mode);
     app.push_system_note(format!(
@@ -150,6 +208,86 @@ async fn main() -> anyhow::Result<()> {
     ));
 
     run_tui(app, provider, mcp, tools).await
+}
+
+/// Non-interactive single-turn mode (`--prompt`): no TUI, no confirm gate
+/// (`McpClient` is used directly as the `ToolExecutor` -- every tool call is
+/// auto-approved). Prints each tool call/result as it happens plus the final
+/// assistant text, then exits.
+async fn run_once(
+    args: &Args,
+    prompt: String,
+    mut mcp: McpClient,
+    tools: Vec<ToolDefinition>,
+    provider: Arc<dyn AgentProvider>,
+) -> anyhow::Result<()> {
+    eprintln!("mae-agent: --prompt mode (non-interactive, all tool calls auto-approved)");
+
+    let mut messages: Vec<Message> = Vec::new();
+    let config = agent_loop::TurnConfig {
+        max_rounds: args
+            .max_rounds
+            .unwrap_or_else(|| agent_loop::TurnConfig::default().max_rounds),
+    };
+
+    let result = agent_loop::run_turn(
+        agent_loop::TurnContext {
+            provider: provider.as_ref(),
+            executor: &mut mcp,
+            tools: &tools,
+            system_prompt: "You are an AI agent operating MAE's editor and knowledge-base tools.",
+        },
+        &mut messages,
+        &config,
+        &prompt,
+        |event| match event {
+            agent_loop::AgentEvent::ToolCallStarted { name, arguments } => {
+                println!(
+                    "[tool] {name} {}",
+                    serde_json::to_string(&arguments).unwrap_or_default()
+                );
+            }
+            agent_loop::AgentEvent::ToolCallFinished {
+                name,
+                success,
+                output,
+            } => {
+                println!("[result] {name} success={success} output={output}");
+            }
+            agent_loop::AgentEvent::Text(text) => {
+                println!("[text] {text}");
+            }
+            agent_loop::AgentEvent::RoundLimitReached => {
+                println!("[round-limit-reached]");
+            }
+            agent_loop::AgentEvent::RoundDiagnostics {
+                round,
+                tools_offered,
+                stop_reason,
+                tool_calls_returned,
+                text_len,
+                usage,
+            } => {
+                let usage = usage
+                    .map(|u| format!("prompt={} completion={}", u.prompt_tokens, u.completion_tokens))
+                    .unwrap_or_else(|| "none".to_string());
+                println!(
+                    "[diag] round={round} tools_offered={tools_offered} stop_reason={stop_reason:?} tool_calls={tool_calls_returned} text_len={text_len} tokens=({usage})"
+                );
+            }
+        },
+    )
+    .await;
+
+    if let Some(Message {
+        content: mae_ai::MessageContent::Text(text),
+        ..
+    }) = messages.last()
+    {
+        println!("\n=== FINAL ===\n{text}");
+    }
+
+    result
 }
 
 /// `AgentProvider` requires `Send + Sync`; a `Box<dyn AgentProvider>` doesn't
@@ -406,6 +544,21 @@ async fn run_event_loop(
                     HarnessEvent::Agent(agent_loop::AgentEvent::RoundLimitReached) => {
                         app.push_system_note("Round limit reached for this turn.".to_string());
                     }
+                    HarnessEvent::Agent(agent_loop::AgentEvent::RoundDiagnostics {
+                        round,
+                        tools_offered,
+                        stop_reason,
+                        tool_calls_returned,
+                        text_len,
+                        usage,
+                    }) => {
+                        let tokens = usage
+                            .map(|u| format!("{}/{}", u.prompt_tokens, u.completion_tokens))
+                            .unwrap_or_else(|| "?/?".to_string());
+                        app.set_diagnostics(format!(
+                            "r{round} tools={tools_offered} stop={stop_reason:?} calls={tool_calls_returned} text={text_len} tok={tokens}"
+                        ));
+                    }
                     HarnessEvent::ConfirmRequest(pending, reply) => {
                         app.pending_confirm = Some(pending);
                         pending_confirm_reply = Some(reply);
@@ -560,6 +713,51 @@ mod tests {
             "ollama".into(),
             PermissionMode::default(),
         )
+    }
+
+    // ---- convert_tool_infos / filter_tools ----
+
+    fn tool_info(name: &str) -> mae_mcp::protocol::ToolInfo {
+        mae_mcp::protocol::ToolInfo {
+            name: name.to_string(),
+            description: format!("{name} description"),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+        }
+    }
+
+    #[test]
+    fn convert_tool_infos_keeps_valid_schemas() {
+        let tools = convert_tool_infos(vec![tool_info("kb_search"), tool_info("kb_get")]);
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].name, "kb_search");
+    }
+
+    #[test]
+    fn convert_tool_infos_drops_unparseable_schema_not_the_whole_batch() {
+        let mut bad = tool_info("broken_tool");
+        bad.input_schema = serde_json::json!("not an object schema at all");
+        let tools = convert_tool_infos(vec![tool_info("kb_search"), bad]);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "kb_search");
+    }
+
+    #[test]
+    fn filter_tools_empty_allowlist_is_a_noop() {
+        let tools = convert_tool_infos(vec![tool_info("kb_search"), tool_info("shell_exec")]);
+        let filtered = filter_tools(tools, &[]);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn filter_tools_restricts_to_named_tools_only() {
+        let tools = convert_tool_infos(vec![
+            tool_info("kb_search"),
+            tool_info("shell_exec"),
+            tool_info("kb_get"),
+        ]);
+        let filtered = filter_tools(tools, &["kb_search".to_string(), "kb_get".to_string()]);
+        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["kb_search", "kb_get"]);
     }
 
     // ---- construct_provider / api_key_env_var / is_local_provider ----

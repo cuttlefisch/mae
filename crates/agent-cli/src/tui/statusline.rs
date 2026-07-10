@@ -10,6 +10,10 @@ use super::AppState;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &AppState) {
     let mode_label = format!("{:?}", app.permission_mode);
+    let trailer = match &app.last_diagnostics {
+        Some(diag) => format!("  {diag}"),
+        None => "  /help for commands".to_string(),
+    };
     let line = Line::from(vec![
         Span::styled(
             format!(" {}/{} ", app.provider, app.model),
@@ -20,7 +24,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &AppState) {
             format!(" perms:{mode_label} "),
             Style::default().fg(Color::Black).bg(Color::Magenta),
         ),
-        Span::raw("  /help for commands"),
+        Span::raw(trailer),
     ]);
     frame.render_widget(Paragraph::new(line), area);
 }

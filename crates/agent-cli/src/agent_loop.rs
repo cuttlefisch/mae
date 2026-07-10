@@ -10,6 +10,7 @@
 use anyhow::Result;
 use mae_ai::{
     AgentProvider, Message, MessageContent, Role, StopReason, ToolCall, ToolDefinition, ToolResult,
+    Usage,
 };
 
 use crate::mcp_client::ToolExecutor;
@@ -31,6 +32,24 @@ pub enum AgentEvent {
     /// reasoning models commonly do both in one turn).
     Text(String),
     RoundLimitReached,
+    /// Emitted once per round, before any tool calls execute -- what the
+    /// provider actually reported for this round, independent of what the
+    /// harness does with it. This is the introspection signal needed to
+    /// distinguish "the model correctly decided it's done" from "the model
+    /// went silent because the tool list overwhelmed it" (confirmed
+    /// empirically: MAE's real ~730-tool surface reliably causes a real
+    /// tool-use-tuned 8B Ollama model to return zero tool calls and a refusal
+    /// text, while the same model tool-calls correctly the moment the
+    /// offered set drops to 1-2 -- see ADR-045). Without this, both look
+    /// identical from the outside.
+    RoundDiagnostics {
+        round: usize,
+        tools_offered: usize,
+        stop_reason: StopReason,
+        tool_calls_returned: usize,
+        text_len: usize,
+        usage: Option<Usage>,
+    },
 }
 
 pub struct TurnConfig {
@@ -85,6 +104,15 @@ pub async fn run_turn(
             .send(messages, tools, system_prompt)
             .await
             .map_err(|e| anyhow::anyhow!(e.message))?;
+
+        on_event(AgentEvent::RoundDiagnostics {
+            round,
+            tools_offered: tools.len(),
+            stop_reason: response.stop_reason.clone(),
+            tool_calls_returned: response.tool_calls.len(),
+            text_len: response.text.as_deref().map(str::len).unwrap_or(0),
+            usage: response.usage,
+        });
 
         let text = response.text.clone().filter(|t| !t.is_empty());
         if let Some(t) = &text {
@@ -252,10 +280,78 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert!(matches!(messages[0].role, Role::User));
         assert!(matches!(messages[1].role, Role::Assistant));
+        let text_events: Vec<&AgentEvent> = events
+            .iter()
+            .filter(|e| matches!(e, AgentEvent::Text(_)))
+            .collect();
         assert!(matches!(
-            events.as_slice(),
+            text_events.as_slice(),
             [AgentEvent::Text(t)] if t == "hello"
         ));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::RoundDiagnostics { .. })),
+            "expected a RoundDiagnostics event alongside the text"
+        );
+    }
+
+    #[tokio::test]
+    async fn round_diagnostics_reports_tools_offered_and_stop_reason() {
+        let tool_def = ToolDefinition {
+            name: "kb_search".to_string(),
+            description: "search".to_string(),
+            parameters: mae_ai::ToolParameters {
+                schema_type: "object".to_string(),
+                properties: Default::default(),
+                required: vec![],
+            },
+            permission: None,
+        };
+        let provider = ScriptedProvider {
+            responses: Mutex::new(vec![text_response("hi there")]),
+        };
+        let mut executor = RecordingExecutor { calls: vec![] };
+        let mut messages = Vec::new();
+        let mut events = Vec::new();
+
+        run_turn(
+            TurnContext {
+                provider: &provider,
+                executor: &mut executor,
+                tools: std::slice::from_ref(&tool_def),
+                system_prompt: "system",
+            },
+            &mut messages,
+            &TurnConfig::default(),
+            "hi",
+            |e| events.push(e),
+        )
+        .await
+        .unwrap();
+
+        let diag = events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::RoundDiagnostics {
+                    tools_offered,
+                    stop_reason,
+                    tool_calls_returned,
+                    text_len,
+                    ..
+                } => Some((
+                    *tools_offered,
+                    stop_reason.clone(),
+                    *tool_calls_returned,
+                    *text_len,
+                )),
+                _ => None,
+            })
+            .expect("expected a RoundDiagnostics event");
+        assert_eq!(diag.0, 1, "tools_offered should reflect the tools slice");
+        assert_eq!(diag.1, StopReason::EndTurn);
+        assert_eq!(diag.2, 0);
+        assert_eq!(diag.3, "hi there".len());
     }
 
     #[tokio::test]

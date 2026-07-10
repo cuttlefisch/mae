@@ -43,6 +43,11 @@ pub struct AppState {
     /// drained by the event loop, which decides whether it's a slash command
     /// or a real user turn to hand to the agent.
     pub pending_submit: Option<String>,
+    /// Compact one-line summary of the most recent round's
+    /// `AgentEvent::RoundDiagnostics` (tools offered, stop reason, tokens) --
+    /// shown in the status line rather than the transcript so it's always
+    /// available for troubleshooting without cluttering the conversation.
+    pub last_diagnostics: Option<String>,
 }
 
 impl AppState {
@@ -62,7 +67,12 @@ impl AppState {
             input_history: Vec::new(),
             history_cursor: None,
             pending_submit: None,
+            last_diagnostics: None,
         }
+    }
+
+    pub fn set_diagnostics(&mut self, summary: String) {
+        self.last_diagnostics = Some(summary);
     }
 
     pub fn push_user(&mut self, text: String) {
