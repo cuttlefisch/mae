@@ -482,4 +482,119 @@ mod tests {
             MessageContent::ToolResult(r) if !r.success && r.output.contains("socket dropped")
         ));
     }
+
+    #[tokio::test]
+    async fn provider_error_mid_turn_leaves_dangling_tool_message() {
+        // Round 0 gets a real tool-call response (so a Tool message gets
+        // appended to history). Round 1 (not round 0) hits
+        // `ScriptedProvider`'s own "responses exhausted" branch, which
+        // returns `Err(ProviderError { .. })` -- standing in for a real
+        // provider erroring out partway through a multi-round turn.
+        let provider = ScriptedProvider {
+            responses: Mutex::new(vec![tool_call_response(
+                "kb_search",
+                serde_json::json!({"query": "x"}),
+            )]),
+        };
+        let mut executor = RecordingExecutor { calls: vec![] };
+        let mut messages = Vec::new();
+        let mut events = Vec::new();
+
+        let result = run_turn(
+            TurnContext {
+                provider: &provider,
+                executor: &mut executor,
+                tools: &[],
+                system_prompt: "system",
+            },
+            &mut messages,
+            &TurnConfig::default(),
+            "search for x",
+            |e| events.push(e),
+        )
+        .await;
+
+        assert!(result.is_err(), "provider error must propagate as Err");
+        assert_eq!(executor.calls.len(), 1, "round 0's tool call did execute");
+
+        // Traced from `run_turn`: push(User) -> round 0 send() succeeds ->
+        // push(Assistant, ToolCalls) -> execute_one -> push(Tool, ToolResult)
+        // -> round 1's `provider.send(...).await.map_err(...)?` errors
+        // *before* anything else is pushed. So `messages` ends up exactly
+        // [User, Assistant(ToolCalls), Tool(ToolResult)] -- 3 entries, last
+        // one a dangling `Role::Tool` message with no matching final
+        // `Assistant` reply.
+        //
+        // This is NOT a corrupted/unsafe-to-resume state, and it's worth
+        // saying so plainly rather than glossing over it: it's the exact
+        // same shape as the normal boundary between any two rounds mid-turn
+        // (tool results appended, next `provider.send()` not yet issued). A
+        // caller that retries `run_turn` by re-invoking it with this same
+        // `messages` Vec resumes cleanly -- the next `provider.send()` call
+        // simply receives the pending tool result and continues the turn.
+        assert_eq!(messages.len(), 3);
+        assert!(matches!(messages[0].role, Role::User));
+        assert!(matches!(messages[1].role, Role::Assistant));
+        assert!(matches!(messages[2].role, Role::Tool));
+    }
+
+    fn text_and_tool_call_response(
+        text: &str,
+        name: &str,
+        args: serde_json::Value,
+    ) -> ProviderResponse {
+        ProviderResponse {
+            text: Some(text.to_string()),
+            tool_calls: vec![ToolCall {
+                id: "call-1".to_string(),
+                name: name.to_string(),
+                arguments: args,
+            }],
+            stop_reason: StopReason::ToolUse,
+            usage: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn text_and_tool_calls_in_same_round_both_fire() {
+        // Reasoning models commonly emit reasoning text *and* a tool call in
+        // the same response -- `AgentEvent::Text`'s own doc comment calls
+        // this out. The loop must not drop one in favor of the other.
+        let provider = ScriptedProvider {
+            responses: Mutex::new(vec![
+                text_and_tool_call_response(
+                    "some reasoning",
+                    "kb_search",
+                    serde_json::json!({"query": "x"}),
+                ),
+                text_response("done"),
+            ]),
+        };
+        let mut executor = RecordingExecutor { calls: vec![] };
+        let mut messages = Vec::new();
+        let mut events = Vec::new();
+
+        run_turn(
+            TurnContext {
+                provider: &provider,
+                executor: &mut executor,
+                tools: &[],
+                system_prompt: "system",
+            },
+            &mut messages,
+            &TurnConfig::default(),
+            "search for x",
+            |e| events.push(e),
+        )
+        .await
+        .unwrap();
+
+        // The reasoning text fired as its own event...
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Text(t) if t == "some reasoning")));
+        // ...AND the tool call actually executed -- neither suppressed the other.
+        assert_eq!(executor.calls.len(), 1);
+        assert_eq!(executor.calls[0].0, "kb_search");
+    }
 }
