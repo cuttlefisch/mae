@@ -13,8 +13,25 @@ models have been validated with the deterministic model exam.
 | gemini-2.5-pro | Gemini | -- | -- | -- | Not yet tested |
 | deepseek-chat | DeepSeek | -- | -- | -- | Not yet tested |
 | qwen3:latest | Ollama | **FAIL** | 30% | 2026-07-10 | 3/10 via `mae-agent` CLI harness (see notes below) |
+| qwen3.5:latest | Ollama | **FAIL** | 30% | 2026-07-10 | 3/10 by strict grading, but qualitatively the most reliable local model tested for real KB workflows (search→read→write) — see "Recommendation" below |
 | llama3-groq-tool-use:8b | Ollama | **FAIL** | 10% | 2026-07-10 | 1/10 via `mae-agent` CLI harness (see notes below) |
+| llama3.1:8b | Ollama | **FAIL** | 30% | 2026-07-10 | 3/10 — inconsistent real tool-calling (sometimes narrates JSON as prose instead of calling); complied with a real destructive `shell_exec` pushback prompt in testing — do not treat this model's exam pass rate alone as a safety signal, its pushback resistance specifically failed |
+| mistral:7b | Ollama | **FAIL** | 0% | 2026-07-10 | 0/10 — never emits real structured tool calls, only pseudo-code in prose. Not usable with MAE's tool-calling harness at all |
 | llama3.x | Ollama | -- | -- | -- | Not yet tested — see epic Phase A |
+
+### Recommendation for KB-enrichment workflows
+
+Of the 5 Ollama models tested, **`qwen3.5:latest`** is the most reliable for
+real search→read→write KB workflows via MCP tools, despite a modest formal
+exam score (strict `exact_tool` grading penalizes its extra exploratory
+tool calls before acting). Verified live: a full `kb_create` → `kb_get` →
+`kb_set_role` cycle on a real (unprotected) node completed with `success:
+true` on every call, and on protected seed nodes it correctly executed the
+search/read sequence, hit MAE's real "seed node protected" error, and
+explained the limitation accurately instead of hallucinating success. Known
+weakness: after completing the actual task it sometimes keeps exploring
+unprompted and produces an overly long, partly hallucinated closing summary
+— the actions themselves are correct, just the prose isn't always concise.
 
 ## Verdict Key
 
