@@ -981,7 +981,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         // --- Graph KB tools (v0.12.0) ---
         ToolDefinition {
             name: "kb_agenda".into(),
-            description: "Query KB nodes using agenda-style filters. Returns matching nodes as JSON array. Filters: todo (by state), priority (minimum char), tag, stale (days), orphan (no links), dead_end (no outgoing), custom (raw Datalog).".into(),
+            description: "Query KB nodes using agenda-style filters. Returns matching nodes as JSON array. Filters: todo (by state), priority (minimum char), tag, stale (days), orphan (no links), dead_end (no outgoing), missing_role (no :role: property set), weakly_linked (fewer than N outgoing links), custom (raw Datalog).".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
                 properties: HashMap::from([
@@ -989,10 +989,11 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
                         "filter".into(),
                         ToolProperty {
                             prop_type: "string".into(),
-                            description: "Filter type: todo, priority, tag, stale, orphan, dead_end, custom".into(),
+                            description: "Filter type: todo, priority, tag, stale, orphan, dead_end, missing_role, weakly_linked, custom".into(),
                             enum_values: Some(vec![
                                 "todo".into(), "priority".into(), "tag".into(),
-                                "stale".into(), "orphan".into(), "dead_end".into(), "custom".into(),
+                                "stale".into(), "orphan".into(), "dead_end".into(),
+                                "missing_role".into(), "weakly_linked".into(), "custom".into(),
                             ]),
                         },
                     ),
@@ -1000,7 +1001,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
                         "value".into(),
                         ToolProperty {
                             prop_type: "string".into(),
-                            description: "Filter value: todo state (e.g. 'TODO'), priority char (e.g. 'A'), tag name, days for stale, or Datalog query for custom".into(),
+                            description: "Filter value: todo state (e.g. 'TODO'), priority char (e.g. 'A'), tag name, days for stale, N for weakly_linked, or Datalog query for custom".into(),
                             enum_values: None,
                         },
                     ),

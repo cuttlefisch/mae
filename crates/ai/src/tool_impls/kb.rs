@@ -1203,6 +1203,11 @@ pub fn execute_kb_agenda(editor: &Editor, args: &serde_json::Value) -> Result<St
         }
         "orphan" => mae_kb::AgendaFilter::Orphan,
         "dead_end" => mae_kb::AgendaFilter::DeadEnd,
+        "missing_role" => mae_kb::AgendaFilter::MissingRole,
+        "weakly_linked" => {
+            let n = value.parse::<u32>().unwrap_or(2);
+            mae_kb::AgendaFilter::WeaklyLinked(n)
+        }
         "custom" => mae_kb::AgendaFilter::Custom(value.to_string()),
         _ => return Err(format!("Unknown filter type: {filter_type}")),
     };

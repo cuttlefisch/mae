@@ -76,6 +76,10 @@ pub enum AgendaFilter {
     Orphan,
     /// Nodes with no outgoing links.
     DeadEnd,
+    /// Nodes with no `:role:` property set (missing molecular-note classification).
+    MissingRole,
+    /// Nodes with fewer than N outgoing typed links.
+    WeaklyLinked(u32),
     /// Raw Datalog query (CozoDB only).
     Custom(String),
 }
