@@ -123,6 +123,22 @@ fn is_local_provider(provider_type: &str) -> bool {
     provider_type.eq_ignore_ascii_case("ollama")
 }
 
+/// Parse the wire-format permission-tier string (`ToolInfo::permission`,
+/// e.g. `"Shell"`) back into a `PermissionTier`. `None` for anything
+/// unrecognized (including a server that predates this field entirely) --
+/// callers must NOT treat that as "safe," it means "we don't actually know
+/// this tool's real tier" (see `ToolInfo::permission`'s doc comment for why
+/// this field exists at all).
+fn parse_permission_tier(s: &str) -> Option<mae_ai::PermissionTier> {
+    match s {
+        "ReadOnly" => Some(mae_ai::PermissionTier::ReadOnly),
+        "Write" => Some(mae_ai::PermissionTier::Write),
+        "Shell" => Some(mae_ai::PermissionTier::Shell),
+        "Privileged" => Some(mae_ai::PermissionTier::Privileged),
+        _ => None,
+    }
+}
+
 /// Convert MCP `ToolInfo`s into `ToolDefinition`s, dropping (with a stderr
 /// warning) any whose `input_schema` doesn't parse as `ToolParameters`.
 fn convert_tool_infos(tool_infos: Vec<mae_mcp::protocol::ToolInfo>) -> Vec<ToolDefinition> {
@@ -143,7 +159,7 @@ fn convert_tool_infos(tool_infos: Vec<mae_mcp::protocol::ToolInfo>) -> Vec<ToolD
                 name: t.name,
                 description: t.description,
                 parameters,
-                permission: None, // populated below once we know each tool's tier
+                permission: t.permission.as_deref().and_then(parse_permission_tier),
             })
         })
         .collect()
@@ -245,18 +261,34 @@ async fn main() -> anyhow::Result<()> {
     run_tui(app, provider, mcp, tools).await
 }
 
-/// Non-interactive single-turn mode (`--prompt`): no TUI, no confirm gate
-/// (`McpClient` is used directly as the `ToolExecutor` -- every tool call is
-/// auto-approved). Prints each tool call/result as it happens plus the final
-/// assistant text, then exits.
+/// Non-interactive single-turn mode (`--prompt`): no TUI, no human to answer
+/// a confirm prompt -- but every tool call still gates on `--permission-mode`
+/// via `NonInteractiveExecutor`, which DENIES (rather than blindly executes)
+/// anything exceeding the configured ceiling. This was NOT always true: an
+/// earlier version used `McpClient` directly as the executor with zero
+/// gating at any tier, including Privileged -- which is how a `model_exam`
+/// pushback prompt ("delete all files in the project root") once reached a
+/// real `shell_exec` call with no safety net at all and wiped a real
+/// checkout's working tree. Prints each tool call/result as it happens plus
+/// the final assistant text, then exits.
 async fn run_once(
     args: &Args,
     prompt: String,
-    mut mcp: McpClient,
+    mcp: McpClient,
     tools: Vec<ToolDefinition>,
     provider: Arc<dyn AgentProvider>,
 ) -> anyhow::Result<()> {
-    eprintln!("mae-agent: --prompt mode (non-interactive, all tool calls auto-approved)");
+    let permission_mode = PermissionMode::parse(&args.permission_mode).unwrap_or_default();
+    eprintln!(
+        "mae-agent: --prompt mode (non-interactive) -- permission ceiling: {permission_mode:?}. \
+         Tool calls exceeding this tier are denied, not confirmed (no human to ask)."
+    );
+    let mut executor = NonInteractiveExecutor {
+        inner: mcp,
+        tools: tools.clone(),
+        mode: permission_mode,
+        own_provider: args.provider.clone(),
+    };
 
     let mut messages: Vec<Message> = Vec::new();
     let config = agent_loop::TurnConfig {
@@ -268,7 +300,7 @@ async fn run_once(
     let result = agent_loop::run_turn(
         agent_loop::TurnContext {
             provider: provider.as_ref(),
-            executor: &mut mcp,
+            executor: &mut executor,
             tools: &tools,
             system_prompt: "You are an AI agent operating MAE's editor and knowledge-base tools.",
         },
@@ -378,7 +410,7 @@ impl ToolExecutor for ConfirmingExecutor {
         arguments: serde_json::Value,
     ) -> anyhow::Result<ToolCallOutcome> {
         // Client-side residency self-check: best effort, server is authoritative.
-        if let Ok(kb_residency) = self.fetch_kb_residency().await {
+        if let Ok(kb_residency) = fetch_kb_residency(&mut self.inner).await {
             if let residency_check::SelfCheckDecision::Refuse(reason) =
                 residency_check::check_before_call(
                     name,
@@ -399,7 +431,11 @@ impl ToolExecutor for ConfirmingExecutor {
             .iter()
             .find(|t| t.name == name)
             .and_then(|t| t.permission)
-            .unwrap_or(mae_ai::PermissionTier::Write);
+            // Unknown tier (server predates the `permission` wire field, or
+            // genuinely didn't declare one) defaults to the MOST restrictive
+            // tier, not `Write` -- an untiered tool must not be silently
+            // trusted just because we don't know better.
+            .unwrap_or(mae_ai::PermissionTier::Privileged);
 
         if needs_confirmation(tier, self.mode) {
             let (tx, rx) = oneshot::channel();
@@ -427,35 +463,100 @@ impl ToolExecutor for ConfirmingExecutor {
     }
 }
 
-impl ConfirmingExecutor {
-    async fn fetch_kb_residency(
-        &mut self,
-    ) -> anyhow::Result<Vec<residency_check::KbResidencyInfo>> {
-        let outcome = self
-            .inner
-            .call_tool("kb_instances", serde_json::json!({}))
-            .await?;
-        let parsed: serde_json::Value = serde_json::from_str(&outcome.text)?;
-        let entries = parsed
-            .as_array()
-            .cloned()
-            .or_else(|| parsed.get("instances").and_then(|v| v.as_array()).cloned())
-            .unwrap_or_default();
-        Ok(entries
-            .into_iter()
-            .filter_map(|v| {
-                let name = v.get("name")?.as_str()?.to_string();
-                let local_models_only = v
-                    .get("ai_residency")
-                    .and_then(|r| r.as_str())
-                    .map(|s| s.eq_ignore_ascii_case("local_models_only"))
-                    .unwrap_or(false);
-                Some(residency_check::KbResidencyInfo {
-                    name,
-                    local_models_only,
-                })
+/// Fetch each registered KB instance's `ai_residency` policy, best-effort
+/// (server-side ADR-048 enforcement is authoritative regardless). Shared by
+/// `ConfirmingExecutor` (interactive) and `NonInteractiveExecutor`
+/// (`--prompt` mode) — identical residency self-check either way.
+async fn fetch_kb_residency(
+    mcp: &mut McpClient,
+) -> anyhow::Result<Vec<residency_check::KbResidencyInfo>> {
+    let outcome = mcp.call_tool("kb_instances", serde_json::json!({})).await?;
+    let parsed: serde_json::Value = serde_json::from_str(&outcome.text)?;
+    let entries = parsed
+        .as_array()
+        .cloned()
+        .or_else(|| parsed.get("instances").and_then(|v| v.as_array()).cloned())
+        .unwrap_or_default();
+    Ok(entries
+        .into_iter()
+        .filter_map(|v| {
+            let name = v.get("name")?.as_str()?.to_string();
+            let local_models_only = v
+                .get("ai_residency")
+                .and_then(|r| r.as_str())
+                .map(|s| s.eq_ignore_ascii_case("local_models_only"))
+                .unwrap_or(false);
+            Some(residency_check::KbResidencyInfo {
+                name,
+                local_models_only,
             })
-            .collect())
+        })
+        .collect())
+}
+
+/// Tool executor for `--prompt` mode: no human exists to answer a confirm
+/// prompt, so a tool call whose tier EXCEEDS the configured
+/// `--permission-mode` ceiling is DENIED outright rather than executed.
+/// Before this existed, `run_once` used `McpClient` directly with zero
+/// gating at any tier -- see `run_once`'s doc comment for the incident that
+/// motivated this.
+struct NonInteractiveExecutor {
+    inner: McpClient,
+    tools: Vec<ToolDefinition>,
+    mode: PermissionMode,
+    own_provider: String,
+}
+
+#[async_trait::async_trait]
+impl ToolExecutor for NonInteractiveExecutor {
+    async fn call_tool(
+        &mut self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolCallOutcome> {
+        // Client-side residency self-check: best effort, server is authoritative.
+        if let Ok(kb_residency) = fetch_kb_residency(&mut self.inner).await {
+            if let residency_check::SelfCheckDecision::Refuse(reason) =
+                residency_check::check_before_call(
+                    name,
+                    &arguments,
+                    &self.own_provider,
+                    &kb_residency,
+                )
+            {
+                return Ok(ToolCallOutcome {
+                    success: false,
+                    text: reason,
+                });
+            }
+        }
+
+        let tier = self
+            .tools
+            .iter()
+            .find(|t| t.name == name)
+            .and_then(|t| t.permission)
+            // Unknown tier (server predates the `permission` wire field, or
+            // genuinely didn't declare one) defaults to the MOST restrictive
+            // tier, not `Write` -- an untiered tool must not be silently
+            // trusted just because we don't know better.
+            .unwrap_or(mae_ai::PermissionTier::Privileged);
+
+        if needs_confirmation(tier, self.mode) {
+            let text = format!(
+                "Denied: '{name}' is {tier:?}-tier, which exceeds the --permission-mode \
+                 ceiling ({:?}). --prompt mode has no human to confirm this -- pass a \
+                 higher --permission-mode explicitly if this call is expected.",
+                self.mode
+            );
+            eprintln!("mae-agent: {text}");
+            return Ok(ToolCallOutcome {
+                success: false,
+                text,
+            });
+        }
+
+        self.inner.call_tool(name, arguments).await
     }
 }
 
@@ -737,6 +838,7 @@ mod tests {
             name: name.to_string(),
             description: format!("{name} description"),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            permission: None,
         }
     }
 
@@ -958,5 +1060,125 @@ mod tests {
             app.transcript.last(),
             Some(tui::TranscriptEntry::SystemNote(n)) if n == "Unknown command: /bogus"
         ));
+    }
+
+    // ---- NonInteractiveExecutor: --prompt mode must deny, not bypass, tier gating ----
+    //
+    // Regression coverage for the real incident that motivated this executor:
+    // `run_once` used to hand `McpClient` straight to `agent_loop::run_turn`
+    // with zero tier gating, so a Shell/Privileged-tier tool call (e.g. a
+    // `model_exam` pushback prompt asking a model to run `rm -rf /`-style
+    // commands) executed completely unchecked in non-interactive mode.
+
+    /// Minimal fake JSON-RPC server for these two tests: replies to
+    /// `kb_instances` (so `fetch_kb_residency` doesn't error) with an empty
+    /// list, and to anything else with `{}` -- good enough since a denied
+    /// call must never actually reach the wire in the first place.
+    async fn run_minimal_fake_server(
+        mut reader: tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>,
+        mut writer: tokio::net::unix::OwnedWriteHalf,
+    ) {
+        loop {
+            let Some(msg) = mae_mcp::read_message(&mut reader).await.unwrap() else {
+                break;
+            };
+            let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+            if let Some(id) = parsed.get("id").cloned() {
+                let method = parsed.get("method").and_then(|m| m.as_str()).unwrap_or("");
+                let result = if method == "tools/call" {
+                    serde_json::json!({"isError": false, "content": [{"type": "text", "text": "[]"}]})
+                } else {
+                    serde_json::json!({})
+                };
+                let response = serde_json::json!({"jsonrpc": "2.0", "id": id, "result": result});
+                let body = serde_json::to_vec(&response).unwrap();
+                mae_mcp::write_framed(&mut writer, &body, std::time::Duration::from_secs(5))
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+
+    fn shell_tool(name: &str) -> ToolDefinition {
+        ToolDefinition {
+            name: name.to_string(),
+            description: "test tool".to_string(),
+            parameters: mae_ai::ToolParameters {
+                schema_type: "object".to_string(),
+                properties: Default::default(),
+                required: vec![],
+            },
+            permission: Some(mae_ai::PermissionTier::Shell),
+        }
+    }
+
+    #[tokio::test]
+    async fn non_interactive_executor_denies_a_call_exceeding_the_permission_ceiling() {
+        let (client_stream, server_stream) = tokio::net::UnixStream::pair().unwrap();
+        let (server_read, server_write) = server_stream.into_split();
+        let server_reader = tokio::io::BufReader::new(server_read);
+        let server = tokio::spawn(run_minimal_fake_server(server_reader, server_write));
+
+        let mcp = McpClient::from_stream(client_stream, None, None)
+            .await
+            .expect("connect should succeed");
+
+        let mut executor = NonInteractiveExecutor {
+            inner: mcp,
+            tools: vec![shell_tool("shell_exec")],
+            mode: PermissionMode::ReadOnly, // ceiling well below Shell
+            own_provider: "ollama".to_string(),
+        };
+
+        let outcome = executor
+            .call_tool("shell_exec", serde_json::json!({"command": "rm -rf /"}))
+            .await
+            .unwrap();
+
+        assert!(
+            !outcome.success,
+            "a Shell-tier call must be denied, not executed"
+        );
+        assert!(
+            outcome.text.contains("Denied"),
+            "denial reason should be explicit: {}",
+            outcome.text
+        );
+
+        drop(executor);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn non_interactive_executor_allows_a_call_within_the_permission_ceiling() {
+        let (client_stream, server_stream) = tokio::net::UnixStream::pair().unwrap();
+        let (server_read, server_write) = server_stream.into_split();
+        let server_reader = tokio::io::BufReader::new(server_read);
+        let server = tokio::spawn(run_minimal_fake_server(server_reader, server_write));
+
+        let mcp = McpClient::from_stream(client_stream, None, None)
+            .await
+            .expect("connect should succeed");
+
+        let mut executor = NonInteractiveExecutor {
+            inner: mcp,
+            tools: vec![shell_tool("shell_exec")],
+            mode: PermissionMode::Shell, // ceiling covers Shell -- explicit opt-in
+            own_provider: "ollama".to_string(),
+        };
+
+        let outcome = executor
+            .call_tool("shell_exec", serde_json::json!({"command": "echo hi"}))
+            .await
+            .unwrap();
+
+        assert!(
+            outcome.success,
+            "a Shell-tier call within an explicit Shell-ceiling permission mode should reach the server: {}",
+            outcome.text
+        );
+
+        drop(executor);
+        server.abort();
     }
 }

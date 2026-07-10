@@ -158,8 +158,10 @@ impl McpClient {
 
     /// Shared post-connect logic: split, optionally PSK-handshake, initialize.
     /// Split out from `connect` so tests can drive it over an in-process
-    /// `UnixStream::pair()` instead of a real filesystem socket.
-    async fn from_stream(
+    /// `UnixStream::pair()` instead of a real filesystem socket. `pub(crate)`
+    /// so `main.rs`'s own test module (a sibling, not a descendant, of this
+    /// one) can build a real `McpClient` for its own executor-level tests.
+    pub(crate) async fn from_stream(
         stream: UnixStream,
         psk: Option<&str>,
         declared_provider: Option<&str>,

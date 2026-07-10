@@ -1793,6 +1793,7 @@ fn main() -> io::Result<()> {
                     name: t.name.clone(),
                     description: t.description.clone(),
                     input_schema: serde_json::to_value(&t.parameters).unwrap_or_default(),
+                    permission: t.permission.map(|p| format!("{p:?}")),
                 })
                 .collect();
             let server = mae_mcp::McpServer::new(

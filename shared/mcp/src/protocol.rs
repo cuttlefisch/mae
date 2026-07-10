@@ -162,6 +162,18 @@ pub struct ToolInfo {
     pub name: String,
     pub description: String,
     pub input_schema: serde_json::Value,
+    /// The tool's permission tier ("ReadOnly"/"Write"/"Shell"/"Privileged"),
+    /// as a plain string so this crate doesn't need to depend on `mae-ai`'s
+    /// `PermissionTier` type. `None` for a tool with no declared tier
+    /// (callers should treat that the same as an unknown/untiered tool, not
+    /// as evidence it's safe). Added after a real incident: without this,
+    /// `tools/list` transmitted no tier information at all, so every
+    /// external client (`mae-agent` included) silently treated every tool as
+    /// the default `Write` tier regardless of its real tier -- meaning a
+    /// Shell-tier tool like `shell_exec` was never distinguishable from a
+    /// Write-tier one by any client-side permission gate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub permission: Option<String>,
 }
 
 /// Result of a tool call.
@@ -230,6 +242,7 @@ mod tests {
                     "buffer_index": {"type": "integer"}
                 }
             }),
+            permission: None,
         };
         let json = serde_json::to_value(&tool).unwrap();
         assert_eq!(json["name"], "read_buffer");
