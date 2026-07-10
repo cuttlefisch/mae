@@ -6,7 +6,8 @@
 //! that historically plagues editor event loops (see: Emacs xdisp.c).
 
 use mae_ai::{
-    execute_tool, AgentSession, AiCommand, AiEvent, DeferredKind, ExecuteResult, ToolResult,
+    execute_tool, AgentProvider, AgentSession, AiCommand, AiEvent, DeferredKind, ExecuteResult,
+    ToolResult,
 };
 use mae_core::{Editor, InputLock};
 use mae_lsp::LspCommand;
@@ -530,6 +531,23 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
 
             let provider =
                 crate::bootstrap::construct_provider(&config.provider_type, config.clone());
+
+            // Reliability hardening for non-Verified-tier models (ADR-045's
+            // guardrail pillars): rescue-parsing malformed tool-call JSON, a
+            // one-time retry nudge on an empty response, and loop detection.
+            // The embedded primary session (`setup_ai()`) intentionally does
+            // NOT get this treatment in this pass -- a deliberate, documented
+            // scope boundary, not an oversight. This sub-agent delegate path
+            // is in scope because it's the one place besides the `mae-agent`
+            // CLI harness that can hand a weak/local model an unsupervised
+            // tool-calling loop.
+            let verification = mae_ai::context_limits::lookup(&config.model).verification;
+            let provider: Box<dyn AgentProvider> =
+                if matches!(verification, mae_ai::ModelVerification::Verified) {
+                    provider
+                } else {
+                    Box::new(mae_ai::GuardrailProvider::wrap(provider))
+                };
 
             // Scope verifier tools: read-only + shell, no write/create/modify.
             let all_tools = {

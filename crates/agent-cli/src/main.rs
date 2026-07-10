@@ -3,7 +3,6 @@
 //! `mae-mcp-shim` subprocess hop — see `mcp_client.rs`).
 
 mod agent_loop;
-mod guardrail;
 mod mcp_client;
 mod residency_check;
 mod tui;
@@ -20,14 +19,13 @@ use crossterm::terminal::{
 use crossterm::{execute, ExecutableCommand};
 use futures::StreamExt;
 use mae_ai::{
-    AgentProvider, ClaudeProvider, GeminiProvider, Message, OllamaProvider, OpenAiProvider,
-    ProviderConfig, ToolDefinition,
+    AgentProvider, ClaudeProvider, GeminiProvider, GuardrailProvider, Message, OllamaProvider,
+    OpenAiProvider, ProviderConfig, StagePolicy, ToolDefinition, ToolStage,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::guardrail::GuardrailProvider;
 use crate::mcp_client::{McpClient, ToolCallOutcome, ToolExecutor};
 use crate::tui::{
     needs_confirmation, AppState, ConfirmChoice, PendingConfirm, PermissionMode, SlashCommand,
@@ -75,6 +73,32 @@ struct Args {
     /// (`ai_event_handler.rs`'s `AiEvent::Delegate` handling).
     #[arg(long, value_delimiter = ',')]
     only_tools: Vec<String>,
+    /// Name of a workflow stage policy to enforce via `GuardrailProvider`'s
+    /// premature-write rejection pillar (rejects a Write-stage tool call
+    /// that has no prior Discovery/Read call this session, nudging the
+    /// model to look before it writes). Currently supported: "kb-enrichment".
+    /// An unrecognized name is ignored (with a warning), not fatal.
+    #[arg(long)]
+    stage_policy: Option<String>,
+}
+
+/// Resolve a `--stage-policy` flag value to a concrete [`StagePolicy`].
+/// Returns `None` (with a stderr warning) for an unrecognized name.
+fn stage_policy_for(name: &str) -> Option<StagePolicy> {
+    match name {
+        "kb-enrichment" => Some(StagePolicy {
+            classify: |tool_name| match tool_name {
+                "kb_search" | "kb_search_context" | "kb_agenda" => Some(ToolStage::Discovery),
+                "kb_get" | "kb_links_from" => Some(ToolStage::Read),
+                "kb_add_link" | "kb_set_role" => Some(ToolStage::Write),
+                _ => None,
+            },
+        }),
+        other => {
+            eprintln!("mae-agent: unrecognized --stage-policy '{other}' -- ignoring");
+            None
+        }
+    }
 }
 
 fn construct_provider(provider_type: &str, config: ProviderConfig) -> Box<dyn AgentProvider> {
@@ -187,12 +211,23 @@ async fn main() -> anyhow::Result<()> {
     };
     let raw_provider = construct_provider(&args.provider, config);
     let verification = mae_ai::lookup_context_limit(&args.model).verification;
-    let provider: Arc<dyn AgentProvider> =
-        if matches!(verification, mae_ai::ModelVerification::Verified) {
-            Arc::from(raw_provider)
-        } else {
-            Arc::new(GuardrailProvider::wrap(BoxedProvider(raw_provider)))
-        };
+    let stage_policy = args.stage_policy.as_deref().and_then(stage_policy_for);
+    // Non-Verified-tier models always get the guardrail's reliability
+    // pillars. A Verified-tier model normally skips it entirely -- but if a
+    // stage policy was explicitly requested, wrap anyway (with the other
+    // pillars along for the ride, effectively inert for a well-behaved
+    // model) purely to get stage enforcement.
+    let needs_guardrail =
+        !matches!(verification, mae_ai::ModelVerification::Verified) || stage_policy.is_some();
+    let provider: Arc<dyn AgentProvider> = if needs_guardrail {
+        let mut guardrail = GuardrailProvider::wrap(raw_provider);
+        if let Some(policy) = stage_policy {
+            guardrail = guardrail.with_stage_policy(policy);
+        }
+        Arc::new(guardrail)
+    } else {
+        Arc::from(raw_provider)
+    };
 
     if let Some(prompt) = args.prompt.clone() {
         return run_once(&args, prompt, mcp, tools, provider).await;
@@ -288,26 +323,6 @@ async fn run_once(
     }
 
     result
-}
-
-/// `AgentProvider` requires `Send + Sync`; a `Box<dyn AgentProvider>` doesn't
-/// implement it by itself in a way `Arc::new` can wrap generically here, so
-/// this newtype forwards to the boxed trait object.
-struct BoxedProvider(Box<dyn AgentProvider>);
-
-#[async_trait::async_trait]
-impl AgentProvider for BoxedProvider {
-    async fn send(
-        &self,
-        messages: &[Message],
-        tools: &[ToolDefinition],
-        system_prompt: &str,
-    ) -> Result<mae_ai::ProviderResponse, mae_ai::ProviderError> {
-        self.0.send(messages, tools, system_prompt).await
-    }
-    fn name(&self) -> &str {
-        self.0.name()
-    }
 }
 
 async fn run_check(args: &Args) -> anyhow::Result<()> {
