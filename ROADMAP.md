@@ -486,6 +486,17 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   registrations in `crates/scheme/src/runtime.rs` vs. only 18 `scheme:*` KB nodes in
   `crates/core/src/kb_seed/` — a ~10x gap meaning most registered primitives have no `:help`/
   `kb_search` doc node. Real AI-peer discoverability gap; sized for its own follow-up pass.
+- [ ] **`mae-kb` doesn't compile standalone with only its own default features** (found 2026-07
+  while fixing the daemon/cozo feature-flag fragility above): `shared/kb/src/lru_query.rs:376`
+  uses `mae_sync::encoding::base64_to_update` unconditionally, not gated behind
+  `#[cfg(feature = "crdt")]`, even though `mae-sync` is an `optional` dependency enabled only by
+  the `crdt` feature. `cargo build -p mae-kb` (default features = `["storage-sled"]`, no `crdt`)
+  fails with an unresolved-crate error. Every real build today works only because some other
+  workspace member (e.g. `mae-core`, `daemon`) also depends on `mae-kb` with `crdt` enabled,
+  and Cargo's feature unification masks the gap — confirmed this reproduces identically on a
+  clean checkout, so it's pre-existing, not a regression. Fix: gate the `mae_sync` usage in
+  `lru_query.rs` behind `#[cfg(feature = "crdt")]` (with a non-crdt fallback), then verify
+  `cargo build -p mae-kb` (defaults only) succeeds in CI to prevent this recurring silently.
 
 ---
 

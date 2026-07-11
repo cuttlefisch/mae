@@ -14,12 +14,13 @@ name = "mae-daemon"
 path = "src/main.rs"
 
 [dependencies]
-mae-kb = { path = "../shared/kb", default-features = false, features = ["crdt"] }
+# storage-sqlite is required explicitly here (not left to Cargo's feature
+# unification with a separate direct `cozo` dep) -- the daemon never calls
+# `cozo::` directly, it only uses mae-kb's CozoKbStore, so mae-kb's own
+# feature list must be the thing that actually requests the sqlite backend.
+mae-kb = { path = "../shared/kb", default-features = false, features = ["crdt", "storage-sqlite"] }
 mae-mcp = { path = "../shared/mcp" }
 mae-sync = { path = "../shared/sync" }
-
-# CozoDB with SQLite storage — separate workspace avoids rusqlite links conflict
-cozo = { version = "0.7", default-features = false, features = ["storage-sqlite", "rayon"] }
 
 # Collab WAL persistence — uses `sqlite` crate (same native lib as cozo, no links conflict)
 sqlite = "0.32"
