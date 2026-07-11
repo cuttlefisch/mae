@@ -882,3 +882,205 @@ fn collab_psk_option_registered_with_config_key() {
         "PSK command should map to collaboration.psk_command in config.toml"
     );
 }
+
+// --- :set-save / save_option_to_init persistence ---
+//
+// save_option_to_init() does real filesystem I/O keyed off XDG_CONFIG_HOME,
+// so tests must serialize (env vars are process-global) and use an isolated
+// tmp dir — never a shared/well-known path (principle #14 test isolation).
+
+mod set_save_tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Run `f` with XDG_CONFIG_HOME pointed at a fresh tmp dir, restoring
+    /// the previous value afterwards even if `f` panics.
+    fn with_isolated_config_home<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let prev = std::env::var("XDG_CONFIG_HOME").ok();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(tmp.path())));
+        match prev {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+        result.unwrap()
+    }
+
+    fn init_scm_contents(config_home: &std::path::Path) -> String {
+        std::fs::read_to_string(config_home.join("mae").join("init.scm"))
+            .expect("init.scm should exist")
+    }
+
+    #[test]
+    fn creates_managed_section_when_init_scm_absent() {
+        with_isolated_config_home(|config_home| {
+            let mut editor = Editor::new();
+            editor.set_option("ai_chat_enabled", "true").unwrap();
+            let msg = editor.save_option_to_init("ai_chat_enabled").unwrap();
+            assert!(msg.contains("ai_chat_enabled = true"));
+
+            let content = init_scm_contents(config_home);
+            assert!(content.contains(";; --- MAE managed options ---"));
+            assert!(content.contains(";; --- end managed options ---"));
+            assert!(content.contains("(set-option! \"ai_chat_enabled\" \"true\")"));
+        });
+    }
+
+    #[test]
+    fn appends_second_option_into_existing_managed_section() {
+        with_isolated_config_home(|config_home| {
+            let mut editor = Editor::new();
+            editor.set_option("ai_chat_enabled", "true").unwrap();
+            editor.save_option_to_init("ai_chat_enabled").unwrap();
+
+            editor.set_option("spell_enabled", "true").unwrap();
+            editor.save_option_to_init("spell_enabled").unwrap();
+
+            let content = init_scm_contents(config_home);
+            // Exactly one managed section, both options present inside it.
+            assert_eq!(content.matches(";; --- MAE managed options ---").count(), 1);
+            assert_eq!(content.matches(";; --- end managed options ---").count(), 1);
+            assert!(content.contains("(set-option! \"ai_chat_enabled\" \"true\")"));
+            assert!(content.contains("(set-option! \"spell_enabled\" \"true\")"));
+        });
+    }
+
+    #[test]
+    fn resaving_same_option_replaces_line_instead_of_duplicating() {
+        // Adversarial: re-running :set-save for an option already present
+        // must overwrite its line, not append a second, conflicting one —
+        // a real Scheme file would apply both sequentially and "last write
+        // wins" would be silently order-dependent instead of idempotent.
+        with_isolated_config_home(|_config_home| {
+            let mut editor = Editor::new();
+            editor.set_option("ai_chat_enabled", "true").unwrap();
+            editor.save_option_to_init("ai_chat_enabled").unwrap();
+
+            editor.set_option("ai_chat_enabled", "false").unwrap();
+            editor.save_option_to_init("ai_chat_enabled").unwrap();
+
+            let content =
+                std::fs::read_to_string(dirs_config_home_path().join("mae").join("init.scm"))
+                    .unwrap();
+            let occurrences = content
+                .lines()
+                .filter(|l| {
+                    l.trim_start()
+                        .starts_with("(set-option! \"ai_chat_enabled\"")
+                })
+                .count();
+            assert_eq!(
+                occurrences, 1,
+                "resaving must replace the existing line, not duplicate it"
+            );
+            assert!(content.contains("(set-option! \"ai_chat_enabled\" \"false\")"));
+            assert!(!content.contains("(set-option! \"ai_chat_enabled\" \"true\")"));
+        });
+    }
+
+    /// Resolve the XDG_CONFIG_HOME path the way save_option_to_init does,
+    /// for tests that need to re-read the file after the closure captured
+    /// `config_home` is out of scope.
+    fn dirs_config_home_path() -> std::path::PathBuf {
+        std::path::PathBuf::from(std::env::var("XDG_CONFIG_HOME").unwrap())
+    }
+
+    #[test]
+    fn preserves_user_content_outside_managed_markers() {
+        with_isolated_config_home(|config_home| {
+            let mae_dir = config_home.join("mae");
+            std::fs::create_dir_all(&mae_dir).unwrap();
+            std::fs::write(
+                mae_dir.join("init.scm"),
+                "; my own config\n(define-key \"normal\" \"g g\" \"goto-first-line\")\n",
+            )
+            .unwrap();
+
+            let mut editor = Editor::new();
+            editor.set_option("ai_chat_enabled", "true").unwrap();
+            editor.save_option_to_init("ai_chat_enabled").unwrap();
+
+            let content = init_scm_contents(config_home);
+            assert!(content.contains("; my own config"));
+            assert!(content.contains("(define-key \"normal\" \"g g\" \"goto-first-line\")"));
+            assert!(content.contains("(set-option! \"ai_chat_enabled\" \"true\")"));
+        });
+    }
+
+    #[test]
+    fn unknown_option_errors_without_touching_filesystem() {
+        with_isolated_config_home(|config_home| {
+            let editor = Editor::new();
+            let result = editor.save_option_to_init("not_a_real_option");
+            assert!(result.is_err());
+            assert!(!config_home.join("mae").join("init.scm").exists());
+        });
+    }
+
+    #[test]
+    fn escapes_quotes_and_backslashes_in_string_values() {
+        // Adversarial: a string-valued option (e.g. a shell command) may
+        // legitimately contain a `"` or `\`. An unescaped write would emit
+        // invalid Scheme (or worse, silently truncate the string at the
+        // embedded quote), corrupting init.scm for every subsequent load.
+        with_isolated_config_home(|config_home| {
+            let mut editor = Editor::new();
+            let tricky = r#"echo "hi" \ done"#;
+            editor.set_option("ai_api_key_command", tricky).unwrap();
+            editor.save_option_to_init("ai_api_key_command").unwrap();
+
+            let content = init_scm_contents(config_home);
+            let expected = format!(
+                "(set-option! \"ai_api_key_command\" \"{}\")",
+                tricky.replace('\\', "\\\\").replace('"', "\\\"")
+            );
+            assert!(
+                content.contains(&expected),
+                "expected escaped line in init.scm, got:\n{}",
+                content
+            );
+
+            // Round-trip: unescaping the written literal (mirroring R7RS
+            // string-escape rules: \\ -> \, \" -> ") must reproduce the
+            // original value exactly. mae-core has no dependency on the
+            // Scheme reader itself, so this pins the same contract the
+            // reader (crates/scheme/src/reader.rs) is expected to honor
+            // without pulling that crate in as a test dependency.
+            let escaped = tricky.replace('\\', "\\\\").replace('"', "\\\"");
+            let mut unescaped = String::with_capacity(escaped.len());
+            let mut chars = escaped.chars();
+            while let Some(c) = chars.next() {
+                if c == '\\' {
+                    match chars.next() {
+                        Some(next) => unescaped.push(next),
+                        None => panic!("dangling escape in written literal"),
+                    }
+                } else {
+                    unescaped.push(c);
+                }
+            }
+            assert_eq!(unescaped, tricky, "escaping must be exactly reversible");
+        });
+    }
+
+    #[test]
+    fn set_save_command_applies_value_then_persists() {
+        with_isolated_config_home(|config_home| {
+            let mut editor = Editor::new();
+            assert!(!editor.ai_chat_enabled);
+
+            editor.execute_command("set-save ai_chat_enabled true");
+
+            assert!(
+                editor.ai_chat_enabled,
+                ":set-save must apply the value, not just persist it"
+            );
+            let content = init_scm_contents(config_home);
+            assert!(content.contains("(set-option! \"ai_chat_enabled\" \"true\")"));
+        });
+    }
+}

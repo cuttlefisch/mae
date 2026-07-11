@@ -941,7 +941,11 @@ impl super::Editor {
             String::new()
         };
 
-        let set_line = format!("(set-option! \"{}\" \"{}\")", def.name, value);
+        // Escape backslashes and quotes so a value containing either (e.g. a
+        // shell command in ai_api_key_command) still writes a valid Scheme
+        // string literal instead of corrupting init.scm on next load.
+        let escaped_value = value.replace('\\', "\\\\").replace('"', "\\\"");
+        let set_line = format!("(set-option! \"{}\" \"{}\")", def.name, escaped_value);
         let pattern = format!("(set-option! \"{}\"", def.name);
 
         const MARKER_START: &str = ";; --- MAE managed options ---";
