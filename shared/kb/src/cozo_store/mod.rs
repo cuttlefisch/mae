@@ -13,12 +13,10 @@
 //! feature, currently disabled due to upstream `graph_builder` rayon compat
 //! issue. Will be re-enabled when upstream fixes land.
 //!
-//! @ai-caution: [architecture-debt] Dense but organized CozoDB Datalog query
-//! module, split by query domain (schema/db/graph/links/blocks/agenda/health/
+//! Split by query domain (schema/db/graph/links/blocks/agenda/health/
 //! versioning/vector/suggestions/source_files/util + the `KbStore` trait
-//! impl). Tracked in `.claude/commands/mae-audit.md`'s "Known exceptions"
-//! and `ROADMAP.md`'s "Architecture Debt" section — re-measure before adding
-//! more query surface here.
+//! impl) — formerly a single 4,229-line file, resolved 2026-07. Re-measure
+//! before adding substantial new query surface here.
 
 use crate::store::{
     AgendaFilter, Block, HealthReport, KbStore, KbStoreError, Link, MetaMember, NodeVersion,

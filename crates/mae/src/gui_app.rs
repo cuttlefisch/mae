@@ -7,6 +7,13 @@
 //! all editor state on the main thread and dispatch `winit` events into the
 //! shared editor/renderer. Pure code motion (ADR none needed) — see
 //! `.claude/commands/mae-audit.md` / ROADMAP.md "Architecture Debt".
+//!
+//! @ai-caution: [architecture-debt] New file, ~1,270 lines, surfaced by the
+//! `main.rs` split (2026-07) — over the 800-line ceiling. All state lives in
+//! `self` fields (not raw locals), so a further per-arm/per-phase split of
+//! `window_event`/`about_to_wait` is a real, low-risk future candidate, not
+//! attempted this pass. Tracked in .claude/commands/mae-audit.md's "Known
+//! exceptions" and ROADMAP.md's "Architecture Debt" section.
 
 use std::io;
 

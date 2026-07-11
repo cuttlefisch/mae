@@ -1,8 +1,12 @@
 // @stability: stable
-// @ai-caution: [architecture-debt] Editor entry point; extraction in progress.
-// Tracked in .claude/commands/mae-audit.md's "Known exceptions" and
-// ROADMAP.md's "Architecture Debt" section — see both before further growing
-// this file; prefer extracting a new module over adding here.
+// @ai-caution: [architecture-debt] Editor entry point. CLI dispatch, GuiApp,
+// and config/KB-federation/daemon-connect bootstrapping were extracted (see
+// cli.rs, gui_app.rs, bootstrap.rs) — this file went from 3,329 to ~950
+// lines, 2026-07. Residual is sequential entry-point glue with no obvious
+// further seam. Tracked in .claude/commands/mae-audit.md's "Known
+// exceptions" and ROADMAP.md's "Architecture Debt" section — see both
+// before further growing this file; prefer extracting a new module over
+// adding here.
 
 mod agents;
 mod ai_event_handler;

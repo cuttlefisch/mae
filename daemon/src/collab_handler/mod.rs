@@ -7,15 +7,18 @@
 //! by dispatching to the DocStore.
 //!
 //! @ai-caution: [architecture-debt] JSON-RPC router. `handle_doc_request_inner`
-//! is now a thin dispatcher — its `sync/*`, `docs/*`, and `kb/*` match arms
+//! is now a thin ~340-line dispatcher — its `sync/*`, `docs/*`, and `kb/*` match arms
 //! live in the sibling `sync_methods`/`docs_methods`/`kb_membership`/
 //! `kb_content`/`kb_governance` modules, grouped by domain (same pattern as
-//! `crates/core/src/editor/kb_ops/`). The co-located `collab_handler_tests.rs`
-//! (kept as one file — a separate, not-yet-done step of the same
-//! architecture-debt-reduction pass) has grown to ~10x the 500-line
-//! test-file ceiling — a strong candidate for further splitting into
-//! per-feature test modules. Tracked in .claude/commands/mae-audit.md's
-//! "Known exceptions" and ROADMAP.md's "Architecture Debt" section.
+//! `crates/core/src/editor/kb_ops/`). This file still went from 3,821 to
+//! ~1,934 lines: the residual is ~30 individually-reasonable auth/session/
+//! access-control functions (`run_session`, `verify_content_op`, `kb_access`,
+//! `verify_member_self_service_update`, etc.) that collectively exceed the
+//! ceiling — a candidate for a further domain-grouping split, not attempted
+//! in the 2026-07 pass. Its test module was split into `tests/` (per-feature
+//! files, all under the 500-line ceiling). Tracked in
+//! .claude/commands/mae-audit.md's "Known exceptions" and ROADMAP.md's
+//! "Architecture Debt" section.
 
 mod docs_methods;
 mod kb_content;

@@ -6,9 +6,12 @@
 //! - `handle_collab_event()` handles events from the background task
 //! - `run_collab_task()` is the background tokio task owning the TCP connection
 //!
-//! @ai-caution: [architecture-debt] Collab event/intent bridge; the co-located
-//! `#[cfg(test)] mod tests` (see `collab_bridge_tests.rs`) is itself a prime
-//! candidate for further splitting. Tracked in `.claude/commands/mae-audit.md`'s
+//! @ai-caution: [architecture-debt] Collab event/intent bridge. Went from
+//! 6,546 to ~5,300 lines (2026-07) via the split described below; the
+//! remaining debt is narrower now — see `run_collab_task`'s own
+//! `@ai-caution` marker for why it's deliberately not split further. Its
+//! test module was also split into `tests/` (per-feature files, all under
+//! the 500-line ceiling). Tracked in `.claude/commands/mae-audit.md`'s
 //! "Known exceptions" and `ROADMAP.md`'s "Architecture Debt" section.
 //!
 //! `handle_collab_event`'s per-variant bodies and `drain_collab_intents`'s

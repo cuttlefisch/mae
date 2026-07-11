@@ -1,3 +1,12 @@
+//! @ai-caution: [architecture-debt] App bootstrapping (path resolution, config
+//! application, KB federation init, daemon connect, collab user-name
+//! resolution). Already 2,397 lines pre-existing debt before the `main.rs`
+//! split (2026-07) added `apply_app_config`/`init_kb_federation`/
+//! `init_daemon_connection`/`resolve_collab_user_name`, bringing it to
+//! ~3,062 — not split further this pass, needs its own dedicated look.
+//! Tracked in .claude/commands/mae-audit.md's "Known exceptions" and
+//! ROADMAP.md's "Architecture Debt" section.
+
 use std::collections::HashMap;
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;

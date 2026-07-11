@@ -1,3 +1,15 @@
+//! @ai-caution: [architecture-debt] Editor module root. Went from 3,457 to
+//! ~1,382 lines (2026-07): a dozen orphaned value-structs moved into the
+//! sibling files that already imported them (`lsp_state.rs`, `git_ops.rs`,
+//! `ai_state.rs`), and ~90 `impl Editor` methods regrouped into
+//! `window_ops.rs`/`render_ops.rs`/`session_ops.rs`/`conversation_ops.rs`
+//! plus extended `keymaps.rs`/`option_ops.rs`/`project_ops.rs`. Residual is
+//! the `Editor` struct definition itself (see the separate `[dispatch]`
+//! marker below on its field count) plus constructors/small lifecycle
+//! methods, with no further obvious seam. Tracked in
+//! .claude/commands/mae-audit.md's "Known exceptions" and ROADMAP.md's
+//! "Architecture Debt" section.
+
 mod agenda_ops;
 pub mod ai_state;
 mod babel_ops;
