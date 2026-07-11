@@ -489,8 +489,19 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   (each source file now under 800 lines) plus `kb_ops/kb_ops_tests.rs`. That test file itself is
   still 2,987 lines (well over the 500-line test ceiling) — splitting it by the same
   registry/sync/nodes/... groupings as the source is a reasonable, low-risk follow-up, not done in
-  this pass. `shared/sync/src/kb.rs` was identified as the next-safest source-restructuring
-  candidate (clean per-type `impl` block seams) but isn't done yet either.
+  this pass. **`crates/scheme/src/runtime.rs`** (was 6,450 lines, the *biggest* single-file
+  offender) was split the same way: its inline test module went to a sibling `runtime_tests.rs`
+  (1,526 lines — still over the test ceiling, tracked like `kb_ops_tests.rs` above), then
+  `SchemeRuntime::new()`'s ~186 `register_fn` calls and the `inject_editor_state`/`apply_to_editor`
+  state-sync pair were split by category into
+  `crates/scheme/src/runtime/{keybindings,editor_ops,shell_agenda,io_packages,kb_primitives,
+  kb_queries,misc_primitives,test_primitives,state_sync_inject,state_sync_inject_kb,
+  state_sync_apply,state_sync_apply2}.rs` (each under 800 lines). The residual `runtime.rs`
+  (`SharedState` + `SchemeRuntime`'s core methods) is ~950 lines — still over ceiling but no longer
+  sprawling; a further split wasn't pursued in this pass since the remaining content (one struct
+  definition + a handful of cohesive accessor/eval methods) doesn't have an obvious further seam.
+  `shared/sync/src/kb.rs` was identified as the next-safest source-restructuring candidate (clean
+  per-type `impl` block seams) but isn't done yet either.
 - [x] **Scheme API KB-doc coverage gap** (found via `/mae-audit`, 2026-07; closed 2026-07): the
   original "186 vs 18" figure was stale — the audit's grep only found the 18-entry *variables*
   table, missing that `crates/core/src/kb_seed/scheme_api.rs`'s `SCHEME_API_FUNCTIONS` table already

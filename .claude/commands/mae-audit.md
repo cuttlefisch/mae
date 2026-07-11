@@ -67,7 +67,12 @@ section — when you add a new exception, add the marker + both cross-references
   not a candidate for the original extraction advice anymore
 - `crates/core/src/editor/mod.rs` — Editor struct, modularized into submodules
 - `shared/kb/src/cozo_store.rs` — CozoDB Datalog queries, dense but organized
-- `crates/scheme/src/runtime.rs` — Scheme VM runtime, under modularization
+- `crates/scheme/src/runtime.rs` — Scheme VM runtime; `SchemeRuntime::new()`'s ~186 `register_fn` calls and
+  `inject_editor_state`/`apply_to_editor` were split into `crates/scheme/src/runtime/*.rs` submodules by
+  category (keybindings/editor-ops/kb-primitives/kb-queries/io-packages/misc-primitives/test-primitives/
+  state-sync). The residual `runtime.rs` (SharedState, SchemeRuntime's core methods) is still ~950 lines;
+  its `#[cfg(test)] mod tests` was extracted to a sibling `runtime_tests.rs` (~1,526 lines, ~3x the
+  test-file ceiling) — both still over ceiling but no longer sprawling
 - `crates/scheme/tests/r7rs_compliance.rs` — R7RS spec compliance tests (large by nature)
 - `daemon/src/collab_handler.rs` — JSON-RPC router; `handle_doc_request_inner` is large with many
   method arms; its `collab_handler_tests.rs` sibling is also ~10x the test-file ceiling
@@ -258,10 +263,12 @@ A fast, mostly-grep checklist. Report `[OK]` / `[WARN]` / `[ERROR]` per item.
    `version`, `description`, `mae_version`, `category`), semver format, `mae_version` constraint. Check each
    `autoloads.scm` for a `(provide-feature …)` call and an `@module` header. Report the module dependency
    graph (modules that declare `[dependencies]`).
-2. **Scheme API documentation coverage** — count `register_fn` registrations in `crates/scheme/src/runtime.rs`;
-   count `scheme:*` nodes in `crates/core/src/kb_seed/`. Report undocumented primitives (registered but no KB
-   node) and orphan KB nodes (node but no registration). Spot-check documented arities against the
-   registered `Arity`.
+2. **Scheme API documentation coverage** — count `register_fn` registrations across
+   `crates/scheme/src/runtime.rs` and `crates/scheme/src/runtime/*.rs` (the `register_fn` calls live in the
+   `register_*_fns` submodules; `runtime.rs` itself only holds `SchemeRuntime::new()`'s dispatch calls plus a
+   handful of registrations before the module split); count `scheme:*` nodes in `crates/core/src/kb_seed/`.
+   Report undocumented primitives (registered but no KB node) and orphan KB nodes (node but no registration).
+   Spot-check documented arities against the registered `Arity`.
 3. **AI provider coverage** — check `crates/ai/src/context_limits.rs` TABLE for model coverage (list model
    prefixes); verify `ProviderHint::from_model()` covers every family in the TABLE; report verification-status
    distribution (Verified / Testing / Untested). Confirm prompt XML exists for all profiles × tiers
