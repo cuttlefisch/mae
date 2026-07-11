@@ -245,6 +245,11 @@ impl AgentSession {
 
             // Graceful degradation: shed tools/prompt under context pressure
             if self.check_and_degrade() {
+                // check_and_degrade() (context_mgmt.rs) only returns true when it just
+                // transitioned degradation_level to ToolsShed or Minimal -- never while
+                // leaving it at Normal. That invariant lives in a different file, so
+                // don't panic if a future third tier or refactor breaks it: fall back to
+                // a generic message instead of unreachable!().
                 let warning = match self.degradation_level {
                     super::DegradationLevel::ToolsShed => {
                         "[Context pressure: extended tools disabled. Use core tools only.]"
@@ -252,7 +257,7 @@ impl AgentSession {
                     super::DegradationLevel::Minimal => {
                         "[Context pressure: minimal mode. System prompt shortened.]"
                     }
-                    super::DegradationLevel::Normal => unreachable!(),
+                    super::DegradationLevel::Normal => "[Context pressure: degradation applied.]",
                 };
                 self.messages.push(Message {
                     role: Role::User,

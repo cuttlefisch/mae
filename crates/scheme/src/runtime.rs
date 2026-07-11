@@ -1126,13 +1126,14 @@ impl SchemeRuntime {
         // --- Module system functions ---
 
         // (when-flag MODULE-NAME FLAG-NAME THUNK)
-        vm.eval(
+        if let Err(e) = vm.eval(
             r#"
 (define (when-flag module-name flag-name thunk)
   (thunk))
 "#,
-        )
-        .ok();
+        ) {
+            warn!(error = %e, "scheme runtime: failed to define bootstrap `when-flag`");
+        }
 
         // (define-option! NAME KIND DEFAULT DOC)
         let s = shared.clone();
@@ -1212,14 +1213,15 @@ impl SchemeRuntime {
         );
 
         // (when-module NAME THUNK) — Scheme-level wrapper
-        vm.eval(
+        if let Err(e) = vm.eval(
             r#"
 (define (when-module name thunk)
   (when (module-loaded? name)
     (thunk)))
 "#,
-        )
-        .ok();
+        ) {
+            warn!(error = %e, "scheme runtime: failed to define bootstrap `when-module`");
+        }
 
         // (module-flags NAME)
         vm.register_fn(
@@ -1293,7 +1295,7 @@ impl SchemeRuntime {
         );
 
         // Define mae! and package! Scheme-level wrappers
-        vm.eval(
+        if let Err(e) = vm.eval(
             r#"
 ;; Pre-define category labels
 (define :editor ":editor")
@@ -1343,8 +1345,9 @@ impl SchemeRuntime {
                         (kwarg-ref ":pin" "")
                         (if (kwarg-ref ":disable" #f) #t #f)))
 "#,
-        )
-        .ok();
+        ) {
+            warn!(error = %e, "scheme runtime: failed to define bootstrap `mae!`/`package!` wrappers");
+        }
 
         // (undefine-command! NAME)
         let s = shared.clone();

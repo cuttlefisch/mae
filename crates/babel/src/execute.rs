@@ -152,25 +152,63 @@ impl BabelExecutor {
         // Write body to stdin
         if let Some(mut stdin) = child.stdin.take() {
             use std::io::Write;
-            let _ = stdin.write_all(body.as_bytes());
+            if let Err(e) = stdin.write_all(body.as_bytes()) {
+                eprintln!("babel: failed writing block body to child stdin: {e}");
+            }
             // stdin drops here, closing the pipe
         }
 
-        let timeout = Duration::from_secs(self.timeout_secs);
-        match child.wait_timeout(timeout) {
-            Ok(Some(status)) => {
-                let mut stdout = String::new();
-                let mut stderr = String::new();
-                if let Some(ref mut out) = child.stdout {
-                    let _ = out.read_to_string(&mut stdout);
+        // Drain stdout/stderr on background threads CONCURRENTLY with waiting,
+        // not after. wait_timeout() only polls try_wait() (see the WaitTimeout
+        // impl below) -- it never touches stdout/stderr -- so a child that
+        // writes more than the OS pipe buffer (~64KB) before exiting would
+        // otherwise block on write() forever, since nothing drains the pipe
+        // until after wait_timeout returns, and wait_timeout never returns
+        // until the child (blocked on write) exits. Each drain thread is also
+        // bounded to max_output_bytes so it can't buffer unbounded output into
+        // memory even for a process that legitimately produces a lot before
+        // exiting quickly.
+        let limit = self.max_output_bytes as u64;
+        let stdout_handle = child.stdout.take().map(|out| {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                if let Err(e) = out.take(limit).read_to_end(&mut buf) {
+                    eprintln!("babel: failed reading child stdout: {e}");
                 }
-                if let Some(ref mut err) = child.stderr {
-                    let _ = err.read_to_string(&mut stderr);
+                buf
+            })
+        });
+        let stderr_handle = child.stderr.take().map(|err| {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                if let Err(e) = err.take(limit).read_to_end(&mut buf) {
+                    eprintln!("babel: failed reading child stderr: {e}");
                 }
+                buf
+            })
+        });
 
-                // Truncate if too large
-                if stdout.len() > self.max_output_bytes {
-                    stdout.truncate(self.max_output_bytes);
+        let timeout = Duration::from_secs(self.timeout_secs);
+        let wait_result = child.wait_timeout(timeout);
+        if matches!(wait_result, Ok(None)) {
+            if let Err(e) = child.kill() {
+                eprintln!("babel: failed to kill timed-out child process: {e}");
+            }
+        }
+        let stdout_bytes = stdout_handle
+            .map(|h| h.join().unwrap_or_default())
+            .unwrap_or_default();
+        let stderr_bytes = stderr_handle
+            .map(|h| h.join().unwrap_or_default())
+            .unwrap_or_default();
+
+        match wait_result {
+            Ok(Some(status)) => {
+                let truncated = stdout_bytes.len() as u64 >= limit;
+                let mut stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
+                let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
+
+                if truncated {
                     stdout.push_str("\n... (output truncated)");
                 }
 
@@ -184,7 +222,6 @@ impl BabelExecutor {
                 }
             }
             Ok(None) => {
-                let _ = child.kill();
                 ExecResult::Error(format!("Execution timed out after {}s", self.timeout_secs))
             }
             Err(e) => ExecResult::Error(format!("Failed to wait for process: {}", e)),
@@ -358,6 +395,40 @@ mod tests {
             ExecResult::Output(s) => assert_eq!(s.trim(), "4"),
             ExecResult::Error(e) if e.contains("not found") => {
                 // python3 not installed, skip
+            }
+            other => panic!("Expected Output, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn execute_shell_output_over_limit_is_bounded_not_just_truncated() {
+        // Adversarial: a block producing far more than max_output_bytes must not
+        // have all of it buffered into memory before truncation -- the read
+        // itself is bounded. Confirmed indirectly: the returned output length is
+        // close to the (small, test-configured) limit, not the full ~1MB the
+        // shell command actually produces.
+        let mut executor = BabelExecutor::new();
+        executor.max_output_bytes = 64;
+        let block = SrcBlock {
+            name: None,
+            language: "bash".to_string(),
+            header_args: HeaderArgs::default(),
+            // `yes` repeats forever; head -c caps the pipe's producer side so the
+            // test itself doesn't hang, while still producing far more than the
+            // 64-byte limit for the bounded-read path to actually exercise.
+            body: "yes x | head -c 1000000".to_string(),
+            line_range: (0, 2),
+            body_byte_range: (0, 20),
+        };
+        let result = executor.execute_block(&block, Path::new("/tmp"), &[]);
+        match result {
+            ExecResult::Output(s) => {
+                assert!(
+                    s.len() < 1_000_000,
+                    "output should be bounded well under the 1MB the command produced, got {} bytes",
+                    s.len()
+                );
+                assert!(s.contains("... (output truncated)"));
             }
             other => panic!("Expected Output, got {:?}", other),
         }

@@ -1,3 +1,4 @@
+// @stability: stable
 // @ai-caution: [architecture-debt] Editor entry point; extraction in progress.
 // Tracked in .claude/commands/mae-audit.md's "Known exceptions" and
 // ROADMAP.md's "Architecture Debt" section — see both before further growing
@@ -2448,7 +2449,6 @@ impl winit::application::ApplicationHandler<gui_event::MaeEvent> for GuiApp {
                     lsp_command_tx: &self.lsp_command_tx,
                     dap_command_tx: &self.dap_command_tx,
                     ai_event_tx: &self.ai_event_tx,
-                    ai_command_tx: &self.ai_command_tx,
                     scheme: &mut self.scheme,
                     mcp_client_mgr: &self.mcp_client_mgr,
                 };
