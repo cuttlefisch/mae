@@ -163,9 +163,8 @@ impl Editor {
 
         // Helper: push a line into view + text
         fn push_line(view: &mut GitStatusView, text: &mut String, line: GitStatusLine) {
-            text.push_str(&line.text);
-            text.push('\n');
-            view.lines.push(line);
+            let line_text = line.text.clone();
+            crate::foldable_view::push_line(text, &line_text, &mut view.lines, line);
         }
 
         // Header
@@ -442,8 +441,7 @@ impl Editor {
         let cursor_row = self.window_mgr.focused_window().cursor_row;
 
         let key = self.buffers[idx].git_status_view().and_then(|v| {
-            v.lines
-                .get(cursor_row)
+            v.line_at(cursor_row)
                 .and_then(crate::git_status::GitStatusView::collapse_key_for_line)
         });
 

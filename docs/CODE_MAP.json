@@ -324,6 +324,10 @@
           "kind": "mod"
         },
         {
+          "name": "foldable_view",
+          "kind": "mod"
+        },
+        {
           "name": "git_status",
           "kind": "mod"
         },

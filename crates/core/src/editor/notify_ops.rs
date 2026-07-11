@@ -221,9 +221,8 @@ impl super::Editor {
         view.collapsed = prev_collapsed;
         let mut text = String::new();
         let push = |view: &mut NotifView, text: &mut String, line: NotifLine| {
-            text.push_str(&line.text);
-            text.push('\n');
-            view.lines.push(line);
+            let line_text = line.text.clone();
+            crate::foldable_view::push_line(text, &line_text, &mut view.lines, line);
         };
 
         let items = self.notifications.active_sorted();

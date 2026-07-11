@@ -161,6 +161,7 @@ Source: `crates/core/src/lib.rs`
 | `file_lock` | mod |
 | `file_picker` | mod |
 | `file_tree` | mod |
+| `foldable_view` | mod |
 | `git_status` | mod |
 | `grapheme` | mod |
 | `heading` | mod |
