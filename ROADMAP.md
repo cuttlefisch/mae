@@ -65,7 +65,10 @@ Near-term, code-grounded work extracted from this roadmap + the ADR backlog (fil
 
 - [ ] **AI output buffer cursor invisible in GUI**: After AI responds, the cursor in the `*ai*` conversation output buffer is not visible. Root cause: buffer type / layout metadata mismatch — the conversation buffer doesn't provide the same state that the cursor renderer expects. Low priority (output buffer is read-only, navigation still works).
 - [ ] **Theme load failure is silent in headless mode**: If config.toml requests a nonexistent theme, `set_theme_by_name()` shows a status bar message but keeps the current theme. In CI/headless mode the user gets zero feedback. Should log to stderr or return non-zero exit from `--check-config`.
-- [ ] **Status bar `[ReadOnly]` confusing during collab** **→ #80**: The `[ReadOnly]` badge is the AI permission tier (`status.rs:271`), not a buffer property. During collab sessions users mistake it for a collab-imposed restriction. Consider: rename to `[AI:RO]` or `[Tier:RO]`, or hide when no AI session is active.
+- [x] **Status bar `[ReadOnly]` confusing during collab** **→ #80** (closed `b1bd6a9e`): The
+  `[ReadOnly]` badge (AI permission tier, not a buffer property) was mistaken for a collab-imposed
+  restriction. Fixed: `render_common/status.rs` now renders `[AI:{tier}]`, only surfaced when an AI
+  session is active (`status.rs:762-783` tests assert this).
 
 ### Collaborative Editing (v0.11.0)
 
@@ -495,17 +498,15 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   `register_fn`/`register_collab_command_prim!` vs. the table's `name` column, excluding Scheme-level
   test-framework macros never `register_fn`'d): the real gap was 53 functions, now all documented
   with real signature/doc/example/category entries matching the existing table's quality bar.
-- [ ] **`mae-kb` doesn't compile standalone with only its own default features** (found 2026-07
-  while fixing the daemon/cozo feature-flag fragility above): `shared/kb/src/lru_query.rs:376`
-  uses `mae_sync::encoding::base64_to_update` unconditionally, not gated behind
+- [x] **`mae-kb` doesn't compile standalone with only its own default features** (found 2026-07;
+  closed 2026-07 via `49f4b1f5`): `shared/kb/src/lru_query.rs:376` used
+  `mae_sync::encoding::base64_to_update` unconditionally, not gated behind
   `#[cfg(feature = "crdt")]`, even though `mae-sync` is an `optional` dependency enabled only by
-  the `crdt` feature. `cargo build -p mae-kb` (default features = `["storage-sled"]`, no `crdt`)
-  fails with an unresolved-crate error. Every real build today works only because some other
-  workspace member (e.g. `mae-core`, `daemon`) also depends on `mae-kb` with `crdt` enabled,
-  and Cargo's feature unification masks the gap — confirmed this reproduces identically on a
-  clean checkout, so it's pre-existing, not a regression. Fix: gate the `mae_sync` usage in
-  `lru_query.rs` behind `#[cfg(feature = "crdt")]` (with a non-crdt fallback), then verify
-  `cargo build -p mae-kb` (defaults only) succeeds in CI to prevent this recurring silently.
+  the `crdt` feature — `cargo build -p mae-kb` (default features, no `crdt`) failed with an
+  unresolved-crate error, masked in every real build by Cargo's feature unification across other
+  workspace members. Fixed by gating the `mae_sync` usage behind `#[cfg(feature = "crdt")]` via a
+  new `decode_crdt_state()` helper, with a non-crdt fallback returning `None` (the call's own
+  caller already treats `None` as an expected, handled case).
 
 ---
 
