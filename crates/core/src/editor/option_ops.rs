@@ -163,6 +163,7 @@ impl super::Editor {
             "kb_daily_chain_gap_max" => self.kb.daily_chain_gap_max.to_string(),
             "format_on_save" => self.format_on_save.to_string(),
             "spell_enabled" => self.spell_enabled.to_string(),
+            "ai_chat_enabled" => self.ai_chat_enabled.to_string(),
             "file_tree_focus_on_open" => self.file_tree_focus_on_open.to_string(),
             "collab_server_address" => self.collab.server_address.clone(),
             "collab_auto_connect" => self.collab.auto_connect.to_string(),
@@ -707,6 +708,9 @@ impl super::Editor {
             }
             "spell_enabled" => {
                 self.spell_enabled = parse_option_bool(value)?;
+            }
+            "ai_chat_enabled" => {
+                self.ai_chat_enabled = parse_option_bool(value)?;
             }
             "file_tree_focus_on_open" => {
                 self.file_tree_focus_on_open = parse_option_bool(value)?;
