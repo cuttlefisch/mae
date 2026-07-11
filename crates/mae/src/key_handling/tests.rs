@@ -259,6 +259,7 @@ fn conversation_input_mode_excluded_from_gui_cursor() {
 fn conversation_multiline_submit_reads_all_lines() {
     let mut scheme = require_scheme!();
     let mut editor = Editor::new();
+    editor.ai_chat_enabled = true;
 
     // Open conversation (creates pair: *AI* output + *ai-input* input).
     editor.dispatch_builtin("ai-prompt");

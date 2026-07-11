@@ -199,6 +199,8 @@ fn which_key_prefix_initialized_empty() {
 fn placeholder_commands_dispatch() {
     let mut editor = Editor::new();
     // ai-prompt is no longer a stub — it creates a conversation buffer
+    // when ai_chat_enabled is on (the legacy path exercised here).
+    editor.ai_chat_enabled = true;
     assert!(editor.dispatch_builtin("ai-prompt"));
     assert_eq!(editor.mode, Mode::ConversationInput);
     assert!(editor.dispatch_builtin("kill-buffer"));
@@ -385,6 +387,7 @@ fn insert_from_register_empty_sets_status() {
 #[test]
 fn ai_prompt_creates_conversation_buffer() {
     let mut editor = Editor::new();
+    editor.ai_chat_enabled = true;
     assert_eq!(editor.buffers.len(), 1);
     assert_eq!(editor.mode, Mode::Normal);
 
@@ -406,6 +409,7 @@ fn ai_prompt_creates_conversation_buffer() {
 #[test]
 fn ai_prompt_reuses_existing_conversation() {
     let mut editor = Editor::new();
+    editor.ai_chat_enabled = true;
     editor.dispatch_builtin("ai-prompt");
     // Split pair: *AI* + *ai-input* = 3 buffers
     assert_eq!(editor.buffers.len(), 3);
@@ -425,6 +429,7 @@ fn ai_prompt_reuses_existing_conversation() {
 #[test]
 fn ai_cancel_when_streaming() {
     let mut editor = Editor::new();
+    editor.ai_chat_enabled = true;
     editor.dispatch_builtin("ai-prompt");
     // Simulate streaming state
     if let Some(conv) = editor.buffers[1].conversation_mut() {
@@ -441,6 +446,7 @@ fn ai_cancel_when_streaming() {
 #[test]
 fn ai_cancel_when_not_streaming() {
     let mut editor = Editor::new();
+    editor.ai_chat_enabled = true;
     editor.dispatch_builtin("ai-prompt");
     editor.dispatch_builtin("ai-cancel");
     assert!(editor.status_msg.contains("No active AI request"));
@@ -458,6 +464,7 @@ fn close_window_returns_to_single() {
 #[test]
 fn ai_prompt_creates_split_pair() {
     let mut editor = Editor::new();
+    editor.ai_chat_enabled = true;
     editor.dispatch_builtin("ai-prompt");
     let pair = editor
         .ai
@@ -476,6 +483,7 @@ fn ai_prompt_creates_split_pair() {
 #[test]
 fn ai_prompt_input_cursor_follows_text() {
     let mut editor = Editor::new();
+    editor.ai_chat_enabled = true;
     editor.dispatch_builtin("ai-prompt");
     let pair = editor.ai.conversation_pair.as_ref().unwrap().clone();
 
@@ -509,6 +517,7 @@ fn ai_input_newline_survives_clamp_all_cursors() {
     // Regression: clamp_all_cursors used display_line_count() which excluded the
     // trailing phantom line after '\n', clamping cursor from row 1 back to row 0.
     let mut editor = Editor::new();
+    editor.ai_chat_enabled = true;
     editor.dispatch_builtin("ai-prompt");
     let pair = editor.ai.conversation_pair.as_ref().unwrap().clone();
     let buf = &mut editor.buffers[pair.input_buffer_idx];
@@ -529,6 +538,7 @@ fn ai_input_newline_after_clear_survives_clamp() {
     // Regression: after clear_input_buffer (submit) + retype + newline,
     // cursor must stay on the new line through clamp_all_cursors.
     let mut editor = Editor::new();
+    editor.ai_chat_enabled = true;
     editor.dispatch_builtin("ai-prompt");
     let pair = editor.ai.conversation_pair.as_ref().unwrap().clone();
 
@@ -558,6 +568,7 @@ fn ai_input_newline_after_clear_survives_clamp() {
 #[test]
 fn ai_prompt_i_in_output_redirects_to_input() {
     let mut editor = Editor::new();
+    editor.ai_chat_enabled = true;
     editor.dispatch_builtin("ai-prompt");
     let pair = editor.ai.conversation_pair.as_ref().unwrap().clone();
     // Switch to normal mode in the output window.
@@ -570,6 +581,7 @@ fn ai_prompt_i_in_output_redirects_to_input() {
 #[test]
 fn kill_conversation_buffer_closes_both() {
     let mut editor = Editor::new();
+    editor.ai_chat_enabled = true;
     editor.dispatch_builtin("ai-prompt");
     assert_eq!(editor.buffers.len(), 3);
     assert!(editor.ai.conversation_pair.is_some());
@@ -580,6 +592,68 @@ fn kill_conversation_buffer_closes_both() {
     // Both buffers and the pair should be gone.
     assert!(editor.ai.conversation_pair.is_none());
     assert_eq!(editor.buffers.len(), 1);
+}
+
+// --- ADR-049: ai_chat_enabled default-off redirect behavior ---
+
+#[test]
+fn ai_chat_enabled_defaults_to_false() {
+    let editor = Editor::new();
+    assert!(
+        !editor.ai_chat_enabled,
+        "embedded AI chat must be off by default (ADR-049): mae-agent is the default surface"
+    );
+}
+
+#[test]
+fn ai_editor_defaults_to_mae_agent() {
+    let editor = Editor::new();
+    assert_eq!(editor.ai.editor_name, "mae-agent");
+}
+
+#[test]
+fn ai_prompt_redirects_to_agent_shell_when_chat_disabled() {
+    let mut editor = Editor::new();
+    assert!(!editor.ai_chat_enabled);
+
+    editor.dispatch_builtin("ai-prompt");
+
+    // No conversation buffer/pair should have been created.
+    assert!(editor.ai.conversation_pair.is_none());
+    assert!(
+        !editor
+            .buffers
+            .iter()
+            .any(|b| b.kind == crate::buffer::BufferKind::Conversation),
+        "no Conversation buffer should be created when ai_chat_enabled is false"
+    );
+    // Instead, an agent shell buffer should have been opened, exactly like open-ai-agent.
+    let shell_buf = editor
+        .buffers
+        .iter()
+        .find(|b| b.agent_shell)
+        .expect("ai-prompt should redirect to an agent shell buffer");
+    assert!(shell_buf.name.contains(&editor.ai.editor_name));
+    assert_eq!(editor.mode, Mode::ShellInsert);
+}
+
+#[test]
+fn ai_chat_true_restores_legacy_conversation_buffer_behavior() {
+    let mut editor = Editor::new();
+    editor.ai_chat_enabled = true;
+
+    editor.dispatch_builtin("ai-prompt");
+
+    assert!(editor.ai.conversation_pair.is_some());
+    assert!(editor
+        .buffers
+        .iter()
+        .any(|b| b.kind == crate::buffer::BufferKind::Conversation));
+    assert!(
+        !editor.buffers.iter().any(|b| b.agent_shell),
+        "no agent shell buffer should be created when ai_chat_enabled is true"
+    );
+    assert_eq!(editor.mode, Mode::ConversationInput);
 }
 
 #[test]
