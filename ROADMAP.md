@@ -482,10 +482,13 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   ad-hoc fixes. Two smaller items already resolved as part of that same audit: the remote-cursor
   render duplication (principle #8) and the git_status/notifications_view/kb_sharing hand-mirrored
   view pattern, both consolidated via `render_common::collab_cursor` / `foldable_view`.
-- [ ] **Scheme API KB-doc coverage gap** (found via `/mae-audit`, 2026-07): 186 `register_fn`
-  registrations in `crates/scheme/src/runtime.rs` vs. only 18 `scheme:*` KB nodes in
-  `crates/core/src/kb_seed/` — a ~10x gap meaning most registered primitives have no `:help`/
-  `kb_search` doc node. Real AI-peer discoverability gap; sized for its own follow-up pass.
+- [x] **Scheme API KB-doc coverage gap** (found via `/mae-audit`, 2026-07; closed 2026-07): the
+  original "186 vs 18" figure was stale — the audit's grep only found the 18-entry *variables*
+  table, missing that `crates/core/src/kb_seed/scheme_api.rs`'s `SCHEME_API_FUNCTIONS` table already
+  documented 137 of the ~194 registered names. Re-verified via an exact diff (registered names from
+  `register_fn`/`register_collab_command_prim!` vs. the table's `name` column, excluding Scheme-level
+  test-framework macros never `register_fn`'d): the real gap was 53 functions, now all documented
+  with real signature/doc/example/category entries matching the existing table's quality bar.
 - [ ] **`mae-kb` doesn't compile standalone with only its own default features** (found 2026-07
   while fixing the daemon/cozo feature-flag fragility above): `shared/kb/src/lru_query.rs:376`
   uses `mae_sync::encoding::base64_to_update` unconditionally, not gated behind
