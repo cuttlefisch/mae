@@ -5296,5 +5296,4 @@ pub(crate) fn build_doctor_lines(ctx: &DoctorContext) -> Vec<String> {
 }
 
 #[cfg(test)]
-#[path = "../collab_bridge_tests.rs"]
 mod tests;
