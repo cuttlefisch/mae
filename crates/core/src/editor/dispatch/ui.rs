@@ -167,14 +167,21 @@ impl Editor {
 
             // AI
             "ai-prompt" | "ai-chat" => {
-                self.open_conversation_buffer();
-                // If AI is not configured, show setup guidance in the output buffer
-                // and stay in Normal mode so the user can read/copy the URLs.
-                if !self.ai.configured {
-                    if let Some(ref pair) = self.ai.conversation_pair {
-                        let out_idx = pair.output_buffer_idx;
-                        if out_idx < self.buffers.len() {
-                            let guidance = "\
+                // The embedded conversation-buffer chat is deprecated in favor
+                // of the model-agnostic mae-agent TUI harness (ADR-049). Off
+                // by default: transparently redirect to the same agent-shell
+                // mechanism as `open-ai-agent` unless explicitly re-enabled.
+                if !self.ai_chat_enabled {
+                    self.open_ai_agent_shell();
+                } else {
+                    self.open_conversation_buffer();
+                    // If AI is not configured, show setup guidance in the output buffer
+                    // and stay in Normal mode so the user can read/copy the URLs.
+                    if !self.ai.configured {
+                        if let Some(ref pair) = self.ai.conversation_pair {
+                            let out_idx = pair.output_buffer_idx;
+                            if out_idx < self.buffers.len() {
+                                let guidance = "\
 AI is not configured yet.
 
 Quick setup:
@@ -193,10 +200,13 @@ Quick setup:
   4. Restart MAE.
 
 For full setup guide: :help ai-setup";
-                            self.buffers[out_idx].replace_contents(guidance);
+                                self.buffers[out_idx].replace_contents(guidance);
+                            }
                         }
+                        self.set_status(
+                            "AI not configured \u{2014} :help ai-setup for setup guide",
+                        );
                     }
-                    self.set_status("AI not configured \u{2014} :help ai-setup for setup guide");
                 }
             }
             "ai-set-mode" => {
@@ -279,34 +289,7 @@ For full setup guide: :help ai-setup";
 
             // AI agent launcher
             "open-ai-agent" => {
-                // Prefer git root so agents operate at the repository level,
-                // not a subcrate Cargo.toml directory.
-                let agent_cwd = self.git_or_project_root();
-                let shell_name = format!("*AI:{}*", self.ai.editor_name);
-                let mut buf = Buffer::new_shell(shell_name);
-                buf.agent_shell = true;
-                self.buffers.push(buf);
-                let new_idx = self.buffers.len() - 1;
-                if let Some(cwd) = agent_cwd {
-                    self.shell.cwds.insert(new_idx, cwd);
-                }
-                // @ai-caution: [window-split] Agent shells MUST use
-                // switch_to_buffer_non_conversation() + split_root(), NOT
-                // display_buffer_and_focus(). The latter steals conversation
-                // windows. Fixed in commit 8a52851.
-                self.switch_to_buffer_non_conversation(new_idx);
-                // Focus the window showing the agent shell.
-                let agent_win_id = self
-                    .window_mgr
-                    .iter_windows()
-                    .find(|w| w.buffer_idx == new_idx)
-                    .map(|w| w.id);
-                if let Some(wid) = agent_win_id {
-                    self.window_mgr.set_focused(wid);
-                }
-                let cmd = self.ai.editor_name.clone();
-                self.shell.agent_spawns.push((new_idx, cmd));
-                self.set_mode(Mode::ShellInsert);
+                self.open_ai_agent_shell();
             }
 
             // Demo buffers
@@ -432,6 +415,40 @@ For full setup guide: :help ai-setup";
         }
         self.mark_full_redraw();
         Some(true)
+    }
+
+    /// Spawn the configured `ai_editor` command (default `mae-agent`) as an
+    /// auto-run agent shell buffer. Shared by the `open-ai-agent` command and
+    /// the `ai_chat_enabled = false` redirect for `ai-prompt`/`ai-chat`.
+    pub(crate) fn open_ai_agent_shell(&mut self) {
+        // Prefer git root so agents operate at the repository level,
+        // not a subcrate Cargo.toml directory.
+        let agent_cwd = self.git_or_project_root();
+        let shell_name = format!("*AI:{}*", self.ai.editor_name);
+        let mut buf = Buffer::new_shell(shell_name);
+        buf.agent_shell = true;
+        self.buffers.push(buf);
+        let new_idx = self.buffers.len() - 1;
+        if let Some(cwd) = agent_cwd {
+            self.shell.cwds.insert(new_idx, cwd);
+        }
+        // @ai-caution: [window-split] Agent shells MUST use
+        // switch_to_buffer_non_conversation() + split_root(), NOT
+        // display_buffer_and_focus(). The latter steals conversation
+        // windows. Fixed in commit 8a52851.
+        self.switch_to_buffer_non_conversation(new_idx);
+        // Focus the window showing the agent shell.
+        let agent_win_id = self
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == new_idx)
+            .map(|w| w.id);
+        if let Some(wid) = agent_win_id {
+            self.window_mgr.set_focused(wid);
+        }
+        let cmd = self.ai.editor_name.clone();
+        self.shell.agent_spawns.push((new_idx, cmd));
+        self.set_mode(Mode::ShellInsert);
     }
 
     fn open_demo(&mut self, label: &str, content: &str) {
