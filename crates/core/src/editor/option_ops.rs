@@ -1598,7 +1598,7 @@ impl super::Editor {
             "AI Agent (SPC a a):".to_string(),
         ];
         let ai_cmd = if self.ai.editor_name.is_empty() {
-            "claude"
+            "mae-agent"
         } else {
             &self.ai.editor_name
         };
@@ -1616,6 +1616,15 @@ impl super::Editor {
 
         // AI Chat
         lines.push("AI Chat (SPC a p):".to_string());
+        if self.ai_chat_enabled {
+            lines.push("  Embedded chat: enabled (built-in conversation buffer)".to_string());
+        } else {
+            lines.push(
+                "  Embedded chat: disabled (ADR-049) \u{2014} SPC a p launches the AI Agent \
+                 shell above instead. :set ai_chat_enabled true to restore it."
+                    .to_string(),
+            );
+        }
         let provider = if self.ai.provider.is_empty() {
             "(not configured)"
         } else {

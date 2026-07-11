@@ -169,8 +169,8 @@ Edit it with `SPC f c`.\n\n\
 (add-hook! \"buffer-open\" \"my-on-open\")\n\
 ```\n\n\
 ## Built-in AI\n\
-- `SPC a p` — AI Chat (built-in conversation with editor context)\n\
-- `SPC a a` — AI Agent (terminal-based, e.g. Claude Code)\n\
+- `SPC a a` / `SPC a p` — AI Agent (mae-agent terminal harness by default)\n\
+- Set `ai_chat_enabled` to restore the older built-in conversation-buffer chat on `SPC a p`\n\
 See [[tutorial:ai-setup|AI Setup]] for configuration.\n\n\
 ## No plugins — packages\n\
 MAE uses a Scheme-based package system with `require-feature`/`provide-feature` \

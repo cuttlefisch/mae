@@ -508,11 +508,11 @@ impl CommandRegistry {
         reg.register_builtin("force-kill-buffer", "Close current buffer without saving");
         reg.register_builtin(
             "ai-prompt",
-            "AI Chat — built-in conversation with editor context (SPC a p)",
+            "AI Agent (SPC a p) — mae-agent shell by default; built-in chat if ai_chat_enabled",
         );
         reg.register_builtin(
             "ai-chat",
-            "AI Chat — built-in conversation with editor context (SPC a p)",
+            "AI Agent (SPC a p) — mae-agent shell by default; built-in chat if ai_chat_enabled",
         );
         reg.register_builtin("ai-cancel", "Cancel current AI operation");
         reg.register_builtin("ai-accept", "Accept proposed AI changes");

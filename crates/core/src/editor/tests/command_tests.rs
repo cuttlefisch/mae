@@ -612,6 +612,56 @@ fn ai_editor_defaults_to_mae_agent() {
 }
 
 #[test]
+fn open_ai_agent_dispatches_directly_to_agent_shell() {
+    // Regression test for the open_ai_agent_shell() extraction: dispatching
+    // "open-ai-agent" itself (not just its ai-prompt redirect) must still
+    // spawn an agent_shell buffer named after the configured ai_editor.
+    let mut editor = Editor::new();
+    assert_eq!(editor.buffers.len(), 1);
+
+    editor.dispatch_builtin("open-ai-agent");
+
+    assert_eq!(editor.mode, Mode::ShellInsert);
+    let shell_buf = editor
+        .buffers
+        .iter()
+        .find(|b| b.agent_shell)
+        .expect("open-ai-agent should create an agent shell buffer");
+    assert_eq!(shell_buf.name, "*AI:mae-agent*");
+    assert!(editor
+        .shell
+        .agent_spawns
+        .iter()
+        .any(|(_, cmd)| cmd == "mae-agent"));
+}
+
+#[test]
+fn ai_chat_alias_matches_ai_prompt_redirect_behavior() {
+    // "ai-chat" is a documented alias of "ai-prompt" (commands.rs) and must
+    // follow the exact same ai_chat_enabled gate.
+    let mut editor = Editor::new();
+    assert!(!editor.ai_chat_enabled);
+
+    editor.dispatch_builtin("ai-chat");
+
+    assert!(editor.ai.conversation_pair.is_none());
+    assert!(editor.buffers.iter().any(|b| b.agent_shell));
+    assert_eq!(editor.mode, Mode::ShellInsert);
+}
+
+#[test]
+fn ai_chat_alias_respects_chat_enabled_true() {
+    let mut editor = Editor::new();
+    editor.ai_chat_enabled = true;
+
+    editor.dispatch_builtin("ai-chat");
+
+    assert!(editor.ai.conversation_pair.is_some());
+    assert!(!editor.buffers.iter().any(|b| b.agent_shell));
+    assert_eq!(editor.mode, Mode::ConversationInput);
+}
+
+#[test]
 fn ai_prompt_redirects_to_agent_shell_when_chat_disabled() {
     let mut editor = Editor::new();
     assert!(!editor.ai_chat_enabled);
