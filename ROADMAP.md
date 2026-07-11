@@ -473,15 +473,21 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 - [x] **Binary architecture split** (v0.13.0, ADR-014): Split MAE into editor workspace + daemon workspace with separate `Cargo.lock` files. `mae-daemon` binary with CozoDB+SQLite backend for persistent KB, background maintenance (scheduler with watcher/maintenance/health ticks), and JSON-RPC API over Unix socket. Shared crates (`mae-kb`, `mae-sync`, `mae-mcp`) moved to `shared/` with feature flags (`storage-sled`, `crdt`). `CozoKbStore::open_with_engine()` + `open_mem()` for backend-agnostic storage. Resolves rusqlite linker conflict (separate dependency trees). LRU cache query layer (`LruQueryLayer`) + `DaemonClient` for editor-daemon integration. Config: `[daemon]` section with 3 options. CI/CD: daemon job, release artifacts include `mae-daemon`. ADR-014 written.
 - [ ] **File-size ceiling enforcement audit** (found via `/mae-audit`, 2026-07): the 800-line source /
   500-line test-file ceilings in `.claude/commands/mae-audit.md`'s "Hard Ceilings" table are not
-  actively enforced outside the 7 originally-tracked exceptions — roughly **60 additional files**
-  across `crates/core`, `crates/ai`, `crates/mae`, `crates/lsp`, `crates/dap`, `shared/sync`,
-  `shared/mcp`, and `daemon` now exceed them (worst: `daemon/src/collab_handler_tests.rs` 4,885
-  lines, `shared/sync/src/kb.rs` 4,390, `crates/core/src/editor/kb_ops.rs` 6,754 combined
-  source+test). See `.claude/commands/mae-audit.md`'s "Known exceptions" list for the original 7;
-  this entry tracks that the list needs a full refresh and a dedicated splitting pass rather than
-  ad-hoc fixes. Two smaller items already resolved as part of that same audit: the remote-cursor
-  render duplication (principle #8) and the git_status/notifications_view/kb_sharing hand-mirrored
-  view pattern, both consolidated via `render_common::collab_cursor` / `foldable_view`.
+  actively enforced outside the tracked exceptions — roughly **60 additional files** across
+  `crates/core`, `crates/ai`, `crates/mae`, `crates/lsp`, `crates/dap`, `shared/sync`, `shared/mcp`,
+  and `daemon` exceed them (worst remaining: `daemon/src/collab_handler_tests.rs` 4,885 lines,
+  `shared/sync/src/kb.rs` 4,390). See `.claude/commands/mae-audit.md`'s "Known exceptions" list; this
+  entry tracks that the list needs a full refresh and a dedicated splitting pass rather than ad-hoc
+  fixes. Resolved so far: the remote-cursor render duplication (principle #8) and the
+  git_status/notifications_view/kb_sharing hand-mirrored view pattern (via
+  `render_common::collab_cursor` / `foldable_view`); and **`crates/core/src/editor/kb_ops.rs`**
+  (was 6,754 combined source+test, the single worst offender) — split into
+  `crates/core/src/editor/kb_ops/{mod,registry,sync,nodes,search,watchers,activity,daily,dispatch}.rs`
+  (each source file now under 800 lines) plus `kb_ops/kb_ops_tests.rs`. That test file itself is
+  still 2,987 lines (well over the 500-line test ceiling) — splitting it by the same
+  registry/sync/nodes/... groupings as the source is a reasonable, low-risk follow-up, not done in
+  this pass. `shared/sync/src/kb.rs` was identified as the next-safest source-restructuring
+  candidate (clean per-type `impl` block seams) but isn't done yet either.
 - [x] **Scheme API KB-doc coverage gap** (found via `/mae-audit`, 2026-07; closed 2026-07): the
   original "186 vs 18" figure was stale — the audit's grep only found the 18-entry *variables*
   table, missing that `crates/core/src/kb_seed/scheme_api.rs`'s `SCHEME_API_FUNCTIONS` table already
