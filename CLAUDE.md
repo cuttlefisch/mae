@@ -145,6 +145,32 @@ a `FrameLayout`, `render_buffer_content()` draws text, and `render_cursor()`
 positions the cursor. All three MUST consume the same `HighlightSpan` set.
 See `crates/gui/src/RENDERING.md` for detailed rules.
 
+### Debt/Invariant Tagging
+
+MAE uses two distinct in-code comment conventions — don't confuse them:
+
+- **`@ai-caution: [category] <explanation>`** — a landmine/invariant warning for a specific
+  function, field, or block that future editors (human or AI) must not casually violate (e.g.
+  `// @ai-caution: [window-split] Agent shells MUST use switch_to_buffer_non_conversation() +
+  split_root(), NOT display_buffer_and_focus() — the latter steals conversation windows.`). Place
+  it directly above the guarded code, or as a file-header `//!` line when the whole file carries
+  one invariant. `[category]` is a short bracketed tag grouping related warnings (`[rendering]`,
+  `[dispatch]`, `[window-split]`, `[architecture-debt]`, etc.) so they're greppable together. This
+  is also the convention for flagging tracked architectural debt in-code (see below) — use
+  `[architecture-debt]` and cross-link to `ROADMAP.md`'s "Architecture Debt" section so the debt is
+  discoverable by grepping the source, not only by reading a separate tracking doc.
+- **`@stability: stable|experimental`** — a crate/module-level maturity marker (one per crate's
+  `lib.rs`, or a module's `autoloads.scm` header per `docs/module-template/README.md`). This is
+  about API maturity, not a warning about a specific invariant — don't use it where `@ai-caution`
+  is meant, and vice versa.
+
+Architectural debt is tracked in three places that should cross-reference each other: this file's
+principles, `ROADMAP.md`'s "Architecture Debt" checklist, and `.claude/commands/mae-audit.md`'s
+"Known exceptions" list (files over the audit's size ceilings that are accepted debt, not audit
+failures). When you add a new tracked exception in one place, add an `@ai-caution:
+[architecture-debt]` marker at the file in question and a pointer in the other two, so a reader
+landing in any one of the three finds the others.
+
 ## Development Priorities
 
 Start terminal-only. Skip GUI until the model works.

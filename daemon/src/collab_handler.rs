@@ -5,6 +5,13 @@
 //! for responses. Protocol methods (initialize, ping, subscribe) are
 //! delegated to `mae_mcp::handle_request`. Sync methods are handled locally
 //! by dispatching to the DocStore.
+//!
+//! @ai-caution: [architecture-debt] JSON-RPC router; `handle_doc_request_inner`
+//! is large with many method arms. Tracked in
+//! .claude/commands/mae-audit.md's "Known exceptions" and ROADMAP.md's
+//! "Architecture Debt" section. Its co-located `collab_handler_tests.rs` has
+//! grown to ~10x the 500-line test-file ceiling — a strong candidate for
+//! further splitting into per-feature test modules.
 
 use std::collections::HashSet;
 use std::sync::Arc;

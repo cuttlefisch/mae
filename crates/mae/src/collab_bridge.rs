@@ -5,6 +5,11 @@
 //! - `drain_collab_intents()` called every tick
 //! - `handle_collab_event()` handles events from the background task
 //! - `run_collab_task()` is the background tokio task owning the TCP connection
+//!
+//! @ai-caution: [architecture-debt] Collab event/intent bridge; the co-located
+//! `#[cfg(test)] mod tests` (see `collab_bridge_tests.rs`) is itself a prime
+//! candidate for further splitting. Tracked in `.claude/commands/mae-audit.md`'s
+//! "Known exceptions" and `ROADMAP.md`'s "Architecture Debt" section.
 
 use std::collections::HashSet;
 use std::sync::Mutex;

@@ -12,6 +12,11 @@
 //! Graph algorithms (PageRank, community detection) require the `graph-algo`
 //! feature, currently disabled due to upstream `graph_builder` rayon compat
 //! issue. Will be re-enabled when upstream fixes land.
+//!
+//! @ai-caution: [architecture-debt] Dense but organized CozoDB Datalog query
+//! module. Tracked in `.claude/commands/mae-audit.md`'s "Known exceptions"
+//! and `ROADMAP.md`'s "Architecture Debt" section — re-measure before adding
+//! more query surface here.
 
 use crate::store::{
     AgendaFilter, Block, HealthReport, KbStore, KbStoreError, Link, MetaMember, NodeVersion,

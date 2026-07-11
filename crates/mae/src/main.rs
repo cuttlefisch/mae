@@ -1,3 +1,8 @@
+// @ai-caution: [architecture-debt] Editor entry point; extraction in progress.
+// Tracked in .claude/commands/mae-audit.md's "Known exceptions" and
+// ROADMAP.md's "Architecture Debt" section — see both before further growing
+// this file; prefer extracting a new module over adding here.
+
 mod agents;
 mod ai_event_handler;
 mod ai_residency;

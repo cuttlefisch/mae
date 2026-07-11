@@ -5,6 +5,11 @@
 //! the behavior specified in the standard.
 //!
 //! Reference: https://small.r7rs.org/attachment/r7rs.pdf
+//!
+//! @ai-caution: [architecture-debt] Large by nature (one function per R7RS
+//! section) — tracked in .claude/commands/mae-audit.md's "Known exceptions"
+//! and ROADMAP.md's "Architecture Debt" section as an accepted exception,
+//! not a splitting target.
 
 use std::rc::Rc;
 

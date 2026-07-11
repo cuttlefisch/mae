@@ -56,17 +56,29 @@ Build commands:
 | Struct fields | 15 fields | Extract sub-structs or builder pattern |
 | Nesting depth | 4 levels | Early return, extract function |
 
-**Known exceptions** (tracked as architectural debt, not audit failures — re-measure each run with `wc -l`):
+**Known exceptions** (tracked as architectural debt, not audit failures — re-measure each run with `wc -l`).
+Each of these also carries an in-code `@ai-caution: [architecture-debt]` marker (see CLAUDE.md's
+"Debt/Invariant Tagging" section) cross-linking back here and to `ROADMAP.md`'s "Architecture Debt"
+section — when you add a new exception, add the marker + both cross-references, not just this list:
 - `crates/mae/src/main.rs` — editor entry point, extraction in progress
-- `crates/mae/src/collab_bridge.rs` — collab event/intent bridge; the `#[cfg(test)] mod tests` is large and
-  a prime candidate to extract to a sibling submodule file (see Test Organization)
+- `crates/mae/src/collab_bridge.rs` — collab event/intent bridge; its `#[cfg(test)] mod tests` was
+  already extracted to a sibling file (`collab_bridge_tests.rs`) but that file has since grown to
+  ~4,500 lines (~9x the test-file ceiling) — needs further splitting into per-feature test modules,
+  not a candidate for the original extraction advice anymore
 - `crates/core/src/editor/mod.rs` — Editor struct, modularized into submodules
 - `shared/kb/src/cozo_store.rs` — CozoDB Datalog queries, dense but organized
 - `crates/scheme/src/runtime.rs` — Scheme VM runtime, under modularization
 - `crates/scheme/tests/r7rs_compliance.rs` — R7RS spec compliance tests (large by nature)
-- `daemon/src/collab_handler.rs` — JSON-RPC router; `handle_doc_request_inner` is large with many method arms
+- `daemon/src/collab_handler.rs` — JSON-RPC router; `handle_doc_request_inner` is large with many
+  method arms; its `collab_handler_tests.rs` sibling is also ~10x the test-file ceiling
 
 Flag these if they've grown since last audit, but don't remediate without explicit request.
+
+**2026-07 full-codebase audit** found ~60 additional files over these ceilings beyond the list
+above (not yet individually tracked here) — see `ROADMAP.md`'s "Architecture Debt" section for the
+summary and worst offenders; that audit pass also resolved two Phase-5 DRY findings (remote-cursor
+render duplication, the git_status/notifications_view/kb_sharing hand-mirrored view pattern) via
+`render_common::collab_cursor` and `crates/core/src/foldable_view.rs`.
 
 ## Test Organization (Rust convention — do NOT "fix" co-located tests)
 

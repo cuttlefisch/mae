@@ -471,6 +471,21 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 - [ ] **Unified buffer-switching strategy**: Three patterns exist (`switch_to_buffer`, `display_buffer_and_focus`, palette). Should converge on one with consistent view state management.
 - [ ] **KB fuzzy body search** **→ #81**: `kb_search` currently matches node titles and tags but not node body content in a fuzzy/substring way. Searching for a term like "DeltaDB" that only appears in the body of some nodes returns no results. Add full-text indexing of node bodies (CozoDB FTS) so `kb_search` and `:help` fuzzy completion can find concepts mentioned anywhere in the knowledge graph, not just in titles.
 - [x] **Binary architecture split** (v0.13.0, ADR-014): Split MAE into editor workspace + daemon workspace with separate `Cargo.lock` files. `mae-daemon` binary with CozoDB+SQLite backend for persistent KB, background maintenance (scheduler with watcher/maintenance/health ticks), and JSON-RPC API over Unix socket. Shared crates (`mae-kb`, `mae-sync`, `mae-mcp`) moved to `shared/` with feature flags (`storage-sled`, `crdt`). `CozoKbStore::open_with_engine()` + `open_mem()` for backend-agnostic storage. Resolves rusqlite linker conflict (separate dependency trees). LRU cache query layer (`LruQueryLayer`) + `DaemonClient` for editor-daemon integration. Config: `[daemon]` section with 3 options. CI/CD: daemon job, release artifacts include `mae-daemon`. ADR-014 written.
+- [ ] **File-size ceiling enforcement audit** (found via `/mae-audit`, 2026-07): the 800-line source /
+  500-line test-file ceilings in `.claude/commands/mae-audit.md`'s "Hard Ceilings" table are not
+  actively enforced outside the 7 originally-tracked exceptions — roughly **60 additional files**
+  across `crates/core`, `crates/ai`, `crates/mae`, `crates/lsp`, `crates/dap`, `shared/sync`,
+  `shared/mcp`, and `daemon` now exceed them (worst: `daemon/src/collab_handler_tests.rs` 4,885
+  lines, `shared/sync/src/kb.rs` 4,390, `crates/core/src/editor/kb_ops.rs` 6,754 combined
+  source+test). See `.claude/commands/mae-audit.md`'s "Known exceptions" list for the original 7;
+  this entry tracks that the list needs a full refresh and a dedicated splitting pass rather than
+  ad-hoc fixes. Two smaller items already resolved as part of that same audit: the remote-cursor
+  render duplication (principle #8) and the git_status/notifications_view/kb_sharing hand-mirrored
+  view pattern, both consolidated via `render_common::collab_cursor` / `foldable_view`.
+- [ ] **Scheme API KB-doc coverage gap** (found via `/mae-audit`, 2026-07): 186 `register_fn`
+  registrations in `crates/scheme/src/runtime.rs` vs. only 18 `scheme:*` KB nodes in
+  `crates/core/src/kb_seed/` — a ~10x gap meaning most registered primitives have no `:help`/
+  `kb_search` doc node. Real AI-peer discoverability gap; sized for its own follow-up pass.
 
 ---
 

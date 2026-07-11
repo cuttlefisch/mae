@@ -1,3 +1,8 @@
+// @ai-caution: [architecture-debt] Scheme VM runtime — under modularization.
+// Tracked in .claude/commands/mae-audit.md's "Known exceptions" and
+// ROADMAP.md's "Architecture Debt" section; prefer extracting a submodule
+// over growing this file further.
+
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
