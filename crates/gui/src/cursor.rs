@@ -7,6 +7,9 @@
 //! Cursor pixel positions come from `FrameLayout`, which bakes in heading
 //! scale from `syntax_spans`. No separate span parameter is needed here.
 
+use mae_core::render_common::collab_cursor::{
+    normalize_selection_range, offscreen_side, selection_col_range, OffscreenSide,
+};
 use mae_core::wrap::wrap_cursor_position;
 use mae_core::{Editor, HighlightSpan, Mode};
 use skia_safe::Color4f;
@@ -512,11 +515,8 @@ pub fn render_remote_selections(
         };
 
         // Normalize selection direction.
-        let (sr, sc, er, ec) = if (start_row, start_col) <= (end_row, end_col) {
-            (start_row, start_col, end_row, end_col)
-        } else {
-            (end_row, end_col, start_row, start_col)
-        };
+        let ((sr, sc), (er, ec)) =
+            normalize_selection_range((start_row, start_col), (end_row, end_col));
 
         let color_key =
             mae_core::render_common::collab_colors::collab_cursor_style_key(user.color_index);
@@ -543,11 +543,8 @@ pub fn render_remote_selections(
                 continue;
             }
 
-            let col_start = if row == sr { sc } else { 0 };
-            let col_end = if row == er { ec } else { buf.line_len(row) };
-
-            let vis_start = col_start.saturating_sub(win.col_offset);
-            let vis_end = col_end.saturating_sub(win.col_offset);
+            let (vis_start, vis_end) =
+                selection_col_range(row, sr, sc, er, ec, buf.line_len(row), win.col_offset);
             let width = vis_end.saturating_sub(vis_start);
 
             if width == 0 {
@@ -597,16 +594,17 @@ pub fn render_remote_offscreen_indicators(
     let mut below: Vec<Color4f> = Vec::new();
 
     for user in &remote_users {
+        let fallback_side = offscreen_side(user.cursor_row, win.scroll_offset, inner_height);
         let is_above = if let Some(layout) = frame_layout {
             layout.display_row_of(user.cursor_row).is_none() && user.cursor_row < win.scroll_offset
         } else {
-            user.cursor_row < win.scroll_offset
+            fallback_side == Some(OffscreenSide::Above)
         };
 
         let is_below = if let Some(layout) = frame_layout {
             layout.display_row_of(user.cursor_row).is_none() && user.cursor_row >= win.scroll_offset
         } else {
-            user.cursor_row >= win.scroll_offset + inner_height
+            fallback_side == Some(OffscreenSide::Below)
         };
 
         let color_key =
