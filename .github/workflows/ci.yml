@@ -86,10 +86,19 @@ jobs:
       # The mae-mcp build stays: it's the only way the shim lands at
       # target/release/mae-mcp-shim, and it's cheap (mae-mcp is feature-independent
       # and already compiled by the test step — this just links the shim).
+      #
+      # mae-agent-cli needs the same explicit `cargo build` treatment: it's a
+      # bin-only crate with only unit tests (no lib target, no integration
+      # test spawning it via CARGO_BIN_EXE_*), so `cargo test --release`
+      # above only produces its test-harness binary under target/release/deps/
+      # — never the plain target/release/mae-agent artifact this job stages.
+      # Confirmed by reproducing locally: `cargo test --release -p
+      # mae-agent-cli` leaves no target/release/mae-agent at all.
       - name: Build install artifacts (reuse test-compiled binaries)
         if: matrix.toolchain == 'stable' && matrix.step == 'test'
         run: |
           cargo build --release --package mae-mcp
+          cargo build --release --package mae-agent-cli
           ./target/release/build-manual-kb assets/mae-manual.cozo
 
       - name: Stage editor artifacts
