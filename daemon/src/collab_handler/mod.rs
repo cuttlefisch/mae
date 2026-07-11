@@ -1931,5 +1931,4 @@ async fn handle_sync_tool(
 }
 
 #[cfg(test)]
-#[path = "../collab_handler_tests.rs"]
 mod tests;
