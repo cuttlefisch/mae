@@ -6,7 +6,28 @@
 use crate::window::WindowId;
 use crate::SchemeToolDef;
 
-use super::{AiNetworkCheck, ConversationPair, InputLock};
+use super::ConversationPair;
+
+/// Input lock scope — controls what keyboard input is allowed during AI/MCP operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputLock {
+    /// No lock — all input accepted normally.
+    None,
+    /// AI session active — block editor commands but allow shell input and navigation.
+    AiBusy,
+    /// MCP tool executing — block editor commands but allow shell input and navigation.
+    McpBusy,
+}
+
+/// Network connectivity check result (lightweight copy for display/reporting).
+#[derive(Debug, Clone)]
+pub struct AiNetworkCheck {
+    pub endpoint: String,
+    pub reachable: bool,
+    pub http_status: Option<u16>,
+    pub latency_ms: u64,
+    pub error: Option<String>,
+}
 
 /// AI session state: provider config, token counters, streaming flags,
 /// conversation pair, permission tier, and target context.

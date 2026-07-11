@@ -207,4 +207,33 @@ impl Editor {
         self.command_palette = Some(CommandPalette::for_recent_files(&name_refs));
         self.set_mode(Mode::CommandPalette);
     }
+    /// Returns the active buffer's project root, falling back to the editor-wide project root.
+    pub fn active_project_root(&self) -> Option<&std::path::Path> {
+        let buf = self.active_buffer();
+        if let Some(root) = &buf.project_root {
+            return Some(root.as_path());
+        }
+        self.project.as_ref().map(|p| p.root.as_path())
+    }
+
+    /// Returns the git repository root, falling back to the project root.
+    /// Walks up from the current project root looking for `.git`.
+    /// This gives the VCS-level root rather than a subcrate Cargo.toml directory.
+    pub fn git_or_project_root(&self) -> Option<std::path::PathBuf> {
+        let start = self
+            .project
+            .as_ref()
+            .map(|p| p.root.as_path())
+            .or_else(|| self.active_buffer().project_root.as_deref())?;
+        let mut dir = start.to_path_buf();
+        loop {
+            if dir.join(".git").exists() {
+                return Some(dir);
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+        Some(start.to_path_buf())
+    }
 }
