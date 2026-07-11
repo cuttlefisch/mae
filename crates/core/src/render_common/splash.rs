@@ -77,7 +77,11 @@ pub const QUICK_ACTIONS: &[(&str, &str, &str)] = &[
     ("SPC SPC", "Commands", "command-palette"),
     ("SPC :", "Command line", "command-mode"),
     ("SPC a a", "AI Agent (terminal)", "open-ai-agent"),
-    ("SPC a p", "AI Chat (built-in)", "ai-prompt"),
+    (
+        "SPC a p",
+        "AI Agent (or built-in chat, ai_chat_enabled)",
+        "ai-prompt",
+    ),
     ("SPC h h", "Help", "help"),
     ("SPC h t", "Tutorial", "tutor"),
     ("", "Choose keybindings", "choose-keymap-flavor"),

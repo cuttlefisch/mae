@@ -382,6 +382,7 @@ mod tests {
             width: 80,
             height: layout_height,
         };
+        editor.ai_chat_enabled = true;
         editor.dispatch_builtin("ai-prompt");
         editor
     }

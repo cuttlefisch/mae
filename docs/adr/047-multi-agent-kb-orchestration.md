@@ -57,6 +57,15 @@ operations** — not a general-purpose multi-agent framework:
    extend this pattern or build a distinct one — not an assumption that this becomes a general
    framework by default.
 
+**Narrowing note on "review before commit."** The single-node interactive case is *already*
+satisfied and is not part of this ADR's remaining gap: `mae-agent` (`crates/agent-cli`) already
+gates every Write-tier tool call — including `kb_add_link`/`kb_set_role` — behind an inline human
+confirm prompt via its existing `ConfirmingExecutor`/confirm-prompt UI whenever a human is driving
+that harness interactively. No new confirm mechanism is needed for that path. What item 3 above
+adds is strictly the **batch-level** review this ADR is actually scoped to solve — reviewing N
+proposed changes across many nodes from a coordinator/worker run in one gate, which the per-node
+interactive prompt does not (and, per item 3, deliberately should not) provide on its own.
+
 ## Consequences
 
 **Positive.** Directly targets the named gap with the topology industry practice says actually

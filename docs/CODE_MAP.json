@@ -60,6 +60,10 @@
           "kind": "mod"
         },
         {
+          "name": "guardrail",
+          "kind": "mod"
+        },
+        {
           "name": "ollama",
           "kind": "mod"
         },
@@ -2481,11 +2485,11 @@
     },
     {
       "name": "ai-prompt",
-      "doc": "AI Chat — built-in conversation with editor context (SPC a p)"
+      "doc": "AI Agent (SPC a p) — mae-agent shell by default; built-in chat if ai_chat_enabled"
     },
     {
       "name": "ai-chat",
-      "doc": "AI Chat — built-in conversation with editor context (SPC a p)"
+      "doc": "AI Agent (SPC a p) — mae-agent shell by default; built-in chat if ai_chat_enabled"
     },
     {
       "name": "ai-cancel",

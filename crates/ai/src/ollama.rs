@@ -22,6 +22,12 @@ use crate::types::*;
 pub struct OllamaProvider {
     client: Client,
     config: ProviderConfig,
+    /// Constrain tool-call argument generation via Ollama's `format`
+    /// request parameter. See `with_format_constrained` for the gating
+    /// rationale (ADR-045 decision 4) and a known compatibility caveat.
+    /// Off by default — additive opt-in, so existing `new()` call sites
+    /// are unaffected until a caller explicitly enables it.
+    format_constrained: bool,
 }
 
 impl OllamaProvider {
@@ -30,7 +36,45 @@ impl OllamaProvider {
             .timeout(Duration::from_secs(config.timeout_secs))
             .build()
             .unwrap_or_default();
-        OllamaProvider { client, config }
+        OllamaProvider {
+            client,
+            config,
+            format_constrained: false,
+        }
+    }
+
+    /// Opt into Ollama's `format` request parameter (JSON-mode
+    /// grammar-constrained decoding) to reduce malformed tool-call
+    /// argument JSON at the source, per ADR-045 decision 4: "Use Ollama's
+    /// `format` parameter to constrain tool-call argument generation for
+    /// any model below the `Verified` tier."
+    ///
+    /// This is deliberately a post-construction builder method rather
+    /// than a new `ProviderConfig` field: `ProviderConfig` is built via
+    /// exhaustive struct literals at every call site (`crates/mae/src/config.rs`,
+    /// `crates/agent-cli/src/main.rs`), so adding a field there is a
+    /// cross-file change. Callers that have already looked up the
+    /// model's `ModelVerification` tier (`mae_ai::lookup_context_limit`)
+    /// can chain this in: e.g.
+    /// `OllamaProvider::new(config).with_format_constrained(tier != ModelVerification::Verified)`.
+    /// Defaults to `false` (off) so unmodified call sites keep today's
+    /// behavior exactly.
+    ///
+    /// CAUTION — checked against Ollama's own issue tracker before
+    /// wiring this: `format` and `tools` are documented as separate,
+    /// independent request fields (Ollama's `/api/chat` docs show no
+    /// combined example), and there is a history of the combination
+    /// misbehaving on some versions/models — e.g. ollama/ollama#8095
+    /// reports `tool_calls` coming back empty when a JSON-schema
+    /// `format` is set alongside `tools`. We only ever send the loose
+    /// `"json"` string mode (never a schema) specifically to stay clear
+    /// of that failure mode, but callers enabling this should still
+    /// verify against their target Ollama version/model before relying
+    /// on it in production, and should be prepared to fall back to
+    /// `false` if a model regresses to empty tool-call responses.
+    pub fn with_format_constrained(mut self, enabled: bool) -> Self {
+        self.format_constrained = enabled;
+        self
     }
 
     /// Convert canonical ToolCalls to Ollama's native format. Unlike OpenAI,
@@ -193,22 +237,16 @@ impl OllamaProvider {
     }
 }
 
-#[async_trait::async_trait]
-impl AgentProvider for OllamaProvider {
-    async fn send(
+impl OllamaProvider {
+    /// Build the outbound `/api/chat` request body. Split out from `send`
+    /// so the body-construction logic (including the `format` gating) is
+    /// unit-testable without an HTTP round trip.
+    fn build_request_body(
         &self,
         messages: &[Message],
         tools: &[ToolDefinition],
         system_prompt: &str,
-    ) -> Result<ProviderResponse, ProviderError> {
-        let url = format!(
-            "{}/api/chat",
-            self.config
-                .base_url
-                .as_deref()
-                .unwrap_or("http://localhost:11434")
-        );
-
+    ) -> serde_json::Value {
         let mut body = json!({
             "model": self.config.model,
             "stream": false,
@@ -218,6 +256,16 @@ impl AgentProvider for OllamaProvider {
         if !tools.is_empty() {
             // Ollama documents its tool schema as OpenAI-compatible.
             body["tools"] = OpenAiProvider::serialize_tools(tools);
+
+            if self.format_constrained {
+                // Loose JSON-mode ("json"), deliberately not a full JSON
+                // Schema: Ollama's `format` is a single top-level request
+                // field, not per-tool schema plumbing, so a minimal
+                // "constrain to *some* valid JSON" nudge is the right
+                // scope here (see `with_format_constrained` doc comment
+                // for why we avoid schema-mode with `tools` present).
+                body["format"] = json!("json");
+            }
         }
 
         // Generation params live under "options" in the native API, not at
@@ -236,6 +284,28 @@ impl AgentProvider for OllamaProvider {
                 other => json!(other), // "high" | "medium" | "low"
             };
         }
+
+        body
+    }
+}
+
+#[async_trait::async_trait]
+impl AgentProvider for OllamaProvider {
+    async fn send(
+        &self,
+        messages: &[Message],
+        tools: &[ToolDefinition],
+        system_prompt: &str,
+    ) -> Result<ProviderResponse, ProviderError> {
+        let url = format!(
+            "{}/api/chat",
+            self.config
+                .base_url
+                .as_deref()
+                .unwrap_or("http://localhost:11434")
+        );
+
+        let body = self.build_request_body(messages, tools, system_prompt);
 
         debug!(model = %self.config.model, url = %url, message_count = messages.len(), tool_count = tools.len(), "sending Ollama API request");
 
@@ -316,6 +386,58 @@ impl AgentProvider for OllamaProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_config() -> ProviderConfig {
+        ProviderConfig {
+            provider_type: "ollama".to_string(),
+            api_key: None,
+            model: "qwen3:8b".to_string(),
+            base_url: None,
+            max_tokens: 4096,
+            temperature: None,
+            thinking: None,
+            timeout_secs: 300,
+            budget: Default::default(),
+        }
+    }
+
+    fn test_tool() -> ToolDefinition {
+        ToolDefinition {
+            name: "buffer_read".to_string(),
+            description: "Read buffer contents".to_string(),
+            parameters: ToolParameters {
+                schema_type: "object".to_string(),
+                properties: Default::default(),
+                required: vec![],
+            },
+            permission: None,
+        }
+    }
+
+    #[test]
+    fn format_absent_by_default_even_with_tools() {
+        let provider = OllamaProvider::new(test_config());
+        let body = provider.build_request_body(&[], &[test_tool()], "system");
+        assert!(body.get("format").is_none());
+    }
+
+    #[test]
+    fn format_present_when_constrained_and_tools_supplied() {
+        let provider = OllamaProvider::new(test_config()).with_format_constrained(true);
+        let body = provider.build_request_body(&[], &[test_tool()], "system");
+        assert_eq!(body["format"], "json");
+    }
+
+    #[test]
+    fn format_absent_when_constrained_but_no_tools() {
+        // Nothing to constrain the shape of without any tool calls in
+        // play, so the flag is a no-op when `tools` is empty — mirrors
+        // the existing gating on `body["tools"]` itself.
+        let provider = OllamaProvider::new(test_config()).with_format_constrained(true);
+        let body = provider.build_request_body(&[], &[], "system");
+        assert!(body.get("format").is_none());
+        assert!(body.get("tools").is_none());
+    }
 
     #[test]
     fn serialize_messages_text() {

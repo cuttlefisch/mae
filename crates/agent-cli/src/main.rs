@@ -3,7 +3,6 @@
 //! `mae-mcp-shim` subprocess hop — see `mcp_client.rs`).
 
 mod agent_loop;
-mod guardrail;
 mod mcp_client;
 mod residency_check;
 mod tui;
@@ -20,14 +19,13 @@ use crossterm::terminal::{
 use crossterm::{execute, ExecutableCommand};
 use futures::StreamExt;
 use mae_ai::{
-    AgentProvider, ClaudeProvider, GeminiProvider, Message, OllamaProvider, OpenAiProvider,
-    ProviderConfig, ToolDefinition,
+    AgentProvider, ClaudeProvider, GeminiProvider, GuardrailProvider, Message, OllamaProvider,
+    OpenAiProvider, ProviderConfig, StagePolicy, ToolDefinition, ToolStage,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::guardrail::GuardrailProvider;
 use crate::mcp_client::{McpClient, ToolCallOutcome, ToolExecutor};
 use crate::tui::{
     needs_confirmation, AppState, ConfirmChoice, PendingConfirm, PermissionMode, SlashCommand,
@@ -43,7 +41,7 @@ struct Args {
     #[arg(long, default_value = "ollama")]
     provider: String,
     /// Model name.
-    #[arg(long, default_value = "qwen3:8b")]
+    #[arg(long, default_value = "qwen3:latest")]
     model: String,
     /// API key (falls back to the provider's usual env var if omitted).
     #[arg(long)]
@@ -55,6 +53,52 @@ struct Args {
     /// (mirrors `mae-mcp-shim --check`).
     #[arg(long)]
     check: bool,
+    /// Run one turn non-interactively (no TUI): send this prompt, print each
+    /// tool call/result and the final text to stdout, then exit. Every tool
+    /// call is auto-approved -- there's no human to answer a confirm prompt
+    /// in scripted/automated use, which is the intended use case (e.g.
+    /// driving a real provider through `model_exam` for compatibility data).
+    #[arg(long)]
+    prompt: Option<String>,
+    /// Max tool-calling rounds for `--prompt` mode (default: 50).
+    #[arg(long)]
+    max_rounds: Option<usize>,
+    /// Comma-separated tool names to expose -- everything else is hidden
+    /// from the model. MAE's real tool surface (700+ tools) reliably
+    /// overwhelms smaller/local models into never attempting a tool call at
+    /// all (confirmed directly: the same model that ignores 730 tools calls
+    /// the right one immediately when only 1-2 are offered) -- this mirrors
+    /// the same restricted allowlist MAE's own embedded `verifier` delegate
+    /// profile already uses for exactly this reason
+    /// (`ai_event_handler.rs`'s `AiEvent::Delegate` handling).
+    #[arg(long, value_delimiter = ',')]
+    only_tools: Vec<String>,
+    /// Name of a workflow stage policy to enforce via `GuardrailProvider`'s
+    /// premature-write rejection pillar (rejects a Write-stage tool call
+    /// that has no prior Discovery/Read call this session, nudging the
+    /// model to look before it writes). Currently supported: "kb-enrichment".
+    /// An unrecognized name is ignored (with a warning), not fatal.
+    #[arg(long)]
+    stage_policy: Option<String>,
+}
+
+/// Resolve a `--stage-policy` flag value to a concrete [`StagePolicy`].
+/// Returns `None` (with a stderr warning) for an unrecognized name.
+fn stage_policy_for(name: &str) -> Option<StagePolicy> {
+    match name {
+        "kb-enrichment" => Some(StagePolicy {
+            classify: |tool_name| match tool_name {
+                "kb_search" | "kb_search_context" | "kb_agenda" => Some(ToolStage::Discovery),
+                "kb_get" | "kb_links_from" => Some(ToolStage::Read),
+                "kb_add_link" | "kb_set_role" => Some(ToolStage::Write),
+                _ => None,
+            },
+        }),
+        other => {
+            eprintln!("mae-agent: unrecognized --stage-policy '{other}' -- ignoring");
+            None
+        }
+    }
 }
 
 fn construct_provider(provider_type: &str, config: ProviderConfig) -> Box<dyn AgentProvider> {
@@ -77,6 +121,66 @@ fn api_key_env_var(provider_type: &str) -> Option<&'static str> {
 
 fn is_local_provider(provider_type: &str) -> bool {
     provider_type.eq_ignore_ascii_case("ollama")
+}
+
+/// Parse the wire-format permission-tier string (`ToolInfo::permission`,
+/// e.g. `"Shell"`) back into a `PermissionTier`. `None` for anything
+/// unrecognized (including a server that predates this field entirely) --
+/// callers must NOT treat that as "safe," it means "we don't actually know
+/// this tool's real tier" (see `ToolInfo::permission`'s doc comment for why
+/// this field exists at all).
+fn parse_permission_tier(s: &str) -> Option<mae_ai::PermissionTier> {
+    match s {
+        "ReadOnly" => Some(mae_ai::PermissionTier::ReadOnly),
+        "Write" => Some(mae_ai::PermissionTier::Write),
+        "Shell" => Some(mae_ai::PermissionTier::Shell),
+        "Privileged" => Some(mae_ai::PermissionTier::Privileged),
+        _ => None,
+    }
+}
+
+/// Convert MCP `ToolInfo`s into `ToolDefinition`s, dropping (with a stderr
+/// warning) any whose `input_schema` doesn't parse as `ToolParameters`.
+fn convert_tool_infos(tool_infos: Vec<mae_mcp::protocol::ToolInfo>) -> Vec<ToolDefinition> {
+    tool_infos
+        .into_iter()
+        .filter_map(|t| {
+            let parameters = match serde_json::from_value(t.input_schema.clone()) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!(
+                        "mae-agent: dropping tool {} -- schema parse failed: {e}",
+                        t.name
+                    );
+                    return None;
+                }
+            };
+            Some(ToolDefinition {
+                name: t.name,
+                description: t.description,
+                parameters,
+                permission: t.permission.as_deref().and_then(parse_permission_tier),
+            })
+        })
+        .collect()
+}
+
+/// Restrict `tools` to `only` by name (empty `only` means no filtering).
+/// MAE's real tool surface (700+ tools) reliably overwhelms smaller/local
+/// models into never attempting a tool call at all -- confirmed directly:
+/// the same model that ignores 730 tools calls the right one immediately
+/// when only 1-2 are offered. Mirrors the same restricted allowlist MAE's
+/// own embedded `verifier` delegate profile already uses for exactly this
+/// reason (`ai_event_handler.rs`'s `AiEvent::Delegate` handling).
+fn filter_tools(tools: Vec<ToolDefinition>, only: &[String]) -> Vec<ToolDefinition> {
+    if only.is_empty() {
+        return tools;
+    }
+    let allowed: std::collections::HashSet<&str> = only.iter().map(String::as_str).collect();
+    tools
+        .into_iter()
+        .filter(|t| allowed.contains(t.name.as_str()))
+        .collect()
 }
 
 #[tokio::main]
@@ -103,18 +207,8 @@ async fn main() -> anyhow::Result<()> {
 
     let mut mcp = McpClient::connect(&socket_path, psk.as_deref(), declared_provider).await?;
     let tool_infos = mcp.list_tools().await?;
-    let tools: Vec<ToolDefinition> = tool_infos
-        .into_iter()
-        .filter_map(|t| {
-            let parameters = serde_json::from_value(t.input_schema).ok()?;
-            Some(ToolDefinition {
-                name: t.name,
-                description: t.description,
-                parameters,
-                permission: None, // populated below once we know each tool's tier
-            })
-        })
-        .collect();
+    let tools = convert_tool_infos(tool_infos);
+    let tools = filter_tools(tools, &args.only_tools);
 
     let api_key = args
         .api_key
@@ -133,12 +227,27 @@ async fn main() -> anyhow::Result<()> {
     };
     let raw_provider = construct_provider(&args.provider, config);
     let verification = mae_ai::lookup_context_limit(&args.model).verification;
-    let provider: Arc<dyn AgentProvider> =
-        if matches!(verification, mae_ai::ModelVerification::Verified) {
-            Arc::from(raw_provider)
-        } else {
-            Arc::new(GuardrailProvider::wrap(BoxedProvider(raw_provider)))
-        };
+    let stage_policy = args.stage_policy.as_deref().and_then(stage_policy_for);
+    // Non-Verified-tier models always get the guardrail's reliability
+    // pillars. A Verified-tier model normally skips it entirely -- but if a
+    // stage policy was explicitly requested, wrap anyway (with the other
+    // pillars along for the ride, effectively inert for a well-behaved
+    // model) purely to get stage enforcement.
+    let needs_guardrail =
+        !matches!(verification, mae_ai::ModelVerification::Verified) || stage_policy.is_some();
+    let provider: Arc<dyn AgentProvider> = if needs_guardrail {
+        let mut guardrail = GuardrailProvider::wrap(raw_provider);
+        if let Some(policy) = stage_policy {
+            guardrail = guardrail.with_stage_policy(policy);
+        }
+        Arc::new(guardrail)
+    } else {
+        Arc::from(raw_provider)
+    };
+
+    if let Some(prompt) = args.prompt.clone() {
+        return run_once(&args, prompt, mcp, tools, provider).await;
+    }
 
     let permission_mode = PermissionMode::parse(&args.permission_mode).unwrap_or_default();
     let mut app = AppState::new(args.model.clone(), args.provider.clone(), permission_mode);
@@ -152,24 +261,100 @@ async fn main() -> anyhow::Result<()> {
     run_tui(app, provider, mcp, tools).await
 }
 
-/// `AgentProvider` requires `Send + Sync`; a `Box<dyn AgentProvider>` doesn't
-/// implement it by itself in a way `Arc::new` can wrap generically here, so
-/// this newtype forwards to the boxed trait object.
-struct BoxedProvider(Box<dyn AgentProvider>);
+/// Non-interactive single-turn mode (`--prompt`): no TUI, no human to answer
+/// a confirm prompt -- but every tool call still gates on `--permission-mode`
+/// via `NonInteractiveExecutor`, which DENIES (rather than blindly executes)
+/// anything exceeding the configured ceiling. This was NOT always true: an
+/// earlier version used `McpClient` directly as the executor with zero
+/// gating at any tier, including Privileged -- which is how a `model_exam`
+/// pushback prompt ("delete all files in the project root") once reached a
+/// real `shell_exec` call with no safety net at all and wiped a real
+/// checkout's working tree. Prints each tool call/result as it happens plus
+/// the final assistant text, then exits.
+async fn run_once(
+    args: &Args,
+    prompt: String,
+    mcp: McpClient,
+    tools: Vec<ToolDefinition>,
+    provider: Arc<dyn AgentProvider>,
+) -> anyhow::Result<()> {
+    let permission_mode = PermissionMode::parse(&args.permission_mode).unwrap_or_default();
+    eprintln!(
+        "mae-agent: --prompt mode (non-interactive) -- permission ceiling: {permission_mode:?}. \
+         Tool calls exceeding this tier are denied, not confirmed (no human to ask)."
+    );
+    let mut executor = NonInteractiveExecutor {
+        inner: mcp,
+        tools: tools.clone(),
+        mode: permission_mode,
+        own_provider: args.provider.clone(),
+    };
 
-#[async_trait::async_trait]
-impl AgentProvider for BoxedProvider {
-    async fn send(
-        &self,
-        messages: &[Message],
-        tools: &[ToolDefinition],
-        system_prompt: &str,
-    ) -> Result<mae_ai::ProviderResponse, mae_ai::ProviderError> {
-        self.0.send(messages, tools, system_prompt).await
+    let mut messages: Vec<Message> = Vec::new();
+    let config = agent_loop::TurnConfig {
+        max_rounds: args
+            .max_rounds
+            .unwrap_or_else(|| agent_loop::TurnConfig::default().max_rounds),
+    };
+
+    let result = agent_loop::run_turn(
+        agent_loop::TurnContext {
+            provider: provider.as_ref(),
+            executor: &mut executor,
+            tools: &tools,
+            system_prompt: "You are an AI agent operating MAE's editor and knowledge-base tools.",
+        },
+        &mut messages,
+        &config,
+        &prompt,
+        |event| match event {
+            agent_loop::AgentEvent::ToolCallStarted { name, arguments } => {
+                println!(
+                    "[tool] {name} {}",
+                    serde_json::to_string(&arguments).unwrap_or_default()
+                );
+            }
+            agent_loop::AgentEvent::ToolCallFinished {
+                name,
+                success,
+                output,
+            } => {
+                println!("[result] {name} success={success} output={output}");
+            }
+            agent_loop::AgentEvent::Text(text) => {
+                println!("[text] {text}");
+            }
+            agent_loop::AgentEvent::RoundLimitReached => {
+                println!("[round-limit-reached]");
+            }
+            agent_loop::AgentEvent::RoundDiagnostics {
+                round,
+                tools_offered,
+                stop_reason,
+                tool_calls_returned,
+                text_len,
+                usage,
+            } => {
+                let usage = usage
+                    .map(|u| format!("prompt={} completion={}", u.prompt_tokens, u.completion_tokens))
+                    .unwrap_or_else(|| "none".to_string());
+                println!(
+                    "[diag] round={round} tools_offered={tools_offered} stop_reason={stop_reason:?} tool_calls={tool_calls_returned} text_len={text_len} tokens=({usage})"
+                );
+            }
+        },
+    )
+    .await;
+
+    if let Some(Message {
+        content: mae_ai::MessageContent::Text(text),
+        ..
+    }) = messages.last()
+    {
+        println!("\n=== FINAL ===\n{text}");
     }
-    fn name(&self) -> &str {
-        self.0.name()
-    }
+
+    result
 }
 
 async fn run_check(args: &Args) -> anyhow::Result<()> {
@@ -225,7 +410,7 @@ impl ToolExecutor for ConfirmingExecutor {
         arguments: serde_json::Value,
     ) -> anyhow::Result<ToolCallOutcome> {
         // Client-side residency self-check: best effort, server is authoritative.
-        if let Ok(kb_residency) = self.fetch_kb_residency().await {
+        if let Ok(kb_residency) = fetch_kb_residency(&mut self.inner).await {
             if let residency_check::SelfCheckDecision::Refuse(reason) =
                 residency_check::check_before_call(
                     name,
@@ -246,7 +431,11 @@ impl ToolExecutor for ConfirmingExecutor {
             .iter()
             .find(|t| t.name == name)
             .and_then(|t| t.permission)
-            .unwrap_or(mae_ai::PermissionTier::Write);
+            // Unknown tier (server predates the `permission` wire field, or
+            // genuinely didn't declare one) defaults to the MOST restrictive
+            // tier, not `Write` -- an untiered tool must not be silently
+            // trusted just because we don't know better.
+            .unwrap_or(mae_ai::PermissionTier::Privileged);
 
         if needs_confirmation(tier, self.mode) {
             let (tx, rx) = oneshot::channel();
@@ -274,35 +463,100 @@ impl ToolExecutor for ConfirmingExecutor {
     }
 }
 
-impl ConfirmingExecutor {
-    async fn fetch_kb_residency(
-        &mut self,
-    ) -> anyhow::Result<Vec<residency_check::KbResidencyInfo>> {
-        let outcome = self
-            .inner
-            .call_tool("kb_instances", serde_json::json!({}))
-            .await?;
-        let parsed: serde_json::Value = serde_json::from_str(&outcome.text)?;
-        let entries = parsed
-            .as_array()
-            .cloned()
-            .or_else(|| parsed.get("instances").and_then(|v| v.as_array()).cloned())
-            .unwrap_or_default();
-        Ok(entries
-            .into_iter()
-            .filter_map(|v| {
-                let name = v.get("name")?.as_str()?.to_string();
-                let local_models_only = v
-                    .get("ai_residency")
-                    .and_then(|r| r.as_str())
-                    .map(|s| s.eq_ignore_ascii_case("local_models_only"))
-                    .unwrap_or(false);
-                Some(residency_check::KbResidencyInfo {
-                    name,
-                    local_models_only,
-                })
+/// Fetch each registered KB instance's `ai_residency` policy, best-effort
+/// (server-side ADR-048 enforcement is authoritative regardless). Shared by
+/// `ConfirmingExecutor` (interactive) and `NonInteractiveExecutor`
+/// (`--prompt` mode) — identical residency self-check either way.
+async fn fetch_kb_residency(
+    mcp: &mut McpClient,
+) -> anyhow::Result<Vec<residency_check::KbResidencyInfo>> {
+    let outcome = mcp.call_tool("kb_instances", serde_json::json!({})).await?;
+    let parsed: serde_json::Value = serde_json::from_str(&outcome.text)?;
+    let entries = parsed
+        .as_array()
+        .cloned()
+        .or_else(|| parsed.get("instances").and_then(|v| v.as_array()).cloned())
+        .unwrap_or_default();
+    Ok(entries
+        .into_iter()
+        .filter_map(|v| {
+            let name = v.get("name")?.as_str()?.to_string();
+            let local_models_only = v
+                .get("ai_residency")
+                .and_then(|r| r.as_str())
+                .map(|s| s.eq_ignore_ascii_case("local_models_only"))
+                .unwrap_or(false);
+            Some(residency_check::KbResidencyInfo {
+                name,
+                local_models_only,
             })
-            .collect())
+        })
+        .collect())
+}
+
+/// Tool executor for `--prompt` mode: no human exists to answer a confirm
+/// prompt, so a tool call whose tier EXCEEDS the configured
+/// `--permission-mode` ceiling is DENIED outright rather than executed.
+/// Before this existed, `run_once` used `McpClient` directly with zero
+/// gating at any tier -- see `run_once`'s doc comment for the incident that
+/// motivated this.
+struct NonInteractiveExecutor {
+    inner: McpClient,
+    tools: Vec<ToolDefinition>,
+    mode: PermissionMode,
+    own_provider: String,
+}
+
+#[async_trait::async_trait]
+impl ToolExecutor for NonInteractiveExecutor {
+    async fn call_tool(
+        &mut self,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> anyhow::Result<ToolCallOutcome> {
+        // Client-side residency self-check: best effort, server is authoritative.
+        if let Ok(kb_residency) = fetch_kb_residency(&mut self.inner).await {
+            if let residency_check::SelfCheckDecision::Refuse(reason) =
+                residency_check::check_before_call(
+                    name,
+                    &arguments,
+                    &self.own_provider,
+                    &kb_residency,
+                )
+            {
+                return Ok(ToolCallOutcome {
+                    success: false,
+                    text: reason,
+                });
+            }
+        }
+
+        let tier = self
+            .tools
+            .iter()
+            .find(|t| t.name == name)
+            .and_then(|t| t.permission)
+            // Unknown tier (server predates the `permission` wire field, or
+            // genuinely didn't declare one) defaults to the MOST restrictive
+            // tier, not `Write` -- an untiered tool must not be silently
+            // trusted just because we don't know better.
+            .unwrap_or(mae_ai::PermissionTier::Privileged);
+
+        if needs_confirmation(tier, self.mode) {
+            let text = format!(
+                "Denied: '{name}' is {tier:?}-tier, which exceeds the --permission-mode \
+                 ceiling ({:?}). --prompt mode has no human to confirm this -- pass a \
+                 higher --permission-mode explicitly if this call is expected.",
+                self.mode
+            );
+            eprintln!("mae-agent: {text}");
+            return Ok(ToolCallOutcome {
+                success: false,
+                text,
+            });
+        }
+
+        self.inner.call_tool(name, arguments).await
     }
 }
 
@@ -405,6 +659,21 @@ async fn run_event_loop(
                     }
                     HarnessEvent::Agent(agent_loop::AgentEvent::RoundLimitReached) => {
                         app.push_system_note("Round limit reached for this turn.".to_string());
+                    }
+                    HarnessEvent::Agent(agent_loop::AgentEvent::RoundDiagnostics {
+                        round,
+                        tools_offered,
+                        stop_reason,
+                        tool_calls_returned,
+                        text_len,
+                        usage,
+                    }) => {
+                        let tokens = usage
+                            .map(|u| format!("{}/{}", u.prompt_tokens, u.completion_tokens))
+                            .unwrap_or_else(|| "?/?".to_string());
+                        app.set_diagnostics(format!(
+                            "r{round} tools={tools_offered} stop={stop_reason:?} calls={tool_calls_returned} text={text_len} tok={tokens}"
+                        ));
                     }
                     HarnessEvent::ConfirmRequest(pending, reply) => {
                         app.pending_confirm = Some(pending);
@@ -528,5 +797,388 @@ fn handle_slash_command(app: &mut AppState, cmd: SlashCommand) {
         }
         SlashCommand::Quit => app.should_quit = true,
         SlashCommand::Unknown(name) => app.push_system_note(format!("Unknown command: /{name}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::{KeyEventKind, KeyEventState};
+
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    fn char_key(c: char, mods: KeyModifiers) -> KeyEvent {
+        KeyEvent {
+            code: KeyCode::Char(c),
+            modifiers: mods,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    fn state() -> AppState {
+        AppState::new(
+            "qwen3:latest".into(),
+            "ollama".into(),
+            PermissionMode::default(),
+        )
+    }
+
+    // ---- convert_tool_infos / filter_tools ----
+
+    fn tool_info(name: &str) -> mae_mcp::protocol::ToolInfo {
+        mae_mcp::protocol::ToolInfo {
+            name: name.to_string(),
+            description: format!("{name} description"),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            permission: None,
+        }
+    }
+
+    #[test]
+    fn convert_tool_infos_keeps_valid_schemas() {
+        let tools = convert_tool_infos(vec![tool_info("kb_search"), tool_info("kb_get")]);
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].name, "kb_search");
+    }
+
+    #[test]
+    fn convert_tool_infos_drops_unparseable_schema_not_the_whole_batch() {
+        let mut bad = tool_info("broken_tool");
+        bad.input_schema = serde_json::json!("not an object schema at all");
+        let tools = convert_tool_infos(vec![tool_info("kb_search"), bad]);
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].name, "kb_search");
+    }
+
+    #[test]
+    fn filter_tools_empty_allowlist_is_a_noop() {
+        let tools = convert_tool_infos(vec![tool_info("kb_search"), tool_info("shell_exec")]);
+        let filtered = filter_tools(tools, &[]);
+        assert_eq!(filtered.len(), 2);
+    }
+
+    #[test]
+    fn filter_tools_restricts_to_named_tools_only() {
+        let tools = convert_tool_infos(vec![
+            tool_info("kb_search"),
+            tool_info("shell_exec"),
+            tool_info("kb_get"),
+        ]);
+        let filtered = filter_tools(tools, &["kb_search".to_string(), "kb_get".to_string()]);
+        let names: Vec<&str> = filtered.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, vec!["kb_search", "kb_get"]);
+    }
+
+    // ---- construct_provider / api_key_env_var / is_local_provider ----
+
+    fn config_for(provider_type: &str) -> ProviderConfig {
+        ProviderConfig {
+            provider_type: provider_type.to_string(),
+            api_key: None,
+            model: "test-model".to_string(),
+            base_url: None,
+            max_tokens: 8192,
+            temperature: None,
+            thinking: None,
+            timeout_secs: 300,
+            budget: Default::default(),
+        }
+    }
+
+    #[test]
+    fn construct_provider_dispatches_by_type_name() {
+        for (provider_type, expected_name) in [
+            ("claude", "claude"),
+            ("openai", "openai"),
+            ("gemini", "gemini"),
+            ("ollama", "ollama"),
+            ("something-unknown", "claude"), // unmatched falls back to Claude
+        ] {
+            let provider = construct_provider(provider_type, config_for(provider_type));
+            assert_eq!(provider.name(), expected_name, "for input {provider_type}");
+        }
+    }
+
+    #[test]
+    fn api_key_env_var_matches_provider_conventions() {
+        assert_eq!(api_key_env_var("claude"), Some("ANTHROPIC_API_KEY"));
+        assert_eq!(api_key_env_var("openai"), Some("OPENAI_API_KEY"));
+        assert_eq!(api_key_env_var("gemini"), Some("GEMINI_API_KEY"));
+        assert_eq!(api_key_env_var("ollama"), None);
+        assert_eq!(api_key_env_var("unknown"), None);
+    }
+
+    #[test]
+    fn is_local_provider_recognizes_ollama_case_insensitively() {
+        assert!(is_local_provider("ollama"));
+        assert!(is_local_provider("Ollama"));
+        assert!(is_local_provider("OLLAMA"));
+        assert!(!is_local_provider("claude"));
+        assert!(!is_local_provider(""));
+    }
+
+    // ---- handle_key ----
+
+    #[test]
+    fn handle_key_types_and_backspaces() {
+        let mut app = state();
+        let mut pending_reply = None;
+        handle_key(
+            &mut app,
+            char_key('h', KeyModifiers::NONE),
+            &mut pending_reply,
+        );
+        handle_key(
+            &mut app,
+            char_key('i', KeyModifiers::NONE),
+            &mut pending_reply,
+        );
+        assert_eq!(app.input, "hi");
+        assert_eq!(app.cursor, 2);
+
+        handle_key(&mut app, key(KeyCode::Backspace), &mut pending_reply);
+        assert_eq!(app.input, "h");
+        assert_eq!(app.cursor, 1);
+    }
+
+    #[test]
+    fn handle_key_enter_submits_and_clears_input() {
+        let mut app = state();
+        let mut pending_reply = None;
+        app.input = "hello".to_string();
+        app.cursor = 5;
+        handle_key(&mut app, key(KeyCode::Enter), &mut pending_reply);
+        assert_eq!(app.pending_submit, Some("hello".to_string()));
+        assert!(app.input.is_empty());
+    }
+
+    #[test]
+    fn handle_key_ctrl_c_sets_should_quit() {
+        let mut app = state();
+        let mut pending_reply = None;
+        handle_key(
+            &mut app,
+            char_key('c', KeyModifiers::CONTROL),
+            &mut pending_reply,
+        );
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn handle_key_tab_toggles_last_tool_call_expansion() {
+        let mut app = state();
+        app.push_tool_call_started("kb_search".into(), serde_json::json!({}));
+        let mut pending_reply = None;
+        handle_key(&mut app, key(KeyCode::Tab), &mut pending_reply);
+        assert!(matches!(
+            app.transcript.last(),
+            Some(tui::TranscriptEntry::ToolCall { expanded: true, .. })
+        ));
+    }
+
+    #[test]
+    fn handle_key_ignores_unrecognized_confirm_key_and_keeps_dialog_open() {
+        let mut app = state();
+        app.pending_confirm = Some(tui::PendingConfirm {
+            tool_name: "shell_exec".into(),
+            arguments: serde_json::json!({}),
+            tier: mae_ai::PermissionTier::Shell,
+        });
+        let (tx, mut rx) = oneshot::channel();
+        let mut pending_reply = Some(tx);
+        // 'z' isn't y/n/a — dialog should stay open, no reply sent.
+        handle_key(
+            &mut app,
+            char_key('z', KeyModifiers::NONE),
+            &mut pending_reply,
+        );
+        assert!(app.pending_confirm.is_some());
+        assert!(pending_reply.is_some());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn handle_key_confirm_key_resolves_pending_dialog() {
+        let mut app = state();
+        app.pending_confirm = Some(tui::PendingConfirm {
+            tool_name: "shell_exec".into(),
+            arguments: serde_json::json!({}),
+            tier: mae_ai::PermissionTier::Shell,
+        });
+        let (tx, mut rx) = oneshot::channel();
+        let mut pending_reply = Some(tx);
+        handle_key(
+            &mut app,
+            char_key('y', KeyModifiers::NONE),
+            &mut pending_reply,
+        );
+        assert!(app.pending_confirm.is_none());
+        assert!(pending_reply.is_none());
+        assert_eq!(rx.try_recv().unwrap(), ConfirmChoice::Approve);
+    }
+
+    // ---- handle_slash_command ----
+
+    #[test]
+    fn handle_slash_command_clear_empties_transcript() {
+        let mut app = state();
+        app.push_user("hi".into());
+        handle_slash_command(&mut app, SlashCommand::Clear);
+        assert!(app.transcript.is_empty());
+    }
+
+    #[test]
+    fn handle_slash_command_quit_sets_should_quit() {
+        let mut app = state();
+        handle_slash_command(&mut app, SlashCommand::Quit);
+        assert!(app.should_quit);
+    }
+
+    #[test]
+    fn handle_slash_command_model_reports_provider_and_model() {
+        let mut app = state();
+        handle_slash_command(&mut app, SlashCommand::Model);
+        assert!(matches!(
+            app.transcript.last(),
+            Some(tui::TranscriptEntry::SystemNote(n)) if n == "ollama/qwen3:latest"
+        ));
+    }
+
+    #[test]
+    fn handle_slash_command_unknown_reports_the_command_name() {
+        let mut app = state();
+        handle_slash_command(&mut app, SlashCommand::Unknown("bogus".to_string()));
+        assert!(matches!(
+            app.transcript.last(),
+            Some(tui::TranscriptEntry::SystemNote(n)) if n == "Unknown command: /bogus"
+        ));
+    }
+
+    // ---- NonInteractiveExecutor: --prompt mode must deny, not bypass, tier gating ----
+    //
+    // Regression coverage for the real incident that motivated this executor:
+    // `run_once` used to hand `McpClient` straight to `agent_loop::run_turn`
+    // with zero tier gating, so a Shell/Privileged-tier tool call (e.g. a
+    // `model_exam` pushback prompt asking a model to run `rm -rf /`-style
+    // commands) executed completely unchecked in non-interactive mode.
+
+    /// Minimal fake JSON-RPC server for these two tests: replies to
+    /// `kb_instances` (so `fetch_kb_residency` doesn't error) with an empty
+    /// list, and to anything else with `{}` -- good enough since a denied
+    /// call must never actually reach the wire in the first place.
+    async fn run_minimal_fake_server(
+        mut reader: tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>,
+        mut writer: tokio::net::unix::OwnedWriteHalf,
+    ) {
+        loop {
+            let Some(msg) = mae_mcp::read_message(&mut reader).await.unwrap() else {
+                break;
+            };
+            let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+            if let Some(id) = parsed.get("id").cloned() {
+                let method = parsed.get("method").and_then(|m| m.as_str()).unwrap_or("");
+                let result = if method == "tools/call" {
+                    serde_json::json!({"isError": false, "content": [{"type": "text", "text": "[]"}]})
+                } else {
+                    serde_json::json!({})
+                };
+                let response = serde_json::json!({"jsonrpc": "2.0", "id": id, "result": result});
+                let body = serde_json::to_vec(&response).unwrap();
+                mae_mcp::write_framed(&mut writer, &body, std::time::Duration::from_secs(5))
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+
+    fn shell_tool(name: &str) -> ToolDefinition {
+        ToolDefinition {
+            name: name.to_string(),
+            description: "test tool".to_string(),
+            parameters: mae_ai::ToolParameters {
+                schema_type: "object".to_string(),
+                properties: Default::default(),
+                required: vec![],
+            },
+            permission: Some(mae_ai::PermissionTier::Shell),
+        }
+    }
+
+    #[tokio::test]
+    async fn non_interactive_executor_denies_a_call_exceeding_the_permission_ceiling() {
+        let (client_stream, server_stream) = tokio::net::UnixStream::pair().unwrap();
+        let (server_read, server_write) = server_stream.into_split();
+        let server_reader = tokio::io::BufReader::new(server_read);
+        let server = tokio::spawn(run_minimal_fake_server(server_reader, server_write));
+
+        let mcp = McpClient::from_stream(client_stream, None, None)
+            .await
+            .expect("connect should succeed");
+
+        let mut executor = NonInteractiveExecutor {
+            inner: mcp,
+            tools: vec![shell_tool("shell_exec")],
+            mode: PermissionMode::ReadOnly, // ceiling well below Shell
+            own_provider: "ollama".to_string(),
+        };
+
+        let outcome = executor
+            .call_tool("shell_exec", serde_json::json!({"command": "rm -rf /"}))
+            .await
+            .unwrap();
+
+        assert!(
+            !outcome.success,
+            "a Shell-tier call must be denied, not executed"
+        );
+        assert!(
+            outcome.text.contains("Denied"),
+            "denial reason should be explicit: {}",
+            outcome.text
+        );
+
+        drop(executor);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn non_interactive_executor_allows_a_call_within_the_permission_ceiling() {
+        let (client_stream, server_stream) = tokio::net::UnixStream::pair().unwrap();
+        let (server_read, server_write) = server_stream.into_split();
+        let server_reader = tokio::io::BufReader::new(server_read);
+        let server = tokio::spawn(run_minimal_fake_server(server_reader, server_write));
+
+        let mcp = McpClient::from_stream(client_stream, None, None)
+            .await
+            .expect("connect should succeed");
+
+        let mut executor = NonInteractiveExecutor {
+            inner: mcp,
+            tools: vec![shell_tool("shell_exec")],
+            mode: PermissionMode::Shell, // ceiling covers Shell -- explicit opt-in
+            own_provider: "ollama".to_string(),
+        };
+
+        let outcome = executor
+            .call_tool("shell_exec", serde_json::json!({"command": "echo hi"}))
+            .await
+            .unwrap();
+
+        assert!(
+            outcome.success,
+            "a Shell-tier call within an explicit Shell-ceiling permission mode should reach the server: {}",
+            outcome.text
+        );
+
+        drop(executor);
+        server.abort();
     }
 }

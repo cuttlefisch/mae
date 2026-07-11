@@ -49,3 +49,4 @@ gui = ["dep:mae-gui", "dep:winit"]
 
 [dev-dependencies]
 tempfile = "3.27.0"
+async-trait = "0.1"

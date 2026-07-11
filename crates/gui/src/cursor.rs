@@ -768,6 +768,7 @@ mod tests {
     fn cursor_conversation_input_follows_text() {
         // Simulate opening conversation buffer and typing.
         let mut editor = Editor::new();
+        editor.ai_chat_enabled = true;
         editor.dispatch_builtin("ai-prompt");
         assert_eq!(editor.mode, Mode::ConversationInput);
 

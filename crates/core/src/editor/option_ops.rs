@@ -163,6 +163,7 @@ impl super::Editor {
             "kb_daily_chain_gap_max" => self.kb.daily_chain_gap_max.to_string(),
             "format_on_save" => self.format_on_save.to_string(),
             "spell_enabled" => self.spell_enabled.to_string(),
+            "ai_chat_enabled" => self.ai_chat_enabled.to_string(),
             "file_tree_focus_on_open" => self.file_tree_focus_on_open.to_string(),
             "collab_server_address" => self.collab.server_address.clone(),
             "collab_auto_connect" => self.collab.auto_connect.to_string(),
@@ -708,6 +709,9 @@ impl super::Editor {
             "spell_enabled" => {
                 self.spell_enabled = parse_option_bool(value)?;
             }
+            "ai_chat_enabled" => {
+                self.ai_chat_enabled = parse_option_bool(value)?;
+            }
             "file_tree_focus_on_open" => {
                 self.file_tree_focus_on_open = parse_option_bool(value)?;
             }
@@ -937,7 +941,11 @@ impl super::Editor {
             String::new()
         };
 
-        let set_line = format!("(set-option! \"{}\" \"{}\")", def.name, value);
+        // Escape backslashes and quotes so a value containing either (e.g. a
+        // shell command in ai_api_key_command) still writes a valid Scheme
+        // string literal instead of corrupting init.scm on next load.
+        let escaped_value = value.replace('\\', "\\\\").replace('"', "\\\"");
+        let set_line = format!("(set-option! \"{}\" \"{}\")", def.name, escaped_value);
         let pattern = format!("(set-option! \"{}\"", def.name);
 
         const MARKER_START: &str = ";; --- MAE managed options ---";
@@ -1594,7 +1602,7 @@ impl super::Editor {
             "AI Agent (SPC a a):".to_string(),
         ];
         let ai_cmd = if self.ai.editor_name.is_empty() {
-            "claude"
+            "mae-agent"
         } else {
             &self.ai.editor_name
         };
@@ -1612,6 +1620,15 @@ impl super::Editor {
 
         // AI Chat
         lines.push("AI Chat (SPC a p):".to_string());
+        if self.ai_chat_enabled {
+            lines.push("  Embedded chat: enabled (built-in conversation buffer)".to_string());
+        } else {
+            lines.push(
+                "  Embedded chat: disabled (ADR-049) \u{2014} SPC a p launches the AI Agent \
+                 shell above instead. :set ai_chat_enabled true to restore it."
+                    .to_string(),
+            );
+        }
         let provider = if self.ai.provider.is_empty() {
             "(not configured)"
         } else {

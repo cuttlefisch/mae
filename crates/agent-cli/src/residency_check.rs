@@ -178,4 +178,180 @@ mod tests {
         );
         assert_eq!(decision, SelfCheckDecision::Proceed);
     }
+
+    // --- Adversarial / gap coverage (principle #14) ---
+
+    #[test]
+    fn own_provider_check_is_case_insensitive() {
+        // `is_local_provider` uses `eq_ignore_ascii_case`, not `==` -- an
+        // uppercase/mixed-case provider string (e.g. from a config file or
+        // CLI flag typed differently than the canonical "ollama") must still
+        // be treated as local and bypass the check entirely. The target here
+        // deliberately points AT the restricted KB: if the case-insensitive
+        // comparison were broken (e.g. `==`), this would incorrectly Refuse
+        // instead of Proceed.
+        let kbs = vec![restricted("primary")];
+        assert_eq!(
+            check_before_call(
+                "kb_get",
+                &serde_json::json!({"kb": "primary"}),
+                "OLLAMA",
+                &kbs
+            ),
+            SelfCheckDecision::Proceed
+        );
+        assert_eq!(
+            check_before_call(
+                "kb_get",
+                &serde_json::json!({"kb": "primary"}),
+                "OlLaMa",
+                &kbs
+            ),
+            SelfCheckDecision::Proceed
+        );
+    }
+
+    #[test]
+    fn kb_name_match_is_case_insensitive() {
+        // The TARGET_ARG_KEYS loop matches via `kb.name.eq_ignore_ascii_case`,
+        // so a restricted KB registered as "primary" must still be caught when
+        // the tool argument spells it "PRIMARY" (a different case than what's
+        // in the registry).
+        let kbs = vec![restricted("primary")];
+        let decision = check_before_call(
+            "kb_get",
+            &serde_json::json!({"kb": "PRIMARY"}),
+            "claude",
+            &kbs,
+        );
+        assert!(
+            matches!(decision, SelfCheckDecision::Refuse(_)),
+            "differently-cased KB name must still match: {decision:?}"
+        );
+    }
+
+    #[test]
+    fn near_miss_kb_names_do_not_match() {
+        // Exact-string comparison only -- a restricted KB named "journal"
+        // must NOT be caught by a substring/prefix/suffix near-miss like
+        // "journal-drafts" or "myjournal". This guards against a future
+        // refactor accidentally loosening `eq_ignore_ascii_case` into a
+        // `contains`/`starts_with`/`ends_with` check.
+        let kbs = vec![restricted("journal")];
+        for near_miss in ["journal-drafts", "myjournal", "journalist", "my-journal-x"] {
+            let decision = check_before_call(
+                "kb_get",
+                &serde_json::json!({"kb": near_miss}),
+                "claude",
+                &kbs,
+            );
+            assert_eq!(
+                decision,
+                SelfCheckDecision::Proceed,
+                "near-miss '{near_miss}' must not match restricted KB 'journal'"
+            );
+        }
+    }
+
+    #[test]
+    fn every_target_arg_key_is_checked() {
+        // TARGET_ARG_KEYS = ["id", "src", "dst", "from", "to", "kb"]. Exercise
+        // every key at least once so a typo/reordering/removal in that array
+        // would actually fail a test, not just the "id"/"kb" pair the
+        // pre-existing tests covered.
+        let kbs = vec![restricted("primary")];
+        for key in ["id", "src", "dst", "from", "to", "kb"] {
+            let decision = check_before_call(
+                "kb_get",
+                &serde_json::json!({ key: "primary" }),
+                "claude",
+                &kbs,
+            );
+            assert!(
+                matches!(decision, SelfCheckDecision::Refuse(_)),
+                "key '{key}' should be checked against restricted KBs: {decision:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn federated_scan_proceeds_when_no_kb_restricted() {
+        // The refuse case (some KB IS restricted) is covered by
+        // `federated_scan_refused_when_any_kb_restricted`; this covers the
+        // Proceed half of the same branch.
+        let kbs = vec![open("work"), open("journal")];
+        let decision = check_before_call("kb_search", &serde_json::json!({}), "claude", &kbs);
+        assert_eq!(decision, SelfCheckDecision::Proceed);
+    }
+
+    #[test]
+    fn tool_outside_both_lists_always_proceeds() {
+        // A tool name in neither SINGLE_TARGET_KB_TOOLS nor
+        // FEDERATED_SCAN_KB_TOOLS must proceed unconditionally -- regardless
+        // of arguments or a fully-restricted KB set.
+        let kbs = vec![restricted("primary")];
+        for tool in ["shell_exec", "buffer_read"] {
+            let decision = check_before_call(
+                tool,
+                &serde_json::json!({"kb": "primary", "id": "primary"}),
+                "claude",
+                &kbs,
+            );
+            assert_eq!(
+                decision,
+                SelfCheckDecision::Proceed,
+                "tool '{tool}' is not KB-target-checked and must always proceed"
+            );
+        }
+    }
+
+    #[test]
+    fn multiple_restricted_kbs_matches_the_correct_one() {
+        // With several restricted KBs registered, the check must correctly
+        // identify the one actually named in the arguments, not refuse based
+        // on an unrelated restricted KB or fail to match at all.
+        let kbs = vec![restricted("alpha"), restricted("beta"), restricted("gamma")];
+        let decision =
+            check_before_call("kb_get", &serde_json::json!({"kb": "beta"}), "claude", &kbs);
+        match decision {
+            SelfCheckDecision::Refuse(msg) => {
+                assert!(
+                    msg.contains("beta"),
+                    "refusal must name the actual matching KB, got: {msg}"
+                );
+                assert!(
+                    !msg.contains("alpha") && !msg.contains("gamma"),
+                    "refusal must not misattribute to an unrelated restricted KB: {msg}"
+                );
+            }
+            other => panic!("expected Refuse for restricted 'beta', got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_string_argument_values_are_skipped_gracefully() {
+        // `arguments.get(key).and_then(|v| v.as_str())` returns None for a
+        // non-string JSON value (number, null, object, array) -- the loop
+        // must skip it (not panic) and fall through to Proceed when no other
+        // key matches.
+        let kbs = vec![restricted("primary")];
+        for bad_value in [
+            serde_json::json!(123),
+            serde_json::json!(null),
+            serde_json::json!({"nested": "primary"}),
+            serde_json::json!(["primary"]),
+        ] {
+            let decision = check_before_call(
+                "kb_get",
+                &serde_json::json!({"kb": bad_value}),
+                "claude",
+                &kbs,
+            );
+            assert_eq!(
+                decision,
+                SelfCheckDecision::Proceed,
+                "non-string 'kb' value {bad_value:?} must not panic and must not match"
+            );
+        }
+    }
 }

@@ -10,6 +10,7 @@
 use anyhow::Result;
 use mae_ai::{
     AgentProvider, Message, MessageContent, Role, StopReason, ToolCall, ToolDefinition, ToolResult,
+    Usage,
 };
 
 use crate::mcp_client::ToolExecutor;
@@ -31,6 +32,24 @@ pub enum AgentEvent {
     /// reasoning models commonly do both in one turn).
     Text(String),
     RoundLimitReached,
+    /// Emitted once per round, before any tool calls execute -- what the
+    /// provider actually reported for this round, independent of what the
+    /// harness does with it. This is the introspection signal needed to
+    /// distinguish "the model correctly decided it's done" from "the model
+    /// went silent because the tool list overwhelmed it" (confirmed
+    /// empirically: MAE's real ~730-tool surface reliably causes a real
+    /// tool-use-tuned 8B Ollama model to return zero tool calls and a refusal
+    /// text, while the same model tool-calls correctly the moment the
+    /// offered set drops to 1-2 -- see ADR-045). Without this, both look
+    /// identical from the outside.
+    RoundDiagnostics {
+        round: usize,
+        tools_offered: usize,
+        stop_reason: StopReason,
+        tool_calls_returned: usize,
+        text_len: usize,
+        usage: Option<Usage>,
+    },
 }
 
 pub struct TurnConfig {
@@ -85,6 +104,15 @@ pub async fn run_turn(
             .send(messages, tools, system_prompt)
             .await
             .map_err(|e| anyhow::anyhow!(e.message))?;
+
+        on_event(AgentEvent::RoundDiagnostics {
+            round,
+            tools_offered: tools.len(),
+            stop_reason: response.stop_reason.clone(),
+            tool_calls_returned: response.tool_calls.len(),
+            text_len: response.text.as_deref().map(str::len).unwrap_or(0),
+            usage: response.usage,
+        });
 
         let text = response.text.clone().filter(|t| !t.is_empty());
         if let Some(t) = &text {
@@ -252,10 +280,78 @@ mod tests {
         assert_eq!(messages.len(), 2);
         assert!(matches!(messages[0].role, Role::User));
         assert!(matches!(messages[1].role, Role::Assistant));
+        let text_events: Vec<&AgentEvent> = events
+            .iter()
+            .filter(|e| matches!(e, AgentEvent::Text(_)))
+            .collect();
         assert!(matches!(
-            events.as_slice(),
+            text_events.as_slice(),
             [AgentEvent::Text(t)] if t == "hello"
         ));
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, AgentEvent::RoundDiagnostics { .. })),
+            "expected a RoundDiagnostics event alongside the text"
+        );
+    }
+
+    #[tokio::test]
+    async fn round_diagnostics_reports_tools_offered_and_stop_reason() {
+        let tool_def = ToolDefinition {
+            name: "kb_search".to_string(),
+            description: "search".to_string(),
+            parameters: mae_ai::ToolParameters {
+                schema_type: "object".to_string(),
+                properties: Default::default(),
+                required: vec![],
+            },
+            permission: None,
+        };
+        let provider = ScriptedProvider {
+            responses: Mutex::new(vec![text_response("hi there")]),
+        };
+        let mut executor = RecordingExecutor { calls: vec![] };
+        let mut messages = Vec::new();
+        let mut events = Vec::new();
+
+        run_turn(
+            TurnContext {
+                provider: &provider,
+                executor: &mut executor,
+                tools: std::slice::from_ref(&tool_def),
+                system_prompt: "system",
+            },
+            &mut messages,
+            &TurnConfig::default(),
+            "hi",
+            |e| events.push(e),
+        )
+        .await
+        .unwrap();
+
+        let diag = events
+            .iter()
+            .find_map(|e| match e {
+                AgentEvent::RoundDiagnostics {
+                    tools_offered,
+                    stop_reason,
+                    tool_calls_returned,
+                    text_len,
+                    ..
+                } => Some((
+                    *tools_offered,
+                    stop_reason.clone(),
+                    *tool_calls_returned,
+                    *text_len,
+                )),
+                _ => None,
+            })
+            .expect("expected a RoundDiagnostics event");
+        assert_eq!(diag.0, 1, "tools_offered should reflect the tools slice");
+        assert_eq!(diag.1, StopReason::EndTurn);
+        assert_eq!(diag.2, 0);
+        assert_eq!(diag.3, "hi there".len());
     }
 
     #[tokio::test]
@@ -385,5 +481,120 @@ mod tests {
             &messages[2].content,
             MessageContent::ToolResult(r) if !r.success && r.output.contains("socket dropped")
         ));
+    }
+
+    #[tokio::test]
+    async fn provider_error_mid_turn_leaves_dangling_tool_message() {
+        // Round 0 gets a real tool-call response (so a Tool message gets
+        // appended to history). Round 1 (not round 0) hits
+        // `ScriptedProvider`'s own "responses exhausted" branch, which
+        // returns `Err(ProviderError { .. })` -- standing in for a real
+        // provider erroring out partway through a multi-round turn.
+        let provider = ScriptedProvider {
+            responses: Mutex::new(vec![tool_call_response(
+                "kb_search",
+                serde_json::json!({"query": "x"}),
+            )]),
+        };
+        let mut executor = RecordingExecutor { calls: vec![] };
+        let mut messages = Vec::new();
+        let mut events = Vec::new();
+
+        let result = run_turn(
+            TurnContext {
+                provider: &provider,
+                executor: &mut executor,
+                tools: &[],
+                system_prompt: "system",
+            },
+            &mut messages,
+            &TurnConfig::default(),
+            "search for x",
+            |e| events.push(e),
+        )
+        .await;
+
+        assert!(result.is_err(), "provider error must propagate as Err");
+        assert_eq!(executor.calls.len(), 1, "round 0's tool call did execute");
+
+        // Traced from `run_turn`: push(User) -> round 0 send() succeeds ->
+        // push(Assistant, ToolCalls) -> execute_one -> push(Tool, ToolResult)
+        // -> round 1's `provider.send(...).await.map_err(...)?` errors
+        // *before* anything else is pushed. So `messages` ends up exactly
+        // [User, Assistant(ToolCalls), Tool(ToolResult)] -- 3 entries, last
+        // one a dangling `Role::Tool` message with no matching final
+        // `Assistant` reply.
+        //
+        // This is NOT a corrupted/unsafe-to-resume state, and it's worth
+        // saying so plainly rather than glossing over it: it's the exact
+        // same shape as the normal boundary between any two rounds mid-turn
+        // (tool results appended, next `provider.send()` not yet issued). A
+        // caller that retries `run_turn` by re-invoking it with this same
+        // `messages` Vec resumes cleanly -- the next `provider.send()` call
+        // simply receives the pending tool result and continues the turn.
+        assert_eq!(messages.len(), 3);
+        assert!(matches!(messages[0].role, Role::User));
+        assert!(matches!(messages[1].role, Role::Assistant));
+        assert!(matches!(messages[2].role, Role::Tool));
+    }
+
+    fn text_and_tool_call_response(
+        text: &str,
+        name: &str,
+        args: serde_json::Value,
+    ) -> ProviderResponse {
+        ProviderResponse {
+            text: Some(text.to_string()),
+            tool_calls: vec![ToolCall {
+                id: "call-1".to_string(),
+                name: name.to_string(),
+                arguments: args,
+            }],
+            stop_reason: StopReason::ToolUse,
+            usage: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn text_and_tool_calls_in_same_round_both_fire() {
+        // Reasoning models commonly emit reasoning text *and* a tool call in
+        // the same response -- `AgentEvent::Text`'s own doc comment calls
+        // this out. The loop must not drop one in favor of the other.
+        let provider = ScriptedProvider {
+            responses: Mutex::new(vec![
+                text_and_tool_call_response(
+                    "some reasoning",
+                    "kb_search",
+                    serde_json::json!({"query": "x"}),
+                ),
+                text_response("done"),
+            ]),
+        };
+        let mut executor = RecordingExecutor { calls: vec![] };
+        let mut messages = Vec::new();
+        let mut events = Vec::new();
+
+        run_turn(
+            TurnContext {
+                provider: &provider,
+                executor: &mut executor,
+                tools: &[],
+                system_prompt: "system",
+            },
+            &mut messages,
+            &TurnConfig::default(),
+            "search for x",
+            |e| events.push(e),
+        )
+        .await
+        .unwrap();
+
+        // The reasoning text fired as its own event...
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, AgentEvent::Text(t) if t == "some reasoning")));
+        // ...AND the tool call actually executed -- neither suppressed the other.
+        assert_eq!(executor.calls.len(), 1);
+        assert_eq!(executor.calls[0].0, "kb_search");
     }
 }

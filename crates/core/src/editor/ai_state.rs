@@ -108,7 +108,7 @@ impl AiState {
             last_network_check: None,
             last_output_scroll: None,
             work_window_id: None,
-            editor_name: "claude".to_string(),
+            editor_name: "mae-agent".to_string(),
             agent_login_shell: true,
             provider: String::new(),
             model: String::new(),

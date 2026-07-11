@@ -151,8 +151,8 @@ impl OptionRegistry {
                     "Current AI permission tier (ReadOnly, Write, Shell, Privileged)",
                     OptionKind::String, "ReadOnly", Some("ai.auto_approve_tier"), &["ReadOnly", "Write", "Shell", "Privileged"]),
                 opt!("ai_editor", &["ai-editor"],
-                    "Command to launch for AI agent shell sessions (e.g. claude, aider)",
-                    OptionKind::String, "claude", Some("ai.editor"), &[]),
+                    "Command to launch for AI agent shell sessions (e.g. mae-agent, claude, aider)",
+                    OptionKind::String, "mae-agent", Some("ai.editor"), &[]),
                 opt!("ai_agent_login_shell", &["ai-agent-login-shell"],
                     "Wrap the AI agent shell command in the user's login+interactive shell \
                      (sources ~/.bashrc, ~/.zshrc, etc.) so exported env vars — auth tokens, \
@@ -389,6 +389,13 @@ impl OptionRegistry {
                 opt!("spell_enabled", &["spell-enabled"],
                     "Enable spell checking",
                     OptionKind::Bool, "false", Some("spell.enabled"), &[]),
+                opt!("ai_chat_enabled", &["ai-chat-enabled"],
+                    "Enable the legacy embedded AI chat window (SPC a p / :ai-prompt custom \
+                     conversation buffer + rendering). Deprecated in favor of the model-agnostic \
+                     mae-agent TUI harness (SPC a a). When false (default), SPC a p/:ai-prompt \
+                     transparently launches the mae-agent shell instead of opening the old \
+                     conversation buffer. See ADR-049.",
+                    OptionKind::Bool, "false", Some("ai.chat_enabled"), &[]),
                 // --- Which-key ---
                 opt!("which_key_idle_delay", &["which-key-idle-delay"],
                     "Milliseconds before which-key popup appears (0 = immediate). NOTE: timer integration deferred.",

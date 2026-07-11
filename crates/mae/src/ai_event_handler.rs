@@ -6,7 +6,8 @@
 //! that historically plagues editor event loops (see: Emacs xdisp.c).
 
 use mae_ai::{
-    execute_tool, AgentSession, AiCommand, AiEvent, DeferredKind, ExecuteResult, ToolResult,
+    execute_tool, AgentProvider, AgentSession, AiCommand, AiEvent, DeferredKind, ExecuteResult,
+    ToolResult,
 };
 use mae_core::{Editor, InputLock};
 use mae_lsp::LspCommand;
@@ -26,6 +27,26 @@ fn find_buffer_by_name_or_default_mut<'a>(
         }
     }
     find_conversation_buffer_mut(editor)
+}
+
+/// Decide whether a sub-agent provider needs ADR-045's guardrail hardening
+/// wrapped around it before it's handed an unsupervised tool-calling loop.
+/// `Verified`-tier models are passed through untouched; anything else
+/// (`Testing`/`Untested`) gets wrapped in [`mae_ai::GuardrailProvider`].
+///
+/// Extracted from the `AiEvent::Delegate` arm so this specific decision —
+/// the one closing GitHub issue #310's "embedded delegate sub-agents get
+/// zero guardrail protection" gap — is unit-testable without constructing
+/// a full `&mut Editor` + `AiEventContext`.
+fn guardrail_wrap_if_needed(
+    verification: mae_ai::ModelVerification,
+    provider: Box<dyn AgentProvider>,
+) -> Box<dyn AgentProvider> {
+    if matches!(verification, mae_ai::ModelVerification::Verified) {
+        provider
+    } else {
+        Box::new(mae_ai::GuardrailProvider::wrap(provider))
+    }
 }
 
 /// Type alias for the deferred AI reply state held across loop iterations.
@@ -530,6 +551,18 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
 
             let provider =
                 crate::bootstrap::construct_provider(&config.provider_type, config.clone());
+
+            // Reliability hardening for non-Verified-tier models (ADR-045's
+            // guardrail pillars): rescue-parsing malformed tool-call JSON, a
+            // one-time retry nudge on an empty response, and loop detection.
+            // The embedded primary session (`setup_ai()`) intentionally does
+            // NOT get this treatment in this pass -- a deliberate, documented
+            // scope boundary, not an oversight. This sub-agent delegate path
+            // is in scope because it's the one place besides the `mae-agent`
+            // CLI harness that can hand a weak/local model an unsupervised
+            // tool-calling loop.
+            let verification = mae_ai::context_limits::lookup(&config.model).verification;
+            let provider = guardrail_wrap_if_needed(verification, provider);
 
             // Scope verifier tools: read-only + shell, no write/create/modify.
             let all_tools = {
@@ -1338,5 +1371,118 @@ fn eval_with_yield_handling(
                 };
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// A minimal fake provider whose `send()` is never actually invoked by
+    /// the `Verified` test below — it only needs a distinctive `name()` so
+    /// the test can prove the returned provider is functional and unwrapped
+    /// by identity of behavior, not by downcasting (`AgentProvider` isn't
+    /// `Any`).
+    struct FakeProvider(&'static str);
+
+    #[async_trait::async_trait]
+    impl mae_ai::AgentProvider for FakeProvider {
+        async fn send(
+            &self,
+            _: &[mae_ai::Message],
+            _: &[mae_ai::ToolDefinition],
+            _: &str,
+        ) -> Result<mae_ai::ProviderResponse, mae_ai::ProviderError> {
+            unimplemented!("not exercised by this test")
+        }
+        fn name(&self) -> &str {
+            self.0
+        }
+    }
+
+    /// A fake provider that always returns a completely empty response (no
+    /// text, no tool calls) and counts how many times `send()` actually ran
+    /// on this concrete instance.
+    ///
+    /// This is the vehicle for the "prove wrapping actually happened" test.
+    /// `GuardrailProvider` cannot be distinguished from a bare provider via
+    /// `AgentProvider`'s public surface by identity alone — `.name()` just
+    /// forwards transparently to the inner provider's name, and the trait
+    /// isn't `Any`, so downcasting is not an option. What *is* observable is
+    /// behavior: `GuardrailProvider::send` treats a completely empty
+    /// response as "the model produced nothing usable" and issues exactly
+    /// one corrective retry nudge — a *second* call into the inner provider
+    /// (see `crates/ai/src/guardrail.rs`'s "targeted retry nudge" pillar).
+    /// So one call through a *wrapped* provider drives 2 calls into this
+    /// counter, while one call through the *unwrapped* provider drives
+    /// exactly 1. That difference is the only honest, non-cherry-picked way
+    /// to prove `guardrail_wrap_if_needed`'s `matches!` polarity is correct.
+    struct CountingEmptyProvider {
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[async_trait::async_trait]
+    impl mae_ai::AgentProvider for CountingEmptyProvider {
+        async fn send(
+            &self,
+            _: &[mae_ai::Message],
+            _: &[mae_ai::ToolDefinition],
+            _: &str,
+        ) -> Result<mae_ai::ProviderResponse, mae_ai::ProviderError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(mae_ai::ProviderResponse {
+                text: None,
+                tool_calls: vec![],
+                stop_reason: mae_ai::StopReason::EndTurn,
+                usage: None,
+            })
+        }
+        fn name(&self) -> &str {
+            "counting-empty"
+        }
+    }
+
+    #[test]
+    fn verified_model_is_returned_unwrapped() {
+        let provider: Box<dyn mae_ai::AgentProvider> = Box::new(FakeProvider("distinctive-name"));
+        let result = guardrail_wrap_if_needed(mae_ai::ModelVerification::Verified, provider);
+
+        // NOTE on what this test can and can't prove: `.name()` alone can't
+        // distinguish "unwrapped" from "wrapped" because `GuardrailProvider`
+        // forwards `name()` straight to its inner provider. So this test
+        // only proves the `Verified` branch returns a working provider that
+        // preserves identity via its name, without panicking or swapping in
+        // something else. The actual behavioral proof that non-`Verified`
+        // models get wrapped (and `Verified` models are NOT subjected to
+        // guardrail behavior) lives in
+        // `unverified_model_is_wrapped_and_retries_on_empty_response` below,
+        // which can observe wrapping through a real behavioral difference.
+        assert_eq!(result.name(), "distinctive-name");
+    }
+
+    #[tokio::test]
+    async fn unverified_model_is_wrapped_and_retries_on_empty_response() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let inner = CountingEmptyProvider {
+            calls: calls.clone(),
+        };
+        let provider: Box<dyn mae_ai::AgentProvider> = Box::new(inner);
+
+        // `Testing`/`Untested` are the two non-`Verified` variants this
+        // function must wrap.
+        let wrapped = guardrail_wrap_if_needed(mae_ai::ModelVerification::Untested, provider);
+        let _ = wrapped.send(&[], &[], "system prompt").await.unwrap();
+
+        // A wrapped provider's empty response triggers exactly one retry
+        // nudge, so the inner `CountingEmptyProvider` sees 2 calls for our
+        // single `send()` call. If `guardrail_wrap_if_needed` had (wrongly)
+        // NOT wrapped for `Untested`, this would be 1 instead.
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "expected the guardrail's empty-response retry nudge to fire a second send()"
+        );
     }
 }

@@ -81,6 +81,7 @@ Source: `crates/ai/src/lib.rs`
 | `context_limits` | mod |
 | `executor` | mod |
 | `gemini` | mod |
+| `guardrail` | mod |
 | `ollama` | mod |
 | `openai` | mod |
 | `pricing` | mod |
@@ -788,8 +789,8 @@ Source: `shared/sync/src/lib.rs`
 | `switch-buffer` | Switch to another buffer |
 | `new-buffer` | Create a new empty scratch buffer |
 | `force-kill-buffer` | Close current buffer without saving |
-| `ai-prompt` | AI Chat — built-in conversation with editor context (SPC a p) |
-| `ai-chat` | AI Chat — built-in conversation with editor context (SPC a p) |
+| `ai-prompt` | AI Agent (SPC a p) — mae-agent shell by default; built-in chat if ai_chat_enabled |
+| `ai-chat` | AI Agent (SPC a p) — mae-agent shell by default; built-in chat if ai_chat_enabled |
 | `ai-cancel` | Cancel current AI operation |
 | `ai-accept` | Accept proposed AI changes |
 | `ai-reject` | Reject proposed AI changes |

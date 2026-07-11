@@ -1041,6 +1041,9 @@ pub struct Editor {
     pub format_on_save: bool,
     /// Enable spell checking.
     pub spell_enabled: bool,
+    /// Enable the legacy embedded AI chat window (deprecated in favor of
+    /// the mae-agent TUI harness). Default false; see ADR-049.
+    pub ai_chat_enabled: bool,
     /// Saved help view state from the last `help_close`. `help-reopen`
     /// restores this to resume exactly where the user left off.
     pub last_kb_state: Option<crate::kb_view::KbView>,
@@ -1398,6 +1401,7 @@ impl Editor {
             spell_results: HashMap::new(),
             format_on_save: false,
             spell_enabled: false,
+            ai_chat_enabled: false,
             ai: AiState::new(),
             bell_until: None,
             project: None,
