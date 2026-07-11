@@ -236,5 +236,4 @@ fn chrono_now() -> String {
 }
 
 #[cfg(test)]
-#[path = "kb_ops_tests.rs"]
 mod tests;
