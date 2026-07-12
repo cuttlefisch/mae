@@ -882,9 +882,17 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
                 self.dirty = true;
             }
             MaeEvent::IdleTick => {
-                if self.last_input_time.elapsed() > std::time::Duration::from_millis(100) {
+                let idle_elapsed = self.last_input_time.elapsed();
+                if idle_elapsed > std::time::Duration::from_millis(100) {
                     self.editor.idle_work();
-                    // Don't set dirty — idle work shouldn't trigger redraws.
+                    // idle_work() itself shouldn't trigger redraws.
+                }
+                // Shared idle-dispatch (Part B): which-key idle-delay (ROADMAP #83) and
+                // the Part-D KB-preview hook point. Unlike idle_work(), this CAN request
+                // a redraw — e.g. to reveal the which-key popup once its configured
+                // delay elapses, since nothing else changes state during a pure pause.
+                if self.editor.on_idle_tick(idle_elapsed.as_millis() as u64) {
+                    self.dirty = true;
                 }
                 // Drain sync updates on idle tick (~100ms max latency for keyboard edits).
                 crate::sync_broadcast::drain_and_broadcast(

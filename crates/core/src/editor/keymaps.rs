@@ -537,7 +537,7 @@ impl Editor {
         // registrations (e.g. a "navigation" context, canvas artifact) re-apply
         // on the subsequent module reload, exactly like the keymaps themselves.
         self.keymap_registry = crate::keymap_registry::KeymapRegistry::kernel_defaults();
-        self.leader_active = false;
+        self.set_leader_active(false);
         self.clear_which_key_prefix();
     }
 
@@ -669,6 +669,21 @@ impl Editor {
     pub fn clear_which_key_prefix(&mut self) {
         self.which_key_prefix.clear();
         self.which_key_scroll = 0;
+    }
+
+    /// Activate or deactivate the transient leader keypad. Use this instead
+    /// of assigning `leader_active` directly — it keeps `leader_activated_at`
+    /// and `which_key_popup_redraw_done` (the `which_key_idle_delay` timing
+    /// bookkeeping, ROADMAP #83, see `editor::idle_ops`) from drifting out of
+    /// sync with `leader_active` itself.
+    pub fn set_leader_active(&mut self, active: bool) {
+        self.leader_active = active;
+        self.leader_activated_at = if active {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        };
+        self.which_key_popup_redraw_done = false;
     }
 }
 

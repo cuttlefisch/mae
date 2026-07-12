@@ -398,7 +398,9 @@ impl OptionRegistry {
                     OptionKind::Bool, "false", Some("ai.chat_enabled"), &[]),
                 // --- Which-key ---
                 opt!("which_key_idle_delay", &["which-key-idle-delay"],
-                    "Milliseconds before which-key popup appears (0 = immediate). NOTE: timer integration deferred.",
+                    "Milliseconds of idle time (no input) after the leader keypad activates \
+                     before the which-key popup appears (0 = immediate). Wired via \
+                     Editor::on_idle_tick (ROADMAP #83).",
                     OptionKind::Int, "0", Some("which-key.idle-delay"), &[]),
                 opt!("which_key_separator", &["which-key-separator"],
                     "Separator between key and description in which-key popup",
@@ -412,6 +414,13 @@ impl OptionRegistry {
                 opt!("which_key_sort_order", &["which-key-sort-order"],
                     "Sort order for which-key entries: key (default), desc, none",
                     OptionKind::String, "key", Some("which-key.sort-order"), &["key", "desc", "none"]),
+                // --- KB preview (idle-dispatch hook point; popup itself is Part D, not yet built) ---
+                opt!("kb_preview_idle_delay", &["kb-preview-idle-delay"],
+                    "Milliseconds of cursor idle time over a KB link before a hover preview \
+                     popup would appear. Wired via Editor::on_idle_tick; the preview popup \
+                     itself (KB-link hover preview) is not implemented yet — see the KB graph \
+                     view plan's Part D.",
+                    OptionKind::Int, "300", Some("kb-preview.idle-delay"), &[]),
                 // --- File tree ---
                 opt!("file_tree_focus_on_open", &["file-tree-focus-on-open"],
                     "Auto-focus the file tree window when it opens",

@@ -216,6 +216,8 @@ impl super::Editor {
             "notify_badge_min_severity" => {
                 self.notifications.badge_min_severity.as_str().to_string()
             }
+            "which_key_idle_delay" => self.which_key_idle_delay.to_string(),
+            "kb_preview_idle_delay" => self.kb_preview_idle_delay.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -901,6 +903,18 @@ impl super::Editor {
                             value
                         )
                     })?
+            }
+            "which_key_idle_delay" => {
+                let v: u64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.which_key_idle_delay = v.clamp(0, 60_000);
+            }
+            "kb_preview_idle_delay" => {
+                let v: u64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_preview_idle_delay = v.clamp(0, 60_000);
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }

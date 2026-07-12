@@ -323,7 +323,7 @@ pub fn handle_key(
         let is_cancel = key.code == KeyCode::Esc
             || (key.code == KeyCode::Char('g') && key.modifiers.contains(KeyModifiers::CONTROL));
         if is_cancel {
-            editor.leader_active = false;
+            editor.set_leader_active(false);
             pending_keys.clear();
             editor.clear_which_key_prefix();
             editor.set_status("");

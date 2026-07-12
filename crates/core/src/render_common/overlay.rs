@@ -50,7 +50,7 @@ pub fn active_overlay(editor: &Editor) -> ActiveOverlay {
         ActiveOverlay::CommandPalette
     } else if !editor.which_key_prefix.is_empty()
         || editor.buffer_keys_popup
-        || editor.leader_active
+        || editor.leader_popup_ready()
     {
         ActiveOverlay::WhichKey
     } else if super::splash::should_show_splash(editor) {
@@ -70,8 +70,12 @@ mod tests {
         let mut ed = Editor::new();
         // Baseline: no overlay.
         assert_eq!(active_overlay(&ed), ActiveOverlay::None);
-        // which-key/leader transient outranks the normal view.
-        ed.leader_active = true;
+        // which-key/leader transient outranks the normal view. Uses
+        // `set_leader_active` (not the bare field) so `leader_activated_at`
+        // is populated — required for `leader_popup_ready()`'s
+        // `which_key_idle_delay` gate (default 0ms = immediate) to resolve
+        // true, matching pre-idle-delay behavior exactly.
+        ed.set_leader_active(true);
         assert_eq!(active_overlay(&ed), ActiveOverlay::WhichKey);
         // A blocking modal outranks everything, regardless of other state.
         ed.mini_dialog = Some(MiniDialogState::confirm(
@@ -85,7 +89,30 @@ mod tests {
         );
         ed.mini_dialog = None;
         assert_eq!(active_overlay(&ed), ActiveOverlay::WhichKey);
-        ed.leader_active = false;
+        ed.set_leader_active(false);
         assert_eq!(active_overlay(&ed), ActiveOverlay::None);
+    }
+
+    #[test]
+    fn which_key_idle_delay_defers_the_overlay_until_elapsed() {
+        // Regression for ROADMAP #83: a nonzero `which_key_idle_delay` must
+        // hide the which-key overlay right after leader-mode activation and
+        // only reveal it once that much idle time has actually passed.
+        let mut ed = Editor::new();
+        ed.which_key_idle_delay = 50;
+        ed.set_leader_active(true);
+        assert_eq!(
+            active_overlay(&ed),
+            ActiveOverlay::None,
+            "must not show immediately when a nonzero delay is configured"
+        );
+        // Backdate the activation instant instead of sleeping — deterministic.
+        ed.leader_activated_at =
+            Some(std::time::Instant::now() - std::time::Duration::from_millis(60));
+        assert_eq!(
+            active_overlay(&ed),
+            ActiveOverlay::WhichKey,
+            "must show once the configured idle delay has elapsed"
+        );
     }
 }

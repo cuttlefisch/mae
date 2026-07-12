@@ -29,6 +29,7 @@ mod git_ops;
 mod heading_ops;
 pub(crate) mod help_ops;
 mod hook_ops;
+mod idle_ops;
 mod jumps;
 pub(crate) mod kb_ops;
 mod kb_sharing_ops;
@@ -710,6 +711,18 @@ pub struct Editor {
     /// Entered via the `leader-dispatch` command — `SPC` in the doom flavor,
     /// `C-;` in the non-modal flavor — so both flavors share one leader tree.
     pub leader_active: bool,
+    /// Wall-clock time `leader_active` was last flipped true — `None` while
+    /// inactive. Drives the `which_key_idle_delay` gate (ROADMAP #83): the
+    /// which-key popup only paints once this long ago, evaluated fresh on
+    /// every render by `leader_popup_ready()`. Always set/cleared together
+    /// with `leader_active` via `Editor::set_leader_active` so the two can
+    /// never drift out of sync.
+    pub leader_activated_at: Option<std::time::Instant>,
+    /// Set once `on_idle_tick` has already forced the redraw that reveals the
+    /// which-key popup for the CURRENT leader activation, so repeated idle
+    /// ticks don't keep marking a full redraw while the popup just sits idle
+    /// on screen. Reset by `Editor::set_leader_active`.
+    pub which_key_popup_redraw_done: bool,
     pub running: bool,
     pub status_msg: String,
     /// Name of the command currently being dispatched (Emacs `this-command`).
@@ -726,6 +739,17 @@ pub struct Editor {
     pub which_key_prefix: Vec<KeyPress>,
     /// Scroll offset (in rows) for the which-key popup. Reset when prefix changes.
     pub which_key_scroll: usize,
+    /// Milliseconds of idle time (no input) required, after the leader
+    /// transient keypad activates, before the which-key popup paints (0 =
+    /// immediate, matching the old un-timed behavior). Mirrors the
+    /// `which_key_idle_delay` option (ROADMAP #83); see `on_idle_tick`.
+    pub which_key_idle_delay: u64,
+    /// Milliseconds of idle time required before a KB-link hover preview
+    /// popup would appear. Mirrors the `kb_preview_idle_delay` option.
+    /// TODO(Part D, KB-link hover preview): the popup itself isn't built
+    /// yet — this field and its idle-dispatch hook (`maybe_show_kb_preview_popup`)
+    /// are the forward-compatible hook point only.
+    pub kb_preview_idle_delay: u64,
     /// In-editor message log (*Messages* buffer equivalent).
     /// Shared with the tracing layer via MessageLogHandle.
     pub message_log: MessageLog,
@@ -1131,6 +1155,8 @@ impl Editor {
             saved_maximize_layout: None,
             mode: Mode::Normal,
             leader_active: false,
+            leader_activated_at: None,
+            which_key_popup_redraw_done: false,
             running: true,
             status_msg: String::new(),
             current_command: String::new(),
@@ -1139,6 +1165,8 @@ impl Editor {
             keymap_registry: crate::keymap_registry::KeymapRegistry::kernel_defaults(),
             which_key_prefix: Vec::new(),
             which_key_scroll: 0,
+            which_key_idle_delay: 0,
+            kb_preview_idle_delay: 300,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)
             theme: default_theme(),
             dap: DapContext::new(),

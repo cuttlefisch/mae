@@ -98,7 +98,7 @@ pub(super) fn handle_keymap_mode(
             // command-post fired by dispatch_command) so users can hook ONLY
             // keypad-resolved commands.
             if was_leader && editor.leader_active {
-                editor.leader_active = false;
+                editor.set_leader_active(false);
                 editor.fire_hook("leader-execute");
             }
         }
@@ -109,7 +109,7 @@ pub(super) fn handle_keymap_mode(
             // In the transient leader layer, an unbound key cancels the keypad
             // (no stray command, no vi operator fallback).
             if editor.leader_active {
-                editor.leader_active = false;
+                editor.set_leader_active(false);
                 pending_keys.clear();
                 editor.clear_which_key_prefix();
                 editor.set_status("");
