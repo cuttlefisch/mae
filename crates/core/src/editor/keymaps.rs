@@ -392,6 +392,9 @@ impl Editor {
         help.bind(parse_key_seq("p"), "help-prev-link");
         help.bind(parse_key_seq("e"), "kb-edit-source");
         help.bind(parse_key_seq("P"), "kb-promote");
+        // KB-link hover preview (Part D) — mirrors normal mode's "K" ->
+        // lsp-hover binding above, scoped to the KB buffer's own keymap.
+        help.bind(parse_key_seq("K"), "kb-preview");
         help.bind(parse_key_seq("q"), "help-close");
         help.bind(parse_key_seq("C-o"), "help-back");
         help.bind(parse_key_seq("C-i"), "help-forward");

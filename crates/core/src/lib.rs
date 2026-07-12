@@ -105,7 +105,7 @@ pub use graph_view::{
 };
 pub use hooks::HookRegistry;
 pub use input::{InputEvent, MouseButton};
-pub use kb_view::{KbLinkSpan, KbView};
+pub use kb_view::{KbLinkSpan, KbPreviewIntent, KbPreviewPopup, KbView};
 pub use keymap::{
     parse_key_seq, parse_key_seq_spaced, Key, KeyPress, Keymap, LookupResult, WhichKeyEntry,
 };

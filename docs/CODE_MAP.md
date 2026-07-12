@@ -437,7 +437,7 @@ Source: `shared/sync/src/lib.rs`
 | `compare_state_vectors` | fn |
 | `compute_project_identity` | fn |
 
-## Commands (549 built-in)
+## Commands (553 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -912,6 +912,10 @@ Source: `shared/sync/src/lib.rs`
 | `help-close` | Close KB viewer |
 | `help-search` | Search help topics |
 | `help-reopen` | Reopen the last-closed KB viewer |
+| `kb-preview` | Show a hover preview of the KB link under cursor, or scroll it if already showing (K in a KB buffer) |
+| `dismiss-kb-preview-popup` | Dismiss the KB-link hover preview popup |
+| `kb-preview-scroll-down` | Scroll the KB-link hover preview popup down |
+| `kb-preview-scroll-up` | Scroll the KB-link hover preview popup up |
 | `kb-view` | Return to rendered KB view from source editing (SPC n v) |
 | `help-cycle` | Fold/unfold heading at cursor, or next link if not on heading (Tab) |
 | `help-global-cycle` | Cycle global visibility: OVERVIEW → CONTENTS → SHOW ALL (S-Tab) |

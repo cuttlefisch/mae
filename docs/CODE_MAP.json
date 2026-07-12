@@ -2997,6 +2997,22 @@
       "doc": "Reopen the last-closed KB viewer"
     },
     {
+      "name": "kb-preview",
+      "doc": "Show a hover preview of the KB link under cursor, or scroll it if already showing (K in a KB buffer)"
+    },
+    {
+      "name": "dismiss-kb-preview-popup",
+      "doc": "Dismiss the KB-link hover preview popup"
+    },
+    {
+      "name": "kb-preview-scroll-down",
+      "doc": "Scroll the KB-link hover preview popup down"
+    },
+    {
+      "name": "kb-preview-scroll-up",
+      "doc": "Scroll the KB-link hover preview popup up"
+    },
+    {
       "name": "kb-view",
       "doc": "Return to rendered KB view from source editing (SPC n v)"
     },

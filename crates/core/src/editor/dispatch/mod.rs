@@ -93,6 +93,22 @@ impl Editor {
         {
             self.lsp.hover_popup = None;
         }
+        // Auto-dismiss the KB-link hover preview popup (Part D) on any
+        // command that isn't preview-related — same pattern as the LSP
+        // hover popup above, just scoped to the active buffer's `KbView`
+        // rather than a top-level `Editor` field (see `KbPreviewPopup`'s
+        // doc comment for why).
+        if self.kb_view().is_some_and(|v| v.kb_preview_popup.is_some())
+            && !matches!(
+                name,
+                "kb-preview"
+                    | "kb-preview-scroll-down"
+                    | "kb-preview-scroll-up"
+                    | "dismiss-kb-preview-popup"
+            )
+        {
+            self.kb_preview_dismiss();
+        }
         // Auto-dismiss signature help on non-related commands.
         if self.lsp.signature_help.is_some() && !matches!(name, "lsp-signature-help") {
             self.lsp.signature_help = None;

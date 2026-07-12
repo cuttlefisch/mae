@@ -414,13 +414,20 @@ impl OptionRegistry {
                 opt!("which_key_sort_order", &["which-key-sort-order"],
                     "Sort order for which-key entries: key (default), desc, none",
                     OptionKind::String, "key", Some("which-key.sort-order"), &["key", "desc", "none"]),
-                // --- KB preview (idle-dispatch hook point; popup itself is Part D, not yet built) ---
+                // --- KB-link hover preview (Part D) ---
                 opt!("kb_preview_idle_delay", &["kb-preview-idle-delay"],
                     "Milliseconds of cursor idle time over a KB link before a hover preview \
-                     popup would appear. Wired via Editor::on_idle_tick; the preview popup \
-                     itself (KB-link hover preview) is not implemented yet — see the KB graph \
-                     view plan's Part D.",
+                     popup would appear. Wired via Editor::on_idle_tick.",
                     OptionKind::Int, "300", Some("kb-preview.idle-delay"), &[]),
+                opt!("kb_preview_on_hover", &["kb-preview-on-hover"],
+                    "Auto-show the KB-link hover preview popup when the cursor idles over a \
+                     link in a KB-view-mode buffer (gated by kb_preview_idle_delay). The manual \
+                     kb-preview command/keybinding works regardless of this option.",
+                    OptionKind::Bool, "true", Some("kb-preview.on-hover"), &[]),
+                opt!("kb_preview_max_lines", &["kb-preview-max-lines"],
+                    "Maximum lines shown in the KB-link hover preview popup before scrolling. \
+                     Mirrors hover_max_lines.",
+                    OptionKind::Int, "15", Some("kb-preview.max-lines"), &[]),
                 // --- Native KB graph view (Part C Phase 1) ---
                 opt!("kb_graph_default_depth", &["kb-graph-default-depth"],
                     "Default hop radius (SubgraphSpec::max_depth) for (kb-graph-view-open) when \

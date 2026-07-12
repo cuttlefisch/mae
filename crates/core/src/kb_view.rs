@@ -21,6 +21,41 @@ pub struct KbLinkSpan {
     pub target: String,
 }
 
+/// Floating popup showing a KB-link hover preview near the cursor
+/// (KB-graph-view plan Part D). Same shape as
+/// `crate::editor::lsp_state::HoverPopup`, its direct template — the two
+/// are intentionally kept structurally parallel even though this one lives
+/// per-buffer on `KbView` rather than as a single top-level `Editor` field,
+/// since each non-builtin KB node gets its own buffer (see
+/// `Editor::ensure_kb_buffer_idx`) and the popup is scoped to
+/// KB-view-mode buffers only.
+#[derive(Debug, Clone)]
+pub struct KbPreviewPopup {
+    /// Rendered preview text (title + body, noise-stripped and truncated —
+    /// see `Editor::fetch_kb_preview_content`).
+    pub contents: String,
+    /// Buffer index the popup was requested from.
+    pub buffer_idx: usize,
+    /// Buffer row the popup is anchored to.
+    pub anchor_row: usize,
+    /// Buffer col the popup is anchored to.
+    pub anchor_col: usize,
+    /// Scroll offset for long content.
+    pub scroll_offset: usize,
+}
+
+/// Scheme/MCP-originated intents for the KB-link hover preview, queued
+/// into `SharedState::pending_kb_preview_intents` by the Scheme primitives
+/// in `runtime/kb_preview.rs` and drained in order by `apply_to_editor`
+/// into the matching `Editor::kb_preview_*` method — the same
+/// intent-queue pattern `GraphViewIntent` uses for the native KB graph
+/// view.
+#[derive(Debug, Clone)]
+pub enum KbPreviewIntent {
+    Show(String),
+    Dismiss,
+}
+
 /// Navigation state for a KB buffer.
 #[derive(Debug, Clone)]
 pub struct KbView {
@@ -39,6 +74,10 @@ pub struct KbView {
     pub rendered_links: Vec<KbLinkSpan>,
     /// Indices into `rendered_links` that point to broken/unresolvable targets.
     pub broken_links: std::collections::HashSet<usize>,
+    /// KB-link hover preview popup (Part D), if currently showing. Scoped
+    /// to this buffer's KB view rather than a top-level `Editor` field —
+    /// see `KbPreviewPopup`'s doc comment for why.
+    pub kb_preview_popup: Option<KbPreviewPopup>,
 }
 
 impl KbView {
@@ -51,6 +90,7 @@ impl KbView {
             focused_link: None,
             rendered_links: Vec::new(),
             broken_links: std::collections::HashSet::new(),
+            kb_preview_popup: None,
         }
     }
 

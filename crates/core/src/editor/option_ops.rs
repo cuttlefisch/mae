@@ -218,6 +218,8 @@ impl super::Editor {
             }
             "which_key_idle_delay" => self.which_key_idle_delay.to_string(),
             "kb_preview_idle_delay" => self.kb_preview_idle_delay.to_string(),
+            "kb_preview_on_hover" => self.kb_preview_on_hover.to_string(),
+            "kb_preview_max_lines" => self.kb_preview_max_lines.to_string(),
             "kb_graph_default_depth" => self.kb_graph_default_depth.to_string(),
             "kb_graph_include_backlinks" => self.kb_graph_include_backlinks.to_string(),
             "kb_graph_node_radius" => self.kb_graph_node_radius.to_string(),
@@ -922,6 +924,15 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.kb_preview_idle_delay = v.clamp(0, 60_000);
+            }
+            "kb_preview_on_hover" => {
+                self.kb_preview_on_hover = parse_option_bool(value)?;
+            }
+            "kb_preview_max_lines" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_preview_max_lines = v.clamp(1, 50);
             }
             "kb_graph_default_depth" => {
                 let v: usize = value

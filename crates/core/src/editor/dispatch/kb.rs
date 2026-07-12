@@ -166,6 +166,19 @@ impl Editor {
             "kb-widen" => {
                 self.kb_widen_meta();
             }
+            "kb-preview" => {
+                // Mirrors "lsp-hover": pressing the manual trigger again
+                // while the popup is already showing scrolls it instead of
+                // re-fetching (see dispatch_lsp's "lsp-hover" arm).
+                if self.kb_preview_popup().is_some() {
+                    self.kb_preview_scroll_down();
+                } else if !self.kb_preview_show_at_cursor(true) {
+                    self.set_status("No KB link under cursor");
+                }
+            }
+            "dismiss-kb-preview-popup" => self.kb_preview_dismiss(),
+            "kb-preview-scroll-down" => self.kb_preview_scroll_down(),
+            "kb-preview-scroll-up" => self.kb_preview_scroll_up(),
             "capture-finalize" => {
                 if let Some(cap) = self.kb.capture_state.take() {
                     self.dispatch_builtin("save");

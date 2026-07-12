@@ -33,6 +33,7 @@ mod hook_ops;
 mod idle_ops;
 mod jumps;
 pub(crate) mod kb_ops;
+mod kb_preview_ops;
 mod kb_sharing_ops;
 pub mod kb_state;
 mod keymaps;
@@ -1049,6 +1050,14 @@ pub struct Editor {
     pub render_markup: bool,
     /// Show hover info in a floating popup (true) or status bar (false). Default true.
     pub lsp_hover_popup: bool,
+    /// Whether the KB-link hover preview popup (Part D) auto-triggers when
+    /// the cursor idles over a link in a KB-view-mode buffer, gated by
+    /// `kb_preview_idle_delay`. The manual `kb-preview` command/keybinding
+    /// works regardless of this option. Default true.
+    pub kb_preview_on_hover: bool,
+    /// Max lines shown in the KB-link hover preview popup before scrolling.
+    /// Mirrors `hover_max_lines`. Default 15.
+    pub kb_preview_max_lines: usize,
     /// Git blame overlay for current buffer.
     pub blame_overlay: Option<BlameOverlay>,
     /// Show inline diagnostic underlines on error/warning ranges. Default true.
@@ -1327,6 +1336,8 @@ impl Editor {
             link_descriptive: true,
             render_markup: true,
             lsp_hover_popup: true,
+            kb_preview_on_hover: true,
+            kb_preview_max_lines: 15,
             blame_overlay: None,
             lsp_diagnostics_inline: true,
             lsp_diagnostics_virtual_text: true,

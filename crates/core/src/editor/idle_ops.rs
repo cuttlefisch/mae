@@ -70,17 +70,26 @@ impl Editor {
         }
     }
 
-    /// TODO(Part D, KB-link hover preview — not built yet): once `KbPreviewPopup`
-    /// (planned on `KbView`, see the plan's Part D) exists, this becomes the
-    /// idle-dispatch hook that shows it after `kb_preview_idle_delay` ms of
-    /// cursor idle over a KB link, mirroring `maybe_show_which_key_popup`
-    /// above. Until then there is no popup state to show, so this is a
-    /// deliberate no-op early-return — the condition it checks
-    /// (`kb_view.hovered_link`, not yet a field on `Editor`) can never be
-    /// true today. Kept as a real, correctly-shaped function (not a stub
-    /// left out of `on_idle_tick`) so Part D only has to fill in the body.
+    /// Part D (KB-link hover preview): once `kb_preview_idle_delay` ms of
+    /// idle time has elapsed, show a preview popup if the focused buffer is
+    /// KB-kind, `kb_preview_on_hover` is enabled, and the cursor is
+    /// currently sitting on a KB link. Delegates the actual lookup/populate
+    /// work to `Editor::kb_preview_show_at_cursor` (`kb_preview_ops.rs`,
+    /// shared with the manual `kb-preview` command) with `force = false` so
+    /// repeated idle ticks over a motionless cursor don't keep re-fetching
+    /// KB content or forcing a redraw — mirrors `maybe_show_which_key_popup`
+    /// above (force exactly one redraw to reveal a popup that pure idle
+    /// time alone doesn't otherwise mark dirty).
     fn maybe_show_kb_preview_popup(&mut self) -> bool {
-        false
+        if !self.kb_preview_on_hover {
+            return false;
+        }
+        if self.kb_preview_show_at_cursor(false) {
+            self.mark_full_redraw();
+            true
+        } else {
+            false
+        }
     }
 }
 

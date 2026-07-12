@@ -337,7 +337,7 @@ fn render_kb_node_with_store(
 /// (`render_kb_body`) can run over the *whole* filtered body at once instead
 /// of one already-split line at a time — needed for a link whose display
 /// text spans a line break (#301/#302).
-fn strip_kb_body_noise(body: &str) -> String {
+pub(crate) fn strip_kb_body_noise(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
     let mut in_drawer = false;
     let mut kept_lines = 0usize;
@@ -534,7 +534,12 @@ impl Editor {
     }
 
     /// Get the KnowledgeBase that contains a given node ID (local first, then federated).
-    fn kb_for_node(&self, id: &str) -> Option<&mae_kb::KnowledgeBase> {
+    ///
+    /// `pub(crate)` so `kb_preview_ops.rs`'s `fetch_kb_preview_content` (Part
+    /// D, KB-link hover preview) can reuse the same lookup instead of a
+    /// second divergent resolver — mirrors why `kb_contains_any` above is
+    /// `pub(crate)`.
+    pub(crate) fn kb_for_node(&self, id: &str) -> Option<&mae_kb::KnowledgeBase> {
         // Use query_layer for the existence check when available, but we still need
         // to return a &KnowledgeBase reference so we do the structural search regardless.
         if let Some(q) = self.kb.query_layer() {
@@ -1020,6 +1025,44 @@ impl Editor {
         let line_len = rope.line(row).len_bytes();
         let col_bytes = win.cursor_col.min(line_len);
         line_start + col_bytes
+    }
+
+    /// Find the KB link at an arbitrary `(row, col)` position in the
+    /// FOCUSED window's buffer, if that buffer is showing a KB node
+    /// (`BufferKind::Kb`) and the position falls inside one of its
+    /// `KbView.rendered_links` byte ranges.
+    ///
+    /// Read-only: unlike `help_follow_link`, this never navigates or
+    /// mutates `KbView.focused_link` — it's a pure lookup for the KB-link
+    /// hover preview (Part D, `kb_preview_ops.rs`), which needs to know
+    /// "is the cursor on a link right now" without following it. Mirrors
+    /// `help_cursor_byte_offset`'s row/col → byte-offset conversion (same
+    /// technique `mouse_ops::try_link_follow_at` uses to generalize
+    /// cursor-based link-follow to arbitrary mouse positions), generalized
+    /// to an arbitrary `(row, col)` instead of only the live cursor.
+    pub(crate) fn kb_link_at(&self, row: usize, col: usize) -> Option<KbLinkSpan> {
+        let buf_idx = self.window_mgr.focused_window().buffer_idx;
+        let buf = self.buffers.get(buf_idx)?;
+        if buf.kind != BufferKind::Kb {
+            return None;
+        }
+        let view = buf.kb_view()?;
+        if view.rendered_links.is_empty() {
+            return None;
+        }
+        let rope = buf.rope();
+        if rope.len_lines() == 0 {
+            return None;
+        }
+        let row = row.min(rope.len_lines().saturating_sub(1));
+        let line_start = rope.line_to_byte(row);
+        let line_len = rope.line(row).len_bytes();
+        let col_bytes = col.min(line_len);
+        let byte_offset = line_start + col_bytes;
+        view.rendered_links
+            .iter()
+            .find(|l| byte_offset >= l.byte_start && byte_offset < l.byte_end)
+            .cloned()
     }
 
     /// Close the *Help* buffer if one exists, switching to the alternate
