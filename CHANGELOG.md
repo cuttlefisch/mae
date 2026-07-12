@@ -2,19 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.14.40] - 2026-07-11
 
 ### Bug Fixes
 
 - *(agent-cli,mcp)* Enforce permission tiers in --prompt mode; transmit real tool tiers over MCP ([9fdeec7](https://github.com/cuttlefisch/mae/commit/9fdeec7ba3b58f14365a0c6f558b44ebf09447ff))
 - *(ai)* Close ADR-049 test/copy gaps found in self-review ([14ad72d](https://github.com/cuttlefisch/mae/commit/14ad72df0da5ffbb672b62911d1a80036047e552))
 - *(ci)* Explicitly build mae-agent binary before staging artifacts ([37c22c5](https://github.com/cuttlefisch/mae/commit/37c22c58adac32121616f0cb1761644aaadb6b91))
+- Address 4 concrete bugs found by the architecture audit ([48bd2bb](https://github.com/cuttlefisch/mae/commit/48bd2bbd41ebe5ca78c1d163a96f186708b743e7))
+- *(daemon)* Make mae-kb's storage-sqlite requirement explicit ([14bd447](https://github.com/cuttlefisch/mae/commit/14bd447c5fe5d88f923500dd33ab20db171deb3d))
+- *(kb)* Make mae-kb build standalone with default features ([49f4b1f](https://github.com/cuttlefisch/mae/commit/49f4b1f57068907d59a367cef405001dc47273b1))
+- *(ci)* Repoint TCP E2E test commands to split collab_tcp_e2e_* targets ([55429eb](https://github.com/cuttlefisch/mae/commit/55429eb19bb5133a634f42abe88cad4164395168))
 
 ### Documentation
 
 - *(model-support)* Real Ollama exam data for qwen3:latest and llama3-groq-tool-use:8b ([6212902](https://github.com/cuttlefisch/mae/commit/6212902177a0d1d5acb8e8bb58bbbd78bc0390d9))
 - *(model-support)* Real exam data for mistral:7b, llama3.1:8b, qwen3.5:latest ([0711ad0](https://github.com/cuttlefisch/mae/commit/0711ad03b18e8ae14bd7706a157bd094ce821b6a))
 - *(adr)* Add ADR-049, supersede ADR-046's rejected chat deprecation ([f430685](https://github.com/cuttlefisch/mae/commit/f43068569cc7030d0b9a24a022099de01ddae62f))
+- Formalize @ai-caution tagging convention, retrofit + cross-link ([cb79975](https://github.com/cuttlefisch/mae/commit/cb799750091595fb7bad13fd7c4e6f9775baaa4e))
+- Fix stale README/CLAUDE.md content, add missing @stability markers ([6410442](https://github.com/cuttlefisch/mae/commit/641044250000ecfdd973a4ec97fbff4acc3d759f))
+- *(scheme)* Close the Scheme API KB-doc coverage gap (53 functions) ([2d86da2](https://github.com/cuttlefisch/mae/commit/2d86da285c9925e1957adbe4ab6ea35dc0556861))
+- *(roadmap)* Check off two stale architecture-debt items ([9fd95b6](https://github.com/cuttlefisch/mae/commit/9fd95b62cebb8efafa8e0d4a697d6b30c35a73da))
+- Refresh architecture-debt tracking after the file-size splitting pass ([2586c31](https://github.com/cuttlefisch/mae/commit/2586c31b595a2c0f1bd10bfdd3016a8d6119e9f1))
 
 ### Features
 
@@ -25,6 +34,23 @@ All notable changes to this project will be documented in this file.
 - *(ai)* Flip ai_editor default to mae-agent, add ai_chat_enabled gate ([5a96bb4](https://github.com/cuttlefisch/mae/commit/5a96bb472d1f996623b1f70b4ce5a1562fdb1c3a))
 - *(ai)* Redirect ai-prompt to mae-agent shell when chat disabled ([d799274](https://github.com/cuttlefisch/mae/commit/d7992744627830dbff5f307f70b9a4af8ea143e1))
 
+### Miscellaneous
+
+- Bump version to 0.14.40 ([b879476](https://github.com/cuttlefisch/mae/commit/b879476e3b684cc4c13b46e3f4160a166797d8ac))
+
+### Refactor
+
+- *(render)* Extract shared remote-cursor/selection math (principle #8) ([b71bb8a](https://github.com/cuttlefisch/mae/commit/b71bb8a4945f05ea386c59a26e58bff3d0f604f1))
+- *(core)* Extract shared FoldableView abstraction (DRY audit finding) ([7fc9137](https://github.com/cuttlefisch/mae/commit/7fc91373e3debdfb060fe160b6500c6d16129f15))
+- *(core)* Split kb_ops.rs source into a kb_ops/ submodule (ADR none needed) ([0a91270](https://github.com/cuttlefisch/mae/commit/0a91270fb17f0989091b460cb1c5fa4aba51f944))
+- *(mae)* Split main.rs into cli/gui_app/bootstrap modules ([d49f177](https://github.com/cuttlefisch/mae/commit/d49f1778b558ed65c6e47b8803b6884c6a17e132))
+- *(core)* Split editor/mod.rs into themed submodules ([ebaed95](https://github.com/cuttlefisch/mae/commit/ebaed956ba1b5e7ffd4bacf3a329ff97a069aab7))
+- *(kb)* Split cozo_store.rs into a cozo_store/ submodule ([1673240](https://github.com/cuttlefisch/mae/commit/16732405a93216d1da80c8688bf62743497c1c1f))
+- *(sync)* Split kb.rs into a kb/ submodule ([add86af](https://github.com/cuttlefisch/mae/commit/add86aff2ec8766966b8b29d001b494ff33592f4))
+- *(scheme)* Split runtime.rs's register_fn calls by category ([6d286b8](https://github.com/cuttlefisch/mae/commit/6d286b859adccb9995cf4289687a37b52063ddd8))
+- *(daemon)* Split collab_handler.rs's method dispatch by domain ([7dd38a8](https://github.com/cuttlefisch/mae/commit/7dd38a8f6714b1ba0724eb6117643b971622be44))
+- *(mae)* Partially split collab_bridge.rs; mark run_collab_task as accepted debt ([68f8541](https://github.com/cuttlefisch/mae/commit/68f85418f1a2d84ec3b5d16d79aaafac8583002e))
+
 ### Testing
 
 - *(agent-cli)* Harden mcp_client.rs + main.rs coverage, add CI smoke check ([c8f29cc](https://github.com/cuttlefisch/mae/commit/c8f29cc4ee1c3aeba1aef3c1c20d542563dab9a4))
@@ -32,6 +58,13 @@ All notable changes to this project will be documented in this file.
 - *(agent-cli)* Adversarial coverage for mcp_client.rs + confirm.rs boundary matrix ([0029c76](https://github.com/cuttlefisch/mae/commit/0029c7682c3a9eaa4463ff7d2031441212815260))
 - *(ai)* Adversarial coverage for residency_check.rs + execute_kb_agenda ([c526f68](https://github.com/cuttlefisch/mae/commit/c526f681e90190987efbcbf159c84d6b9385b3e4))
 - *(ai)* Cover ai_chat_enabled default/redirect, fix legacy chat tests ([0d6ded1](https://github.com/cuttlefisch/mae/commit/0d6ded1106bd19e8b23fbf12df3f02069cfc1687))
+- *(mae)* Split kb_graph_validation.rs (1510 lines) into 3 files by category ([1316b55](https://github.com/cuttlefisch/mae/commit/1316b55b98b49a696bea9dc94294cb97a4e7bc6d))
+- *(mae)* Split collab_tcp_e2e.rs (1431 lines) into 4 files by section ([0cc72c7](https://github.com/cuttlefisch/mae/commit/0cc72c720da128e2bc192fa372ec296d658654ec))
+- *(core)* Externalize kb_ops.rs's inline test module (2992 lines) ([89eb232](https://github.com/cuttlefisch/mae/commit/89eb232f5ad008bec93ff25e0e813281092da70e))
+- *(scheme)* Externalize runtime.rs's inline test module ([1a08e17](https://github.com/cuttlefisch/mae/commit/1a08e179215c9c58d36ce4b2361248909f6e768a))
+- *(core)* Split kb_ops_tests.rs into 8 feature-grouped files ([adb4886](https://github.com/cuttlefisch/mae/commit/adb488644333e68df167f7fbaaa6c2dbbee5f974))
+- *(mae)* Split collab_bridge_tests.rs into section-grouped files ([9625906](https://github.com/cuttlefisch/mae/commit/9625906ac53305a557d1ec221d52484b6d5d51ca))
+- *(daemon)* Split collab_handler_tests.rs into section-grouped files ([71e30ab](https://github.com/cuttlefisch/mae/commit/71e30abed03a7882e192b8d7871f93dad35dbf31))
 
 ## [0.14.39] - 2026-07-09
 
