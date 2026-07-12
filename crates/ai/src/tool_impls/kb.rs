@@ -716,6 +716,35 @@ pub fn execute_kb_graph_view_select_current(
     Ok("Companion window navigated to the selected node".to_string())
 }
 
+// --- KB-link hover preview (Part D) ---
+//
+// Each executor calls the SAME `Editor::kb_preview_*` method the Scheme
+// primitives (`runtime/kb_preview.rs`) and buffer-local keybinding call —
+// CLAUDE.md principle #3 (AI/human parity).
+
+pub fn execute_kb_preview_show(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: id")?;
+    editor.kb_preview_show(id);
+    editor
+        .kb_preview_popup()
+        .map(|popup| popup.contents.clone())
+        .ok_or_else(|| format!("kb_preview_show: could not show preview for '{}'", id))
+}
+
+pub fn execute_kb_preview_dismiss(
+    editor: &mut Editor,
+    _args: &serde_json::Value,
+) -> Result<String, String> {
+    editor.kb_preview_dismiss();
+    Ok("KB preview popup dismissed".to_string())
+}
+
 pub fn execute_kb_delete(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
     let id = args
         .get("id")
@@ -1453,6 +1482,53 @@ mod tests {
             .buffers
             .iter()
             .any(|b| b.kind == mae_core::BufferKind::Kb));
+    }
+
+    #[test]
+    fn kb_preview_show_returns_popup_contents() {
+        let mut editor = Editor::new();
+        editor.open_help_at("index"); // active buffer must be KB-kind
+        let result =
+            execute_kb_preview_show(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
+        assert!(result.contains("MAE Help Index"));
+        assert!(editor.kb_preview_popup().is_some());
+    }
+
+    #[test]
+    fn kb_preview_show_missing_id_arg_is_error() {
+        let mut editor = Editor::new();
+        editor.open_help_at("index");
+        let err = execute_kb_preview_show(&mut editor, &serde_json::json!({})).unwrap_err();
+        assert!(err.contains("id"));
+    }
+
+    #[test]
+    fn kb_preview_show_missing_node_is_error() {
+        let mut editor = Editor::new();
+        editor.open_help_at("index");
+        let err = execute_kb_preview_show(&mut editor, &serde_json::json!({"id": "no:such:node"}))
+            .unwrap_err();
+        assert!(err.contains("no:such:node"));
+        assert!(editor.kb_preview_popup().is_none());
+    }
+
+    #[test]
+    fn kb_preview_show_outside_kb_buffer_is_error() {
+        let mut editor = Editor::new(); // active buffer is scratch, not KB
+        let err =
+            execute_kb_preview_show(&mut editor, &serde_json::json!({"id": "index"})).unwrap_err();
+        assert!(err.contains("index"));
+        assert!(editor.kb_preview_popup().is_none());
+    }
+
+    #[test]
+    fn kb_preview_dismiss_clears_popup() {
+        let mut editor = Editor::new();
+        editor.open_help_at("index");
+        execute_kb_preview_show(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
+        assert!(editor.kb_preview_popup().is_some());
+        execute_kb_preview_dismiss(&mut editor, &serde_json::json!({})).unwrap();
+        assert!(editor.kb_preview_popup().is_none());
     }
 
     #[test]

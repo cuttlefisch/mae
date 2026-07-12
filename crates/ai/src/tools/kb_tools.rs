@@ -264,6 +264,34 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        // --- KB-link hover preview (Part D) ---
+        ToolDefinition {
+            name: "kb_preview_show".into(),
+            description: "Show the KB-link hover preview popup for a node id, anchored at the current cursor position — same popup shown by the human's cursor-hover/K-keybinding trigger. `id` doesn't need to be the target of a link under the cursor. Scoped to KB-view-mode buffers. Returns the popup's rendered content (title + noise-stripped, truncated body).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "id".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "KB node id to preview".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["id".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "kb_preview_dismiss".into(),
+            description: "Dismiss the KB-link hover preview popup, if showing.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
         ToolDefinition {
             name: "help_open".into(),
             description: "Look up MAE manual content for your own reasoning (searches builtin nodes first, falls back to user KB). Does not open a visible buffer. To show help to the user, suggest `:help <topic>`. Falls back to the `index` node if the id isn't found.".into(),

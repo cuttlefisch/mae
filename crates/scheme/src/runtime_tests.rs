@@ -1748,6 +1748,49 @@ fn kb_graph_view_open_defaults_center_and_depth_when_omitted() {
 }
 
 #[test]
+fn kb_preview_show_from_scheme_populates_popup() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    editor.open_help_at("index"); // active buffer must be KB-kind
+    rt.eval(r#"(kb-preview-show "index")"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    let popup = editor
+        .kb_preview_popup()
+        .expect("kb-preview-show should populate the popup");
+    assert!(popup.contents.contains("MAE Help Index"));
+}
+
+#[test]
+fn kb_preview_dismiss_from_scheme_clears_popup() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    editor.open_help_at("index");
+    rt.eval(r#"(kb-preview-show "index")"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+    assert!(editor.kb_preview_popup().is_some());
+
+    rt.eval("(kb-preview-dismiss)").unwrap();
+    rt.apply_to_editor(&mut editor);
+    assert!(
+        editor.kb_preview_popup().is_none(),
+        "kb-preview-dismiss should clear the popup"
+    );
+}
+
+#[test]
+fn kb_preview_show_from_scheme_outside_kb_buffer_is_noop() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new(); // active buffer is scratch, not KB
+    rt.eval(r#"(kb-preview-show "index")"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+    assert!(
+        editor.kb_preview_popup().is_none(),
+        "kb-preview-show must not populate a popup outside a KB buffer"
+    );
+}
+
+#[test]
 fn kb_graph_view_close_from_scheme_removes_the_buffer() {
     let mut rt = new_runtime();
     let mut editor = Editor::new();

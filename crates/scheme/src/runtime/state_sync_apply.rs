@@ -296,6 +296,16 @@ impl SchemeRuntime {
             }
         }
 
+        // Apply KB-link hover preview intents from `(kb-preview-show)` /
+        // `(kb-preview-dismiss)` (Part D) — same 1:1 mapping onto
+        // `Editor::kb_preview_*` as the graph-view intents above.
+        for intent in state.pending_kb_preview_intents.drain(..) {
+            match intent {
+                mae_core::KbPreviewIntent::Show(id) => editor.kb_preview_show(&id),
+                mae_core::KbPreviewIntent::Dismiss => editor.kb_preview_dismiss(),
+            }
+        }
+
         // Apply typed link additions from (kb-add-link! SRC DST REL_TYPE)
         if let Some(ref store) = editor.kb.store {
             for (src, dst, rel_type) in state.pending_kb_links.drain(..) {
