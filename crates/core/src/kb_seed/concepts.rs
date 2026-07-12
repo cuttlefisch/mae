@@ -333,7 +333,7 @@ layout was destroyed.\n\n\
 *** The 4 Actions (vs Emacs's 29)\n\
 - **ReplaceFocused** — replace the focused window, but fall through to AvoidConversation \
 if focused on a conversation buffer (git-status, dashboard)\n\
-- **AvoidConversation** — route via `switch_to_buffer_non_conversation` which has a \
+- **AvoidConversation** — route via `display_buffer_for_agent` which has a \
 3-step strategy protecting conversation pairs (text, diff)\n\
 - **ReuseOrSplit** — reuse an existing window of the same BufferKind, or create a split \
 with the given direction and ratio (help → 50% vsplit, messages → 30% hsplit)\n\

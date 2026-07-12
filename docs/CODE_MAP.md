@@ -155,6 +155,7 @@ Source: `crates/core/src/lib.rs`
 | `diff` | mod |
 | `display_policy` | mod |
 | `display_region` | mod |
+| `driven_window` | mod |
 | `editor` | mod |
 | `event_record` | mod |
 | `file_browser` | mod |

@@ -3,6 +3,7 @@
 //! User-facing option names (e.g. "ai_provider") are unchanged — only Rust
 //! field access changes.
 
+use crate::driven_window::DrivenWindow;
 use crate::window::WindowId;
 use crate::SchemeToolDef;
 
@@ -59,8 +60,11 @@ pub struct AiState {
     pub last_network_check: Option<AiNetworkCheck>,
     /// Throttle for AI output scroll during streaming.
     pub last_output_scroll: Option<std::time::Instant>,
-    /// Dedicated window for AI file operations.
-    pub work_window_id: Option<WindowId>,
+    /// Dedicated window this AI/MCP actor is driving — reused across a
+    /// sequence of agent-triggered display calls (open_file, KB node
+    /// display, etc.) regardless of the displayed content's `BufferKind`.
+    /// See `crate::driven_window::DrivenWindow` for the shared primitive.
+    pub work_window: DrivenWindow,
     /// AI editor/agent command (e.g. "claude", "aider").
     pub editor_name: String,
     /// Whether `open-ai-agent`'s shell wraps `editor_name` through the
@@ -128,7 +132,7 @@ impl AiState {
             api_call_count: 0,
             last_network_check: None,
             last_output_scroll: None,
-            work_window_id: None,
+            work_window: DrivenWindow::none(),
             editor_name: "mae-agent".to_string(),
             agent_login_shell: true,
             provider: String::new(),

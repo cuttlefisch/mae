@@ -19,6 +19,7 @@ pub mod debug_view;
 pub mod diff;
 pub mod display_policy;
 pub mod display_region;
+pub mod driven_window;
 pub mod editor;
 pub mod event_record;
 pub use mae_export as export;
@@ -114,6 +115,7 @@ pub use project::{
 pub use search::{SearchDirection, SearchMatch, SearchState};
 pub mod redraw;
 pub use display_policy::{DisplayAction, DisplayPolicy};
+pub use driven_window::DrivenWindow;
 pub use syntax::{
     compute_markdown_style_spans, compute_markup_spans, compute_markup_spans_for_range,
     compute_org_style_spans, detect_code_block_lines, detect_code_block_lines_for_range,

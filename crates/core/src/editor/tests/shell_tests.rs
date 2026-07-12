@@ -659,20 +659,20 @@ fn close_window_fires_window_close_hook() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn switch_to_buffer_non_conv_sets_target_window_id() {
+fn display_buffer_for_agent_sets_target_window_id() {
     let mut editor = Editor::new();
     // Add a second buffer (Text).
     editor.buffers.push(Buffer::new());
     // Split so we have two windows.
     editor.dispatch_builtin("split-vertical");
     assert_eq!(editor.window_mgr.window_count(), 2);
-    // Call switch_to_buffer_non_conversation for buffer 1.
-    let ok = editor.switch_to_buffer_non_conversation(1);
+    // Call display_buffer_for_agent for buffer 1.
+    let ok = editor.display_buffer_for_agent(1);
     assert!(ok);
     // ai_target_window_id must be set.
     assert!(
         editor.ai.target_window_id.is_some(),
-        "ai_target_window_id must be set by switch_to_buffer_non_conversation"
+        "ai_target_window_id must be set by display_buffer_for_agent"
     );
     // The target window should show buffer 1.
     let tw_id = editor.ai.target_window_id.unwrap();
@@ -681,7 +681,7 @@ fn switch_to_buffer_non_conv_sets_target_window_id() {
 }
 
 #[test]
-fn switch_to_buffer_non_conv_visible_sets_target_window() {
+fn display_buffer_for_agent_visible_sets_target_window() {
     let mut editor = Editor::new();
     editor.buffers.push(Buffer::new());
     editor.dispatch_builtin("split-vertical");
@@ -698,7 +698,7 @@ fn switch_to_buffer_non_conv_visible_sets_target_window() {
         .unwrap()
         .buffer_idx = 1;
     // Step 1 path: buffer already visible.
-    let ok = editor.switch_to_buffer_non_conversation(1);
+    let ok = editor.display_buffer_for_agent(1);
     assert!(ok);
     assert_eq!(editor.ai.target_window_id, Some(second_win_id));
 }
@@ -727,7 +727,7 @@ fn agent_shell_does_not_steal_conversation_output() {
     editor.buffers.push(shell_buf);
     let shell_idx = editor.buffers.len() - 1;
     // Try to display it. The steal path should be skipped for agent shells.
-    let result = editor.switch_to_buffer_non_conversation(shell_idx);
+    let result = editor.display_buffer_for_agent(shell_idx);
     // Should succeed via split (or at least not steal the output window).
     assert!(result);
     // The conversation output window should NOT show the shell buffer.

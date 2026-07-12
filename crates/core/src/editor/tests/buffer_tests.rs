@@ -361,8 +361,8 @@ fn dashboard_replaced_by_agent_shell_when_replaceable() {
     editor.buffers.push(shell_buf);
     let shell_idx = editor.buffers.len() - 1;
 
-    // switch_to_buffer_non_conversation should replace dashboard, not split
-    let ok = editor.switch_to_buffer_non_conversation(shell_idx);
+    // display_buffer_for_agent should replace dashboard, not split
+    let ok = editor.display_buffer_for_agent(shell_idx);
     assert!(ok, "switch should succeed");
 
     // Should still be 1 window (dashboard replaced), not 2 (split)
@@ -398,7 +398,7 @@ fn dashboard_stays_when_not_replaceable() {
     editor.buffers.push(shell_buf);
     let shell_idx = editor.buffers.len() - 1;
 
-    let ok = editor.switch_to_buffer_non_conversation(shell_idx);
+    let ok = editor.display_buffer_for_agent(shell_idx);
     assert!(ok, "switch should succeed");
 
     // Should have 2 windows (split alongside dashboard)

@@ -14,7 +14,7 @@ use crate::window::SplitDirection;
 pub enum DisplayAction {
     /// Replace focused window. Falls through to AvoidConversation if focused on conversation.
     ReplaceFocused,
-    /// Route via switch_to_buffer_non_conversation (protects conversation pair).
+    /// Route via display_buffer_for_agent (protects conversation pair).
     AvoidConversation,
     /// Reuse existing window of same BufferKind, or create a split.
     /// Emacs 28+ "side window" pattern — tool buffers reuse their dedicated window.

@@ -87,6 +87,25 @@ pub enum BufferKind {
 impl BufferKind {
     /// Kinds that belong in dedicated side windows — never valid as a
     /// kill-buffer fallback or AI file-open target for editing windows.
+    ///
+    /// This is also the set `Editor::is_dedicated_window` consults to keep
+    /// `display_buffer_for_agent`'s step-2 "commandeer a non-focused,
+    /// non-dedicated window" scan from silently repurposing a human's
+    /// manually-opened window of one of these kinds for unrelated
+    /// agent-triggered content.
+    ///
+    /// `Kb` and `Shell` were added alongside the `DrivenWindow` unification
+    /// (see `crate::driven_window`): both are windows a human deliberately
+    /// keeps open and returns to — a KB reading position navigated several
+    /// links deep, or a terminal with a live running process — so an
+    /// unrelated agent action (e.g. `open_file`) converting either into a
+    /// text-file pane out from under the human is a real, separate bug, not
+    /// just a side effect of the missing window-tracking unification.
+    /// `Notifications` was deliberately left out: it's a transient
+    /// "surface, act, dismiss" attention-bus buffer (ADR-024), not a
+    /// long-lived reading/working position a human returns to the way they
+    /// do a KB pane or a shell session — it does not carry the same
+    /// "silently destroyed human state" risk if reused by another action.
     pub fn is_sidebar(&self) -> bool {
         matches!(
             self,
@@ -96,6 +115,8 @@ impl BufferKind {
                 | BufferKind::Messages
                 | BufferKind::Dashboard
                 | BufferKind::ShellSelect
+                | BufferKind::Kb
+                | BufferKind::Shell
         )
     }
 }

@@ -300,6 +300,10 @@
           "kind": "mod"
         },
         {
+          "name": "driven_window",
+          "kind": "mod"
+        },
+        {
           "name": "editor",
           "kind": "mod"
         },
