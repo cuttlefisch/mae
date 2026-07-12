@@ -427,6 +427,34 @@ fn render_kb_body(body: &str, out: &mut String, links: &mut Vec<KbLinkSpan>) {
 }
 
 impl Editor {
+    /// TUI textual fallback for the native KB graph view (`BufferKind::Graph`,
+    /// Part C Phase 1): delegates to the EXISTING KB "** Neighborhood"
+    /// rendering machinery (`render_kb_node_for_query`) for the graph's
+    /// center node, rather than rendering `GraphView.scene`'s positions
+    /// (which only the GUI's Skia canvas consumes) as text. Lives here
+    /// (not `graph_view_ops.rs`) specifically so it can call the private
+    /// `render_kb_node_for_query` directly without widening that
+    /// function's visibility.
+    pub fn render_graph_view_as_text(&self) -> String {
+        let Some(center) = self
+            .buffers
+            .iter()
+            .find(|b| b.kind == BufferKind::Graph)
+            .and_then(|b| b.graph_view())
+            .and_then(|gv| gv.center_node.clone())
+        else {
+            return "(KB graph view: no center node yet — open with :kb-graph-view-open)\n"
+                .to_string();
+        };
+        match self.kb.query_layer() {
+            Some(q) => render_kb_node_for_query(q, &center).0,
+            None => format!(
+                "* KB Graph — {}\n(no KB query layer available; graph data unavailable in this build)\n",
+                center
+            ),
+        }
+    }
+
     /// Generate live help text for a command, querying current keymaps and hooks.
     pub fn describe_command_live(&self, cmd_name: &str) -> Option<String> {
         let cmd = self.commands.get(cmd_name)?;
@@ -1357,6 +1385,27 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn render_graph_view_as_text_no_center_before_open() {
+        let e = Editor::new();
+        let text = e.render_graph_view_as_text();
+        assert!(text.contains("no center node"));
+    }
+
+    #[test]
+    fn render_graph_view_as_text_reports_center_when_no_query_layer() {
+        // A plain `Editor::new()` test fixture has no `KbQueryLayer` wired
+        // (that's assembled by the binary's bootstrap, not the core
+        // constructor) — confirms the graceful-degradation branch rather
+        // than panicking or silently rendering nothing.
+        let mut e = Editor::new();
+        e.kb_graph_view_open(Some("index".to_string()), Some(1));
+        assert!(e.kb.query_layer().is_none());
+        let text = e.render_graph_view_as_text();
+        assert!(text.contains("index"));
+        assert!(text.contains("no KB query layer"));
+    }
 
     #[test]
     fn open_help_at_creates_buffer() {

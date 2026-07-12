@@ -4,6 +4,7 @@
       "path": "crates/mae/src/main.rs",
       "dependencies": [
         "mae-ai",
+        "mae-canvas",
         "mae-core",
         "mae-dap",
         "mae-gui",
@@ -334,6 +335,10 @@
         },
         {
           "name": "git_status",
+          "kind": "mod"
+        },
+        {
+          "name": "graph_view",
           "kind": "mod"
         },
         {

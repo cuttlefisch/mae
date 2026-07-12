@@ -45,11 +45,25 @@ impl Editor {
         }
 
         let pre_buf_idx = self.active_buffer_idx();
+        // Part C (native KB graph view): snapshot focus before dispatch so
+        // a keyboard/Scheme-triggered focus change (e.g. `focus-left`,
+        // `focus-next-window`) can update the graph view's captured
+        // `companion_window` afterward. `dispatch_builtin` is the single
+        // point EVERY command — human keybinding or AI/MCP — passes
+        // through, making it the right central hook (see
+        // `Editor::capture_graph_companion_focus`'s doc comment for why
+        // `focus_window_at`, the mouse-click path, ALSO calls the same
+        // helper directly rather than relying on this alone).
+        let pre_focused = self.window_mgr.focused_id();
         self.fire_hook("command-pre");
         let result = self.dispatch_builtin_inner(name);
         self.fire_hook("command-post");
         if self.active_buffer_idx() != pre_buf_idx {
             self.fire_hook("buffer-switch");
+        }
+        let post_focused = self.window_mgr.focused_id();
+        if post_focused != pre_focused {
+            self.capture_graph_companion_focus(post_focused);
         }
 
         let elapsed_us = _cmd_start.elapsed().as_micros() as u64;

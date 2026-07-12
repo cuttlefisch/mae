@@ -38,6 +38,28 @@ pub fn build_kb_graph(
     boundary_links: &[(String, String)],
     starter_ids: &[String],
 ) -> SceneGraph {
+    let mut graph = build_kb_graph_positions_only(nodes, links, boundary_links, starter_ids);
+
+    // Run force layout
+    let layout = ForceLayout::new(LayoutConfig::default());
+    layout.run(&mut graph.nodes, &graph.edges, 50);
+
+    graph
+}
+
+/// Build a scene graph WITHOUT running the force-directed layout pass —
+/// nodes get only their initial circular positions. Used by MAE's native KB
+/// graph view (`crates/core/src/editor/graph_view_ops.rs`) so the (possibly
+/// nontrivial, O(n^2)-per-iteration) layout computation can be dispatched to
+/// a background thread (`graph_layout_bridge`) instead of running inline —
+/// `build_kb_graph` above still runs it synchronously for callers (tests,
+/// any future non-backgrounded caller) that want a complete one-call result.
+pub fn build_kb_graph_positions_only(
+    nodes: &[KbNodeInfo],
+    links: &[(String, String)],
+    boundary_links: &[(String, String)],
+    starter_ids: &[String],
+) -> SceneGraph {
     // Build index: id -> node position
     let id_to_idx: std::collections::HashMap<&str, usize> = nodes
         .iter()
@@ -106,18 +128,12 @@ pub fn build_kb_graph(
         }
     }
 
-    let mut graph = SceneGraph {
+    SceneGraph {
         nodes: scene_nodes,
         edges: scene_edges,
         viewport: Viewport::default(),
         selection: if n > 0 { Some(0) } else { None },
-    };
-
-    // Run force layout
-    let layout = ForceLayout::new(LayoutConfig::default());
-    layout.run(&mut graph.nodes, &graph.edges, 50);
-
-    graph
+    }
 }
 
 /// Map node kind to visual style.
@@ -259,6 +275,33 @@ mod tests {
             assert!(style.fill.starts_with('#'), "{kind:?} fill: {style:?}");
             assert!(style.border.starts_with('#'), "{kind:?} border: {style:?}");
         }
+    }
+
+    #[test]
+    fn positions_only_skips_force_layout() {
+        // Two nodes placed on the initial circle stay EXACTLY on it (no
+        // force-layout displacement) — confirms `build_kb_graph_positions_only`
+        // really is layout-free, the property `graph_view_ops.rs` depends on
+        // to defer layout to the background bridge.
+        let (nodes, links) = nodes_and_links();
+        let graph = build_kb_graph_positions_only(&nodes, &links, &[], &[]);
+        let radius = (nodes.len() as f64 * 30.0).max(100.0);
+        for (i, node) in graph.nodes.iter().enumerate() {
+            let angle = 2.0 * std::f64::consts::PI * (i as f64) / (nodes.len().max(1) as f64);
+            assert!((node.x - radius * angle.cos()).abs() < 1e-9);
+            assert!((node.y - radius * angle.sin()).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn positions_only_and_full_agree_on_topology() {
+        // Same node/edge count and starter highlighting either way — only
+        // the coordinates differ (before vs after layout).
+        let (nodes, links) = nodes_and_links();
+        let positions_only = build_kb_graph_positions_only(&nodes, &links, &[], &[]);
+        let full = build_kb_graph(&nodes, &links, &[], &[]);
+        assert_eq!(positions_only.nodes.len(), full.nodes.len());
+        assert_eq!(positions_only.edges.len(), full.edges.len());
     }
 
     #[test]

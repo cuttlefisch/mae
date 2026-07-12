@@ -26,6 +26,7 @@ mod edit_ops;
 pub(crate) mod ex_parse;
 mod file_ops;
 mod git_ops;
+mod graph_view_ops;
 mod heading_ops;
 pub(crate) mod help_ops;
 mod hook_ops;
@@ -750,6 +751,42 @@ pub struct Editor {
     /// yet — this field and its idle-dispatch hook (`maybe_show_kb_preview_popup`)
     /// are the forward-compatible hook point only.
     pub kb_preview_idle_delay: u64,
+    /// Default hop radius (`SubgraphSpec::max_depth`) for `(kb-graph-view-open)`
+    /// when no explicit depth is given. Mirrors the `kb_graph_default_depth`
+    /// option.
+    pub kb_graph_default_depth: usize,
+    /// Whether `extract_subgraph` includes backlinks (not just outgoing
+    /// links) in the graph view's BFS walk. Mirrors `kb_graph_include_backlinks`.
+    pub kb_graph_include_backlinks: bool,
+    /// Node circle radius in logical pixels for the graph view's GUI
+    /// rendering. Mirrors `kb_graph_node_radius`.
+    pub kb_graph_node_radius: u32,
+    /// Node label font size in points for the graph view's GUI rendering.
+    /// Mirrors `kb_graph_font_size` — defaults to the same numeric default
+    /// as the base `font_size` option (14), but is a fully independent
+    /// setting (no live-inheritance wiring — MAE has no general
+    /// option-inherits-from-option mechanism today), so changing `font_size`
+    /// does not retroactively change this.
+    pub kb_graph_font_size: u32,
+    /// Force-directed layout iteration count run by the background
+    /// `graph_layout_bridge` on each open/refresh/set-depth. Mirrors
+    /// `kb_graph_layout_iterations`.
+    pub kb_graph_layout_iterations: usize,
+    /// TODO(Part C Phase 2, not wired yet): whether the graph view
+    /// re-centers on the human/AI's current KB node automatically. Mirrors
+    /// `kb_graph_follow_current_node` — registered now so the OptionRegistry
+    /// surface is complete ahead of Phase 2's `command-post` wiring.
+    pub kb_graph_follow_current_node: bool,
+    /// TODO(Part C Phase 3, not wired yet): whether the graph view's
+    /// force-layout keeps ticking (physics animation) after the initial
+    /// layout settles. Mirrors `kb_graph_animate` — registered now, unused
+    /// until Phase 3 extends `graph_layout_bridge` to tick continuously.
+    pub kb_graph_animate: bool,
+    /// Queued background layout request for the open/refreshed graph-view
+    /// buffer (`mae::graph_layout_bridge`, Part C Phase 1) — drained once
+    /// per GUI event-loop tick, see `crate::graph_view::GraphLayoutIntent`'s
+    /// doc comment for why the TUI safely ignores this.
+    pub pending_graph_layout: Option<crate::graph_view::GraphLayoutIntent>,
     /// In-editor message log (*Messages* buffer equivalent).
     /// Shared with the tracing layer via MessageLogHandle.
     pub message_log: MessageLog,
@@ -1167,6 +1204,14 @@ impl Editor {
             which_key_scroll: 0,
             which_key_idle_delay: 0,
             kb_preview_idle_delay: 300,
+            kb_graph_default_depth: 2,
+            kb_graph_include_backlinks: true,
+            kb_graph_node_radius: 18,
+            kb_graph_font_size: 14,
+            kb_graph_layout_iterations: 50,
+            kb_graph_follow_current_node: true,
+            kb_graph_animate: false,
+            pending_graph_layout: None,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)
             theme: default_theme(),
             dap: DapContext::new(),

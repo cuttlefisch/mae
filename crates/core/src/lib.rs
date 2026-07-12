@@ -29,6 +29,7 @@ pub mod file_picker;
 pub mod file_tree;
 pub mod foldable_view;
 pub mod git_status;
+pub mod graph_view;
 pub mod graph_view_support;
 pub mod grapheme;
 pub mod heading;
@@ -98,6 +99,10 @@ pub use editor::{
 };
 pub use file_browser::{Activation as BrowserActivation, BrowserEntry, FileBrowser};
 pub use file_picker::FilePicker;
+pub use graph_view::{
+    flatten_scene_graph, GraphLayoutIntent, GraphNavDirection, GraphStyleOptions, GraphView,
+    GraphViewIntent,
+};
 pub use hooks::HookRegistry;
 pub use input::{InputEvent, MouseButton};
 pub use kb_view::{KbLinkSpan, KbView};
