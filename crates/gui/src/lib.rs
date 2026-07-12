@@ -782,6 +782,22 @@ impl Renderer for GuiRenderer {
                 );
             }
 
+            // KB-link hover preview popup (Part D).
+            if editor.kb_preview_popup().is_some() {
+                popup_render::render_kb_preview_popup(
+                    canvas,
+                    editor,
+                    0,
+                    cols,
+                    window_height,
+                    focused_frame_layout,
+                    win_col_off,
+                    win_row_off,
+                    win_w,
+                    win_h,
+                );
+            }
+
             // Code action popup.
             if editor.lsp.code_action_menu.is_some() {
                 popup_render::render_code_action_popup(

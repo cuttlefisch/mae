@@ -355,6 +355,9 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
         if editor.lsp.hover_popup.is_some() {
             popup_render::render_hover_popup(frame, chunks[0], editor);
         }
+        if editor.kb_preview_popup().is_some() {
+            popup_render::render_kb_preview_popup(frame, chunks[0], editor);
+        }
         if editor.lsp.code_action_menu.is_some() {
             popup_render::render_code_action_popup(frame, chunks[0], editor);
         }

@@ -754,6 +754,121 @@ pub fn render_hover_popup(
 }
 
 // ---------------------------------------------------------------------------
+// KB-link hover preview popup (KB-graph-view plan, Part D)
+// ---------------------------------------------------------------------------
+
+/// Mirrors `render_hover_popup` above almost exactly — same anchor-based
+/// positioning, same theme keys, same scroll/border treatment — but reads
+/// `editor.kb_preview_popup()` (the ACTIVE buffer's `KbView.kb_preview_popup`,
+/// not a top-level `Editor` field) and titles the popup " KB Preview ".
+/// Reuses `render_common::hover::compute_hover_lines` directly (no separate
+/// `render_common::kb_preview` module) — the word-wrap it does is generic
+/// text wrapping with no hover-specific behavior baked in, so a parallel
+/// file would just be a byte-for-byte duplicate.
+pub fn render_kb_preview_popup(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    area_row: usize,
+    area_width: usize,
+    area_height: usize,
+    frame_layout: Option<&FrameLayout>,
+    win_col_offset: usize,
+    win_row_offset: usize,
+    _win_width: usize,
+    win_height: usize,
+) {
+    let popup = match editor.kb_preview_popup() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let win = editor.window_mgr.focused_window();
+    // Anchor position, not the live cursor — matches the GUI hover popup's
+    // correct behavior (the TUI hover popup's live-cursor positioning is a
+    // known bug, not replicated here; see `crates/renderer/src/
+    // popup_render.rs::render_kb_preview_popup` for the anchor-based fix
+    // applied there too).
+    let anchor_screen_row = frame_layout
+        .and_then(|fl| fl.display_row_of(popup.anchor_row))
+        .unwrap_or_else(|| popup.anchor_row.saturating_sub(win.scroll_offset));
+
+    let max_popup_cols = area_width.saturating_sub(4).max(40);
+    let wrap_width = max_popup_cols.saturating_sub(2);
+
+    let lines = mae_core::render_common::hover::compute_hover_lines(&popup.contents, wrap_width);
+    if lines.is_empty() {
+        return;
+    }
+
+    let max_visible = editor.kb_preview_max_lines;
+    let visible_count = lines.len().min(max_visible);
+    let popup_width = lines
+        .iter()
+        .take(visible_count)
+        .map(|l| l.len())
+        .max()
+        .unwrap_or(20)
+        .min(max_popup_cols)
+        + 2;
+    let popup_height = (visible_count + 2).min(area_height.saturating_sub(2));
+
+    let abs_anchor_row = win_row_offset + anchor_screen_row;
+    let popup_top = if anchor_screen_row + 2 + popup_height < win_height {
+        abs_anchor_row + 2
+    } else if anchor_screen_row > popup_height {
+        abs_anchor_row.saturating_sub(popup_height + 1)
+    } else {
+        abs_anchor_row.saturating_sub(popup_height)
+    };
+    let popup_top = popup_top.clamp(
+        area_row,
+        area_row + area_height.saturating_sub(popup_height),
+    );
+
+    let abs_anchor_col = win_col_offset + popup.anchor_col;
+    let popup_left = if abs_anchor_col + popup_width <= area_width {
+        abs_anchor_col
+    } else {
+        area_width.saturating_sub(popup_width)
+    };
+
+    let border_fg = theme::ts_fg(editor, "ui.window.border");
+    let text_fg = theme::ts_fg(editor, "ui.popup.text");
+    let bg = theme::ts_bg(editor, "ui.popup")
+        .or_else(|| theme::ts_bg(editor, "ui.popup.text"))
+        .or_else(|| theme::ts_bg(editor, "ui.background"))
+        .unwrap_or(theme::DEFAULT_BG);
+
+    canvas.draw_rect_fill(popup_top, popup_left, popup_width, popup_height, bg);
+    draw_border_titled(
+        canvas,
+        popup_top,
+        popup_left,
+        popup_width,
+        popup_height,
+        border_fg,
+        " KB Preview ",
+    );
+
+    let inner_top = popup_top + 1;
+    let inner_left = popup_left + 1;
+    let inner_width = popup_width.saturating_sub(2);
+
+    let scroll = popup.scroll_offset;
+    for (i, line) in lines.iter().skip(scroll).take(visible_count).enumerate() {
+        let display: String = line.chars().take(inner_width).collect();
+        canvas.draw_text_at(inner_top + i, inner_left, &display, text_fg);
+    }
+
+    if lines.len() > max_visible {
+        let indicator = format!("[{}/{}]", scroll + visible_count, lines.len());
+        let x = popup_left + popup_width.saturating_sub(indicator.len() + 1);
+        canvas.draw_rect_fill(popup_top + popup_height - 1, x, indicator.len(), 1, bg);
+        canvas.draw_text_at(popup_top + popup_height - 1, x, &indicator, border_fg);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Code action popup
 // ---------------------------------------------------------------------------
 
