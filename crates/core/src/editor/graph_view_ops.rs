@@ -14,13 +14,49 @@
 use crate::buffer::{Buffer, BufferKind};
 use crate::graph_view::{
     flatten_scene_graph, GraphLayoutIntent, GraphLayoutMode, GraphNavDirection, GraphStyleOptions,
-    ANIMATION_COOLING_FACTOR, ANIMATION_INITIAL_TEMPERATURE, ANIMATION_SETTLE_EPSILON,
+    GraphView, ANIMATION_COOLING_FACTOR, ANIMATION_INITIAL_TEMPERATURE, ANIMATION_SETTLE_EPSILON,
     ANIMATION_TEMPERATURE_FLOOR,
 };
 use crate::visual_buffer::VisualBuffer;
 use crate::window::WindowId;
 
 use super::Editor;
+
+/// Convert a Graph window's window-relative pixel click/drag position into
+/// scene coordinates, sharing the exact neutral-viewport convention
+/// `kb_graph_view_click_at` established (Part C Phase 1 item 6): the
+/// renderer (`flatten_scene_graph`) does not yet apply `Viewport`'s
+/// pan/zoom transform to node draw positions (it draws `SceneNode.x/y`
+/// directly as window-relative pixel offsets — see the module-level NOTE
+/// on `kb_graph_view_click_at` below), so `width`/`height` are zeroed out
+/// to neutralize `viewport_to_scene`'s centering term while `zoom`/
+/// `center_x`/`center_y` are still applied. This keeps hit-testing AND
+/// (Phase 4) node-dragging/zoom-focus math consistent with each other and
+/// with what's actually drawn on screen today, and forward-compatible with
+/// whenever the renderer gains a real camera transform.
+fn graph_scene_point(gv: &GraphView, rel_x: f32, rel_y: f32) -> (f64, f64) {
+    let vp = &gv.scene.viewport;
+    let neutral_vp = mae_canvas::scene::Viewport {
+        width: 0.0,
+        height: 0.0,
+        zoom: vp.zoom,
+        center_x: vp.center_x,
+        center_y: vp.center_y,
+    };
+    mae_canvas::interaction::viewport_to_scene(&neutral_vp, rel_x as f64, rel_y as f64)
+}
+
+/// Part C Phase 4 (wheel-zoom): per-wheel-event zoom-factor tuning.
+/// `GRAPH_ZOOM_SENSITIVITY` scales a raw wheel pixel delta (the same units
+/// `gui_app.rs::handle_mouse_wheel` already computes for text scroll) down
+/// to a fractional zoom step; `GRAPH_ZOOM_MAX_STEP` caps how far a single
+/// wheel event can move the zoom factor so one fast/large scroll can't jump
+/// straight to `canvas::interaction::zoom`'s 0.1x/10x clamp boundary.
+/// Plain constants (not `OptionRegistry` entries), matching this module's
+/// existing `ANIMATION_*` precedent in `graph_view.rs` for interaction/
+/// physics tuning that isn't itself a user-facing behavior toggle.
+const GRAPH_ZOOM_SENSITIVITY: f64 = 400.0;
+const GRAPH_ZOOM_MAX_STEP: f64 = 0.3;
 
 impl Editor {
     /// Find or create the `*KB Graph*` buffer. Returns buffer index.
@@ -344,63 +380,40 @@ impl Editor {
         self.navigate_companion_window_to_node(graph_idx, &node_id);
     }
 
-    /// Mouse click-to-navigate (Part C Phase 1 item 6): `graph_win_id` is
-    /// the window a click just landed in (already confirmed by the caller —
-    /// `gui_app.rs`'s `handle_mouse_button_pressed` — to be showing a
-    /// `BufferKind::Graph` buffer); `rel_x`/`rel_y` are the click's pixel
-    /// position relative to that window's content rect (top-left origin),
-    /// NOT raw screen pixels and NOT text cells — the graph is drawn via
-    /// the Skia `VisualBuffer` pixel pipeline, not the text-cell layout
-    /// pipeline.
+    /// Hit-test a Graph window position and update the scene's selection —
+    /// WITHOUT navigating the companion window. Factored out of
+    /// `kb_graph_view_click_at` (Part C Phase 1 item 6) so Part C Phase 4's
+    /// mouse-DOWN handler can do the identical hit-test/select step (for
+    /// immediate visual feedback, and so a subsequent drag knows which node
+    /// index it's moving) without prematurely navigating away — the press
+    /// might turn into a drag rather than a click, and only a plain
+    /// click-without-drag should navigate (see `kb_graph_view_click_at` and
+    /// `gui_app.rs`'s press/move/release handlers).
     ///
-    /// Converts to scene coordinates and hit-tests against the graph's
-    /// `SceneGraph`. On a hit: selects that node (mirroring keyboard-nav's
-    /// selection-highlight behavior) and navigates the captured companion
-    /// window to it via the same shared logic `kb_graph_view_select_current`
-    /// uses. On a miss (click landed on empty canvas): clears the
-    /// selection — an explicit deselect, since the user visibly clicked
-    /// empty space — and is otherwise a harmless no-op (no navigation, no
-    /// panic). Either way, `rendered` is re-flattened so the (de)selection
-    /// highlight is visible immediately, matching `kb_graph_view_navigate`'s
-    /// behavior.
-    ///
-    /// NOTE: `flatten_scene_graph` (the current GUI renderer for
-    /// `BufferKind::Graph`, see `crates/gui/src/lib.rs`'s
-    /// `render_visual_buffer_with_bg`) does not yet apply
-    /// `SceneGraph.viewport`'s pan/zoom transform to node positions — it
-    /// draws `SceneNode.x/y` directly as window-relative pixel offsets.
-    /// Phase 4 (drag-to-pin/wheel-zoom, explicitly out of scope here) is
-    /// where a real camera transform gets wired into the renderer and this
-    /// hit-test path together. Until then, `viewport_to_scene` is called
-    /// with the viewport's width/height zeroed out (neutralizing its
-    /// centering term, `(screen - dimension/2)/zoom`) so hit-testing stays
-    /// consistent with what's actually drawn on screen today — using the
-    /// viewport's `zoom`/`center` unchanged keeps this forward-compatible
-    /// with whenever Phase 4 wires pan/zoom into both sides together.
-    pub fn kb_graph_view_click_at(&mut self, graph_win_id: WindowId, rel_x: f32, rel_y: f32) {
-        let Some(buf_idx) = self.window_mgr.window(graph_win_id).map(|w| w.buffer_idx) else {
-            return;
-        };
+    /// `graph_win_id`/`rel_x`/`rel_y` have the same contract as
+    /// `kb_graph_view_click_at`. On a hit: sets `scene.selection`. On a miss
+    /// (or an invalid/non-Graph window): clears `scene.selection` — an
+    /// explicit deselect for a miss, a harmless no-op for an invalid
+    /// window. Either way (except the invalid-window case, which mutates
+    /// nothing), re-flattens `rendered` and marks a full redraw, matching
+    /// `kb_graph_view_navigate`'s behavior. Returns the hit node's index, or
+    /// `None` on a miss/invalid window.
+    pub fn kb_graph_view_hit_test_and_select(
+        &mut self,
+        graph_win_id: WindowId,
+        rel_x: f32,
+        rel_y: f32,
+    ) -> Option<usize> {
+        let buf_idx = self.window_mgr.window(graph_win_id).map(|w| w.buffer_idx)?;
         if buf_idx >= self.buffers.len() || self.buffers[buf_idx].kind != BufferKind::Graph {
-            return;
+            return None;
         }
 
         let hit_result: Option<Option<usize>> = self.buffers[buf_idx].graph_view().map(|gv| {
-            let vp = &gv.scene.viewport;
-            let neutral_vp = mae_canvas::scene::Viewport {
-                width: 0.0,
-                height: 0.0,
-                zoom: vp.zoom,
-                center_x: vp.center_x,
-                center_y: vp.center_y,
-            };
-            let (scene_x, scene_y) =
-                mae_canvas::interaction::viewport_to_scene(&neutral_vp, rel_x as f64, rel_y as f64);
+            let (scene_x, scene_y) = graph_scene_point(gv, rel_x, rel_y);
             mae_canvas::interaction::hit_test(&gv.scene, scene_x, scene_y)
         });
-        let Some(node_hit) = hit_result else {
-            return;
-        };
+        let node_hit = hit_result?;
 
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
             gv.scene.selection = node_hit;
@@ -413,15 +426,204 @@ impl Editor {
         }
         self.mark_full_redraw();
 
-        if let Some(node_idx) = node_hit {
-            let node_id = self.buffers[buf_idx]
-                .graph_view()
-                .and_then(|gv| gv.scene.nodes.get(node_idx))
-                .map(|n| n.id.clone());
-            if let Some(node_id) = node_id {
-                self.navigate_companion_window_to_node(buf_idx, &node_id);
+        node_hit
+    }
+
+    /// Mouse click-to-navigate (Part C Phase 1 item 6): `graph_win_id` is
+    /// the window a click just landed in (already confirmed by the caller —
+    /// `gui_app.rs`'s `handle_mouse_button_pressed`/mouse-release path — to
+    /// be showing a `BufferKind::Graph` buffer); `rel_x`/`rel_y` are the
+    /// click's pixel position relative to that window's content rect
+    /// (top-left origin), NOT raw screen pixels and NOT text cells — the
+    /// graph is drawn via the Skia `VisualBuffer` pixel pipeline, not the
+    /// text-cell layout pipeline.
+    ///
+    /// Delegates the hit-test/select step to
+    /// `kb_graph_view_hit_test_and_select` (Part C Phase 4 extracted this
+    /// so mouse-DOWN could reuse it without navigating). On a hit,
+    /// additionally navigates the captured companion window to it via the
+    /// same shared logic `kb_graph_view_select_current` uses. On a miss,
+    /// this is otherwise a harmless no-op (no navigation, no panic) beyond
+    /// the deselect `kb_graph_view_hit_test_and_select` already performed.
+    ///
+    /// Part C Phase 4 note: as of Phase 4, `gui_app.rs` calls this ONLY on
+    /// mouse-release-without-drag (a plain click) — a press-drag-release
+    /// instead calls `kb_graph_view_hit_test_and_select` on press and
+    /// `kb_graph_view_drag_node`/`kb_graph_view_drag_end` during/after the
+    /// drag, never this method, so a drag never navigates the companion
+    /// window.
+    ///
+    /// NOTE: `flatten_scene_graph` (the current GUI renderer for
+    /// `BufferKind::Graph`, see `crates/gui/src/lib.rs`'s
+    /// `render_visual_buffer_with_bg`) does not yet apply
+    /// `SceneGraph.viewport`'s pan/zoom transform to node draw positions —
+    /// it draws `SceneNode.x/y` directly as window-relative pixel offsets;
+    /// wiring a real camera transform into the renderer (so
+    /// `kb_graph_view_zoom`'s viewport changes have a visible effect, and
+    /// this hit-test path can drop the neutral-viewport workaround) remains
+    /// a flagged follow-up, not silently dropped — see `graph_scene_point`
+    /// and `kb_graph_view_zoom`'s doc comments.
+    pub fn kb_graph_view_click_at(&mut self, graph_win_id: WindowId, rel_x: f32, rel_y: f32) {
+        let Some(node_idx) = self.kb_graph_view_hit_test_and_select(graph_win_id, rel_x, rel_y)
+        else {
+            return;
+        };
+
+        let Some(buf_idx) = self.window_mgr.window(graph_win_id).map(|w| w.buffer_idx) else {
+            return;
+        };
+        let node_id = self.buffers[buf_idx]
+            .graph_view()
+            .and_then(|gv| gv.scene.nodes.get(node_idx))
+            .map(|n| n.id.clone());
+        if let Some(node_id) = node_id {
+            self.navigate_companion_window_to_node(buf_idx, &node_id);
+        }
+    }
+
+    /// Part C Phase 4 (drag-to-pin): update the dragged node's scene
+    /// position to track the cursor. Called by `gui_app.rs` on every
+    /// `CursorMoved` while a node-drag is in progress (mouse-DOWN hit a
+    /// node via `kb_graph_view_hit_test_and_select`, button still held).
+    /// Converts `rel_x`/`rel_y` to scene coordinates via the same
+    /// `graph_scene_point` convention hit-testing uses, so the dragged node
+    /// tracks the exact point the cursor is over. Does NOT set `pinned` —
+    /// that only happens once on release, via `kb_graph_view_drag_end` —
+    /// so a layout/animation tick that lands mid-drag still leaves the node
+    /// free to keep tracking the cursor rather than fighting the user's
+    /// grip (it would just get overwritten by the next drag-move call
+    /// anyway, but not pinning early keeps the invariant "pinned means the
+    /// user finished placing it" honest). No-op (never panics) if the
+    /// window/buffer/node no longer exist — e.g. the graph was closed or
+    /// the node's index no longer resolves because of a refresh mid-drag.
+    pub fn kb_graph_view_drag_node(
+        &mut self,
+        graph_win_id: WindowId,
+        node_index: usize,
+        rel_x: f32,
+        rel_y: f32,
+    ) {
+        let Some(buf_idx) = self.window_mgr.window(graph_win_id).map(|w| w.buffer_idx) else {
+            return;
+        };
+        if buf_idx >= self.buffers.len() || self.buffers[buf_idx].kind != BufferKind::Graph {
+            return;
+        }
+        let Some(scene_point) = self.buffers[buf_idx]
+            .graph_view()
+            .map(|gv| graph_scene_point(gv, rel_x, rel_y))
+        else {
+            return;
+        };
+        let (scene_x, scene_y) = scene_point;
+        let moved = if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+            if let Some(node) = gv.scene.nodes.get_mut(node_index) {
+                node.x = scene_x;
+                node.y = scene_y;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if !moved {
+            return;
+        }
+
+        let style = self.graph_style_options();
+        if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+            gv.rendered = VisualBuffer {
+                elements: flatten_scene_graph(&gv.scene, &style),
+            };
+        }
+        self.mark_full_redraw();
+    }
+
+    /// Part C Phase 4 (drag-to-pin): finish an in-progress node drag on
+    /// mouse-release — pins the node (`SceneNode.pinned = true`) at
+    /// wherever `kb_graph_view_drag_node` last placed it, so
+    /// `mae_canvas::layout::ForceLayout::step`/`run` (both confirmed to
+    /// skip pinned nodes when applying displacement) leave it exactly
+    /// there on any subsequent layout/animation tick. No-op (never panics)
+    /// if the window/buffer/node no longer exist.
+    pub fn kb_graph_view_drag_end(&mut self, graph_win_id: WindowId, node_index: usize) {
+        let Some(buf_idx) = self.window_mgr.window(graph_win_id).map(|w| w.buffer_idx) else {
+            return;
+        };
+        if buf_idx >= self.buffers.len() || self.buffers[buf_idx].kind != BufferKind::Graph {
+            return;
+        }
+        if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+            if let Some(node) = gv.scene.nodes.get_mut(node_index) {
+                node.pinned = true;
             }
         }
+        self.mark_full_redraw();
+    }
+
+    /// Part C Phase 4 (wheel-zoom): adjust a Graph window's viewport zoom by
+    /// wheel `delta` (a raw pixel scroll amount — the same unit
+    /// `gui_app.rs::handle_mouse_wheel` already computes for text scroll,
+    /// reused directly rather than re-deriving a separate unit), focused at
+    /// (`focus_x`, `focus_y`) — the cursor's window-relative pixel
+    /// position — so the point under the cursor stays fixed, exactly as
+    /// `mae_canvas::interaction::zoom`'s existing focus-preserving math
+    /// already guarantees (including its 0.1x-10x clamp, applied
+    /// unmodified). This method's only job is turning a wheel delta into
+    /// the multiplicative `factor` argument `zoom()` expects and
+    /// re-flattening afterward — `zoom()` itself is not duplicated.
+    ///
+    /// No-op if `graph_win_id` doesn't resolve to an open `BufferKind::
+    /// Graph` window.
+    ///
+    /// NOTE (same gap `kb_graph_view_click_at` documents): `flatten_scene_
+    /// graph`/the GUI renderer do not yet apply `Viewport`'s pan/zoom
+    /// transform to node draw positions, so this correctly updates
+    /// `GraphView.scene.viewport.zoom`/`center_x`/`center_y` state (and
+    /// re-flattens with the SAME `flatten_scene_graph` function every other
+    /// graph mutation uses — no second flattening path), but wiring that
+    /// transform into the actual Skia draw calls (so zooming has a visible
+    /// on-screen effect) is a flagged follow-up, not silently dropped: it
+    /// requires threading window pixel dimensions into `flatten_scene_
+    /// graph`, which today is a pure `&SceneGraph -> Vec<VisualElement>`
+    /// function with no window-size input at all.
+    pub fn kb_graph_view_zoom(
+        &mut self,
+        graph_win_id: WindowId,
+        delta: f32,
+        focus_x: f32,
+        focus_y: f32,
+    ) {
+        let Some(buf_idx) = self.window_mgr.window(graph_win_id).map(|w| w.buffer_idx) else {
+            return;
+        };
+        if buf_idx >= self.buffers.len() || self.buffers[buf_idx].kind != BufferKind::Graph {
+            return;
+        }
+
+        // Positive delta (scroll up/away, MAE's existing convention —
+        // matches `handle_mouse_wheel`'s positive-v_px-scrolls-content-up
+        // treatment) zooms in; negative zooms out. Clamped per-event so one
+        // fast/large scroll can't jump straight to zoom()'s clamp bounds.
+        let factor = 1.0
+            + (delta as f64 / GRAPH_ZOOM_SENSITIVITY)
+                .clamp(-GRAPH_ZOOM_MAX_STEP, GRAPH_ZOOM_MAX_STEP);
+        if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+            mae_canvas::interaction::zoom(
+                &mut gv.scene.viewport,
+                factor,
+                focus_x as f64,
+                focus_y as f64,
+            );
+        }
+        let style = self.graph_style_options();
+        if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+            gv.rendered = VisualBuffer {
+                elements: flatten_scene_graph(&gv.scene, &style),
+            };
+        }
+        self.mark_full_redraw();
     }
 
     /// Apply a completed background layout (`mae::graph_layout_bridge`)
@@ -1141,6 +1343,424 @@ mod tests {
         editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
         // 999_999 was never allocated by this WindowManager.
         editor.kb_graph_view_click_at(999_999, 0.0, 0.0);
+    }
+
+    // --- Part C Phase 4: drag-to-pin + wheel-zoom ---
+    //
+    // Same testing shape as the click_at coverage above (no literal winit
+    // event loop reachable from this crate — tested at the `Editor` function
+    // boundary that `gui_app.rs`'s press/move/release/wheel handlers call
+    // into). Real post-layout node coordinates are read back and used as
+    // click/drag positions throughout (not hand-picked "unicorn" values).
+
+    #[test]
+    fn hit_test_and_select_selects_without_navigating() {
+        // The mouse-DOWN half of a click/drag gesture: selects the node for
+        // immediate visual feedback but must NOT navigate the companion
+        // window (that's release's job) — otherwise every drag would
+        // spuriously navigate before the user even finishes dragging.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "[[concept:window]]");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:window",
+            "Window",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), Some(1));
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        let (x, y) = {
+            let gv = editor.buffers[graph_idx].graph_view().unwrap();
+            let node = &gv.scene.nodes[0];
+            (node.x as f32, node.y as f32)
+        };
+        let kb_buf_count_before = editor
+            .buffers
+            .iter()
+            .filter(|b| b.kind == BufferKind::Kb)
+            .count();
+
+        let hit = editor.kb_graph_view_hit_test_and_select(graph_win_id, x, y);
+
+        assert_eq!(hit, Some(0), "pressing on node 0 must hit-test to index 0");
+        assert_eq!(
+            editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .scene
+                .selection,
+            Some(0),
+            "hit-test-and-select must update scene.selection"
+        );
+        assert_eq!(
+            editor
+                .buffers
+                .iter()
+                .filter(|b| b.kind == BufferKind::Kb)
+                .count(),
+            kb_buf_count_before,
+            "hit-test-and-select must NOT navigate the companion window"
+        );
+    }
+
+    #[test]
+    fn drag_start_move_release_pins_node_at_expected_position_without_navigating() {
+        // The full drag gesture `gui_app.rs` drives: hit-test-and-select on
+        // press, `kb_graph_view_drag_node` on each subsequent move, then
+        // `kb_graph_view_drag_end` on release — must end with the node
+        // pinned exactly where the drag left it, and must NEVER navigate
+        // the companion window (that's the click-without-drag path only).
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "[[concept:window]]");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:window",
+            "Window",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), Some(1));
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        let (press_x, press_y) = {
+            let gv = editor.buffers[graph_idx].graph_view().unwrap();
+            let node = &gv.scene.nodes[0];
+            assert!(
+                !node.pinned,
+                "sanity: a freshly laid-out node must start unpinned"
+            );
+            (node.x as f32, node.y as f32)
+        };
+        let kb_buf_count_before = editor
+            .buffers
+            .iter()
+            .filter(|b| b.kind == BufferKind::Kb)
+            .count();
+        let window_count_before = editor.window_mgr.iter_windows().count();
+
+        // Press.
+        let hit = editor.kb_graph_view_hit_test_and_select(graph_win_id, press_x, press_y);
+        assert_eq!(hit, Some(0));
+
+        // Drag across several intermediate positions (real multi-step
+        // movement, not a single teleport) to a final resting position 200
+        // scene units away.
+        let final_x = press_x + 200.0;
+        let final_y = press_y - 150.0;
+        for step in 1..=4 {
+            let t = step as f32 / 4.0;
+            let rx = press_x + (final_x - press_x) * t;
+            let ry = press_y + (final_y - press_y) * t;
+            editor.kb_graph_view_drag_node(graph_win_id, 0, rx, ry);
+        }
+
+        // Mid-drag: the node must already track the cursor, but must NOT be
+        // pinned yet, and no navigation should have happened.
+        {
+            let gv = editor.buffers[graph_idx].graph_view().unwrap();
+            let node = &gv.scene.nodes[0];
+            assert!(
+                (node.x as f32 - final_x).abs() < 0.01,
+                "node should track the cursor's scene-x during drag"
+            );
+            assert!(
+                (node.y as f32 - final_y).abs() < 0.01,
+                "node should track the cursor's scene-y during drag"
+            );
+            assert!(!node.pinned, "must not be pinned before release");
+        }
+
+        // Release.
+        editor.kb_graph_view_drag_end(graph_win_id, 0);
+
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        let node = &gv.scene.nodes[0];
+        assert!(node.pinned, "release must pin the node");
+        assert!(
+            (node.x as f32 - final_x).abs() < 0.01,
+            "pinned position must match the drag's final position (x)"
+        );
+        assert!(
+            (node.y as f32 - final_y).abs() < 0.01,
+            "pinned position must match the drag's final position (y)"
+        );
+        assert_eq!(
+            editor
+                .buffers
+                .iter()
+                .filter(|b| b.kind == BufferKind::Kb)
+                .count(),
+            kb_buf_count_before,
+            "a drag-to-pin gesture must never navigate the companion window"
+        );
+        assert_eq!(
+            editor.window_mgr.iter_windows().count(),
+            window_count_before,
+            "a drag-to-pin gesture must never open/close/split any window"
+        );
+    }
+
+    #[test]
+    fn pinned_node_is_left_in_place_by_a_subsequent_force_layout_pass() {
+        // Regression guard for the task's explicit requirement: "A
+        // subsequent layout/animation tick ... must then leave this node in
+        // place." Exercises the REAL `ForceLayout` (not a mock) against the
+        // pinned node, mirroring how `apply_graph_layout_result` would fold
+        // a background layout pass back in.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "[[concept:window]]");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:window",
+            "Window",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), Some(1));
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+
+        editor.kb_graph_view_hit_test_and_select(graph_win_id, 0.0, 0.0);
+        editor.kb_graph_view_drag_node(graph_win_id, 0, 12345.0, -6789.0);
+        editor.kb_graph_view_drag_end(graph_win_id, 0);
+
+        let pinned_x;
+        let pinned_y;
+        let mut scene = {
+            let gv = editor.buffers[graph_idx].graph_view().unwrap();
+            let node = &gv.scene.nodes[0];
+            pinned_x = node.x;
+            pinned_y = node.y;
+            gv.scene.clone()
+        };
+
+        let layout =
+            mae_canvas::layout::ForceLayout::new(mae_canvas::layout::LayoutConfig::default());
+        layout.run(&mut scene.nodes, &scene.edges, 50);
+
+        assert_eq!(
+            scene.nodes[0].x, pinned_x,
+            "a real ForceLayout pass must not move the pinned node (x)"
+        );
+        assert_eq!(
+            scene.nodes[0].y, pinned_y,
+            "a real ForceLayout pass must not move the pinned node (y)"
+        );
+    }
+
+    #[test]
+    fn plain_click_without_drag_still_navigates_companion_regression_guard() {
+        // Regression guard: Phase 1b's "quick click-and-release navigates"
+        // behavior must survive the Phase 4 press/release split.
+        // `gui_app.rs`'s release handler calls `kb_graph_view_click_at`
+        // (not the drag path) when no movement occurred between press and
+        // release — simulate that exact sequence here.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "[[concept:window]]");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:window",
+            "Window",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), Some(1));
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        let (node_id, x, y) = {
+            let gv = editor.buffers[graph_idx].graph_view().unwrap();
+            let node = &gv.scene.nodes[0];
+            (node.id.clone(), node.x as f32, node.y as f32)
+        };
+
+        // Press: hit-test-and-select only (mirrors gui_app.rs's press path).
+        let hit = editor.kb_graph_view_hit_test_and_select(graph_win_id, x, y);
+        assert_eq!(hit, Some(0));
+        // Release without any drag_node calls in between: the release
+        // handler falls back to a plain click at the press coordinates.
+        editor.kb_graph_view_click_at(graph_win_id, x, y);
+
+        let kb_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kb_view().map(|kv| kv.current == node_id).unwrap_or(false))
+            .expect("a click-without-drag must still navigate to the clicked node's KB buffer");
+        assert!(editor
+            .window_mgr
+            .iter_windows()
+            .any(|w| w.buffer_idx == kb_idx));
+        assert!(
+            !editor.buffers[graph_idx].graph_view().unwrap().scene.nodes[0].pinned,
+            "a plain click must never pin the node"
+        );
+    }
+
+    #[test]
+    fn drag_node_and_drag_end_on_stale_window_or_node_do_not_panic() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+
+        // Stale window id.
+        editor.kb_graph_view_drag_node(999_999, 0, 1.0, 1.0);
+        editor.kb_graph_view_drag_end(999_999, 0);
+        // Valid window, out-of-range node index.
+        editor.kb_graph_view_drag_node(graph_win_id, 999, 1.0, 1.0);
+        editor.kb_graph_view_drag_end(graph_win_id, 999);
+    }
+
+    #[test]
+    fn zoom_changes_viewport_zoom_within_clamped_range_and_reflattens() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        let zoom_before = editor.buffers[graph_idx]
+            .graph_view()
+            .unwrap()
+            .scene
+            .viewport
+            .zoom;
+
+        // Zoom in (positive delta).
+        editor.kb_graph_view_zoom(graph_win_id, 100.0, 400.0, 300.0);
+        let zoom_after_in = editor.buffers[graph_idx]
+            .graph_view()
+            .unwrap()
+            .scene
+            .viewport
+            .zoom;
+        assert!(
+            zoom_after_in > zoom_before,
+            "a positive wheel delta must increase zoom (before={zoom_before}, after={zoom_after_in})"
+        );
+        assert!(zoom_after_in <= 10.0, "zoom must respect the upper clamp");
+        assert!(
+            !editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .rendered
+                .elements
+                .is_empty(),
+            "zoom must re-flatten (rendered must reflect the current scene)"
+        );
+
+        // Zoom out repeatedly — must never cross below the 0.1x floor no
+        // matter how many times it's applied.
+        for _ in 0..200 {
+            editor.kb_graph_view_zoom(graph_win_id, -100.0, 400.0, 300.0);
+        }
+        let zoom_after_out = editor.buffers[graph_idx]
+            .graph_view()
+            .unwrap()
+            .scene
+            .viewport
+            .zoom;
+        assert!(
+            zoom_after_out >= 0.1,
+            "zoom must respect the lower clamp even under sustained zoom-out, got {zoom_after_out}"
+        );
+
+        // Zoom in aggressively — must never cross above the 10x ceiling.
+        for _ in 0..200 {
+            editor.kb_graph_view_zoom(graph_win_id, 100.0, 400.0, 300.0);
+        }
+        let zoom_after_max = editor.buffers[graph_idx]
+            .graph_view()
+            .unwrap()
+            .scene
+            .viewport
+            .zoom;
+        assert!(
+            zoom_after_max <= 10.0,
+            "zoom must respect the upper clamp even under sustained zoom-in, got {zoom_after_max}"
+        );
+    }
+
+    #[test]
+    fn zoom_on_non_graph_or_stale_window_is_a_harmless_no_op() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let non_graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx != graph_idx)
+            .map(|w| w.id)
+            .expect("opening the graph view should have split");
+
+        // Must not panic, and must not affect the graph's own viewport.
+        let zoom_before = editor.buffers[graph_idx]
+            .graph_view()
+            .unwrap()
+            .scene
+            .viewport
+            .zoom;
+        editor.kb_graph_view_zoom(non_graph_win_id, 100.0, 0.0, 0.0);
+        editor.kb_graph_view_zoom(999_999, 100.0, 0.0, 0.0);
+        assert_eq!(
+            editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .scene
+                .viewport
+                .zoom,
+            zoom_before,
+            "zooming a non-graph/stale window must not affect the graph's own viewport"
+        );
     }
 
     #[test]

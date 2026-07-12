@@ -160,6 +160,7 @@ pub(crate) fn run_gui(
         last_scroll_window: None,
         last_scroll_time: None,
         mouse_pressed: false,
+        graph_drag: None,
         shell_generations: std::collections::HashMap::new(),
         last_render: std::time::Instant::now(),
         input_dirty: false,
@@ -258,6 +259,34 @@ async fn bridge_task(
     }
 }
 
+/// Part C Phase 4 (drag-to-pin): in-progress graph-node drag, tracked
+/// across a mouse press -> `CursorMoved`* -> release sequence. See
+/// `GuiApp::graph_drag`'s doc comment for why this lives on `GuiApp`
+/// rather than `Editor`/`GraphView`.
+#[cfg(feature = "gui")]
+struct GraphDragState {
+    window: mae_core::WindowId,
+    node_index: usize,
+    /// Window-relative pixel position at mouse-DOWN — replayed as the
+    /// hit-test coordinates for a plain click (`Editor::kb_graph_view_click_at`)
+    /// if the drag never exceeds `GRAPH_DRAG_THRESHOLD_PX` (see `moved`).
+    press_rel_x: f32,
+    press_rel_y: f32,
+    /// Set once cumulative movement from `press_rel_x`/`press_rel_y`
+    /// exceeds `GRAPH_DRAG_THRESHOLD_PX` — the click-vs-drag split: on
+    /// release, `moved == false` navigates the companion window (Phase 1b
+    /// behavior, preserved); `moved == true` pins the node instead
+    /// (Phase 4), never navigating.
+    moved: bool,
+}
+
+/// Minimum window-relative pixel movement before a graph-node press is
+/// treated as a drag rather than a click — absorbs mouse/trackpad jitter so
+/// an intended click-and-release doesn't accidentally pin the node a pixel
+/// away from where it started instead of navigating.
+#[cfg(feature = "gui")]
+const GRAPH_DRAG_THRESHOLD_PX: f32 = 3.0;
+
 /// GUI application state — owns all editor state on the main thread.
 ///
 /// Implements `ApplicationHandler<MaeEvent>` for winit's `run_app()`.
@@ -316,6 +345,17 @@ struct GuiApp {
     last_scroll_window: Option<mae_core::WindowId>,
     last_scroll_time: Option<std::time::Instant>,
     mouse_pressed: bool,
+    /// Part C Phase 4 (drag-to-pin): transient in-progress node-drag state
+    /// for a `BufferKind::Graph` window, tracked across a
+    /// press -> `CursorMoved`* -> release sequence. Lives on `GuiApp` (not
+    /// `Editor`) because it's purely about sequencing raw mouse events
+    /// across winit callbacks — mirrors `mouse_pressed`'s existing
+    /// GUI-event-loop-local scoping, rather than
+    /// `crates/mae/src/shell_lifecycle.rs`'s `Editor`-owned,
+    /// drained-per-frame `shell.drag` pattern (there's no background
+    /// thread/bridge here that needs a drain step; every mutation is
+    /// applied synchronously as each winit event arrives).
+    graph_drag: Option<GraphDragState>,
 
     // Shell generation tracking (dirty-check optimisation — TUI parity)
     shell_generations: std::collections::HashMap<usize, u64>,
@@ -658,7 +698,24 @@ impl GuiApp {
                     if let Some(rect) = window_rect {
                         let rel_x = self.cursor_x as f32 - (rect.x as f32 * cell_w);
                         let rel_y = self.cursor_y as f32 - (rect.y as f32 * cell_h);
-                        self.editor.kb_graph_view_click_at(focused_id, rel_x, rel_y);
+                        // Part C Phase 4 (drag-to-pin): hit-test + select
+                        // immediately (visual feedback, and so a subsequent
+                        // drag knows which node index to move) but do NOT
+                        // navigate yet — the press might turn into a drag
+                        // rather than a click. Navigation (Phase 1b
+                        // behavior) happens on release if no drag occurred;
+                        // pinning (Phase 4) happens on release if it did —
+                        // see the `MouseInput { Released, Left }` arm.
+                        let hit = self
+                            .editor
+                            .kb_graph_view_hit_test_and_select(focused_id, rel_x, rel_y);
+                        self.graph_drag = hit.map(|node_index| GraphDragState {
+                            window: focused_id,
+                            node_index,
+                            press_rel_x: rel_x,
+                            press_rel_y: rel_y,
+                            moved: false,
+                        });
                         self.dirty = true;
                     }
                     return;
@@ -712,6 +769,61 @@ impl GuiApp {
                 (pos.x as f32, pos.y as f32)
             }
         };
+
+        // Part C Phase 4 (wheel-zoom): if the wheel event's target window
+        // (computed with the SAME mouse_wheel_follow_mouse/
+        // window-under-cursor-vs-focused logic the text-scroll path below
+        // uses, so "which window is this wheel event for" stays consistent
+        // between the graph and non-graph cases) is showing a
+        // `BufferKind::Graph` buffer, divert entirely to
+        // `Editor::kb_graph_view_zoom` instead of falling into any of the
+        // generic text-scroll logic below — gated the same way Phase 1b
+        // gated click interception (the target window's `BufferKind`).
+        // Self-contained block (its own target-window lookup, rather than
+        // threading a shared variable through the existing scroll code
+        // below) so the pre-existing text-scroll implementation is left
+        // byte-for-byte unchanged for every other `BufferKind`.
+        if v_px.abs() > 0.01 || h_px.abs() > 0.01 {
+            let (cell_w, cell_h_dim) = self.renderer.cell_dimensions();
+            let target_win =
+                if self.editor.mouse_wheel_follow_mouse && cell_w > 0.0 && cell_h_dim > 0.0 {
+                    let col = (self.cursor_x / cell_w as f64) as u16;
+                    let row = (self.cursor_y / cell_h_dim as f64) as u16;
+                    self.editor
+                        .window_mgr
+                        .window_at_cell(col, row, self.editor.last_layout_area)
+                } else {
+                    None
+                };
+            let target_id = target_win.unwrap_or_else(|| self.editor.window_mgr.focused_id());
+            let is_graph_window = self
+                .editor
+                .window_mgr
+                .window(target_id)
+                .map(|w| w.buffer_idx)
+                .and_then(|idx| self.editor.buffers.get(idx))
+                .is_some_and(|b| b.kind == mae_core::BufferKind::Graph);
+            if is_graph_window {
+                if v_px.abs() > 0.01 && cell_w > 0.0 && cell_h_dim > 0.0 {
+                    let window_rect = self
+                        .editor
+                        .window_mgr
+                        .layout_rects(self.editor.last_layout_area)
+                        .into_iter()
+                        .find(|(id, _)| *id == target_id)
+                        .map(|(_, rect)| rect);
+                    if let Some(rect) = window_rect {
+                        let rel_x = self.cursor_x as f32 - (rect.x as f32 * cell_w);
+                        let rel_y = self.cursor_y as f32 - (rect.y as f32 * cell_h_dim);
+                        self.editor
+                            .kb_graph_view_zoom(target_id, v_px, rel_x, rel_y);
+                        self.dirty = true;
+                        self.input_dirty = true;
+                    }
+                }
+                return;
+            }
+        }
 
         if v_px.abs() > 0.01 {
             // Determine target window for scroll.
@@ -1011,7 +1123,36 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
                 self.cursor_y = position.y;
                 let (cell_w, cell_h) = self.renderer.cell_dimensions();
                 if cell_w > 0.0 && cell_h > 0.0 {
-                    if self.mouse_pressed {
+                    if let Some(drag) = self.graph_drag.as_mut() {
+                        // Part C Phase 4 (drag-to-pin): dragging a graph
+                        // node. Recompute the window-relative pixel
+                        // position each move (not just once at press) in
+                        // case the window was resized mid-drag. Deliberately
+                        // does NOT call `focus_window_at` (unlike the
+                        // text-selection drag path below) — the drag must
+                        // keep tracking the SAME graph window's node even if
+                        // the cursor strays outside that window's bounds.
+                        let window_rect = self
+                            .editor
+                            .window_mgr
+                            .layout_rects(self.editor.last_layout_area)
+                            .into_iter()
+                            .find(|(id, _)| *id == drag.window)
+                            .map(|(_, rect)| rect);
+                        if let Some(rect) = window_rect {
+                            let rel_x = self.cursor_x as f32 - (rect.x as f32 * cell_w);
+                            let rel_y = self.cursor_y as f32 - (rect.y as f32 * cell_h);
+                            let dx = rel_x - drag.press_rel_x;
+                            let dy = rel_y - drag.press_rel_y;
+                            if drag.moved || (dx * dx + dy * dy).sqrt() > GRAPH_DRAG_THRESHOLD_PX {
+                                drag.moved = true;
+                                let (window, node_index) = (drag.window, drag.node_index);
+                                self.editor
+                                    .kb_graph_view_drag_node(window, node_index, rel_x, rel_y);
+                                self.dirty = true;
+                            }
+                        }
+                    } else if self.mouse_pressed {
                         let col = (self.cursor_x / cell_w as f64) as u16;
                         let row = (self.cursor_y / cell_h as f64) as u16;
                         // Drag across windows: switch focus so visual selection extends correctly.
@@ -1040,6 +1181,26 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
                 ..
             } => {
                 self.mouse_pressed = false;
+                if let Some(drag) = self.graph_drag.take() {
+                    // Part C Phase 4: finish the graph-node press/drag
+                    // gesture. `moved` distinguishes a real drag (pin the
+                    // node where it was left) from a plain click-and-release
+                    // (fall back to the Phase 1b click-to-navigate path, at
+                    // the ORIGINAL press position — the node never actually
+                    // moved in that case).
+                    if drag.moved {
+                        self.editor
+                            .kb_graph_view_drag_end(drag.window, drag.node_index);
+                    } else {
+                        self.editor.kb_graph_view_click_at(
+                            drag.window,
+                            drag.press_rel_x,
+                            drag.press_rel_y,
+                        );
+                    }
+                    self.dirty = true;
+                    return;
+                }
                 let (cell_w, cell_h) = self.renderer.cell_dimensions();
                 if cell_w > 0.0 && cell_h > 0.0 {
                     let col = (self.cursor_x / cell_w as f64) as u16;
