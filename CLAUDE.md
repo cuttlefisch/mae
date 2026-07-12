@@ -151,7 +151,7 @@ MAE uses two distinct in-code comment conventions — don't confuse them:
 
 - **`@ai-caution: [category] <explanation>`** — a landmine/invariant warning for a specific
   function, field, or block that future editors (human or AI) must not casually violate (e.g.
-  `// @ai-caution: [window-split] Agent shells MUST use switch_to_buffer_non_conversation() +
+  `// @ai-caution: [window-split] Agent shells MUST use display_buffer_for_agent() +
   split_root(), NOT display_buffer_and_focus() — the latter steals conversation windows.`). Place
   it directly above the guarded code, or as a file-header `//!` line when the whole file carries
   one invariant. `[category]` is a short bracketed tag grouping related warnings (`[rendering]`,
@@ -195,6 +195,23 @@ membership/roles/policy (Owner/Editor/Viewer, ADR-018), epoch-fenced write acces
 attention bus, a magit-style `*KB Sharing*` management buffer (`SPC C K m`), and full introspection +
 lifecycle parity across the human (buffer + Scheme `(kb-…)` primitives) and the AI peer (`kb_sharing_status`
 + lifecycle MCP tools). See `docs/COLLABORATION.md`.
+
+**Also shipped — `DrivenWindow` + native KB graph view** (v0.14.x): `DrivenWindow`
+(`crates/core/src/driven_window.rs`) is a new first-class "window this actor is driving" primitive
+(`resolve_persistent` / `follow_focus_away_from`) that fixes AI/MCP agent actions — including
+external Claude Code via the MCP shim — cascading into repeated new window splits;
+`AiState.work_window` now uses it, and `display_buffer_for_agent()` (renamed from
+`switch_to_buffer_non_conversation()`) is the generalized agent-display entry point. A native
+org-roam-ui-style KB graph view (`BufferKind::Graph`, `crates/core/src/graph_view.rs`) is built on
+the previously-orphaned `mae-canvas` crate — background-threaded force layout
+(`crates/mae/src/graph_layout_bridge.rs`), click-to-navigate via `DrivenWindow`'s companion-window
+strategy, follow-current-node, opt-in physics animation, full Scheme+MCP parity
+(`kb-graph-view-*`). A shared idle-dispatch mechanism (`Editor::on_idle_tick`,
+`crates/core/src/editor/idle_ops.rs`) closes ROADMAP #83 (which-key idle delay) and now also
+drives a new KB-link hover preview popup. Deferred: full per-MCP-session window isolation (two
+simultaneous MCP clients still share one driven window — candidate for its own ADR), GPU-accelerated
+rendering (still out of scope, confirmed 100% CPU-rasterized). See ROADMAP.md's "Completed
+Features" and "Architecture Debt" for the full breakdown.
 
 **Next — P2P decentralized KB sync** (multi-session/multi-machine initiative): a **daemon mesh** so global
 peers maintain shared KBs with **no central server**. Design = **ADR-025** (iroh QUIC transport, Ed25519
