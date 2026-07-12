@@ -334,7 +334,18 @@ pub fn flatten_scene_graph(
     scene: &mae_canvas::scene::SceneGraph,
     style: &GraphStyleOptions,
 ) -> Vec<VisualElement> {
+    use mae_canvas::interaction::scene_to_viewport;
+
     let mut elements = Vec::with_capacity(scene.edges.len() + scene.nodes.len() * 2);
+    // Every position below goes through `scene_to_viewport` — the same
+    // scene<->screen transform hit-testing/drag/zoom already use via
+    // `viewport_to_scene` (see `graph_view_ops.rs::graph_scene_point`) — so
+    // drawing and interaction always agree on where a node actually is,
+    // driven by `scene.viewport` alone (kept in sync with the real window's
+    // pixel size by `Editor::graph_view_reflatten`, the single call site
+    // that invokes this function). Sizes (node radius, font size, stub/line
+    // offsets, stroke width) stay fixed screen-space pixels, NOT scaled by
+    // zoom — zoom moves nodes apart/together, it doesn't grow/shrink them.
 
     for edge in &scene.edges {
         let Some(src) = scene.nodes.get(edge.source) else {
@@ -346,23 +357,26 @@ pub fn flatten_scene_graph(
         } else {
             style.edge_color.clone()
         };
+        let (sx1, sy1) = scene_to_viewport(&scene.viewport, src.x, src.y);
         // A boundary edge is represented as a self-loop (source == target,
         // see `build_kb_graph`) — draw a short stub off to the side instead
-        // of a zero-length line, so it's visually distinguishable.
-        let (x2, y2) = if edge.target < scene.nodes.len() && edge.target != edge.source {
+        // of a zero-length line, so it's visually distinguishable. The stub
+        // offset is applied in screen space (after transforming the source
+        // node), so it stays a constant visual size regardless of zoom.
+        let (sx2, sy2) = if edge.target < scene.nodes.len() && edge.target != edge.source {
             let t = &scene.nodes[edge.target];
-            (t.x as f32, t.y as f32)
+            scene_to_viewport(&scene.viewport, t.x, t.y)
         } else {
             (
-                src.x as f32 + style.node_radius * 2.0,
-                src.y as f32 - style.node_radius,
+                sx1 + (style.node_radius * 2.0) as f64,
+                sy1 - style.node_radius as f64,
             )
         };
         elements.push(VisualElement::Line {
-            x1: src.x as f32,
-            y1: src.y as f32,
-            x2,
-            y2,
+            x1: sx1 as f32,
+            y1: sy1 as f32,
+            x2: sx2 as f32,
+            y2: sy2 as f32,
             color,
             thickness: edge.style.width as f32,
             dashed: is_boundary,
@@ -376,16 +390,17 @@ pub fn flatten_scene_graph(
         } else {
             style.color_for_kind(node.kind).to_string()
         };
+        let (scx, scy) = scene_to_viewport(&scene.viewport, node.x, node.y);
         elements.push(VisualElement::Circle {
-            cx: node.x as f32,
-            cy: node.y as f32,
+            cx: scx as f32,
+            cy: scy as f32,
             r: style.node_radius,
             fill: Some(color.clone()),
             stroke: Some(style.edge_color.clone()),
         });
         elements.push(VisualElement::Text {
-            x: node.x as f32 + style.node_radius + 4.0,
-            y: node.y as f32,
+            x: scx as f32 + style.node_radius + 4.0,
+            y: scy as f32,
             text: node.label.clone(),
             font_size: style.font_size,
             color,
@@ -494,12 +509,19 @@ mod tests {
         let style = test_style();
         let elements = flatten_scene_graph(&scene, &style);
         assert_eq!(elements.len(), 2);
+        // Default `Viewport` (center 0,0, zoom 1.0, 800x600) is NOT an
+        // identity transform — `scene_to_viewport` centers the origin in
+        // the middle of the viewport, so a scene point (10, 20) draws at
+        // (10 + width/2, 20 + height/2), matching `graph_scene_point`'s
+        // inverse used by hit-testing.
+        let (expected_cx, expected_cy) =
+            mae_canvas::interaction::scene_to_viewport(&scene.viewport, 10.0, 20.0);
         match &elements[0] {
             VisualElement::Circle {
                 cx, cy, r, fill, ..
             } => {
-                assert_eq!(*cx, 10.0);
-                assert_eq!(*cy, 20.0);
+                assert_eq!(*cx, expected_cx as f32);
+                assert_eq!(*cy, expected_cy as f32);
                 assert_eq!(*r, style.node_radius);
                 assert_eq!(
                     fill.as_deref(),
@@ -555,6 +577,11 @@ mod tests {
         });
         let style = test_style();
         let elements = flatten_scene_graph(&scene, &style);
+        // Same non-identity default-viewport transform as `flatten_single_
+        // node_produces_circle_and_text` — target node (50, 0) draws at
+        // (50 + width/2, 0 + height/2).
+        let (expected_x2, expected_y2) =
+            mae_canvas::interaction::scene_to_viewport(&scene.viewport, 50.0, 0.0);
         match &elements[0] {
             VisualElement::Line {
                 dashed,
@@ -565,8 +592,8 @@ mod tests {
             } => {
                 assert!(!dashed);
                 assert_eq!(color, &style.edge_color);
-                assert_eq!(*x2, 50.0);
-                assert_eq!(*y2, 0.0);
+                assert_eq!(*x2, expected_x2 as f32);
+                assert_eq!(*y2, expected_y2 as f32);
             }
             other => panic!("expected Line, got {other:?}"),
         }

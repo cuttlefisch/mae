@@ -23,27 +23,15 @@ use crate::window::WindowId;
 use super::Editor;
 
 /// Convert a Graph window's window-relative pixel click/drag position into
-/// scene coordinates, sharing the exact neutral-viewport convention
-/// `kb_graph_view_click_at` established (Part C Phase 1 item 6): the
-/// renderer (`flatten_scene_graph`) does not yet apply `Viewport`'s
-/// pan/zoom transform to node draw positions (it draws `SceneNode.x/y`
-/// directly as window-relative pixel offsets — see the module-level NOTE
-/// on `kb_graph_view_click_at` below), so `width`/`height` are zeroed out
-/// to neutralize `viewport_to_scene`'s centering term while `zoom`/
-/// `center_x`/`center_y` are still applied. This keeps hit-testing AND
-/// (Phase 4) node-dragging/zoom-focus math consistent with each other and
-/// with what's actually drawn on screen today, and forward-compatible with
-/// whenever the renderer gains a real camera transform.
+/// scene coordinates via `mae_canvas::interaction::viewport_to_scene` — the
+/// exact inverse of `flatten_scene_graph`'s `scene_to_viewport` draw
+/// transform. Both are driven by the SAME `GraphView.scene.viewport`,
+/// which `Editor::graph_view_reflatten` keeps synced to the real window's
+/// pixel size before every render — so a click always resolves to the
+/// scene point actually under the cursor, matching what's drawn, with no
+/// separate/neutralized convention to keep in sync by hand.
 fn graph_scene_point(gv: &GraphView, rel_x: f32, rel_y: f32) -> (f64, f64) {
-    let vp = &gv.scene.viewport;
-    let neutral_vp = mae_canvas::scene::Viewport {
-        width: 0.0,
-        height: 0.0,
-        zoom: vp.zoom,
-        center_x: vp.center_x,
-        center_y: vp.center_y,
-    };
-    mae_canvas::interaction::viewport_to_scene(&neutral_vp, rel_x as f64, rel_y as f64)
+    mae_canvas::interaction::viewport_to_scene(&gv.scene.viewport, rel_x as f64, rel_y as f64)
 }
 
 /// Part C Phase 4 (wheel-zoom): per-wheel-event zoom-factor tuning.
@@ -90,6 +78,65 @@ impl Editor {
     /// directly by unit tests in this file.
     pub(crate) fn graph_style_options(&self) -> GraphStyleOptions {
         GraphStyleOptions::from_editor(self)
+    }
+
+    /// Real pixel dimensions of the window currently showing `buf_idx`, for
+    /// centering the graph's viewport within it (via `Editor::
+    /// graph_view_reflatten`). Falls back to `mae_canvas::scene::
+    /// Viewport::default()`'s 800x600 if no window is showing this buffer
+    /// yet — e.g. the very first `populate_graph_buffer` call, before
+    /// `display_buffer` has created its window.
+    fn graph_viewport_pixel_size(&self, buf_idx: usize) -> (f32, f32) {
+        let default = mae_canvas::scene::Viewport::default();
+        let fallback = (default.width as f32, default.height as f32);
+
+        let Some(win_id) = self
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == buf_idx)
+            .map(|w| w.id)
+        else {
+            return fallback;
+        };
+        let Some((_, rect)) = self
+            .window_mgr
+            .layout_rects(self.last_layout_area)
+            .into_iter()
+            .find(|(id, _)| *id == win_id)
+        else {
+            return fallback;
+        };
+        (
+            rect.width as f32 * self.gui_cell_width,
+            rect.height as f32 * self.gui_cell_height,
+        )
+    }
+
+    /// The single path that re-flattens a graph buffer's `VisualBuffer`
+    /// cache for render. First syncs `GraphView.scene.viewport`'s pixel
+    /// size to the real window currently showing `buf_idx` (see
+    /// `graph_viewport_pixel_size`), THEN flattens — so `flatten_scene_
+    /// graph`'s `scene_to_viewport` transform and `graph_scene_point`'s
+    /// `viewport_to_scene` transform (used by hit-testing/drag/zoom) always
+    /// agree on where a node actually is, driven by one synced `Viewport`,
+    /// not two independently-maintained ideas of window size. Every
+    /// graph-mutating method (open, refresh, navigate, hit-test/select,
+    /// drag, zoom, a completed background layout) calls this instead of
+    /// calling `flatten_scene_graph` directly, so viewport sizing can never
+    /// be forgotten at a call site.
+    fn graph_view_reflatten(&mut self, buf_idx: usize) {
+        let (width, height) = self.graph_viewport_pixel_size(buf_idx);
+        if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+            gv.scene.viewport.width = width as f64;
+            gv.scene.viewport.height = height as f64;
+        }
+        let style = self.graph_style_options();
+        if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+            gv.rendered = VisualBuffer {
+                elements: flatten_scene_graph(&gv.scene, &style),
+            };
+        }
+        self.mark_full_redraw();
     }
 
     /// Rebuild `GraphView.scene`/`rendered` for `buf_idx` from a fresh
@@ -166,20 +213,15 @@ impl Editor {
             mode,
         });
 
-        let style = self.graph_style_options();
-        let rendered = VisualBuffer {
-            elements: flatten_scene_graph(&scene, &style),
-        };
-
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
             gv.center_node = Some(center);
             gv.depth = depth;
             gv.kb_instance = kb_instance;
             gv.scene = scene;
-            gv.rendered = rendered;
             gv.animating = self.kb_graph_animate;
             gv.anim_temperature = ANIMATION_INITIAL_TEMPERATURE;
         }
+        self.graph_view_reflatten(buf_idx);
     }
 
     /// Part C Phase 3: is there an open `BufferKind::Graph` buffer whose
@@ -213,8 +255,14 @@ impl Editor {
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
             gv.follow_current = self.kb_graph_follow_current_node;
         }
-        self.populate_graph_buffer(buf_idx, center, depth);
+        // Display FIRST, then populate: `populate_graph_buffer` ends by
+        // syncing the viewport to whatever window is currently showing
+        // `buf_idx` (`graph_view_reflatten`/`graph_viewport_pixel_size`) —
+        // doing this after the window exists means the very first render
+        // is already centered on the real pane, not a size-unknown
+        // fallback corrected on a later refresh.
         self.display_buffer(buf_idx);
+        self.populate_graph_buffer(buf_idx, center, depth);
     }
 
     /// Close the graph view buffer (mirrors `close_debug_panel`).
@@ -272,7 +320,6 @@ impl Editor {
             .map(|gv| gv.depth)
             .unwrap_or(self.kb_graph_default_depth);
         self.populate_graph_buffer(idx, center, depth);
-        self.mark_full_redraw();
     }
 
     /// Change the graph view's hop radius and refresh in place. No-op if
@@ -292,7 +339,6 @@ impl Editor {
             return;
         };
         self.populate_graph_buffer(idx, center, depth);
-        self.mark_full_redraw();
     }
 
     /// Move the graph's selection cursor toward `dir` (wraps
@@ -309,13 +355,7 @@ impl Editor {
         if let Some(gv) = self.buffers[idx].graph_view_mut() {
             mae_canvas::interaction::navigate_direction(&mut gv.scene, dir.into());
         }
-        let style = self.graph_style_options();
-        if let Some(gv) = self.buffers[idx].graph_view_mut() {
-            gv.rendered = VisualBuffer {
-                elements: flatten_scene_graph(&gv.scene, &style),
-            };
-        }
-        self.mark_full_redraw();
+        self.graph_view_reflatten(idx);
     }
 
     /// Navigate the graph's captured companion window (Part A
@@ -418,13 +458,7 @@ impl Editor {
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
             gv.scene.selection = node_hit;
         }
-        let style = self.graph_style_options();
-        if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
-            gv.rendered = VisualBuffer {
-                elements: flatten_scene_graph(&gv.scene, &style),
-            };
-        }
-        self.mark_full_redraw();
+        self.graph_view_reflatten(buf_idx);
 
         node_hit
     }
@@ -452,17 +486,6 @@ impl Editor {
     /// `kb_graph_view_drag_node`/`kb_graph_view_drag_end` during/after the
     /// drag, never this method, so a drag never navigates the companion
     /// window.
-    ///
-    /// NOTE: `flatten_scene_graph` (the current GUI renderer for
-    /// `BufferKind::Graph`, see `crates/gui/src/lib.rs`'s
-    /// `render_visual_buffer_with_bg`) does not yet apply
-    /// `SceneGraph.viewport`'s pan/zoom transform to node draw positions —
-    /// it draws `SceneNode.x/y` directly as window-relative pixel offsets;
-    /// wiring a real camera transform into the renderer (so
-    /// `kb_graph_view_zoom`'s viewport changes have a visible effect, and
-    /// this hit-test path can drop the neutral-viewport workaround) remains
-    /// a flagged follow-up, not silently dropped — see `graph_scene_point`
-    /// and `kb_graph_view_zoom`'s doc comments.
     pub fn kb_graph_view_click_at(&mut self, graph_win_id: WindowId, rel_x: f32, rel_y: f32) {
         let Some(node_idx) = self.kb_graph_view_hit_test_and_select(graph_win_id, rel_x, rel_y)
         else {
@@ -531,13 +554,7 @@ impl Editor {
             return;
         }
 
-        let style = self.graph_style_options();
-        if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
-            gv.rendered = VisualBuffer {
-                elements: flatten_scene_graph(&gv.scene, &style),
-            };
-        }
-        self.mark_full_redraw();
+        self.graph_view_reflatten(buf_idx);
     }
 
     /// Part C Phase 4 (drag-to-pin): finish an in-progress node drag on
@@ -576,18 +593,6 @@ impl Editor {
     ///
     /// No-op if `graph_win_id` doesn't resolve to an open `BufferKind::
     /// Graph` window.
-    ///
-    /// NOTE (same gap `kb_graph_view_click_at` documents): `flatten_scene_
-    /// graph`/the GUI renderer do not yet apply `Viewport`'s pan/zoom
-    /// transform to node draw positions, so this correctly updates
-    /// `GraphView.scene.viewport.zoom`/`center_x`/`center_y` state (and
-    /// re-flattens with the SAME `flatten_scene_graph` function every other
-    /// graph mutation uses — no second flattening path), but wiring that
-    /// transform into the actual Skia draw calls (so zooming has a visible
-    /// on-screen effect) is a flagged follow-up, not silently dropped: it
-    /// requires threading window pixel dimensions into `flatten_scene_
-    /// graph`, which today is a pure `&SceneGraph -> Vec<VisualElement>`
-    /// function with no window-size input at all.
     pub fn kb_graph_view_zoom(
         &mut self,
         graph_win_id: WindowId,
@@ -617,13 +622,7 @@ impl Editor {
                 focus_y as f64,
             );
         }
-        let style = self.graph_style_options();
-        if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
-            gv.rendered = VisualBuffer {
-                elements: flatten_scene_graph(&gv.scene, &style),
-            };
-        }
-        self.mark_full_redraw();
+        self.graph_view_reflatten(buf_idx);
     }
 
     /// Apply a completed background layout (`mae::graph_layout_bridge`)
@@ -648,14 +647,10 @@ impl Editor {
         if buf_idx >= self.buffers.len() || self.buffers[buf_idx].kind != BufferKind::Graph {
             return;
         }
-        let style = self.graph_style_options();
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
             gv.scene = scene;
-            gv.rendered = VisualBuffer {
-                elements: flatten_scene_graph(&gv.scene, &style),
-            };
         }
-        self.mark_full_redraw();
+        self.graph_view_reflatten(buf_idx);
 
         if let Some(disp) = max_displacement {
             let settled = disp.abs() < ANIMATION_SETTLE_EPSILON;
@@ -785,6 +780,19 @@ mod tests {
             body,
         ));
         editor
+    }
+
+    /// Convert a node's SCENE position into the window-relative PIXEL
+    /// position that would actually land a click on it — the exact inverse
+    /// of `graph_scene_point`'s `viewport_to_scene`, driven by the same
+    /// `GraphView.scene.viewport` the click/drag/hit-test methods under
+    /// test read. Click/drag tests must click in pixel space (what real
+    /// mouse events deliver), not raw scene coordinates — the default
+    /// `Viewport` centers the scene origin at (width/2, height/2), so scene
+    /// and pixel coordinates are NOT interchangeable.
+    fn scene_to_click_px(gv: &GraphView, x: f64, y: f64) -> (f32, f32) {
+        let (px, py) = mae_canvas::interaction::scene_to_viewport(&gv.scene.viewport, x, y);
+        (px as f32, py as f32)
     }
 
     #[test]
@@ -1159,7 +1167,8 @@ mod tests {
             .map(|w| w.id)
             .unwrap();
 
-        // Read back node 0's REAL layout position and click exactly there.
+        // Read back node 0's REAL layout position and click exactly there
+        // (converted from scene to pixel space — see `scene_to_click_px`).
         let (node_id, x, y) = {
             let gv = editor.buffers[graph_idx].graph_view().unwrap();
             assert!(
@@ -1167,7 +1176,8 @@ mod tests {
                 "a center node + its one link should both be present at depth 1"
             );
             let node = &gv.scene.nodes[0];
-            (node.id.clone(), node.x as f32, node.y as f32)
+            let (x, y) = scene_to_click_px(gv, node.x, node.y);
+            (node.id.clone(), x, y)
         };
 
         editor.kb_graph_view_click_at(graph_win_id, x, y);
@@ -1228,7 +1238,7 @@ mod tests {
         let (x, y) = {
             let gv = editor.buffers[graph_idx].graph_view().unwrap();
             let node = &gv.scene.nodes[0];
-            (node.x as f32, node.y as f32)
+            scene_to_click_px(gv, node.x, node.y)
         };
 
         let window_count_before = editor.window_mgr.iter_windows().count();
@@ -1381,7 +1391,7 @@ mod tests {
         let (x, y) = {
             let gv = editor.buffers[graph_idx].graph_view().unwrap();
             let node = &gv.scene.nodes[0];
-            (node.x as f32, node.y as f32)
+            scene_to_click_px(gv, node.x, node.y)
         };
         let kb_buf_count_before = editor
             .buffers
@@ -1438,14 +1448,15 @@ mod tests {
             .find(|w| w.buffer_idx == graph_idx)
             .map(|w| w.id)
             .unwrap();
-        let (press_x, press_y) = {
+        let (scene_x0, scene_y0, press_x, press_y) = {
             let gv = editor.buffers[graph_idx].graph_view().unwrap();
             let node = &gv.scene.nodes[0];
             assert!(
                 !node.pinned,
                 "sanity: a freshly laid-out node must start unpinned"
             );
-            (node.x as f32, node.y as f32)
+            let (px, py) = scene_to_click_px(gv, node.x, node.y);
+            (node.x, node.y, px, py)
         };
         let kb_buf_count_before = editor
             .buffers
@@ -1458,9 +1469,12 @@ mod tests {
         let hit = editor.kb_graph_view_hit_test_and_select(graph_win_id, press_x, press_y);
         assert_eq!(hit, Some(0));
 
-        // Drag across several intermediate positions (real multi-step
+        // Drag across several intermediate PIXEL positions (real multi-step
         // movement, not a single teleport) to a final resting position 200
-        // scene units away.
+        // pixels away. With the default viewport's zoom of 1.0, a pixel
+        // delta maps 1:1 to a scene delta (see `scene_to_click_px`'s
+        // doc), so the expected scene position below is `scene_x0`/
+        // `scene_y0` shifted by that same delta.
         let final_x = press_x + 200.0;
         let final_y = press_y - 150.0;
         for step in 1..=4 {
@@ -1469,6 +1483,8 @@ mod tests {
             let ry = press_y + (final_y - press_y) * t;
             editor.kb_graph_view_drag_node(graph_win_id, 0, rx, ry);
         }
+        let expected_scene_x = scene_x0 as f32 + 200.0;
+        let expected_scene_y = scene_y0 as f32 - 150.0;
 
         // Mid-drag: the node must already track the cursor, but must NOT be
         // pinned yet, and no navigation should have happened.
@@ -1476,11 +1492,11 @@ mod tests {
             let gv = editor.buffers[graph_idx].graph_view().unwrap();
             let node = &gv.scene.nodes[0];
             assert!(
-                (node.x as f32 - final_x).abs() < 0.01,
+                (node.x as f32 - expected_scene_x).abs() < 0.01,
                 "node should track the cursor's scene-x during drag"
             );
             assert!(
-                (node.y as f32 - final_y).abs() < 0.01,
+                (node.y as f32 - expected_scene_y).abs() < 0.01,
                 "node should track the cursor's scene-y during drag"
             );
             assert!(!node.pinned, "must not be pinned before release");
@@ -1493,11 +1509,11 @@ mod tests {
         let node = &gv.scene.nodes[0];
         assert!(node.pinned, "release must pin the node");
         assert!(
-            (node.x as f32 - final_x).abs() < 0.01,
+            (node.x as f32 - expected_scene_x).abs() < 0.01,
             "pinned position must match the drag's final position (x)"
         );
         assert!(
-            (node.y as f32 - final_y).abs() < 0.01,
+            (node.y as f32 - expected_scene_y).abs() < 0.01,
             "pinned position must match the drag's final position (y)"
         );
         assert_eq!(
@@ -1600,7 +1616,8 @@ mod tests {
         let (node_id, x, y) = {
             let gv = editor.buffers[graph_idx].graph_view().unwrap();
             let node = &gv.scene.nodes[0];
-            (node.id.clone(), node.x as f32, node.y as f32)
+            let (x, y) = scene_to_click_px(gv, node.x, node.y);
+            (node.id.clone(), x, y)
         };
 
         // Press: hit-test-and-select only (mirrors gui_app.rs's press path).
