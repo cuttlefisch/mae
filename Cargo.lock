@@ -2903,6 +2903,7 @@ dependencies = [
  "include_dir",
  "libc",
  "mae-ai",
+ "mae-canvas",
  "mae-core",
  "mae-dap",
  "mae-gui",

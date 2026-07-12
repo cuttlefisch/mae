@@ -29,4 +29,9 @@ pub enum MaeEvent {
     IdleTick,
     /// A collaborative editing event from the collab background task.
     CollabEvent(crate::collab_bridge::CollabEvent),
+    /// A completed KB graph-view force-directed layout computation
+    /// (`graph_layout_bridge`, Part C Phase 1) — computed on a background
+    /// blocking thread so opening/refreshing a dense graph never blocks the
+    /// UI thread.
+    GraphLayoutEvent(crate::graph_layout_bridge::GraphLayoutResult),
 }

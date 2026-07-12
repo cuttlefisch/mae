@@ -19,6 +19,8 @@ mod daemon_supervisor;
 mod dap_bridge;
 mod doctor;
 #[cfg(feature = "gui")]
+mod graph_layout_bridge;
+#[cfg(feature = "gui")]
 mod gui_app;
 #[cfg(feature = "gui")]
 mod gui_event;

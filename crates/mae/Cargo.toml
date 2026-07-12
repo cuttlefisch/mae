@@ -15,6 +15,7 @@ path = "src/bin/build_manual_kb.rs"
 
 [dependencies]
 mae-core = { path = "../core" }
+mae-canvas = { path = "../canvas" }
 mae-renderer = { path = "../renderer" }
 mae-scheme = { path = "../scheme" }
 mae-ai = { path = "../ai" }

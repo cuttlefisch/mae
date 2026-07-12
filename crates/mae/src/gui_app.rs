@@ -88,6 +88,14 @@ pub(crate) fn run_gui(
     let (collab_event_rx, collab_command_tx, collab_spawn) =
         crate::collab_bridge::setup_collab_channels(&editor);
 
+    // KB graph-view background layout channel (Part C Phase 1). Bounded at
+    // 4 — one-shot request/response per open/refresh/set-depth, never a
+    // sustained stream; a full channel just means a stale request gets
+    // dropped in favor of whatever's queued next (logged, not fatal — see
+    // `drain_graph_layout_intent`).
+    let (graph_layout_tx, graph_layout_rx) =
+        tokio::sync::mpsc::channel::<crate::graph_layout_bridge::GraphLayoutRequest>(4);
+
     // Shared atomics so the bridge task only sends ticks when relevant.
     let shell_active = Arc::new(AtomicBool::new(false));
     let mcp_active = Arc::new(AtomicBool::new(false));
@@ -106,6 +114,7 @@ pub(crate) fn run_gui(
                 dap_event_rx,
                 mcp_tool_rx,
                 collab_event_rx,
+                graph_layout_rx,
                 shell_active_bg,
                 mcp_active_bg,
             )
@@ -136,6 +145,7 @@ pub(crate) fn run_gui(
         lsp_command_tx,
         dap_command_tx,
         collab_command_tx,
+        graph_layout_tx,
         mcp_socket_path,
         app_config,
         mcp_client_mgr,
@@ -185,6 +195,9 @@ async fn bridge_task(
     mut dap_rx: tokio::sync::mpsc::Receiver<mae_dap::DapTaskEvent>,
     mut mcp_rx: tokio::sync::mpsc::Receiver<mae_mcp::McpToolRequest>,
     mut collab_rx: tokio::sync::mpsc::Receiver<crate::collab_bridge::CollabEvent>,
+    mut graph_layout_rx: tokio::sync::mpsc::Receiver<
+        crate::graph_layout_bridge::GraphLayoutRequest,
+    >,
     shell_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
     mcp_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
@@ -221,6 +234,9 @@ async fn bridge_task(
             }
             Some(ev) = collab_rx.recv() => {
                 if proxy.send_event(MaeEvent::CollabEvent(ev)).is_err() { break; }
+            }
+            Some(req) = graph_layout_rx.recv() => {
+                crate::graph_layout_bridge::spawn_layout_computation(req, proxy.clone());
             }
             _ = shell_interval.tick() => {
                 if shell_active.load(Relaxed) {
@@ -279,6 +295,7 @@ struct GuiApp {
     lsp_command_tx: tokio::sync::mpsc::Sender<LspCommand>,
     dap_command_tx: tokio::sync::mpsc::Sender<DapCommand>,
     collab_command_tx: tokio::sync::mpsc::Sender<crate::collab_bridge::CollabCommand>,
+    graph_layout_tx: tokio::sync::mpsc::Sender<crate::graph_layout_bridge::GraphLayoutRequest>,
 
     // Config
     mcp_socket_path: String,
@@ -333,6 +350,10 @@ impl GuiApp {
         crate::collab_bridge::drain_collab_intents(&mut self.editor, &self.collab_command_tx);
         crate::collab_bridge::queue_awareness_update(&mut self.editor);
         crate::collab_bridge::cleanup_stale_awareness(&mut self.editor);
+        crate::graph_layout_bridge::drain_graph_layout_intent(
+            &mut self.editor,
+            &self.graph_layout_tx,
+        );
 
         crate::shell_lifecycle::drain_agent_setup(&mut self.editor);
         crate::shell_lifecycle::spawn_pending_shells(
@@ -879,6 +900,10 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
             }
             MaeEvent::CollabEvent(collab_event) => {
                 crate::collab_bridge::handle_collab_event(&mut self.editor, collab_event);
+                self.dirty = true;
+            }
+            MaeEvent::GraphLayoutEvent(result) => {
+                crate::graph_layout_bridge::handle_graph_layout_event(&mut self.editor, result);
                 self.dirty = true;
             }
             MaeEvent::IdleTick => {
