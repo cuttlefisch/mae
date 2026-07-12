@@ -32,6 +32,7 @@ pub mod data_dir;
 pub mod export;
 pub mod federation;
 pub mod fuzzy;
+pub mod graph_query;
 pub mod migrate;
 pub mod org;
 pub mod store;

@@ -443,6 +443,10 @@ impl KbStore for CozoKbStore {
         CozoKbStore::neighborhood(self, id, depth)
     }
 
+    fn related(&self, id: &str, limit: usize) -> Result<Vec<(String, f64)>, KbStoreError> {
+        CozoKbStore::related(self, id, limit)
+    }
+
     fn raw_query(&self, script: &str) -> Result<(Vec<String>, Vec<Vec<String>>), KbStoreError> {
         CozoKbStore::raw_query(self, script)
     }

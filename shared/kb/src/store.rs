@@ -315,6 +315,19 @@ pub trait KbStore: Send + Sync {
         ))
     }
 
+    /// Graph-relatedness: `(id, score)` for nodes structurally related to
+    /// `id` (co-citation / bibliographic coupling / shared tags), distinct
+    /// from lexical search. Default `NotSupported`; only `CozoKbStore`
+    /// overrides it (delegating to its inherent `related`). Added so the
+    /// `(kb-related)` Scheme primitive can share `graph_query::related_enriched`
+    /// with the `kb_related` MCP tool via a single `KbStore`-backed trait
+    /// object, instead of reimplementing the ranking query.
+    fn related(&self, _id: &str, _limit: usize) -> Result<Vec<(String, f64)>, KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "graph relatedness requires CozoDB backend".into(),
+        ))
+    }
+
     /// Execute a raw backend query (Datalog for CozoDB, SQL for SQLite).
     fn raw_query(&self, _script: &str) -> Result<(Vec<String>, Vec<Vec<String>>), KbStoreError> {
         Err(KbStoreError::NotSupported(

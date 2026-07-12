@@ -229,6 +229,7 @@
       "path": "crates/core/src/lib.rs",
       "dependencies": [
         "mae-babel",
+        "mae-canvas",
         "mae-export",
         "mae-format",
         "mae-kb",
@@ -333,6 +334,10 @@
         },
         {
           "name": "git_status",
+          "kind": "mod"
+        },
+        {
+          "name": "graph_view_support",
           "kind": "mod"
         },
         {
@@ -643,6 +648,10 @@
         },
         {
           "name": "fuzzy",
+          "kind": "mod"
+        },
+        {
+          "name": "graph_query",
           "kind": "mod"
         },
         {

@@ -26,6 +26,7 @@ graph TD
     mae_babel[mae-babel]
     mae_canvas[mae-canvas]
     mae_core --> mae_babel
+    mae_core --> mae_canvas
     mae_core --> mae_export
     mae_core --> mae_format
     mae_core --> mae_kb
@@ -164,6 +165,7 @@ Source: `crates/core/src/lib.rs`
 | `file_tree` | mod |
 | `foldable_view` | mod |
 | `git_status` | mod |
+| `graph_view_support` | mod |
 | `grapheme` | mod |
 | `heading` | mod |
 | `hooks` | mod |
@@ -266,6 +268,7 @@ Source: `shared/kb/src/lib.rs`
 | `export` | mod |
 | `federation` | mod |
 | `fuzzy` | mod |
+| `graph_query` | mod |
 | `migrate` | mod |
 | `org` | mod |
 | `store` | mod |

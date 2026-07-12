@@ -349,6 +349,169 @@ fn kb_set_role_primitive_stamps_property_via_ex_command() {
     );
 }
 
+/// Open an in-memory `CozoKbStore`, seed its schema, and wire it as
+/// `editor.kb.store` — the shared setup for the `kb-graph`/`kb-neighborhood`/
+/// `kb-related`/`kb-shortest-path` primitive tests below (mirrors the
+/// existing pattern at `crates/core/src/editor/command.rs:1451-1453`).
+fn editor_with_cozo_store() -> Editor {
+    let mut editor = Editor::new();
+    let store = mae_kb::CozoKbStore::open_mem().unwrap();
+    store.seed_type_system().unwrap();
+    editor.kb.store = Some(std::sync::Arc::new(store));
+    editor
+}
+
+#[test]
+fn kb_graph_primitive_walks_the_primary_store_and_shares_bfs_with_mcp() {
+    // Closes the parity gap: `kb_graph` (MCP tool) had no Scheme
+    // counterpart. The walk itself is shared with the MCP executor via
+    // `mae_kb::graph_query::bfs_neighborhood` — this test exercises the
+    // Scheme-side wiring of that shared function through a real `KbStore`.
+    let mut rt = new_runtime();
+    let mut editor = editor_with_cozo_store();
+    editor
+        .kb_create_node("graph:a", "Node A", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    editor
+        .kb_create_node("graph:b", "Node B", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    editor
+        .kb_create_node("graph:c", "Node C", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    editor
+        .kb_update_node("graph:a", None, Some("Links to [[graph:b]]."), None)
+        .unwrap();
+    editor
+        .kb_update_node("graph:b", None, Some("Links to [[graph:c]]."), None)
+        .unwrap();
+
+    rt.inject_editor_state(&editor);
+
+    // depth 1: reaches graph:b, NOT graph:c.
+    let out = rt.eval("(kb-graph \"graph:a\" 1)").unwrap();
+    assert!(out.contains("graph:a"), "root echoed back: {out}");
+    assert!(out.contains("graph:b"), "1-hop neighbor present: {out}");
+    assert!(
+        !out.contains("graph:c"),
+        "2-hop node must NOT appear at depth 1: {out}"
+    );
+
+    // depth 2: reaches graph:c too.
+    let out2 = rt.eval("(kb-graph \"graph:a\" 2)").unwrap();
+    assert!(
+        out2.contains("graph:c"),
+        "2-hop node must appear at depth 2: {out2}"
+    );
+
+    // default depth (no second arg) matches the MCP tool's default of 1.
+    let out3 = rt.eval("(kb-graph \"graph:a\")").unwrap();
+    assert!(!out3.contains("graph:c"), "default depth must be 1: {out3}");
+}
+
+#[test]
+fn kb_graph_primitive_errors_on_unknown_root() {
+    let mut rt = new_runtime();
+    let editor = editor_with_cozo_store();
+    rt.inject_editor_state(&editor);
+    let err = rt.eval("(kb-graph \"no:such:node\" 1)").unwrap_err();
+    assert!(
+        err.message.contains("No KB node"),
+        "error should name the missing node: {}",
+        err.message
+    );
+}
+
+#[test]
+fn kb_graph_primitive_without_a_store_returns_empty_list_not_an_error() {
+    // No CozoDB store configured (the common in-process-only case) — degrades
+    // gracefully to '() like every other kb-* read primitive in this file,
+    // rather than erroring.
+    let mut rt = new_runtime();
+    let editor = Editor::new();
+    rt.inject_editor_state(&editor);
+    let out = rt.eval("(kb-graph \"anything\" 1)").unwrap();
+    assert_eq!(out, "()");
+}
+
+#[test]
+fn kb_neighborhood_primitive_returns_typed_edges() {
+    let mut rt = new_runtime();
+    let mut editor = editor_with_cozo_store();
+    editor
+        .kb_create_node("nbhd:a", "A", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    editor
+        .kb_create_node("nbhd:b", "B", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    editor
+        .kb_update_node("nbhd:a", None, Some("Links to [[nbhd:b]]."), None)
+        .unwrap();
+
+    rt.inject_editor_state(&editor);
+    let out = rt.eval("(kb-neighborhood \"nbhd:a\" 2)").unwrap();
+    assert!(out.contains("nbhd:a"), "root echoed back: {out}");
+    assert!(out.contains("nbhd:b"), "neighbor present: {out}");
+}
+
+#[test]
+fn kb_related_primitive_returns_empty_list_for_unknown_node() {
+    let mut rt = new_runtime();
+    let editor = editor_with_cozo_store();
+    rt.inject_editor_state(&editor);
+    let out = rt.eval("(kb-related \"no:such:node\" 5)").unwrap();
+    assert_eq!(out, "()");
+}
+
+#[test]
+fn kb_related_primitive_does_not_error_on_a_real_node() {
+    let mut rt = new_runtime();
+    let mut editor = editor_with_cozo_store();
+    editor
+        .kb_create_node("rel:a", "A", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    rt.inject_editor_state(&editor);
+    // Not asserting on ranked content (CozoKbStore::related's heuristic is
+    // exercised directly in shared/kb's own tests) — just that the Scheme
+    // wiring round-trips through a real store without erroring.
+    assert!(rt.eval("(kb-related \"rel:a\" 5)").is_ok());
+}
+
+#[test]
+fn kb_shortest_path_primitive_finds_a_direct_link() {
+    let mut rt = new_runtime();
+    let mut editor = editor_with_cozo_store();
+    editor
+        .kb_create_node("path:a", "A", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    editor
+        .kb_create_node("path:b", "B", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    editor
+        .kb_update_node("path:a", None, Some("Links to [[path:b]]."), None)
+        .unwrap();
+
+    rt.inject_editor_state(&editor);
+    let out = rt.eval("(kb-shortest-path \"path:a\" \"path:b\")").unwrap();
+    assert!(out.contains("path:a"), "{out}");
+    assert!(out.contains("path:b"), "{out}");
+}
+
+#[test]
+fn kb_shortest_path_primitive_empty_for_disconnected_nodes() {
+    let mut rt = new_runtime();
+    let mut editor = editor_with_cozo_store();
+    editor
+        .kb_create_node("iso:a", "A", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    editor
+        .kb_create_node("iso:b", "B", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    // No link between them.
+    rt.inject_editor_state(&editor);
+    let out = rt.eval("(kb-shortest-path \"iso:a\" \"iso:b\")").unwrap();
+    assert_eq!(out, "()");
+}
+
 #[test]
 fn kb_sharing_status_primitive_returns_snapshot_json() {
     // P0: users can script KB-sharing introspection — `(kb-sharing-status)`
