@@ -1,6 +1,7 @@
 //! `mae-agent` — a terminal chat harness for driving MAE's tools via any AI
 //! provider (ADR-046), built directly on `mae-mcp`'s protocol library (no
 //! `mae-mcp-shim` subprocess hop — see `mcp_client.rs`).
+//! @stability: stable
 
 mod agent_loop;
 mod mcp_client;

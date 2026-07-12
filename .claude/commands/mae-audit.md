@@ -56,17 +56,68 @@ Build commands:
 | Struct fields | 15 fields | Extract sub-structs or builder pattern |
 | Nesting depth | 4 levels | Early return, extract function |
 
-**Known exceptions** (tracked as architectural debt, not audit failures — re-measure each run with `wc -l`):
-- `crates/mae/src/main.rs` — editor entry point, extraction in progress
-- `crates/mae/src/collab_bridge.rs` — collab event/intent bridge; the `#[cfg(test)] mod tests` is large and
-  a prime candidate to extract to a sibling submodule file (see Test Organization)
-- `crates/core/src/editor/mod.rs` — Editor struct, modularized into submodules
-- `shared/kb/src/cozo_store.rs` — CozoDB Datalog queries, dense but organized
-- `crates/scheme/src/runtime.rs` — Scheme VM runtime, under modularization
+**Known exceptions** (tracked as architectural debt, not audit failures — re-measure each run with `wc -l`).
+Each of these also carries an in-code `@ai-caution: [architecture-debt]` marker (see CLAUDE.md's
+"Debt/Invariant Tagging" section) cross-linking back here and to `ROADMAP.md`'s "Architecture Debt"
+section — when you add a new exception, add the marker + both cross-references, not just this list.
+**2026-07 update**: a dedicated splitting pass closed out most of the list below — `shared/kb/src/cozo_store.rs`
+and `shared/sync/src/kb.rs` are now fully resolved (every resulting file under ceiling) and dropped
+from this list entirely; the rest were substantially reduced but their residual/dispatcher file is
+still over the source ceiling, so they stay listed with updated numbers:
+- `crates/mae/src/main.rs` — 945 lines (was 3,329). CLI dispatch moved to `cli.rs`, `GuiApp` +
+  its `ApplicationHandler` impl moved to `gui_app.rs`, config-application/KB-federation-init/
+  daemon-connect moved to `bootstrap.rs`. Residual is genuinely sequential entry-point glue
+  (panic/logging setup, editor construction, Scheme init, final channel-wiring handoff) with no
+  further obvious seam — still ~18% over the 800-line ceiling, accepted as-is rather than forced.
+- `crates/mae/src/bootstrap.rs` (NEW, surfaced by the `main.rs` split above) — 3,062 lines (was
+  already 2,397 before this pass, pre-existing untracked debt). Holds app bootstrapping: config
+  application, KB federation init, daemon connect, collab user-name resolution. Not split further
+  this pass — needs its own dedicated look.
+- `crates/mae/src/gui_app.rs` (NEW, surfaced by the `main.rs` split above) — 1,270 lines. `GuiApp`
+  struct + `ApplicationHandler` impl (`window_event`'s 3 largest arms were already extracted to
+  private methods during the move). All state lives in `self` fields — a real candidate for a
+  future per-arm/per-phase split, not attempted this pass.
+- `crates/mae/src/collab_bridge/mod.rs` (was flat `collab_bridge.rs`) — 5,299 lines (was 6,546).
+  `handle_collab_event` (28-arm match) and `drain_collab_intents` (~10 drain sections) split into
+  sibling `events_kb.rs`/`events_connection.rs`/`events_doc.rs` (all under 800). The remaining debt
+  is narrower and more precise now: `run_collab_task` (1,695 lines) is a `tokio::select!` loop with
+  ~19 raw locals threaded across 29 `CollabCommand` match arms and no state struct to group them —
+  see its own in-code `@ai-caution` marker for why it's deliberately NOT split mechanically.
+  `handle_response`/`handle_disconnected_cmd` also remain unmoved (reasonably sized on their own).
+- `crates/core/src/editor/mod.rs` — 1,382 lines (was 3,457). A dozen orphaned value-structs moved
+  into the sibling files that already imported them (`lsp_state.rs`, `git_ops.rs`, `ai_state.rs`);
+  ~90 `impl Editor` methods regrouped into `window_ops.rs`/`render_ops.rs`/`session_ops.rs`/
+  `conversation_ops.rs` (new) plus extended `keymaps.rs`/`option_ops.rs`/`project_ops.rs`. Residual
+  is the `Editor` struct definition itself (~410 lines, separately tracked as field-count debt, see
+  its own `@ai-caution: [dispatch]` marker) plus constructors and small lifecycle methods.
+- `crates/scheme/src/runtime.rs` — Scheme VM runtime; `SchemeRuntime::new()`'s ~186 `register_fn` calls and
+  `inject_editor_state`/`apply_to_editor` were split into `crates/scheme/src/runtime/*.rs` submodules by
+  category (keybindings/editor-ops/kb-primitives/kb-queries/io-packages/misc-primitives/test-primitives/
+  state-sync). The residual `runtime.rs` (SharedState, SchemeRuntime's core methods) is still ~950 lines;
+  its `#[cfg(test)] mod tests` was extracted to a sibling `runtime_tests.rs` (~1,526 lines, ~3x the
+  test-file ceiling) — both still over ceiling but no longer sprawling
 - `crates/scheme/tests/r7rs_compliance.rs` — R7RS spec compliance tests (large by nature)
-- `daemon/src/collab_handler.rs` — JSON-RPC router; `handle_doc_request_inner` is large with many method arms
+- `daemon/src/collab_handler/mod.rs` (was flat `collab_handler.rs`) — 1,934 lines (was 3,821).
+  `handle_doc_request_inner`'s 31-arm match split into sibling `sync_methods.rs`/`docs_methods.rs`/
+  `kb_membership.rs`/`kb_content.rs`/`kb_governance.rs` (all under 800; `kb_content.rs` lands 2 lines
+  over) — it's now a thin ~340-line dispatcher. The residual is ~30 individually-reasonable
+  auth/session/access-control functions (`run_session`, `verify_content_op`, `kb_access`,
+  `verify_member_self_service_update`, etc.) that collectively still exceed the file ceiling — a
+  candidate for a further domain-grouping split, not attempted this pass.
+
+Both `collab_bridge_tests.rs` and `collab_handler_tests.rs` (and `crates/core/src/editor/kb_ops/kb_ops_tests.rs`)
+were split into `tests/` submodule directories in the same pass — all resulting test files are under
+the 500-line ceiling; see git history for the exact per-feature breakdown.
 
 Flag these if they've grown since last audit, but don't remediate without explicit request.
+
+**2026-07 full-codebase audit** found ~60 additional files over these ceilings beyond the list
+above (not yet individually tracked here) — see `ROADMAP.md`'s "Architecture Debt" section for the
+summary; that list still needs a full re-audit/refresh (it predates the splitting pass described
+above, so it may now also be stale in the other direction — double-check before trusting it). That
+same audit pass also resolved two Phase-5 DRY findings (remote-cursor render duplication, the
+git_status/notifications_view/kb_sharing hand-mirrored view pattern) via `render_common::collab_cursor`
+and `crates/core/src/foldable_view.rs`.
 
 ## Test Organization (Rust convention — do NOT "fix" co-located tests)
 
@@ -246,10 +297,12 @@ A fast, mostly-grep checklist. Report `[OK]` / `[WARN]` / `[ERROR]` per item.
    `version`, `description`, `mae_version`, `category`), semver format, `mae_version` constraint. Check each
    `autoloads.scm` for a `(provide-feature …)` call and an `@module` header. Report the module dependency
    graph (modules that declare `[dependencies]`).
-2. **Scheme API documentation coverage** — count `register_fn` registrations in `crates/scheme/src/runtime.rs`;
-   count `scheme:*` nodes in `crates/core/src/kb_seed/`. Report undocumented primitives (registered but no KB
-   node) and orphan KB nodes (node but no registration). Spot-check documented arities against the
-   registered `Arity`.
+2. **Scheme API documentation coverage** — count `register_fn` registrations across
+   `crates/scheme/src/runtime.rs` and `crates/scheme/src/runtime/*.rs` (the `register_fn` calls live in the
+   `register_*_fns` submodules; `runtime.rs` itself only holds `SchemeRuntime::new()`'s dispatch calls plus a
+   handful of registrations before the module split); count `scheme:*` nodes in `crates/core/src/kb_seed/`.
+   Report undocumented primitives (registered but no KB node) and orphan KB nodes (node but no registration).
+   Spot-check documented arities against the registered `Arity`.
 3. **AI provider coverage** — check `crates/ai/src/context_limits.rs` TABLE for model coverage (list model
    prefixes); verify `ProviderHint::from_model()` covers every family in the TABLE; report verification-status
    distribution (Verified / Testing / Untested). Confirm prompt XML exists for all profiles × tiers

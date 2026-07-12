@@ -1,4 +1,5 @@
 //! mae-sync: Collaborative state synchronization via yrs (YATA CRDT).
+//! @stability: stable
 //!
 //! Wraps yrs with MAE-specific document schemas and provides a bridge
 //! between yrs YText and ropey Rope for rendering.

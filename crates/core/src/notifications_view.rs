@@ -76,17 +76,16 @@ impl NotifView {
     }
 
     pub fn line_at(&self, row: usize) -> Option<&NotifLine> {
-        self.lines.get(row)
+        crate::foldable_view::line_at(&self.lines, row)
     }
 
     /// Toggle collapse state for a key (default expanded).
     pub fn toggle(&mut self, key: CollapseKey) {
-        let collapsed = self.collapsed.entry(key).or_insert(false);
-        *collapsed = !*collapsed;
+        crate::foldable_view::toggle(&mut self.collapsed, key);
     }
 
     pub fn is_collapsed(&self, key: &CollapseKey) -> bool {
-        self.collapsed.get(key).copied().unwrap_or(false)
+        crate::foldable_view::is_collapsed(&self.collapsed, key)
     }
 
     /// The fold key for a line, if it is a (foldable) category header.

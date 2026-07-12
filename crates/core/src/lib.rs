@@ -26,6 +26,7 @@ pub mod file_browser;
 pub mod file_lock;
 pub mod file_picker;
 pub mod file_tree;
+pub mod foldable_view;
 pub mod git_status;
 pub mod grapheme;
 pub mod heading;

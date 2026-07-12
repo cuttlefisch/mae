@@ -1,0 +1,1277 @@
+//! GUI application state and event loop (winit `ApplicationHandler`).
+//!
+//! Extracted from `main.rs`: `run_gui` launches the GUI event loop and
+//! constructs [`GuiApp`], `bridge_task` forwards AI/LSP/DAP/MCP/collab
+//! channel events to the main thread via `EventLoopProxy` (the Alacritty
+//! pattern — no polling), and `GuiApp` + its `ApplicationHandler` impl own
+//! all editor state on the main thread and dispatch `winit` events into the
+//! shared editor/renderer. Pure code motion (ADR none needed) — see
+//! `.claude/commands/mae-audit.md` / ROADMAP.md "Architecture Debt".
+//!
+//! @ai-caution: [architecture-debt] New file, ~1,270 lines, surfaced by the
+//! `main.rs` split (2026-07) — over the 800-line ceiling. All state lives in
+//! `self` fields (not raw locals), so a further per-arm/per-phase split of
+//! `window_event`/`about_to_wait` is a real, low-risk future candidate, not
+//! attempted this pass. Tracked in .claude/commands/mae-audit.md's "Known
+//! exceptions" and ROADMAP.md's "Architecture Debt" section.
+
+use std::io;
+
+use mae_ai::{AiCommand, AiEvent};
+use mae_core::Editor;
+use mae_dap::DapCommand;
+use mae_lsp::LspCommand;
+use mae_renderer::Renderer;
+use mae_scheme::SchemeRuntime;
+use tracing::{error, info, warn};
+
+// Architecture: main thread runs EventLoop::run_app(&mut GuiApp) (blocking).
+// Background thread runs a tokio current_thread runtime with the bridge_task
+// that reads AI/LSP/DAP/MCP channels and forwards events via EventLoopProxy.
+// This replaces the pump_app_events anti-pattern that broke Wayland.
+
+/// Launch the GUI event loop. Consumes the tokio runtime (moved to a
+/// background thread) and blocks the main thread on `run_app`.
+#[cfg(feature = "gui")]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_gui(
+    rt: tokio::runtime::Runtime,
+    mut editor: Editor,
+    scheme: SchemeRuntime,
+    ai_event_rx: tokio::sync::mpsc::Receiver<AiEvent>,
+    ai_event_tx: tokio::sync::mpsc::Sender<AiEvent>,
+    ai_command_tx: Option<tokio::sync::mpsc::Sender<AiCommand>>,
+    lsp_event_rx: tokio::sync::mpsc::Receiver<mae_lsp::LspTaskEvent>,
+    lsp_command_tx: tokio::sync::mpsc::Sender<LspCommand>,
+    dap_event_rx: tokio::sync::mpsc::Receiver<mae_dap::DapTaskEvent>,
+    dap_command_tx: tokio::sync::mpsc::Sender<DapCommand>,
+    mcp_tool_rx: tokio::sync::mpsc::Receiver<mae_mcp::McpToolRequest>,
+    mcp_socket_path: String,
+    all_tools: Vec<mae_ai::ToolDefinition>,
+    permission_policy: mae_ai::PermissionPolicy,
+    app_config: crate::config::Config,
+    mcp_client_mgr: crate::ai_event_handler::McpClientMgrRef,
+    sync_broadcaster: mae_mcp::broadcast::SharedBroadcaster,
+) -> io::Result<()> {
+    use crate::gui_event::MaeEvent;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+    use winit::event_loop::EventLoop;
+
+    let mut renderer = mae_gui::GuiRenderer::new();
+    renderer.set_font_config(
+        if editor.gui_font_family.is_empty() {
+            None
+        } else {
+            Some(editor.gui_font_family.clone())
+        },
+        if editor.gui_icon_font_family.is_empty() {
+            None
+        } else {
+            Some(editor.gui_icon_font_family.clone())
+        },
+        Some(editor.gui_font_size),
+    );
+    renderer.set_window_title(editor.window_title.clone());
+    editor.renderer_name = "gui".to_string();
+    editor.org_hide_emphasis_markers = app_config.editor.org_hide_emphasis_markers.unwrap_or(false);
+    editor.clipboard = "unnamedplus".to_string();
+
+    // Create typed event loop with user events — must happen on main thread
+    // before the tokio runtime moves to the background.
+    let event_loop = EventLoop::<MaeEvent>::with_user_event()
+        .build()
+        .map_err(|e| io::Error::other(e.to_string()))?;
+    let proxy = event_loop.create_proxy();
+
+    // Set up collab bridge channels (no runtime needed yet — task spawned in bridge_task).
+    let (collab_event_rx, collab_command_tx, collab_spawn) =
+        crate::collab_bridge::setup_collab_channels(&editor);
+
+    // Shared atomics so the bridge task only sends ticks when relevant.
+    let shell_active = Arc::new(AtomicBool::new(false));
+    let mcp_active = Arc::new(AtomicBool::new(false));
+
+    // Move the tokio runtime + bridge task to a background thread.
+    let shell_active_bg = shell_active.clone();
+    let mcp_active_bg = mcp_active.clone();
+    std::thread::spawn(move || {
+        rt.block_on(async {
+            // Spawn collab task inside the tokio runtime.
+            crate::collab_bridge::spawn_collab_task(collab_spawn);
+            bridge_task(
+                proxy,
+                ai_event_rx,
+                lsp_event_rx,
+                dap_event_rx,
+                mcp_tool_rx,
+                collab_event_rx,
+                shell_active_bg,
+                mcp_active_bg,
+            )
+            .await;
+        });
+    });
+
+    info!("entering GUI event loop (run_app + EventLoopProxy)");
+
+    let last_theme_name = editor.theme.name.clone();
+    let mut app = GuiApp {
+        renderer,
+        editor,
+        scheme,
+        pending_keys: Vec::new(),
+        shell_pending_keys: Vec::new(),
+        shell_terminals: std::collections::HashMap::new(),
+        shell_last_dims: std::collections::HashMap::new(),
+        ai_event_tx,
+        ai_command_tx,
+        deferred_ai_reply: None,
+        deferred_dap_reply: None,
+        pending_interactive_event: None,
+        deferred_mcp_reply: Vec::new(),
+        last_mcp_activity: None,
+        all_tools,
+        permission_policy,
+        lsp_command_tx,
+        dap_command_tx,
+        collab_command_tx,
+        mcp_socket_path,
+        app_config,
+        mcp_client_mgr,
+        sync_broadcaster,
+        ctrl_held: false,
+        alt_held: false,
+        shift_held: false,
+        dirty: true,
+        cursor_x: 0.0,
+        cursor_y: 0.0,
+        scroll_accumulator_x: 0.0,
+        last_scroll_window: None,
+        last_scroll_time: None,
+        mouse_pressed: false,
+        shell_generations: std::collections::HashMap::new(),
+        last_render: std::time::Instant::now(),
+        input_dirty: false,
+        last_input_time: std::time::Instant::now(),
+        bell_sent: false,
+        last_theme_name,
+        shell_active,
+        mcp_active,
+    };
+
+    event_loop
+        .run_app(&mut app)
+        .map_err(|e| io::Error::other(e.to_string()))?;
+
+    // Cleanup.
+    let _ = std::fs::remove_file(&app.mcp_socket_path);
+    let _ = app.renderer.cleanup();
+    info!("mae (GUI) exited cleanly");
+    Ok(())
+}
+
+/// Async bridge task — runs on the background tokio thread, reads all async
+/// channels and forwards events to the main thread via `EventLoopProxy`.
+///
+/// This is the Alacritty pattern: the event loop sleeps until an OS event
+/// *or* a proxy wakeup. No polling, no 16ms fallback sleep needed.
+#[cfg(feature = "gui")]
+#[allow(clippy::too_many_arguments)]
+async fn bridge_task(
+    proxy: winit::event_loop::EventLoopProxy<crate::gui_event::MaeEvent>,
+    mut ai_rx: tokio::sync::mpsc::Receiver<AiEvent>,
+    mut lsp_rx: tokio::sync::mpsc::Receiver<mae_lsp::LspTaskEvent>,
+    mut dap_rx: tokio::sync::mpsc::Receiver<mae_dap::DapTaskEvent>,
+    mut mcp_rx: tokio::sync::mpsc::Receiver<mae_mcp::McpToolRequest>,
+    mut collab_rx: tokio::sync::mpsc::Receiver<crate::collab_bridge::CollabEvent>,
+    shell_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    mcp_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) {
+    use crate::gui_event::MaeEvent;
+    use std::sync::atomic::Ordering::Relaxed;
+    use std::time::Duration;
+
+    let mut shell_interval = tokio::time::interval(Duration::from_millis(33));
+    let mut mcp_interval = tokio::time::interval(Duration::from_millis(500));
+    let mut health_interval = tokio::time::interval(Duration::from_secs(30));
+    let mut idle_interval = tokio::time::interval(Duration::from_millis(100));
+
+    // Skip the initial immediate tick from each interval.
+    shell_interval.tick().await;
+    mcp_interval.tick().await;
+    health_interval.tick().await;
+    idle_interval.tick().await;
+
+    loop {
+        tokio::select! {
+            biased;
+
+            Some(ev) = ai_rx.recv() => {
+                if proxy.send_event(MaeEvent::AiEvent(ev)).is_err() { break; }
+            }
+            Some(ev) = lsp_rx.recv() => {
+                if proxy.send_event(MaeEvent::LspEvent(ev)).is_err() { break; }
+            }
+            Some(ev) = dap_rx.recv() => {
+                if proxy.send_event(MaeEvent::DapEvent(ev)).is_err() { break; }
+            }
+            Some(ev) = mcp_rx.recv() => {
+                if proxy.send_event(MaeEvent::McpToolRequest(ev)).is_err() { break; }
+            }
+            Some(ev) = collab_rx.recv() => {
+                if proxy.send_event(MaeEvent::CollabEvent(ev)).is_err() { break; }
+            }
+            _ = shell_interval.tick() => {
+                if shell_active.load(Relaxed) {
+                    let _ = proxy.send_event(MaeEvent::ShellTick);
+                }
+            }
+            _ = mcp_interval.tick() => {
+                if mcp_active.load(Relaxed) {
+                    let _ = proxy.send_event(MaeEvent::McpIdleTick);
+                }
+            }
+            _ = health_interval.tick() => {
+                let _ = proxy.send_event(MaeEvent::HealthCheck);
+            }
+            _ = idle_interval.tick() => {
+                let _ = proxy.send_event(MaeEvent::IdleTick);
+            }
+        }
+    }
+}
+
+/// GUI application state — owns all editor state on the main thread.
+///
+/// Implements `ApplicationHandler<MaeEvent>` for winit's `run_app()`.
+/// This replaces the old `WinitCallback<'a>` which borrowed everything
+/// via mutable references (required by `pump_app_events`).
+#[cfg(feature = "gui")]
+struct GuiApp {
+    // Rendering
+    renderer: mae_gui::GuiRenderer,
+
+    // Core state (owned on main thread — not Send, which is fine)
+    editor: Editor,
+    scheme: SchemeRuntime,
+
+    // Key state
+    pending_keys: Vec<mae_core::KeyPress>,
+    shell_pending_keys: Vec<mae_core::KeyPress>,
+
+    // Shell terminals
+    shell_terminals: std::collections::HashMap<usize, mae_shell::ShellTerminal>,
+    shell_last_dims: std::collections::HashMap<usize, (u16, u16)>,
+
+    // AI/MCP state
+    ai_event_tx: tokio::sync::mpsc::Sender<AiEvent>,
+    ai_command_tx: Option<tokio::sync::mpsc::Sender<AiCommand>>,
+    deferred_ai_reply: crate::ai_event_handler::DeferredAiReply,
+    deferred_dap_reply: crate::ai_event_handler::DeferredDapReply,
+    pending_interactive_event: Option<crate::ai_event_handler::PendingInteractiveEvent>,
+    deferred_mcp_reply: crate::ai_event_handler::DeferredMcpReply,
+    last_mcp_activity: Option<tokio::time::Instant>,
+    all_tools: Vec<mae_ai::ToolDefinition>,
+    permission_policy: mae_ai::PermissionPolicy,
+
+    // Command senders (main thread → background tokio thread)
+    lsp_command_tx: tokio::sync::mpsc::Sender<LspCommand>,
+    dap_command_tx: tokio::sync::mpsc::Sender<DapCommand>,
+    collab_command_tx: tokio::sync::mpsc::Sender<crate::collab_bridge::CollabCommand>,
+
+    // Config
+    mcp_socket_path: String,
+    app_config: crate::config::Config,
+    mcp_client_mgr: crate::ai_event_handler::McpClientMgrRef,
+    sync_broadcaster: mae_mcp::broadcast::SharedBroadcaster,
+
+    // Input state
+    ctrl_held: bool,
+    alt_held: bool,
+    shift_held: bool,
+    dirty: bool,
+    cursor_x: f64,
+    cursor_y: f64,
+    scroll_accumulator_x: f64,
+    // Per-window inertial scrolling: tracks which window last scrolled
+    // and when, so inertia activates in the correct pane.
+    last_scroll_window: Option<mae_core::WindowId>,
+    last_scroll_time: Option<std::time::Instant>,
+    mouse_pressed: bool,
+
+    // Shell generation tracking (dirty-check optimisation — TUI parity)
+    shell_generations: std::collections::HashMap<usize, u64>,
+
+    // Frame cap (60fps) + input-pending bypass (Emacs dispnew.c:3254 pattern)
+    last_render: std::time::Instant,
+    /// Keyboard/mouse input needs immediate visual feedback.
+    /// Bypasses the 60fps frame cap so scroll/movement is never delayed.
+    input_dirty: bool,
+    /// Timestamp of last keyboard/mouse input. Used for idle tick scheduling.
+    last_input_time: std::time::Instant,
+
+    // Bell urgency state
+    bell_sent: bool,
+
+    // Theme change tracking for shell color sync.
+    last_theme_name: String,
+
+    // Shared atomics (read by bridge_task to gate conditional ticks)
+    shell_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    mcp_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[cfg(feature = "gui")]
+impl GuiApp {
+    /// Drain editor intents to LSP/DAP, manage shells and agents.
+    fn drain_intents_and_lifecycle(&mut self) {
+        crate::scheme_lsp_bridge::drain_scheme_lsp_intents(&mut self.editor, &self.scheme);
+        crate::lsp_bridge::drain_lsp_intents(&mut self.editor, &self.lsp_command_tx);
+        crate::scheme_dap_bridge::drain_scheme_dap_intents(&mut self.editor, &mut self.scheme);
+        crate::dap_bridge::drain_dap_intents(&mut self.editor, &self.dap_command_tx);
+        crate::collab_bridge::drain_collab_intents(&mut self.editor, &self.collab_command_tx);
+        crate::collab_bridge::queue_awareness_update(&mut self.editor);
+        crate::collab_bridge::cleanup_stale_awareness(&mut self.editor);
+
+        crate::shell_lifecycle::drain_agent_setup(&mut self.editor);
+        crate::shell_lifecycle::spawn_pending_shells(
+            &mut self.editor,
+            &mut self.shell_terminals,
+            &mut self.shell_last_dims,
+            &self.renderer,
+            &self.mcp_socket_path,
+            &self.app_config,
+        );
+        crate::shell_lifecycle::resize_shells(
+            &self.editor,
+            &self.renderer,
+            &self.shell_terminals,
+            &mut self.shell_last_dims,
+        );
+        crate::shell_lifecycle::manage_shell_lifecycle(&mut self.editor, &mut self.shell_terminals);
+
+        // Rekey binary-owned shell maps after any buffer removals this tick.
+        for removed_idx in std::mem::take(&mut self.editor.pending_buffer_removals) {
+            mae_core::editor::rekey_after_remove(&mut self.shell_terminals, removed_idx);
+            mae_core::editor::rekey_after_remove(&mut self.shell_last_dims, removed_idx);
+            mae_core::editor::rekey_after_remove(&mut self.shell_generations, removed_idx);
+        }
+
+        // Detect theme changes and update shell terminal colors.
+        if self.editor.theme.name != self.last_theme_name {
+            self.last_theme_name = self.editor.theme.name.clone();
+            crate::shell_lifecycle::update_shell_theme_colors(&self.editor, &self.shell_terminals);
+        }
+
+        // Clean up generation tracking for removed shells.
+        self.shell_generations
+            .retain(|idx, _| self.shell_terminals.contains_key(idx));
+
+        // Process module reload requests.
+        let reloads = std::mem::take(&mut self.editor.pending_module_reloads);
+        for module_name in reloads {
+            if module_name == "__all__" {
+                // Full reload pipeline (init → modules → config.scm → default_mode),
+                // not modules-only, so `:reload-modules` matches startup (C1/H2).
+                crate::bootstrap::reload_everything(&mut self.scheme, &mut self.editor, None);
+            } else if let Some(flavor) = module_name.strip_prefix("__flavor:") {
+                crate::bootstrap::switch_keymap_flavor(&mut self.scheme, &mut self.editor, flavor);
+            } else {
+                crate::bootstrap::reload_module(&module_name, &mut self.scheme, &mut self.editor);
+            }
+        }
+    }
+
+    /// Send shutdown commands to AI/LSP/DAP tasks.
+    fn shutdown(&mut self) {
+        info!("editor shutting down (GUI)");
+
+        // Fire app-exit hook.
+        self.editor.fire_hook("app-exit");
+
+        // Phase D3b: snapshot the daemon-hosted primary mirror back to the local
+        // store so the per-edit-retired edits land in the daemon-less fallback.
+        if self.editor.kb.daemon_hosts_primary() {
+            self.editor.kb_snapshot_primary_to_store();
+        }
+
+        // Persist history (skipped in clean mode)
+        if !self.editor.clean_mode {
+            if let Err(e) = crate::bootstrap::save_history_on_exit(&self.editor) {
+                error!(error = %e, "failed to save history");
+            }
+            // Save persistent project list
+            if let Some(data_dir) = self.editor.mae_data_dir() {
+                crate::bootstrap::save_project_list_on_exit(&self.editor, &data_dir);
+            }
+        }
+
+        // If debug mode is enabled, save a tombstone dump.
+        if self.editor.debug_mode {
+            crate::bootstrap::debug_dump(&self.editor);
+        }
+
+        // AI session persistence
+        if self.editor.restore_session {
+            if let Some(root) = self.editor.active_project_root() {
+                let session_path = root.join(".mae/conversation.json");
+                if let Some(parent) = session_path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                match self.editor.ai_save(&session_path) {
+                    Ok(n) => {
+                        info!(path = %session_path.display(), entries = n, "AI session persisted")
+                    }
+                    Err(e) => {
+                        if !e.contains("No conversation buffer") {
+                            warn!(path = %session_path.display(), error = %e, "failed to persist AI session");
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(ref tx) = self.ai_command_tx {
+            let _ = tx.try_send(AiCommand::Shutdown);
+        }
+        let _ = self.lsp_command_tx.try_send(LspCommand::Shutdown);
+        let _ = self.dap_command_tx.try_send(DapCommand::Shutdown);
+    }
+}
+
+/// `window_event`'s per-arm handlers, split out so the `match` in
+/// `ApplicationHandler::window_event` stays a thin dispatcher. Only the
+/// three largest arms (keyboard input, mouse-button-pressed, mouse wheel)
+/// are extracted — the rest are short enough to stay inline.
+#[cfg(feature = "gui")]
+impl GuiApp {
+    fn handle_keyboard_input(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        event: winit::event::KeyEvent,
+    ) {
+        // Track modifier keys directly from KeyboardInput events.
+        // On some Wayland compositors (GNOME), ModifiersChanged may
+        // arrive AFTER KeyboardInput, causing shift_held to be stale.
+        // Tracking from physical key press/release fixes this.
+        use winit::keyboard::{Key as WinitKey, NamedKey};
+        match &event.logical_key {
+            WinitKey::Named(NamedKey::Shift) => {
+                self.shift_held = event.state == winit::event::ElementState::Pressed;
+            }
+            WinitKey::Named(NamedKey::Control) => {
+                self.ctrl_held = event.state == winit::event::ElementState::Pressed;
+            }
+            WinitKey::Named(NamedKey::Alt) => {
+                self.alt_held = event.state == winit::event::ElementState::Pressed;
+            }
+            _ => {}
+        }
+
+        // Bare modifier keys don't dispatch commands — skip dirty/frame.
+        if matches!(
+            &event.logical_key,
+            WinitKey::Named(NamedKey::Shift | NamedKey::Control | NamedKey::Alt | NamedKey::Super)
+        ) {
+            return;
+        }
+
+        // Only process non-release events for actual key dispatch.
+        if event.state != winit::event::ElementState::Pressed {
+            return;
+        }
+
+        self.dirty = true;
+        self.input_dirty = true;
+        self.last_input_time = std::time::Instant::now();
+        self.editor.last_edit_time = std::time::Instant::now();
+        self.editor.clear_highlights();
+        // Cancel inertial scrolling on any key input.
+        self.last_scroll_window = None;
+        self.last_scroll_time = None;
+        for win in self.editor.window_mgr.iter_windows_mut() {
+            win.inertia_active = false;
+            win.scroll_velocity = 0.0;
+            win.scroll_samples.clear();
+        }
+        // Default to CursorOnly redraw for keyboard input. Commands that
+        // modify text or change mode escalate via mark_full_redraw() or
+        // mark_scrolled() internally. This avoids full syntax recomputation
+        // on every keypress (scroll, cursor move).
+        self.editor.mark_cursor_moved();
+        if let Some(mae_core::InputEvent::Key(kp)) =
+            mae_gui::winit_event_to_input(&event, self.ctrl_held, self.alt_held, self.shift_held)
+        {
+            if self.editor.mini_dialog.is_some() {
+                // A blocking modal (e.g. host-key TOFU prompt) captures input
+                // before AI-input-lock / shell routing — otherwise Esc/Ctrl-C
+                // leak to AI-cancel and the modal is unanswerable (B-22).
+                crate::key_handling::handle_key_from_keypress(
+                    &mut self.editor,
+                    &mut self.scheme,
+                    kp,
+                    &mut self.pending_keys,
+                    &self.ai_command_tx,
+                    &mut self.pending_interactive_event,
+                );
+            } else if self.editor.ai.input_lock != mae_core::InputLock::None {
+                if kp.key == mae_core::Key::Escape
+                    || (kp.key == mae_core::Key::Char('c') && kp.ctrl)
+                {
+                    self.editor.ai.input_lock = mae_core::InputLock::None;
+                    self.editor.ai.streaming = false;
+                    self.last_mcp_activity = None;
+                    if let Some(ref tx) = self.ai_command_tx {
+                        let _ = tx.try_send(AiCommand::Cancel);
+                    }
+                    if self.editor.cleanup_self_test() {
+                        self.editor
+                            .set_status("[AI] Cancelled — self-test state restored");
+                    } else {
+                        self.editor.set_status("AI operation cancelled");
+                    }
+                } else if self.editor.mode == mae_core::Mode::ShellInsert {
+                    let ct_event = crate::key_handling::keypress_to_crossterm(&kp);
+                    crate::shell_keys::handle_shell_key(
+                        &mut self.editor,
+                        ct_event,
+                        &mut self.shell_terminals,
+                        &mut self.shell_pending_keys,
+                    );
+                }
+            } else if self.editor.mode == mae_core::Mode::ShellInsert {
+                let ct_event = crate::key_handling::keypress_to_crossterm(&kp);
+                crate::shell_keys::handle_shell_key(
+                    &mut self.editor,
+                    ct_event,
+                    &mut self.shell_terminals,
+                    &mut self.shell_pending_keys,
+                );
+            } else {
+                crate::key_handling::handle_key_from_keypress(
+                    &mut self.editor,
+                    &mut self.scheme,
+                    kp,
+                    &mut self.pending_keys,
+                    &self.ai_command_tx,
+                    &mut self.pending_interactive_event,
+                );
+
+                if self.editor.ai.cancel_requested {
+                    self.editor.ai.cancel_requested = false;
+                    if let Some(ref tx) = self.ai_command_tx {
+                        let _ = tx.try_send(AiCommand::Cancel);
+                    }
+                    self.editor.ai.streaming = false;
+                    self.editor.ai.input_lock = mae_core::InputLock::None;
+                    self.pending_interactive_event = None;
+                    if self.editor.cleanup_self_test() {
+                        self.editor
+                            .set_status("[AI] Cancelled — self-test state restored");
+                    }
+                }
+            }
+
+            // Check for editor shutdown after key handling.
+            if !self.editor.running {
+                self.shutdown();
+                event_loop.exit();
+            }
+        }
+    }
+
+    fn handle_mouse_button_pressed(&mut self, button: winit::event::MouseButton) {
+        if let Some(mae_button) = mae_gui::winit_mouse_button(&button) {
+            if matches!(mae_button, mae_core::input::MouseButton::Left) {
+                self.mouse_pressed = true;
+            }
+            self.last_input_time = std::time::Instant::now();
+            // Cancel inertial scrolling on mouse click.
+            self.last_scroll_window = None;
+            self.last_scroll_time = None;
+            for win in self.editor.window_mgr.iter_windows_mut() {
+                win.inertia_active = false;
+                win.scroll_velocity = 0.0;
+                win.scroll_samples.clear();
+            }
+            let (cell_w, cell_h) = self.renderer.cell_dimensions();
+            if cell_w > 0.0 && cell_h > 0.0 {
+                let col = (self.cursor_x / cell_w as f64) as u16;
+                let row = (self.cursor_y / cell_h as f64) as u16;
+
+                // Click-to-focus: switch window before dispatching the click.
+                self.editor.focus_window_at(col, row);
+
+                // Dismiss stale popups on any mouse click.
+                self.editor.lsp.hover_popup = None;
+                self.editor.lsp.code_action_menu = None;
+
+                // Try pixel-precise positioning via cached FrameLayout
+                // (handles scaled headings and folded lines correctly).
+                let px_x = self.cursor_x as f32;
+                let px_y = self.cursor_y as f32;
+                let focused_id = self.editor.window_mgr.focused_id();
+                let fl = self.renderer.window_layout(focused_id);
+                if let Some(fl) = fl {
+                    if let Some((buf_row, char_col)) = fl.pixel_to_buffer_position(px_x, px_y) {
+                        self.editor.set_cursor_position(buf_row, char_col);
+                        self.dirty = true;
+                    } else {
+                        self.editor.handle_mouse_click_shift(
+                            row as usize,
+                            col as usize,
+                            mae_button,
+                            self.shift_held,
+                        );
+                        self.dirty = true;
+                    }
+                } else {
+                    self.editor.handle_mouse_click_shift(
+                        row as usize,
+                        col as usize,
+                        mae_button,
+                        self.shift_held,
+                    );
+                    self.dirty = true;
+                }
+            }
+        }
+    }
+
+    fn handle_mouse_wheel(&mut self, delta: winit::event::MouseScrollDelta) {
+        let now = std::time::Instant::now();
+        self.last_input_time = now;
+        use tracing::debug;
+
+        let cell_h = self.editor.gui_cell_height;
+        let (h_px, v_px): (f32, f32) = match delta {
+            winit::event::MouseScrollDelta::LineDelta(x, y) => {
+                debug!(x, y, "MouseWheel: LineDelta");
+                // Convert line deltas to pixel amounts (3 lines per notch).
+                (x * cell_h * 3.0, y * cell_h * 3.0)
+            }
+            winit::event::MouseScrollDelta::PixelDelta(pos) => {
+                debug!(pos_x = pos.x, pos_y = pos.y, "MouseWheel: PixelDelta");
+                (pos.x as f32, pos.y as f32)
+            }
+        };
+
+        if v_px.abs() > 0.01 {
+            // Determine target window for scroll.
+            let target_win = if self.editor.mouse_wheel_follow_mouse {
+                let (cell_w, cell_h_dim) = self.renderer.cell_dimensions();
+                if cell_w > 0.0 && cell_h_dim > 0.0 {
+                    let col = (self.cursor_x / cell_w as f64) as u16;
+                    let row = (self.cursor_y / cell_h_dim as f64) as u16;
+                    self.editor
+                        .window_mgr
+                        .window_at_cell(col, row, self.editor.last_layout_area)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let target_id = target_win.unwrap_or_else(|| self.editor.window_mgr.focused_id());
+
+            // Push sample to target window and prune old samples (>100ms).
+            if let Some(win) = self.editor.window_mgr.window_mut(target_id) {
+                win.scroll_samples
+                    .retain(|(t, _)| now.duration_since(*t).as_secs_f32() < 0.10);
+                win.scroll_samples.push((now, v_px));
+                // Real input overrides inertia in this window.
+                win.inertia_active = false;
+            }
+            self.last_scroll_window = Some(target_id);
+            self.last_scroll_time = Some(now);
+
+            // Apply pixel delta directly.
+            if target_win.is_some() {
+                self.editor
+                    .handle_mouse_scroll_pixels_in_window(target_id, v_px);
+            } else {
+                self.editor.handle_mouse_scroll_pixels(v_px);
+            }
+            self.dirty = true;
+            self.input_dirty = true;
+        }
+
+        // Horizontal scroll: keep simple accumulator (no inertia).
+        let h_delta = {
+            self.scroll_accumulator_x += h_px as f64;
+            let whole_cols = (self.scroll_accumulator_x / 20.0) as i16;
+            if whole_cols != 0 {
+                self.scroll_accumulator_x -= whole_cols as f64 * 20.0;
+            }
+            whole_cols
+        };
+        if h_delta != 0 {
+            if self.editor.mouse_wheel_follow_mouse {
+                let (cell_w, cell_h) = self.renderer.cell_dimensions();
+                if cell_w > 0.0 && cell_h > 0.0 {
+                    let col = (self.cursor_x / cell_w as f64) as u16;
+                    let row = (self.cursor_y / cell_h as f64) as u16;
+                    if let Some(target) = self.editor.window_mgr.window_at_cell(
+                        col,
+                        row,
+                        self.editor.last_layout_area,
+                    ) {
+                        self.editor
+                            .handle_mouse_scroll_horizontal_in_window(target, h_delta);
+                    } else {
+                        self.editor.handle_mouse_scroll_horizontal(h_delta);
+                    }
+                } else {
+                    self.editor.handle_mouse_scroll_horizontal(h_delta);
+                }
+            } else {
+                self.editor.handle_mouse_scroll_horizontal(h_delta);
+            }
+            self.dirty = true;
+            self.input_dirty = true;
+        }
+    }
+}
+
+#[cfg(feature = "gui")]
+impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiApp {
+    fn resumed(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        if self.renderer.window().is_none() {
+            if let Err(e) = self.renderer.init_window(event_loop) {
+                error!(error = %e, "failed to init GUI window");
+                event_loop.exit();
+            }
+        }
+    }
+
+    fn user_event(
+        &mut self,
+        _event_loop: &winit::event_loop::ActiveEventLoop,
+        event: crate::gui_event::MaeEvent,
+    ) {
+        use crate::gui_event::MaeEvent;
+
+        match event {
+            MaeEvent::AiEvent(ai_event) => {
+                let ctx = crate::ai_event_handler::AiEventContext {
+                    all_tools: &self.all_tools,
+                    permission_policy: &self.permission_policy,
+                    deferred_ai_reply: &mut self.deferred_ai_reply,
+                    deferred_dap_reply: &mut self.deferred_dap_reply,
+                    pending_interactive_event: &mut self.pending_interactive_event,
+                    lsp_command_tx: &self.lsp_command_tx,
+                    dap_command_tx: &self.dap_command_tx,
+                    ai_event_tx: &self.ai_event_tx,
+                    scheme: &mut self.scheme,
+                    mcp_client_mgr: &self.mcp_client_mgr,
+                };
+                crate::ai_event_handler::handle_ai_event(&mut self.editor, ai_event, ctx);
+                self.dirty = true;
+            }
+            MaeEvent::LspEvent(lsp_event) => {
+                crate::ai_event_handler::try_resolve_deferred(
+                    &mut self.editor,
+                    &lsp_event,
+                    &mut self.deferred_ai_reply,
+                );
+                if crate::ai_event_handler::try_resolve_deferred_mcp(
+                    &lsp_event,
+                    &mut self.deferred_mcp_reply,
+                ) {
+                    self.last_mcp_activity = Some(tokio::time::Instant::now());
+                }
+                if crate::lsp_bridge::handle_lsp_event(
+                    &mut self.editor,
+                    &self.lsp_command_tx,
+                    lsp_event,
+                ) {
+                    self.dirty = true;
+                }
+            }
+            MaeEvent::DapEvent(dap_event) => {
+                // Try to resolve deferred DAP tool first (promise/await)
+                let dap_action = crate::ai_event_handler::try_resolve_deferred_dap(
+                    &mut self.editor,
+                    &dap_event,
+                    &mut self.deferred_dap_reply,
+                );
+                crate::dap_bridge::handle_dap_event(&mut self.editor, dap_event);
+                if dap_action == crate::ai_event_handler::DapResolveAction::TransitionedToStackTrace
+                {
+                    crate::dap_bridge::drain_dap_intents(&mut self.editor, &self.dap_command_tx);
+                }
+                self.dirty = true;
+            }
+            MaeEvent::McpToolRequest(mcp_req) => {
+                self.editor.ai.input_lock = mae_core::InputLock::McpBusy;
+                self.last_mcp_activity = Some(tokio::time::Instant::now());
+                let immediate = crate::ai_event_handler::handle_mcp_request(
+                    &mut self.editor,
+                    mcp_req,
+                    &self.all_tools,
+                    &self.permission_policy,
+                    &self.lsp_command_tx,
+                    &mut self.deferred_mcp_reply,
+                    &mut self.scheme,
+                );
+                if immediate && self.deferred_mcp_reply.is_empty() {
+                    self.editor.ai.input_lock = mae_core::InputLock::None;
+                    self.last_mcp_activity = None;
+                }
+                // Drain hooks queued by MCP-driven commands (e.g. mode-change).
+                crate::key_handling::drain_hook_evals(&mut self.editor, &mut self.scheme);
+                // Drain sync updates immediately after MCP-driven edits.
+                crate::sync_broadcast::drain_and_broadcast(
+                    &mut self.editor,
+                    &self.sync_broadcaster,
+                    Some(&self.collab_command_tx),
+                );
+                self.dirty = true;
+            }
+            MaeEvent::ShellTick => {
+                // Only check generations if we're not already waiting to render.
+                // This prevents redraw stacking when shell output streams faster
+                // than the frame budget allows.
+                if !self.dirty {
+                    for (idx, term) in &self.shell_terminals {
+                        let gen = term.generation();
+                        if self.shell_generations.get(idx) != Some(&gen) {
+                            self.shell_generations.insert(*idx, gen);
+                            self.dirty = true;
+                            break; // One dirty is enough
+                        }
+                    }
+                }
+            }
+            MaeEvent::McpIdleTick => {
+                if let Some(ts) = self.last_mcp_activity {
+                    if ts.elapsed() > std::time::Duration::from_millis(500)
+                        && self.deferred_mcp_reply.is_empty()
+                    {
+                        if self.editor.ai.input_lock == mae_core::InputLock::McpBusy {
+                            self.editor.set_status("MCP: input unlocked");
+                        }
+                        self.editor.ai.input_lock = mae_core::InputLock::None;
+                        self.last_mcp_activity = None;
+                        self.dirty = true;
+                    }
+                }
+            }
+            MaeEvent::HealthCheck => {
+                crate::shell_lifecycle::health_check(
+                    &mut self.editor,
+                    &mut self.shell_terminals,
+                    self.deferred_ai_reply.is_some(),
+                    self.last_mcp_activity.is_some() || !self.deferred_mcp_reply.is_empty(),
+                );
+                // Rekey after health_check zombie cleanup.
+                for removed_idx in std::mem::take(&mut self.editor.pending_buffer_removals) {
+                    mae_core::editor::rekey_after_remove(&mut self.shell_terminals, removed_idx);
+                    mae_core::editor::rekey_after_remove(&mut self.shell_last_dims, removed_idx);
+                    mae_core::editor::rekey_after_remove(&mut self.shell_generations, removed_idx);
+                }
+                // Autosave check (piggybacks on 30s health tick).
+                self.editor.try_autosave();
+                // On-demand daemon supervision (ADR-035 PR B2): restart a daemon we
+                // own if it has died (bounded; the reconnect loop re-attaches).
+                crate::daemon_supervisor::supervise_daemon(&mut self.editor);
+            }
+            MaeEvent::CollabEvent(collab_event) => {
+                crate::collab_bridge::handle_collab_event(&mut self.editor, collab_event);
+                self.dirty = true;
+            }
+            MaeEvent::IdleTick => {
+                if self.last_input_time.elapsed() > std::time::Duration::from_millis(100) {
+                    self.editor.idle_work();
+                    // Don't set dirty — idle work shouldn't trigger redraws.
+                }
+                // Drain sync updates on idle tick (~100ms max latency for keyboard edits).
+                crate::sync_broadcast::drain_and_broadcast(
+                    &mut self.editor,
+                    &self.sync_broadcaster,
+                    Some(&self.collab_command_tx),
+                );
+            }
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        _window_id: winit::window::WindowId,
+        event: winit::event::WindowEvent,
+    ) {
+        use winit::event::WindowEvent;
+
+        match event {
+            WindowEvent::CloseRequested => {
+                self.shutdown();
+                event_loop.exit();
+            }
+            WindowEvent::Focused(true) => {
+                // Check if current buffer's file changed on disk
+                let idx = self.editor.active_buffer_idx();
+                if self.editor.mini_dialog.is_none() {
+                    self.editor.check_and_reload_buffer(idx);
+                }
+                self.dirty = true;
+            }
+            WindowEvent::Resized(size) => {
+                self.renderer.handle_resize(size.width, size.height);
+                if let Ok((w, h)) = self.renderer.size() {
+                    self.editor.last_layout_area = mae_core::WinRect {
+                        x: 0,
+                        y: 0,
+                        width: w,
+                        height: h.saturating_sub(2),
+                    };
+                }
+                self.dirty = true;
+            }
+            WindowEvent::ModifiersChanged(mods) => {
+                let state = mods.state();
+                self.ctrl_held = state.control_key();
+                self.alt_held = state.alt_key();
+                self.shift_held = state.shift_key();
+            }
+            WindowEvent::KeyboardInput { event, .. } => {
+                self.handle_keyboard_input(event_loop, event);
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor_x = position.x;
+                self.cursor_y = position.y;
+                let (cell_w, cell_h) = self.renderer.cell_dimensions();
+                if cell_w > 0.0 && cell_h > 0.0 {
+                    if self.mouse_pressed {
+                        let col = (self.cursor_x / cell_w as f64) as u16;
+                        let row = (self.cursor_y / cell_h as f64) as u16;
+                        // Drag across windows: switch focus so visual selection extends correctly.
+                        self.editor.focus_window_at(col, row);
+                        self.editor.handle_mouse_drag(row as usize, col as usize);
+                        self.dirty = true;
+                    } else if self.editor.mouse_autoselect_window {
+                        let col = (self.cursor_x / cell_w as f64) as u16;
+                        let row = (self.cursor_y / cell_h as f64) as u16;
+                        if self.editor.focus_window_at(col, row) {
+                            self.dirty = true;
+                        }
+                    }
+                }
+            }
+            WindowEvent::MouseInput {
+                state: winit::event::ElementState::Pressed,
+                button,
+                ..
+            } => {
+                self.handle_mouse_button_pressed(button);
+            }
+            WindowEvent::MouseInput {
+                state: winit::event::ElementState::Released,
+                button: winit::event::MouseButton::Left,
+                ..
+            } => {
+                self.mouse_pressed = false;
+                let (cell_w, cell_h) = self.renderer.cell_dimensions();
+                if cell_w > 0.0 && cell_h > 0.0 {
+                    let col = (self.cursor_x / cell_w as f64) as u16;
+                    let row = (self.cursor_y / cell_h as f64) as u16;
+                    self.editor.handle_mouse_release(row as usize, col as usize);
+                    self.dirty = true;
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } => {
+                self.handle_mouse_wheel(delta);
+            }
+            WindowEvent::RedrawRequested => {
+                let render_start = std::time::Instant::now();
+                if let Err(e) = self
+                    .renderer
+                    .render(&mut self.editor, &self.shell_terminals)
+                {
+                    warn!(error = %e, "GUI render error");
+                }
+                self.last_render = std::time::Instant::now();
+                let frame_elapsed = render_start.elapsed().as_micros() as u64;
+                self.editor.perf_stats.record_frame(frame_elapsed);
+                if self.editor.debug_mode {
+                    self.editor.perf_stats.sample_process_stats();
+                }
+                // Record frame snapshot for perf_profile tool.
+                if self.editor.event_recorder.is_recording() {
+                    let ps = &self.editor.perf_stats;
+                    let snapshot = mae_core::event_record::FrameSnapshot {
+                        offset_us: self.editor.event_recorder.duration_us(),
+                        frame_time_us: frame_elapsed,
+                        total_render_us: ps.total_render_us,
+                        render_syntax_us: ps.render_syntax_us,
+                        render_layout_us: ps.render_layout_us,
+                        render_draw_us: ps.render_draw_us,
+                        redraw_level: format!("{:?}", self.editor.redraw_level),
+                        scroll_offset: self.editor.window_mgr.focused_window().scroll_offset,
+                        syntax_cache_hit: ps.syntax_cache_hits > 0 && ps.syntax_cache_misses == 0,
+                        visual_rows_cache_hit: ps.visual_rows_cache_hits > 0
+                            && ps.visual_rows_cache_misses == 0,
+                    };
+                    self.editor.event_recorder.record_frame_snapshot(snapshot);
+                }
+                self.dirty = false;
+                self.editor.clear_redraw();
+            }
+            _ => {}
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &winit::event_loop::ActiveEventLoop) {
+        use std::sync::atomic::Ordering::Relaxed;
+
+        // Timeout deferred replies.
+        crate::ai_event_handler::timeout_deferred_reply(
+            &mut self.editor,
+            &mut self.deferred_ai_reply,
+        );
+        crate::ai_event_handler::timeout_deferred_dap_reply(
+            &mut self.editor,
+            &mut self.deferred_dap_reply,
+        );
+        crate::ai_event_handler::timeout_deferred_mcp_reply(
+            &mut self.editor,
+            &mut self.deferred_mcp_reply,
+        );
+
+        // Font hot-reload: lisp-machine contract.
+        if self.editor.gui_font_size != self.renderer.current_font_size() {
+            self.renderer.apply_font_size(self.editor.gui_font_size);
+            let viewport_height = self.renderer.viewport_height().unwrap_or(40);
+            self.editor.viewport_height = viewport_height;
+            self.dirty = true;
+        }
+
+        // Push real cell dimensions so image_extra_rows() matches GUI layout.
+        let (cw, ch) = self.renderer.cell_dimensions();
+        self.editor.gui_cell_width = cw;
+        self.editor.gui_cell_height = ch;
+
+        // Pre-render bookkeeping.
+        self.editor.clamp_all_cursors();
+        if let Ok((w, h)) = self.renderer.size() {
+            let total_area = mae_core::WinRect {
+                x: 0,
+                y: 0,
+                width: w,
+                height: h.saturating_sub(2),
+            };
+            let vh = self.editor.focused_window_viewport_height(total_area);
+            self.editor.viewport_height = vh;
+
+            // Compute text_area_width for word-wrap cursor movement.
+            let focused_id = self.editor.window_mgr.focused_id();
+            let rects = self.editor.window_mgr.layout_rects(total_area);
+            if let Some((_, win_rect)) = rects.iter().find(|(id, _)| *id == focused_id) {
+                let inner_w = win_rect.width.saturating_sub(2) as usize;
+                let buf = &self.editor.buffers[self.editor.active_buffer_idx()];
+                let gutter_w = if !mae_core::BufferMode::has_gutter(&buf.kind) {
+                    0
+                } else if self.editor.show_line_numbers {
+                    mae_renderer::gutter_width(buf.display_line_count())
+                } else {
+                    2 // marker column + padding
+                };
+                let scrollbar_w: usize = if self.editor.scrollbar { 1 } else { 0 };
+                let text_w = inner_w.saturating_sub(gutter_w).saturating_sub(scrollbar_w);
+                self.editor.text_area_width = text_w;
+                if !self.editor.word_wrap {
+                    self.editor
+                        .window_mgr
+                        .focused_window_mut()
+                        .ensure_scroll_horizontal(text_w);
+                }
+            }
+
+            {
+                // Pre-compute visual rows for the viewport range so the
+                // ensure_scroll_wrapped closure doesn't need &self.editor.
+                let buf_idx = self.editor.active_buffer_idx();
+                let cursor_row = self.editor.window_mgr.focused_window().cursor_row;
+                let scroll = self.editor.window_mgr.focused_window().scroll_offset;
+                let so = self.editor.scrolloff;
+                // Pass tight needed range — populate_visual_rows_cache adds padding internally.
+                let cache_start = scroll.min(cursor_row).saturating_sub(1);
+                let cache_end = (scroll.max(cursor_row) + vh + 2)
+                    .min(self.editor.buffers[buf_idx].display_line_count());
+                self.editor
+                    .populate_visual_rows_cache(buf_idx, cache_start, cache_end);
+
+                // Snapshot cache Vec<u8> to avoid borrow conflict with window_mgr.
+                let (cache_rows, cache_line_start) = {
+                    let buf = &self.editor.buffers[buf_idx];
+                    match &buf.visual_rows_cache {
+                        Some(c) => (c.rows.clone(), c.line_start),
+                        None => (Vec::new(), 0),
+                    }
+                };
+
+                let line_count = self.editor.buffers[buf_idx].display_line_count();
+                let win = self.editor.window_mgr.focused_window_mut();
+                if win.scroll_locked && win.cursor_row == win.scroll_locked_cursor {
+                    // Cursor hasn't moved since scroll command; keep lock active
+                } else {
+                    win.scroll_locked = false;
+                    win.ensure_scroll_wrapped_with_margin(vh, so, line_count, |line| {
+                        if line >= cache_line_start && line < cache_line_start + cache_rows.len() {
+                            let v = cache_rows[line - cache_line_start] as usize;
+                            if v > 0 {
+                                v
+                            } else {
+                                1
+                            }
+                        } else {
+                            1
+                        }
+                    });
+                }
+            }
+        }
+
+        // Shell lifecycle (runs after every event batch).
+        self.drain_intents_and_lifecycle();
+
+        // Update shared atomics so the bridge task knows when to send ticks.
+        self.shell_active
+            .store(!self.shell_terminals.is_empty(), Relaxed);
+        self.mcp_active.store(
+            self.last_mcp_activity.is_some() || !self.deferred_mcp_reply.is_empty(),
+            Relaxed,
+        );
+
+        // Bell → Wayland urgency hint (sway workspace highlight).
+        if self.editor.bell_active() {
+            if !self.bell_sent {
+                if let Some(window) = self.renderer.window() {
+                    window.request_user_attention(Some(winit::window::UserAttentionType::Critical));
+                }
+                self.bell_sent = true;
+            }
+        } else {
+            self.bell_sent = false;
+        }
+
+        // Debounced syntax reparse: drain pending reparses after configured ms idle.
+        let reparse_debounce =
+            std::time::Duration::from_millis(self.editor.syntax_reparse_debounce_ms);
+        if !self.editor.syntax_reparse_pending.is_empty()
+            && self.editor.last_edit_time.elapsed() >= reparse_debounce
+        {
+            mae_core::syntax::drain_pending_reparses(&mut self.editor);
+            self.dirty = true;
+        }
+
+        // Debounced document highlight: request after 300ms cursor idle.
+        if self.editor.lsp.highlight_ranges.is_empty()
+            && self.editor.last_edit_time.elapsed() >= std::time::Duration::from_millis(300)
+        {
+            self.editor.lsp_request_document_highlight();
+        }
+
+        // Breadcrumbs: request/refresh on cursor idle.
+        if self.editor.show_breadcrumbs {
+            self.editor.request_breadcrumb_symbols();
+        }
+
+        // Per-window inertial scrolling.
+        // Phase 1: Activate inertia after 50ms gap since last real scroll event.
+        const MAX_INERTIA_VELOCITY: f32 = 3000.0;
+        const MIN_INERTIA_VELOCITY: f32 = 100.0;
+        const INERTIA_KILL_THRESHOLD: f32 = 20.0;
+        const INERTIA_DECAY: f32 = 0.92;
+
+        if let Some(last) = self.last_scroll_time {
+            if last.elapsed().as_secs_f32() > 0.05 {
+                if let Some(target_id) = self.last_scroll_window.take() {
+                    self.last_scroll_time = None;
+                    // Compute velocity from samples: total displacement / total time.
+                    if let Some(win) = self.editor.window_mgr.window_mut(target_id) {
+                        if win.scroll_samples.len() >= 2 {
+                            let first_t = win.scroll_samples.first().unwrap().0;
+                            let last_t = win.scroll_samples.last().unwrap().0;
+                            let dt = last_t.duration_since(first_t).as_secs_f32();
+                            let total_disp: f32 = win.scroll_samples.iter().map(|(_, d)| d).sum();
+                            if dt > 0.001 {
+                                let velocity = (total_disp / dt)
+                                    .clamp(-MAX_INERTIA_VELOCITY, MAX_INERTIA_VELOCITY);
+                                if velocity.abs() >= MIN_INERTIA_VELOCITY {
+                                    win.inertia_active = true;
+                                    win.scroll_velocity = velocity;
+                                }
+                            }
+                        }
+                        win.scroll_samples.clear();
+                    }
+                }
+            }
+        }
+
+        // Phase 2: Process active inertia windows.
+        let any_inertia = {
+            // Collect active windows to avoid borrow conflict.
+            let active: Vec<(mae_core::WindowId, f32)> = self
+                .editor
+                .window_mgr
+                .iter_windows()
+                .filter(|w| w.inertia_active)
+                .map(|w| (w.id, w.scroll_velocity))
+                .collect();
+            let mut any = false;
+            for (win_id, velocity) in active {
+                let dt = 1.0 / 60.0_f32;
+                let delta_px = velocity * dt;
+                let moved = self
+                    .editor
+                    .handle_mouse_scroll_pixels_in_window(win_id, delta_px);
+                if let Some(win) = self.editor.window_mgr.window_mut(win_id) {
+                    win.scroll_velocity *= INERTIA_DECAY;
+                    if win.scroll_velocity.abs() < INERTIA_KILL_THRESHOLD || !moved {
+                        win.scroll_velocity = 0.0;
+                        win.inertia_active = false;
+                    } else {
+                        any = true;
+                    }
+                }
+            }
+            if any {
+                self.dirty = true;
+            }
+            any
+        };
+
+        // Frame-capped redraw (60fps = 16.667ms).
+        // Emacs pattern (dispnew.c:3254): input-pending bypasses frame cap
+        // so keyboard/scroll never waits for the next frame boundary.
+        if self.dirty {
+            let elapsed = self.last_render.elapsed();
+            let frame_budget = std::time::Duration::from_micros(16_667);
+            if self.input_dirty || elapsed >= frame_budget {
+                self.renderer.request_redraw();
+                self.input_dirty = false;
+            } else {
+                // Schedule wakeup for remaining budget.
+                event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+                    std::time::Instant::now() + (frame_budget - elapsed),
+                ));
+            }
+        } else if any_inertia || self.last_scroll_time.is_some() {
+            // Inertia pending or about to activate — keep 60fps cadence.
+            let frame_budget = std::time::Duration::from_micros(16_667);
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
+                std::time::Instant::now() + frame_budget,
+            ));
+        } else if !self.editor.syntax_reparse_pending.is_empty() {
+            // Pending reparses but not otherwise dirty — wake up when debounce expires.
+            let wake_at = self.editor.last_edit_time + reparse_debounce;
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(wake_at));
+        } else {
+            // Not dirty — sleep until next event (no busy-loop).
+            event_loop.set_control_flow(winit::event_loop::ControlFlow::Wait);
+        }
+    }
+}

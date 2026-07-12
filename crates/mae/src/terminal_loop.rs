@@ -593,7 +593,6 @@ pub(crate) async fn run_terminal_loop(
                     lsp_command_tx,
                     dap_command_tx,
                     ai_event_tx,
-                    ai_command_tx,
                     scheme,
                     mcp_client_mgr,
                 };

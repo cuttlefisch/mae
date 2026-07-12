@@ -2,6 +2,9 @@
 //! search/selection highlights, cursorline, diagnostics, breakpoints.
 
 use mae_core::render_common::collab_colors;
+use mae_core::render_common::collab_cursor::{
+    normalize_selection_range, offscreen_side, selection_col_range, OffscreenSide,
+};
 use mae_core::render_common::gutter::{
     self as gutter_common, collect_breakpoints, collect_line_severities, gutter_width,
 };
@@ -733,12 +736,8 @@ pub(crate) fn render_remote_cursors(
         let color = Color::Rgb(r, g, b);
 
         // Render selection background.
-        if let Some((sr, sc, er, ec)) = user.selection {
-            let (sr, sc, er, ec) = if (sr, sc) <= (er, ec) {
-                (sr, sc, er, ec)
-            } else {
-                (er, ec, sr, sc)
-            };
+        if let Some((start, end)) = user.selection.map(|(sr, sc, er, ec)| ((sr, sc), (er, ec))) {
+            let ((sr, sc), (er, ec)) = normalize_selection_range(start, end);
 
             for row in sr..=er {
                 let screen_row = row.saturating_sub(win.scroll_offset);
@@ -746,10 +745,8 @@ pub(crate) fn render_remote_cursors(
                     continue;
                 }
 
-                let col_start = if row == sr { sc } else { 0 };
-                let col_end = if row == er { ec } else { buf.line_len(row) };
-                let vis_start = col_start.saturating_sub(win.col_offset);
-                let vis_end = col_end.saturating_sub(win.col_offset);
+                let (vis_start, vis_end) =
+                    selection_col_range(row, sr, sc, er, ec, buf.line_len(row), win.col_offset);
 
                 for col in vis_start..vis_end {
                     let x = area.x + gutter_w as u16 + col as u16;
@@ -802,10 +799,10 @@ pub(crate) fn render_remote_cursors(
         let (r, g, b) = palette[user.color_index % collab_colors::COLLAB_PALETTE_SIZE];
         let color = Color::Rgb(r, g, b);
 
-        if user.cursor_row < win.scroll_offset {
-            above_colors.push(color);
-        } else if user.cursor_row >= win.scroll_offset + viewport_height {
-            below_colors.push(color);
+        match offscreen_side(user.cursor_row, win.scroll_offset, viewport_height) {
+            Some(OffscreenSide::Above) => above_colors.push(color),
+            Some(OffscreenSide::Below) => below_colors.push(color),
+            None => {}
         }
     }
 

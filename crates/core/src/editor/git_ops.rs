@@ -8,6 +8,38 @@ use tracing::{error, info};
 
 use super::Editor;
 
+/// Per-line blame annotation from `git blame`.
+#[derive(Debug, Clone)]
+pub struct BlameEntry {
+    /// Short commit hash (8 chars).
+    pub commit_hash: String,
+    /// Author name.
+    pub author: String,
+    /// Unix timestamp.
+    pub timestamp: i64,
+    /// First line of commit message.
+    pub summary: String,
+    /// 0-indexed line in buffer.
+    pub final_line: usize,
+}
+
+/// Blame overlay for the active buffer.
+#[derive(Debug, Clone)]
+pub struct BlameOverlay {
+    /// Which buffer this blame is for.
+    pub buffer_idx: usize,
+    /// Blame entries, one per line.
+    pub entries: Vec<BlameEntry>,
+}
+
+/// Pending async git diff: spawned on a background thread, polled on idle ticks.
+pub struct PendingGitDiff {
+    pub file_path: std::path::PathBuf,
+    pub receiver: std::sync::mpsc::Receiver<
+        std::collections::HashMap<usize, crate::render_common::gutter::GitLineStatus>,
+    >,
+}
+
 impl Editor {
     /// Run a git command and put output in a read-only scratch buffer.
     fn git_command_to_buffer(&mut self, args: &[&str], buf_name: &str) {
@@ -163,9 +195,8 @@ impl Editor {
 
         // Helper: push a line into view + text
         fn push_line(view: &mut GitStatusView, text: &mut String, line: GitStatusLine) {
-            text.push_str(&line.text);
-            text.push('\n');
-            view.lines.push(line);
+            let line_text = line.text.clone();
+            crate::foldable_view::push_line(text, &line_text, &mut view.lines, line);
         }
 
         // Header
@@ -442,8 +473,7 @@ impl Editor {
         let cursor_row = self.window_mgr.focused_window().cursor_row;
 
         let key = self.buffers[idx].git_status_view().and_then(|v| {
-            v.lines
-                .get(cursor_row)
+            v.line_at(cursor_row)
                 .and_then(crate::git_status::GitStatusView::collapse_key_for_line)
         });
 
@@ -980,7 +1010,7 @@ impl Editor {
                 return;
             }
             let entries = Self::parse_blame_porcelain(&stdout);
-            self.blame_overlay = Some(super::BlameOverlay {
+            self.blame_overlay = Some(BlameOverlay {
                 buffer_idx: buf_idx,
                 entries,
             });
@@ -991,7 +1021,7 @@ impl Editor {
     }
 
     /// Parse `git blame --porcelain` output into BlameEntry list.
-    fn parse_blame_porcelain(output: &str) -> Vec<super::BlameEntry> {
+    fn parse_blame_porcelain(output: &str) -> Vec<BlameEntry> {
         let mut entries = Vec::new();
         let mut current_hash = String::new();
         let mut current_author = String::new();
@@ -1008,7 +1038,7 @@ impl Editor {
                 current_summary = rest.to_string();
             } else if line.starts_with('\t') {
                 // Content line — this ends the current entry
-                entries.push(super::BlameEntry {
+                entries.push(BlameEntry {
                     commit_hash: if current_hash.len() >= 8 {
                         current_hash[..8].to_string()
                     } else {
@@ -1101,7 +1131,7 @@ impl Editor {
         });
 
         // Latest request wins — any prior pending result is dropped.
-        self.pending_git_diff = Some(super::PendingGitDiff {
+        self.pending_git_diff = Some(PendingGitDiff {
             file_path,
             receiver: rx,
         });

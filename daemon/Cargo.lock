@@ -2607,7 +2607,6 @@ name = "mae-daemon"
 version = "0.14.39"
 dependencies = [
  "async-trait",
- "cozo",
  "data-encoding",
  "dirs",
  "hex",

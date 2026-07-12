@@ -6,6 +6,7 @@
 
 pub mod agenda;
 pub mod collab_colors;
+pub mod collab_cursor;
 pub mod color;
 pub mod debug;
 pub mod diagnostics;

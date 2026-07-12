@@ -98,6 +98,7 @@ mae (binary)
  ├── mae-gui         GUI rendering (winit + Skia 2D), mouse input, font config, inline images
  ├── mae-scheme      R7RS-small Scheme runtime, init.scm loading, hook dispatch
  ├── mae-ai          Claude + OpenAI + Gemini + DeepSeek providers, tool execution, conversation
+ ├── mae-agent       Terminal AI-agent harness (ADR-046) — the default `SPC a a`/`SPC a p` surface
  ├── mae-lsp         LSP client — connection, navigation, diagnostics, completion, formatting
  ├── mae-dap         DAP client — protocol types, transport, breakpoints, stepping, watches
  ├── mae-shell       Terminal emulator (alacritty_terminal), PTY management
@@ -180,12 +181,16 @@ provider = "claude"                    # claude | openai | gemini | deepseek | o
 model = "claude-sonnet-4-20250514"     # any supported model name
 # api_key_command = "pass show mae/anthropic"  # password manager integration
 # auto_approve_tier = "shell"          # readonly | write | shell (default) | privileged
-# editor = "claude"                    # CLI command for SPC a a (AI agent shell)
+# editor = "mae-agent"                 # CLI command for SPC a a / SPC a p (AI agent shell,
+                                        # default since ADR-049 — set to "claude"/"aider"/etc.
+                                        # to use a different agent CLI instead)
 ```
 
 All other AI behavior is configured in `init.scm` (see [Configuration](#configuration)),
 not config.toml. Provider-aware prompt tuning is automatic — Gemini gets explicit
-JSON examples, DeepSeek gets anti-looping guardrails.
+JSON examples, DeepSeek gets anti-looping guardrails. The legacy embedded conversation-buffer
+chat is available behind `ai_chat_enabled` (default `false`, see ADR-049) — with it off,
+`SPC a p` launches the same `mae-agent` terminal harness as `SPC a a`.
 
 ### First 10 Minutes
 
@@ -211,7 +216,7 @@ If anything in this list doesn't work as written, that's a bug — please file i
 3. `SPC f f` — find file in project
 4. `SPC h h` — help index (knowledge base)
 5. `SPC a a` — launch AI agent in embedded shell
-6. `SPC a p` — start an AI conversation
+6. `SPC a p` — same by default (`ai_chat_enabled` restores the legacy embedded chat)
 7. `:self-test` — verify AI integration
 
 ### Drive MAE with Your Coding Agent
@@ -354,7 +359,7 @@ Full vi modal editing with 450+ commands:
 | `SPC SPC` | Normal | Command palette |
 | `SPC f f` | Normal | Fuzzy file picker |
 | `SPC a a` | Normal | AI agent (shell) |
-| `SPC a p` | Normal | AI conversation |
+| `SPC a p` | Normal | AI agent (shell, same as above by default) |
 | `SPC o t` | Normal | Open terminal |
 | `SPC d b` | Normal | Toggle breakpoint |
 | `SPC h h` | Normal | Help index |

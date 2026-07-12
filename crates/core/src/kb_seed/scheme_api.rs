@@ -994,6 +994,403 @@ pub(crate) const SCHEME_API_FUNCTIONS: &[(&str, &str, &str, &str, &str)] = &[
             "(wait-until (lambda () (file-exists? \"/tmp/result.txt\")) 5000)",
             "testing",
         ),
+
+        // --- 2026-07 gap-closing pass: registered but previously undocumented ---
+        // (found via /mae-audit's Scheme-API-KB-doc-coverage-gap item; see ROADMAP.md)
+
+        // Cursor / navigation
+        (
+            "goto-char",
+            "(goto-char OFFSET)",
+            "Move the cursor to the character OFFSET in the active buffer (0-based). The setter counterpart to `point`.",
+            "(goto-char 0) ; jump to the start of the buffer",
+            "navigation",
+        ),
+        (
+            "current-mode",
+            "(current-mode)",
+            "Return the active buffer's current editing mode as a string (e.g. \"Normal\", \"Insert\", \"Visual\").",
+            "(when (equal? (current-mode) \"Insert\") (message \"still typing\"))",
+            "navigation",
+        ),
+
+        // Buffer read
+        (
+            "buffer-string",
+            "(buffer-string)",
+            "Full text of the active buffer, always freshly read from live editor state.",
+            "(string-length (buffer-string)) ; => character count of the active buffer",
+            "buffer-read",
+        ),
+        (
+            "buffer-text",
+            "(buffer-text NAME)",
+            "Full text of the buffer named NAME (matches by exact name or suffix), or #f if no such buffer is open.",
+            "(buffer-text \"*scratch*\")",
+            "buffer-read",
+        ),
+
+        // Buffer editing
+        (
+            "buffer-undo-boundary",
+            "(buffer-undo-boundary)",
+            "Insert an undo boundary in the active buffer, so subsequent edits form a new undo group separate from what came before.",
+            "(buffer-undo-boundary) (buffer-insert \"new group\")",
+            "buffer-editing",
+        ),
+        (
+            "undo-available?",
+            "(undo-available?)",
+            "Whether the active buffer's undo stack has at least one entry to undo.",
+            "(when (undo-available?) (run-command \"undo\"))",
+            "buffer-editing",
+        ),
+        (
+            "redo-available?",
+            "(redo-available?)",
+            "Whether the active buffer's redo stack has at least one entry to redo.",
+            "(when (redo-available?) (run-command \"redo\"))",
+            "buffer-editing",
+        ),
+
+        // Commands
+        (
+            "execute-ex",
+            "(execute-ex CMD-STRING)",
+            "Run CMD-STRING through the ex-command parser, exactly as if typed after `:` in command mode.",
+            "(execute-ex \"w /tmp/backup.txt\")",
+            "commands",
+        ),
+        (
+            "exit",
+            "(exit CODE)",
+            "Request the process exit with status CODE once the current eval/event-loop tick finishes.",
+            "(exit 0)",
+            "commands",
+        ),
+
+        // File I/O
+        (
+            "write-file",
+            "(write-file PATH CONTENT)",
+            "Write the string CONTENT to disk at PATH, creating or overwriting the file.",
+            "(write-file \"/tmp/notes.txt\" \"hello from Scheme\")",
+            "file-io",
+        ),
+
+        // Keymaps
+        (
+            "bind-context-keymap",
+            "(bind-context-keymap SELECTOR-TYPE SELECTOR-VALUE KEYMAP)",
+            "Route a buffer context to a context keymap, overlaying the modal keymap in the resolution chain. SELECTOR-TYPE is \"kind\" (e.g. \"dashboard\", \"file-tree\") or \"language\" (e.g. \"org\"). Lets a module wire a new buffer kind or shared context (e.g. \"navigation\") without a kernel patch.",
+            "(bind-context-keymap \"kind\" \"file-tree\" \"file-tree-nav\")",
+            "keymaps",
+        ),
+        (
+            "set-group-name",
+            "(set-group-name MAP PREFIX LABEL)",
+            "Set the which-key group LABEL shown for key PREFIX in keymap MAP (e.g. so `SPC x` shows \"+experimental\" instead of the fallback \"+...\").",
+            "(set-group-name \"leader\" \"x\" \"+experimental\")",
+            "keymaps",
+        ),
+
+        // Configuration
+        (
+            "set-buffer-kind-replaceable!",
+            "(set-buffer-kind-replaceable! KIND ENABLE)",
+            "Mark buffer KIND (e.g. \"dashboard\") as replaceable (ENABLE #t) or not — a replaceable buffer's window is reused by the next `display-buffer` instead of forcing a new split.",
+            "(set-buffer-kind-replaceable! \"dashboard\" #t)",
+            "configuration",
+        ),
+        (
+            "register-splash-art!",
+            "(register-splash-art! NAME ART-STRING)",
+            "Register a custom ASCII splash art under NAME, selectable via the `splash_art` option / `:set splash_art NAME`.",
+            "(register-splash-art! \"my-art\" \"  /\\\\_/\\\\  \\n ( o.o ) \\n  > ^ <  \")",
+            "configuration",
+        ),
+        (
+            "register-splash-art-image!",
+            "(register-splash-art-image! NAME IMAGE-PATH)",
+            "Register a custom splash image (PNG/JPG/SVG, GUI only — TUI falls back to ASCII art) under NAME. Relative IMAGE-PATH resolves against the calling module's directory.",
+            "(register-splash-art-image! \"my-logo\" \"assets/logo.png\")",
+            "configuration",
+        ),
+
+        // KB authoring
+        (
+            "kb-add-link!",
+            "(kb-add-link! SOURCE-ID TARGET-ID REL-TYPE)",
+            "Add a typed link from SOURCE-ID to TARGET-ID with relationship REL-TYPE (e.g. \"references\", \"implements\").",
+            "(kb-add-link! \"concept:buffer\" \"concept:window\" \"references\")",
+            "kb-authoring",
+        ),
+        (
+            "kb-remove-link!",
+            "(kb-remove-link! SOURCE-ID TARGET-ID)",
+            "Remove the typed link from SOURCE-ID to TARGET-ID (all relationship types between the pair).",
+            "(kb-remove-link! \"concept:buffer\" \"concept:window\")",
+            "kb-authoring",
+        ),
+        (
+            "kb-add-meta-member!",
+            "(kb-add-meta-member! META-ID MEMBER-ID ROLE)",
+            "Add MEMBER-ID as a member of meta-node META-ID with the given ROLE (member ordering follows insertion).",
+            "(kb-add-meta-member! \"meta:release-checklist\" \"task:write-changelog\" \"item\")",
+            "kb-authoring",
+        ),
+        (
+            "kb-remove-meta-member!",
+            "(kb-remove-meta-member! META-ID MEMBER-ID)",
+            "Remove MEMBER-ID from meta-node META-ID's member list.",
+            "(kb-remove-meta-member! \"meta:release-checklist\" \"task:write-changelog\")",
+            "kb-authoring",
+        ),
+        (
+            "kb-compose-meta",
+            "(kb-compose-meta META-ID)",
+            "Recompose meta-node META-ID's body from its current members (call after add/remove-meta-member! to refresh the rendered body).",
+            "(kb-compose-meta \"meta:release-checklist\")",
+            "kb-authoring",
+        ),
+        (
+            "kb-add-rel-type!",
+            "(kb-add-rel-type! NAME LABEL DESCRIPTION INVERSE DIRECTED)",
+            "Register a custom relationship type NAME (e.g. \"blocks\") with a display LABEL, DESCRIPTION, its INVERSE type name (e.g. \"blocked-by\"), and whether it's DIRECTED (#t) or symmetric (#f).",
+            "(kb-add-rel-type! \"blocks\" \"Blocks\" \"This item blocks another\" \"blocked-by\" #t)",
+            "kb-authoring",
+        ),
+        (
+            "kb-set-ai-residency",
+            "(kb-set-ai-residency KB-ID POLICY)",
+            "Set KB-ID's AI-residency policy (ADR-048): \"open\" (any configured provider may read it) or \"local_models_only\" (restrict AI access to local/Ollama-style models). Use \"primary\" for the primary/local KB.",
+            "(kb-set-ai-residency \"primary\" \"local_models_only\")",
+            "kb-authoring",
+        ),
+        (
+            "kb-set-role",
+            "(kb-set-role NODE-ID ROLE)",
+            "Set KB node NODE-ID's molecular-note classification ROLE: \"source\" | \"atom\" | \"molecule\" | \"hub\" (Source→Atom→Molecule→Hub).",
+            "(kb-set-role \"concept:buffer\" \"hub\")",
+            "kb-authoring",
+        ),
+
+        // KB graph (read-only queries)
+        (
+            "kb-links-from",
+            "(kb-links-from ID)",
+            "Return outgoing typed links from KB node ID as a list of (target-id rel-type display-label).",
+            "(kb-links-from \"concept:buffer\")",
+            "kb-graph",
+        ),
+        (
+            "kb-links-to",
+            "(kb-links-to ID)",
+            "Return incoming typed links to KB node ID as a list of (source-id rel-type display-label).",
+            "(kb-links-to \"concept:buffer\")",
+            "kb-graph",
+        ),
+        (
+            "kb-links-typed",
+            "(kb-links-typed ID REL-TYPE)",
+            "Return outgoing links of a specific REL-TYPE from KB node ID as a list of (target-id display-label).",
+            "(kb-links-typed \"concept:buffer\" \"references\")",
+            "kb-graph",
+        ),
+        (
+            "kb-meta-members",
+            "(kb-meta-members ID)",
+            "Return meta-node ID's members as a list of (member-id role position).",
+            "(kb-meta-members \"meta:release-checklist\")",
+            "kb-graph",
+        ),
+        (
+            "kb-rel-types",
+            "(kb-rel-types)",
+            "Return the names of all known relationship types (built-in plus any registered via `kb-add-rel-type!`).",
+            "(kb-rel-types) ; => (\"references\" \"implements\" \"blocks\" ...)",
+            "kb-graph",
+        ),
+        (
+            "kb-get-block",
+            "(kb-get-block ID INDEX)",
+            "Return the text of block INDEX (0-based) within KB node ID's body, or #f if out of range.",
+            "(kb-get-block \"concept:buffer\" 0)",
+            "kb-graph",
+        ),
+        (
+            "kb-block-count",
+            "(kb-block-count ID)",
+            "Return the number of decomposed blocks in KB node ID's body.",
+            "(kb-block-count \"concept:buffer\")",
+            "kb-graph",
+        ),
+
+        // KB sharing / collaboration lifecycle
+        (
+            "collab-status",
+            "(collab-status)",
+            "Return the current collaboration state as an alist: status, server address, synced-doc count, peer count.",
+            "(collab-status) ; => ((status . \"connected\") (server . \"127.0.0.1:9473\") ...)",
+            "kb-sharing",
+        ),
+        (
+            "collab-synced-buffers",
+            "(collab-synced-buffers)",
+            "Return the names of buffers currently synced via collaboration (optimistically updated as share/join intents drain).",
+            "(collab-synced-buffers)",
+            "kb-sharing",
+        ),
+        (
+            "collab-confirmed-shares",
+            "(collab-confirmed-shares)",
+            "Return the doc IDs the collaboration server has confirmed shared/joined (unlike `collab-synced-buffers`, only reflects server-acknowledged state, not optimistic intent).",
+            "(collab-confirmed-shares)",
+            "kb-sharing",
+        ),
+
+        // Testing framework (mae-test.scm) — E2E/CRDT test-harness primitives.
+        // Not typically called outside `.scm` test files; see docs/Scheme Testing Framework.
+        (
+            "gc-stats",
+            "(gc-stats)",
+            "Return Scheme VM garbage-collector statistics as an alist: eval-count, collections, globals-count, stack-hwm, frame-hwm.",
+            "(gc-stats) ; => ((eval-count . 42) (collections . 1) ...)",
+            "testing",
+        ),
+        (
+            "feed-keys",
+            "(feed-keys KEY-SEQUENCE)",
+            "E2E test: feed a raw key sequence (e.g. \"C-; b s\") through the real key handler, exactly as if typed interactively.",
+            "(feed-keys \"g g\")",
+            "testing",
+        ),
+        (
+            "which-key-open?",
+            "(which-key-open?)",
+            "E2E test: whether the transient leader keypad / which-key popup is currently active.",
+            "(should (which-key-open?))",
+            "testing",
+        ),
+        (
+            "which-key-entry-count",
+            "(which-key-entry-count)",
+            "E2E test: number of which-key entries visible for the current keymap/prefix.",
+            "(should (> (which-key-entry-count) 0))",
+            "testing",
+        ),
+        (
+            "messages-buffer-text",
+            "(messages-buffer-text)",
+            "Read the full content of the `*messages*` buffer (the message log), for asserting a status/log message was recorded.",
+            "(should-contain (messages-buffer-text) \"Saved\")",
+            "testing",
+        ),
+        (
+            "buffer-enable-sync",
+            "(buffer-enable-sync CLIENT-ID)",
+            "CRDT test: enable yrs sync on the active buffer under CLIENT-ID.",
+            "(buffer-enable-sync 1)",
+            "testing",
+        ),
+        (
+            "buffer-disable-sync",
+            "(buffer-disable-sync)",
+            "CRDT test: disable yrs sync on the active buffer.",
+            "(buffer-disable-sync)",
+            "testing",
+        ),
+        (
+            "buffer-sync-enabled?",
+            "(buffer-sync-enabled?)",
+            "CRDT test: whether the active buffer currently has sync enabled.",
+            "(should (buffer-sync-enabled?))",
+            "testing",
+        ),
+        (
+            "buffer-apply-update",
+            "(buffer-apply-update BUFFER-NAME UPDATE-BASE64)",
+            "CRDT test: apply a base64-encoded yrs update to buffer BUFFER-NAME. Returns #t on success, or an error-message string if the base64 payload is malformed.",
+            "(buffer-apply-update \"*scratch*\" encoded-update)",
+            "testing",
+        ),
+        (
+            "buffer-load-sync-state",
+            "(buffer-load-sync-state STATE-BASE64 CLIENT-ID)",
+            "CRDT test: load a full base64-encoded yrs document state into the active buffer under CLIENT-ID, replacing its current sync state.",
+            "(buffer-load-sync-state encoded-state 2)",
+            "testing",
+        ),
+        (
+            "buffer-encode-state-vector",
+            "(buffer-encode-state-vector)",
+            "CRDT test: request encoding of the active buffer's yrs state vector; retrieve it via `buffer-get-state-vector`.",
+            "(buffer-encode-state-vector) (buffer-get-state-vector)",
+            "testing",
+        ),
+        (
+            "buffer-get-state-vector",
+            "(buffer-get-state-vector)",
+            "CRDT test: retrieve the base64-encoded state vector previously requested via `buffer-encode-state-vector`, or #f if not yet computed.",
+            "(buffer-get-state-vector)",
+            "testing",
+        ),
+        (
+            "buffer-compute-diff",
+            "(buffer-compute-diff REMOTE-STATE-VECTOR-BASE64)",
+            "CRDT test: request a diff of the active buffer against a remote peer's base64-encoded state vector; retrieve it via `buffer-get-diff`.",
+            "(buffer-compute-diff remote-sv) (buffer-get-diff)",
+            "testing",
+        ),
+        (
+            "buffer-get-diff",
+            "(buffer-get-diff)",
+            "CRDT test: retrieve the base64-encoded diff previously requested via `buffer-compute-diff`, or #f if not yet computed.",
+            "(buffer-get-diff)",
+            "testing",
+        ),
+        (
+            "buffer-reconcile-to",
+            "(buffer-reconcile-to TEXT)",
+            "CRDT test: reconcile the active buffer's sync doc to exactly match TEXT via a character-level diff (used to test undo/redo generating CRDT-safe deltas); retrieve the result via `buffer-get-reconcile-result`.",
+            "(buffer-reconcile-to \"expected final text\") (buffer-get-reconcile-result)",
+            "testing",
+        ),
+        (
+            "buffer-get-reconcile-result",
+            "(buffer-get-reconcile-result)",
+            "CRDT test: retrieve the result of the last `buffer-reconcile-to` call, or #f if none is pending.",
+            "(buffer-get-reconcile-result)",
+            "testing",
+        ),
+        (
+            "buffer-pending-updates",
+            "(buffer-pending-updates)",
+            "CRDT test: number of sync updates accumulated for the active buffer since the last drain.",
+            "(should (> (buffer-pending-updates) 0))",
+            "testing",
+        ),
+        (
+            "buffer-drain-updates",
+            "(buffer-drain-updates)",
+            "CRDT test: take (and clear) the active buffer's accumulated base64-encoded sync updates as a list.",
+            "(buffer-drain-updates)",
+            "testing",
+        ),
+        (
+            "buffer-sync-content",
+            "(buffer-sync-content)",
+            "CRDT test: the active buffer's sync-doc content (the yrs `YText` mirror), or #f if sync isn't enabled.",
+            "(should-equal (buffer-sync-content) (buffer-string))",
+            "testing",
+        ),
+        (
+            "buffer-encode-state",
+            "(buffer-encode-state)",
+            "CRDT test: the active buffer's full yrs document state, base64-encoded, or #f if sync isn't enabled.",
+            "(buffer-encode-state)",
+            "testing",
+        ),
     ];
 
 /// Install `scheme:<name>` nodes for all Scheme API functions and variables.

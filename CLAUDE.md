@@ -145,6 +145,32 @@ a `FrameLayout`, `render_buffer_content()` draws text, and `render_cursor()`
 positions the cursor. All three MUST consume the same `HighlightSpan` set.
 See `crates/gui/src/RENDERING.md` for detailed rules.
 
+### Debt/Invariant Tagging
+
+MAE uses two distinct in-code comment conventions — don't confuse them:
+
+- **`@ai-caution: [category] <explanation>`** — a landmine/invariant warning for a specific
+  function, field, or block that future editors (human or AI) must not casually violate (e.g.
+  `// @ai-caution: [window-split] Agent shells MUST use switch_to_buffer_non_conversation() +
+  split_root(), NOT display_buffer_and_focus() — the latter steals conversation windows.`). Place
+  it directly above the guarded code, or as a file-header `//!` line when the whole file carries
+  one invariant. `[category]` is a short bracketed tag grouping related warnings (`[rendering]`,
+  `[dispatch]`, `[window-split]`, `[architecture-debt]`, etc.) so they're greppable together. This
+  is also the convention for flagging tracked architectural debt in-code (see below) — use
+  `[architecture-debt]` and cross-link to `ROADMAP.md`'s "Architecture Debt" section so the debt is
+  discoverable by grepping the source, not only by reading a separate tracking doc.
+- **`@stability: stable|experimental`** — a crate/module-level maturity marker (one per crate's
+  `lib.rs`, or a module's `autoloads.scm` header per `docs/module-template/README.md`). This is
+  about API maturity, not a warning about a specific invariant — don't use it where `@ai-caution`
+  is meant, and vice versa.
+
+Architectural debt is tracked in three places that should cross-reference each other: this file's
+principles, `ROADMAP.md`'s "Architecture Debt" checklist, and `.claude/commands/mae-audit.md`'s
+"Known exceptions" list (files over the audit's size ceilings that are accepted debt, not audit
+failures). When you add a new tracked exception in one place, add an `@ai-caution:
+[architecture-debt]` marker at the file in question and a pointer in the other two, so a reader
+landing in any one of the three finds the others.
+
 ## Development Priorities
 
 Start terminal-only. Skip GUI until the model works.
@@ -445,7 +471,7 @@ Events carry version numbers for ordering. Slow clients are dropped, not blocked
 
 ### Architecture Decision Records
 ADRs live in `docs/adr/` and as KB concept nodes (`concept:adr-*`).
-See ADR-001 (protocol), ADR-002 (text sync — accepted: yrs), ADR-003 (file safety), ADR-004 (KB scaling), ADR-005 (KB CRDT), ADR-006 (collaborative state engine), ADR-007 (save coordination), ADR-008 (CRDT target metrics), ADR-014 (binary architecture — editor + daemon workspaces), ADR-017/018 (asymmetric peer auth + identity-anchored access control), ADR-019/020/022/023 (durable / replicated / crash-safe sync + epoch-fenced write access), ADR-024 (notification attention bus), the **P2P daemon-mesh trio ADR-025/026/027** (iroh transport / peer-verifiable signed-hash-chained integrity / collaboration observability), the **KB-architecture set ADR-028–034** (data lifecycle / CRDT-as-truth + cozo-as-projection / in-text link grammar / derived intelligence / durable CRDT store / operation coordination / cross-peer artifact sharing), **ADR-035** (editor↔daemon boundary + `daemon_mode`), the **content-integrity + confidentiality pair ADR-036/037** (signed content ops / E2E content encryption), the **E2E KB-sharing pair ADR-038/039** (editor-authored key-blind membership / identity + authorization hardening), the **identity-arc pair ADR-040/041** (key rotation/rebind — cross-signed, history-preserving / key separation — a published X25519 wrap key), **ADR-042** (membership-derivation cache + O(n) deterministic causal order), and **ADR-043** (P2P share integrity — a fresh mesh share seeds the signed owner-genesis so it anchors membership + E2E identically to the hub). The holistic sharing story + security audits live in `docs/KB_SHARING.md`, `docs/E2E_ENCRYPTION.md`, and `docs/SECURITY_REVIEW.md`.
+See ADR-001 (protocol), ADR-002 (text sync — accepted: yrs), ADR-003 (file safety), ADR-004 (KB scaling), ADR-005 (KB CRDT), ADR-006 (collaborative state engine), ADR-007 (save coordination), ADR-008 (CRDT target metrics), ADR-014 (binary architecture — editor + daemon workspaces), ADR-017/018 (asymmetric peer auth + identity-anchored access control), ADR-019/020/022/023 (durable / replicated / crash-safe sync + epoch-fenced write access), ADR-024 (notification attention bus), the **P2P daemon-mesh trio ADR-025/026/027** (iroh transport / peer-verifiable signed-hash-chained integrity / collaboration observability), the **KB-architecture set ADR-028–034** (data lifecycle / CRDT-as-truth + cozo-as-projection / in-text link grammar / derived intelligence / durable CRDT store / operation coordination / cross-peer artifact sharing), **ADR-035** (editor↔daemon boundary + `daemon_mode`), the **content-integrity + confidentiality pair ADR-036/037** (signed content ops / E2E content encryption), the **E2E KB-sharing pair ADR-038/039** (editor-authored key-blind membership / identity + authorization hardening), the **identity-arc pair ADR-040/041** (key rotation/rebind — cross-signed, history-preserving / key separation — a published X25519 wrap key), **ADR-042** (membership-derivation cache + O(n) deterministic causal order), **ADR-043** (P2P share integrity — a fresh mesh share seeds the signed owner-genesis so it anchors membership + E2E identically to the hub), **ADR-044** (e2e daemon-lifecycle safety), **ADR-048** (AI residency policy for sensitive KBs), and **ADR-049** (`mae-agent` as the default AI-interaction surface, `ai_chat_enabled` gates the legacy embedded chat — supersedes ADR-046's rejected-deprecation call in part). The holistic sharing story + security audits live in `docs/KB_SHARING.md`, `docs/E2E_ENCRYPTION.md`, and `docs/SECURITY_REVIEW.md`.
 
 ### Sync Engine (yrs — Accepted)
 Collaborative state uses **yrs** (Yjs Rust port, YATA algorithm). Decision rationale:
@@ -489,10 +515,10 @@ mae-daemon doctor                   # run diagnostics
 
 These APIs are intended to remain stable through v1.0:
 
-- **Scheme API:** ~50 functions + ~25 variables (see `:help concept:scheme-api`)
+- **Scheme API:** 186 registered functions + ~25 variables (see `:help concept:scheme-api`)
 - **Hooks:** 25 hook points (see `:help concept:hooks`)
 - **MCP tools:** 135+ tools, categorized (core/lsp/dap/kb/shell/ai/commands/git/web/visual/debug/collab)
-- **Config options:** 91+ registered, persistable via `:set-save`
+- **Config options:** 138+ registered, persistable via `:set-save`
 
 ## Related Resources
 

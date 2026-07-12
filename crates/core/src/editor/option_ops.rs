@@ -1764,6 +1764,215 @@ impl super::Editor {
         self.buffers.push(buf);
         self.display_buffer(buf_idx);
     }
+    /// Effective word-wrap for a specific buffer index.
+    pub fn word_wrap_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .word_wrap
+            .unwrap_or(self.word_wrap)
+    }
+
+    /// Effective word-wrap for the currently focused buffer.
+    pub fn effective_word_wrap(&self) -> bool {
+        self.word_wrap_for(self.active_buffer_idx())
+    }
+
+    /// Effective show_line_numbers for a specific buffer index.
+    pub fn line_numbers_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .line_numbers
+            .unwrap_or(self.show_line_numbers)
+    }
+
+    /// Effective relative_line_numbers for a specific buffer index.
+    pub fn relative_line_numbers_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .relative_line_numbers
+            .unwrap_or(self.relative_line_numbers)
+    }
+
+    /// Effective break_indent for a specific buffer index.
+    pub fn break_indent_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .break_indent
+            .unwrap_or(self.break_indent)
+    }
+
+    /// Effective show_break for a specific buffer index.
+    pub fn show_break_for(&self, buf_idx: usize) -> &str {
+        self.buffers[buf_idx]
+            .local_options
+            .show_break
+            .as_deref()
+            .unwrap_or(&self.show_break)
+    }
+
+    /// Effective heading_scale for a specific buffer index.
+    pub fn heading_scale_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .heading_scale
+            .unwrap_or(self.heading_scale)
+    }
+
+    /// Effective link_descriptive for a specific buffer index.
+    pub fn link_descriptive_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .link_descriptive
+            .unwrap_or(self.link_descriptive)
+    }
+
+    /// Effective render_markup for a specific buffer index.
+    pub fn render_markup_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .render_markup
+            .unwrap_or(self.render_markup)
+    }
+
+    /// Resolve the effective markup flavor for a buffer, respecting the
+    /// priority chain: BufferMode → Language → None, gated by render_markup.
+    pub fn effective_markup_flavor(&self, buf_idx: usize) -> crate::syntax::MarkupFlavor {
+        use crate::buffer_mode::BufferMode;
+        if !self.render_markup_for(buf_idx) {
+            return crate::syntax::MarkupFlavor::None;
+        }
+        let buf = &self.buffers[buf_idx];
+        if let Some(flavor) = buf.kind.markup_flavor() {
+            return flavor;
+        }
+        if let Some(lang) = self.syntax.language_of(buf_idx) {
+            return lang.markup_flavor();
+        }
+        crate::syntax::MarkupFlavor::None
+    }
+
+    /// Detect whether a buffer is too large for full feature rendering.
+    /// Returns true for files exceeding `degrade_threshold_chars` or any line
+    /// exceeding `degrade_threshold_line_length` (both user-configurable).
+    /// Callers should skip markup spans, display regions, code block
+    /// detection, and heading scale for such buffers (Emacs `so-long` pattern).
+    ///
+    /// Result is cached per buffer (`buffer.degraded`). The cache is set on
+    /// first access and on file open — degradation status is monotonic during
+    /// normal editing so re-scanning every frame is unnecessary.
+    pub fn should_degrade_features(&self, buf_idx: usize) -> bool {
+        if buf_idx >= self.buffers.len() {
+            return false;
+        }
+        if let Some(cached) = self.buffers[buf_idx].degraded {
+            return cached;
+        }
+        let buf = &self.buffers[buf_idx];
+        let rope = buf.rope();
+        if rope.len_chars() > self.degrade_threshold_chars {
+            return true;
+        }
+        // Sample first 200 lines + last 50 for long-line detection (avoid O(n) full scan).
+        let lc = rope.len_lines();
+        let check_lines = (0..200.min(lc)).chain(lc.saturating_sub(50)..lc);
+        for li in check_lines {
+            let line = rope.line(li);
+            if line.len_chars() > self.degrade_threshold_line_length {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Compute and cache the degradation status for a buffer.
+    pub fn cache_degraded(&mut self, buf_idx: usize) {
+        let degraded = self.should_degrade_features(buf_idx);
+        self.buffers[buf_idx].degraded = Some(degraded);
+    }
+
+    /// Get or compute cached markup spans for a buffer. Returns empty if
+    /// flavor is None. The cache is keyed by buffer generation so editing
+    /// invalidates it but pure scrolling reuses cached spans.
+    pub fn get_or_compute_markup_spans(
+        &mut self,
+        buf_idx: usize,
+        flavor: crate::syntax::MarkupFlavor,
+    ) -> Vec<crate::syntax::HighlightSpan> {
+        if flavor == crate::syntax::MarkupFlavor::None {
+            return Vec::new();
+        }
+        let gen = self.buffers[buf_idx].generation;
+        if let Some(cached) = self.markup_cache.get(&buf_idx) {
+            if cached.generation == gen && cached.flavor == flavor {
+                return cached.spans.clone();
+            }
+        }
+        let rope = self.buffers[buf_idx].rope();
+        let line_count = rope.len_lines();
+        let source: String = rope.chars().collect();
+        let spans = crate::syntax::compute_markup_spans(&source, flavor);
+        self.markup_cache.insert(
+            buf_idx,
+            crate::syntax::MarkupCache {
+                generation: gen,
+                flavor,
+                line_start: 0,
+                line_end: line_count,
+                byte_offset: 0,
+                spans: spans.clone(),
+            },
+        );
+        spans
+    }
+
+    /// Clamp all window cursors to their buffer bounds. Safety net against
+    /// stale cursor positions after buffer mutations (MCP tools, AI edits).
+    /// Also clamps visual anchors and last_visual so rendering never panics.
+    pub fn clamp_all_cursors(&mut self) {
+        for win in self.window_mgr.iter_windows_mut() {
+            let buf_idx = win.buffer_idx;
+            if buf_idx < self.buffers.len() {
+                win.clamp_cursor(&self.buffers[buf_idx]);
+            }
+        }
+
+        // Clamp visual anchor to focused buffer bounds.
+        let idx = self.active_buffer_idx();
+        let line_count = self.buffers[idx].display_line_count();
+        if line_count == 0 {
+            self.vi.visual_anchor_row = 0;
+            self.vi.visual_anchor_col = 0;
+        } else {
+            let max_row = line_count.saturating_sub(1);
+            if self.vi.visual_anchor_row > max_row {
+                self.vi.visual_anchor_row = max_row;
+            }
+            let max_col = self.buffers[idx].line_len(self.vi.visual_anchor_row);
+            if self.vi.visual_anchor_col > max_col {
+                self.vi.visual_anchor_col = max_col;
+            }
+        }
+
+        // Clamp last_visual so `gv` reselect never panics.
+        if let Some((ref mut ar, ref mut ac, ref mut cr, ref mut cc, _)) = self.vi.last_visual {
+            if line_count == 0 {
+                *ar = 0;
+                *ac = 0;
+                *cr = 0;
+                *cc = 0;
+            } else {
+                let max_row = line_count.saturating_sub(1);
+                if *ar > max_row {
+                    *ar = max_row;
+                }
+                *ac = (*ac).min(self.buffers[idx].line_len(*ar));
+                if *cr > max_row {
+                    *cr = max_row;
+                }
+                *cc = (*cc).min(self.buffers[idx].line_len(*cr));
+            }
+        }
+    }
 }
 
 #[cfg(test)]

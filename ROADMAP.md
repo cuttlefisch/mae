@@ -64,8 +64,11 @@ Near-term, code-grounded work extracted from this roadmap + the ADR backlog (fil
 ### Pre-existing
 
 - [ ] **AI output buffer cursor invisible in GUI**: After AI responds, the cursor in the `*ai*` conversation output buffer is not visible. Root cause: buffer type / layout metadata mismatch — the conversation buffer doesn't provide the same state that the cursor renderer expects. Low priority (output buffer is read-only, navigation still works).
-- [ ] **Theme load failure is silent in headless mode**: If config.toml requests a nonexistent theme, `set_theme_by_name()` shows a status bar message but keeps the current theme. In CI/headless mode the user gets zero feedback. Should log to stderr or return non-zero exit from `--check-config`.
-- [ ] **Status bar `[ReadOnly]` confusing during collab** **→ #80**: The `[ReadOnly]` badge is the AI permission tier (`status.rs:271`), not a buffer property. During collab sessions users mistake it for a collab-imposed restriction. Consider: rename to `[AI:RO]` or `[Tier:RO]`, or hide when no AI session is active.
+- [x] **Theme load failure is silent in headless mode** (closed 2026-07): If config.toml requests a nonexistent theme, `set_theme_by_name()` shows a status bar message but keeps the current theme — fine interactively, but `--check-config` only treated `editor.status_msg` strings starting with `"Error in"` as fatal, and the theme failure message doesn't start with that, so a bad theme name in `config.toml`/`init.scm` silently exited 0 in CI/headless mode. Fixed in `crates/mae/src/cli.rs::handle_check_config`: `--check-config` now resolves the theme directly via `Theme::load(...)` and checks the `Result`, independent of the status-string sniff, so a bad theme name is a structurally-detected fatal error (non-zero exit, stderr names the bad theme). Regression test: `crates/mae/tests/check_config_theme_failure.rs`.
+- [x] **Status bar `[ReadOnly]` confusing during collab** **→ #80** (closed `b1bd6a9e`): The
+  `[ReadOnly]` badge (AI permission tier, not a buffer property) was mistaken for a collab-imposed
+  restriction. Fixed: `render_common/status.rs` now renders `[AI:{tier}]`, only surfaced when an AI
+  session is active (`status.rs:762-783` tests assert this).
 
 ### Collaborative Editing (v0.11.0)
 
@@ -471,6 +474,65 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 - [ ] **Unified buffer-switching strategy**: Three patterns exist (`switch_to_buffer`, `display_buffer_and_focus`, palette). Should converge on one with consistent view state management.
 - [ ] **KB fuzzy body search** **→ #81**: `kb_search` currently matches node titles and tags but not node body content in a fuzzy/substring way. Searching for a term like "DeltaDB" that only appears in the body of some nodes returns no results. Add full-text indexing of node bodies (CozoDB FTS) so `kb_search` and `:help` fuzzy completion can find concepts mentioned anywhere in the knowledge graph, not just in titles.
 - [x] **Binary architecture split** (v0.13.0, ADR-014): Split MAE into editor workspace + daemon workspace with separate `Cargo.lock` files. `mae-daemon` binary with CozoDB+SQLite backend for persistent KB, background maintenance (scheduler with watcher/maintenance/health ticks), and JSON-RPC API over Unix socket. Shared crates (`mae-kb`, `mae-sync`, `mae-mcp`) moved to `shared/` with feature flags (`storage-sled`, `crdt`). `CozoKbStore::open_with_engine()` + `open_mem()` for backend-agnostic storage. Resolves rusqlite linker conflict (separate dependency trees). LRU cache query layer (`LruQueryLayer`) + `DaemonClient` for editor-daemon integration. Config: `[daemon]` section with 3 options. CI/CD: daemon job, release artifacts include `mae-daemon`. ADR-014 written.
+- [x] **File-size ceiling enforcement audit — the 7 originally-tracked exceptions** (found via
+  `/mae-audit`, 2026-07; this batch closed 2026-07): every file `.claude/commands/mae-audit.md`'s
+  "Known exceptions" list originally tracked, plus `kb_ops.rs` (closed in an earlier pass) and
+  `shared/sync/src/kb.rs` (the "next-safest candidate" noted below), got the same mechanical
+  treatment — group existing small, bounded methods/match-arms by theme into sibling files, promote
+  shared private helpers to `pub(super)` as needed. **Fully resolved (every resulting file under
+  ceiling)**: `crates/core/src/editor/kb_ops.rs` (was 6,754 combined, split earlier), `shared/kb/src/cozo_store.rs`
+  (4,229 → `cozo_store/{schema,db,graph,links,blocks,agenda,health,versioning,vector,suggestions,
+  source_files,util,kb_store_impl}.rs`, all ≤541 lines), `shared/sync/src/kb.rs` (4,390 →
+  `kb/{node,collection_core,collection_roles,collection_oplog,collection_crypto}.rs`, all ≤518
+  lines). **Substantially reduced but residual still over ceiling** (each case-by-case judged: the
+  residual is either irreducible glue/struct-definition code or, for `collab_bridge.rs`, a
+  deliberately-preserved function — see below): `crates/mae/src/main.rs` (3,329 → 945; CLI dispatch
+  → `cli.rs`, `GuiApp` → `gui_app.rs`, config/KB-federation/daemon-connect → `bootstrap.rs`),
+  `crates/core/src/editor/mod.rs` (3,457 → 1,382; struct def + a dozen relocated value-structs +
+  ~90 regrouped `impl Editor` methods), `crates/scheme/src/runtime.rs` (6,450 → 958 residual +
+  `runtime_tests.rs` 1,526; `SchemeRuntime::new()`'s 186 `register_fn` calls + `inject_editor_state`/
+  `apply_to_editor` split by category into `crates/scheme/src/runtime/*.rs`), `daemon/src/collab_handler.rs`
+  (3,821 → 1,934 residual; `handle_doc_request_inner`'s 31-arm match split into
+  `collab_handler/{sync_methods,docs_methods,kb_membership,kb_content,kb_governance}.rs`, residual
+  is ~30 individually-reasonable auth/access functions), `crates/mae/src/collab_bridge.rs` (6,546 →
+  5,299 residual; `handle_collab_event`/`drain_collab_intents` split into
+  `collab_bridge/{events_kb,events_connection,events_doc}.rs`; `run_collab_task`, 1,695 lines,
+  deliberately kept as-is and marked `@ai-caution` — its ~19 locals thread across 29
+  `CollabCommand` match arms with no state struct, so a mechanical split would relocate the
+  entanglement rather than resolve it; a future pass could bundle them into a `CollabTaskState`
+  struct first). All three oversized test-sibling files also split into `tests/` submodule
+  directories (per-feature files, all under the 500-line ceiling): `kb_ops/kb_ops_tests.rs` (2,987
+  → 8 files), `collab_bridge_tests.rs` (4,497 → 13 files), `collab_handler_tests.rs` (4,885 → 13
+  files). **New debt surfaced by this pass**: `crates/mae/src/bootstrap.rs` (already 2,397 lines
+  pre-existing, now 3,062 after absorbing `main.rs`'s config/KB-federation/daemon-connect code) and
+  `crates/mae/src/gui_app.rs` (new, 1,270 lines) — both flagged in `.claude/commands/mae-audit.md`'s
+  "Known exceptions" list and carry their own `@ai-caution` markers, not split further this pass.
+  Also resolved earlier in this same effort: the remote-cursor render duplication (principle #8) and
+  the git_status/notifications_view/kb_sharing hand-mirrored view pattern (via
+  `render_common::collab_cursor` / `foldable_view`).
+- [ ] **File-size ceiling enforcement audit — the ~60-file 2026-07 backlog** (found via `/mae-audit`,
+  2026-07; still open): beyond the 7 originally-tracked exceptions closed above, the full-codebase
+  audit found roughly **60 additional files** across `crates/core`, `crates/ai`, `crates/mae`,
+  `crates/lsp`, `crates/dap`, `shared/sync`, `shared/mcp`, and `daemon` exceeding the ceilings — not
+  yet individually tracked, and the summary predates the splitting pass above so it may itself be
+  stale in the other direction (some of its worst-offender examples were among the files just
+  resolved). Needs a fresh full-codebase re-audit before a dedicated splitting pass, not ad-hoc fixes.
+- [x] **Scheme API KB-doc coverage gap** (found via `/mae-audit`, 2026-07; closed 2026-07): the
+  original "186 vs 18" figure was stale — the audit's grep only found the 18-entry *variables*
+  table, missing that `crates/core/src/kb_seed/scheme_api.rs`'s `SCHEME_API_FUNCTIONS` table already
+  documented 137 of the ~194 registered names. Re-verified via an exact diff (registered names from
+  `register_fn`/`register_collab_command_prim!` vs. the table's `name` column, excluding Scheme-level
+  test-framework macros never `register_fn`'d): the real gap was 53 functions, now all documented
+  with real signature/doc/example/category entries matching the existing table's quality bar.
+- [x] **`mae-kb` doesn't compile standalone with only its own default features** (found 2026-07;
+  closed 2026-07 via `49f4b1f5`): `shared/kb/src/lru_query.rs:376` used
+  `mae_sync::encoding::base64_to_update` unconditionally, not gated behind
+  `#[cfg(feature = "crdt")]`, even though `mae-sync` is an `optional` dependency enabled only by
+  the `crdt` feature — `cargo build -p mae-kb` (default features, no `crdt`) failed with an
+  unresolved-crate error, masked in every real build by Cargo's feature unification across other
+  workspace members. Fixed by gating the `mae_sync` usage behind `#[cfg(feature = "crdt")]` via a
+  new `decode_crdt_state()` helper, with a non-crdt fallback returning `None` (the call's own
+  caller already treats `None` as an expected, handled case).
 
 ---
 

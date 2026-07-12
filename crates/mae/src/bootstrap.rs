@@ -1,3 +1,12 @@
+//! @ai-caution: [architecture-debt] App bootstrapping (path resolution, config
+//! application, KB federation init, daemon connect, collab user-name
+//! resolution). Already 2,397 lines pre-existing debt before the `main.rs`
+//! split (2026-07) added `apply_app_config`/`init_kb_federation`/
+//! `init_daemon_connection`/`resolve_collab_user_name`, bringing it to
+//! ~3,062 — not split further this pass, needs its own dedicated look.
+//! Tracked in .claude/commands/mae-audit.md's "Known exceptions" and
+//! ROADMAP.md's "Architecture Debt" section.
+
 use std::collections::HashMap;
 use std::io::{self, IsTerminal};
 use std::path::PathBuf;
@@ -14,6 +23,7 @@ use mae_ai::{
 };
 use mae_core::Editor;
 use mae_dap::{run_dap_task, DapCommand, DapTaskEvent};
+use mae_kb::KbStore;
 use mae_lsp::{run_lsp_task, LspCommand, LspServerConfig, LspTaskEvent};
 use mae_scheme::SchemeRuntime;
 use tracing::{debug, error, info, warn};
@@ -1950,6 +1960,670 @@ pub fn setup_dap() -> (
     info!("starting DAP task");
     tokio::spawn(run_dap_task(cmd_rx, evt_tx));
     (evt_rx, cmd_tx)
+}
+
+/// Resolve collaborative user name from available sources.
+///
+/// Resolution order:
+/// 1. `git config user.name`
+/// 2. `$USER` environment variable
+/// 3. hostname
+/// 4. "anonymous"
+///
+/// Returns `(name, source)` for logging.
+pub(crate) fn resolve_collab_user_name() -> (String, &'static str) {
+    // 1. git config user.name
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["config", "user.name"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+    {
+        if output.status.success() {
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !name.is_empty() {
+                return (name, "git config");
+            }
+        }
+    }
+    // 2. $USER env var
+    if let Ok(user) = std::env::var("USER") {
+        if !user.is_empty() {
+            return (user, "$USER");
+        }
+    }
+    // 3. hostname
+    if let Ok(output) = std::process::Command::new("hostname")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .output()
+    {
+        if output.status.success() {
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !name.is_empty() {
+                return (name, "hostname");
+            }
+        }
+    }
+    // 4. fallback
+    ("anonymous".to_string(), "fallback")
+}
+
+/// Apply editor preferences loaded from `config.toml` (+ auto-derived collab
+/// identity / KB CRDT client_id) onto the [`Editor`]. Called once at startup,
+/// after `config::load_config()` and before Scheme runtime init (`init.scm`
+/// loads after this, so it can still override anything set here).
+pub(crate) fn apply_app_config(editor: &mut Editor, app_config: &crate::config::Config) {
+    if let Some(ref theme) = app_config.editor.theme {
+        editor.set_theme_by_name(theme);
+    }
+    if let Some(ref art) = app_config.editor.splash_art {
+        editor.splash_art = Some(art.clone());
+    }
+    if let Some(ref cmd) = app_config.ai.editor {
+        editor.ai.editor_name = cmd.clone();
+    }
+    if let Some(restore) = app_config.editor.restore_session {
+        editor.restore_session = restore;
+    }
+    if let Some(interval) = app_config.editor.autosave_interval {
+        editor.autosave_interval = interval;
+    }
+
+    // Apply org agenda files from config.
+    if !app_config.org.agenda_files.is_empty() {
+        editor.org_agenda_files = app_config.org.agenda_files.clone();
+        editor.ingest_agenda_files();
+    }
+
+    // Apply font settings from config early (init.scm can override).
+    if let Some(size) = app_config.editor.font_size {
+        editor.gui_font_size = size;
+        editor.gui_font_size_default = size;
+    }
+    if let Some(ref family) = app_config.editor.font_family {
+        editor.gui_font_family = family.clone();
+    }
+    if let Some(ref icon_family) = app_config.editor.icon_font_family {
+        editor.gui_icon_font_family = icon_family.clone();
+    }
+
+    // Apply collaboration settings from config → OptionRegistry.
+    if let Some(ref addr) = app_config.collaboration.server_address {
+        let _ = editor.set_option("collab_server_address", addr);
+    }
+    if let Some(auto) = app_config.collaboration.auto_connect {
+        let _ = editor.set_option("collab_auto_connect", &auto.to_string());
+    }
+    if let Some(auto) = app_config.collaboration.auto_share {
+        let _ = editor.set_option("collab_auto_share", &auto.to_string());
+    }
+    if let Some(secs) = app_config.collaboration.reconnect_interval_secs {
+        let _ = editor.set_option("collab_reconnect_interval", &secs.to_string());
+    }
+    if let Some(ref name) = app_config.collaboration.user_name {
+        let _ = editor.set_option("collab_user_name", name);
+    }
+    if let Some(secs) = app_config.collaboration.heartbeat_interval_secs {
+        let _ = editor.set_option("collab_heartbeat_interval", &secs.to_string());
+    }
+    if let Some(ref cmd) = app_config.collaboration.psk_command {
+        let _ = editor.set_option("collab_psk_command", cmd);
+    }
+    if let Some(ref key) = app_config.collaboration.psk {
+        let _ = editor.set_option("collab_psk", key);
+    }
+    if let Some(ref mode) = app_config.collaboration.kb_sync_mode {
+        let _ = editor.set_option("collab_kb_sync_mode", mode);
+    }
+
+    // Auto-derive collab user name if not set via config.
+    if editor.collab.user_name.is_empty() {
+        let (resolved, source) = resolve_collab_user_name();
+        info!(name = %resolved, source = %source, "collab identity resolved");
+        let _ = editor.set_option("collab_user_name", &resolved);
+    }
+
+    // ADR-020 B-16: derive this peer's STABLE, UNIQUE yrs client_id for KB CRDT
+    // edits from the durable collab identity fingerprint. Two peers sharing a
+    // client_id collide in yrs' clock space and their concurrent edits diverge;
+    // seeding from the per-install Ed25519 fingerprint makes every peer distinct
+    // and stable across restarts (so a peer's edits chain on one lineage).
+    crate::init_collab_kb_client_id(editor);
+
+    // NB: per-launch collab overrides (env) are applied AFTER init.scm loads
+    // (below), so they win over config files — see `apply_collab_launch_overrides`.
+    // (They used to be set here, before init.scm, which let a
+    // `(set-option! "collab_auto_connect" …)` in init.scm clobber the env var.)
+
+    // Apply daemon settings from config → OptionRegistry.
+    if let Some(enabled) = app_config.daemon.enabled {
+        let _ = editor.set_option("daemon_enabled", &enabled.to_string());
+    }
+    if let Some(ref socket) = app_config.daemon.socket {
+        let _ = editor.set_option("daemon_socket", socket);
+    }
+    if let Some(size) = app_config.daemon.cache_size {
+        let _ = editor.set_option("daemon_cache_size", &size.to_string());
+    }
+
+    // Apply performance thresholds from config.
+    if let Some(v) = app_config.performance.large_file_lines {
+        editor.large_file_lines = v;
+    }
+    if let Some(v) = app_config.performance.degrade_threshold_chars {
+        editor.degrade_threshold_chars = v;
+    }
+    if let Some(v) = app_config.performance.degrade_threshold_line_length {
+        editor.degrade_threshold_line_length = v;
+    }
+    if let Some(v) = app_config.performance.display_region_debounce_ms {
+        editor.display_region_debounce_ms = v;
+    }
+    if let Some(v) = app_config.performance.syntax_reparse_debounce_ms {
+        editor.syntax_reparse_debounce_ms = v;
+    }
+}
+
+/// Load the KB federation registry and import enabled instances (primary
+/// CozoDB store, manual/help KB, federated instances, shared-KB recovery).
+/// No-op in `--clean`/`-q` mode.
+pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
+    // Load KB federation registry and import enabled instances.
+    if !clean_mode {
+        // XDG-first (CLAUDE.md principle #13 / B-6): honor XDG_DATA_HOME, then
+        // ~/.local/share — NOT dirs::data_dir() (macOS ~/Library). This MUST
+        // match editor.mae_data_dir() (where ADR-019 persists the shared-KB
+        // registry markers) or those markers would save + load to different
+        // paths and silently fail to survive restart.
+        let data_dir = editor.mae_data_dir().unwrap_or_else(|| {
+            crate::pkg::paths::data_dir_candidate("mae")
+                .unwrap_or_else(|| std::path::PathBuf::from("~/.local/share/mae"))
+        });
+
+        // Build an in-memory manual KB so the help system's cozo-backed
+        // `KbQueryLayer` can resolve built-in nodes (`index`, command/option
+        // help, etc.). It is sourced from the pre-built CozoDB file when found
+        // (read-only — we never open the on-disk asset read-write, since sled
+        // would write recovery snapshots and dirty a git-tracked asset or drift
+        // an install's checksum), otherwise from the code-generated seed nodes
+        // already in `editor.kb.primary`. Without a manual cozo, `SPC h h` fails
+        // with "no such KB node: index".
+        match mae_kb::CozoKbStore::open_mem() {
+            Ok(mem_store) => {
+                let mut sourced_from_prebuilt = false;
+                if let Some(result) = crate::manual_kb::locate_and_validate(&data_dir, None) {
+                    match &result.validation {
+                        crate::manual_kb::ManualValidation::Valid => {
+                            debug!(path = %result.path.display(), "manual KB checksum valid");
+                        }
+                        crate::manual_kb::ManualValidation::Historical { matched_version } => {
+                            warn!(
+                                path = %result.path.display(),
+                                matched = %matched_version,
+                                current = env!("CARGO_PKG_VERSION"),
+                                "manual KB is from an older mae version"
+                            );
+                        }
+                        crate::manual_kb::ManualValidation::Unknown => {
+                            warn!(
+                                path = %result.path.display(),
+                                "manual KB checksum does not match any known release"
+                            );
+                        }
+                        crate::manual_kb::ManualValidation::Custom => {
+                            info!(path = %result.path.display(), "using custom manual KB");
+                        }
+                    }
+                    match crate::manual_kb::load_nodes_readonly(&result.path) {
+                        Ok(nodes) => {
+                            let count = nodes.len();
+                            for node in &nodes {
+                                editor.kb.primary.insert(node.clone());
+                                if let Err(e) = mem_store.insert_node(node) {
+                                    warn!(error = %e, id = %node.id, "failed to load manual node");
+                                }
+                            }
+                            info!(count, path = %result.path.display(), "loaded manual KB nodes (read-only)");
+                            sourced_from_prebuilt = true;
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "failed to read pre-built manual KB; falling back to seed");
+                        }
+                    }
+                }
+
+                if !sourced_from_prebuilt {
+                    // No usable pre-built KB: seed the in-memory manual cozo from
+                    // the code-generated nodes already present in `kb.primary`.
+                    match mem_store.persist_nodes(&editor.kb.primary) {
+                        Ok(count) => {
+                            info!(
+                                count,
+                                "built in-memory manual KB from seed (no pre-built KB found)"
+                            );
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "failed to persist seed nodes to in-memory manual KB");
+                        }
+                    }
+                }
+
+                let _ = mem_store.seed_type_system();
+                let _ = mem_store.seed_typed_relationships();
+                let _ = mem_store.seed_views();
+                editor.kb.manual_cozo = Some(std::sync::Arc::new(mem_store));
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to open in-memory manual KB store");
+            }
+        }
+
+        // Initialize standardized KB data directory layout (XDG-compliant).
+        match mae_kb::data_dir::KbDataDir::new(&data_dir) {
+            Ok(kb_data_dir) => {
+                // Migrate old scattered layout to new structure if needed.
+                match mae_kb::data_dir::migrate_legacy_layout(&data_dir) {
+                    Ok(0) => {}
+                    Ok(n) => info!(
+                        count = n,
+                        "migrated legacy KB instances to new data directory layout"
+                    ),
+                    Err(e) => warn!(error = %e, "failed to migrate legacy KB layout"),
+                }
+                // Phase D3 (ADR-029): if opted in and a local daemon already hosts the
+                // primary KB, take the THIN startup path — skip the O(n) `load_all`
+                // mirror preload. Reads resolve via the daemon (LRU layer, wired below);
+                // the store handle is still opened so the durable pending queue, the
+                // lazy single-node load on edit, and the daemon-less fallback keep
+                // working. We force `daemon_enabled` so the read LRU is wired. On any
+                // probe failure we fall through to the full local init (unchanged).
+                let daemon_hosts_primary = editor.kb.daemon_default
+                    && crate::probe_daemon_hosts_primary(&editor.kb.daemon_socket);
+                if daemon_hosts_primary {
+                    editor.kb.daemon_enabled = true;
+                    // Mark the mirror thin so lazy edit-hydration fires off the daemon
+                    // READ layer (available now), without waiting for the collab write
+                    // channel that `daemon_hosts_primary` requires.
+                    editor.kb.set_primary_thin(true);
+                    info!(
+                        "Phase D3: local daemon hosts the primary KB — thin startup \
+                         (skipping the mirror preload; reads via daemon, lazy load on edit)"
+                    );
+                }
+
+                // Initialize primary KB store (CozoDB) for user data.
+                let kb_root = kb_data_dir.root();
+                let cozo_path = kb_root.join("primary.cozo");
+
+                // Phase 2b: resolve the storage engine (default sqlite — lets multiple
+                // daemon-less mae processes share the store). Orthogonal to daemon_mode.
+                let mut engine = editor
+                    .get_option("kb_storage_engine")
+                    .map(|(v, _)| v)
+                    .unwrap_or_else(|| "sqlite".to_string());
+
+                // One-time, reversible sled→sqlite migration when sqlite is selected and
+                // a legacy sled store (a directory) is present. On failure the intact
+                // sled store is opened as-is this session, so the KB keeps working.
+                if engine == "sqlite" {
+                    match mae_kb::migrate::migrate_sled_to_sqlite(&cozo_path) {
+                        Ok(mae_kb::migrate::SledToSqliteOutcome::Migrated {
+                            nodes,
+                            links,
+                            backup,
+                        }) => {
+                            info!(nodes, links, backup = %backup.display(), "migrated primary KB store: sled → sqlite");
+                            editor.set_status(format!(
+                                "KB migrated to sqlite ({nodes} nodes) — old store backed up alongside"
+                            ));
+                        }
+                        Ok(mae_kb::migrate::SledToSqliteOutcome::NotNeeded) => {}
+                        Err(e) => {
+                            error!(error = %e, "sled→sqlite migration failed; opening the existing store");
+                            editor.set_status(format!(
+                                "KB migration failed ({e}); opened existing store"
+                            ));
+                            // The sled store is intact (a directory) — open it as sled so
+                            // the KB still works; the user can retry the migration later.
+                            if cozo_path.is_dir() {
+                                engine = "sled".to_string();
+                            }
+                        }
+                    }
+                }
+
+                match mae_kb::CozoKbStore::open_with_engine(&cozo_path, &engine) {
+                    Ok(store) => {
+                        if let Err(e) = store.seed_type_system() {
+                            warn!(error = %e, "failed to seed KB type system");
+                        }
+                        match store.seed_typed_relationships() {
+                            Ok(n) => debug!(count = n, "seeded typed KB relationships"),
+                            Err(e) => {
+                                warn!(error = %e, "failed to seed typed relationships")
+                            }
+                        }
+                        if let Err(e) = store.seed_views() {
+                            warn!(error = %e, "failed to seed KB views");
+                        }
+
+                        info!(path = %cozo_path.display(), "primary KB store opened (CozoDB)");
+                        let arc_store = std::sync::Arc::new(store);
+                        editor.kb.primary_cozo = Some(arc_store.clone());
+                        editor.kb.store = Some(arc_store.clone());
+
+                        // Load user nodes into the in-memory mirror — UNLESS the daemon
+                        // hosts the primary (Phase D3): skip the bulk preload; nodes load
+                        // lazily from this open store on edit (`kb_ensure_node_loaded`).
+                        if daemon_hosts_primary {
+                            info!("Phase D3: mirror preload skipped (daemon-hosted primary)");
+                        } else {
+                            // Phase 1a: run the O(n) load_all OFF the UI thread. A
+                            // synchronous load on a large store (thousands of nodes)
+                            // blocked the main thread long enough to trip the 10s startup
+                            // watchdog. The loader thread streams the node set back via a
+                            // channel drained on the idle tick (`drain_kb_preload`).
+                            let store_for_load = arc_store.clone();
+                            let (tx, rx) = std::sync::mpsc::channel();
+                            std::thread::spawn(move || {
+                                let result = store_for_load.load_all().map_err(|e| e.to_string());
+                                let _ = tx.send(result);
+                            });
+                            editor.kb.pending_preload = Some(rx);
+                        }
+
+                        // Phase 4: watch the sqlite store file so this process reloads
+                        // its mirror when ANOTHER daemon-less process commits. Skip for
+                        // sled (single-writer) and daemon-hosted primaries.
+                        if engine == "sqlite" && !daemon_hosts_primary {
+                            match mae_kb::watch::StoreWatcher::new(&cozo_path) {
+                                Ok(w) => editor.kb.store_watcher = Some(w),
+                                Err(e) => {
+                                    warn!(error = %e, "KB store watcher failed to start (cross-instance refresh off)")
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        // Phase 0c: surface the failure LOUDLY instead of booting with a
+                        // silent empty KB. A second daemon-less process hits the sled
+                        // single-writer lock here; flag the store unavailable so KB
+                        // mutations refuse rather than write to a mirror that will never
+                        // persist.
+                        error!(error = %e, path = %cozo_path.display(), "failed to open primary KB store");
+                        editor.kb.store_unavailable = true;
+                        editor.set_status(format!(
+                            "KB store unavailable: {e} — another mae instance may hold it, or it is corrupt. KB changes cannot be saved."
+                        ));
+                    }
+                }
+                editor.kb.data_dir = Some(kb_data_dir);
+            }
+            Err(e) => {
+                warn!(error = %e, "failed to initialize KB data directory");
+            }
+        }
+
+        // Migrate kb-registry.toml from config → data (v0.9.0)
+        let config_dir = dirs::config_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("~/.config"))
+            .join("mae");
+        let old_registry = config_dir.join("kb-registry.toml");
+        let new_registry = data_dir.join("kb-registry.toml");
+        if old_registry.exists() && !new_registry.exists() {
+            let _ = std::fs::create_dir_all(&data_dir);
+            if std::fs::rename(&old_registry, &new_registry).is_ok() {
+                info!("migrated kb-registry.toml from config to data directory");
+            }
+        }
+        let registry = mae_kb::federation::KbRegistry::load(&data_dir);
+        for inst in &registry.instances {
+            if !inst.enabled {
+                continue;
+            }
+            // ADR-020: load from the durable CozoDB store FIRST when present — this
+            // works for collab-JOINED instances whose `org_dir` is empty (they carry
+            // a real `db_path`). Previously gated on `org_dir.exists()`, so joined
+            // instances were skipped ("dir missing") and lost their nodes (B-10).
+            let loaded_via_cozo = if inst.db_path.exists() {
+                match editor.kb_open_instance_store(&inst.db_path) {
+                    Ok(store) => match store.load_all() {
+                        Ok(nodes) => {
+                            let count = nodes.len();
+                            let mut kb = mae_kb::KnowledgeBase::new();
+                            for node in nodes {
+                                kb.insert(node);
+                            }
+                            info!(name = %inst.name, nodes = count, shared = inst.shared, "KB instance loaded from CozoDB");
+                            editor.kb.instances.insert(inst.uuid.clone(), kb);
+                            editor
+                                .kb
+                                .instance_stores
+                                .insert(inst.uuid.clone(), std::sync::Arc::new(store));
+                            true
+                        }
+                        Err(e) => {
+                            warn!(error = %e, name = %inst.name, "CozoDB load_all failed, falling back to org import");
+                            false
+                        }
+                    },
+                    Err(e) => {
+                        warn!(error = %e, name = %inst.name, "CozoDB open failed, falling back to org import");
+                        false
+                    }
+                }
+            } else {
+                false
+            };
+            if loaded_via_cozo {
+                // done
+            } else if inst.org_dir.exists() {
+                let (kb, report, _health) = mae_kb::federation::import_org_dir(&inst.org_dir);
+                info!(
+                    name = %inst.name,
+                    nodes = report.nodes_imported,
+                    skipped = report.nodes_skipped,
+                    errors = report.errors.len(),
+                    "KB instance loaded from org files"
+                );
+                editor.kb.instances.insert(inst.uuid.clone(), kb);
+            } else {
+                warn!(name = %inst.name, db = %inst.db_path.display(), "KB instance has no loadable store or org dir, skipping");
+            }
+        }
+        editor.kb.registry = registry;
+
+        // Phase 4 (KB): watch kb-registry.toml itself for changes by OTHER
+        // mae processes (e.g. a KB registered from a second concurrently
+        // running editor), so this process's registry stays fresh without
+        // needing a local KB operation to trigger a reload (see
+        // `drain_kb_registry_watch`). `StoreWatcher::new` requires its
+        // target to already exist — write an empty registry first if this
+        // is a brand-new install with no KB ever registered.
+        if !new_registry.exists() {
+            let _ = mae_kb::federation::KbRegistry::default().save(&data_dir);
+        }
+        editor.kb.registry_watcher = mae_kb::watch::StoreWatcher::new(&new_registry).ok();
+
+        // ADR-020 recovery: reconstruct shared-KB instances present on disk but
+        // MISSING from the registry (e.g. a clobbered registry — the exact failure
+        // that lost a joined KB mid-session). Collect candidates first (immutable
+        // borrow of data_dir), then reconstruct (mutable). Idempotent.
+        let recoveries: Vec<(String, String, std::path::PathBuf, Option<String>)> =
+            if let Some(dd) = editor.kb.data_dir.as_ref() {
+                dd.list_shared_kbs()
+                    .into_iter()
+                    .filter_map(|slug| {
+                        let meta = dd.read_shared_meta(&slug)?;
+                        Some((
+                            meta.collab_id,
+                            meta.name,
+                            dd.shared_kb_db(&slug),
+                            meta.last_sync,
+                        ))
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        // Collect recovered instances locally (rather than pushing into
+        // `editor.kb.registry` directly) so the eventual persist goes through
+        // `KbRegistry::update`'s reload-fresh-then-mutate path — startup is
+        // still a moment another concurrently-starting `mae` process could be
+        // writing the same registry file.
+        let mut recovered_instances = Vec::new();
+        for (collab_id, name, db_path, last_sync) in recoveries {
+            if collab_id.is_empty()
+                || editor.kb.registry.find_by_collab_id(&collab_id).is_some()
+                || !db_path.exists()
+            {
+                continue;
+            }
+            if let Ok(store) = editor.kb_open_instance_store(&db_path) {
+                if let Ok(nodes) = store.load_all() {
+                    let uuid = mae_kb::federation::generate_uuid();
+                    let mut kb = mae_kb::KnowledgeBase::new();
+                    for node in nodes {
+                        kb.insert(node);
+                    }
+                    let count = kb.list_ids(None).len();
+                    editor.kb.instances.insert(uuid.clone(), kb);
+                    editor
+                        .kb
+                        .instance_stores
+                        .insert(uuid.clone(), std::sync::Arc::new(store));
+                    recovered_instances.push(mae_kb::federation::KbInstance {
+                        uuid,
+                        name: if name.is_empty() {
+                            collab_id.clone()
+                        } else {
+                            name.clone()
+                        },
+                        org_dir: std::path::PathBuf::new(),
+                        db_path,
+                        primary: false,
+                        enabled: true,
+                        last_import: None,
+                        collab_id: Some(collab_id.clone()),
+                        shared: true,
+                        remote_peers: Vec::new(),
+                        last_sync,
+                        ai_residency: mae_kb::federation::AiResidency::default(),
+                    });
+                    info!(kb = %collab_id, nodes = count, "recovered shared KB instance from disk (registry rescan)");
+                }
+            }
+        }
+        if !recovered_instances.is_empty() {
+            let (registry, (), saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+                for inst in recovered_instances {
+                    // Re-check against the freshly-reloaded registry: another
+                    // process may have already added this collab_id since we
+                    // loaded ours at the top of this function.
+                    if reg
+                        .find_by_collab_id(inst.collab_id.as_deref().unwrap_or_default())
+                        .is_none()
+                    {
+                        reg.instances.push(inst);
+                    }
+                }
+            });
+            if let Err(e) = saved {
+                warn!(error = %e, "failed to persist recovered shared-KB registry");
+            }
+            editor.kb.registry = registry;
+            editor.kb.last_local_registry_write = Some(std::time::Instant::now());
+        }
+
+        // Build the CozoDB-first query layer AFTER all stores are loaded
+        // (primary + manual + federated instances).
+        editor.kb.rebuild_query_layer();
+
+        // ADR-019: warm the shared-KB sync cache from durable markers at startup
+        // so a restarted editor's broadcast gate + status reflect what syncs (the
+        // re-subscribe to RECEIVE happens on the Connected event).
+        editor.reconstruct_kb_sync_gate();
+    }
+}
+
+/// On-demand daemon auto-spawn (ADR-035 `daemon_mode`) + LRU-cached daemon
+/// connection, `editor`-only. Best-effort throughout: a failed spawn or
+/// connect falls back to the in-process/local KB.
+pub(crate) fn init_daemon_connection(editor: &mut Editor) {
+    // On-demand auto-spawn (ADR-035 `daemon_mode`): if configured `on-demand` and
+    // nothing is already listening, spawn + await a co-located mae-daemon before we
+    // try to attach below. `shared` never spawns (it attaches to an externally
+    // managed daemon); `off` skips this entirely. Best-effort — a failed spawn
+    // falls through to the in-process KB (the attach below just warns + uses local).
+    if editor.kb.daemon_mode == mae_core::DaemonMode::OnDemand {
+        let socket = editor.kb.daemon_socket.clone();
+        crate::daemon_supervisor::ensure_on_demand_daemon(editor.kb.daemon_mode, &socket);
+    }
+
+    // Optionally connect to mae-daemon for LRU-cached KB access.
+    // Falls back gracefully to local sled KB if daemon is unavailable.
+    if editor.kb.daemon_enabled {
+        let socket = editor.kb.daemon_socket.clone();
+        let cache_size = editor.kb.daemon_cache_size;
+        let mut client = mae_mcp::daemon_client::DaemonClient::new(&socket);
+        match client.connect() {
+            Ok(()) => {
+                info!(socket = %socket.display(), cache_size, "connected to mae-daemon");
+                // One daemon/status round-trip drives two ADR-035 guardrails:
+                // (1) version skew — warn on a mismatched daemon; (2) read routing
+                // — only attach the daemon LRU when it actually hosts the primary
+                // (or we're thin with no local mirror). A freshly spawned on-demand
+                // daemon serves its own empty daemon-kb.cozo, so attaching its LRU
+                // would shadow the editor's local KB with nothing. Best-effort: a
+                // status failure never blocks the attach.
+                let status = client.call("daemon/status", serde_json::json!({})).ok();
+                if let Some(ref s) = status {
+                    if let Some(msg) = crate::daemon_version_skew(env!("CARGO_PKG_VERSION"), s) {
+                        warn!("{}", msg);
+                    }
+                }
+                let primary_exists = status
+                    .as_ref()
+                    .and_then(|s| s.get("primary_exists").and_then(|p| p.as_bool()))
+                    .unwrap_or(false);
+                if crate::daemon_supervisor::should_attach_daemon_reads(
+                    primary_exists,
+                    editor.kb.primary_thin(),
+                ) {
+                    let lru = mae_kb::lru_query::LruQueryLayer::new(client, cache_size);
+                    editor
+                        .kb
+                        .set_daemon_query_layer(Some(std::sync::Arc::new(lru)));
+                    info!("routing KB reads through the daemon (hosts primary)");
+                } else {
+                    info!(
+                        "daemon connected but does not host the primary KB; \
+                         KB reads stay local"
+                    );
+                }
+
+                // Wire a second client as the control channel for P2P lifecycle
+                // ops (ticket mint/join) — independent of the read path above.
+                let mut control = mae_mcp::daemon_client::DaemonClient::new(&socket);
+                match control.connect() {
+                    Ok(()) => editor.kb.set_daemon_control(Some(std::sync::Arc::new(
+                        crate::DaemonControlClient(std::sync::Mutex::new(control)),
+                    ))),
+                    Err(e) => {
+                        warn!(error = %e, "daemon control channel unavailable (P2P share disabled)")
+                    }
+                }
+            }
+            Err(e) => {
+                warn!(
+                    socket = %socket.display(),
+                    error = %e,
+                    "daemon unavailable, using local KB"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -140,7 +140,7 @@ impl AgentProvider for GuardrailProvider {
                 .find(|c| matches!((policy.classify)(&c.name), Some(ToolStage::Write)))
             {
                 let has_prior_discovery_or_read = {
-                    let recent = self.recent_calls.lock().unwrap();
+                    let recent = self.recent_calls.lock().unwrap_or_else(|e| e.into_inner());
                     recent.iter().any(|(name, _)| {
                         matches!(
                             (policy.classify)(name),
@@ -174,7 +174,7 @@ impl AgentProvider for GuardrailProvider {
         // block it with an explicit, informative stop rather than burning
         // rounds (and, for a priced provider, budget) on a stuck loop.
         if let Some(call) = response.tool_calls.first() {
-            let mut recent = self.recent_calls.lock().unwrap();
+            let mut recent = self.recent_calls.lock().unwrap_or_else(|e| e.into_inner());
             recent.push((call.name.clone(), call.arguments.clone()));
             if recent.len() > LOOP_DETECTION_THRESHOLD {
                 recent.remove(0);
@@ -201,7 +201,10 @@ impl AgentProvider for GuardrailProvider {
                 });
             }
         } else {
-            self.recent_calls.lock().unwrap().clear();
+            self.recent_calls
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
         }
 
         Ok(response)

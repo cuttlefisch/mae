@@ -101,20 +101,24 @@ impl GitStatusView {
         }
     }
 
+    /// Get the full line at a given row index.
+    pub fn line_at(&self, row: usize) -> Option<&GitStatusLine> {
+        crate::foldable_view::line_at(&self.lines, row)
+    }
+
     /// Get the line kind at a given row index.
     pub fn kind_at(&self, row: usize) -> Option<&GitLineKind> {
-        self.lines.get(row).map(|l| &l.kind)
+        self.line_at(row).map(|l| &l.kind)
     }
 
     /// Toggle collapse state for a key. Default state is "not collapsed" (expanded).
     pub fn toggle(&mut self, key: CollapseKey) {
-        let collapsed = self.collapsed.entry(key).or_insert(false);
-        *collapsed = !*collapsed;
+        crate::foldable_view::toggle(&mut self.collapsed, key);
     }
 
     /// Check if a key is collapsed.
     pub fn is_collapsed(&self, key: &CollapseKey) -> bool {
-        self.collapsed.get(key).copied().unwrap_or(false)
+        crate::foldable_view::is_collapsed(&self.collapsed, key)
     }
 
     /// Build the collapse key for a given line.

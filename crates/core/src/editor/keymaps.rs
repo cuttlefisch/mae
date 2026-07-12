@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use crate::keymap::{parse_key_seq, parse_key_seq_spaced, Key, KeyPress, Keymap};
+use crate::keymap::{parse_key_seq, parse_key_seq_spaced, Key, KeyPress, Keymap, WhichKeyEntry};
+use crate::Mode;
 
 use super::Editor;
 
@@ -404,6 +405,270 @@ impl Editor {
         // Agenda keymap — moved to modules/agenda/autoloads.scm
 
         maps
+    }
+}
+
+impl Editor {
+    /// Returns the primary keymap name and optional fallback for the current mode.
+    /// Buffer-kind overlays (git-status, file-tree, help, debug) and language
+    /// overlays (org, markdown) sit on top of "normal" — if the overlay has no
+    /// match, the caller should retry with the fallback.
+    pub fn current_keymap_names(&self) -> Option<(&str, Option<&str>)> {
+        // Transient keypad/leader layer overrides mode-based keymap selection:
+        // while active, keys resolve against the shared `leader` keymap (the mae
+        // which-key tree), regardless of the underlying mode (Normal for the doom
+        // flavor, Insert for the non-modal flavor). See `Editor::leader_active`.
+        if self.leader_active {
+            // Mode-aware local leader: if the active buffer's context has a
+            // local-leader keymap (which parents on `leader`), the keypad
+            // consults it FIRST — so `SPC m` is the major-mode local leader (org
+            // babel/export in an org buffer) while `SPC b/f/w/…` still fall
+            // through to the global `leader`. Only used when the keymap actually
+            // exists (a module opted in by creating it); otherwise the plain
+            // global leader, exactly as before.
+            let idx = self.active_buffer_idx();
+            let kind = self.buffers[idx].kind;
+            let local_leader = self
+                .keymap_registry
+                .local_leader_for_kind(kind)
+                .or_else(|| {
+                    self.syntax
+                        .language_of(idx)
+                        .and_then(|l| self.keymap_registry.local_leader_for_language(l))
+                });
+            if let Some(ll) = local_leader {
+                if self.keymaps.contains_key(ll) {
+                    return Some((ll, None));
+                }
+            }
+            return Some(("leader", None));
+        }
+
+        let idx = self.active_buffer_idx();
+        let kind = self.buffers[idx].kind;
+        let lang = self.syntax.language_of(idx);
+
+        match self.mode {
+            Mode::Normal => {
+                // Context keymap from the data-driven registry: buffer kind first
+                // (git-status, file-tree, navigation, …), then language overlay
+                // (org/markdown). Both fall back to "normal". No hardcoded match —
+                // a module can route a new kind/language without a kernel patch.
+                if let Some(km_name) = self.keymap_registry.context_for_kind(kind) {
+                    Some((km_name, Some("normal")))
+                } else if let Some(km_name) =
+                    lang.and_then(|l| self.keymap_registry.context_for_language(l))
+                {
+                    Some((km_name, Some("normal")))
+                } else {
+                    Some(("normal", None))
+                }
+            }
+            Mode::Insert => Some(("insert", None)),
+            Mode::Visual(_) => Some(("visual", None)),
+            Mode::Command
+            | Mode::ConversationInput
+            | Mode::Search
+            | Mode::FilePicker
+            | Mode::FileBrowser
+            | Mode::CommandPalette => Some(("command", None)),
+            Mode::ShellInsert => None,
+        }
+    }
+
+    /// Get the keymap for the current mode.
+    pub fn current_keymap(&self) -> Option<&Keymap> {
+        let (name, _) = self.current_keymap_names()?;
+        self.keymaps.get(name)
+    }
+
+    /// The ordered keymap resolution chain for the current focus, most-specific
+    /// layer first.
+    ///
+    /// This is the SINGLE source of truth consumed by keystroke dispatch
+    /// (`handle_keymap_mode`), the which-key popup (`merged_which_key_entries`),
+    /// and `describe-bindings`. Routing all three through one chain makes the
+    /// keymap a key *resolves against* and the keymap the UI *shows* incapable of
+    /// diverging — previously dispatch used a flat `(primary, fallback)` pair
+    /// while `describe-bindings` walked the `parent` chain N levels, so a 3-deep
+    /// chain (e.g. `git-log → git-status → normal`) would dispatch and display
+    /// differently.
+    ///
+    /// The chain is `current_keymap_names()`'s primary keymap plus its `parent`
+    /// ancestry, followed by the fallback plus its ancestry (deduped, cycle-safe).
+    /// For the current 2-deep keymaps this reproduces the old behavior exactly.
+    /// Empty when there is no keymap (ShellInsert — keys go straight to the PTY).
+    ///
+    /// Phase 0 derives the chain from the existing `current_keymap_names()` match;
+    /// a later phase replaces the source with the data-driven keymap registry
+    /// without changing any consumer.
+    pub fn keymap_chain(&self) -> Vec<String> {
+        let Some((primary, fallback)) = self.current_keymap_names() else {
+            return Vec::new();
+        };
+        let mut chain: Vec<String> = Vec::new();
+        self.extend_keymap_chain(primary, &mut chain);
+        if let Some(fb) = fallback {
+            self.extend_keymap_chain(fb, &mut chain);
+        }
+        chain
+    }
+
+    /// Append `start` and its `parent` ancestry to `chain`, skipping any name
+    /// already present (dedupe + cycle guard).
+    fn extend_keymap_chain(&self, start: &str, chain: &mut Vec<String>) {
+        let mut cur = Some(start.to_string());
+        while let Some(name) = cur.take() {
+            if chain.iter().any(|n| n == &name) {
+                break;
+            }
+            cur = self.keymaps.get(&name).and_then(|km| km.parent.clone());
+            chain.push(name);
+        }
+    }
+
+    /// Reset all keymaps to the fresh kernel defaults (vi-modal primitives only,
+    /// no leader tree). Used by runtime keymap-flavor switching: reset to a clean
+    /// slate, then re-run module loading to apply the new flavor — avoids stale
+    /// bindings from the previous flavor (the `leader`/`insert` entries differ).
+    pub fn reset_keymaps_to_kernel(&mut self) {
+        self.keymaps = Self::default_keymaps();
+        // Re-seed the context routing to the kernel baseline too; module
+        // registrations (e.g. a "navigation" context, canvas artifact) re-apply
+        // on the subsequent module reload, exactly like the keymaps themselves.
+        self.keymap_registry = crate::keymap_registry::KeymapRegistry::kernel_defaults();
+        self.leader_active = false;
+        self.clear_which_key_prefix();
+    }
+
+    /// Look up a key binding by key string (e.g. "SPC n d t").
+    /// Returns (command_name, keymap_name) if found.
+    pub fn lookup_key_binding(&self, key_str: &str) -> Option<(String, String)> {
+        let seq = crate::keymap::parse_key_seq_spaced(key_str);
+        if seq.is_empty() {
+            return None;
+        }
+        for (name, km) in &self.keymaps {
+            for (bound_seq, cmd) in km.bindings() {
+                if *bound_seq == seq {
+                    return Some((cmd.clone(), name.clone()));
+                }
+            }
+        }
+        None
+    }
+
+    /// Query keybindings across all keymaps with optional filters.
+    /// Returns vec of (key_display, command, keymap_name).
+    pub fn query_keybindings(
+        &self,
+        keymap_filter: Option<&str>,
+        command_filter: Option<&str>,
+        prefix_filter: Option<&str>,
+    ) -> Vec<(String, String, String)> {
+        let prefix_seq = prefix_filter.map(crate::keymap::parse_key_seq_spaced);
+        let mut results = Vec::new();
+        for (name, km) in &self.keymaps {
+            if let Some(filter) = keymap_filter {
+                if name != filter {
+                    continue;
+                }
+            }
+            for (seq, cmd) in km.bindings() {
+                if let Some(ref cmd_filter) = command_filter {
+                    if !cmd.contains(cmd_filter) {
+                        continue;
+                    }
+                }
+                if let Some(ref prefix) = prefix_seq {
+                    if seq.len() < prefix.len() || &seq[..prefix.len()] != prefix.as_slice() {
+                        continue;
+                    }
+                }
+                let key_display = crate::keymap::format_key_seq(seq);
+                results.push((key_display, cmd.clone(), name.clone()));
+            }
+        }
+        results.sort_by(|a, b| a.2.cmp(&b.2).then(a.0.cmp(&b.0)));
+        results
+    }
+
+    /// Merge which-key entries across the full resolution chain (most-specific
+    /// layer first; a more-specific layer's binding for a key shadows a deeper
+    /// one). Uses the same `keymap_chain()` as dispatch so the popup can't show a
+    /// key the dispatcher wouldn't run.
+    fn merged_which_key_entries(&self, prefix: &[KeyPress]) -> Vec<WhichKeyEntry> {
+        let mut entries: Vec<WhichKeyEntry> = Vec::new();
+        let mut existing: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for km_name in self.keymap_chain() {
+            let Some(km) = self.keymaps.get(&km_name) else {
+                continue;
+            };
+            for entry in km.which_key_entries(prefix, &self.commands) {
+                if existing.insert(format!("{:?}", entry.key)) {
+                    entries.push(entry);
+                }
+            }
+        }
+        entries
+    }
+
+    /// Get which-key entries for the current keymap, merging overlay + parent.
+    /// Applies the `which-key-sort-order` option: groups first, then sorted.
+    pub fn which_key_entries_for_current_keymap(&self) -> Vec<WhichKeyEntry> {
+        let mut entries = self.merged_which_key_entries(&self.which_key_prefix);
+        self.sort_which_key_entries(&mut entries);
+        entries
+    }
+
+    /// Get all top-level bindings for the current buffer's keymap + parent.
+    /// Used by `show-buffer-keys` (`?`) to show a full keybind reference.
+    pub fn buffer_keys_entries(&self) -> Vec<WhichKeyEntry> {
+        let mut entries = self.merged_which_key_entries(&[]);
+        self.sort_which_key_entries(&mut entries);
+        entries
+    }
+
+    /// Sort which-key entries: groups first (sorted by key), then leaves
+    /// sorted by the chosen field (`key`, `desc`, or `none`).
+    fn sort_which_key_entries(&self, entries: &mut [WhichKeyEntry]) {
+        let order = self
+            .get_option("which-key-sort-order")
+            .map(|(v, _)| v)
+            .unwrap_or_else(|| "key".to_string());
+        match order.as_str() {
+            "desc" => {
+                entries.sort_by(|a, b| {
+                    b.is_group
+                        .cmp(&a.is_group)
+                        .then_with(|| a.label.to_lowercase().cmp(&b.label.to_lowercase()))
+                });
+            }
+            "none" => {} // insertion order
+            _ => {
+                // "key" (default): groups first, then alphabetical by key
+                entries.sort_by(|a, b| {
+                    b.is_group.cmp(&a.is_group).then_with(|| {
+                        let ak = crate::text_utils::format_keypress(&a.key);
+                        let bk = crate::text_utils::format_keypress(&b.key);
+                        ak.cmp(&bk)
+                    })
+                });
+            }
+        }
+    }
+
+    /// Set the which-key prefix and reset scroll to top.
+    /// Use this instead of assigning `which_key_prefix` directly.
+    pub fn set_which_key_prefix(&mut self, prefix: Vec<KeyPress>) {
+        self.which_key_prefix = prefix;
+        self.which_key_scroll = 0;
+    }
+
+    /// Clear the which-key prefix and reset scroll.
+    pub fn clear_which_key_prefix(&mut self) {
+        self.which_key_prefix.clear();
+        self.which_key_scroll = 0;
     }
 }
 

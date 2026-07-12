@@ -64,8 +64,9 @@ jobs:
             cargo test --workspace --exclude mae
             cargo test -p mae --bins
             cargo test -p mae --test mcp_event_loop_integration
-            # Skipped on nightly: kb_graph_validation, kb_lifecycle_e2e,
-            # collab_tcp_e2e (all CozoDB or #[ignore])
+            # Skipped on nightly: kb_graph_validation_{embeddings,queries,schema},
+            # kb_lifecycle_e2e, collab_tcp_e2e_{psk_auth,kb_protocol,kb_stress,tests}
+            # (all CozoDB or #[ignore])
             # collab_bridge_integration and collab_stress moved to daemon workspace
             cargo test --doc --workspace
           fi
@@ -179,11 +180,15 @@ jobs:
           MAE_TCP_E2E: "1"
           RUST_LOG: "mae_daemon=debug,mae_sync=debug,warn"
       - name: TCP E2E tests (PSK auth + KB protocol)
+        # collab_tcp_e2e.rs was split into 4 files by section (2026-07); each
+        # `--test` target below is the file that now contains the matching tests.
         run: |
-          cargo test --package mae --test collab_tcp_e2e -- tcp_psk --ignored --test-threads=1 --nocapture
-          cargo test --package mae --test collab_tcp_e2e -- tcp_kb --ignored --test-threads=1 --nocapture
-          cargo test --package mae --test collab_tcp_e2e -- tcp_full_roundtrip --ignored --test-threads=1 --nocapture
-          cargo test --package mae --test collab_tcp_e2e -- tcp_two_editors --ignored --test-threads=1 --nocapture
+          cargo test --package mae --test collab_tcp_e2e_psk_auth -- tcp_psk --ignored --test-threads=1 --nocapture
+          cargo test --package mae --test collab_tcp_e2e_psk_auth -- tcp_kb --ignored --test-threads=1 --nocapture
+          cargo test --package mae --test collab_tcp_e2e_kb_protocol -- tcp_kb --ignored --test-threads=1 --nocapture
+          cargo test --package mae --test collab_tcp_e2e_kb_stress -- tcp_kb --ignored --test-threads=1 --nocapture
+          cargo test --package mae --test collab_tcp_e2e_tests -- tcp_full_roundtrip --ignored --test-threads=1 --nocapture
+          cargo test --package mae --test collab_tcp_e2e_tests -- tcp_two_editors --ignored --test-threads=1 --nocapture
         timeout-minutes: 5
         env:
           MAE_TCP_E2E: "1"

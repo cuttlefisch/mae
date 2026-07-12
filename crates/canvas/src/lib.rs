@@ -1,4 +1,5 @@
 //! mae-canvas — Backend-agnostic scene graph and force-directed layout.
+//! @stability: experimental
 //!
 //! Provides a `SceneGraph` with nodes/edges, Fruchterman-Reingold force
 //! layout, hit testing, and a KB graph builder. The scene graph is

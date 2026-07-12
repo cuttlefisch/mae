@@ -25,6 +25,22 @@ enum CacheEntry {
     Found(Box<Node>),
 }
 
+/// Decode a base64-encoded CRDT update, if the `crdt` feature is enabled.
+/// `mae-sync` is an optional dependency gated by `crdt` (not a default
+/// feature) — this is the only place in the crate that used it
+/// unconditionally, which broke `cargo build -p mae-kb` with default
+/// features. Without `crdt`, node_crdt_state's caller already treats `None`
+/// as an expected, handled fallback (hydrate from the local store instead).
+#[cfg(feature = "crdt")]
+fn decode_crdt_state(s: &str) -> Option<Vec<u8>> {
+    mae_sync::encoding::base64_to_update(s).ok()
+}
+
+#[cfg(not(feature = "crdt"))]
+fn decode_crdt_state(_s: &str) -> Option<Vec<u8>> {
+    None
+}
+
 /// Bounded LRU cache implementing `KbQueryLayer` via daemon RPC.
 pub struct LruQueryLayer {
     client: Mutex<DaemonClient>,
@@ -373,7 +389,7 @@ impl KbQueryLayer for LruQueryLayer {
             Ok(val) => val
                 .get("state")
                 .and_then(|s| s.as_str())
-                .and_then(|s| mae_sync::encoding::base64_to_update(s).ok()),
+                .and_then(decode_crdt_state),
             Err(e) => {
                 tracing::debug!(error = %e, id, "LruQueryLayer: node_crdt fetch failed");
                 None

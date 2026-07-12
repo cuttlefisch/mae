@@ -113,8 +113,6 @@ pub struct AiEventContext<'a> {
     pub lsp_command_tx: &'a tokio::sync::mpsc::Sender<LspCommand>,
     pub dap_command_tx: &'a tokio::sync::mpsc::Sender<mae_dap::DapCommand>,
     pub ai_event_tx: &'a tokio::sync::mpsc::Sender<AiEvent>,
-    #[allow(dead_code)]
-    pub ai_command_tx: &'a Option<tokio::sync::mpsc::Sender<AiCommand>>,
     pub scheme: &'a mut mae_scheme::SchemeRuntime,
     pub mcp_client_mgr: &'a McpClientMgrRef,
 }
