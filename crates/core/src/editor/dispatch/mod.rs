@@ -58,6 +58,16 @@ impl Editor {
         self.fire_hook("command-pre");
         let result = self.dispatch_builtin_inner(name);
         self.fire_hook("command-post");
+        // Part C Phase 2 (KB graph view follow-current-node): fires on this
+        // SAME command-post point, unconditionally — not gated behind the
+        // buffer-switch check below — because in-KB-buffer link-following
+        // (`help_follow_link`) can update the active buffer's `KbView.
+        // current` in place without changing the active buffer index, which
+        // `buffer-switch` alone would miss. See
+        // `Editor::maybe_follow_kb_graph_view` for the short-circuit
+        // behavior (no work unless a Graph window is open, follow is
+        // enabled, and the node actually changed).
+        self.maybe_follow_kb_graph_view();
         if self.active_buffer_idx() != pre_buf_idx {
             self.fire_hook("buffer-switch");
         }

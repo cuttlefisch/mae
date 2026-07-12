@@ -409,6 +409,59 @@ impl Editor {
         self.mark_full_redraw();
     }
 
+    /// Follow-current-node (Part C Phase 2): called at the end of
+    /// `dispatch_builtin`'s `command-post` firing point, i.e. after EVERY
+    /// dispatched command — not gated behind the coarser `buffer-switch`
+    /// hook, because in-KB-buffer link-following (`Editor::help_follow_link`)
+    /// updates the active buffer's `KbView.current` in place without
+    /// necessarily changing the active buffer index (see that function's
+    /// use of `kb_view_mut()`/`kb_view()`, both scoped to
+    /// `active_buffer_idx()`). Re-centers the open `*KB Graph*` buffer, in
+    /// place (never re-splits, matching `kb_graph_view_refresh_if_open`'s
+    /// template), on whichever KB node the active buffer is currently
+    /// showing.
+    ///
+    /// Short-circuits to a single `buffers.iter().position` scan (the same
+    /// cost every sibling `kb_graph_view_*` method in this file already
+    /// pays) when no `BufferKind::Graph` window exists — the common case,
+    /// since most commands run with no graph view open. Reads
+    /// `GraphView.follow_current` (snapshotted from the
+    /// `kb_graph_follow_current_node` option when the graph was opened —
+    /// see `kb_graph_view_open`) rather than re-reading the live option, so
+    /// behavior is consistent with `GraphView.depth`'s existing
+    /// snapshot-on-open pattern elsewhere in this file. Only calls
+    /// `populate_graph_buffer` (the actual re-extract + re-flatten work)
+    /// when the active KB node genuinely differs from `GraphView.center_
+    /// node` — a no-op re-navigation (e.g. re-selecting the same node) or a
+    /// command that doesn't touch a KB buffer at all costs nothing beyond
+    /// that one scan plus a cheap field comparison.
+    pub fn maybe_follow_kb_graph_view(&mut self) {
+        let Some(idx) = self
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+        else {
+            return;
+        };
+        let Some((follow, center_node, depth)) = self.buffers[idx]
+            .graph_view()
+            .map(|gv| (gv.follow_current, gv.center_node.clone(), gv.depth))
+        else {
+            return;
+        };
+        if !follow {
+            return;
+        }
+        let Some(current) = self.kb_view().map(|v| v.current.clone()) else {
+            return;
+        };
+        if center_node.as_deref() == Some(current.as_str()) {
+            return;
+        }
+        self.populate_graph_buffer(idx, current, depth);
+        self.mark_full_redraw();
+    }
+
     /// Focus-capture hook (Part A `DrivenWindow::follow_focus_away_from`):
     /// call whenever editor focus changes to any window — keyboard/Scheme-
     /// driven (`dispatch_builtin`'s wrapper) or mouse-driven
@@ -1130,6 +1183,209 @@ mod tests {
         // Must not panic even though `idx` now points at a different (or
         // out-of-range) buffer.
         editor.apply_graph_layout_result(idx, scene);
+    }
+
+    // --- maybe_follow_kb_graph_view (Part C Phase 2, follow-current-node) ---
+
+    #[test]
+    fn follow_recenters_graph_when_active_kb_node_changes() {
+        let mut editor = ed_with_kb_node("concept:a", "A", "[[concept:b]]");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:b",
+            "B",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+
+        // Focus a KB buffer showing concept:a.
+        let kb_idx = editor.ensure_kb_buffer_idx("concept:a");
+        editor.kb_populate_buffer(kb_idx);
+        editor.switch_to_buffer(kb_idx);
+        let kb_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == kb_idx)
+            .map(|w| w.id)
+            .unwrap();
+
+        // Open the graph centered on concept:a — this splits and focuses the
+        // NEW graph window (`display_buffer_split`'s normal behavior).
+        // Simulate the human refocusing the KB window afterward (e.g.
+        // `focus-left`), which is the scenario this feature targets: the
+        // graph is open in a side window while the human browses the KB
+        // buffer in the other one.
+        editor.kb_graph_view_open(Some("concept:a".to_string()), Some(1));
+        editor.window_mgr.set_focused(kb_win_id);
+        assert_eq!(
+            editor.active_buffer_idx(),
+            kb_idx,
+            "refocusing the KB window must make it active again"
+        );
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        assert_eq!(
+            editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .center_node
+                .as_deref(),
+            Some("concept:a")
+        );
+
+        // Simulate in-place KB navigation the way `help_follow_link` does:
+        // mutate the active buffer's `KbView.current` WITHOUT switching the
+        // active buffer index.
+        editor.kb_view_mut().unwrap().navigate_to("concept:b");
+        assert_eq!(editor.active_buffer_idx(), kb_idx);
+
+        editor.maybe_follow_kb_graph_view();
+
+        assert_eq!(
+            editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .center_node
+                .as_deref(),
+            Some("concept:b"),
+            "the graph must re-center on the node the active KB buffer now shows"
+        );
+    }
+
+    #[test]
+    fn follow_is_a_noop_when_the_node_has_not_changed() {
+        let mut editor = ed_with_kb_node("concept:a", "A", "[[concept:b]]");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:b",
+            "B",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        let kb_idx = editor.ensure_kb_buffer_idx("concept:a");
+        editor.kb_populate_buffer(kb_idx);
+        editor.switch_to_buffer(kb_idx);
+        let kb_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == kb_idx)
+            .map(|w| w.id)
+            .unwrap();
+        editor.kb_graph_view_open(Some("concept:a".to_string()), Some(1));
+        editor.window_mgr.set_focused(kb_win_id);
+
+        // First call: no navigation happened since open, so the center node
+        // already matches — must be a no-op (no populate/layout work).
+        editor.pending_graph_layout = None;
+        editor.maybe_follow_kb_graph_view();
+        assert!(
+            editor.pending_graph_layout.is_none(),
+            "re-checking an unchanged node must not queue a re-populate/layout pass"
+        );
+
+        // Navigate once (genuine change) to confirm the harness actually
+        // detects changes, then call again with no further navigation.
+        editor.kb_view_mut().unwrap().navigate_to("concept:b");
+        editor.pending_graph_layout = None;
+        editor.maybe_follow_kb_graph_view();
+        assert!(
+            editor.pending_graph_layout.is_some(),
+            "sanity check: a genuine node change DOES queue a populate/layout pass"
+        );
+
+        // Reset and call again with the node still "concept:b" — no-op.
+        editor.pending_graph_layout = None;
+        editor.maybe_follow_kb_graph_view();
+        assert!(
+            editor.pending_graph_layout.is_none(),
+            "calling again with the same current node must not redo any work"
+        );
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        assert_eq!(
+            editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .center_node
+                .as_deref(),
+            Some("concept:b")
+        );
+    }
+
+    #[test]
+    fn follow_is_a_noop_when_disabled_on_the_graph_view() {
+        let mut editor = ed_with_kb_node("concept:a", "A", "[[concept:b]]");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:b",
+            "B",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        let kb_idx = editor.ensure_kb_buffer_idx("concept:a");
+        editor.kb_populate_buffer(kb_idx);
+        editor.switch_to_buffer(kb_idx);
+        let kb_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == kb_idx)
+            .map(|w| w.id)
+            .unwrap();
+        editor.kb_graph_view_open(Some("concept:a".to_string()), Some(1));
+        editor.window_mgr.set_focused(kb_win_id);
+
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        editor.buffers[graph_idx]
+            .graph_view_mut()
+            .unwrap()
+            .follow_current = false;
+
+        editor.kb_view_mut().unwrap().navigate_to("concept:b");
+        editor.pending_graph_layout = None;
+        editor.maybe_follow_kb_graph_view();
+
+        assert!(
+            editor.pending_graph_layout.is_none(),
+            "disabled follow must not queue any populate/layout work"
+        );
+        assert_eq!(
+            editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .center_node
+                .as_deref(),
+            Some("concept:a"),
+            "disabled follow must leave the graph centered where it was"
+        );
+    }
+
+    #[test]
+    fn follow_is_a_harmless_noop_when_no_graph_view_is_open() {
+        let mut editor = ed_with_kb_node("concept:a", "A", "[[concept:b]]");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:b",
+            "B",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        let kb_idx = editor.ensure_kb_buffer_idx("concept:a");
+        editor.kb_populate_buffer(kb_idx);
+        editor.switch_to_buffer(kb_idx);
+        editor.kb_view_mut().unwrap().navigate_to("concept:b");
+
+        // No `*KB Graph*` buffer exists at all — must return immediately
+        // without creating one or touching any state.
+        let buf_count_before = editor.buffers.len();
+        editor.maybe_follow_kb_graph_view();
+        assert_eq!(editor.buffers.len(), buf_count_before);
+        assert!(!editor.buffers.iter().any(|b| b.kind == BufferKind::Graph));
     }
 
     #[test]
