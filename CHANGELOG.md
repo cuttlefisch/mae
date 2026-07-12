@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- *(agent-cli,mcp)* Enforce permission tiers in --prompt mode; transmit real tool tiers over MCP ([9fdeec7](https://github.com/cuttlefisch/mae/commit/9fdeec7ba3b58f14365a0c6f558b44ebf09447ff))
+- *(ai)* Close ADR-049 test/copy gaps found in self-review ([14ad72d](https://github.com/cuttlefisch/mae/commit/14ad72df0da5ffbb672b62911d1a80036047e552))
+- *(ci)* Explicitly build mae-agent binary before staging artifacts ([37c22c5](https://github.com/cuttlefisch/mae/commit/37c22c58adac32121616f0cb1761644aaadb6b91))
+
+### Documentation
+
+- *(model-support)* Real Ollama exam data for qwen3:latest and llama3-groq-tool-use:8b ([6212902](https://github.com/cuttlefisch/mae/commit/6212902177a0d1d5acb8e8bb58bbbd78bc0390d9))
+- *(model-support)* Real exam data for mistral:7b, llama3.1:8b, qwen3.5:latest ([0711ad0](https://github.com/cuttlefisch/mae/commit/0711ad03b18e8ae14bd7706a157bd094ce821b6a))
+- *(adr)* Add ADR-049, supersede ADR-046's rejected chat deprecation ([f430685](https://github.com/cuttlefisch/mae/commit/f43068569cc7030d0b9a24a022099de01ddae62f))
+
+### Features
+
+- *(agent-cli)* Non-interactive --prompt mode, tool-count filtering, round diagnostics ([edbc5eb](https://github.com/cuttlefisch/mae/commit/edbc5ebc18fd05d29a64bcf54ea3fa681598e630))
+- *(ai)* Relocate guardrail to mae-ai, extend to embedded delegate(), add stage tracking ([51b4c67](https://github.com/cuttlefisch/mae/commit/51b4c670e127b81295dd234df5ca4a4325ba9afc))
+- *(ai)* Wire Ollama's format param for structured tool-call output ([70cbe0a](https://github.com/cuttlefisch/mae/commit/70cbe0a747e8350601cb981ff7de00755d6d23fc))
+- *(kb)* Add missing_role/weakly_linked agenda filters for enrichment discovery ([b7be566](https://github.com/cuttlefisch/mae/commit/b7be56639a477d533c3fe376d68d72e223a0219d))
+- *(ai)* Flip ai_editor default to mae-agent, add ai_chat_enabled gate ([5a96bb4](https://github.com/cuttlefisch/mae/commit/5a96bb472d1f996623b1f70b4ce5a1562fdb1c3a))
+- *(ai)* Redirect ai-prompt to mae-agent shell when chat disabled ([d799274](https://github.com/cuttlefisch/mae/commit/d7992744627830dbff5f307f70b9a4af8ea143e1))
+
+### Testing
+
+- *(agent-cli)* Harden mcp_client.rs + main.rs coverage, add CI smoke check ([c8f29cc](https://github.com/cuttlefisch/mae/commit/c8f29cc4ee1c3aeba1aef3c1c20d542563dab9a4))
+- *(mae)* Close the untested embedded-delegate guardrail wiring + turn-loop gaps ([dd49bae](https://github.com/cuttlefisch/mae/commit/dd49bae1e6d8ce52c5f9f65687f89d84aa84aeb1))
+- *(agent-cli)* Adversarial coverage for mcp_client.rs + confirm.rs boundary matrix ([0029c76](https://github.com/cuttlefisch/mae/commit/0029c7682c3a9eaa4463ff7d2031441212815260))
+- *(ai)* Adversarial coverage for residency_check.rs + execute_kb_agenda ([c526f68](https://github.com/cuttlefisch/mae/commit/c526f681e90190987efbcbf159c84d6b9385b3e4))
+- *(ai)* Cover ai_chat_enabled default/redirect, fix legacy chat tests ([0d6ded1](https://github.com/cuttlefisch/mae/commit/0d6ded1106bd19e8b23fbf12df3f02069cfc1687))
+
+## [0.14.39] - 2026-07-09
+
+### Miscellaneous
+
+- Bump version to 0.14.39 ([c659aa2](https://github.com/cuttlefisch/mae/commit/c659aa24283159f18c818974c538e97224bebace))
+
 ## [0.14.38] - 2026-07-08
 
 ### Bug Fixes
