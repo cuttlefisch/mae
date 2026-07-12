@@ -29,6 +29,7 @@ pub mod file_picker;
 pub mod file_tree;
 pub mod foldable_view;
 pub mod git_status;
+pub mod graph_view_support;
 pub mod grapheme;
 pub mod heading;
 pub mod hooks;

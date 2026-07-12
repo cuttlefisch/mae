@@ -1,16 +1,29 @@
 //! Bridge between KB data and SceneGraph.
 //!
-//! Converts KB nodes and links into a positioned scene graph,
-//! mapping node namespaces to visual kinds and styles.
+//! Converts KB nodes and links into a positioned scene graph. `mae-canvas`
+//! is deliberately kept a leaf crate with no dependency on `mae-kb` — see
+//! `crate::scene::NodeKind`'s doc comment for how its `NodeKind` stays a
+//! structural mirror of `shared_kb::NodeKind` without a hard dependency
+//! edge. Callers pass the node's real kind in via `KbNodeInfo::kind`
+//! (converted from `shared_kb::NodeKind` at the `crates/core` call site,
+//! the first place in the dependency graph that can see both crates);
+//! this module no longer guesses a kind from the id string (the previous
+//! `namespace_to_kind` — deleted once real kinds were threaded through, since
+//! it was a lossy approximation prone to disagreeing with the actual KB
+//! data, e.g. it had no `option:` mapping matching any real `NodeKind`
+//! variant, because no such variant exists upstream).
 
 use crate::layout::{ForceLayout, LayoutConfig};
 use crate::scene::{EdgeStyle, NodeKind, NodeStyle, SceneEdge, SceneGraph, SceneNode, Viewport};
 
-/// A simplified KB node for graph building (no dependency on mae-kb).
+/// A simplified KB node for graph building (no dependency on mae-kb — see
+/// module docs on why `kind` is `crate::scene::NodeKind`, not
+/// `shared_kb::NodeKind`).
 #[derive(Debug, Clone)]
 pub struct KbNodeInfo {
     pub id: String,
     pub title: String,
+    pub kind: NodeKind,
 }
 
 /// Build a scene graph from KB nodes and links.
@@ -42,7 +55,7 @@ pub fn build_kb_graph(
             let angle = 2.0 * std::f64::consts::PI * (i as f64) / (n.max(1) as f64);
             let x = radius * angle.cos();
             let y = radius * angle.sin();
-            let kind = namespace_to_kind(&node.id);
+            let kind = node.kind;
             let is_starter = starter_ids.contains(&node.id);
             let style = kind_to_style(&kind, is_starter);
             let width = (node.title.len() as f64 * 8.0 + 20.0).clamp(80.0, 200.0);
@@ -107,33 +120,29 @@ pub fn build_kb_graph(
     graph
 }
 
-/// Map KB node ID namespace to visual kind.
-fn namespace_to_kind(id: &str) -> NodeKind {
-    if id.starts_with("cmd:") {
-        NodeKind::Command
-    } else if id.starts_with("concept:") {
-        NodeKind::Concept
-    } else if id.starts_with("lesson:") {
-        NodeKind::Lesson
-    } else if id.starts_with("scheme:") {
-        NodeKind::Scheme
-    } else if id.starts_with("option:") {
-        NodeKind::Option
-    } else {
-        NodeKind::Note
-    }
-}
-
 /// Map node kind to visual style.
+// TODO(graph-view Phase 1): route through MAE's Theme/ThemeResolver system
+// (`ui.graph.node.<kind>` keys) instead of this hardcoded palette — tracked
+// in the native KB graph view plan's Phase 1 (theme-driven styling section).
+// This hardcoded table is a Phase-0-appropriate placeholder that simply
+// extends coverage to the real 14-variant `NodeKind`; it is NOT the final
+// styling mechanism.
 fn kind_to_style(kind: &NodeKind, highlighted: bool) -> NodeStyle {
     let (fill, border) = match kind {
-        NodeKind::Concept => ("#1a3a5c", "#4a9eff"),
+        NodeKind::Index => ("#3a2a1a", "#ffaa4a"),
         NodeKind::Command => ("#3a1a3a", "#ff6aff"),
-        NodeKind::Lesson => ("#1a3a1a", "#6aff6a"),
-        NodeKind::Scheme => ("#3a3a1a", "#ffff6a"),
-        NodeKind::Option => ("#2a2a2a", "#aaaaaa"),
+        NodeKind::Concept => ("#1a3a5c", "#4a9eff"),
+        NodeKind::Key => ("#1a2a3a", "#4aaaff"),
         NodeKind::Note => ("#2a2d3e", "#6a6dff"),
-        NodeKind::Custom(_) => ("#2a2d3e", "#4a4d5e"),
+        NodeKind::Project => ("#1a3a3a", "#4affff"),
+        NodeKind::Category => ("#2a1a3a", "#aa4aff"),
+        NodeKind::Lesson => ("#1a3a1a", "#6aff6a"),
+        NodeKind::Tutorial => ("#1a3a1a", "#8fff8f"),
+        NodeKind::Meta => ("#3a1a1a", "#ff6a6a"),
+        NodeKind::Block => ("#2a2a1a", "#cccc4a"),
+        NodeKind::SchemeApi => ("#3a3a1a", "#ffff6a"),
+        NodeKind::Task => ("#1a2a1a", "#6aff9a"),
+        NodeKind::View => ("#2a1a2a", "#ff4aaa"),
     };
     NodeStyle {
         fill: fill.to_string(),
@@ -156,14 +165,17 @@ mod tests {
             KbNodeInfo {
                 id: "concept:buffer".to_string(),
                 title: "Buffer".to_string(),
+                kind: NodeKind::Concept,
             },
             KbNodeInfo {
                 id: "concept:window".to_string(),
                 title: "Window".to_string(),
+                kind: NodeKind::Concept,
             },
             KbNodeInfo {
                 id: "cmd:save".to_string(),
                 title: "Save".to_string(),
+                kind: NodeKind::Command,
             },
         ];
         let links = vec![
@@ -206,13 +218,47 @@ mod tests {
     }
 
     #[test]
-    fn namespace_mapping() {
-        assert_eq!(namespace_to_kind("cmd:save"), NodeKind::Command);
-        assert_eq!(namespace_to_kind("concept:buffer"), NodeKind::Concept);
-        assert_eq!(namespace_to_kind("lesson:intro"), NodeKind::Lesson);
-        assert_eq!(namespace_to_kind("scheme:define"), NodeKind::Scheme);
-        assert_eq!(namespace_to_kind("option:theme"), NodeKind::Option);
-        assert_eq!(namespace_to_kind("my-note"), NodeKind::Note);
+    fn build_graph_uses_the_kind_passed_in_kb_node_info() {
+        // The kind comes straight from KbNodeInfo now (no more id-string
+        // guessing) — a node whose id looks like a concept but is tagged
+        // Task must come out as Task.
+        let nodes = vec![KbNodeInfo {
+            id: "concept:not-really".to_string(),
+            title: "Fooled you".to_string(),
+            kind: NodeKind::Task,
+        }];
+        let graph = build_kb_graph(&nodes, &[], &[], &[]);
+        assert_eq!(graph.nodes[0].kind, NodeKind::Task);
+    }
+
+    #[test]
+    fn kind_to_style_covers_every_variant() {
+        // Exhaustiveness is already enforced by the compiler (no default
+        // arm in kind_to_style's match) — this just guards against a
+        // variant silently sharing a placeholder color with the wrong
+        // neighbor by construction accident (each call must at least run
+        // without panicking for all 14 real NodeKind variants).
+        let all = [
+            NodeKind::Index,
+            NodeKind::Command,
+            NodeKind::Concept,
+            NodeKind::Key,
+            NodeKind::Note,
+            NodeKind::Project,
+            NodeKind::Category,
+            NodeKind::Lesson,
+            NodeKind::Tutorial,
+            NodeKind::Meta,
+            NodeKind::Block,
+            NodeKind::SchemeApi,
+            NodeKind::Task,
+            NodeKind::View,
+        ];
+        for kind in all {
+            let style = kind_to_style(&kind, false);
+            assert!(style.fill.starts_with('#'), "{kind:?} fill: {style:?}");
+            assert!(style.border.starts_with('#'), "{kind:?} border: {style:?}");
+        }
     }
 
     #[test]
@@ -228,10 +274,12 @@ mod tests {
             KbNodeInfo {
                 id: "a".to_string(),
                 title: "Hi".to_string(),
+                kind: NodeKind::Note,
             },
             KbNodeInfo {
                 id: "b".to_string(),
                 title: "A Very Long Title For Testing Width".to_string(),
+                kind: NodeKind::Note,
             },
         ];
         let graph = build_kb_graph(&nodes, &[], &[], &[]);
@@ -244,14 +292,17 @@ mod tests {
             KbNodeInfo {
                 id: "a".to_string(),
                 title: "A".to_string(),
+                kind: NodeKind::Note,
             },
             KbNodeInfo {
                 id: "b".to_string(),
                 title: "B".to_string(),
+                kind: NodeKind::Note,
             },
             KbNodeInfo {
                 id: "c".to_string(),
                 title: "C".to_string(),
+                kind: NodeKind::Note,
             },
         ];
         let links = vec![
