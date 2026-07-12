@@ -13,7 +13,9 @@
 
 use crate::buffer::{Buffer, BufferKind};
 use crate::graph_view::{
-    flatten_scene_graph, GraphLayoutIntent, GraphNavDirection, GraphStyleOptions,
+    flatten_scene_graph, GraphLayoutIntent, GraphLayoutMode, GraphNavDirection, GraphStyleOptions,
+    ANIMATION_COOLING_FACTOR, ANIMATION_INITIAL_TEMPERATURE, ANIMATION_SETTLE_EPSILON,
+    ANIMATION_TEMPERATURE_FLOOR,
 };
 use crate::visual_buffer::VisualBuffer;
 use crate::window::WindowId;
@@ -104,14 +106,28 @@ impl Editor {
             std::slice::from_ref(&center),
         );
 
-        // Queue the background layout refine pass with a snapshot of the
-        // fresh circular-layout scene BEFORE moving `scene` into the view
-        // below, so the background pass refines the same data the view now
-        // holds (not a stale prior scene).
+        // Queue the background layout pass with a snapshot of the fresh
+        // circular-layout scene BEFORE moving `scene` into the view below,
+        // so the background pass refines the same data the view now holds
+        // (not a stale prior scene). Part C Phase 3: when `kb_graph_animate`
+        // is on, request the FIRST animation tick instead of a one-shot
+        // `run()` — `apply_graph_layout_result` takes over queuing every
+        // subsequent tick from there. When off (the default), this is
+        // byte-for-byte the same one-shot `OneShot` request Phase 1/2 always
+        // sent.
+        let mode = if self.kb_graph_animate {
+            GraphLayoutMode::Tick {
+                temperature: ANIMATION_INITIAL_TEMPERATURE,
+            }
+        } else {
+            GraphLayoutMode::OneShot {
+                iterations: self.kb_graph_layout_iterations,
+            }
+        };
         self.pending_graph_layout = Some(GraphLayoutIntent {
             buf_idx,
             scene: scene.clone(),
-            iterations: self.kb_graph_layout_iterations,
+            mode,
         });
 
         let style = self.graph_style_options();
@@ -125,7 +141,28 @@ impl Editor {
             gv.kb_instance = kb_instance;
             gv.scene = scene;
             gv.rendered = rendered;
+            gv.animating = self.kb_graph_animate;
+            gv.anim_temperature = ANIMATION_INITIAL_TEMPERATURE;
         }
+    }
+
+    /// Part C Phase 3: is there an open `BufferKind::Graph` buffer whose
+    /// layout hasn't settled yet, with `kb_graph_animate` enabled? Read by
+    /// `gui_app.rs`'s unified dirty/`ControlFlow::WaitUntil` loop condition
+    /// (mirroring the existing scroll-inertia `any_inertia` term) to decide
+    /// whether to keep the 60fps wake-up cadence alive so animation ticks
+    /// keep flowing through `drain_graph_layout_intent`. Live-reads
+    /// `kb_graph_animate` (not snapshotted) so toggling the option off stops
+    /// the wake-up cadence on the very next check, same as it stops new
+    /// ticks being queued in `apply_graph_layout_result`. Always `false`
+    /// when the option is off, matching every `GraphView.animating` field it
+    /// reads (see that field's doc comment).
+    pub fn has_active_graph_animation(&self) -> bool {
+        self.kb_graph_animate
+            && self
+                .buffers
+                .iter()
+                .any(|b| b.graph_view().map(|gv| gv.animating).unwrap_or(false))
     }
 
     /// Open the KB graph view, centered on `center` (default: whichever KB
@@ -391,10 +428,20 @@ impl Editor {
     /// back onto the owning `GraphView`, re-flattening for render and
     /// marking the buffer dirty. No-op if the buffer no longer exists or is
     /// no longer a `BufferKind::Graph` buffer (closed mid-flight).
+    ///
+    /// `max_displacement` is `None` for a completed `OneShot` `run()` pass
+    /// (Phase 1/2 behavior, unchanged) and `Some(signal)` for a completed
+    /// Phase 3 animation `Tick` — in the latter case, this is also where the
+    /// NEXT tick gets queued (via the same `pending_graph_layout` field
+    /// `graph_view_ops.rs`'s open/refresh paths use), continuing the chain
+    /// until either the settlement signal drops below
+    /// `ANIMATION_SETTLE_EPSILON` or `kb_graph_animate` has been turned off
+    /// in the meantime.
     pub fn apply_graph_layout_result(
         &mut self,
         buf_idx: usize,
         scene: mae_canvas::scene::SceneGraph,
+        max_displacement: Option<f32>,
     ) {
         if buf_idx >= self.buffers.len() || self.buffers[buf_idx].kind != BufferKind::Graph {
             return;
@@ -407,6 +454,33 @@ impl Editor {
             };
         }
         self.mark_full_redraw();
+
+        if let Some(disp) = max_displacement {
+            let settled = disp.abs() < ANIMATION_SETTLE_EPSILON;
+            let still_animating = self.kb_graph_animate && !settled;
+            if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+                gv.animating = still_animating;
+                if still_animating {
+                    gv.anim_temperature = (gv.anim_temperature * ANIMATION_COOLING_FACTOR)
+                        .max(ANIMATION_TEMPERATURE_FLOOR);
+                }
+            }
+            if still_animating {
+                let next_scene = self.buffers[buf_idx]
+                    .graph_view()
+                    .map(|gv| gv.scene.clone());
+                let next_temperature = self.buffers[buf_idx]
+                    .graph_view()
+                    .map(|gv| gv.anim_temperature);
+                if let (Some(scene), Some(temperature)) = (next_scene, next_temperature) {
+                    self.pending_graph_layout = Some(GraphLayoutIntent {
+                        buf_idx,
+                        scene,
+                        mode: GraphLayoutMode::Tick { temperature },
+                    });
+                }
+            }
+        }
     }
 
     /// Follow-current-node (Part C Phase 2): called at the end of
@@ -1153,7 +1227,7 @@ mod tests {
         if let Some(n) = new_scene.nodes.first_mut() {
             n.x = 12345.0;
         }
-        editor.apply_graph_layout_result(idx, new_scene);
+        editor.apply_graph_layout_result(idx, new_scene, None);
 
         assert_eq!(
             editor.buffers[idx]
@@ -1182,7 +1256,7 @@ mod tests {
 
         // Must not panic even though `idx` now points at a different (or
         // out-of-range) buffer.
-        editor.apply_graph_layout_result(idx, scene);
+        editor.apply_graph_layout_result(idx, scene, None);
     }
 
     // --- maybe_follow_kb_graph_view (Part C Phase 2, follow-current-node) ---
@@ -1397,6 +1471,151 @@ mod tests {
             .pending_graph_layout
             .as_ref()
             .expect("open should queue a layout request");
-        assert_eq!(pending.iterations, editor.kb_graph_layout_iterations);
+        match pending.mode {
+            GraphLayoutMode::OneShot { iterations } => {
+                assert_eq!(iterations, editor.kb_graph_layout_iterations);
+            }
+            GraphLayoutMode::Tick { .. } => {
+                panic!("kb_graph_animate defaults to false — open() must queue OneShot, not Tick")
+            }
+        }
+    }
+
+    // --- Part C Phase 3: `kb_graph_animate` physics-animation ticking ---
+
+    #[test]
+    fn animate_disabled_is_byte_for_byte_the_old_one_shot_path() {
+        // The default (`kb_graph_animate = false`) must behave exactly like
+        // Phase 1/2: a single OneShot request, `GraphView.animating` never
+        // set, and `has_active_graph_animation` always false.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        assert!(!editor.kb_graph_animate, "sanity: animate defaults to off");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        assert!(!editor.buffers[idx].graph_view().unwrap().animating);
+        assert!(!editor.has_active_graph_animation());
+
+        // Simulate the OneShot request completing (no settlement signal) —
+        // must not start animating or queue another request.
+        let scene = editor.buffers[idx].graph_view().unwrap().scene.clone();
+        editor.pending_graph_layout = None;
+        editor.apply_graph_layout_result(idx, scene, None);
+        assert!(!editor.buffers[idx].graph_view().unwrap().animating);
+        assert!(editor.pending_graph_layout.is_none());
+        assert!(!editor.has_active_graph_animation());
+    }
+
+    #[test]
+    fn animate_enabled_open_queues_a_tick_not_a_one_shot() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_animate = true;
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        assert!(
+            editor.buffers[idx].graph_view().unwrap().animating,
+            "opening with kb_graph_animate=true should mark the view as animating"
+        );
+        assert!(editor.has_active_graph_animation());
+
+        let pending = editor
+            .pending_graph_layout
+            .as_ref()
+            .expect("open should queue the first animation tick");
+        match pending.mode {
+            GraphLayoutMode::Tick { temperature } => {
+                assert_eq!(temperature, ANIMATION_INITIAL_TEMPERATURE);
+            }
+            GraphLayoutMode::OneShot { .. } => {
+                panic!("kb_graph_animate=true — open() must queue a Tick, not OneShot")
+            }
+        }
+    }
+
+    #[test]
+    fn animate_tick_with_large_displacement_requeues_another_tick() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_animate = true;
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+
+        let scene = editor.buffers[idx].graph_view().unwrap().scene.clone();
+        editor.pending_graph_layout = None;
+        // Well above ANIMATION_SETTLE_EPSILON — still moving.
+        editor.apply_graph_layout_result(idx, scene, Some(10.0));
+
+        assert!(
+            editor.buffers[idx].graph_view().unwrap().animating,
+            "a large settlement signal must keep animating=true"
+        );
+        assert!(editor.has_active_graph_animation());
+        let pending = editor
+            .pending_graph_layout
+            .as_ref()
+            .expect("an unsettled tick result must queue the next tick");
+        assert!(matches!(pending.mode, GraphLayoutMode::Tick { .. }));
+    }
+
+    #[test]
+    fn animate_tick_with_small_displacement_settles_and_stops_requeuing() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_animate = true;
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+
+        let scene = editor.buffers[idx].graph_view().unwrap().scene.clone();
+        editor.pending_graph_layout = None;
+        // Well below ANIMATION_SETTLE_EPSILON — converged.
+        editor.apply_graph_layout_result(idx, scene, Some(0.01));
+
+        assert!(
+            !editor.buffers[idx].graph_view().unwrap().animating,
+            "a small settlement signal must clear animating"
+        );
+        assert!(!editor.has_active_graph_animation());
+        assert!(
+            editor.pending_graph_layout.is_none(),
+            "a settled tick result must NOT queue another tick"
+        );
+    }
+
+    #[test]
+    fn animate_disabled_mid_flight_stops_requeuing_even_with_large_displacement() {
+        // If the user toggles kb_graph_animate off while a tick chain is in
+        // flight, the in-flight result must not resurrect the chain.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_animate = true;
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let scene = editor.buffers[idx].graph_view().unwrap().scene.clone();
+
+        editor.kb_graph_animate = false;
+        editor.pending_graph_layout = None;
+        editor.apply_graph_layout_result(idx, scene, Some(10.0));
+
+        assert!(!editor.buffers[idx].graph_view().unwrap().animating);
+        assert!(!editor.has_active_graph_animation());
+        assert!(editor.pending_graph_layout.is_none());
     }
 }

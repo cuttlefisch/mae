@@ -1312,6 +1312,18 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
             any
         };
 
+        // Part C Phase 3 (`kb_graph_animate`): is a `BufferKind::Graph`
+        // buffer's force layout still settling? Reuses the EXACT same
+        // dirty/`ControlFlow::WaitUntil`-capped-60fps/`Wait` scheduling
+        // pattern as scroll inertia below (per the architecture plan: no
+        // second animation scheduler) — unioned with `any_inertia` so
+        // EITHER keeps the 60fps cadence alive, and only when BOTH are idle
+        // does the loop fall back to `ControlFlow::Wait`. Always `false`
+        // when `kb_graph_animate` is off (the default), so this term never
+        // fires and the loop's idle-vs-ticking behavior is unchanged from
+        // before Phase 3 existed.
+        let graph_animating = self.editor.has_active_graph_animation();
+
         // Frame-capped redraw (60fps = 16.667ms).
         // Emacs pattern (dispnew.c:3254): input-pending bypasses frame cap
         // so keyboard/scroll never waits for the next frame boundary.
@@ -1327,8 +1339,9 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
                     std::time::Instant::now() + (frame_budget - elapsed),
                 ));
             }
-        } else if any_inertia || self.last_scroll_time.is_some() {
-            // Inertia pending or about to activate — keep 60fps cadence.
+        } else if any_inertia || self.last_scroll_time.is_some() || graph_animating {
+            // Inertia pending/about to activate, or a graph layout still
+            // settling — keep 60fps cadence.
             let frame_budget = std::time::Duration::from_micros(16_667);
             event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
                 std::time::Instant::now() + frame_budget,

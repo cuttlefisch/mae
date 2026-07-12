@@ -15,16 +15,18 @@
 
 use mae_canvas::layout::{ForceLayout, LayoutConfig};
 use mae_canvas::scene::SceneGraph;
-use mae_core::GraphLayoutIntent;
+use mae_core::{GraphLayoutIntent, GraphLayoutMode};
 
 /// A request to (re)compute a force-directed layout for the graph-view
 /// buffer at `buf_idx`. Constructed from `mae_core::GraphLayoutIntent`
-/// (`Editor::pending_graph_layout`) by `drain_graph_layout_intent`.
+/// (`Editor::pending_graph_layout`) by `drain_graph_layout_intent`. `mode`
+/// carries `GraphLayoutIntent`'s `OneShot`/`Tick` distinction through
+/// unchanged — see `GraphLayoutMode`'s doc comment.
 #[derive(Debug)]
 pub struct GraphLayoutRequest {
     pub buf_idx: usize,
     pub scene: SceneGraph,
-    pub iterations: usize,
+    pub mode: GraphLayoutMode,
 }
 
 impl From<GraphLayoutIntent> for GraphLayoutRequest {
@@ -32,17 +34,22 @@ impl From<GraphLayoutIntent> for GraphLayoutRequest {
         GraphLayoutRequest {
             buf_idx: intent.buf_idx,
             scene: intent.scene,
-            iterations: intent.iterations,
+            mode: intent.mode,
         }
     }
 }
 
 /// A completed layout, ready to be applied back onto the owning
 /// `GraphView.scene` via `Editor::apply_graph_layout_result`.
+///
+/// `max_displacement` is `None` for a completed `OneShot` `run()` pass
+/// (Phase 1/2, unchanged) and `Some(signal)` — `ForceLayout::step`'s
+/// settlement signal — for a completed Phase 3 animation `Tick`.
 #[derive(Debug)]
 pub struct GraphLayoutResult {
     pub buf_idx: usize,
     pub scene: SceneGraph,
+    pub max_displacement: Option<f32>,
 }
 
 /// Drain `editor.pending_graph_layout` (set by `graph_view_ops.rs` on every
@@ -67,7 +74,10 @@ pub(crate) fn drain_graph_layout_intent(
 
 /// Run one queued layout request on a blocking thread and send the result
 /// back via `proxy`. Called from `bridge_task`'s `select!` arm for
-/// `graph_layout_rx.recv()`.
+/// `graph_layout_rx.recv()`. Both `GraphLayoutMode` variants reuse this same
+/// spawn/channel/proxy plumbing — Phase 3 animation ticking is NOT a second
+/// background mechanism, just a different (single-`step`) computation
+/// dispatched from the same request type.
 pub(crate) fn spawn_layout_computation(
     req: GraphLayoutRequest,
     proxy: winit::event_loop::EventLoopProxy<crate::gui_event::MaeEvent>,
@@ -75,10 +85,19 @@ pub(crate) fn spawn_layout_computation(
     tokio::task::spawn_blocking(move || {
         let mut scene = req.scene;
         let layout = ForceLayout::new(LayoutConfig::default());
-        layout.run(&mut scene.nodes, &scene.edges, req.iterations);
+        let max_displacement = match req.mode {
+            GraphLayoutMode::OneShot { iterations } => {
+                layout.run(&mut scene.nodes, &scene.edges, iterations);
+                None
+            }
+            GraphLayoutMode::Tick { temperature } => {
+                Some(layout.step(&mut scene.nodes, &scene.edges, temperature))
+            }
+        };
         let result = GraphLayoutResult {
             buf_idx: req.buf_idx,
             scene,
+            max_displacement,
         };
         let _ = proxy.send_event(crate::gui_event::MaeEvent::GraphLayoutEvent(result));
     });
@@ -88,7 +107,7 @@ pub(crate) fn spawn_layout_computation(
 /// Thin wrapper so `gui_app.rs`'s `user_event` match arm reads consistently
 /// with `dap_bridge::handle_dap_event`/`lsp_bridge::handle_lsp_event`.
 pub(crate) fn handle_graph_layout_event(editor: &mut mae_core::Editor, result: GraphLayoutResult) {
-    editor.apply_graph_layout_result(result.buf_idx, result.scene);
+    editor.apply_graph_layout_result(result.buf_idx, result.scene, result.max_displacement);
 }
 
 #[cfg(test)]
@@ -100,11 +119,29 @@ mod tests {
         let intent = GraphLayoutIntent {
             buf_idx: 3,
             scene: SceneGraph::new(),
-            iterations: 42,
+            mode: GraphLayoutMode::OneShot { iterations: 42 },
         };
         let req: GraphLayoutRequest = intent.into();
         assert_eq!(req.buf_idx, 3);
-        assert_eq!(req.iterations, 42);
+        assert!(matches!(
+            req.mode,
+            GraphLayoutMode::OneShot { iterations: 42 }
+        ));
+    }
+
+    #[test]
+    fn intent_converts_tick_mode_verbatim() {
+        let intent = GraphLayoutIntent {
+            buf_idx: 7,
+            scene: SceneGraph::new(),
+            mode: GraphLayoutMode::Tick { temperature: 12.5 },
+        };
+        let req: GraphLayoutRequest = intent.into();
+        assert_eq!(req.buf_idx, 7);
+        match req.mode {
+            GraphLayoutMode::Tick { temperature } => assert_eq!(temperature, 12.5),
+            GraphLayoutMode::OneShot { .. } => panic!("expected Tick mode"),
+        }
     }
 
     #[test]
@@ -113,13 +150,16 @@ mod tests {
         editor.pending_graph_layout = Some(GraphLayoutIntent {
             buf_idx: 0,
             scene: SceneGraph::new(),
-            iterations: 10,
+            mode: GraphLayoutMode::OneShot { iterations: 10 },
         });
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         drain_graph_layout_intent(&mut editor, &tx);
         assert!(editor.pending_graph_layout.is_none());
         let received = rx.try_recv().expect("request should have been sent");
-        assert_eq!(received.iterations, 10);
+        assert!(matches!(
+            received.mode,
+            GraphLayoutMode::OneShot { iterations: 10 }
+        ));
     }
 
     #[test]

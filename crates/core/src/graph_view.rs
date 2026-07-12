@@ -46,7 +46,50 @@ pub struct GraphView {
     /// the GUI render path never needs to know about `SceneGraph` at all —
     /// it just draws `rendered` exactly like a `BufferKind::Visual` buffer.
     pub rendered: VisualBuffer,
+    /// Part C Phase 3 (`kb_graph_animate`): true while this graph's layout
+    /// is still settling — i.e. `ForceLayout::step`'s per-tick settlement
+    /// signal (max node displacement) has not yet dropped below
+    /// `ANIMATION_SETTLE_EPSILON`. Always `false` when `kb_graph_animate` is
+    /// off, in which case `populate_graph_buffer` never sets it and the
+    /// one-shot `ForceLayout::run` path (Phase 1/2) behaves exactly as
+    /// before Phase 3 existed. Read by `Editor::has_active_graph_animation`,
+    /// which `gui_app.rs`'s unified dirty/`ControlFlow::WaitUntil` loop
+    /// condition consults (mirroring the scroll-inertia `any_inertia` term)
+    /// to decide whether to keep the 60fps wake-up cadence alive.
+    pub animating: bool,
+    /// Cooling-schedule temperature carried across animation ticks —
+    /// mirrors `ForceLayout::run`'s per-iteration linear cooling, but
+    /// persisted here (rather than as a loop-local variable) because each
+    /// Phase 3 tick is now a separate background round-trip
+    /// (`graph_layout_bridge`) instead of one in-process loop. Reset to
+    /// `ANIMATION_INITIAL_TEMPERATURE` on every fresh (re)populate; not
+    /// meaningful when `animating` is false.
+    pub anim_temperature: f64,
 }
+
+/// Initial per-tick temperature for a freshly (re)populated animated layout
+/// — mirrors `ForceLayout::run`'s first-iteration temperature (`100.0 * (1.0
+/// - 0/iters) = 100.0`).
+pub const ANIMATION_INITIAL_TEMPERATURE: f64 = 100.0;
+/// Per-tick cooling multiplier applied in `apply_graph_layout_result` after
+/// each animation tick, floor-clamped at `ANIMATION_TEMPERATURE_FLOOR`. This
+/// keeps the schedule self-terminating (temperature converges to a floor
+/// rather than staying high indefinitely) without needing `ForceLayout::
+/// run`'s fixed total-iteration-count linear schedule, since Phase 3's tick
+/// count is open-ended (driven by real elapsed frames, not a precomputed
+/// loop bound).
+pub const ANIMATION_COOLING_FACTOR: f64 = 0.92;
+/// Floor for `anim_temperature` — cooling never drives it to (near-)zero,
+/// since forces near equilibrium already produce a shrinking settlement
+/// signal on their own (see `ForceLayout::step`'s doc comment); a nonzero
+/// floor just avoids the schedule stalling at an unproductively tiny
+/// temperature for many ticks before actually reaching equilibrium.
+pub const ANIMATION_TEMPERATURE_FLOOR: f64 = 1.0;
+/// Settlement threshold for `ForceLayout::step`'s max-displacement return
+/// value: once a tick's max displacement drops below this, `GraphView.
+/// animating` flips to `false` and animation ticking stops (until the next
+/// open/refresh/set-depth/follow-current repopulate).
+pub const ANIMATION_SETTLE_EPSILON: f32 = 0.3;
 
 impl GraphView {
     pub fn new() -> Self {
@@ -58,6 +101,8 @@ impl GraphView {
             scene: mae_canvas::scene::SceneGraph::new(),
             companion_window: DrivenWindow::none(),
             rendered: VisualBuffer::new(),
+            animating: false,
+            anim_temperature: ANIMATION_INITIAL_TEMPERATURE,
         }
     }
 }
@@ -129,6 +174,26 @@ pub enum GraphViewIntent {
     SelectCurrent,
 }
 
+/// Which background layout pass a `GraphLayoutIntent` requests.
+///
+/// - `OneShot`: Phase 1/2 behavior (`kb_graph_animate = false`, the
+///   default) — run the full cooling schedule inline on the background
+///   thread in a single round-trip (`ForceLayout::run`). Unchanged from
+///   before Phase 3 existed.
+/// - `Tick`: Phase 3 behavior (`kb_graph_animate = true`) — a single
+///   `ForceLayout::step` at `temperature`, one round-trip per animation
+///   frame. `apply_graph_layout_result` reads the returned settlement
+///   signal and, if not yet settled, queues the *next* tick itself — so
+///   `graph_view_ops.rs` only ever originates the FIRST tick of a run (on
+///   open/refresh/set-depth/follow-current); the chain is self-sustaining
+///   after that, reusing this exact same intent/channel/apply machinery
+///   rather than a second scheduler.
+#[derive(Debug, Clone, Copy)]
+pub enum GraphLayoutMode {
+    OneShot { iterations: usize },
+    Tick { temperature: f64 },
+}
+
 /// A queued request to (re)compute a KB graph's force-directed layout on a
 /// background thread (`mae::graph_layout_bridge`). Set by
 /// `graph_view_ops.rs` on every open/refresh/set-depth, drained once per GUI
@@ -144,7 +209,7 @@ pub enum GraphViewIntent {
 pub struct GraphLayoutIntent {
     pub buf_idx: usize,
     pub scene: mae_canvas::scene::SceneGraph,
-    pub iterations: usize,
+    pub mode: GraphLayoutMode,
 }
 
 /// Resolved, theme-driven styling inputs for `flatten_scene_graph` — sizing
