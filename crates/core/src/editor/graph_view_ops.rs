@@ -245,30 +245,21 @@ impl Editor {
         self.mark_full_redraw();
     }
 
-    /// Navigate the captured companion window (Part A `DrivenWindow`) to
-    /// the currently-selected graph node's KB buffer. Uses the direct
+    /// Navigate the graph's captured companion window (Part A
+    /// `DrivenWindow`) to `node_id`'s KB buffer. Shared by
+    /// `kb_graph_view_select_current` (keyboard/Scheme/MCP: "select the
+    /// currently-highlighted node") and `kb_graph_view_click_at` (mouse:
+    /// "navigate to the clicked node") — both resolve *which* node
+    /// differently but then must do the exact same navigation, so this is
+    /// pure code motion out of what was previously
+    /// `kb_graph_view_select_current`'s body, not new logic. Uses the direct
     /// window-buffer-write idiom, bypassing `display_buffer`'s
     /// reuse-or-split policy entirely — falls back to a normal
     /// `display_buffer` split if no valid companion window is captured yet,
     /// and that new window becomes the companion for next time.
-    pub fn kb_graph_view_select_current(&mut self) {
-        let Some(graph_idx) = self
-            .buffers
-            .iter()
-            .position(|b| b.kind == BufferKind::Graph)
-        else {
-            return;
-        };
-        let Some(node_id) = self.buffers[graph_idx]
-            .graph_view()
-            .and_then(|gv| gv.scene.selected_node())
-            .map(|n| n.id.clone())
-        else {
-            return;
-        };
-
-        self.kb.record_visit(&node_id);
-        let kb_buf_idx = self.ensure_kb_buffer_idx(&node_id);
+    fn navigate_companion_window_to_node(&mut self, graph_idx: usize, node_id: &str) {
+        self.kb.record_visit(node_id);
+        let kb_buf_idx = self.ensure_kb_buffer_idx(node_id);
         self.kb_populate_buffer(kb_buf_idx);
 
         let companion_valid = self.buffers[graph_idx]
@@ -291,6 +282,107 @@ impl Editor {
                 .map(|w| w.id);
             if let Some(gv) = self.buffers[graph_idx].graph_view_mut() {
                 gv.companion_window.set(new_win_id);
+            }
+        }
+    }
+
+    /// Navigate the captured companion window (Part A `DrivenWindow`) to
+    /// the currently-selected graph node's KB buffer. See
+    /// `navigate_companion_window_to_node` for the shared navigation logic.
+    pub fn kb_graph_view_select_current(&mut self) {
+        let Some(graph_idx) = self
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+        else {
+            return;
+        };
+        let Some(node_id) = self.buffers[graph_idx]
+            .graph_view()
+            .and_then(|gv| gv.scene.selected_node())
+            .map(|n| n.id.clone())
+        else {
+            return;
+        };
+        self.navigate_companion_window_to_node(graph_idx, &node_id);
+    }
+
+    /// Mouse click-to-navigate (Part C Phase 1 item 6): `graph_win_id` is
+    /// the window a click just landed in (already confirmed by the caller —
+    /// `gui_app.rs`'s `handle_mouse_button_pressed` — to be showing a
+    /// `BufferKind::Graph` buffer); `rel_x`/`rel_y` are the click's pixel
+    /// position relative to that window's content rect (top-left origin),
+    /// NOT raw screen pixels and NOT text cells — the graph is drawn via
+    /// the Skia `VisualBuffer` pixel pipeline, not the text-cell layout
+    /// pipeline.
+    ///
+    /// Converts to scene coordinates and hit-tests against the graph's
+    /// `SceneGraph`. On a hit: selects that node (mirroring keyboard-nav's
+    /// selection-highlight behavior) and navigates the captured companion
+    /// window to it via the same shared logic `kb_graph_view_select_current`
+    /// uses. On a miss (click landed on empty canvas): clears the
+    /// selection — an explicit deselect, since the user visibly clicked
+    /// empty space — and is otherwise a harmless no-op (no navigation, no
+    /// panic). Either way, `rendered` is re-flattened so the (de)selection
+    /// highlight is visible immediately, matching `kb_graph_view_navigate`'s
+    /// behavior.
+    ///
+    /// NOTE: `flatten_scene_graph` (the current GUI renderer for
+    /// `BufferKind::Graph`, see `crates/gui/src/lib.rs`'s
+    /// `render_visual_buffer_with_bg`) does not yet apply
+    /// `SceneGraph.viewport`'s pan/zoom transform to node positions — it
+    /// draws `SceneNode.x/y` directly as window-relative pixel offsets.
+    /// Phase 4 (drag-to-pin/wheel-zoom, explicitly out of scope here) is
+    /// where a real camera transform gets wired into the renderer and this
+    /// hit-test path together. Until then, `viewport_to_scene` is called
+    /// with the viewport's width/height zeroed out (neutralizing its
+    /// centering term, `(screen - dimension/2)/zoom`) so hit-testing stays
+    /// consistent with what's actually drawn on screen today — using the
+    /// viewport's `zoom`/`center` unchanged keeps this forward-compatible
+    /// with whenever Phase 4 wires pan/zoom into both sides together.
+    pub fn kb_graph_view_click_at(&mut self, graph_win_id: WindowId, rel_x: f32, rel_y: f32) {
+        let Some(buf_idx) = self.window_mgr.window(graph_win_id).map(|w| w.buffer_idx) else {
+            return;
+        };
+        if buf_idx >= self.buffers.len() || self.buffers[buf_idx].kind != BufferKind::Graph {
+            return;
+        }
+
+        let hit_result: Option<Option<usize>> = self.buffers[buf_idx].graph_view().map(|gv| {
+            let vp = &gv.scene.viewport;
+            let neutral_vp = mae_canvas::scene::Viewport {
+                width: 0.0,
+                height: 0.0,
+                zoom: vp.zoom,
+                center_x: vp.center_x,
+                center_y: vp.center_y,
+            };
+            let (scene_x, scene_y) =
+                mae_canvas::interaction::viewport_to_scene(&neutral_vp, rel_x as f64, rel_y as f64);
+            mae_canvas::interaction::hit_test(&gv.scene, scene_x, scene_y)
+        });
+        let Some(node_hit) = hit_result else {
+            return;
+        };
+
+        if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+            gv.scene.selection = node_hit;
+        }
+        let style = self.graph_style_options();
+        if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+            gv.rendered = VisualBuffer {
+                elements: flatten_scene_graph(&gv.scene, &style),
+            };
+        }
+        self.mark_full_redraw();
+
+        if let Some(node_idx) = node_hit {
+            let node_id = self.buffers[buf_idx]
+                .graph_view()
+                .and_then(|gv| gv.scene.nodes.get(node_idx))
+                .map(|n| n.id.clone());
+            if let Some(node_id) = node_id {
+                self.navigate_companion_window_to_node(buf_idx, &node_id);
             }
         }
     }
@@ -700,6 +792,228 @@ mod tests {
             companion_win.buffer_idx, kb_idx,
             "the captured companion window must now show the selected node's KB buffer"
         );
+    }
+
+    // --- kb_graph_view_click_at (Part C Phase 1 item 6, mouse click-to-navigate) ---
+    //
+    // No literal GUI event-loop / winit glue is exercised here (that lives in
+    // `crates/mae/src/gui_app.rs::handle_mouse_button_pressed`, which isn't
+    // reachable from this crate's test harness) — these test at the
+    // `Editor`-level function boundary instead, exactly like the rest of
+    // this file's `select_current`/`navigate` coverage, and like Part B's
+    // idle-dispatch work handled the same class of limitation. The
+    // pixel->scene conversion itself is exercised end-to-end here by reading
+    // back a node's REAL post-layout `(x, y)` from the scene and clicking at
+    // that exact coordinate — not a hand-picked "unicorn" value that happens
+    // to work, but the actual position the current circular layout produces.
+
+    #[test]
+    fn click_hits_node_selects_it_and_navigates_companion() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "[[concept:window]]");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:window",
+            "Window",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), Some(1));
+
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+
+        // Read back node 0's REAL layout position and click exactly there.
+        let (node_id, x, y) = {
+            let gv = editor.buffers[graph_idx].graph_view().unwrap();
+            assert!(
+                gv.scene.nodes.len() >= 2,
+                "a center node + its one link should both be present at depth 1"
+            );
+            let node = &gv.scene.nodes[0];
+            (node.id.clone(), node.x as f32, node.y as f32)
+        };
+
+        editor.kb_graph_view_click_at(graph_win_id, x, y);
+
+        assert_eq!(
+            editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .scene
+                .selection,
+            Some(0),
+            "clicking a node must select it, mirroring keyboard-nav selection"
+        );
+
+        let kb_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kb_view().map(|kv| kv.current == node_id).unwrap_or(false))
+            .expect("a KB buffer for the clicked node should have been created");
+        assert!(
+            editor
+                .window_mgr
+                .iter_windows()
+                .any(|w| w.buffer_idx == kb_idx),
+            "the clicked node's KB buffer must be displayed in the companion window"
+        );
+    }
+
+    #[test]
+    fn click_reuses_captured_companion_without_resplitting() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+
+        let area = editor.default_area();
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        let text_idx = editor.buffers.len();
+        editor.buffers.push(Buffer::new());
+        let companion_win_id = editor
+            .window_mgr
+            .split(SplitDirection::Vertical, text_idx, area)
+            .expect("split should succeed");
+        editor.buffers[graph_idx]
+            .graph_view_mut()
+            .unwrap()
+            .companion_window
+            .set(Some(companion_win_id));
+
+        let (x, y) = {
+            let gv = editor.buffers[graph_idx].graph_view().unwrap();
+            let node = &gv.scene.nodes[0];
+            (node.x as f32, node.y as f32)
+        };
+
+        let window_count_before = editor.window_mgr.iter_windows().count();
+        editor.kb_graph_view_click_at(graph_win_id, x, y);
+        let window_count_after = editor.window_mgr.iter_windows().count();
+
+        assert_eq!(
+            window_count_before, window_count_after,
+            "reusing the captured companion via a click must never split"
+        );
+        let companion_win = editor.window_mgr.window(companion_win_id).unwrap();
+        let kb_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Kb)
+            .unwrap();
+        assert_eq!(
+            companion_win.buffer_idx, kb_idx,
+            "the captured companion window must now show the clicked node's KB buffer"
+        );
+    }
+
+    #[test]
+    fn click_miss_deselects_and_does_not_navigate() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        // Pre-select a node, as keyboard nav would have left it.
+        editor.buffers[graph_idx]
+            .graph_view_mut()
+            .unwrap()
+            .scene
+            .selection = Some(0);
+
+        let kb_buf_count_before = editor
+            .buffers
+            .iter()
+            .filter(|b| b.kind == BufferKind::Kb)
+            .count();
+        let window_count_before = editor.window_mgr.iter_windows().count();
+
+        // Click far away from any node's bounding box — a guaranteed miss.
+        editor.kb_graph_view_click_at(graph_win_id, 1_000_000.0, 1_000_000.0);
+
+        assert_eq!(
+            editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .scene
+                .selection,
+            None,
+            "a miss must clear the selection (explicit deselect)"
+        );
+        assert_eq!(
+            editor
+                .buffers
+                .iter()
+                .filter(|b| b.kind == BufferKind::Kb)
+                .count(),
+            kb_buf_count_before,
+            "a miss must not create/navigate any KB buffer"
+        );
+        assert_eq!(
+            editor.window_mgr.iter_windows().count(),
+            window_count_before,
+            "a miss must not open/close/split any window"
+        );
+    }
+
+    #[test]
+    fn click_on_a_non_graph_window_is_a_harmless_no_op() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        // `kb_graph_view_open` splits, so there should be a non-graph window too.
+        let non_graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx != graph_idx)
+            .map(|w| w.id)
+            .expect("opening the graph view should have split");
+
+        let buf_count_before = editor.buffers.len();
+        let window_count_before = editor.window_mgr.iter_windows().count();
+
+        editor.kb_graph_view_click_at(non_graph_win_id, 0.0, 0.0);
+
+        assert_eq!(editor.buffers.len(), buf_count_before);
+        assert_eq!(
+            editor.window_mgr.iter_windows().count(),
+            window_count_before
+        );
+    }
+
+    #[test]
+    fn click_with_a_stale_window_id_does_not_panic() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        // 999_999 was never allocated by this WindowManager.
+        editor.kb_graph_view_click_at(999_999, 0.0, 0.0);
     }
 
     #[test]

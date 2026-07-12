@@ -473,10 +473,13 @@ impl super::Editor {
                 // companion-window capture hook is called here too — same
                 // shared helper as `dispatch_builtin`'s hook, just a
                 // different focus-change entry point. Mouse click-to-select
-                // on graph nodes themselves is a later follow-up (Phase 1
-                // scope excludes mouse), but this keeps the capture correct
-                // today for e.g. clicking a DIFFERENT window while the
-                // graph view is open.
+                // on graph nodes themselves is handled separately, in
+                // `gui_app.rs`'s `handle_mouse_button_pressed` via
+                // `Editor::kb_graph_view_click_at` (Phase 1 item 6) — this
+                // hook keeps the companion capture correct for the more
+                // general case of clicking a DIFFERENT window while the
+                // graph view is open (including clicking the graph window
+                // itself, which is `guard_window` and thus ignored here).
                 self.capture_graph_companion_focus(win_id);
                 return true;
             }

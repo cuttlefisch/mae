@@ -628,11 +628,46 @@ impl GuiApp {
                 self.editor.lsp.hover_popup = None;
                 self.editor.lsp.code_action_menu = None;
 
+                let focused_id = self.editor.window_mgr.focused_id();
+
+                // Native KB graph view (Part C Phase 1 item 6): a
+                // `BufferKind::Graph` window is drawn via the Skia
+                // `VisualBuffer` pixel pipeline (`render_visual_buffer_with_bg`
+                // in `crates/gui/src/lib.rs`), not the text-cell `FrameLayout`
+                // pipeline below — it has no `FrameLayout` at all, so the
+                // fallthrough below would silently mis-hit-test it (today it
+                // falls into `handle_mouse_click_shift`, which doesn't
+                // understand graph nodes). Intercept here, before that
+                // fallthrough, and hand off to node hit-testing instead.
+                let focused_buf_idx = self
+                    .editor
+                    .window_mgr
+                    .window(focused_id)
+                    .map(|w| w.buffer_idx);
+                let is_graph_window = focused_buf_idx
+                    .and_then(|idx| self.editor.buffers.get(idx))
+                    .is_some_and(|b| b.kind == mae_core::BufferKind::Graph);
+                if is_graph_window {
+                    let window_rect = self
+                        .editor
+                        .window_mgr
+                        .layout_rects(self.editor.last_layout_area)
+                        .into_iter()
+                        .find(|(id, _)| *id == focused_id)
+                        .map(|(_, rect)| rect);
+                    if let Some(rect) = window_rect {
+                        let rel_x = self.cursor_x as f32 - (rect.x as f32 * cell_w);
+                        let rel_y = self.cursor_y as f32 - (rect.y as f32 * cell_h);
+                        self.editor.kb_graph_view_click_at(focused_id, rel_x, rel_y);
+                        self.dirty = true;
+                    }
+                    return;
+                }
+
                 // Try pixel-precise positioning via cached FrameLayout
                 // (handles scaled headings and folded lines correctly).
                 let px_x = self.cursor_x as f32;
                 let px_y = self.cursor_y as f32;
-                let focused_id = self.editor.window_mgr.focused_id();
                 let fl = self.renderer.window_layout(focused_id);
                 if let Some(fl) = fl {
                     if let Some((buf_row, char_col)) = fl.pixel_to_buffer_position(px_x, px_y) {
