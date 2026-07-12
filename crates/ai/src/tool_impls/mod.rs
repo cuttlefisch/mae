@@ -49,12 +49,15 @@ pub use image::{execute_image_info, execute_image_list};
 pub use introspect::execute_introspect;
 pub use kb::{
     execute_kb_add_link, execute_kb_agenda, execute_kb_create, execute_kb_delete, execute_kb_get,
-    execute_kb_graph, execute_kb_health, execute_kb_history, execute_kb_id_audit,
-    execute_kb_links_from, execute_kb_links_to, execute_kb_list, execute_kb_neighborhood,
-    execute_kb_raw_query, execute_kb_register, execute_kb_reimport, execute_kb_related,
-    execute_kb_restore, execute_kb_search, execute_kb_search_context, execute_kb_set_ai_residency,
-    execute_kb_set_role, execute_kb_shortest_path, execute_kb_sync_status, execute_kb_unregister,
-    execute_kb_update, execute_kb_vector_search, execute_kb_view_query,
+    execute_kb_graph, execute_kb_graph_view_close, execute_kb_graph_view_navigate,
+    execute_kb_graph_view_open, execute_kb_graph_view_refresh,
+    execute_kb_graph_view_select_current, execute_kb_graph_view_set_depth, execute_kb_health,
+    execute_kb_history, execute_kb_id_audit, execute_kb_links_from, execute_kb_links_to,
+    execute_kb_list, execute_kb_neighborhood, execute_kb_raw_query, execute_kb_register,
+    execute_kb_reimport, execute_kb_related, execute_kb_restore, execute_kb_search,
+    execute_kb_search_context, execute_kb_set_ai_residency, execute_kb_set_role,
+    execute_kb_shortest_path, execute_kb_sync_status, execute_kb_unregister, execute_kb_update,
+    execute_kb_vector_search, execute_kb_view_query,
 };
 pub use lsp::execute_lsp_diagnostics;
 pub use project::{

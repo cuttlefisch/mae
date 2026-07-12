@@ -218,6 +218,13 @@ impl super::Editor {
             }
             "which_key_idle_delay" => self.which_key_idle_delay.to_string(),
             "kb_preview_idle_delay" => self.kb_preview_idle_delay.to_string(),
+            "kb_graph_default_depth" => self.kb_graph_default_depth.to_string(),
+            "kb_graph_include_backlinks" => self.kb_graph_include_backlinks.to_string(),
+            "kb_graph_node_radius" => self.kb_graph_node_radius.to_string(),
+            "kb_graph_font_size" => self.kb_graph_font_size.to_string(),
+            "kb_graph_layout_iterations" => self.kb_graph_layout_iterations.to_string(),
+            "kb_graph_follow_current_node" => self.kb_graph_follow_current_node.to_string(),
+            "kb_graph_animate" => self.kb_graph_animate.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -915,6 +922,39 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.kb_preview_idle_delay = v.clamp(0, 60_000);
+            }
+            "kb_graph_default_depth" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_graph_default_depth = v.clamp(0, 10);
+            }
+            "kb_graph_include_backlinks" => {
+                self.kb_graph_include_backlinks = parse_option_bool(value)?;
+            }
+            "kb_graph_node_radius" => {
+                let v: u32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_graph_node_radius = v.clamp(1, 500);
+            }
+            "kb_graph_font_size" => {
+                let v: u32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_graph_font_size = v.clamp(1, 200);
+            }
+            "kb_graph_layout_iterations" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_graph_layout_iterations = v.clamp(0, 10_000);
+            }
+            "kb_graph_follow_current_node" => {
+                self.kb_graph_follow_current_node = parse_option_bool(value)?;
+            }
+            "kb_graph_animate" => {
+                self.kb_graph_animate = parse_option_bool(value)?;
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }

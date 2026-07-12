@@ -24,6 +24,7 @@ use crate::vm::Vm;
 
 mod editor_ops;
 mod io_packages;
+mod kb_graph_view;
 mod kb_primitives;
 mod kb_queries;
 mod keybindings;
@@ -37,6 +38,7 @@ mod test_primitives;
 
 use editor_ops::register_editor_ops_fns;
 use io_packages::register_io_package_fns;
+use kb_graph_view::register_kb_graph_view_fns;
 use kb_primitives::register_kb_primitive_fns;
 use kb_queries::register_kb_query_fns;
 use keybindings::register_keybinding_fns;
@@ -152,6 +154,11 @@ struct SharedState {
     /// Pending KB collaboration lifecycle actions from `(kb-share)` etc. — lowered
     /// to `CollabIntent`s editor-side via `Editor::queue_kb_collab_action`.
     pending_kb_collab_actions: Vec<mae_core::KbCollabAction>,
+    /// Pending native KB graph-view intents from `(kb-graph-view-open)` etc.
+    /// (Part C Phase 1) — drained in order into the matching
+    /// `Editor::kb_graph_view_*` method, mirroring
+    /// `pending_kb_collab_actions` above.
+    pending_graph_view_intents: Vec<mae_core::GraphViewIntent>,
     /// Daemon control channel (cloned from `editor.kb` on each state sync) so
     /// synchronous-return primitives like `(kb-share-p2p)` can drive the same
     /// backend as the command + MCP tool (ADR-025 §"Driving surfaces").
@@ -403,6 +410,7 @@ impl SchemeRuntime {
         register_io_package_fns(&mut vm, &shared);
         register_kb_primitive_fns(&mut vm, &shared);
         register_kb_query_fns(&mut vm, &shared);
+        register_kb_graph_view_fns(&mut vm, &shared);
         register_misc_primitive_fns(&mut vm, &shared);
         register_test_primitive_fns(&mut vm, &shared);
 

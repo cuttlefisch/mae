@@ -1687,3 +1687,164 @@ fn current_command_variable_exists() {
     let result = rt.eval("*current-command*").unwrap();
     assert!(result.is_empty());
 }
+
+// --- Native KB graph view primitives (Part C Phase 1) ---
+//
+// Same 3-step pattern as `define_key_from_scheme` etc.: eval, then
+// `apply_to_editor` to drain the queued `GraphViewIntent` into the matching
+// `Editor::kb_graph_view_*` method — confirming the Scheme primitive and the
+// `Editor` method (also used by the MCP tool + keybinding) are the same
+// code path, not a parallel reimplementation (CLAUDE.md principle #3).
+
+#[test]
+fn kb_graph_view_open_from_scheme_creates_graph_buffer() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new(); // seeds the built-in "index" node
+
+    rt.eval(r#"(kb-graph-view-open "index" 1)"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    let idx = editor
+        .buffers
+        .iter()
+        .position(|b| b.kind == mae_core::BufferKind::Graph)
+        .expect("kb-graph-view-open should create a Graph buffer");
+    assert_eq!(
+        editor.buffers[idx]
+            .graph_view()
+            .unwrap()
+            .center_node
+            .as_deref(),
+        Some("index")
+    );
+    assert_eq!(editor.buffers[idx].graph_view().unwrap().depth, 1);
+}
+
+#[test]
+fn kb_graph_view_open_defaults_center_and_depth_when_omitted() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+
+    rt.eval("(kb-graph-view-open)").unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    let idx = editor
+        .buffers
+        .iter()
+        .position(|b| b.kind == mae_core::BufferKind::Graph)
+        .unwrap();
+    assert_eq!(
+        editor.buffers[idx]
+            .graph_view()
+            .unwrap()
+            .center_node
+            .as_deref(),
+        Some("index")
+    );
+    assert_eq!(
+        editor.buffers[idx].graph_view().unwrap().depth,
+        editor.kb_graph_default_depth
+    );
+}
+
+#[test]
+fn kb_graph_view_close_from_scheme_removes_the_buffer() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    rt.eval(r#"(kb-graph-view-open "index" 1)"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+    assert!(editor
+        .buffers
+        .iter()
+        .any(|b| b.kind == mae_core::BufferKind::Graph));
+
+    rt.eval("(kb-graph-view-close)").unwrap();
+    rt.apply_to_editor(&mut editor);
+    assert!(!editor
+        .buffers
+        .iter()
+        .any(|b| b.kind == mae_core::BufferKind::Graph));
+}
+
+#[test]
+fn kb_graph_view_refresh_from_scheme_is_a_no_op_when_not_open() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    rt.eval("(kb-graph-view-refresh)").unwrap();
+    // Must not panic/error even with nothing open.
+    rt.apply_to_editor(&mut editor);
+    assert!(!editor
+        .buffers
+        .iter()
+        .any(|b| b.kind == mae_core::BufferKind::Graph));
+}
+
+#[test]
+fn kb_graph_view_set_depth_from_scheme_updates_depth_in_place() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    rt.eval(r#"(kb-graph-view-open "index" 1)"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+    let window_count_before = editor.window_mgr.iter_windows().count();
+
+    rt.eval("(kb-graph-view-set-depth 3)").unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    let idx = editor
+        .buffers
+        .iter()
+        .position(|b| b.kind == mae_core::BufferKind::Graph)
+        .unwrap();
+    assert_eq!(editor.buffers[idx].graph_view().unwrap().depth, 3);
+    assert_eq!(
+        editor.window_mgr.iter_windows().count(),
+        window_count_before,
+        "set-depth must refresh in place, not re-split"
+    );
+}
+
+#[test]
+fn kb_graph_view_navigate_valid_direction_from_scheme() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    rt.eval(r#"(kb-graph-view-open "index" 1)"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    rt.eval(r#"(kb-graph-view-navigate "right")"#).unwrap();
+    // Must not panic/error — the exact selection outcome depends on the
+    // seeded KB's topology, so this just confirms the primitive routes
+    // through to `Editor::kb_graph_view_navigate` without error.
+    rt.apply_to_editor(&mut editor);
+}
+
+#[test]
+fn kb_graph_view_navigate_invalid_direction_errors() {
+    let mut rt = new_runtime();
+    let err = rt
+        .eval(r#"(kb-graph-view-navigate "sideways")"#)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("sideways")
+            || err.to_string().to_lowercase().contains("direction"),
+        "error should mention the invalid direction: {err}"
+    );
+}
+
+#[test]
+fn kb_graph_view_select_current_from_scheme_navigates_companion() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    rt.eval(r#"(kb-graph-view-open "index" 1)"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    rt.eval("(kb-graph-view-select-current)").unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    assert!(
+        editor
+            .buffers
+            .iter()
+            .any(|b| b.kind == mae_core::BufferKind::Kb),
+        "select-current should have opened/found a KB buffer for the selected node"
+    );
+}

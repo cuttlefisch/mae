@@ -127,6 +127,29 @@ gray = "#a89984"
 "ui.collab.selection.7" = { bg = "#94A3B8" }
 "ui.collab.label" = { fg = "white", bold = true }
 
+# Native KB graph view (Part C). Falls back through Theme::style's
+# dot-hierarchy (ui.graph.node.<kind> -> ui.graph.node -> ui.graph -> ui.text
+# -> default) for themes that don't define every kind-specific key below.
+"ui.graph.background" = { bg = "black" }
+"ui.graph.node" = { fg = "white" }
+"ui.graph.node.index" = { fg = "#ffaa4a" }
+"ui.graph.node.command" = { fg = "#ff6aff" }
+"ui.graph.node.concept" = { fg = "#4a9eff" }
+"ui.graph.node.key" = { fg = "#4aaaff" }
+"ui.graph.node.note" = { fg = "#6a6dff" }
+"ui.graph.node.project" = { fg = "#4affff" }
+"ui.graph.node.category" = { fg = "#aa4aff" }
+"ui.graph.node.lesson" = { fg = "#6aff6a" }
+"ui.graph.node.tutorial" = { fg = "#8fff8f" }
+"ui.graph.node.meta" = { fg = "#ff6a6a" }
+"ui.graph.node.block" = { fg = "#cccc4a" }
+"ui.graph.node.scheme_api" = { fg = "#ffff6a" }
+"ui.graph.node.task" = { fg = "#6aff9a" }
+"ui.graph.node.view" = { fg = "#ff4aaa" }
+"ui.graph.node.selected" = { fg = "#ff9933" }
+"ui.graph.edge" = { fg = "#6a6d7e" }
+"ui.graph.edge.boundary" = { fg = "#ff6666" }
+
 "diff.added" = { fg = "green" }
 "diff.removed" = { fg = "red" }
 "diff.hunk" = { fg = "magenta" }

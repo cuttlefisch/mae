@@ -167,6 +167,103 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             },
             permission: Some(PermissionTier::ReadOnly),
         },
+        // --- Native KB graph view (Part C Phase 1) ---
+        ToolDefinition {
+            name: "kb_graph_view_open".into(),
+            description: "Open the native KB graph view — a force-directed local ego-network panel around a KB node, distinct from kb_graph (which just answers a raw BFS query). Centers on `id` (default: whichever KB node the *KB* buffer is currently showing, else \"index\") at `depth` hops (default: the kb_graph_default_depth option). Reuses the existing graph window if already open.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "KB node id to center the graph on".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "depth".into(),
+                        ToolProperty {
+                            prop_type: "integer".into(),
+                            description: "Hop radius (default: kb_graph_default_depth option)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "kb_graph_view_close".into(),
+            description: "Close the native KB graph view, if open.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "kb_graph_view_refresh".into(),
+            description: "Refresh the native KB graph view in place (same center node/depth, freshly re-extracted data) if it's open. Never re-splits or steals focus.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "kb_graph_view_set_depth".into(),
+            description: "Change the native KB graph view's hop radius and refresh in place.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "depth".into(),
+                    ToolProperty {
+                        prop_type: "integer".into(),
+                        description: "New hop radius".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["depth".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "kb_graph_view_navigate".into(),
+            description: "Move the native KB graph view's node selection toward a direction.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "direction".into(),
+                    ToolProperty {
+                        prop_type: "string".into(),
+                        description: "Direction to move the selection".into(),
+                        enum_values: Some(vec![
+                            "up".into(),
+                            "down".into(),
+                            "left".into(),
+                            "right".into(),
+                        ]),
+                    },
+                )]),
+                required: vec!["direction".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "kb_graph_view_select_current".into(),
+            description: "Navigate the graph view's captured companion window (the last non-graph window focused) to the currently-selected node's KB buffer — NOT the graph window itself.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
         ToolDefinition {
             name: "help_open".into(),
             description: "Look up MAE manual content for your own reasoning (searches builtin nodes first, falls back to user KB). Does not open a visible buffer. To show help to the user, suggest `:help <topic>`. Falls back to the `index` node if the id isn't found.".into(),

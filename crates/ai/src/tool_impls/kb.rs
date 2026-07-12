@@ -624,6 +624,98 @@ pub fn execute_kb_update(editor: &mut Editor, args: &serde_json::Value) -> Resul
     }
 }
 
+// --- Native KB graph view (Part C Phase 1) ---
+//
+// Each executor calls the SAME `Editor::kb_graph_view_*` method the Scheme
+// primitives (`runtime/kb_graph_view.rs`) and buffer-local keybindings
+// call — CLAUDE.md principle #3 (AI/human parity).
+
+pub fn execute_kb_graph_view_open(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let depth = args
+        .get("depth")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+    editor.kb_graph_view_open(id, depth);
+
+    let idx = editor
+        .buffers
+        .iter()
+        .position(|b| b.kind == mae_core::BufferKind::Graph)
+        .ok_or("kb_graph_view_open: failed to create the graph buffer")?;
+    let gv = editor.buffers[idx]
+        .graph_view()
+        .ok_or("kb_graph_view_open: graph buffer has no GraphView state")?;
+    serde_json::to_string_pretty(&serde_json::json!({
+        "center": gv.center_node,
+        "depth": gv.depth,
+        "kb_instance": gv.kb_instance,
+        "node_count": gv.scene.nodes.len(),
+        "edge_count": gv.scene.edges.len(),
+    }))
+    .map_err(|e| e.to_string())
+}
+
+pub fn execute_kb_graph_view_close(
+    editor: &mut Editor,
+    _args: &serde_json::Value,
+) -> Result<String, String> {
+    editor.kb_graph_view_close();
+    Ok("KB graph view closed".to_string())
+}
+
+pub fn execute_kb_graph_view_refresh(
+    editor: &mut Editor,
+    _args: &serde_json::Value,
+) -> Result<String, String> {
+    editor.kb_graph_view_refresh_if_open();
+    Ok("KB graph view refreshed".to_string())
+}
+
+pub fn execute_kb_graph_view_set_depth(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let depth = args
+        .get("depth")
+        .and_then(|v| v.as_u64())
+        .ok_or("Missing required parameter: depth")? as usize;
+    editor.kb_graph_view_set_depth(depth);
+    Ok(format!("KB graph view depth set to {}", depth))
+}
+
+pub fn execute_kb_graph_view_navigate(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let dir_str = args
+        .get("direction")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: direction")?;
+    let dir = mae_core::GraphNavDirection::parse(dir_str).ok_or_else(|| {
+        format!(
+            "Invalid direction '{}': expected up|down|left|right",
+            dir_str
+        )
+    })?;
+    editor.kb_graph_view_navigate(dir);
+    Ok(format!("KB graph view navigated {}", dir_str))
+}
+
+pub fn execute_kb_graph_view_select_current(
+    editor: &mut Editor,
+    _args: &serde_json::Value,
+) -> Result<String, String> {
+    editor.kb_graph_view_select_current();
+    Ok("Companion window navigated to the selected node".to_string())
+}
+
 pub fn execute_kb_delete(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
     let id = args
         .get("id")
@@ -1266,6 +1358,101 @@ mod tests {
         let editor = Editor::new();
         let err = execute_kb_get(&editor, &serde_json::json!({})).unwrap_err();
         assert!(err.contains("id"));
+    }
+
+    #[test]
+    fn kb_graph_view_open_creates_buffer_and_returns_summary() {
+        let mut editor = Editor::new();
+        let result = execute_kb_graph_view_open(
+            &mut editor,
+            &serde_json::json!({"id": "index", "depth": 1}),
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["center"], "index");
+        assert_eq!(v["depth"], 1);
+        assert!(editor
+            .buffers
+            .iter()
+            .any(|b| b.kind == mae_core::BufferKind::Graph));
+    }
+
+    #[test]
+    fn kb_graph_view_open_defaults_center_and_depth() {
+        let mut editor = Editor::new();
+        let result = execute_kb_graph_view_open(&mut editor, &serde_json::json!({})).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["center"], "index");
+        assert_eq!(v["depth"], editor.kb_graph_default_depth as u64);
+    }
+
+    #[test]
+    fn kb_graph_view_close_removes_the_buffer() {
+        let mut editor = Editor::new();
+        execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
+        assert!(editor
+            .buffers
+            .iter()
+            .any(|b| b.kind == mae_core::BufferKind::Graph));
+        execute_kb_graph_view_close(&mut editor, &serde_json::json!({})).unwrap();
+        assert!(!editor
+            .buffers
+            .iter()
+            .any(|b| b.kind == mae_core::BufferKind::Graph));
+    }
+
+    #[test]
+    fn kb_graph_view_set_depth_updates_in_place() {
+        let mut editor = Editor::new();
+        execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index", "depth": 1}))
+            .unwrap();
+        execute_kb_graph_view_set_depth(&mut editor, &serde_json::json!({"depth": 4})).unwrap();
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == mae_core::BufferKind::Graph)
+            .unwrap();
+        assert_eq!(editor.buffers[idx].graph_view().unwrap().depth, 4);
+    }
+
+    #[test]
+    fn kb_graph_view_set_depth_missing_arg_is_error() {
+        let mut editor = Editor::new();
+        let err = execute_kb_graph_view_set_depth(&mut editor, &serde_json::json!({})).unwrap_err();
+        assert!(err.contains("depth"));
+    }
+
+    #[test]
+    fn kb_graph_view_navigate_invalid_direction_is_error() {
+        let mut editor = Editor::new();
+        execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
+        let err = execute_kb_graph_view_navigate(
+            &mut editor,
+            &serde_json::json!({"direction": "sideways"}),
+        )
+        .unwrap_err();
+        assert!(err.contains("sideways"));
+    }
+
+    #[test]
+    fn kb_graph_view_navigate_valid_direction_succeeds() {
+        let mut editor = Editor::new();
+        execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
+        let result =
+            execute_kb_graph_view_navigate(&mut editor, &serde_json::json!({"direction": "right"}))
+                .unwrap();
+        assert!(result.contains("right"));
+    }
+
+    #[test]
+    fn kb_graph_view_select_current_opens_a_kb_buffer() {
+        let mut editor = Editor::new();
+        execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
+        execute_kb_graph_view_select_current(&mut editor, &serde_json::json!({})).unwrap();
+        assert!(editor
+            .buffers
+            .iter()
+            .any(|b| b.kind == mae_core::BufferKind::Kb));
     }
 
     #[test]

@@ -421,6 +421,37 @@ impl OptionRegistry {
                      itself (KB-link hover preview) is not implemented yet — see the KB graph \
                      view plan's Part D.",
                     OptionKind::Int, "300", Some("kb-preview.idle-delay"), &[]),
+                // --- Native KB graph view (Part C Phase 1) ---
+                opt!("kb_graph_default_depth", &["kb-graph-default-depth"],
+                    "Default hop radius (SubgraphSpec::max_depth) for (kb-graph-view-open) when \
+                     no explicit depth is given.",
+                    OptionKind::Int, "2", Some("kb-graph.default-depth"), &[]),
+                opt!("kb_graph_include_backlinks", &["kb-graph-include-backlinks"],
+                    "Whether the graph view's subgraph extraction walks backlinks as well as \
+                     outgoing links.",
+                    OptionKind::Bool, "true", Some("kb-graph.include-backlinks"), &[]),
+                opt!("kb_graph_node_radius", &["kb-graph-node-radius"],
+                    "Node circle radius in logical pixels for the graph view's GUI rendering.",
+                    OptionKind::Int, "18", Some("kb-graph.node-radius"), &[]),
+                opt!("kb_graph_font_size", &["kb-graph-font-size"],
+                    "Node label font size in points for the graph view's GUI rendering. \
+                     Independent of the base font_size option (same numeric default, no live \
+                     inheritance) — MAE has no general option-inherits-from-option mechanism.",
+                    OptionKind::Int, "14", Some("kb-graph.font-size"), &[]),
+                opt!("kb_graph_layout_iterations", &["kb-graph-layout-iterations"],
+                    "Force-directed layout iteration count run by the background \
+                     graph_layout_bridge on each open/refresh/set-depth.",
+                    OptionKind::Int, "50", Some("kb-graph.layout-iterations"), &[]),
+                opt!("kb_graph_follow_current_node", &["kb-graph-follow-current-node"],
+                    "Whether the graph view re-centers on the human/AI's current KB node \
+                     automatically. Registered ahead of the Phase 2 command-post wiring that \
+                     will read it — currently unused.",
+                    OptionKind::Bool, "true", Some("kb-graph.follow-current-node"), &[]),
+                opt!("kb_graph_animate", &["kb-graph-animate"],
+                    "Whether the graph view's force-layout keeps ticking (physics animation) \
+                     after the initial layout settles. Registered ahead of the Phase 3 \
+                     graph_layout_bridge extension that will read it — currently unused.",
+                    OptionKind::Bool, "false", Some("kb-graph.animate"), &[]),
                 // --- File tree ---
                 opt!("file_tree_focus_on_open", &["file-tree-focus-on-open"],
                     "Auto-focus the file tree window when it opens",

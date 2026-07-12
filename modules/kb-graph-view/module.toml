@@ -1,0 +1,9 @@
+[module]
+name = "kb-graph-view"
+version = "0.1.0"
+description = "Native KB graph view keybindings and SPC K g leader entry"
+mae_version = ">=0.14.0"
+category = "tools"
+
+[entry]
+autoloads = "autoloads.scm"

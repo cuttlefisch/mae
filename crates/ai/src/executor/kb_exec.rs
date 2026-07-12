@@ -3,13 +3,15 @@ use mae_core::Editor;
 use crate::tool_impls::kb::record_kb_visit;
 use crate::tool_impls::{
     execute_help_open, execute_kb_add_link, execute_kb_agenda, execute_kb_create,
-    execute_kb_delete, execute_kb_get, execute_kb_graph, execute_kb_health, execute_kb_history,
-    execute_kb_id_audit, execute_kb_links_from, execute_kb_links_to, execute_kb_list,
-    execute_kb_neighborhood, execute_kb_raw_query, execute_kb_register, execute_kb_reimport,
-    execute_kb_related, execute_kb_restore, execute_kb_search, execute_kb_search_context,
-    execute_kb_set_ai_residency, execute_kb_set_role, execute_kb_shortest_path,
-    execute_kb_sync_status, execute_kb_unregister, execute_kb_update, execute_kb_vector_search,
-    execute_kb_view_query,
+    execute_kb_delete, execute_kb_get, execute_kb_graph, execute_kb_graph_view_close,
+    execute_kb_graph_view_navigate, execute_kb_graph_view_open, execute_kb_graph_view_refresh,
+    execute_kb_graph_view_select_current, execute_kb_graph_view_set_depth, execute_kb_health,
+    execute_kb_history, execute_kb_id_audit, execute_kb_links_from, execute_kb_links_to,
+    execute_kb_list, execute_kb_neighborhood, execute_kb_raw_query, execute_kb_register,
+    execute_kb_reimport, execute_kb_related, execute_kb_restore, execute_kb_search,
+    execute_kb_search_context, execute_kb_set_ai_residency, execute_kb_set_role,
+    execute_kb_shortest_path, execute_kb_sync_status, execute_kb_unregister, execute_kb_update,
+    execute_kb_vector_search, execute_kb_view_query,
 };
 use crate::types::ToolCall;
 
@@ -71,6 +73,14 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "kb_restore" => execute_kb_restore(editor, &call.arguments),
         "kb_view_query" => execute_kb_view_query(editor, &call.arguments),
         "kb_vector_search" => execute_kb_vector_search(editor, &call.arguments),
+        "kb_graph_view_open" => execute_kb_graph_view_open(editor, &call.arguments),
+        "kb_graph_view_close" => execute_kb_graph_view_close(editor, &call.arguments),
+        "kb_graph_view_refresh" => execute_kb_graph_view_refresh(editor, &call.arguments),
+        "kb_graph_view_set_depth" => execute_kb_graph_view_set_depth(editor, &call.arguments),
+        "kb_graph_view_navigate" => execute_kb_graph_view_navigate(editor, &call.arguments),
+        "kb_graph_view_select_current" => {
+            execute_kb_graph_view_select_current(editor, &call.arguments)
+        }
         "help_open" => execute_help_open(editor, &call.arguments),
         _ => return None,
     };
