@@ -20,6 +20,14 @@ pub enum VisualElement {
         y2: f32,
         color: String,
         thickness: f32,
+        /// Render as a dashed stroke instead of solid. Added for the native
+        /// KB graph view (`crate::graph_view::flatten_scene_graph`) to
+        /// distinguish boundary edges (subgraph fringe links) from internal
+        /// ones — defaults to `false` everywhere else via
+        /// `#[serde(default)]` so existing visual-buffer callers/snapshots
+        /// are unaffected.
+        #[serde(default)]
+        dashed: bool,
     },
     Circle {
         cx: f32,

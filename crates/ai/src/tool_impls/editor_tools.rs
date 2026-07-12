@@ -607,6 +607,7 @@ pub fn execute_visual_buffer_add_line(
             y2,
             color,
             thickness,
+            dashed: false,
         });
         Ok(format!(
             "Added line from ({}, {}) to ({}, {})",

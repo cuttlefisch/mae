@@ -137,6 +137,7 @@ impl SchemeRuntime {
                                     y2,
                                     color,
                                     thickness,
+                                    dashed: false,
                                 });
                             }
                             VisualOp::AddCircle {

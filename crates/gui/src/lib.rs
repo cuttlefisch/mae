@@ -1012,6 +1012,28 @@ fn render_window_area(
                         *draw_time_us += t.elapsed().as_micros() as u64;
                     }
                 }
+                BufferKind::Graph => {
+                    // Native KB graph view (Part C Phase 1): the buffer's
+                    // `GraphView.rendered` cache is kept in sync (flattened
+                    // from `GraphView.scene`) by `graph_view_ops.rs` on every
+                    // open/refresh/navigate/layout-applied — this arm just
+                    // draws it through the same `VisualElement` pipeline
+                    // `BufferKind::Visual` uses, with a themed background.
+                    if let Some(gv) = buf.graph_view() {
+                        let t = std::time::Instant::now();
+                        let bg = theme::ts_bg(editor, "ui.graph.background");
+                        render_visual_buffer_with_bg(
+                            canvas,
+                            &gv.rendered,
+                            r_row,
+                            r_col,
+                            r_width,
+                            r_height,
+                            bg,
+                        );
+                        *draw_time_us += t.elapsed().as_micros() as u64;
+                    }
+                }
                 BufferKind::FileTree => {
                     let t = std::time::Instant::now();
                     file_tree_render::render_file_tree_window(
@@ -1184,6 +1206,24 @@ fn render_visual_buffer(
     r_width: usize,
     r_height: usize,
 ) {
+    render_visual_buffer_with_bg(canvas, vb, r_row, r_col, r_width, r_height, None);
+}
+
+/// Shared implementation behind `render_visual_buffer`. `bg` overrides the
+/// default hardcoded fill — used by the `BufferKind::Graph` render arm to
+/// paint the theme-driven `ui.graph.background` color instead (principle
+/// #7: no hardcoded colors for the graph view). `BufferKind::Visual`'s
+/// existing call site passes `None`, preserving its exact prior appearance
+/// byte-for-byte.
+fn render_visual_buffer_with_bg(
+    canvas: &mut canvas::SkiaCanvas,
+    vb: &mae_core::visual_buffer::VisualBuffer,
+    r_row: usize,
+    r_col: usize,
+    r_width: usize,
+    r_height: usize,
+    bg: Option<skia_safe::Color4f>,
+) {
     use mae_core::visual_buffer::VisualElement;
     use skia_safe::{Color4f, Paint, PaintStyle};
 
@@ -1193,7 +1233,7 @@ fn render_visual_buffer(
         r_col,
         r_width,
         r_height,
-        Color4f::new(0.05, 0.05, 0.05, 1.0),
+        bg.unwrap_or(Color4f::new(0.05, 0.05, 0.05, 1.0)),
     );
 
     let (cw, ch) = canvas.cell_size();
@@ -1234,16 +1274,41 @@ fn render_visual_buffer(
                 y2,
                 color,
                 thickness,
+                dashed,
             } => {
                 if let Some(c) = theme::parse_hex_to_skia(color) {
                     let mut paint = Paint::new(c, None);
                     paint.set_stroke_width(*thickness);
                     paint.set_style(PaintStyle::Stroke);
-                    canvas.canvas().draw_line(
-                        (x_off + x1, y_off + y1),
-                        (x_off + x2, y_off + y2),
-                        &paint,
-                    );
+                    let (sx, sy) = (x_off + x1, y_off + y1);
+                    let (ex, ey) = (x_off + x2, y_off + y2);
+                    if *dashed {
+                        // No skia-safe PathEffect dependency needed for a
+                        // simple fixed-cadence dash — manually segment the
+                        // line into ~6px-on/4px-off strokes. Used for
+                        // subgraph boundary edges (graph view) to visually
+                        // distinguish them from internal ones.
+                        const ON: f32 = 6.0;
+                        const OFF: f32 = 4.0;
+                        let dx = ex - sx;
+                        let dy = ey - sy;
+                        let len = (dx * dx + dy * dy).sqrt();
+                        if len > 0.0 {
+                            let (ux, uy) = (dx / len, dy / len);
+                            let mut travelled = 0.0;
+                            while travelled < len {
+                                let seg_end = (travelled + ON).min(len);
+                                canvas.canvas().draw_line(
+                                    (sx + ux * travelled, sy + uy * travelled),
+                                    (sx + ux * seg_end, sy + uy * seg_end),
+                                    &paint,
+                                );
+                                travelled = seg_end + OFF;
+                            }
+                        }
+                    } else {
+                        canvas.canvas().draw_line((sx, sy), (ex, ey), &paint);
+                    }
                 }
             }
             VisualElement::Circle {
