@@ -2,6 +2,60 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- *(core)* Unify AI/MCP window-driving with a first-class DrivenWindow primitive ([dd1a9ae](https://github.com/cuttlefisch/mae/commit/dd1a9ae4a99da99fff0fc72590fb73dd63c487cd))
+- *(kb-graph-view)* Correct module.toml's leader-key description ([a3777d2](https://github.com/cuttlefisch/mae/commit/a3777d22a5cb7c198824e6039bcb084d20f4b673))
+- *(kb-graph-view)* Apply the viewport transform in render and hit-test ([08483bc](https://github.com/cuttlefisch/mae/commit/08483bc7a0805bf2ef8bb5279294dfc25af5128d))
+- *(kb)* Give each open KB node buffer a distinct, title-based name ([c7a9eb9](https://github.com/cuttlefisch/mae/commit/c7a9eb99480b1a9eb42cf90c7e13dce2848bee4e))
+- *(syntax)* Don't leak regex markup into org src-block code spans ([87b1ce0](https://github.com/cuttlefisch/mae/commit/87b1ce0e407cf841c1e3716dbb7d03a323f7a1b4))
+- *(babel)* Sessions handle compound statements, surface stderr, and inherit shell env ([8913572](https://github.com/cuttlefisch/mae/commit/8913572732908063c10aa72846b1b7b5c86e91c0))
+- *(core)* Keep buffer mode in sync across display_buffer paths ([58e5f91](https://github.com/cuttlefisch/mae/commit/58e5f91a1a307657a591e9911d7471f6b58cd3cb))
+- *(core)* Self-heal *Messages* buffer resync beyond first open ([2d4a850](https://github.com/cuttlefisch/mae/commit/2d4a85066921501a50789b678a51147b9aa0d25f))
+- *(kb)* Persist and reconstruct source_file across CozoKbStore reloads ([eb6619c](https://github.com/cuttlefisch/mae/commit/eb6619cf98e72fdb85852659e323288a07679b99))
+- *(babel)* Use character offsets, not byte offsets, for results/body edits ([5fb6c03](https://github.com/cuttlefisch/mae/commit/5fb6c0320ffc23a336b59d81e04b6564f7cd737a))
+
+### Documentation
+
+- Document DrivenWindow, native KB graph view, and KB hover preview ([3e68793](https://github.com/cuttlefisch/mae/commit/3e68793de28b725bd8ed1003631cf6be3f33e430))
+
+### Features
+
+- *(core)* Shared idle-dispatch mechanism + wire which-key idle-delay (ROADMAP #83) ([fdd0d73](https://github.com/cuttlefisch/mae/commit/fdd0d73afe92cd6303e9c52a0c04a88ca69fa4da))
+- *(scheme)* Add kb-graph/kb-neighborhood/kb-related/kb-shortest-path parity ([b28e42e](https://github.com/cuttlefisch/mae/commit/b28e42ead706de6a86da66256f3e3380dd4c60e3))
+- *(core)* Add BufferKind::Graph + GraphView + graph_view_ops (Part C Phase 1) ([0f99a03](https://github.com/cuttlefisch/mae/commit/0f99a0393d54423c9137f7fd1f7b4a8c1ada54a0))
+- *(mae)* Add graph_layout_bridge for background KB graph layout ([bce5880](https://github.com/cuttlefisch/mae/commit/bce5880091f73b86f8d25b8b3546926b9e964234))
+- *(gui,renderer)* Render the KB graph view (GUI Skia + TUI textual) ([4adbe28](https://github.com/cuttlefisch/mae/commit/4adbe280e20734e3550c0758613d44263df4f688))
+- *(scheme,ai,core)* KB graph view Scheme/MCP surface, options, theme keys ([5ef168c](https://github.com/cuttlefisch/mae/commit/5ef168cfc309126ca599ce44a6da5b76bc76975e))
+- *(core,mae)* Mouse click-to-navigate on the KB graph view (Part C Phase 1 item 6) ([9201fcb](https://github.com/cuttlefisch/mae/commit/9201fcb4bbceab257e3f45fe9e38ba2a6d112291))
+- *(core)* Wire kb_graph_follow_current_node to auto re-center the graph view (Part C Phase 2) ([9e0e073](https://github.com/cuttlefisch/mae/commit/9e0e073a614a236bc3b4c8c8891168c7261cb0a5))
+- *(gui)* KB graph view physics animation (Part C Phase 3) ([2a99ff1](https://github.com/cuttlefisch/mae/commit/2a99ff1e62430220b1efe1fa841caa0dcd1c0764))
+- *(graph-view)* Add drag-to-pin and wheel-zoom to the KB graph view ([ab3bc7e](https://github.com/cuttlefisch/mae/commit/ab3bc7ef0de4504c43207a763bb0329108cad7cc))
+- *(kb)* Implement KB-link hover preview state, trigger, and commands (Part D) ([c66fd31](https://github.com/cuttlefisch/mae/commit/c66fd3180623387237180c225bd19529ced111d5))
+- *(kb)* Render the KB-link hover preview popup (GUI + TUI) ([18db453](https://github.com/cuttlefisch/mae/commit/18db4531628c624ea5cfd7b4f922365a8456e756))
+- *(kb)* Add Scheme + MCP parity for the KB-link hover preview ([7778935](https://github.com/cuttlefisch/mae/commit/77789355a4a28ca5bee29cc9037133ce754deffb))
+- *(babel)* Inherit resolved shell environment in executions and sessions ([9aa2c45](https://github.com/cuttlefisch/mae/commit/9aa2c45d3c9aa4143edb38f5c84a4dada3b270a7))
+- *(kb-graph-view)* Resize adaptivity + hover/selection introspection ([073b549](https://github.com/cuttlefisch/mae/commit/073b54956fb495bb9395e65b9713da02f96faa9a))
+
+### Miscellaneous
+
+- *(daemon)* Sync Cargo.lock to the 0.14.41 version bump ([4526a01](https://github.com/cuttlefisch/mae/commit/4526a0103f216cdeec9177a27fd864910753c566))
+- Regenerate manual KB to include the new Scheme API doc entries ([5fa5cdd](https://github.com/cuttlefisch/mae/commit/5fa5cddf50ea50dae5923953af8a89e1d34c4f40))
+- *(core)* Register option/state scaffolding for upcoming fixes ([674ad76](https://github.com/cuttlefisch/mae/commit/674ad76fe8b38ba481f94f6067dbb3b70c2fe8b6))
+- Regenerate manual KB to reflect this session's doc/API changes ([acdbeab](https://github.com/cuttlefisch/mae/commit/acdbeab7d8750535967f59c8756f0f198ea6c19e))
+
+### Refactor
+
+- *(canvas)* Reconcile NodeKind/KbNodeInfo with the real shared_kb::NodeKind ([994931d](https://github.com/cuttlefisch/mae/commit/994931d7f83412055aa81c5dfca9fc720fe3b98d))
+
+## [0.14.41] - 2026-07-12
+
+### Miscellaneous
+
+- Bump version to 0.14.41 ([786c307](https://github.com/cuttlefisch/mae/commit/786c30708a12f77351d7624a60354c1549391e0e))
+
 ## [0.14.40] - 2026-07-11
 
 ### Bug Fixes
