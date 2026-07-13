@@ -386,6 +386,35 @@ impl Editor {
         self.buffers[buf_idx].read_only = false;
         self.buffers[buf_idx].replace_contents(&text);
         self.buffers[buf_idx].read_only = true;
+        self.messages_synced_seq = self.message_log.latest_seq();
+    }
+
+    /// Self-healing resync: if a `*Messages*` buffer is open and new log
+    /// entries have arrived since the rope was last synced, refresh it.
+    /// Mirrors `Editor::sync_open_graph_viewports`'s pattern (called every
+    /// GUI event-loop iteration from `about_to_wait`) — without this, the
+    /// renderer (which always reads `message_log` live) and the rope
+    /// (which yank/visual-select/search actually operate on, synced only
+    /// once at `open_messages_buffer` time) silently drift apart the
+    /// moment a single new log line arrives after the buffer was opened —
+    /// this editor logs constantly (watchdog stalls alone fire every few
+    /// seconds), so in practice that drift starts almost immediately.
+    /// Returns whether a resync actually happened, so callers can set
+    /// their own dirty/redraw flag accordingly.
+    pub fn sync_open_messages_buffer(&mut self) -> bool {
+        let latest = self.message_log.latest_seq();
+        if latest == self.messages_synced_seq {
+            return false;
+        }
+        let has_buffer = self
+            .buffers
+            .iter()
+            .any(|b| b.kind == crate::buffer::BufferKind::Messages);
+        if !has_buffer {
+            return false;
+        }
+        self.sync_messages_rope();
+        true
     }
 
     /// Save the message log to an XDG-compliant path.
@@ -1753,5 +1782,75 @@ mod tests {
 
         // Clean up
         let _ = std::fs::remove_file(&lpath);
+    }
+
+    #[test]
+    fn sync_open_messages_buffer_is_a_no_op_when_no_buffer_is_open() {
+        let mut editor = Editor::new();
+        editor
+            .message_log
+            .push(crate::messages::MessageLevel::Info, "test", "hello");
+        assert!(!editor.sync_open_messages_buffer());
+    }
+
+    #[test]
+    fn sync_open_messages_buffer_is_a_no_op_when_nothing_new_arrived() {
+        let mut editor = Editor::new();
+        editor
+            .message_log
+            .push(crate::messages::MessageLevel::Info, "test", "hello");
+        editor.open_messages_buffer();
+        // open_messages_buffer's own trailing set_status("N log entries")
+        // call logs a genuinely new entry (set_status logs any change —
+        // see set_status's #305 dedup comment), so one resync is still
+        // expected here; the no-op guarantee is for the call AFTER that.
+        editor.sync_open_messages_buffer();
+        assert!(!editor.sync_open_messages_buffer());
+    }
+
+    #[test]
+    fn sync_open_messages_buffer_refreshes_the_rope_when_new_entries_arrive() {
+        // Regression guard: the *Messages* renderer (GUI and TUI) always
+        // reads `message_log` live, but yank/visual-select/search operate
+        // on the buffer's rope — before this fix, the rope was synced
+        // ONLY ONCE at `open_messages_buffer` time, so any log line
+        // arriving afterward (this editor logs constantly) made what's
+        // visually displayed and what could actually be copied silently
+        // diverge, with no way to force a resync short of closing and
+        // reopening the buffer.
+        let mut editor = Editor::new();
+        editor
+            .message_log
+            .push(crate::messages::MessageLevel::Info, "test", "first");
+        editor.open_messages_buffer();
+        let buf_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == crate::buffer::BufferKind::Messages)
+            .unwrap();
+        assert!(editor.buffers[buf_idx].rope().to_string().contains("first"));
+        assert!(!editor.buffers[buf_idx]
+            .rope()
+            .to_string()
+            .contains("second"));
+
+        editor
+            .message_log
+            .push(crate::messages::MessageLevel::Info, "test", "second");
+
+        assert!(
+            editor.sync_open_messages_buffer(),
+            "a genuinely new entry must trigger a resync"
+        );
+        assert!(
+            editor.buffers[buf_idx]
+                .rope()
+                .to_string()
+                .contains("second"),
+            "the rope must reflect the newly-arrived entry, not a stale snapshot"
+        );
+
+        // Idempotent: no further new entries, so calling again is a no-op.
+        assert!(!editor.sync_open_messages_buffer());
     }
 }

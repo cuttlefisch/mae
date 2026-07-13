@@ -1281,6 +1281,14 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
         self.editor.gui_cell_width = cw;
         self.editor.gui_cell_height = ch;
 
+        // Self-healing resync: refresh the open *Messages* buffer's rope
+        // against new log entries, on every event-loop iteration — see
+        // `Editor::sync_open_messages_buffer`'s doc comment for why this
+        // can't just happen once at buffer-open time.
+        if self.editor.sync_open_messages_buffer() {
+            self.dirty = true;
+        }
+
         // Pre-render bookkeeping.
         self.editor.clamp_all_cursors();
         if let Ok((w, h)) = self.renderer.size() {

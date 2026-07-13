@@ -468,6 +468,12 @@ pub(crate) async fn run_terminal_loop(
                 render_pending = false;
                 // Drain sync updates on frame tick (~16ms max latency).
                 crate::sync_broadcast::drain_and_broadcast(editor, sync_broadcaster, Some(collab_command_tx));
+                // Self-healing resync: refresh the open *Messages* buffer's
+                // rope against new log entries — TUI parity with the GUI's
+                // identical `about_to_wait` call (principle #13); the TUI
+                // renderer reads `message_log` live too, so it has the
+                // exact same yank/visual-select/search drift otherwise.
+                editor.sync_open_messages_buffer();
             }
             _ = idle_tick_timer => {
                 // Shared idle-dispatch (Part B): which-key idle-delay (ROADMAP #83)
