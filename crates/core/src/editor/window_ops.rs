@@ -388,6 +388,34 @@ impl Editor {
     /// `resolve_persistent`'s intentionally narrow `&WindowManager`-only
     /// `create_or_pick` closure. See `driven_window.rs` module docs.
     pub fn display_buffer_for_agent(&mut self, idx: usize) -> bool {
+        // Same mode-sync gap `display_buffer` had (see its doc comment) —
+        // this is a THIRD, separate buffer-display primitive (used by the
+        // AI/MCP `open_file` tool, among others) that directly mutates a
+        // window's `buffer_idx` in several branches below, none of which
+        // ever synced `Editor.mode` to the newly-shown buffer. Wrapped
+        // (rather than editing each branch individually) since this
+        // function has several early-return branches and, by design,
+        // deliberately does NOT steal focus in the common case — so mode
+        // must only resync when the FOCUSED window's buffer actually
+        // changed as a side effect, not unconditionally. Comparing the
+        // focused window's buffer_idx before/after handles every branch
+        // uniformly, including the ones that mutate a non-focused window
+        // (correctly a no-op) and the one that already calls
+        // `switch_to_buffer` internally (already handles its own sync,
+        // this wrapper's post-check is then just a harmless no-op re-sync
+        // of the same, already-correct value).
+        let focused_id = self.window_mgr.focused_id();
+        let old_focused_buf = self.window_mgr.window(focused_id).map(|w| w.buffer_idx);
+        self.save_mode_to_buffer();
+        let result = self.display_buffer_for_agent_impl(idx);
+        let new_focused_buf = self.window_mgr.window(focused_id).map(|w| w.buffer_idx);
+        if old_focused_buf != new_focused_buf {
+            self.sync_mode_to_buffer();
+        }
+        result
+    }
+
+    fn display_buffer_for_agent_impl(&mut self, idx: usize) -> bool {
         if idx >= self.buffers.len() {
             return false;
         }
@@ -524,6 +552,24 @@ impl Editor {
         if buf_idx >= self.buffers.len() {
             return;
         }
+        // Save the outgoing buffer's mode and restore/reset the incoming
+        // one's, mirroring `switch_to_buffer`'s save/sync pair — this is
+        // the ROOT buffer-display primitive ~35 call sites across the
+        // codebase use directly (open_file, KB/help/git/notification/
+        // option-editing navigation, etc.), and until now only
+        // `switch_to_buffer` (cycling between already-open buffers) and
+        // `display_buffer_and_focus` (a handful of explicit callers) kept
+        // per-buffer mode consistent. Every other caller left a stale
+        // global `Editor.mode` untouched — e.g. opening a brand-new file
+        // while `self.mode` was still `ShellInsert` from an earlier
+        // terminal interaction silently routed ALL of that buffer's
+        // keypresses through the shell keymap instead of its real one,
+        // with no visible symptom beyond "keybindings do nothing." A
+        // no-op for the overwhelmingly common case (already in Normal/
+        // Insert/Visual mode — `sync_mode_to_buffer`'s fallback only acts
+        // when currently `ShellInsert`/`ConversationInput`), so this only
+        // changes behavior for the exact stuck-mode scenario it fixes.
+        self.save_mode_to_buffer();
         let kind = self.buffers[buf_idx].kind;
         let action = self.display_policy.action_for(kind);
         match action {
@@ -575,6 +621,7 @@ impl Editor {
             }
             crate::display_policy::DisplayAction::Hidden => {}
         }
+        self.sync_mode_to_buffer();
         self.mark_full_redraw();
     }
 
