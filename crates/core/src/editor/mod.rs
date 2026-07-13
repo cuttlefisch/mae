@@ -783,6 +783,10 @@ pub struct Editor {
     /// layout settles. Mirrors `kb_graph_animate` — registered now, unused
     /// until Phase 3 extends `graph_layout_bridge` to tick continuously.
     pub kb_graph_animate: bool,
+    /// Whether hovering the mouse over a graph-view node highlights it in
+    /// real time. Mirrors `kb_graph_hover_enabled`; read by `gui_app.rs`'s
+    /// `CursorMoved` handler to gate the hover hit-test branch.
+    pub kb_graph_hover_enabled: bool,
     /// Queued background layout request for the open/refreshed graph-view
     /// buffer (`mae::graph_layout_bridge`, Part C Phase 1) — drained once
     /// per GUI event-loop tick, see `crate::graph_view::GraphLayoutIntent`'s
@@ -791,6 +795,13 @@ pub struct Editor {
     /// In-editor message log (*Messages* buffer equivalent).
     /// Shared with the tracing layer via MessageLogHandle.
     pub message_log: MessageLog,
+    /// `MessageLog` entry `seq` last synced into the `*Messages*` buffer's
+    /// rope (see `Editor::sync_open_messages_buffer`). The renderer always
+    /// reads `message_log` live, but yank/visual-select/search operate on
+    /// the buffer's rope — this tracks staleness so the rope gets
+    /// refreshed whenever new entries have arrived since the last sync,
+    /// not just once at buffer-open time.
+    pub messages_synced_seq: Option<u64>,
     /// Active color theme. All rendering reads from this.
     pub theme: Theme,
     /// DAP debug session state and pending intent queue.
@@ -868,6 +879,9 @@ pub struct Editor {
     pub babel_trust_paths: Vec<String>,
     /// Babel: execution timeout in seconds (default 30).
     pub babel_timeout: u64,
+    /// Babel: merge the user's resolved shell environment into
+    /// babel-spawned processes/sessions (default true).
+    pub babel_inherit_shell_env: bool,
     /// Babel: C++ compiler for c++/cpp blocks (default "c++").
     pub babel_cxx_compiler: String,
     /// Babel: C compiler for c blocks (default "cc").
@@ -1220,8 +1234,10 @@ impl Editor {
             kb_graph_layout_iterations: 50,
             kb_graph_follow_current_node: true,
             kb_graph_animate: false,
+            kb_graph_hover_enabled: true,
             pending_graph_layout: None,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)
+            messages_synced_seq: None,
             theme: default_theme(),
             dap: DapContext::new(),
             vi: ViState::new(),
@@ -1265,6 +1281,7 @@ impl Editor {
             babel_confirm: true,
             babel_trust_paths: Vec::new(),
             babel_timeout: 30,
+            babel_inherit_shell_env: true,
             babel_cxx_compiler: "c++".to_string(),
             babel_c_compiler: "cc".to_string(),
             babel_cxx_std: "c++17".to_string(),

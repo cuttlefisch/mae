@@ -319,6 +319,13 @@ impl OptionRegistry {
                 opt!("babel_timeout", &["babel-timeout"],
                     "Execution timeout in seconds for babel source blocks",
                     OptionKind::Int, "30", Some("babel.timeout"), &[]),
+                opt!("babel_inherit_shell_env", &["babel-inherit-shell-env"],
+                    "Merge the user's resolved interactive login shell environment (sourcing \
+                     .bashrc/.zshrc/.profile via `$SHELL -i -l -c env`, resolved once and \
+                     cached) into babel-spawned processes and sessions. Needed because a \
+                     GUI-launched editor (desktop launcher, systemd) doesn't inherit shell-rc \
+                     variables the way an interactive terminal session does.",
+                    OptionKind::Bool, "true", Some("babel.inherit_shell_env"), &[]),
                 opt!("babel_cxx_compiler", &["babel-cxx-compiler"],
                     "C++ compiler for org-babel c++/cpp blocks (overridden per-block by :cmd, or by MAE_BABEL_CXX)",
                     OptionKind::String, "c++", Some("babel.cxx_compiler"), &[]),
@@ -459,6 +466,11 @@ impl OptionRegistry {
                      after the initial layout settles. Registered ahead of the Phase 3 \
                      graph_layout_bridge extension that will read it — currently unused.",
                     OptionKind::Bool, "false", Some("kb-graph.animate"), &[]),
+                opt!("kb_graph_hover_enabled", &["kb-graph-hover-enabled"],
+                    "Whether hovering the mouse over a graph-view node highlights it in real \
+                     time (immediate, not idle-delayed — see kb_preview_idle_delay for the \
+                     unrelated idle-triggered KB-link hover preview).",
+                    OptionKind::Bool, "true", Some("kb-graph.hover-enabled"), &[]),
                 // --- File tree ---
                 opt!("file_tree_focus_on_open", &["file-tree-focus-on-open"],
                     "Auto-focus the file tree window when it opens",

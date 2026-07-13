@@ -134,6 +134,7 @@ impl super::Editor {
             "syntax_reparse_debounce_ms" => self.syntax_reparse_debounce_ms.to_string(),
             "babel_confirm" => self.babel_confirm.to_string(),
             "babel_timeout" => self.babel_timeout.to_string(),
+            "babel_inherit_shell_env" => self.babel_inherit_shell_env.to_string(),
             "babel_cxx_compiler" => self.babel_cxx_compiler.clone(),
             "babel_c_compiler" => self.babel_c_compiler.clone(),
             "babel_cxx_std" => self.babel_cxx_std.clone(),
@@ -227,6 +228,7 @@ impl super::Editor {
             "kb_graph_layout_iterations" => self.kb_graph_layout_iterations.to_string(),
             "kb_graph_follow_current_node" => self.kb_graph_follow_current_node.to_string(),
             "kb_graph_animate" => self.kb_graph_animate.to_string(),
+            "kb_graph_hover_enabled" => self.kb_graph_hover_enabled.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -610,6 +612,9 @@ impl super::Editor {
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.babel_timeout = v.clamp(1, 3600);
             }
+            "babel_inherit_shell_env" => {
+                self.babel_inherit_shell_env = parse_option_bool(value)?;
+            }
             "babel_cxx_compiler" => {
                 self.babel_cxx_compiler = value.to_string();
             }
@@ -966,6 +971,9 @@ impl super::Editor {
             }
             "kb_graph_animate" => {
                 self.kb_graph_animate = parse_option_bool(value)?;
+            }
+            "kb_graph_hover_enabled" => {
+                self.kb_graph_hover_enabled = parse_option_bool(value)?;
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }
