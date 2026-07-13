@@ -12,6 +12,7 @@ pub mod noweb;
 pub mod results;
 pub mod safety;
 pub mod session;
+pub mod shell_env;
 pub mod tangle;
 pub mod vars;
 
@@ -30,8 +31,10 @@ pub struct SrcBlock {
     pub body: String,
     /// (begin_line, end_line) 0-indexed inclusive.
     pub line_range: (usize, usize),
-    /// (begin_byte, end_byte) of the body content within the source text.
-    pub body_byte_range: (usize, usize),
+    /// (begin_char, end_char) CHARACTER offsets of the body content within
+    /// the source text — matches `Buffer::insert_text_at`/`delete_range`'s
+    /// `ropey` char-index API, NOT byte offsets (see `line_char_offset`).
+    pub body_char_range: (usize, usize),
 }
 
 /// Parsed header arguments from a source block.
@@ -169,8 +172,8 @@ pub fn parse_src_blocks(source: &str) -> Vec<SrcBlock> {
             let header_part = &trimmed["#+begin_src".len()..];
             let (language, header_args) = parse_begin_line(header_part);
 
-            // Find body start byte offset
-            let body_byte_start = line_byte_offset(source, i + 1);
+            // Find body start char offset
+            let body_char_start = line_char_offset(source, i + 1);
 
             // Find matching #+end_src
             let mut end_line = i + 1;
@@ -192,10 +195,10 @@ pub fn parse_src_blocks(source: &str) -> Vec<SrcBlock> {
                 &[]
             };
             let body = body_lines.join("\n");
-            let body_byte_end = if body.is_empty() {
-                body_byte_start
+            let body_char_end = if body.is_empty() {
+                body_char_start
             } else {
-                body_byte_start + body.len()
+                body_char_start + body.chars().count()
             };
 
             let actual_end = if end_line < lines.len() {
@@ -210,7 +213,7 @@ pub fn parse_src_blocks(source: &str) -> Vec<SrcBlock> {
                 header_args,
                 body,
                 line_range: (begin_line, actual_end),
-                body_byte_range: (body_byte_start, body_byte_end),
+                body_char_range: (body_char_start, body_char_end),
             });
 
             i = actual_end + 1;
@@ -612,16 +615,20 @@ pub fn merge_header_args(buffer_args: &HeaderArgs, block_args: &HeaderArgs) -> H
     }
 }
 
-/// Compute byte offset of line `n` in source (0-indexed).
-fn line_byte_offset(source: &str, line: usize) -> usize {
+/// Compute the CHARACTER offset (not byte offset) of line `n` in source
+/// (0-indexed). Must stay char-based: consumers (`BabelEditContext::
+/// body_char_range` -> `Buffer::insert_text_at`/`delete_range`) index into a
+/// `ropey` rope by character, so a byte offset here would drift for any
+/// multi-byte content earlier in the buffer.
+fn line_char_offset(source: &str, line: usize) -> usize {
     let mut offset = 0;
     for (i, l) in source.lines().enumerate() {
         if i == line {
             return offset;
         }
-        offset += l.len() + 1; // +1 for newline
+        offset += l.chars().count() + 1; // +1 for newline
     }
-    offset.min(source.len())
+    offset.min(source.chars().count())
 }
 
 /// Simple tilde expansion: `~/foo` → `/home/user/foo`.
@@ -656,6 +663,30 @@ print("hello")
         assert_eq!(blocks[0].body, "print(\"hello\")");
         assert_eq!(blocks[0].line_range, (0, 2));
         assert!(blocks[0].name.is_none());
+    }
+
+    #[test]
+    fn body_char_range_is_char_offsets_not_byte_offsets_with_multibyte_content_earlier() {
+        // Regression guard: `line_char_offset` (formerly `line_byte_offset`)
+        // used `l.len()` (byte length) instead of `l.chars().count()`, so
+        // `body_char_range` silently drifted forward for any multi-byte
+        // character earlier in the buffer — corrupting `babel_edit_special`/
+        // `babel_edit_commit` (Buffer::insert_text_at/delete_range are
+        // char-offset ropey APIs), same root cause as the results-insertion
+        // word-splitting bug.
+        let src =
+            "* Café — Notes\n\u{2192} unicode line\n\n#+begin_src python\nprint(1)\n#+end_src\n";
+        let blocks = parse_src_blocks(src);
+        assert_eq!(blocks.len(), 1);
+        let (start, end) = blocks[0].body_char_range;
+
+        let chars: Vec<char> = src.chars().collect();
+        let body_via_char_range: String = chars[start..end].iter().collect();
+        assert_eq!(
+            body_via_char_range, "print(1)",
+            "indexing src by CHARACTER using body_char_range must recover exactly \
+             the block body, not a byte-drifted slice — got {body_via_char_range:?}"
+        );
     }
 
     #[test]

@@ -388,6 +388,24 @@ impl KbStore for CozoKbStore {
                 }
             }
         }
+
+        // `row_to_node` never sets `source_file` — the `nodes` relation has no
+        // such column, only `source_files` (file -> node_ids) does. Reconstruct
+        // it here so every `load_all` caller (fresh instance open at startup,
+        // `:kb-reimport`, migration) gets a correct `source_file`, not just the
+        // in-memory `KnowledgeBase` that did the original ingest.
+        match self.source_file_by_node_id() {
+            Ok(source_files) => {
+                for node in &mut nodes {
+                    if let Some(path) = source_files.get(&node.id) {
+                        node.source_file = Some(path.clone());
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "KB store: failed to reconstruct source_file index — nodes will report no source file");
+            }
+        }
         Ok(nodes)
     }
 
@@ -441,6 +459,10 @@ impl KbStore for CozoKbStore {
 
     fn neighborhood(&self, id: &str, depth: u32) -> Result<SubGraph, KbStoreError> {
         CozoKbStore::neighborhood(self, id, depth)
+    }
+
+    fn related(&self, id: &str, limit: usize) -> Result<Vec<(String, f64)>, KbStoreError> {
+        CozoKbStore::related(self, id, limit)
     }
 
     fn raw_query(&self, script: &str) -> Result<(Vec<String>, Vec<Vec<String>>), KbStoreError> {

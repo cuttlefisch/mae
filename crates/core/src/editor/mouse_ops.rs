@@ -467,6 +467,20 @@ impl super::Editor {
         if let Some(win_id) = self.window_mgr.window_at_cell(col, row, area) {
             if win_id != self.window_mgr.focused_id() {
                 self.window_mgr.set_focused(win_id);
+                // Part C (native KB graph view): mouse-driven focus changes
+                // don't route through `dispatch_builtin` (this is called
+                // directly from `gui_app.rs`'s click handler), so the
+                // companion-window capture hook is called here too — same
+                // shared helper as `dispatch_builtin`'s hook, just a
+                // different focus-change entry point. Mouse click-to-select
+                // on graph nodes themselves is handled separately, in
+                // `gui_app.rs`'s `handle_mouse_button_pressed` via
+                // `Editor::kb_graph_view_click_at` (Phase 1 item 6) — this
+                // hook keeps the companion capture correct for the more
+                // general case of clicking a DIFFERENT window while the
+                // graph view is open (including clicking the graph window
+                // itself, which is `guard_window` and thus ignored here).
+                self.capture_graph_companion_focus(win_id);
                 return true;
             }
         }

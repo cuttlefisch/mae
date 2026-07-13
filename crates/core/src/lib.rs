@@ -19,6 +19,7 @@ pub mod debug_view;
 pub mod diff;
 pub mod display_policy;
 pub mod display_region;
+pub mod driven_window;
 pub mod editor;
 pub mod event_record;
 pub use mae_export as export;
@@ -28,6 +29,8 @@ pub mod file_picker;
 pub mod file_tree;
 pub mod foldable_view;
 pub mod git_status;
+pub mod graph_view;
+pub mod graph_view_support;
 pub mod grapheme;
 pub mod heading;
 pub mod hooks;
@@ -96,9 +99,13 @@ pub use editor::{
 };
 pub use file_browser::{Activation as BrowserActivation, BrowserEntry, FileBrowser};
 pub use file_picker::FilePicker;
+pub use graph_view::{
+    flatten_scene_graph, GraphLayoutIntent, GraphLayoutMode, GraphNavDirection, GraphStyleOptions,
+    GraphView, GraphViewIntent,
+};
 pub use hooks::HookRegistry;
 pub use input::{InputEvent, MouseButton};
-pub use kb_view::{KbLinkSpan, KbView};
+pub use kb_view::{KbLinkSpan, KbPreviewIntent, KbPreviewPopup, KbView};
 pub use keymap::{
     parse_key_seq, parse_key_seq_spaced, Key, KeyPress, Keymap, LookupResult, WhichKeyEntry,
 };
@@ -114,6 +121,7 @@ pub use project::{
 pub use search::{SearchDirection, SearchMatch, SearchState};
 pub mod redraw;
 pub use display_policy::{DisplayAction, DisplayPolicy};
+pub use driven_window::DrivenWindow;
 pub use syntax::{
     compute_markdown_style_spans, compute_markup_spans, compute_markup_spans_for_range,
     compute_org_style_spans, detect_code_block_lines, detect_code_block_lines_for_range,

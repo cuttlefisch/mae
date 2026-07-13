@@ -88,6 +88,14 @@ pub(crate) fn run_gui(
     let (collab_event_rx, collab_command_tx, collab_spawn) =
         crate::collab_bridge::setup_collab_channels(&editor);
 
+    // KB graph-view background layout channel (Part C Phase 1). Bounded at
+    // 4 — one-shot request/response per open/refresh/set-depth, never a
+    // sustained stream; a full channel just means a stale request gets
+    // dropped in favor of whatever's queued next (logged, not fatal — see
+    // `drain_graph_layout_intent`).
+    let (graph_layout_tx, graph_layout_rx) =
+        tokio::sync::mpsc::channel::<crate::graph_layout_bridge::GraphLayoutRequest>(4);
+
     // Shared atomics so the bridge task only sends ticks when relevant.
     let shell_active = Arc::new(AtomicBool::new(false));
     let mcp_active = Arc::new(AtomicBool::new(false));
@@ -106,6 +114,7 @@ pub(crate) fn run_gui(
                 dap_event_rx,
                 mcp_tool_rx,
                 collab_event_rx,
+                graph_layout_rx,
                 shell_active_bg,
                 mcp_active_bg,
             )
@@ -136,6 +145,7 @@ pub(crate) fn run_gui(
         lsp_command_tx,
         dap_command_tx,
         collab_command_tx,
+        graph_layout_tx,
         mcp_socket_path,
         app_config,
         mcp_client_mgr,
@@ -150,6 +160,7 @@ pub(crate) fn run_gui(
         last_scroll_window: None,
         last_scroll_time: None,
         mouse_pressed: false,
+        graph_drag: None,
         shell_generations: std::collections::HashMap::new(),
         last_render: std::time::Instant::now(),
         input_dirty: false,
@@ -185,6 +196,9 @@ async fn bridge_task(
     mut dap_rx: tokio::sync::mpsc::Receiver<mae_dap::DapTaskEvent>,
     mut mcp_rx: tokio::sync::mpsc::Receiver<mae_mcp::McpToolRequest>,
     mut collab_rx: tokio::sync::mpsc::Receiver<crate::collab_bridge::CollabEvent>,
+    mut graph_layout_rx: tokio::sync::mpsc::Receiver<
+        crate::graph_layout_bridge::GraphLayoutRequest,
+    >,
     shell_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
     mcp_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
 ) {
@@ -222,6 +236,9 @@ async fn bridge_task(
             Some(ev) = collab_rx.recv() => {
                 if proxy.send_event(MaeEvent::CollabEvent(ev)).is_err() { break; }
             }
+            Some(req) = graph_layout_rx.recv() => {
+                crate::graph_layout_bridge::spawn_layout_computation(req, proxy.clone());
+            }
             _ = shell_interval.tick() => {
                 if shell_active.load(Relaxed) {
                     let _ = proxy.send_event(MaeEvent::ShellTick);
@@ -241,6 +258,34 @@ async fn bridge_task(
         }
     }
 }
+
+/// Part C Phase 4 (drag-to-pin): in-progress graph-node drag, tracked
+/// across a mouse press -> `CursorMoved`* -> release sequence. See
+/// `GuiApp::graph_drag`'s doc comment for why this lives on `GuiApp`
+/// rather than `Editor`/`GraphView`.
+#[cfg(feature = "gui")]
+struct GraphDragState {
+    window: mae_core::WindowId,
+    node_index: usize,
+    /// Window-relative pixel position at mouse-DOWN — replayed as the
+    /// hit-test coordinates for a plain click (`Editor::kb_graph_view_click_at`)
+    /// if the drag never exceeds `GRAPH_DRAG_THRESHOLD_PX` (see `moved`).
+    press_rel_x: f32,
+    press_rel_y: f32,
+    /// Set once cumulative movement from `press_rel_x`/`press_rel_y`
+    /// exceeds `GRAPH_DRAG_THRESHOLD_PX` — the click-vs-drag split: on
+    /// release, `moved == false` navigates the companion window (Phase 1b
+    /// behavior, preserved); `moved == true` pins the node instead
+    /// (Phase 4), never navigating.
+    moved: bool,
+}
+
+/// Minimum window-relative pixel movement before a graph-node press is
+/// treated as a drag rather than a click — absorbs mouse/trackpad jitter so
+/// an intended click-and-release doesn't accidentally pin the node a pixel
+/// away from where it started instead of navigating.
+#[cfg(feature = "gui")]
+const GRAPH_DRAG_THRESHOLD_PX: f32 = 3.0;
 
 /// GUI application state — owns all editor state on the main thread.
 ///
@@ -279,6 +324,7 @@ struct GuiApp {
     lsp_command_tx: tokio::sync::mpsc::Sender<LspCommand>,
     dap_command_tx: tokio::sync::mpsc::Sender<DapCommand>,
     collab_command_tx: tokio::sync::mpsc::Sender<crate::collab_bridge::CollabCommand>,
+    graph_layout_tx: tokio::sync::mpsc::Sender<crate::graph_layout_bridge::GraphLayoutRequest>,
 
     // Config
     mcp_socket_path: String,
@@ -299,6 +345,17 @@ struct GuiApp {
     last_scroll_window: Option<mae_core::WindowId>,
     last_scroll_time: Option<std::time::Instant>,
     mouse_pressed: bool,
+    /// Part C Phase 4 (drag-to-pin): transient in-progress node-drag state
+    /// for a `BufferKind::Graph` window, tracked across a
+    /// press -> `CursorMoved`* -> release sequence. Lives on `GuiApp` (not
+    /// `Editor`) because it's purely about sequencing raw mouse events
+    /// across winit callbacks — mirrors `mouse_pressed`'s existing
+    /// GUI-event-loop-local scoping, rather than
+    /// `crates/mae/src/shell_lifecycle.rs`'s `Editor`-owned,
+    /// drained-per-frame `shell.drag` pattern (there's no background
+    /// thread/bridge here that needs a drain step; every mutation is
+    /// applied synchronously as each winit event arrives).
+    graph_drag: Option<GraphDragState>,
 
     // Shell generation tracking (dirty-check optimisation — TUI parity)
     shell_generations: std::collections::HashMap<usize, u64>,
@@ -333,6 +390,10 @@ impl GuiApp {
         crate::collab_bridge::drain_collab_intents(&mut self.editor, &self.collab_command_tx);
         crate::collab_bridge::queue_awareness_update(&mut self.editor);
         crate::collab_bridge::cleanup_stale_awareness(&mut self.editor);
+        crate::graph_layout_bridge::drain_graph_layout_intent(
+            &mut self.editor,
+            &self.graph_layout_tx,
+        );
 
         crate::shell_lifecycle::drain_agent_setup(&mut self.editor);
         crate::shell_lifecycle::spawn_pending_shells(
@@ -607,11 +668,63 @@ impl GuiApp {
                 self.editor.lsp.hover_popup = None;
                 self.editor.lsp.code_action_menu = None;
 
+                let focused_id = self.editor.window_mgr.focused_id();
+
+                // Native KB graph view (Part C Phase 1 item 6): a
+                // `BufferKind::Graph` window is drawn via the Skia
+                // `VisualBuffer` pixel pipeline (`render_visual_buffer_with_bg`
+                // in `crates/gui/src/lib.rs`), not the text-cell `FrameLayout`
+                // pipeline below — it has no `FrameLayout` at all, so the
+                // fallthrough below would silently mis-hit-test it (today it
+                // falls into `handle_mouse_click_shift`, which doesn't
+                // understand graph nodes). Intercept here, before that
+                // fallthrough, and hand off to node hit-testing instead.
+                let focused_buf_idx = self
+                    .editor
+                    .window_mgr
+                    .window(focused_id)
+                    .map(|w| w.buffer_idx);
+                let is_graph_window = focused_buf_idx
+                    .and_then(|idx| self.editor.buffers.get(idx))
+                    .is_some_and(|b| b.kind == mae_core::BufferKind::Graph);
+                if is_graph_window {
+                    let window_rect = self
+                        .editor
+                        .window_mgr
+                        .layout_rects(self.editor.last_layout_area)
+                        .into_iter()
+                        .find(|(id, _)| *id == focused_id)
+                        .map(|(_, rect)| rect);
+                    if let Some(rect) = window_rect {
+                        let rel_x = self.cursor_x as f32 - (rect.x as f32 * cell_w);
+                        let rel_y = self.cursor_y as f32 - (rect.y as f32 * cell_h);
+                        // Part C Phase 4 (drag-to-pin): hit-test + select
+                        // immediately (visual feedback, and so a subsequent
+                        // drag knows which node index to move) but do NOT
+                        // navigate yet — the press might turn into a drag
+                        // rather than a click. Navigation (Phase 1b
+                        // behavior) happens on release if no drag occurred;
+                        // pinning (Phase 4) happens on release if it did —
+                        // see the `MouseInput { Released, Left }` arm.
+                        let hit = self
+                            .editor
+                            .kb_graph_view_hit_test_and_select(focused_id, rel_x, rel_y);
+                        self.graph_drag = hit.map(|node_index| GraphDragState {
+                            window: focused_id,
+                            node_index,
+                            press_rel_x: rel_x,
+                            press_rel_y: rel_y,
+                            moved: false,
+                        });
+                        self.dirty = true;
+                    }
+                    return;
+                }
+
                 // Try pixel-precise positioning via cached FrameLayout
                 // (handles scaled headings and folded lines correctly).
                 let px_x = self.cursor_x as f32;
                 let px_y = self.cursor_y as f32;
-                let focused_id = self.editor.window_mgr.focused_id();
                 let fl = self.renderer.window_layout(focused_id);
                 if let Some(fl) = fl {
                     if let Some((buf_row, char_col)) = fl.pixel_to_buffer_position(px_x, px_y) {
@@ -656,6 +769,61 @@ impl GuiApp {
                 (pos.x as f32, pos.y as f32)
             }
         };
+
+        // Part C Phase 4 (wheel-zoom): if the wheel event's target window
+        // (computed with the SAME mouse_wheel_follow_mouse/
+        // window-under-cursor-vs-focused logic the text-scroll path below
+        // uses, so "which window is this wheel event for" stays consistent
+        // between the graph and non-graph cases) is showing a
+        // `BufferKind::Graph` buffer, divert entirely to
+        // `Editor::kb_graph_view_zoom` instead of falling into any of the
+        // generic text-scroll logic below — gated the same way Phase 1b
+        // gated click interception (the target window's `BufferKind`).
+        // Self-contained block (its own target-window lookup, rather than
+        // threading a shared variable through the existing scroll code
+        // below) so the pre-existing text-scroll implementation is left
+        // byte-for-byte unchanged for every other `BufferKind`.
+        if v_px.abs() > 0.01 || h_px.abs() > 0.01 {
+            let (cell_w, cell_h_dim) = self.renderer.cell_dimensions();
+            let target_win =
+                if self.editor.mouse_wheel_follow_mouse && cell_w > 0.0 && cell_h_dim > 0.0 {
+                    let col = (self.cursor_x / cell_w as f64) as u16;
+                    let row = (self.cursor_y / cell_h_dim as f64) as u16;
+                    self.editor
+                        .window_mgr
+                        .window_at_cell(col, row, self.editor.last_layout_area)
+                } else {
+                    None
+                };
+            let target_id = target_win.unwrap_or_else(|| self.editor.window_mgr.focused_id());
+            let is_graph_window = self
+                .editor
+                .window_mgr
+                .window(target_id)
+                .map(|w| w.buffer_idx)
+                .and_then(|idx| self.editor.buffers.get(idx))
+                .is_some_and(|b| b.kind == mae_core::BufferKind::Graph);
+            if is_graph_window {
+                if v_px.abs() > 0.01 && cell_w > 0.0 && cell_h_dim > 0.0 {
+                    let window_rect = self
+                        .editor
+                        .window_mgr
+                        .layout_rects(self.editor.last_layout_area)
+                        .into_iter()
+                        .find(|(id, _)| *id == target_id)
+                        .map(|(_, rect)| rect);
+                    if let Some(rect) = window_rect {
+                        let rel_x = self.cursor_x as f32 - (rect.x as f32 * cell_w);
+                        let rel_y = self.cursor_y as f32 - (rect.y as f32 * cell_h_dim);
+                        self.editor
+                            .kb_graph_view_zoom(target_id, v_px, rel_x, rel_y);
+                        self.dirty = true;
+                        self.input_dirty = true;
+                    }
+                }
+                return;
+            }
+        }
 
         if v_px.abs() > 0.01 {
             // Determine target window for scroll.
@@ -881,10 +1049,22 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
                 crate::collab_bridge::handle_collab_event(&mut self.editor, collab_event);
                 self.dirty = true;
             }
+            MaeEvent::GraphLayoutEvent(result) => {
+                crate::graph_layout_bridge::handle_graph_layout_event(&mut self.editor, result);
+                self.dirty = true;
+            }
             MaeEvent::IdleTick => {
-                if self.last_input_time.elapsed() > std::time::Duration::from_millis(100) {
+                let idle_elapsed = self.last_input_time.elapsed();
+                if idle_elapsed > std::time::Duration::from_millis(100) {
                     self.editor.idle_work();
-                    // Don't set dirty — idle work shouldn't trigger redraws.
+                    // idle_work() itself shouldn't trigger redraws.
+                }
+                // Shared idle-dispatch (Part B): which-key idle-delay (ROADMAP #83) and
+                // the Part-D KB-preview hook point. Unlike idle_work(), this CAN request
+                // a redraw — e.g. to reveal the which-key popup once its configured
+                // delay elapses, since nothing else changes state during a pure pause.
+                if self.editor.on_idle_tick(idle_elapsed.as_millis() as u64) {
+                    self.dirty = true;
                 }
                 // Drain sync updates on idle tick (~100ms max latency for keyboard edits).
                 crate::sync_broadcast::drain_and_broadcast(
@@ -943,7 +1123,86 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
                 self.cursor_y = position.y;
                 let (cell_w, cell_h) = self.renderer.cell_dimensions();
                 if cell_w > 0.0 && cell_h > 0.0 {
-                    if self.mouse_pressed {
+                    // Real-time graph-node hover (introspection/UX pass):
+                    // independent of the drag/mouse_pressed/autoselect
+                    // chain below, and deliberately does NOT use
+                    // `focus_window_at` (unlike click-to-focus) — hovering
+                    // must work over an UNFOCUSED Graph window (e.g.
+                    // visible in a split while a text buffer has focus)
+                    // without stealing focus just from moving the mouse.
+                    // Skipped entirely while dragging a node (the drag path
+                    // above already tracks that node explicitly).
+                    if self.graph_drag.is_none() && self.editor.kb_graph_hover_enabled {
+                        let col = (self.cursor_x / cell_w as f64) as u16;
+                        let row = (self.cursor_y / cell_h as f64) as u16;
+                        let win_at_cursor = self.editor.window_mgr.window_at_cell(
+                            col,
+                            row,
+                            self.editor.last_layout_area,
+                        );
+                        let graph_hit = win_at_cursor.and_then(|win_id| {
+                            let buf_idx = self.editor.window_mgr.window(win_id)?.buffer_idx;
+                            let is_graph = self
+                                .editor
+                                .buffers
+                                .get(buf_idx)
+                                .is_some_and(|b| b.kind == mae_core::BufferKind::Graph);
+                            is_graph.then_some(win_id)
+                        });
+                        let changed = if let Some(win_id) = graph_hit {
+                            let rect = self
+                                .editor
+                                .window_mgr
+                                .layout_rects(self.editor.last_layout_area)
+                                .into_iter()
+                                .find(|(id, _)| *id == win_id)
+                                .map(|(_, rect)| rect);
+                            match rect {
+                                Some(rect) => {
+                                    let rel_x = self.cursor_x as f32 - (rect.x as f32 * cell_w);
+                                    let rel_y = self.cursor_y as f32 - (rect.y as f32 * cell_h);
+                                    self.editor.kb_graph_view_hover_at(win_id, rel_x, rel_y)
+                                }
+                                None => false,
+                            }
+                        } else {
+                            self.editor.kb_graph_view_clear_hover()
+                        };
+                        if changed {
+                            self.dirty = true;
+                        }
+                    }
+
+                    if let Some(drag) = self.graph_drag.as_mut() {
+                        // Part C Phase 4 (drag-to-pin): dragging a graph
+                        // node. Recompute the window-relative pixel
+                        // position each move (not just once at press) in
+                        // case the window was resized mid-drag. Deliberately
+                        // does NOT call `focus_window_at` (unlike the
+                        // text-selection drag path below) — the drag must
+                        // keep tracking the SAME graph window's node even if
+                        // the cursor strays outside that window's bounds.
+                        let window_rect = self
+                            .editor
+                            .window_mgr
+                            .layout_rects(self.editor.last_layout_area)
+                            .into_iter()
+                            .find(|(id, _)| *id == drag.window)
+                            .map(|(_, rect)| rect);
+                        if let Some(rect) = window_rect {
+                            let rel_x = self.cursor_x as f32 - (rect.x as f32 * cell_w);
+                            let rel_y = self.cursor_y as f32 - (rect.y as f32 * cell_h);
+                            let dx = rel_x - drag.press_rel_x;
+                            let dy = rel_y - drag.press_rel_y;
+                            if drag.moved || (dx * dx + dy * dy).sqrt() > GRAPH_DRAG_THRESHOLD_PX {
+                                drag.moved = true;
+                                let (window, node_index) = (drag.window, drag.node_index);
+                                self.editor
+                                    .kb_graph_view_drag_node(window, node_index, rel_x, rel_y);
+                                self.dirty = true;
+                            }
+                        }
+                    } else if self.mouse_pressed {
                         let col = (self.cursor_x / cell_w as f64) as u16;
                         let row = (self.cursor_y / cell_h as f64) as u16;
                         // Drag across windows: switch focus so visual selection extends correctly.
@@ -959,6 +1218,18 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
                     }
                 }
             }
+            WindowEvent::CursorLeft { .. } => {
+                // The cursor left the OS window's client area entirely —
+                // winit stops delivering CursorMoved altogether after this,
+                // so without an explicit clear here a graph-node hover
+                // highlight could stay stuck lit indefinitely (the
+                // CursorMoved "moved off the graph window onto something
+                // else within the same OS window" case is already covered
+                // above; this handles leaving the OS window's bounds).
+                if self.editor.kb_graph_view_clear_hover() {
+                    self.dirty = true;
+                }
+            }
             WindowEvent::MouseInput {
                 state: winit::event::ElementState::Pressed,
                 button,
@@ -972,6 +1243,26 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
                 ..
             } => {
                 self.mouse_pressed = false;
+                if let Some(drag) = self.graph_drag.take() {
+                    // Part C Phase 4: finish the graph-node press/drag
+                    // gesture. `moved` distinguishes a real drag (pin the
+                    // node where it was left) from a plain click-and-release
+                    // (fall back to the Phase 1b click-to-navigate path, at
+                    // the ORIGINAL press position — the node never actually
+                    // moved in that case).
+                    if drag.moved {
+                        self.editor
+                            .kb_graph_view_drag_end(drag.window, drag.node_index);
+                    } else {
+                        self.editor.kb_graph_view_click_at(
+                            drag.window,
+                            drag.press_rel_x,
+                            drag.press_rel_y,
+                        );
+                    }
+                    self.dirty = true;
+                    return;
+                }
                 let (cell_w, cell_h) = self.renderer.cell_dimensions();
                 if cell_w > 0.0 && cell_h > 0.0 {
                     let col = (self.cursor_x / cell_w as f64) as u16;
@@ -1051,6 +1342,23 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
         let (cw, ch) = self.renderer.cell_dimensions();
         self.editor.gui_cell_width = cw;
         self.editor.gui_cell_height = ch;
+
+        // Resize adaptivity: self-heals any open KB graph view's cached
+        // viewport size against a full GUI window resize OR an in-editor
+        // split/pane resize, on every event-loop iteration rather than
+        // hooking every individual resize command — see
+        // `Editor::sync_open_graph_viewports`'s doc comment.
+        if self.editor.sync_open_graph_viewports() {
+            self.dirty = true;
+        }
+
+        // Self-healing resync: refresh the open *Messages* buffer's rope
+        // against new log entries, on every event-loop iteration — see
+        // `Editor::sync_open_messages_buffer`'s doc comment for why this
+        // can't just happen once at buffer-open time.
+        if self.editor.sync_open_messages_buffer() {
+            self.dirty = true;
+        }
 
         // Pre-render bookkeeping.
         self.editor.clamp_all_cursors();
@@ -1244,6 +1552,18 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
             any
         };
 
+        // Part C Phase 3 (`kb_graph_animate`): is a `BufferKind::Graph`
+        // buffer's force layout still settling? Reuses the EXACT same
+        // dirty/`ControlFlow::WaitUntil`-capped-60fps/`Wait` scheduling
+        // pattern as scroll inertia below (per the architecture plan: no
+        // second animation scheduler) — unioned with `any_inertia` so
+        // EITHER keeps the 60fps cadence alive, and only when BOTH are idle
+        // does the loop fall back to `ControlFlow::Wait`. Always `false`
+        // when `kb_graph_animate` is off (the default), so this term never
+        // fires and the loop's idle-vs-ticking behavior is unchanged from
+        // before Phase 3 existed.
+        let graph_animating = self.editor.has_active_graph_animation();
+
         // Frame-capped redraw (60fps = 16.667ms).
         // Emacs pattern (dispnew.c:3254): input-pending bypasses frame cap
         // so keyboard/scroll never waits for the next frame boundary.
@@ -1259,8 +1579,9 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
                     std::time::Instant::now() + (frame_budget - elapsed),
                 ));
             }
-        } else if any_inertia || self.last_scroll_time.is_some() {
-            // Inertia pending or about to activate — keep 60fps cadence.
+        } else if any_inertia || self.last_scroll_time.is_some() || graph_animating {
+            // Inertia pending/about to activate, or a graph layout still
+            // settling — keep 60fps cadence.
             let frame_budget = std::time::Duration::from_micros(16_667);
             event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
                 std::time::Instant::now() + frame_budget,

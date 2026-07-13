@@ -337,7 +337,7 @@ fn render_kb_node_with_store(
 /// (`render_kb_body`) can run over the *whole* filtered body at once instead
 /// of one already-split line at a time — needed for a link whose display
 /// text spans a line break (#301/#302).
-fn strip_kb_body_noise(body: &str) -> String {
+pub(crate) fn strip_kb_body_noise(body: &str) -> String {
     let mut out = String::with_capacity(body.len());
     let mut in_drawer = false;
     let mut kept_lines = 0usize;
@@ -427,6 +427,34 @@ fn render_kb_body(body: &str, out: &mut String, links: &mut Vec<KbLinkSpan>) {
 }
 
 impl Editor {
+    /// TUI textual fallback for the native KB graph view (`BufferKind::Graph`,
+    /// Part C Phase 1): delegates to the EXISTING KB "** Neighborhood"
+    /// rendering machinery (`render_kb_node_for_query`) for the graph's
+    /// center node, rather than rendering `GraphView.scene`'s positions
+    /// (which only the GUI's Skia canvas consumes) as text. Lives here
+    /// (not `graph_view_ops.rs`) specifically so it can call the private
+    /// `render_kb_node_for_query` directly without widening that
+    /// function's visibility.
+    pub fn render_graph_view_as_text(&self) -> String {
+        let Some(center) = self
+            .buffers
+            .iter()
+            .find(|b| b.kind == BufferKind::Graph)
+            .and_then(|b| b.graph_view())
+            .and_then(|gv| gv.center_node.clone())
+        else {
+            return "(KB graph view: no center node yet — open with :kb-graph-view-open)\n"
+                .to_string();
+        };
+        match self.kb.query_layer() {
+            Some(q) => render_kb_node_for_query(q, &center).0,
+            None => format!(
+                "* KB Graph — {}\n(no KB query layer available; graph data unavailable in this build)\n",
+                center
+            ),
+        }
+    }
+
     /// Generate live help text for a command, querying current keymaps and hooks.
     pub fn describe_command_live(&self, cmd_name: &str) -> Option<String> {
         let cmd = self.commands.get(cmd_name)?;
@@ -506,7 +534,12 @@ impl Editor {
     }
 
     /// Get the KnowledgeBase that contains a given node ID (local first, then federated).
-    fn kb_for_node(&self, id: &str) -> Option<&mae_kb::KnowledgeBase> {
+    ///
+    /// `pub(crate)` so `kb_preview_ops.rs`'s `fetch_kb_preview_content` (Part
+    /// D, KB-link hover preview) can reuse the same lookup instead of a
+    /// second divergent resolver — mirrors why `kb_contains_any` above is
+    /// `pub(crate)`.
+    pub(crate) fn kb_for_node(&self, id: &str) -> Option<&mae_kb::KnowledgeBase> {
         // Use query_layer for the existence check when available, but we still need
         // to return a &KnowledgeBase reference so we do the structural search regardless.
         if let Some(q) = self.kb.query_layer() {
@@ -994,6 +1027,44 @@ impl Editor {
         line_start + col_bytes
     }
 
+    /// Find the KB link at an arbitrary `(row, col)` position in the
+    /// FOCUSED window's buffer, if that buffer is showing a KB node
+    /// (`BufferKind::Kb`) and the position falls inside one of its
+    /// `KbView.rendered_links` byte ranges.
+    ///
+    /// Read-only: unlike `help_follow_link`, this never navigates or
+    /// mutates `KbView.focused_link` — it's a pure lookup for the KB-link
+    /// hover preview (Part D, `kb_preview_ops.rs`), which needs to know
+    /// "is the cursor on a link right now" without following it. Mirrors
+    /// `help_cursor_byte_offset`'s row/col → byte-offset conversion (same
+    /// technique `mouse_ops::try_link_follow_at` uses to generalize
+    /// cursor-based link-follow to arbitrary mouse positions), generalized
+    /// to an arbitrary `(row, col)` instead of only the live cursor.
+    pub(crate) fn kb_link_at(&self, row: usize, col: usize) -> Option<KbLinkSpan> {
+        let buf_idx = self.window_mgr.focused_window().buffer_idx;
+        let buf = self.buffers.get(buf_idx)?;
+        if buf.kind != BufferKind::Kb {
+            return None;
+        }
+        let view = buf.kb_view()?;
+        if view.rendered_links.is_empty() {
+            return None;
+        }
+        let rope = buf.rope();
+        if rope.len_lines() == 0 {
+            return None;
+        }
+        let row = row.min(rope.len_lines().saturating_sub(1));
+        let line_start = rope.line_to_byte(row);
+        let line_len = rope.line(row).len_bytes();
+        let col_bytes = col.min(line_len);
+        let byte_offset = line_start + col_bytes;
+        view.rendered_links
+            .iter()
+            .find(|l| byte_offset >= l.byte_start && byte_offset < l.byte_end)
+            .cloned()
+    }
+
     /// Close the *Help* buffer if one exists, switching to the alternate
     /// buffer (or scratch). Saves the view state for `help-reopen`.
     pub fn help_close(&mut self) {
@@ -1357,6 +1428,27 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn render_graph_view_as_text_no_center_before_open() {
+        let e = Editor::new();
+        let text = e.render_graph_view_as_text();
+        assert!(text.contains("no center node"));
+    }
+
+    #[test]
+    fn render_graph_view_as_text_reports_center_when_no_query_layer() {
+        // A plain `Editor::new()` test fixture has no `KbQueryLayer` wired
+        // (that's assembled by the binary's bootstrap, not the core
+        // constructor) — confirms the graceful-degradation branch rather
+        // than panicking or silently rendering nothing.
+        let mut e = Editor::new();
+        e.kb_graph_view_open(Some("index".to_string()), Some(1));
+        assert!(e.kb.query_layer().is_none());
+        let text = e.render_graph_view_as_text();
+        assert!(text.contains("index"));
+        assert!(text.contains("no KB query layer"));
+    }
 
     #[test]
     fn open_help_at_creates_buffer() {

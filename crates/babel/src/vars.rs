@@ -96,7 +96,7 @@ mod tests {
             header_args: args,
             body: String::new(),
             line_range: (0, 0),
-            body_byte_range: (0, 0),
+            body_char_range: (0, 0),
         };
 
         let resolved = resolve_vars(&block, &[], "");
@@ -118,7 +118,7 @@ mod tests {
             header_args: args,
             body: String::new(),
             line_range: (0, 0),
-            body_byte_range: (0, 0),
+            body_char_range: (0, 0),
         };
 
         let resolved = resolve_vars(&block, &[], buf);

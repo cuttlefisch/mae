@@ -433,10 +433,10 @@ For full setup guide: :help ai-setup";
             self.shell.cwds.insert(new_idx, cwd);
         }
         // @ai-caution: [window-split] Agent shells MUST use
-        // switch_to_buffer_non_conversation() + split_root(), NOT
+        // display_buffer_for_agent() + split_root(), NOT
         // display_buffer_and_focus(). The latter steals conversation
         // windows. Fixed in commit 8a52851.
-        self.switch_to_buffer_non_conversation(new_idx);
+        self.display_buffer_for_agent(new_idx);
         // Focus the window showing the agent shell.
         let agent_win_id = self
             .window_mgr

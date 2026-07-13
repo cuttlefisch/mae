@@ -82,19 +82,37 @@ impl Editor {
             return self.buffers.len() - 1;
         }
 
-        // Reuse a *KB* buffer only if it's already showing this exact node —
-        // same semantics as opening an already-open file twice.
+        // Reuse a *KB: <title>* buffer only if it's already showing this
+        // exact node — same semantics as opening an already-open file twice.
+        // Match by node id (not by name), since the name is now derived
+        // from the node's title and isn't itself a stable identity.
         if let Some(idx) = self.buffers.iter().position(|b| {
             b.kind == crate::buffer::BufferKind::Kb
-                && b.name == buffer_names::KB
                 && b.kb_view().is_some_and(|v| v.current == node_id)
         }) {
             return idx;
         }
         let mut buf = Buffer::new_kb(node_id);
-        buf.name = buffer_names::KB.to_string();
+        buf.name = self.kb_buffer_display_name(node_id);
         self.buffers.push(buf);
         self.buffers.len() - 1
+    }
+
+    /// A distinct, title-based buffer name for a KB node buffer — e.g.
+    /// `*KB: ADR-0003*` — so multiple simultaneously-open KB buffers (one
+    /// per node visited via the graph view's companion-window navigation,
+    /// or plain multi-window KB browsing) are distinguishable in the buffer
+    /// switcher (`SPC b b`), instead of every one showing the same generic
+    /// `*KB*` name. Falls back to the raw node id if the title can't be
+    /// looked up (e.g. a not-yet-synced federated node).
+    fn kb_buffer_display_name(&self, node_id: &str) -> String {
+        let title = self
+            .kb_for_node(node_id)
+            .and_then(|kb| kb.get(node_id))
+            .map(|n| n.title.clone())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| node_id.to_string());
+        format!("*KB: {title}*")
     }
 
     /// Mutable view onto the ACTIVE (focused window's) buffer's KbView, if

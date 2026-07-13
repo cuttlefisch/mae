@@ -319,6 +319,13 @@ impl OptionRegistry {
                 opt!("babel_timeout", &["babel-timeout"],
                     "Execution timeout in seconds for babel source blocks",
                     OptionKind::Int, "30", Some("babel.timeout"), &[]),
+                opt!("babel_inherit_shell_env", &["babel-inherit-shell-env"],
+                    "Merge the user's resolved interactive login shell environment (sourcing \
+                     .bashrc/.zshrc/.profile via `$SHELL -i -l -c env`, resolved once and \
+                     cached) into babel-spawned processes and sessions. Needed because a \
+                     GUI-launched editor (desktop launcher, systemd) doesn't inherit shell-rc \
+                     variables the way an interactive terminal session does.",
+                    OptionKind::Bool, "true", Some("babel.inherit_shell_env"), &[]),
                 opt!("babel_cxx_compiler", &["babel-cxx-compiler"],
                     "C++ compiler for org-babel c++/cpp blocks (overridden per-block by :cmd, or by MAE_BABEL_CXX)",
                     OptionKind::String, "c++", Some("babel.cxx_compiler"), &[]),
@@ -398,7 +405,9 @@ impl OptionRegistry {
                     OptionKind::Bool, "false", Some("ai.chat_enabled"), &[]),
                 // --- Which-key ---
                 opt!("which_key_idle_delay", &["which-key-idle-delay"],
-                    "Milliseconds before which-key popup appears (0 = immediate). NOTE: timer integration deferred.",
+                    "Milliseconds of idle time (no input) after the leader keypad activates \
+                     before the which-key popup appears (0 = immediate). Wired via \
+                     Editor::on_idle_tick (ROADMAP #83).",
                     OptionKind::Int, "0", Some("which-key.idle-delay"), &[]),
                 opt!("which_key_separator", &["which-key-separator"],
                     "Separator between key and description in which-key popup",
@@ -412,6 +421,56 @@ impl OptionRegistry {
                 opt!("which_key_sort_order", &["which-key-sort-order"],
                     "Sort order for which-key entries: key (default), desc, none",
                     OptionKind::String, "key", Some("which-key.sort-order"), &["key", "desc", "none"]),
+                // --- KB-link hover preview (Part D) ---
+                opt!("kb_preview_idle_delay", &["kb-preview-idle-delay"],
+                    "Milliseconds of cursor idle time over a KB link before a hover preview \
+                     popup would appear. Wired via Editor::on_idle_tick.",
+                    OptionKind::Int, "300", Some("kb-preview.idle-delay"), &[]),
+                opt!("kb_preview_on_hover", &["kb-preview-on-hover"],
+                    "Auto-show the KB-link hover preview popup when the cursor idles over a \
+                     link in a KB-view-mode buffer (gated by kb_preview_idle_delay). The manual \
+                     kb-preview command/keybinding works regardless of this option.",
+                    OptionKind::Bool, "true", Some("kb-preview.on-hover"), &[]),
+                opt!("kb_preview_max_lines", &["kb-preview-max-lines"],
+                    "Maximum lines shown in the KB-link hover preview popup before scrolling. \
+                     Mirrors hover_max_lines.",
+                    OptionKind::Int, "15", Some("kb-preview.max-lines"), &[]),
+                // --- Native KB graph view (Part C Phase 1) ---
+                opt!("kb_graph_default_depth", &["kb-graph-default-depth"],
+                    "Default hop radius (SubgraphSpec::max_depth) for (kb-graph-view-open) when \
+                     no explicit depth is given.",
+                    OptionKind::Int, "2", Some("kb-graph.default-depth"), &[]),
+                opt!("kb_graph_include_backlinks", &["kb-graph-include-backlinks"],
+                    "Whether the graph view's subgraph extraction walks backlinks as well as \
+                     outgoing links.",
+                    OptionKind::Bool, "true", Some("kb-graph.include-backlinks"), &[]),
+                opt!("kb_graph_node_radius", &["kb-graph-node-radius"],
+                    "Node circle radius in logical pixels for the graph view's GUI rendering.",
+                    OptionKind::Int, "18", Some("kb-graph.node-radius"), &[]),
+                opt!("kb_graph_font_size", &["kb-graph-font-size"],
+                    "Node label font size in points for the graph view's GUI rendering. \
+                     Independent of the base font_size option (same numeric default, no live \
+                     inheritance) — MAE has no general option-inherits-from-option mechanism.",
+                    OptionKind::Int, "14", Some("kb-graph.font-size"), &[]),
+                opt!("kb_graph_layout_iterations", &["kb-graph-layout-iterations"],
+                    "Force-directed layout iteration count run by the background \
+                     graph_layout_bridge on each open/refresh/set-depth.",
+                    OptionKind::Int, "50", Some("kb-graph.layout-iterations"), &[]),
+                opt!("kb_graph_follow_current_node", &["kb-graph-follow-current-node"],
+                    "Whether the graph view re-centers on the human/AI's current KB node \
+                     automatically. Registered ahead of the Phase 2 command-post wiring that \
+                     will read it — currently unused.",
+                    OptionKind::Bool, "true", Some("kb-graph.follow-current-node"), &[]),
+                opt!("kb_graph_animate", &["kb-graph-animate"],
+                    "Whether the graph view's force-layout keeps ticking (physics animation) \
+                     after the initial layout settles. Registered ahead of the Phase 3 \
+                     graph_layout_bridge extension that will read it — currently unused.",
+                    OptionKind::Bool, "false", Some("kb-graph.animate"), &[]),
+                opt!("kb_graph_hover_enabled", &["kb-graph-hover-enabled"],
+                    "Whether hovering the mouse over a graph-view node highlights it in real \
+                     time (immediate, not idle-delayed — see kb_preview_idle_delay for the \
+                     unrelated idle-triggered KB-link hover preview).",
+                    OptionKind::Bool, "true", Some("kb-graph.hover-enabled"), &[]),
                 // --- File tree ---
                 opt!("file_tree_focus_on_open", &["file-tree-focus-on-open"],
                     "Auto-focus the file tree window when it opens",

@@ -1204,6 +1204,21 @@ pub(crate) const SCHEME_API_FUNCTIONS: &[(&str, &str, &str, &str, &str)] = &[
             "(kb-meta-members \"meta:release-checklist\")",
             "kb-graph",
         ),
+        // KB-link hover preview (Part D of the KB-graph-view plan)
+        (
+            "kb-preview-show",
+            "(kb-preview-show ID)",
+            "Show the KB-link hover preview popup for KB node ID, anchored at the current cursor position. Scoped to KB-view-mode buffers; ID does not need to be the target of a link under the cursor.",
+            "(kb-preview-show \"concept:buffer\")",
+            "kb-preview",
+        ),
+        (
+            "kb-preview-dismiss",
+            "(kb-preview-dismiss)",
+            "Dismiss the KB-link hover preview popup, if showing.",
+            "(kb-preview-dismiss)",
+            "kb-preview",
+        ),
         (
             "kb-rel-types",
             "(kb-rel-types)",

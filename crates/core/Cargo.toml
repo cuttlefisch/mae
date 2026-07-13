@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 mae-babel = { path = "../babel" }
+mae-canvas = { path = "../canvas" }
 mae-export = { path = "../export" }
 mae-format = { path = "../format" }
 mae-kb = { path = "../../shared/kb", features = ["storage-sled", "storage-sqlite", "crdt"] }

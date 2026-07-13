@@ -3,35 +3,63 @@
 //! `links.rs` (bibliographic coupling / co-citation / direct adjacency /
 //! shared tags, mirroring `crate::KnowledgeBase::related`).
 
-use super::util::{btree_params, cozo_err, dv_str};
+use super::util::cozo_err;
 use super::*;
 
 impl CozoKbStore {
-    /// Find shortest path between two nodes using BFS-style recursive Datalog.
+    /// Find shortest path between two nodes — actually a **reachability
+    /// check**, not real shortest-path reconstruction (see doc below).
+    ///
+    /// Previously implemented as recursive Datalog with `d + 1` inside a
+    /// rule head (`reach[node, d + 1] := ...`); CozoDB's parser rejects
+    /// arithmetic expressions in rule-head position, so every call to this
+    /// function unconditionally errored ("query parser has encountered
+    /// unexpected input") — `neighborhood` right below already carries a
+    /// comment flagging this exact issue and avoids it via iterative
+    /// expansion in Rust instead of recursive Datalog; this function just
+    /// hadn't been brought in line with that fix yet (CLAUDE.md principle
+    /// #15 — fixing the drift, not just documenting around it). Same
+    /// iterative-BFS shape as `neighborhood`, capped at 10 hops, walking
+    /// links in both directions (undirected reachability, matching the
+    /// original two-rule query).
     pub fn shortest_path(&self, from: &str, to: &str) -> Result<Vec<String>, KbStoreError> {
-        // Simple reachability check — full path tracking requires
-        // list operations that vary across CozoDB versions.
-        // Returns the nodes on *a* path (not necessarily shortest).
-        let result = self
-            .run_immut_params(
-                r#"
-                reach[node, 0] := node = $from
-                reach[node, d + 1] := reach[mid, d], *links{src: mid, dst: node}, d < 10
-                reach[node, d + 1] := reach[mid, d], *links{src: node, dst: mid}, d < 10
+        const MAX_DEPTH: usize = 10;
 
-                ?[node, depth] := reach[node, depth], node = $to
-                :limit 1
-                "#,
-                btree_params([("from", dv_str(from)), ("to", dv_str(to))]),
-            )
-            .map_err(cozo_err)?;
-
-        if result.rows.is_empty() {
-            Ok(vec![])
-        } else {
-            // Path exists — return from and to (full path reconstruction is complex in Datalog)
-            Ok(vec![from.to_string(), to.to_string()])
+        if from == to {
+            return Ok(vec![from.to_string(), to.to_string()]);
         }
+
+        let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+        visited.insert(from.to_string());
+        let mut frontier = vec![from.to_string()];
+
+        for _ in 0..MAX_DEPTH {
+            let mut next_frontier = Vec::new();
+            for node_id in &frontier {
+                let mut neighbors: Vec<String> = self
+                    .links_from(node_id)?
+                    .into_iter()
+                    .map(|l| l.dst)
+                    .collect();
+                neighbors.extend(self.links_to(node_id)?.into_iter().map(|l| l.src));
+                for neighbor in neighbors {
+                    if neighbor == to {
+                        // Path exists — return from/to (full intermediate-hop
+                        // reconstruction is complex in Datalog; not attempted).
+                        return Ok(vec![from.to_string(), to.to_string()]);
+                    }
+                    if visited.insert(neighbor.clone()) {
+                        next_frontier.push(neighbor);
+                    }
+                }
+            }
+            if next_frontier.is_empty() {
+                break;
+            }
+            frontier = next_frontier;
+        }
+
+        Ok(vec![])
     }
     /// Get neighborhood subgraph around a node up to a given depth.
     pub fn neighborhood(&self, id: &str, depth: u32) -> Result<SubGraph, KbStoreError> {

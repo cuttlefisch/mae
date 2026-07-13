@@ -14,7 +14,7 @@ use crate::window::SplitDirection;
 pub enum DisplayAction {
     /// Replace focused window. Falls through to AvoidConversation if focused on conversation.
     ReplaceFocused,
-    /// Route via switch_to_buffer_non_conversation (protects conversation pair).
+    /// Route via display_buffer_for_agent (protects conversation pair).
     AvoidConversation,
     /// Reuse existing window of same BufferKind, or create a split.
     /// Emacs 28+ "side window" pattern — tool buffers reuse their dedicated window.
@@ -116,6 +116,13 @@ impl DisplayPolicy {
             },
             // *KB Sharing* management buffer — full focused window (like git-status).
             BufferKind::KbSharing => DisplayAction::ReplaceFocused,
+            // Native KB graph view (Part C) — right 30% panel, reuse if open.
+            // Vertical (not horizontal, like Debug/Messages) because a graph
+            // benefits from width more than height.
+            BufferKind::Graph => DisplayAction::ReuseOrSplit {
+                direction: SplitDirection::Vertical,
+                ratio: 0.3,
+            },
         }
     }
 
@@ -151,6 +158,7 @@ impl DisplayPolicy {
             BufferKind::Demo,
             BufferKind::ShellSelect,
             BufferKind::Modules,
+            BufferKind::Graph,
         ];
 
         for kind in &kinds {
@@ -250,6 +258,7 @@ pub fn parse_buffer_kind(s: &str) -> Option<BufferKind> {
         "demo" => Some(BufferKind::Demo),
         "shellselect" | "shell-select" => Some(BufferKind::ShellSelect),
         "modules" => Some(BufferKind::Modules),
+        "graph" | "kb-graph" => Some(BufferKind::Graph),
         _ => None,
     }
 }
@@ -278,6 +287,7 @@ mod tests {
             BufferKind::Demo,
             BufferKind::ShellSelect,
             BufferKind::Modules,
+            BufferKind::Graph,
         ];
         for kind in &kinds {
             let _ = policy.action_for(*kind);
@@ -298,6 +308,18 @@ mod tests {
         assert_eq!(
             policy.action_for(BufferKind::Conversation),
             DisplayAction::Hidden
+        );
+    }
+
+    #[test]
+    fn graph_default_action_is_vertical_reuse_or_split() {
+        let policy = DisplayPolicy::default();
+        assert_eq!(
+            policy.action_for(BufferKind::Graph),
+            DisplayAction::ReuseOrSplit {
+                direction: SplitDirection::Vertical,
+                ratio: 0.3,
+            }
         );
     }
 

@@ -26,11 +26,14 @@ mod edit_ops;
 pub(crate) mod ex_parse;
 mod file_ops;
 mod git_ops;
+mod graph_view_ops;
 mod heading_ops;
 pub(crate) mod help_ops;
 mod hook_ops;
+mod idle_ops;
 mod jumps;
 pub(crate) mod kb_ops;
+mod kb_preview_ops;
 mod kb_sharing_ops;
 pub mod kb_state;
 mod keymaps;
@@ -710,6 +713,18 @@ pub struct Editor {
     /// Entered via the `leader-dispatch` command — `SPC` in the doom flavor,
     /// `C-;` in the non-modal flavor — so both flavors share one leader tree.
     pub leader_active: bool,
+    /// Wall-clock time `leader_active` was last flipped true — `None` while
+    /// inactive. Drives the `which_key_idle_delay` gate (ROADMAP #83): the
+    /// which-key popup only paints once this long ago, evaluated fresh on
+    /// every render by `leader_popup_ready()`. Always set/cleared together
+    /// with `leader_active` via `Editor::set_leader_active` so the two can
+    /// never drift out of sync.
+    pub leader_activated_at: Option<std::time::Instant>,
+    /// Set once `on_idle_tick` has already forced the redraw that reveals the
+    /// which-key popup for the CURRENT leader activation, so repeated idle
+    /// ticks don't keep marking a full redraw while the popup just sits idle
+    /// on screen. Reset by `Editor::set_leader_active`.
+    pub which_key_popup_redraw_done: bool,
     pub running: bool,
     pub status_msg: String,
     /// Name of the command currently being dispatched (Emacs `this-command`).
@@ -726,9 +741,67 @@ pub struct Editor {
     pub which_key_prefix: Vec<KeyPress>,
     /// Scroll offset (in rows) for the which-key popup. Reset when prefix changes.
     pub which_key_scroll: usize,
+    /// Milliseconds of idle time (no input) required, after the leader
+    /// transient keypad activates, before the which-key popup paints (0 =
+    /// immediate, matching the old un-timed behavior). Mirrors the
+    /// `which_key_idle_delay` option (ROADMAP #83); see `on_idle_tick`.
+    pub which_key_idle_delay: u64,
+    /// Milliseconds of idle time required before a KB-link hover preview
+    /// popup would appear. Mirrors the `kb_preview_idle_delay` option.
+    /// TODO(Part D, KB-link hover preview): the popup itself isn't built
+    /// yet — this field and its idle-dispatch hook (`maybe_show_kb_preview_popup`)
+    /// are the forward-compatible hook point only.
+    pub kb_preview_idle_delay: u64,
+    /// Default hop radius (`SubgraphSpec::max_depth`) for `(kb-graph-view-open)`
+    /// when no explicit depth is given. Mirrors the `kb_graph_default_depth`
+    /// option.
+    pub kb_graph_default_depth: usize,
+    /// Whether `extract_subgraph` includes backlinks (not just outgoing
+    /// links) in the graph view's BFS walk. Mirrors `kb_graph_include_backlinks`.
+    pub kb_graph_include_backlinks: bool,
+    /// Node circle radius in logical pixels for the graph view's GUI
+    /// rendering. Mirrors `kb_graph_node_radius`.
+    pub kb_graph_node_radius: u32,
+    /// Node label font size in points for the graph view's GUI rendering.
+    /// Mirrors `kb_graph_font_size` — defaults to the same numeric default
+    /// as the base `font_size` option (14), but is a fully independent
+    /// setting (no live-inheritance wiring — MAE has no general
+    /// option-inherits-from-option mechanism today), so changing `font_size`
+    /// does not retroactively change this.
+    pub kb_graph_font_size: u32,
+    /// Force-directed layout iteration count run by the background
+    /// `graph_layout_bridge` on each open/refresh/set-depth. Mirrors
+    /// `kb_graph_layout_iterations`.
+    pub kb_graph_layout_iterations: usize,
+    /// TODO(Part C Phase 2, not wired yet): whether the graph view
+    /// re-centers on the human/AI's current KB node automatically. Mirrors
+    /// `kb_graph_follow_current_node` — registered now so the OptionRegistry
+    /// surface is complete ahead of Phase 2's `command-post` wiring.
+    pub kb_graph_follow_current_node: bool,
+    /// TODO(Part C Phase 3, not wired yet): whether the graph view's
+    /// force-layout keeps ticking (physics animation) after the initial
+    /// layout settles. Mirrors `kb_graph_animate` — registered now, unused
+    /// until Phase 3 extends `graph_layout_bridge` to tick continuously.
+    pub kb_graph_animate: bool,
+    /// Whether hovering the mouse over a graph-view node highlights it in
+    /// real time. Mirrors `kb_graph_hover_enabled`; read by `gui_app.rs`'s
+    /// `CursorMoved` handler to gate the hover hit-test branch.
+    pub kb_graph_hover_enabled: bool,
+    /// Queued background layout request for the open/refreshed graph-view
+    /// buffer (`mae::graph_layout_bridge`, Part C Phase 1) — drained once
+    /// per GUI event-loop tick, see `crate::graph_view::GraphLayoutIntent`'s
+    /// doc comment for why the TUI safely ignores this.
+    pub pending_graph_layout: Option<crate::graph_view::GraphLayoutIntent>,
     /// In-editor message log (*Messages* buffer equivalent).
     /// Shared with the tracing layer via MessageLogHandle.
     pub message_log: MessageLog,
+    /// `MessageLog` entry `seq` last synced into the `*Messages*` buffer's
+    /// rope (see `Editor::sync_open_messages_buffer`). The renderer always
+    /// reads `message_log` live, but yank/visual-select/search operate on
+    /// the buffer's rope — this tracks staleness so the rope gets
+    /// refreshed whenever new entries have arrived since the last sync,
+    /// not just once at buffer-open time.
+    pub messages_synced_seq: Option<u64>,
     /// Active color theme. All rendering reads from this.
     pub theme: Theme,
     /// DAP debug session state and pending intent queue.
@@ -806,6 +879,9 @@ pub struct Editor {
     pub babel_trust_paths: Vec<String>,
     /// Babel: execution timeout in seconds (default 30).
     pub babel_timeout: u64,
+    /// Babel: merge the user's resolved shell environment into
+    /// babel-spawned processes/sessions (default true).
+    pub babel_inherit_shell_env: bool,
     /// Babel: C++ compiler for c++/cpp blocks (default "c++").
     pub babel_cxx_compiler: String,
     /// Babel: C compiler for c blocks (default "cc").
@@ -988,6 +1064,14 @@ pub struct Editor {
     pub render_markup: bool,
     /// Show hover info in a floating popup (true) or status bar (false). Default true.
     pub lsp_hover_popup: bool,
+    /// Whether the KB-link hover preview popup (Part D) auto-triggers when
+    /// the cursor idles over a link in a KB-view-mode buffer, gated by
+    /// `kb_preview_idle_delay`. The manual `kb-preview` command/keybinding
+    /// works regardless of this option. Default true.
+    pub kb_preview_on_hover: bool,
+    /// Max lines shown in the KB-link hover preview popup before scrolling.
+    /// Mirrors `hover_max_lines`. Default 15.
+    pub kb_preview_max_lines: usize,
     /// Git blame overlay for current buffer.
     pub blame_overlay: Option<BlameOverlay>,
     /// Show inline diagnostic underlines on error/warning ranges. Default true.
@@ -1131,6 +1215,8 @@ impl Editor {
             saved_maximize_layout: None,
             mode: Mode::Normal,
             leader_active: false,
+            leader_activated_at: None,
+            which_key_popup_redraw_done: false,
             running: true,
             status_msg: String::new(),
             current_command: String::new(),
@@ -1139,7 +1225,19 @@ impl Editor {
             keymap_registry: crate::keymap_registry::KeymapRegistry::kernel_defaults(),
             which_key_prefix: Vec::new(),
             which_key_scroll: 0,
+            which_key_idle_delay: 0,
+            kb_preview_idle_delay: 300,
+            kb_graph_default_depth: 2,
+            kb_graph_include_backlinks: true,
+            kb_graph_node_radius: 18,
+            kb_graph_font_size: 14,
+            kb_graph_layout_iterations: 50,
+            kb_graph_follow_current_node: true,
+            kb_graph_animate: false,
+            kb_graph_hover_enabled: true,
+            pending_graph_layout: None,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)
+            messages_synced_seq: None,
             theme: default_theme(),
             dap: DapContext::new(),
             vi: ViState::new(),
@@ -1183,6 +1281,7 @@ impl Editor {
             babel_confirm: true,
             babel_trust_paths: Vec::new(),
             babel_timeout: 30,
+            babel_inherit_shell_env: true,
             babel_cxx_compiler: "c++".to_string(),
             babel_c_compiler: "cc".to_string(),
             babel_cxx_std: "c++17".to_string(),
@@ -1254,6 +1353,8 @@ impl Editor {
             link_descriptive: true,
             render_markup: true,
             lsp_hover_popup: true,
+            kb_preview_on_hover: true,
+            kb_preview_max_lines: 15,
             blame_overlay: None,
             lsp_diagnostics_inline: true,
             lsp_diagnostics_virtual_text: true,

@@ -207,6 +207,207 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
         },
     );
 
+    // --- Graph-native KB query functions ---
+    //
+    // These four mirror the `kb_graph`/`kb_neighborhood`/`kb_related`/
+    // `kb_shortest_path` MCP tools (`crates/ai/src/tools/kb_tools.rs`,
+    // executors in `crates/ai/src/tool_impls/kb.rs`), closing a real
+    // human/AI parity gap: those MCP tools previously had zero Scheme
+    // primitive counterparts (CLAUDE.md principle #3). Like every other
+    // primitive in this file, they read the primary KB's durable store only
+    // (`SharedState::kb_store`, synced 1:1 from `Editor.kb.store`) — NOT the
+    // federated query layer the MCP executors prefer when available, so
+    // results here are scoped to the primary KB even when other KB
+    // instances are registered. `kb-graph` and `kb-related` share their
+    // core walk/ranking algorithm with the MCP executors via
+    // `mae_kb::graph_query` (see that module's docs) rather than
+    // reimplementing it; `kb-neighborhood` and `kb-shortest-path` call
+    // `KbStore` trait methods directly (no factoring needed — the MCP
+    // executors already do the same thing).
+
+    // (kb-graph ID [DEPTH]) → (root depth nodes edges)
+    // nodes: list of (id title-or-#f kind-or-#f hop missing?)
+    // edges: list of (src . dst)
+    let s = shared.clone();
+    vm.register_fn(
+        "kb-graph",
+        "BFS neighborhood around a seed node (primary KB only), up to DEPTH hops (default 1, max 3). Returns (root depth nodes edges): each node is (id title kind hop missing?) — title/kind are #f when missing? is #t (a dangling link target); each edge is (src . dst).",
+        Arity::Variadic(1),
+        move |args: &[Value]| {
+            let id = arg_string(args, 0, "kb-graph")?;
+            let depth = if args.len() > 1 {
+                (arg_int(args, 1, "kb-graph")? as usize).min(3)
+            } else {
+                1
+            };
+            let state = s.lock();
+            if let Some(ref store) = state.kb_store {
+                let backend = mae_kb::graph_query::KbStoreBackend(store.as_ref());
+                match mae_kb::graph_query::bfs_neighborhood(&backend, &id, depth) {
+                    Ok(result) => {
+                        let nodes = Value::list(
+                            result
+                                .nodes
+                                .into_iter()
+                                .map(|n| {
+                                    Value::list(vec![
+                                        Value::string(n.id),
+                                        n.title
+                                            .map(Value::string)
+                                            .unwrap_or(Value::Bool(false)),
+                                        n.kind.map(Value::string).unwrap_or(Value::Bool(false)),
+                                        Value::Int(n.hop as i64),
+                                        Value::Bool(n.missing),
+                                    ])
+                                })
+                                .collect::<Vec<_>>(),
+                        );
+                        let edges = Value::list(
+                            result
+                                .edges
+                                .into_iter()
+                                .map(|(src, dst)| {
+                                    Value::cons(Value::string(src), Value::string(dst))
+                                })
+                                .collect::<Vec<_>>(),
+                        );
+                        Ok(Value::list(vec![
+                            Value::string(result.root),
+                            Value::Int(result.depth as i64),
+                            nodes,
+                            edges,
+                        ]))
+                    }
+                    Err(e) => Err(LispError::internal(format!("kb-graph: {}", e))),
+                }
+            } else {
+                Ok(Value::list(vec![]))
+            }
+        },
+    );
+
+    // (kb-neighborhood ID [DEPTH]) → (root depth nodes edges)
+    // nodes: list of (id . title); edges: list of (src dst rel-type)
+    let s = shared.clone();
+    vm.register_fn(
+        "kb-neighborhood",
+        "Graph neighborhood around a seed node from the persistent store, up to DEPTH hops (default 2, max 5). Returns (root depth nodes edges): each node is (id . title), each edge is (src dst rel-type). Requires CozoDB backend.",
+        Arity::Variadic(1),
+        move |args: &[Value]| {
+            let id = arg_string(args, 0, "kb-neighborhood")?;
+            let depth = if args.len() > 1 {
+                (arg_int(args, 1, "kb-neighborhood")? as u32).min(5)
+            } else {
+                2
+            };
+            let state = s.lock();
+            if let Some(ref store) = state.kb_store {
+                match store.neighborhood(&id, depth) {
+                    Ok(subgraph) => {
+                        let nodes = Value::list(
+                            subgraph
+                                .nodes
+                                .into_iter()
+                                .map(|(nid, title)| {
+                                    Value::cons(Value::string(nid), Value::string(title))
+                                })
+                                .collect::<Vec<_>>(),
+                        );
+                        let edges = Value::list(
+                            subgraph
+                                .edges
+                                .into_iter()
+                                .map(|(src, dst, rel)| {
+                                    Value::list(vec![
+                                        Value::string(src),
+                                        Value::string(dst),
+                                        Value::string(rel),
+                                    ])
+                                })
+                                .collect::<Vec<_>>(),
+                        );
+                        Ok(Value::list(vec![
+                            Value::string(id),
+                            Value::Int(depth as i64),
+                            nodes,
+                            edges,
+                        ]))
+                    }
+                    Err(e) => Err(LispError::internal(format!("kb-neighborhood: {}", e))),
+                }
+            } else {
+                Ok(Value::list(vec![]))
+            }
+        },
+    );
+
+    // (kb-related ID [LIMIT]) → list of (id title kind score)
+    let s = shared.clone();
+    vm.register_fn(
+        "kb-related",
+        "Nodes structurally related to ID (primary KB only) — co-citation / bibliographic coupling / shared tags, distinct from lexical search (kb-search). Returns a list of (id title kind score) sorted by relatedness, capped to LIMIT (default 10).",
+        Arity::Variadic(1),
+        move |args: &[Value]| {
+            let id = arg_string(args, 0, "kb-related")?;
+            let limit = if args.len() > 1 {
+                arg_int(args, 1, "kb-related")? as usize
+            } else {
+                10
+            };
+            let state = s.lock();
+            if let Some(ref store) = state.kb_store {
+                let backend = mae_kb::graph_query::KbStoreRelatedBackend(store.as_ref());
+                let items = mae_kb::graph_query::related_enriched(&backend, &id, limit);
+                Ok(Value::list(
+                    items
+                        .into_iter()
+                        .map(|it| {
+                            Value::list(vec![
+                                Value::string(it.id),
+                                Value::string(it.title),
+                                Value::string(it.kind),
+                                Value::Float(it.score),
+                            ])
+                        })
+                        .collect::<Vec<_>>(),
+                ))
+            } else {
+                Ok(Value::list(vec![]))
+            }
+        },
+    );
+
+    // (kb-shortest-path FROM TO) → list of node ids
+    //
+    // NOT a real shortest path: `KbStore::shortest_path` (CozoDB backend) is
+    // a Datalog REACHABILITY check capped at depth 10 — it returns only
+    // `(FROM TO)` when a path of length <= 10 exists, or the empty list
+    // otherwise. It never reconstructs the actual intermediate hops
+    // ("full path tracking requires list operations that vary across
+    // CozoDB versions", per its own implementation comment). See
+    // `shared/kb/src/cozo_store/graph.rs`'s `CozoKbStore::shortest_path`.
+    let s = shared.clone();
+    vm.register_fn(
+        "kb-shortest-path",
+        "Reachability check between FROM and TO — NOT a real shortest path. A Datalog BFS capped at depth 10; returns (FROM TO) if a path of that length or shorter exists, else '() (empty list). Does not reconstruct intermediate hops. Requires CozoDB backend.",
+        Arity::Fixed(2),
+        move |args: &[Value]| {
+            let from = arg_string(args, 0, "kb-shortest-path")?;
+            let to = arg_string(args, 1, "kb-shortest-path")?;
+            let state = s.lock();
+            if let Some(ref store) = state.kb_store {
+                match store.shortest_path(&from, &to) {
+                    Ok(path) => Ok(Value::list(
+                        path.into_iter().map(Value::string).collect::<Vec<_>>(),
+                    )),
+                    Err(e) => Err(LispError::internal(format!("kb-shortest-path: {}", e))),
+                }
+            } else {
+                Ok(Value::list(vec![]))
+            }
+        },
+    );
+
     // (deprecate-function! OLD-NAME NEW-NAME SINCE-VERSION)
     let s = shared.clone();
     vm.register_fn(

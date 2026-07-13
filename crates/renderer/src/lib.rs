@@ -22,6 +22,7 @@ mod conversation_render;
 mod cursor;
 mod debug_render;
 mod file_tree_render;
+mod graph_view_render;
 mod help_render;
 mod messages_render;
 mod popup_render;
@@ -354,6 +355,9 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
         if editor.lsp.hover_popup.is_some() {
             popup_render::render_hover_popup(frame, chunks[0], editor);
         }
+        if editor.kb_preview_popup().is_some() {
+            popup_render::render_kb_preview_popup(frame, chunks[0], editor);
+        }
         if editor.lsp.code_action_menu.is_some() {
             popup_render::render_code_action_popup(frame, chunks[0], editor);
         }
@@ -434,6 +438,21 @@ fn render_window_area(
                     if let Some(vb) = buf.visual() {
                         render_visual_buffer(frame, ratatui_rect, vb);
                     }
+                }
+                mae_core::BufferKind::Graph => {
+                    // TUI has no Skia canvas to draw `GraphView.scene`'s
+                    // positions with, so it reuses the existing KB
+                    // "** Neighborhood" textual machinery for the graph's
+                    // center node instead (`render_graph_view_as_text`,
+                    // GUI-primary/TUI-degraded — same precedent as other
+                    // buffer kinds).
+                    graph_view_render::render_graph_view_window(
+                        frame,
+                        ratatui_rect,
+                        buf,
+                        is_focused,
+                        editor,
+                    );
                 }
                 mae_core::BufferKind::FileTree => {
                     file_tree_render::render_file_tree_window(

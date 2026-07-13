@@ -349,6 +349,169 @@ fn kb_set_role_primitive_stamps_property_via_ex_command() {
     );
 }
 
+/// Open an in-memory `CozoKbStore`, seed its schema, and wire it as
+/// `editor.kb.store` — the shared setup for the `kb-graph`/`kb-neighborhood`/
+/// `kb-related`/`kb-shortest-path` primitive tests below (mirrors the
+/// existing pattern at `crates/core/src/editor/command.rs:1451-1453`).
+fn editor_with_cozo_store() -> Editor {
+    let mut editor = Editor::new();
+    let store = mae_kb::CozoKbStore::open_mem().unwrap();
+    store.seed_type_system().unwrap();
+    editor.kb.store = Some(std::sync::Arc::new(store));
+    editor
+}
+
+#[test]
+fn kb_graph_primitive_walks_the_primary_store_and_shares_bfs_with_mcp() {
+    // Closes the parity gap: `kb_graph` (MCP tool) had no Scheme
+    // counterpart. The walk itself is shared with the MCP executor via
+    // `mae_kb::graph_query::bfs_neighborhood` — this test exercises the
+    // Scheme-side wiring of that shared function through a real `KbStore`.
+    let mut rt = new_runtime();
+    let mut editor = editor_with_cozo_store();
+    editor
+        .kb_create_node("graph:a", "Node A", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    editor
+        .kb_create_node("graph:b", "Node B", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    editor
+        .kb_create_node("graph:c", "Node C", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    editor
+        .kb_update_node("graph:a", None, Some("Links to [[graph:b]]."), None)
+        .unwrap();
+    editor
+        .kb_update_node("graph:b", None, Some("Links to [[graph:c]]."), None)
+        .unwrap();
+
+    rt.inject_editor_state(&editor);
+
+    // depth 1: reaches graph:b, NOT graph:c.
+    let out = rt.eval("(kb-graph \"graph:a\" 1)").unwrap();
+    assert!(out.contains("graph:a"), "root echoed back: {out}");
+    assert!(out.contains("graph:b"), "1-hop neighbor present: {out}");
+    assert!(
+        !out.contains("graph:c"),
+        "2-hop node must NOT appear at depth 1: {out}"
+    );
+
+    // depth 2: reaches graph:c too.
+    let out2 = rt.eval("(kb-graph \"graph:a\" 2)").unwrap();
+    assert!(
+        out2.contains("graph:c"),
+        "2-hop node must appear at depth 2: {out2}"
+    );
+
+    // default depth (no second arg) matches the MCP tool's default of 1.
+    let out3 = rt.eval("(kb-graph \"graph:a\")").unwrap();
+    assert!(!out3.contains("graph:c"), "default depth must be 1: {out3}");
+}
+
+#[test]
+fn kb_graph_primitive_errors_on_unknown_root() {
+    let mut rt = new_runtime();
+    let editor = editor_with_cozo_store();
+    rt.inject_editor_state(&editor);
+    let err = rt.eval("(kb-graph \"no:such:node\" 1)").unwrap_err();
+    assert!(
+        err.message.contains("No KB node"),
+        "error should name the missing node: {}",
+        err.message
+    );
+}
+
+#[test]
+fn kb_graph_primitive_without_a_store_returns_empty_list_not_an_error() {
+    // No CozoDB store configured (the common in-process-only case) — degrades
+    // gracefully to '() like every other kb-* read primitive in this file,
+    // rather than erroring.
+    let mut rt = new_runtime();
+    let editor = Editor::new();
+    rt.inject_editor_state(&editor);
+    let out = rt.eval("(kb-graph \"anything\" 1)").unwrap();
+    assert_eq!(out, "()");
+}
+
+#[test]
+fn kb_neighborhood_primitive_returns_typed_edges() {
+    let mut rt = new_runtime();
+    let mut editor = editor_with_cozo_store();
+    editor
+        .kb_create_node("nbhd:a", "A", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    editor
+        .kb_create_node("nbhd:b", "B", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    editor
+        .kb_update_node("nbhd:a", None, Some("Links to [[nbhd:b]]."), None)
+        .unwrap();
+
+    rt.inject_editor_state(&editor);
+    let out = rt.eval("(kb-neighborhood \"nbhd:a\" 2)").unwrap();
+    assert!(out.contains("nbhd:a"), "root echoed back: {out}");
+    assert!(out.contains("nbhd:b"), "neighbor present: {out}");
+}
+
+#[test]
+fn kb_related_primitive_returns_empty_list_for_unknown_node() {
+    let mut rt = new_runtime();
+    let editor = editor_with_cozo_store();
+    rt.inject_editor_state(&editor);
+    let out = rt.eval("(kb-related \"no:such:node\" 5)").unwrap();
+    assert_eq!(out, "()");
+}
+
+#[test]
+fn kb_related_primitive_does_not_error_on_a_real_node() {
+    let mut rt = new_runtime();
+    let mut editor = editor_with_cozo_store();
+    editor
+        .kb_create_node("rel:a", "A", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    rt.inject_editor_state(&editor);
+    // Not asserting on ranked content (CozoKbStore::related's heuristic is
+    // exercised directly in shared/kb's own tests) — just that the Scheme
+    // wiring round-trips through a real store without erroring.
+    assert!(rt.eval("(kb-related \"rel:a\" 5)").is_ok());
+}
+
+#[test]
+fn kb_shortest_path_primitive_finds_a_direct_link() {
+    let mut rt = new_runtime();
+    let mut editor = editor_with_cozo_store();
+    editor
+        .kb_create_node("path:a", "A", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    editor
+        .kb_create_node("path:b", "B", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    editor
+        .kb_update_node("path:a", None, Some("Links to [[path:b]]."), None)
+        .unwrap();
+
+    rt.inject_editor_state(&editor);
+    let out = rt.eval("(kb-shortest-path \"path:a\" \"path:b\")").unwrap();
+    assert!(out.contains("path:a"), "{out}");
+    assert!(out.contains("path:b"), "{out}");
+}
+
+#[test]
+fn kb_shortest_path_primitive_empty_for_disconnected_nodes() {
+    let mut rt = new_runtime();
+    let mut editor = editor_with_cozo_store();
+    editor
+        .kb_create_node("iso:a", "A", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    editor
+        .kb_create_node("iso:b", "B", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    // No link between them.
+    rt.inject_editor_state(&editor);
+    let out = rt.eval("(kb-shortest-path \"iso:a\" \"iso:b\")").unwrap();
+    assert_eq!(out, "()");
+}
+
 #[test]
 fn kb_sharing_status_primitive_returns_snapshot_json() {
     // P0: users can script KB-sharing introspection — `(kb-sharing-status)`
@@ -1523,4 +1686,236 @@ fn current_command_variable_exists() {
     // Should not error — variable exists
     let result = rt.eval("*current-command*").unwrap();
     assert!(result.is_empty());
+}
+
+// --- Native KB graph view primitives (Part C Phase 1) ---
+//
+// Same 3-step pattern as `define_key_from_scheme` etc.: eval, then
+// `apply_to_editor` to drain the queued `GraphViewIntent` into the matching
+// `Editor::kb_graph_view_*` method — confirming the Scheme primitive and the
+// `Editor` method (also used by the MCP tool + keybinding) are the same
+// code path, not a parallel reimplementation (CLAUDE.md principle #3).
+
+#[test]
+fn kb_graph_view_open_from_scheme_creates_graph_buffer() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new(); // seeds the built-in "index" node
+
+    rt.eval(r#"(kb-graph-view-open "index" 1)"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    let idx = editor
+        .buffers
+        .iter()
+        .position(|b| b.kind == mae_core::BufferKind::Graph)
+        .expect("kb-graph-view-open should create a Graph buffer");
+    assert_eq!(
+        editor.buffers[idx]
+            .graph_view()
+            .unwrap()
+            .center_node
+            .as_deref(),
+        Some("index")
+    );
+    assert_eq!(editor.buffers[idx].graph_view().unwrap().depth, 1);
+}
+
+#[test]
+fn kb_graph_view_open_defaults_center_and_depth_when_omitted() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+
+    rt.eval("(kb-graph-view-open)").unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    let idx = editor
+        .buffers
+        .iter()
+        .position(|b| b.kind == mae_core::BufferKind::Graph)
+        .unwrap();
+    assert_eq!(
+        editor.buffers[idx]
+            .graph_view()
+            .unwrap()
+            .center_node
+            .as_deref(),
+        Some("index")
+    );
+    assert_eq!(
+        editor.buffers[idx].graph_view().unwrap().depth,
+        editor.kb_graph_default_depth
+    );
+}
+
+#[test]
+fn kb_graph_view_state_from_scheme_is_false_when_not_open() {
+    let mut rt = new_runtime();
+    let editor = Editor::new();
+
+    rt.inject_editor_state(&editor);
+    let result = rt.eval("(kb-graph-view-state)").unwrap();
+    assert_eq!(result, "#f");
+}
+
+#[test]
+fn kb_graph_view_state_from_scheme_reflects_open_graph() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new(); // seeds the built-in "index" node
+
+    rt.eval(r#"(kb-graph-view-open "index" 1)"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    // Read-only snapshot: refresh the injected state now that the graph
+    // buffer exists, then query it — mirrors `option_values`'s
+    // snapshot-per-eval pattern (see `inject_graph_view_state`'s doc
+    // comment).
+    rt.inject_editor_state(&editor);
+    let result = rt.eval("(kb-graph-view-state)").unwrap();
+    assert!(result.contains("index"), "got: {result}");
+    assert!(!result.starts_with("#f"), "got: {result}");
+}
+
+#[test]
+fn kb_preview_show_from_scheme_populates_popup() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    editor.open_help_at("index"); // active buffer must be KB-kind
+    rt.eval(r#"(kb-preview-show "index")"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    let popup = editor
+        .kb_preview_popup()
+        .expect("kb-preview-show should populate the popup");
+    assert!(popup.contents.contains("MAE Help Index"));
+}
+
+#[test]
+fn kb_preview_dismiss_from_scheme_clears_popup() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    editor.open_help_at("index");
+    rt.eval(r#"(kb-preview-show "index")"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+    assert!(editor.kb_preview_popup().is_some());
+
+    rt.eval("(kb-preview-dismiss)").unwrap();
+    rt.apply_to_editor(&mut editor);
+    assert!(
+        editor.kb_preview_popup().is_none(),
+        "kb-preview-dismiss should clear the popup"
+    );
+}
+
+#[test]
+fn kb_preview_show_from_scheme_outside_kb_buffer_is_noop() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new(); // active buffer is scratch, not KB
+    rt.eval(r#"(kb-preview-show "index")"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+    assert!(
+        editor.kb_preview_popup().is_none(),
+        "kb-preview-show must not populate a popup outside a KB buffer"
+    );
+}
+
+#[test]
+fn kb_graph_view_close_from_scheme_removes_the_buffer() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    rt.eval(r#"(kb-graph-view-open "index" 1)"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+    assert!(editor
+        .buffers
+        .iter()
+        .any(|b| b.kind == mae_core::BufferKind::Graph));
+
+    rt.eval("(kb-graph-view-close)").unwrap();
+    rt.apply_to_editor(&mut editor);
+    assert!(!editor
+        .buffers
+        .iter()
+        .any(|b| b.kind == mae_core::BufferKind::Graph));
+}
+
+#[test]
+fn kb_graph_view_refresh_from_scheme_is_a_no_op_when_not_open() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    rt.eval("(kb-graph-view-refresh)").unwrap();
+    // Must not panic/error even with nothing open.
+    rt.apply_to_editor(&mut editor);
+    assert!(!editor
+        .buffers
+        .iter()
+        .any(|b| b.kind == mae_core::BufferKind::Graph));
+}
+
+#[test]
+fn kb_graph_view_set_depth_from_scheme_updates_depth_in_place() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    rt.eval(r#"(kb-graph-view-open "index" 1)"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+    let window_count_before = editor.window_mgr.iter_windows().count();
+
+    rt.eval("(kb-graph-view-set-depth 3)").unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    let idx = editor
+        .buffers
+        .iter()
+        .position(|b| b.kind == mae_core::BufferKind::Graph)
+        .unwrap();
+    assert_eq!(editor.buffers[idx].graph_view().unwrap().depth, 3);
+    assert_eq!(
+        editor.window_mgr.iter_windows().count(),
+        window_count_before,
+        "set-depth must refresh in place, not re-split"
+    );
+}
+
+#[test]
+fn kb_graph_view_navigate_valid_direction_from_scheme() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    rt.eval(r#"(kb-graph-view-open "index" 1)"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    rt.eval(r#"(kb-graph-view-navigate "right")"#).unwrap();
+    // Must not panic/error — the exact selection outcome depends on the
+    // seeded KB's topology, so this just confirms the primitive routes
+    // through to `Editor::kb_graph_view_navigate` without error.
+    rt.apply_to_editor(&mut editor);
+}
+
+#[test]
+fn kb_graph_view_navigate_invalid_direction_errors() {
+    let mut rt = new_runtime();
+    let err = rt
+        .eval(r#"(kb-graph-view-navigate "sideways")"#)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("sideways")
+            || err.to_string().to_lowercase().contains("direction"),
+        "error should mention the invalid direction: {err}"
+    );
+}
+
+#[test]
+fn kb_graph_view_select_current_from_scheme_navigates_companion() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    rt.eval(r#"(kb-graph-view-open "index" 1)"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    rt.eval("(kb-graph-view-select-current)").unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    assert!(
+        editor
+            .buffers
+            .iter()
+            .any(|b| b.kind == mae_core::BufferKind::Kb),
+        "select-current should have opened/found a KB buffer for the selected node"
+    );
 }

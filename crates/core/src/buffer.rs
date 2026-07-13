@@ -29,6 +29,7 @@ pub mod buffer_names {
     pub const GIT_STATUS: &str = "*git-status*";
     pub const HELP: &str = "*Help*";
     pub const KB: &str = "*KB*";
+    pub const KB_GRAPH: &str = "*KB Graph*";
     pub const MESSAGES: &str = "*Messages*";
     pub const CHANGES: &str = "*Changes*";
     pub const SCRATCH: &str = "[scratch]";
@@ -82,11 +83,39 @@ pub enum BufferKind {
     /// `*KB Sharing*` management buffer — magit-style list of shared/joined KBs
     /// with members, roles, policy, and pending requests + at-point actions.
     KbSharing,
+    /// Native KB graph view (`*KB Graph*`) — a force-directed local
+    /// ego-network around a KB node, rendered via `GraphView`'s flattened
+    /// `VisualElement`s (GUI) or a textual neighborhood fallback (TUI). See
+    /// the KB-graph-view architecture plan's "Part C".
+    Graph,
 }
 
 impl BufferKind {
     /// Kinds that belong in dedicated side windows — never valid as a
     /// kill-buffer fallback or AI file-open target for editing windows.
+    ///
+    /// This is also the set `Editor::is_dedicated_window` consults to keep
+    /// `display_buffer_for_agent`'s step-2 "commandeer a non-focused,
+    /// non-dedicated window" scan from silently repurposing a human's
+    /// manually-opened window of one of these kinds for unrelated
+    /// agent-triggered content.
+    ///
+    /// `Kb` and `Shell` were added alongside the `DrivenWindow` unification
+    /// (see `crate::driven_window`): both are windows a human deliberately
+    /// keeps open and returns to — a KB reading position navigated several
+    /// links deep, or a terminal with a live running process — so an
+    /// unrelated agent action (e.g. `open_file`) converting either into a
+    /// text-file pane out from under the human is a real, separate bug, not
+    /// just a side effect of the missing window-tracking unification.
+    /// `Notifications` was deliberately left out: it's a transient
+    /// "surface, act, dismiss" attention-bus buffer (ADR-024), not a
+    /// long-lived reading/working position a human returns to the way they
+    /// do a KB pane or a shell session — it does not carry the same
+    /// "silently destroyed human state" risk if reused by another action.
+    /// `Graph` (the native KB graph view, Part C) was added for the same
+    /// reason as `Kb`/`Shell`: a human deliberately keeps it open as a
+    /// persistent navigation panel, so it must not be silently commandeered
+    /// by an unrelated agent-triggered `open_file`/etc.
     pub fn is_sidebar(&self) -> bool {
         matches!(
             self,
@@ -96,6 +125,9 @@ impl BufferKind {
                 | BufferKind::Messages
                 | BufferKind::Dashboard
                 | BufferKind::ShellSelect
+                | BufferKind::Kb
+                | BufferKind::Shell
+                | BufferKind::Graph
         )
     }
 }
@@ -320,8 +352,9 @@ pub struct BabelEditContext {
     pub source_buffer: usize,
     /// Line range of the src block in the source buffer (begin_src..end_src, inclusive).
     pub block_line_range: (usize, usize),
-    /// Byte range of the body within the source buffer.
-    pub body_byte_range: (usize, usize),
+    /// Character range (ropey char-index, not byte offset) of the body
+    /// within the source buffer.
+    pub body_char_range: (usize, usize),
     /// Block name (for status display).
     pub block_name: Option<String>,
     /// Language (for restoring context).
@@ -517,6 +550,17 @@ impl Buffer {
             kind: BufferKind::Debug,
             read_only: true,
             view: BufferView::Debug(Box::default()),
+            ..Self::new()
+        }
+    }
+
+    /// Create a native KB graph view buffer (Part C Phase 1).
+    pub fn new_graph() -> Self {
+        Buffer {
+            name: String::from(buffer_names::KB_GRAPH),
+            kind: BufferKind::Graph,
+            read_only: true,
+            view: BufferView::Graph(Box::default()),
             ..Self::new()
         }
     }
@@ -1285,7 +1329,7 @@ impl Buffer {
         self.sync_insert(offset, text);
         let end_line = self
             .rope
-            .char_to_line((offset + text.len()).min(self.rope.len_chars()));
+            .char_to_line((offset + text.chars().count()).min(self.rope.len_chars()));
         for line in start_line..=end_line {
             self.changed_lines.insert(line);
         }
@@ -1564,6 +1608,14 @@ impl Buffer {
 
     pub fn debug_view_mut(&mut self) -> Option<&mut DebugView> {
         self.view.debug_view_mut()
+    }
+
+    pub fn graph_view(&self) -> Option<&crate::graph_view::GraphView> {
+        self.view.graph_view()
+    }
+
+    pub fn graph_view_mut(&mut self) -> Option<&mut crate::graph_view::GraphView> {
+        self.view.graph_view_mut()
     }
 
     pub fn git_status_view(&self) -> Option<&GitStatusView> {

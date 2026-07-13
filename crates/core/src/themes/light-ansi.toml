@@ -119,3 +119,14 @@
 "diff.removed" = { fg = "red" }
 "diff.hunk" = { fg = "magenta" }
 "diff.header" = { fg = "cyan", bold = true }
+
+# Native KB graph view (Part C). This theme is standalone (no `inherits`),
+# so it doesn't pick up default.toml's per-NodeKind hex keys — a single
+# base color plus Theme::style's dot-hierarchy fallback
+# (ui.graph.node.<kind> -> ui.graph.node) is the right-sized amount of
+# named-ANSI-only styling here, matching this theme's existing philosophy.
+"ui.graph.background" = { bg = "white" }
+"ui.graph.node" = { fg = "blue" }
+"ui.graph.node.selected" = { fg = "yellow", bold = true }
+"ui.graph.edge" = { fg = "gray" }
+"ui.graph.edge.boundary" = { fg = "red" }

@@ -1218,6 +1218,22 @@ impl CommandRegistry {
         reg.register_builtin("help-search", "Search help topics");
         reg.register_builtin("help-reopen", "Reopen the last-closed KB viewer");
         reg.register_builtin(
+            "kb-preview",
+            "Show a hover preview of the KB link under cursor, or scroll it if already showing (K in a KB buffer)",
+        );
+        reg.register_builtin(
+            "dismiss-kb-preview-popup",
+            "Dismiss the KB-link hover preview popup",
+        );
+        reg.register_builtin(
+            "kb-preview-scroll-down",
+            "Scroll the KB-link hover preview popup down",
+        );
+        reg.register_builtin(
+            "kb-preview-scroll-up",
+            "Scroll the KB-link hover preview popup up",
+        );
+        reg.register_builtin(
             "kb-view",
             "Return to rendered KB view from source editing (SPC n v)",
         );

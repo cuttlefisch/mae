@@ -340,7 +340,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             crate::key_handling::conversation::scroll_output_to_bottom(editor);
             editor.ai.streaming = false;
             editor.ai.input_lock = InputLock::None;
-            editor.ai.work_window_id = None;
+            editor.ai.work_window.set(None);
             editor.ai.last_output_scroll = None;
 
             // Auto-restore editor state and clean up sandbox after self-test session.

@@ -1004,7 +1004,19 @@ impl KnowledgeBase {
                         report.skipped_no_id += 1;
                         continue;
                     }
-                    for node in nodes {
+                    for mut node in nodes {
+                        // `parse_org_multi` only sees the file's text, not
+                        // its own path, so it can never set this — must be
+                        // stamped here, mirroring `ingest_org_file` (the
+                        // watcher's single-file re-ingest path, which
+                        // already does this correctly). Without it, every
+                        // node picked up by the initial bulk directory
+                        // scan has `source_file: None` forever (unless the
+                        // file happens to be re-saved later, triggering
+                        // the watcher path instead) — `help_edit_source`/
+                        // `kb_node_source_file` then report "No source
+                        // file" for a node whose file plainly exists.
+                        node.source_file = Some(path.to_path_buf());
                         let id = node.id.clone();
                         if seen_ids.insert(id.clone()) {
                             self.insert(node);
@@ -1111,6 +1123,34 @@ a regular [[https://mae.invalid][link]] that we keep.
         assert!(kb.contains("x-1"));
         // The b.org node links to abc-123 → reverse index must reflect it.
         assert_eq!(kb.links_to("abc-123"), vec!["x-1".to_string()]);
+    }
+
+    #[test]
+    fn ingest_org_dir_populates_source_file() {
+        // Regression guard: `ingest_org_dir` (the bulk/initial directory
+        // scan a federated KB instance's first import goes through) used
+        // to insert every node WITHOUT stamping `source_file` at all —
+        // only `ingest_org_file` (the file-watcher's single-file re-
+        // ingest path) did. Any node picked up by the initial bulk scan
+        // and never individually re-saved afterward had `source_file:
+        // None` forever, so `help_edit_source`/`kb_node_source_file`
+        // reported "No source file for '<id>'" for a node whose backing
+        // file plainly existed on disk.
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("a.org");
+        std::fs::write(&path, SAMPLE).unwrap();
+
+        let mut kb = KnowledgeBase::new();
+        let report = kb.ingest_org_dir(tmp.path());
+        assert_eq!(report.indexed, 1);
+
+        let node = kb.get("abc-123").unwrap();
+        assert_eq!(
+            node.source_file.as_deref(),
+            Some(path.as_path()),
+            "a node ingested via the bulk directory scan must have source_file set, \
+             exactly like ingest_org_file already sets it"
+        );
     }
 
     #[test]

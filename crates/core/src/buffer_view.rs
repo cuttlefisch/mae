@@ -8,6 +8,7 @@ use crate::conversation::Conversation;
 use crate::debug_view::DebugView;
 use crate::file_tree::FileTree;
 use crate::git_status::GitStatusView;
+use crate::graph_view::GraphView;
 use crate::kb_sharing::KbSharingView;
 use crate::kb_view::KbView;
 use crate::notifications_view::NotifView;
@@ -35,6 +36,8 @@ pub enum BufferView {
     Notifications(Box<NotifView>),
     /// `*KB Sharing*` management-buffer state.
     KbSharing(Box<KbSharingView>),
+    /// Native KB graph view state (`BufferKind::Graph`).
+    Graph(Box<GraphView>),
 }
 
 impl BufferView {
@@ -160,6 +163,20 @@ impl BufferView {
     pub fn kb_sharing_view_mut(&mut self) -> Option<&mut KbSharingView> {
         match self {
             BufferView::KbSharing(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    pub fn graph_view(&self) -> Option<&GraphView> {
+        match self {
+            BufferView::Graph(g) => Some(g),
+            _ => None,
+        }
+    }
+
+    pub fn graph_view_mut(&mut self) -> Option<&mut GraphView> {
+        match self {
+            BufferView::Graph(g) => Some(g),
             _ => None,
         }
     }

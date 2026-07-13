@@ -19,6 +19,13 @@ impl Editor {
         executor.compiled.cxx = self.babel_cxx_compiler.clone();
         executor.compiled.cc = self.babel_c_compiler.clone();
         executor.compiled.cxx_std = self.babel_cxx_std.clone();
+        executor.shell_env_enabled = self.babel_inherit_shell_env;
+        // `sessions` is REUSED (persistent across calls, per :session
+        // semantics), not freshly constructed — its shell_env_enabled must
+        // be re-applied here too, not just at SessionManager::default()
+        // time, so a live `:set babel_inherit_shell_env` takes effect for
+        // sessions created afterward even on an already-existing manager.
+        executor.sessions.shell_env_enabled = self.babel_inherit_shell_env;
         executor
     }
 
@@ -315,7 +322,7 @@ impl Editor {
         let ctx = crate::buffer::BabelEditContext {
             source_buffer: buf_idx,
             block_line_range: block.line_range,
-            body_byte_range: block.body_byte_range,
+            body_char_range: block.body_char_range,
             block_name: block.name.clone(),
             language: block.language.clone(),
         };
@@ -368,10 +375,10 @@ impl Editor {
         // Replace body in source buffer
         let src_buf = &mut self.buffers[ctx.source_buffer];
         src_buf.begin_undo_group();
-        if ctx.body_byte_range.0 < ctx.body_byte_range.1 {
-            src_buf.delete_range(ctx.body_byte_range.0, ctx.body_byte_range.1);
+        if ctx.body_char_range.0 < ctx.body_char_range.1 {
+            src_buf.delete_range(ctx.body_char_range.0, ctx.body_char_range.1);
         }
-        src_buf.insert_text_at(ctx.body_byte_range.0, &new_body);
+        src_buf.insert_text_at(ctx.body_char_range.0, &new_body);
         src_buf.end_undo_group();
 
         // Kill edit buffer and switch back to source
@@ -677,6 +684,47 @@ mod tests {
             editor.pending_scheme_eval.len(),
             1,
             "confirming must actually run the deferred block"
+        );
+    }
+
+    #[test]
+    fn babel_run_block_results_land_after_end_src_with_multibyte_content_earlier() {
+        // End-to-end regression guard (through a real `Buffer`, not just the
+        // string-level compute_results_edit unit tests) for the reported bug:
+        // output landing mid-word in a heading that follows the block,
+        // caused by a byte/char offset mismatch anywhere multi-byte content
+        // (em dash, checkmark, accented letters) preceded the block.
+        let src = "* Café \u{2014} Notes\nSome text: \u{2192} \u{2713}\n\n\
+                   #+begin_src sh\necho hi\n#+end_src\n\n** Downstream Section\n";
+        let mut editor = editor_with_block(src);
+        let blocks = babel::parse_src_blocks(&editor.buffers[0].rope().to_string());
+        editor.babel_run_block(0, &blocks[0]);
+
+        let result = editor.buffers[0].rope().to_string();
+        assert!(
+            result.contains("#+end_src\n\n#+RESULTS:\n: hi\n\n** Downstream Section"),
+            "results must land directly after #+end_src and the following heading \
+             must survive intact — got:\n{result}"
+        );
+    }
+
+    #[test]
+    fn babel_run_block_replaces_rather_than_stacks_results_on_second_run() {
+        let src = "* Café notes\n\n#+begin_src sh\necho hi\n#+end_src\n";
+        let mut editor = editor_with_block(src);
+
+        let blocks = babel::parse_src_blocks(&editor.buffers[0].rope().to_string());
+        editor.babel_run_block(0, &blocks[0]);
+        let after_first = editor.buffers[0].rope().to_string();
+        assert_eq!(after_first.matches("#+RESULTS:").count(), 1);
+
+        let blocks = babel::parse_src_blocks(&after_first);
+        editor.babel_run_block(0, &blocks[0]);
+        let after_second = editor.buffers[0].rope().to_string();
+        assert_eq!(
+            after_second.matches("#+RESULTS:").count(),
+            1,
+            "re-running the same block must replace, not stack, the results block — got:\n{after_second}"
         );
     }
 }

@@ -360,8 +360,62 @@ impl Editor {
         self.pending_buffer_removals.push(removed_idx);
     }
 
-    /// visible during AI tool calls that open/switch files.
-    pub fn switch_to_buffer_non_conversation(&mut self, idx: usize) -> bool {
+    /// Display buffer `idx` the way an AI/MCP agent's actions should: reusing
+    /// the single window the agent has been driving (`self.ai.work_window`,
+    /// a `DrivenWindow`) across a sequence of calls, regardless of the
+    /// buffer's `BufferKind` — a "browser tab navigating between page types"
+    /// model rather than one split per action. Also avoids stealing focus
+    /// from a conversation window.
+    ///
+    /// Renamed from `switch_to_buffer_non_conversation` (which had this
+    /// exact logic, but was only ever called for `Text`/`Diff` buffers)
+    /// once confirmed
+    /// `BufferKind`-agnostic: every branch below operates on `idx`/
+    /// `buf_idx`, never branches on the displayed buffer's kind (only on
+    /// buffer *properties* like `agent_shell` and on *other* windows'
+    /// dedicated/replaceable status) — so the exact same step-based fallback
+    /// (reuse if visible -> commandeer non-focused/non-dedicated ->
+    /// commandeer replaceable -> split) is correct for KB/Shell/Messages
+    /// buffers too, not just Text/Diff. This is the direct fix for the
+    /// reported cascading-splits bug: agent-triggered display calls that
+    /// used to bypass this window uniformly now route through it.
+    ///
+    /// `self.ai.work_window`'s validity check (`get_valid`) is used directly
+    /// here rather than `DrivenWindow::resolve_persistent`, because the
+    /// commandeer/split fallback below needs full `&mut Editor` access
+    /// (buffer-kind lookups via `is_dedicated_window`/`is_kind_replaceable`,
+    /// conversation-pair awareness, window splitting) that doesn't fit
+    /// `resolve_persistent`'s intentionally narrow `&WindowManager`-only
+    /// `create_or_pick` closure. See `driven_window.rs` module docs.
+    pub fn display_buffer_for_agent(&mut self, idx: usize) -> bool {
+        // Same mode-sync gap `display_buffer` had (see its doc comment) —
+        // this is a THIRD, separate buffer-display primitive (used by the
+        // AI/MCP `open_file` tool, among others) that directly mutates a
+        // window's `buffer_idx` in several branches below, none of which
+        // ever synced `Editor.mode` to the newly-shown buffer. Wrapped
+        // (rather than editing each branch individually) since this
+        // function has several early-return branches and, by design,
+        // deliberately does NOT steal focus in the common case — so mode
+        // must only resync when the FOCUSED window's buffer actually
+        // changed as a side effect, not unconditionally. Comparing the
+        // focused window's buffer_idx before/after handles every branch
+        // uniformly, including the ones that mutate a non-focused window
+        // (correctly a no-op) and the one that already calls
+        // `switch_to_buffer` internally (already handles its own sync,
+        // this wrapper's post-check is then just a harmless no-op re-sync
+        // of the same, already-correct value).
+        let focused_id = self.window_mgr.focused_id();
+        let old_focused_buf = self.window_mgr.window(focused_id).map(|w| w.buffer_idx);
+        self.save_mode_to_buffer();
+        let result = self.display_buffer_for_agent_impl(idx);
+        let new_focused_buf = self.window_mgr.window(focused_id).map(|w| w.buffer_idx);
+        if old_focused_buf != new_focused_buf {
+            self.sync_mode_to_buffer();
+        }
+        result
+    }
+
+    fn display_buffer_for_agent_impl(&mut self, idx: usize) -> bool {
         if idx >= self.buffers.len() {
             return false;
         }
@@ -369,19 +423,17 @@ impl Editor {
         self.ai.target_buffer_idx = Some(idx);
 
         // 0. Reuse the dedicated AI work window if it exists and is still valid.
-        if let Some(work_id) = self.ai.work_window_id {
-            if self.window_mgr.window(work_id).is_some() {
-                if let Some(win) = self.window_mgr.window_mut(work_id) {
-                    win.buffer_idx = idx;
-                    win.cursor_row = 0;
-                    win.cursor_col = 0;
-                }
-                self.ai.target_window_id = Some(work_id);
-                self.mark_full_redraw();
-                return true;
-            } else {
-                self.ai.work_window_id = None; // stale reference
+        if let Some(work_id) = self.ai.work_window.get_valid(&self.window_mgr) {
+            if let Some(win) = self.window_mgr.window_mut(work_id) {
+                win.buffer_idx = idx;
+                win.cursor_row = 0;
+                win.cursor_col = 0;
             }
+            self.ai.target_window_id = Some(work_id);
+            self.mark_full_redraw();
+            return true;
+        } else {
+            self.ai.work_window.set(None); // stale reference (no-op if already unset)
         }
 
         // 1. Is this buffer already visible?
@@ -403,7 +455,7 @@ impl Editor {
                 win.cursor_row = 0;
                 win.cursor_col = 0;
             }
-            self.ai.work_window_id = Some(other_id);
+            self.ai.work_window.set(Some(other_id));
             self.ai.target_window_id = Some(other_id);
             self.mark_full_redraw();
             return true;
@@ -416,7 +468,7 @@ impl Editor {
                 win.cursor_row = 0;
                 win.cursor_col = 0;
             }
-            self.ai.work_window_id = Some(repl_id);
+            self.ai.work_window.set(Some(repl_id));
             self.ai.target_window_id = Some(repl_id);
             self.mark_full_redraw();
             return true;
@@ -448,7 +500,7 @@ impl Editor {
                         win.cursor_row = 0;
                         win.cursor_col = 0;
                     }
-                    self.ai.work_window_id = Some(out_id);
+                    self.ai.work_window.set(Some(out_id));
                     self.ai.target_window_id = Some(out_id);
                     self.mark_full_redraw();
                     return true;
@@ -472,7 +524,7 @@ impl Editor {
 
         match split_result {
             Ok(new_id) => {
-                self.ai.work_window_id = Some(new_id);
+                self.ai.work_window.set(Some(new_id));
                 self.ai.target_window_id = Some(new_id);
                 self.mark_full_redraw();
                 true
@@ -500,12 +552,30 @@ impl Editor {
         if buf_idx >= self.buffers.len() {
             return;
         }
+        // Save the outgoing buffer's mode and restore/reset the incoming
+        // one's, mirroring `switch_to_buffer`'s save/sync pair — this is
+        // the ROOT buffer-display primitive ~35 call sites across the
+        // codebase use directly (open_file, KB/help/git/notification/
+        // option-editing navigation, etc.), and until now only
+        // `switch_to_buffer` (cycling between already-open buffers) and
+        // `display_buffer_and_focus` (a handful of explicit callers) kept
+        // per-buffer mode consistent. Every other caller left a stale
+        // global `Editor.mode` untouched — e.g. opening a brand-new file
+        // while `self.mode` was still `ShellInsert` from an earlier
+        // terminal interaction silently routed ALL of that buffer's
+        // keypresses through the shell keymap instead of its real one,
+        // with no visible symptom beyond "keybindings do nothing." A
+        // no-op for the overwhelmingly common case (already in Normal/
+        // Insert/Visual mode — `sync_mode_to_buffer`'s fallback only acts
+        // when currently `ShellInsert`/`ConversationInput`), so this only
+        // changes behavior for the exact stuck-mode scenario it fixes.
+        self.save_mode_to_buffer();
         let kind = self.buffers[buf_idx].kind;
         let action = self.display_policy.action_for(kind);
         match action {
             crate::display_policy::DisplayAction::ReplaceFocused => {
                 if self.is_conversation_buffer(self.active_buffer_idx()) {
-                    self.switch_to_buffer_non_conversation(buf_idx);
+                    self.display_buffer_for_agent(buf_idx);
                 } else {
                     let win = self.window_mgr.focused_window_mut();
                     win.buffer_idx = buf_idx;
@@ -515,7 +585,7 @@ impl Editor {
             }
             crate::display_policy::DisplayAction::AvoidConversation => {
                 if self.is_conversation_buffer(self.active_buffer_idx()) {
-                    self.switch_to_buffer_non_conversation(buf_idx);
+                    self.display_buffer_for_agent(buf_idx);
                 } else {
                     let win = self.window_mgr.focused_window_mut();
                     win.buffer_idx = buf_idx;
@@ -551,6 +621,7 @@ impl Editor {
             }
             crate::display_policy::DisplayAction::Hidden => {}
         }
+        self.sync_mode_to_buffer();
         self.mark_full_redraw();
     }
 
@@ -580,7 +651,7 @@ impl Editor {
             .focused_window_mut()
             .restore_view_state(buf_idx);
         // No forced fallback: if display_buffer() routed the buffer via
-        // switch_to_buffer_non_conversation (e.g. split_root for agent
+        // display_buffer_for_agent (e.g. split_root for agent
         // shells), the buffer is already placed in a new window that may
         // not match the iter_windows search above. Forcing it into the
         // focused window would steal conversation windows.
@@ -647,7 +718,7 @@ impl Editor {
                 match self.window_mgr.split_root(direction, buf_idx, area, ratio) {
                     Ok(new_win_id) => self.window_mgr.set_focused(new_win_id),
                     Err(_) => {
-                        self.switch_to_buffer_non_conversation(buf_idx);
+                        self.display_buffer_for_agent(buf_idx);
                     }
                 }
                 return;
@@ -662,7 +733,7 @@ impl Editor {
                 self.window_mgr.set_focused(new_win_id);
             }
             Err(_) => {
-                self.switch_to_buffer_non_conversation(buf_idx);
+                self.display_buffer_for_agent(buf_idx);
             }
         }
     }
@@ -670,10 +741,10 @@ impl Editor {
     /// Open a file without stealing focus from a conversation window.
     ///
     /// The file is opened "hidden" (not assigned to focused window), then
-    /// routed via `switch_to_buffer_non_conversation`.
+    /// routed via `display_buffer_for_agent`.
     pub fn open_file_non_conversation(&mut self, path: impl AsRef<std::path::Path>) {
         if let Some(new_idx) = self.open_file_hidden(path) {
-            self.switch_to_buffer_non_conversation(new_idx);
+            self.display_buffer_for_agent(new_idx);
         }
     }
 

@@ -277,6 +277,35 @@ impl SchemeRuntime {
             editor.queue_kb_collab_action(action);
         }
 
+        // Apply native KB graph-view intents from `(kb-graph-view-open)` etc.
+        // (Part C Phase 1) — each variant maps 1:1 onto the same
+        // `Editor::kb_graph_view_*` method the human keybindings + MCP tools
+        // call, per CLAUDE.md principle #3 (AI/human parity).
+        for intent in state.pending_graph_view_intents.drain(..) {
+            match intent {
+                mae_core::GraphViewIntent::Open { center, depth } => {
+                    editor.kb_graph_view_open(center, depth);
+                }
+                mae_core::GraphViewIntent::Close => editor.kb_graph_view_close(),
+                mae_core::GraphViewIntent::Refresh => editor.kb_graph_view_refresh_if_open(),
+                mae_core::GraphViewIntent::SetDepth(depth) => {
+                    editor.kb_graph_view_set_depth(depth);
+                }
+                mae_core::GraphViewIntent::Navigate(dir) => editor.kb_graph_view_navigate(dir),
+                mae_core::GraphViewIntent::SelectCurrent => editor.kb_graph_view_select_current(),
+            }
+        }
+
+        // Apply KB-link hover preview intents from `(kb-preview-show)` /
+        // `(kb-preview-dismiss)` (Part D) — same 1:1 mapping onto
+        // `Editor::kb_preview_*` as the graph-view intents above.
+        for intent in state.pending_kb_preview_intents.drain(..) {
+            match intent {
+                mae_core::KbPreviewIntent::Show(id) => editor.kb_preview_show(&id),
+                mae_core::KbPreviewIntent::Dismiss => editor.kb_preview_dismiss(),
+            }
+        }
+
         // Apply typed link additions from (kb-add-link! SRC DST REL_TYPE)
         if let Some(ref store) = editor.kb.store {
             for (src, dst, rel_type) in state.pending_kb_links.drain(..) {

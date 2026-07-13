@@ -219,6 +219,11 @@ pub fn execute_kb_links_to(editor: &Editor, args: &serde_json::Value) -> Result<
 /// Returns `[{id, title, kind, score}]` sorted by relatedness, capped to
 /// `limit` (default 10). Relatedness is per-instance (graph edges don't cross
 /// federated instances), matching `kb_graph`/`kb_links_from`.
+///
+/// The rank-then-enrich core is shared with the `(kb-related)` Scheme
+/// primitive via `mae_kb::graph_query::related_enriched` — see that module's
+/// docs (CLAUDE.md principle #8: the ranking logic exists in exactly one
+/// place, not duplicated between the MCP and Scheme surfaces).
 pub fn execute_kb_related(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
     let id = args
         .get("id")
@@ -230,43 +235,17 @@ pub fn execute_kb_related(editor: &Editor, args: &serde_json::Value) -> Result<S
         .map(|n| n as usize)
         .unwrap_or(10);
 
-    // In-memory fallback: the owning instance computes relatedness (primary
-    // wins, else whichever federated instance contains the node).
-    let related_in_memory = |id: &str| -> Vec<(String, f64)> {
-        if editor.kb.primary.contains(id) {
-            return editor.kb.primary.related(id, limit);
-        }
-        for kb in editor.kb.instances.values() {
-            if kb.contains(id) {
-                return kb.related(id, limit);
-            }
-        }
-        Vec::new()
+    let backend = mae_kb::graph_query::FederatedRelatedBackend {
+        query: editor.kb.query_layer(),
+        primary: &editor.kb.primary,
+        instances: &editor.kb.instances,
     };
+    let items = mae_kb::graph_query::related_enriched(&backend, id, limit);
 
-    let scored: Vec<(String, f64)> = match editor.kb.query_layer() {
-        Some(q) if q.contains(id) => q.related(id, limit),
-        _ => related_in_memory(id),
-    };
-
-    // Resolve title/kind for each result without an extra round-trip.
-    let lookup = |rid: &str| -> (String, String) {
-        if let Some(n) = editor.kb.primary.get(rid) {
-            return (n.title.clone(), n.kind.as_str().to_string());
-        }
-        for kb in editor.kb.instances.values() {
-            if let Some(n) = kb.get(rid) {
-                return (n.title.clone(), n.kind.as_str().to_string());
-            }
-        }
-        (String::new(), String::new())
-    };
-
-    let objs: Vec<serde_json::Value> = scored
+    let objs: Vec<serde_json::Value> = items
         .into_iter()
-        .map(|(rid, score)| {
-            let (title, kind) = lookup(&rid);
-            serde_json::json!({ "id": rid, "title": title, "kind": kind, "score": score })
+        .map(|it| {
+            serde_json::json!({ "id": it.id, "title": it.title, "kind": it.kind, "score": it.score })
         })
         .collect();
     serde_json::to_string_pretty(&objs).map_err(|e| e.to_string())
@@ -279,6 +258,13 @@ pub fn execute_kb_related(editor: &Editor, args: &serde_json::Value) -> Result<S
 /// not just a tree. Dangling targets are included as nodes with `"hop": N`
 /// and `"missing": true` so the agent can surface them to the user.
 /// Searches local KB and all federated instances.
+///
+/// The BFS walk itself is shared with the `(kb-graph)` Scheme primitive via
+/// `mae_kb::graph_query::bfs_neighborhood` — see that module's docs
+/// (CLAUDE.md principle #8: the walk exists in exactly one place). This
+/// executor supplies the federated backends (query layer, or in-memory
+/// `KnowledgeBase` federation as a fallback); Scheme supplies a
+/// single-`KbStore` backend instead, since that's all it has access to.
 pub fn execute_kb_graph(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
     let id = args
         .get("id")
@@ -291,196 +277,49 @@ pub fn execute_kb_graph(editor: &Editor, args: &serde_json::Value) -> Result<Str
         .unwrap_or(1)
         .min(3) as usize;
 
-    use std::collections::{HashMap, HashSet, VecDeque};
+    let result = if let Some(q) = editor.kb.query_layer() {
+        mae_kb::graph_query::bfs_neighborhood(&mae_kb::graph_query::QueryLayerBackend(q), id, depth)
+    } else {
+        mae_kb::graph_query::bfs_neighborhood(
+            &mae_kb::graph_query::InMemoryFederatedBackend {
+                primary: &editor.kb.primary,
+                instances: &editor.kb.instances,
+                registry: &editor.kb.registry,
+            },
+            id,
+            depth,
+        )
+    }?;
 
-    // Use query layer when available (CozoDB-first)
-    if let Some(q) = editor.kb.query_layer() {
-        if !q.contains(id) {
-            return Err(format!("No KB node: {}", id));
-        }
-
-        // BFS using query layer
-        let mut hops: HashMap<String, usize> = HashMap::from([(id.to_string(), 0)]);
-        let mut queue: VecDeque<(String, usize)> = VecDeque::from([(id.to_string(), 0)]);
-        while let Some((cur, h)) = queue.pop_front() {
-            if h >= depth {
-                continue;
-            }
-            // Neighbors = union of links_from destinations + links_to sources
-            let mut neighbors: Vec<String> =
-                q.links_from(&cur).into_iter().map(|l| l.dst).collect();
-            let incoming: Vec<String> = q.links_to(&cur).into_iter().map(|l| l.src).collect();
-            let mut seen_n: HashSet<String> = neighbors.iter().cloned().collect();
-            for n in incoming {
-                if seen_n.insert(n.clone()) {
-                    neighbors.push(n);
-                }
-            }
-            for n in neighbors {
-                if !hops.contains_key(&n) {
-                    hops.insert(n.clone(), h + 1);
-                    queue.push_back((n, h + 1));
-                }
-            }
-        }
-
-        let mut ids: Vec<String> = hops.keys().cloned().collect();
-        ids.sort_by(|a, b| hops[a].cmp(&hops[b]).then_with(|| a.cmp(b)));
-        let nodes: Vec<serde_json::Value> = ids
-            .iter()
-            .map(|nid| {
-                let hop = hops[nid];
-                match q.get(nid) {
-                    Some(n) => serde_json::json!({
-                        "id": n.id,
-                        "title": n.title,
-                        "kind": n.kind,
-                        "hop": hop,
-                    }),
-                    None => serde_json::json!({
-                        "id": nid,
-                        "hop": hop,
-                        "missing": true,
-                    }),
-                }
-            })
-            .collect();
-
-        let in_set: HashSet<&String> = hops.keys().collect();
-        let mut edges: Vec<(String, String)> = Vec::new();
-        let mut seen = HashSet::new();
-        for src in &ids {
-            for link in q.links_from(src) {
-                if in_set.contains(&link.dst) && seen.insert((src.clone(), link.dst.clone())) {
-                    edges.push((src.clone(), link.dst));
-                }
-            }
-        }
-        let edges_json: Vec<serde_json::Value> = edges
-            .into_iter()
-            .map(|(src, dst)| serde_json::json!({ "src": src, "dst": dst }))
-            .collect();
-
-        let out = serde_json::json!({
-            "root": id,
-            "depth": depth,
-            "nodes": nodes,
-            "edges": edges_json,
-        });
-        return serde_json::to_string_pretty(&out).map_err(|e| e.to_string());
-    }
-
-    // Fallback: in-memory KB
-    if !editor.kb.primary.contains(id) && !editor.kb.instances.values().any(|kb| kb.contains(id)) {
-        return Err(format!("No KB node: {}", id));
-    }
-
-    let federated_neighbors = |nid: &str| -> Vec<String> {
-        let mut out = editor.kb.primary.neighbors(nid);
-        let mut seen: HashSet<String> = out.iter().cloned().collect();
-        for kb in editor.kb.instances.values() {
-            for n in kb.neighbors(nid) {
-                if seen.insert(n.clone()) {
-                    out.push(n);
-                }
-            }
-        }
-        out
-    };
-
-    let get_node = |nid: &str| -> Option<&mae_core::KbNode> {
-        editor
-            .kb
-            .primary
-            .get(nid)
-            .or_else(|| editor.kb.instances.values().find_map(|kb| kb.get(nid)))
-    };
-
-    let federated_links_from = |nid: &str| -> Vec<String> {
-        let mut out = editor.kb.primary.links_from(nid);
-        let mut seen: HashSet<String> = out.iter().cloned().collect();
-        for kb in editor.kb.instances.values() {
-            for l in kb.links_from(nid) {
-                if seen.insert(l.clone()) {
-                    out.push(l);
-                }
-            }
-        }
-        out
-    };
-
-    // BFS
-    let mut hops: HashMap<String, usize> = HashMap::from([(id.to_string(), 0)]);
-    let mut queue: VecDeque<(String, usize)> = VecDeque::from([(id.to_string(), 0)]);
-    while let Some((cur, h)) = queue.pop_front() {
-        if h >= depth {
-            continue;
-        }
-        for n in federated_neighbors(&cur) {
-            if !hops.contains_key(&n) {
-                hops.insert(n.clone(), h + 1);
-                queue.push_back((n, h + 1));
-            }
-        }
-    }
-
-    let mut ids: Vec<&String> = hops.keys().collect();
-    ids.sort_by(|a, b| hops[*a].cmp(&hops[*b]).then_with(|| a.cmp(b)));
-    let nodes: Vec<serde_json::Value> = ids
+    let nodes: Vec<serde_json::Value> = result
+        .nodes
         .iter()
-        .map(|nid| {
-            let hop = hops[*nid];
-            match get_node(nid) {
-                Some(n) => {
-                    let mut val = serde_json::json!({
-                        "id": n.id,
-                        "title": n.title,
-                        "kind": n.kind,
-                        "hop": hop,
-                    });
-                    if !editor.kb.primary.contains(&n.id) {
-                        for (uuid, kb) in &editor.kb.instances {
-                            if kb.contains(&n.id) {
-                                let inst_name = editor
-                                    .kb
-                                    .registry
-                                    .find_by_uuid(uuid)
-                                    .map(|i| i.name.as_str())
-                                    .unwrap_or("unknown");
-                                val["instance"] = serde_json::json!(inst_name);
-                                break;
-                            }
-                        }
-                    }
-                    val
+        .map(|n| {
+            if n.missing {
+                serde_json::json!({ "id": n.id, "hop": n.hop, "missing": true })
+            } else {
+                let mut val = serde_json::json!({
+                    "id": n.id,
+                    "title": n.title,
+                    "kind": n.kind,
+                    "hop": n.hop,
+                });
+                if let Some(inst) = &n.instance {
+                    val["instance"] = serde_json::json!(inst);
                 }
-                None => serde_json::json!({
-                    "id": nid,
-                    "hop": hop,
-                    "missing": true,
-                }),
+                val
             }
         })
         .collect();
-
-    let in_set: HashSet<&String> = hops.keys().collect();
-    let mut edges: Vec<(String, String)> = Vec::new();
-    let mut seen = HashSet::new();
-    for src in &ids {
-        for dst in federated_links_from(src) {
-            if in_set.contains(&dst) && seen.insert((src.to_string(), dst.clone())) {
-                edges.push((src.to_string(), dst));
-            }
-        }
-    }
-    let edges_json: Vec<serde_json::Value> = edges
+    let edges_json: Vec<serde_json::Value> = result
+        .edges
         .into_iter()
         .map(|(src, dst)| serde_json::json!({ "src": src, "dst": dst }))
         .collect();
 
     let out = serde_json::json!({
-        "root": id,
-        "depth": depth,
+        "root": result.root,
+        "depth": result.depth,
         "nodes": nodes,
         "edges": edges_json,
     });
@@ -783,6 +622,134 @@ pub fn execute_kb_update(editor: &mut Editor, args: &serde_json::Value) -> Resul
         Some(v) => serde_json::to_string_pretty(&v).map_err(|e| e.to_string()),
         None => Ok(format!("Updated node: {}", id)),
     }
+}
+
+// --- Native KB graph view (Part C Phase 1) ---
+//
+// Each executor calls the SAME `Editor::kb_graph_view_*` method the Scheme
+// primitives (`runtime/kb_graph_view.rs`) and buffer-local keybindings
+// call — CLAUDE.md principle #3 (AI/human parity).
+
+pub fn execute_kb_graph_view_open(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let depth = args
+        .get("depth")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize);
+    editor.kb_graph_view_open(id, depth);
+
+    let idx = editor
+        .buffers
+        .iter()
+        .position(|b| b.kind == mae_core::BufferKind::Graph)
+        .ok_or("kb_graph_view_open: failed to create the graph buffer")?;
+    let gv = editor.buffers[idx]
+        .graph_view()
+        .ok_or("kb_graph_view_open: graph buffer has no GraphView state")?;
+    serde_json::to_string_pretty(&serde_json::json!({
+        "center": gv.center_node,
+        "depth": gv.depth,
+        "kb_instance": gv.kb_instance,
+        "node_count": gv.scene.nodes.len(),
+        "edge_count": gv.scene.edges.len(),
+    }))
+    .map_err(|e| e.to_string())
+}
+
+pub fn execute_kb_graph_view_close(
+    editor: &mut Editor,
+    _args: &serde_json::Value,
+) -> Result<String, String> {
+    editor.kb_graph_view_close();
+    Ok("KB graph view closed".to_string())
+}
+
+pub fn execute_kb_graph_view_refresh(
+    editor: &mut Editor,
+    _args: &serde_json::Value,
+) -> Result<String, String> {
+    editor.kb_graph_view_refresh_if_open();
+    Ok("KB graph view refreshed".to_string())
+}
+
+pub fn execute_kb_graph_view_set_depth(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let depth = args
+        .get("depth")
+        .and_then(|v| v.as_u64())
+        .ok_or("Missing required parameter: depth")? as usize;
+    editor.kb_graph_view_set_depth(depth);
+    Ok(format!("KB graph view depth set to {}", depth))
+}
+
+pub fn execute_kb_graph_view_navigate(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let dir_str = args
+        .get("direction")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: direction")?;
+    let dir = mae_core::GraphNavDirection::parse(dir_str).ok_or_else(|| {
+        format!(
+            "Invalid direction '{}': expected up|down|left|right",
+            dir_str
+        )
+    })?;
+    editor.kb_graph_view_navigate(dir);
+    Ok(format!("KB graph view navigated {}", dir_str))
+}
+
+pub fn execute_kb_graph_view_select_current(
+    editor: &mut Editor,
+    _args: &serde_json::Value,
+) -> Result<String, String> {
+    editor.kb_graph_view_select_current();
+    Ok("Companion window navigated to the selected node".to_string())
+}
+
+pub fn execute_kb_graph_view_state(
+    editor: &mut Editor,
+    _args: &serde_json::Value,
+) -> Result<String, String> {
+    serde_json::to_string_pretty(&editor.kb_graph_view_state()).map_err(|e| e.to_string())
+}
+
+// --- KB-link hover preview (Part D) ---
+//
+// Each executor calls the SAME `Editor::kb_preview_*` method the Scheme
+// primitives (`runtime/kb_preview.rs`) and buffer-local keybinding call —
+// CLAUDE.md principle #3 (AI/human parity).
+
+pub fn execute_kb_preview_show(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: id")?;
+    editor.kb_preview_show(id);
+    editor
+        .kb_preview_popup()
+        .map(|popup| popup.contents.clone())
+        .ok_or_else(|| format!("kb_preview_show: could not show preview for '{}'", id))
+}
+
+pub fn execute_kb_preview_dismiss(
+    editor: &mut Editor,
+    _args: &serde_json::Value,
+) -> Result<String, String> {
+    editor.kb_preview_dismiss();
+    Ok("KB preview popup dismissed".to_string())
 }
 
 pub fn execute_kb_delete(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
@@ -1427,6 +1394,168 @@ mod tests {
         let editor = Editor::new();
         let err = execute_kb_get(&editor, &serde_json::json!({})).unwrap_err();
         assert!(err.contains("id"));
+    }
+
+    #[test]
+    fn kb_graph_view_open_creates_buffer_and_returns_summary() {
+        let mut editor = Editor::new();
+        let result = execute_kb_graph_view_open(
+            &mut editor,
+            &serde_json::json!({"id": "index", "depth": 1}),
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["center"], "index");
+        assert_eq!(v["depth"], 1);
+        assert!(editor
+            .buffers
+            .iter()
+            .any(|b| b.kind == mae_core::BufferKind::Graph));
+    }
+
+    #[test]
+    fn kb_graph_view_open_defaults_center_and_depth() {
+        let mut editor = Editor::new();
+        let result = execute_kb_graph_view_open(&mut editor, &serde_json::json!({})).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["center"], "index");
+        assert_eq!(v["depth"], editor.kb_graph_default_depth as u64);
+    }
+
+    #[test]
+    fn kb_graph_view_close_removes_the_buffer() {
+        let mut editor = Editor::new();
+        execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
+        assert!(editor
+            .buffers
+            .iter()
+            .any(|b| b.kind == mae_core::BufferKind::Graph));
+        execute_kb_graph_view_close(&mut editor, &serde_json::json!({})).unwrap();
+        assert!(!editor
+            .buffers
+            .iter()
+            .any(|b| b.kind == mae_core::BufferKind::Graph));
+    }
+
+    #[test]
+    fn kb_graph_view_set_depth_updates_in_place() {
+        let mut editor = Editor::new();
+        execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index", "depth": 1}))
+            .unwrap();
+        execute_kb_graph_view_set_depth(&mut editor, &serde_json::json!({"depth": 4})).unwrap();
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == mae_core::BufferKind::Graph)
+            .unwrap();
+        assert_eq!(editor.buffers[idx].graph_view().unwrap().depth, 4);
+    }
+
+    #[test]
+    fn kb_graph_view_set_depth_missing_arg_is_error() {
+        let mut editor = Editor::new();
+        let err = execute_kb_graph_view_set_depth(&mut editor, &serde_json::json!({})).unwrap_err();
+        assert!(err.contains("depth"));
+    }
+
+    #[test]
+    fn kb_graph_view_navigate_invalid_direction_is_error() {
+        let mut editor = Editor::new();
+        execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
+        let err = execute_kb_graph_view_navigate(
+            &mut editor,
+            &serde_json::json!({"direction": "sideways"}),
+        )
+        .unwrap_err();
+        assert!(err.contains("sideways"));
+    }
+
+    #[test]
+    fn kb_graph_view_navigate_valid_direction_succeeds() {
+        let mut editor = Editor::new();
+        execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
+        let result =
+            execute_kb_graph_view_navigate(&mut editor, &serde_json::json!({"direction": "right"}))
+                .unwrap();
+        assert!(result.contains("right"));
+    }
+
+    #[test]
+    fn kb_graph_view_select_current_opens_a_kb_buffer() {
+        let mut editor = Editor::new();
+        execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
+        execute_kb_graph_view_select_current(&mut editor, &serde_json::json!({})).unwrap();
+        assert!(editor
+            .buffers
+            .iter()
+            .any(|b| b.kind == mae_core::BufferKind::Kb));
+    }
+
+    #[test]
+    fn kb_graph_view_state_is_null_when_no_graph_is_open() {
+        let mut editor = Editor::new();
+        let result = execute_kb_graph_view_state(&mut editor, &serde_json::json!({})).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(v.is_null());
+    }
+
+    #[test]
+    fn kb_graph_view_state_reflects_open_graph() {
+        let mut editor = Editor::new();
+        execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index", "depth": 1}))
+            .unwrap();
+        let result = execute_kb_graph_view_state(&mut editor, &serde_json::json!({})).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["center_node"], "index");
+        assert_eq!(v["depth"], 1);
+        assert!(v["nodes"].as_array().is_some_and(|n| !n.is_empty()));
+    }
+
+    #[test]
+    fn kb_preview_show_returns_popup_contents() {
+        let mut editor = Editor::new();
+        editor.open_help_at("index"); // active buffer must be KB-kind
+        let result =
+            execute_kb_preview_show(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
+        assert!(result.contains("MAE Help Index"));
+        assert!(editor.kb_preview_popup().is_some());
+    }
+
+    #[test]
+    fn kb_preview_show_missing_id_arg_is_error() {
+        let mut editor = Editor::new();
+        editor.open_help_at("index");
+        let err = execute_kb_preview_show(&mut editor, &serde_json::json!({})).unwrap_err();
+        assert!(err.contains("id"));
+    }
+
+    #[test]
+    fn kb_preview_show_missing_node_is_error() {
+        let mut editor = Editor::new();
+        editor.open_help_at("index");
+        let err = execute_kb_preview_show(&mut editor, &serde_json::json!({"id": "no:such:node"}))
+            .unwrap_err();
+        assert!(err.contains("no:such:node"));
+        assert!(editor.kb_preview_popup().is_none());
+    }
+
+    #[test]
+    fn kb_preview_show_outside_kb_buffer_is_error() {
+        let mut editor = Editor::new(); // active buffer is scratch, not KB
+        let err =
+            execute_kb_preview_show(&mut editor, &serde_json::json!({"id": "index"})).unwrap_err();
+        assert!(err.contains("index"));
+        assert!(editor.kb_preview_popup().is_none());
+    }
+
+    #[test]
+    fn kb_preview_dismiss_clears_popup() {
+        let mut editor = Editor::new();
+        editor.open_help_at("index");
+        execute_kb_preview_show(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
+        assert!(editor.kb_preview_popup().is_some());
+        execute_kb_preview_dismiss(&mut editor, &serde_json::json!({})).unwrap();
+        assert!(editor.kb_preview_popup().is_none());
     }
 
     #[test]

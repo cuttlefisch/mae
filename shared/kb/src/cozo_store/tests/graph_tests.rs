@@ -1,6 +1,85 @@
 use super::*;
 
 #[test]
+fn shortest_path_finds_a_direct_link() {
+    // Regression test for a bug where EVERY call to `shortest_path` errored:
+    // the original recursive-Datalog query used `d + 1` in a rule head,
+    // which CozoDB's parser rejects outright ("query parser has encountered
+    // unexpected input"). Now implemented as iterative BFS (mirroring
+    // `neighborhood` below), so this must actually succeed.
+    let (_tmp, store) = make_store();
+    store
+        .insert_node(&Node::new("a", "A", NodeKind::Note, ""))
+        .unwrap();
+    store
+        .insert_node(&Node::new("b", "B", NodeKind::Note, ""))
+        .unwrap();
+    store.add_link("a", "b", None).unwrap();
+
+    let path = store.shortest_path("a", "b").unwrap();
+    assert_eq!(path, vec!["a".to_string(), "b".to_string()]);
+}
+
+#[test]
+fn shortest_path_walks_multiple_hops_within_the_depth_cap() {
+    let (_tmp, store) = make_store();
+    for id in ["a", "b", "c", "d"] {
+        store
+            .insert_node(&Node::new(id, id, NodeKind::Note, ""))
+            .unwrap();
+    }
+    store.add_link("a", "b", None).unwrap();
+    store.add_link("b", "c", None).unwrap();
+    store.add_link("c", "d", None).unwrap();
+
+    let path = store.shortest_path("a", "d").unwrap();
+    assert_eq!(path, vec!["a".to_string(), "d".to_string()]);
+}
+
+#[test]
+fn shortest_path_reaches_via_incoming_links_too() {
+    // The walk is undirected (matches the original two-rule query, which
+    // recursed through both `links{src: mid, dst: node}` and
+    // `links{src: node, dst: mid}`).
+    let (_tmp, store) = make_store();
+    store
+        .insert_node(&Node::new("a", "A", NodeKind::Note, ""))
+        .unwrap();
+    store
+        .insert_node(&Node::new("b", "B", NodeKind::Note, ""))
+        .unwrap();
+    // Link points b -> a (incoming to a), not a -> b.
+    store.add_link("b", "a", None).unwrap();
+
+    let path = store.shortest_path("a", "b").unwrap();
+    assert_eq!(path, vec!["a".to_string(), "b".to_string()]);
+}
+
+#[test]
+fn shortest_path_empty_for_disconnected_nodes() {
+    let (_tmp, store) = make_store();
+    store
+        .insert_node(&Node::new("a", "A", NodeKind::Note, ""))
+        .unwrap();
+    store
+        .insert_node(&Node::new("b", "B", NodeKind::Note, ""))
+        .unwrap();
+    // No link between them.
+    let path = store.shortest_path("a", "b").unwrap();
+    assert!(path.is_empty());
+}
+
+#[test]
+fn shortest_path_from_a_node_to_itself() {
+    let (_tmp, store) = make_store();
+    store
+        .insert_node(&Node::new("a", "A", NodeKind::Note, ""))
+        .unwrap();
+    let path = store.shortest_path("a", "a").unwrap();
+    assert_eq!(path, vec!["a".to_string(), "a".to_string()]);
+}
+
+#[test]
 fn neighborhood_query() {
     let (_tmp, store) = make_store();
     store

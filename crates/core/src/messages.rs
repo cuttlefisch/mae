@@ -107,6 +107,18 @@ impl MessageLog {
         inner.entries.len()
     }
 
+    /// The `seq` of the most recently pushed entry, if any — cheap
+    /// staleness check (no full `entries()` clone) for callers that just
+    /// need to know "has anything new arrived since I last looked," e.g.
+    /// `Editor::sync_open_messages_buffer`. `next_seq` is monotonic and
+    /// never resets even as old entries are evicted at capacity, unlike
+    /// `len()` (which stops changing once the ring buffer is full, since
+    /// each push also evicts one).
+    pub fn latest_seq(&self) -> Option<u64> {
+        let inner = self.inner.lock();
+        inner.next_seq.checked_sub(1)
+    }
+
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
@@ -161,6 +173,42 @@ mod tests {
         assert_eq!(entries[1].level, MessageLevel::Error);
         assert_eq!(entries[0].seq, 0);
         assert_eq!(entries[1].seq, 1);
+    }
+
+    #[test]
+    fn latest_seq_none_when_empty() {
+        let log = MessageLog::new(100);
+        assert_eq!(log.latest_seq(), None);
+    }
+
+    #[test]
+    fn latest_seq_tracks_the_most_recent_push() {
+        let log = MessageLog::new(100);
+        log.push(MessageLevel::Info, "t", "a");
+        assert_eq!(log.latest_seq(), Some(0));
+        log.push(MessageLevel::Info, "t", "b");
+        assert_eq!(log.latest_seq(), Some(1));
+    }
+
+    #[test]
+    fn latest_seq_keeps_advancing_past_ring_buffer_capacity() {
+        // The whole point of using `seq` (not `len()`) for staleness
+        // tracking: `len()` stops changing once the ring buffer is full
+        // (each push also evicts one), so it can't distinguish "nothing
+        // new happened" from "the buffer is full and churning" — `seq` is
+        // monotonic and keeps advancing regardless of eviction.
+        let log = MessageLog::new(2);
+        log.push(MessageLevel::Info, "t", "a");
+        log.push(MessageLevel::Info, "t", "b");
+        assert_eq!(log.len(), 2);
+        assert_eq!(log.latest_seq(), Some(1));
+        log.push(MessageLevel::Info, "t", "c"); // evicts "a"
+        assert_eq!(log.len(), 2, "still at capacity");
+        assert_eq!(
+            log.latest_seq(),
+            Some(2),
+            "seq must still advance even though len() didn't change"
+        );
     }
 
     #[test]

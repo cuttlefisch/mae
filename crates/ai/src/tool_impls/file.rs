@@ -23,7 +23,7 @@ pub fn execute_open_file(editor: &mut Editor, args: &serde_json::Value) -> Resul
     });
     if let Some(idx) = existing_idx {
         let name = editor.buffers[idx].name.clone();
-        editor.switch_to_buffer_non_conversation(idx);
+        editor.display_buffer_for_agent(idx);
         return Ok(format!(
             "Switched to existing buffer '{}' (already open)",
             name
@@ -63,7 +63,7 @@ pub fn execute_switch_buffer(
         .find_buffer_by_name(name)
         .ok_or_else(|| format!("No buffer named '{}'", name))?;
 
-    editor.switch_to_buffer_non_conversation(idx);
+    editor.display_buffer_for_agent(idx);
     Ok(format!("Switched to buffer '{}'", name))
 }
 

@@ -26,7 +26,7 @@ use crate::syntax::languages::Language;
 /// Every `BufferKind`, in declaration order. Single list reused for seeding and
 /// selector parsing (keep in sync with the enum — a missing variant just means
 /// that kind can't be targeted by `bind-context-keymap`, not a crash).
-const ALL_KINDS: [BufferKind; 16] = [
+const ALL_KINDS: [BufferKind; 17] = [
     BufferKind::Text,
     BufferKind::Conversation,
     BufferKind::Preview,
@@ -43,6 +43,7 @@ const ALL_KINDS: [BufferKind; 16] = [
     BufferKind::Demo,
     BufferKind::ShellSelect,
     BufferKind::Modules,
+    BufferKind::Graph,
 ];
 
 /// Maps buffer context (kind / language) to a context keymap name.
@@ -199,6 +200,7 @@ pub fn kind_selector(kind: BufferKind) -> &'static str {
         BufferKind::Modules => "modules",
         BufferKind::Notifications => "notifications",
         BufferKind::KbSharing => "kb-sharing",
+        BufferKind::Graph => "graph",
     }
 }
 

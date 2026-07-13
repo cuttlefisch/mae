@@ -134,6 +134,7 @@ impl super::Editor {
             "syntax_reparse_debounce_ms" => self.syntax_reparse_debounce_ms.to_string(),
             "babel_confirm" => self.babel_confirm.to_string(),
             "babel_timeout" => self.babel_timeout.to_string(),
+            "babel_inherit_shell_env" => self.babel_inherit_shell_env.to_string(),
             "babel_cxx_compiler" => self.babel_cxx_compiler.clone(),
             "babel_c_compiler" => self.babel_c_compiler.clone(),
             "babel_cxx_std" => self.babel_cxx_std.clone(),
@@ -216,6 +217,18 @@ impl super::Editor {
             "notify_badge_min_severity" => {
                 self.notifications.badge_min_severity.as_str().to_string()
             }
+            "which_key_idle_delay" => self.which_key_idle_delay.to_string(),
+            "kb_preview_idle_delay" => self.kb_preview_idle_delay.to_string(),
+            "kb_preview_on_hover" => self.kb_preview_on_hover.to_string(),
+            "kb_preview_max_lines" => self.kb_preview_max_lines.to_string(),
+            "kb_graph_default_depth" => self.kb_graph_default_depth.to_string(),
+            "kb_graph_include_backlinks" => self.kb_graph_include_backlinks.to_string(),
+            "kb_graph_node_radius" => self.kb_graph_node_radius.to_string(),
+            "kb_graph_font_size" => self.kb_graph_font_size.to_string(),
+            "kb_graph_layout_iterations" => self.kb_graph_layout_iterations.to_string(),
+            "kb_graph_follow_current_node" => self.kb_graph_follow_current_node.to_string(),
+            "kb_graph_animate" => self.kb_graph_animate.to_string(),
+            "kb_graph_hover_enabled" => self.kb_graph_hover_enabled.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -599,6 +612,9 @@ impl super::Editor {
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.babel_timeout = v.clamp(1, 3600);
             }
+            "babel_inherit_shell_env" => {
+                self.babel_inherit_shell_env = parse_option_bool(value)?;
+            }
             "babel_cxx_compiler" => {
                 self.babel_cxx_compiler = value.to_string();
             }
@@ -901,6 +917,63 @@ impl super::Editor {
                             value
                         )
                     })?
+            }
+            "which_key_idle_delay" => {
+                let v: u64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.which_key_idle_delay = v.clamp(0, 60_000);
+            }
+            "kb_preview_idle_delay" => {
+                let v: u64 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_preview_idle_delay = v.clamp(0, 60_000);
+            }
+            "kb_preview_on_hover" => {
+                self.kb_preview_on_hover = parse_option_bool(value)?;
+            }
+            "kb_preview_max_lines" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_preview_max_lines = v.clamp(1, 50);
+            }
+            "kb_graph_default_depth" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_graph_default_depth = v.clamp(0, 10);
+            }
+            "kb_graph_include_backlinks" => {
+                self.kb_graph_include_backlinks = parse_option_bool(value)?;
+            }
+            "kb_graph_node_radius" => {
+                let v: u32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_graph_node_radius = v.clamp(1, 500);
+            }
+            "kb_graph_font_size" => {
+                let v: u32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_graph_font_size = v.clamp(1, 200);
+            }
+            "kb_graph_layout_iterations" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_graph_layout_iterations = v.clamp(0, 10_000);
+            }
+            "kb_graph_follow_current_node" => {
+                self.kb_graph_follow_current_node = parse_option_bool(value)?;
+            }
+            "kb_graph_animate" => {
+                self.kb_graph_animate = parse_option_bool(value)?;
+            }
+            "kb_graph_hover_enabled" => {
+                self.kb_graph_hover_enabled = parse_option_bool(value)?;
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }

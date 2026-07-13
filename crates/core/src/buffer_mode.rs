@@ -82,6 +82,7 @@ impl BufferMode for BufferKind {
             Self::Modules => "Modules",
             Self::Notifications => "Notifications",
             Self::KbSharing => "KB Sharing",
+            Self::Graph => "KB Graph",
         }
     }
 
@@ -97,6 +98,7 @@ impl BufferMode for BufferKind {
             Self::Shell => Some("shell-normal"),
             Self::ShellSelect => Some("shell-select"),
             Self::Modules => Some("modules"),
+            Self::Graph => Some("graph"),
             _ => None,
         }
     }
@@ -104,7 +106,7 @@ impl BufferMode for BufferKind {
     fn has_gutter(&self) -> bool {
         !matches!(
             self,
-            Self::Conversation | Self::Messages | Self::Visual | Self::Dashboard
+            Self::Conversation | Self::Messages | Self::Visual | Self::Dashboard | Self::Graph
         )
     }
 
@@ -118,6 +120,7 @@ impl BufferMode for BufferKind {
             Self::Notifications => {
                 Some("Enter: run action  d: dismiss  r: refresh  Tab: fold  q: close  ?: help")
             }
+            Self::Graph => Some("hjkl: navigate  Enter: open in companion  +/-: depth  q: close"),
             _ => None,
         }
     }
@@ -144,7 +147,10 @@ impl BufferMode for BufferKind {
     }
 
     fn normal_mode_only(&self) -> bool {
-        matches!(self, Self::Dashboard | Self::Modules | Self::Kb)
+        matches!(
+            self,
+            Self::Dashboard | Self::Modules | Self::Kb | Self::Graph
+        )
     }
 
     fn read_only(&self) -> bool {
@@ -162,6 +168,7 @@ impl BufferMode for BufferKind {
                 | Self::Agenda
                 | Self::Modules
                 | Self::Notifications
+                | Self::Graph
         )
     }
 
@@ -304,6 +311,16 @@ mod tests {
         assert!(BufferKind::Kb.normal_mode_only());
         assert!(!BufferKind::GitStatus.normal_mode_only());
         assert!(!BufferKind::Shell.normal_mode_only());
+    }
+
+    #[test]
+    fn graph_buffer_kind_mode_properties() {
+        assert_eq!(BufferKind::Graph.mode_name(), "KB Graph");
+        assert_eq!(BufferKind::Graph.keymap_name(), Some("graph"));
+        assert!(!BufferKind::Graph.has_gutter());
+        assert!(BufferKind::Graph.status_hint().is_some());
+        assert!(BufferKind::Graph.read_only());
+        assert!(BufferKind::Graph.normal_mode_only());
     }
 
     #[test]

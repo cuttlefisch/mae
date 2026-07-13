@@ -45,11 +45,35 @@ impl Editor {
         }
 
         let pre_buf_idx = self.active_buffer_idx();
+        // Part C (native KB graph view): snapshot focus before dispatch so
+        // a keyboard/Scheme-triggered focus change (e.g. `focus-left`,
+        // `focus-next-window`) can update the graph view's captured
+        // `companion_window` afterward. `dispatch_builtin` is the single
+        // point EVERY command — human keybinding or AI/MCP — passes
+        // through, making it the right central hook (see
+        // `Editor::capture_graph_companion_focus`'s doc comment for why
+        // `focus_window_at`, the mouse-click path, ALSO calls the same
+        // helper directly rather than relying on this alone).
+        let pre_focused = self.window_mgr.focused_id();
         self.fire_hook("command-pre");
         let result = self.dispatch_builtin_inner(name);
         self.fire_hook("command-post");
+        // Part C Phase 2 (KB graph view follow-current-node): fires on this
+        // SAME command-post point, unconditionally — not gated behind the
+        // buffer-switch check below — because in-KB-buffer link-following
+        // (`help_follow_link`) can update the active buffer's `KbView.
+        // current` in place without changing the active buffer index, which
+        // `buffer-switch` alone would miss. See
+        // `Editor::maybe_follow_kb_graph_view` for the short-circuit
+        // behavior (no work unless a Graph window is open, follow is
+        // enabled, and the node actually changed).
+        self.maybe_follow_kb_graph_view();
         if self.active_buffer_idx() != pre_buf_idx {
             self.fire_hook("buffer-switch");
+        }
+        let post_focused = self.window_mgr.focused_id();
+        if post_focused != pre_focused {
+            self.capture_graph_companion_focus(post_focused);
         }
 
         let elapsed_us = _cmd_start.elapsed().as_micros() as u64;
@@ -68,6 +92,22 @@ impl Editor {
             && !matches!(name, "lsp-hover" | "hover-scroll-down" | "hover-scroll-up")
         {
             self.lsp.hover_popup = None;
+        }
+        // Auto-dismiss the KB-link hover preview popup (Part D) on any
+        // command that isn't preview-related — same pattern as the LSP
+        // hover popup above, just scoped to the active buffer's `KbView`
+        // rather than a top-level `Editor` field (see `KbPreviewPopup`'s
+        // doc comment for why).
+        if self.kb_view().is_some_and(|v| v.kb_preview_popup.is_some())
+            && !matches!(
+                name,
+                "kb-preview"
+                    | "kb-preview-scroll-down"
+                    | "kb-preview-scroll-up"
+                    | "dismiss-kb-preview-popup"
+            )
+        {
+            self.kb_preview_dismiss();
         }
         // Auto-dismiss signature help on non-related commands.
         if self.lsp.signature_help.is_some() && !matches!(name, "lsp-signature-help") {

@@ -24,6 +24,8 @@ use crate::vm::Vm;
 
 mod editor_ops;
 mod io_packages;
+mod kb_graph_view;
+mod kb_preview;
 mod kb_primitives;
 mod kb_queries;
 mod keybindings;
@@ -37,6 +39,8 @@ mod test_primitives;
 
 use editor_ops::register_editor_ops_fns;
 use io_packages::register_io_package_fns;
+use kb_graph_view::register_kb_graph_view_fns;
+use kb_preview::register_kb_preview_fns;
 use kb_primitives::register_kb_primitive_fns;
 use kb_queries::register_kb_query_fns;
 use keybindings::register_keybinding_fns;
@@ -152,6 +156,16 @@ struct SharedState {
     /// Pending KB collaboration lifecycle actions from `(kb-share)` etc. — lowered
     /// to `CollabIntent`s editor-side via `Editor::queue_kb_collab_action`.
     pending_kb_collab_actions: Vec<mae_core::KbCollabAction>,
+    /// Pending native KB graph-view intents from `(kb-graph-view-open)` etc.
+    /// (Part C Phase 1) — drained in order into the matching
+    /// `Editor::kb_graph_view_*` method, mirroring
+    /// `pending_kb_collab_actions` above.
+    pending_graph_view_intents: Vec<mae_core::GraphViewIntent>,
+    /// Pending KB-link hover preview intents from `(kb-preview-show)` /
+    /// `(kb-preview-dismiss)` (Part D) — drained in order into the matching
+    /// `Editor::kb_preview_*` method, mirroring
+    /// `pending_graph_view_intents` above.
+    pending_kb_preview_intents: Vec<mae_core::KbPreviewIntent>,
     /// Daemon control channel (cloned from `editor.kb` on each state sync) so
     /// synchronous-return primitives like `(kb-share-p2p)` can drive the same
     /// backend as the command + MCP tool (ADR-025 §"Driving surfaces").
@@ -234,6 +248,15 @@ struct SharedState {
 
     /// Snapshot of option values: (name, value_string).
     option_values: Vec<(String, String)>,
+
+    /// Snapshot of the open KB graph view's introspection state (hovered/
+    /// selected node, rendered nodes/edges), if one is open — updated by
+    /// `inject_graph_view_state` (`state_sync_inject_kb.rs`), read by
+    /// `(kb-graph-view-state)`. `GraphView` is transient `Editor`-owned UI
+    /// state with no live handle the Scheme VM can hold (unlike
+    /// `kb_store`), so this is snapshotted once per eval rather than
+    /// queried live.
+    graph_view_state: Option<mae_core::graph_view::GraphViewState>,
 
     /// KB store reference for read-only queries (updated by inject_editor_state).
     kb_store: Option<Arc<dyn mae_kb::KbStore>>,
@@ -403,6 +426,8 @@ impl SchemeRuntime {
         register_io_package_fns(&mut vm, &shared);
         register_kb_primitive_fns(&mut vm, &shared);
         register_kb_query_fns(&mut vm, &shared);
+        register_kb_graph_view_fns(&mut vm, &shared);
+        register_kb_preview_fns(&mut vm, &shared);
         register_misc_primitive_fns(&mut vm, &shared);
         register_test_primitive_fns(&mut vm, &shared);
 

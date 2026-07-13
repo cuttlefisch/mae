@@ -54,10 +54,18 @@ impl ForceLayout {
     }
 
     /// Run a single iteration of the force layout.
-    pub fn step(&self, nodes: &mut [SceneNode], edges: &[SceneEdge], temperature: f64) {
+    ///
+    /// Returns the largest displacement magnitude actually applied to any
+    /// (unpinned) node this tick — the "settlement signal" callers use to
+    /// detect convergence (Part C Phase 3 physics animation): as the scene
+    /// approaches force equilibrium, per-node displacement shrinks toward
+    /// zero regardless of `temperature`, so a caller ticking repeatedly can
+    /// stop once this drops below a small epsilon. `0.0` for an empty scene
+    /// or a scene where every node is pinned.
+    pub fn step(&self, nodes: &mut [SceneNode], edges: &[SceneEdge], temperature: f64) -> f32 {
         let n = nodes.len();
         if n == 0 {
-            return;
+            return 0.0;
         }
 
         let area = 800.0 * 600.0; // Default layout area
@@ -109,19 +117,32 @@ impl ForceLayout {
             dy[i] -= nodes[i].y * self.config.centering;
         }
 
-        // 4. Apply with temperature limit
+        // 4. Apply with temperature limit, tracking the largest displacement
+        //    actually applied this tick (the settlement signal).
+        let mut max_disp = 0.0_f64;
         for i in 0..n {
             if nodes[i].pinned {
                 continue;
             }
             let disp = (dx[i] * dx[i] + dy[i] * dy[i]).sqrt().max(0.01);
             let scale = temperature.min(disp) / disp;
-            nodes[i].x += dx[i] * scale * self.config.damping;
-            nodes[i].y += dy[i] * scale * self.config.damping;
+            let applied_dx = dx[i] * scale * self.config.damping;
+            let applied_dy = dy[i] * scale * self.config.damping;
+            nodes[i].x += applied_dx;
+            nodes[i].y += applied_dy;
+            let applied_mag = (applied_dx * applied_dx + applied_dy * applied_dy).sqrt();
+            if applied_mag > max_disp {
+                max_disp = applied_mag;
+            }
         }
+        max_disp as f32
     }
 
-    /// Run the full layout algorithm with temperature cooling.
+    /// Run the full layout algorithm with temperature cooling. Unchanged
+    /// behavior from before `step()` gained a return value — the per-tick
+    /// settlement signal is simply discarded here, since `run()` is a
+    /// one-shot, fire-and-forget pass (Part C Phase 1/2's
+    /// `kb_graph_animate = false` path) with no caller that needs it.
     pub fn run(&self, nodes: &mut [SceneNode], edges: &[SceneEdge], iterations: usize) {
         let iters = if iterations == 0 {
             self.config.max_iterations
@@ -132,7 +153,7 @@ impl ForceLayout {
         for i in 0..iters {
             // Linear cooling: temperature goes from 100 to ~1
             let temperature = 100.0 * (1.0 - (i as f64 / iters as f64));
-            self.step(nodes, edges, temperature.max(1.0));
+            let _ = self.step(nodes, edges, temperature.max(1.0));
         }
     }
 }
@@ -205,6 +226,80 @@ mod tests {
             dist
         );
         assert!(dist > 1.0, "nodes shouldn't overlap, dist={}", dist);
+    }
+
+    // --- `step()`'s settlement-signal return value (Part C Phase 3) ---
+
+    #[test]
+    fn step_returns_zero_for_empty_scene() {
+        let layout = ForceLayout::new(LayoutConfig::default());
+        let mut nodes: Vec<SceneNode> = vec![];
+        let disp = layout.step(&mut nodes, &[], 100.0);
+        assert_eq!(disp, 0.0);
+    }
+
+    #[test]
+    fn step_returns_zero_when_every_node_is_pinned() {
+        let layout = ForceLayout::new(LayoutConfig::default());
+        let mut nodes = vec![make_node("a", 50.0, 50.0), make_node("b", -50.0, -50.0)];
+        nodes[0].pinned = true;
+        nodes[1].pinned = true;
+        let edges = vec![make_edge(0, 1)];
+        let disp = layout.step(&mut nodes, &edges, 100.0);
+        assert_eq!(
+            disp, 0.0,
+            "a fully pinned scene must report zero displacement"
+        );
+        assert_eq!(nodes[0].x, 50.0);
+        assert_eq!(nodes[1].x, -50.0);
+    }
+
+    #[test]
+    fn step_reports_nontrivial_displacement_for_a_freshly_unsettled_scene() {
+        let layout = ForceLayout::new(LayoutConfig::default());
+        let mut nodes = vec![make_node("a", -200.0, 0.0), make_node("b", 200.0, 0.0)];
+        let edges = vec![make_edge(0, 1)];
+        let disp = layout.step(&mut nodes, &edges, 100.0);
+        assert!(
+            disp > 1.0,
+            "a scene far from equilibrium should report a non-trivial settlement signal, got {disp}"
+        );
+    }
+
+    #[test]
+    fn step_displacement_shrinks_as_temperature_cools_over_ticks() {
+        // Mirrors how Phase 3's animation loop actually drives `step()`: a
+        // cooling temperature schedule (not a fixed one — a FIXED low
+        // temperature can plateau indefinitely if the raw force magnitude
+        // stays above it, since `step()` clamps displacement to
+        // `min(temperature, raw_disp)`; that's not a bug, it just means the
+        // schedule itself must cool for the signal to trend toward zero,
+        // exactly as `ForceLayout::run`'s own linear cooling already
+        // relies on). Real physics across 200 ticks, not a hand-picked
+        // "unicorn" starting position — confirms the settlement signal
+        // Phase 3 depends on (`apply_graph_layout_result`'s settle check,
+        // `gui_app.rs`'s loop condition) genuinely decreases as ticking
+        // continues.
+        let layout = ForceLayout::new(LayoutConfig::default());
+        let mut nodes = vec![make_node("a", -200.0, 0.0), make_node("b", 200.0, 0.0)];
+        let edges = vec![make_edge(0, 1)];
+
+        let mut temperature = 100.0_f64;
+        let first = layout.step(&mut nodes, &edges, temperature);
+        let mut last = first;
+        for _ in 0..200 {
+            temperature = (temperature * 0.9).max(0.05);
+            last = layout.step(&mut nodes, &edges, temperature);
+        }
+
+        assert!(
+            last < first,
+            "displacement should shrink as temperature cools (first={first}, last={last})"
+        );
+        assert!(
+            last < 0.5,
+            "after cooling to a very low temperature the settlement signal should be small, last={last}"
+        );
     }
 
     #[test]

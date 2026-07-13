@@ -57,7 +57,7 @@ fn option_registry_has_debug_mode() {
     assert!(reg.find("debug-mode").is_some());
 }
 
-// ---- switch_to_buffer_non_conversation tests ----
+// ---- display_buffer_for_agent tests ----
 
 #[test]
 fn test_switch_non_conv_normal_window() {
@@ -66,7 +66,7 @@ fn test_switch_non_conv_normal_window() {
     let mut editor = Editor::new();
     editor.buffers.push(Buffer::new());
     assert!(!editor.is_conversation_buffer(editor.active_buffer_idx()));
-    let ok = editor.switch_to_buffer_non_conversation(1);
+    let ok = editor.display_buffer_for_agent(1);
     assert!(ok);
     // Focus remains on buffer 0
     assert_eq!(editor.active_buffer_idx(), 0);
@@ -94,7 +94,7 @@ fn test_switch_non_conv_routes_to_other_window() {
     // Add a third buffer and route it.
     editor.buffers.push(Buffer::new());
     let target_idx = editor.buffers.len() - 1;
-    let ok = editor.switch_to_buffer_non_conversation(target_idx);
+    let ok = editor.display_buffer_for_agent(target_idx);
     assert!(ok);
     // Focused window should STILL show conversation.
     assert_eq!(editor.active_buffer_idx(), conv_idx);
@@ -116,7 +116,7 @@ fn test_switch_non_conv_auto_splits() {
     // Add a target buffer.
     editor.buffers.push(Buffer::new());
     let target_idx = editor.buffers.len() - 1;
-    let ok = editor.switch_to_buffer_non_conversation(target_idx);
+    let ok = editor.display_buffer_for_agent(target_idx);
     assert!(ok);
     // Should have split into 2 windows.
     assert_eq!(editor.window_mgr.window_count(), 2);
@@ -384,7 +384,7 @@ fn split_from_conversation_wraps_group() {
 
 // --- Bug regression: AI-opened buffer triggers full redraw (syntax highlighting)
 #[test]
-fn switch_to_buffer_non_conversation_triggers_full_redraw() {
+fn display_buffer_for_agent_triggers_full_redraw() {
     let mut editor = Editor::new();
     // Create a second buffer to switch to.
     editor.buffers.push(Buffer::new());
@@ -395,13 +395,13 @@ fn switch_to_buffer_non_conversation_triggers_full_redraw() {
     assert_eq!(editor.redraw_level, crate::redraw::RedrawLevel::None);
 
     // Simulate AI opening a buffer.
-    editor.switch_to_buffer_non_conversation(new_idx);
+    editor.display_buffer_for_agent(new_idx);
 
     // Must escalate to Full so syntax spans are computed for the new buffer.
     assert_eq!(
         editor.redraw_level,
         crate::redraw::RedrawLevel::Full,
-        "switch_to_buffer_non_conversation must trigger Full redraw for syntax highlighting"
+        "display_buffer_for_agent must trigger Full redraw for syntax highlighting"
     );
 }
 
@@ -611,27 +611,34 @@ fn poll_pending_git_diff_applies_result() {
 #[test]
 fn ai_work_window_reused_across_open_file() {
     let mut editor = Editor::new();
-    // Set up a conversation so switch_to_buffer_non_conversation splits.
+    // Set up a conversation so display_buffer_for_agent splits.
     let conv_idx = editor.ensure_conversation_buffer_idx();
     editor.switch_to_buffer(conv_idx);
 
     // Open first file — creates a split (work window).
     editor.buffers.push(Buffer::new());
     let idx1 = editor.buffers.len() - 1;
-    editor.switch_to_buffer_non_conversation(idx1);
+    editor.display_buffer_for_agent(idx1);
     let window_count_after_first = editor.window_mgr.window_count();
-    let work_id = editor.ai.work_window_id.expect("should record work window");
+    let work_id = editor
+        .ai
+        .work_window
+        .get_valid(&editor.window_mgr)
+        .expect("should record work window");
 
     // Open second file — reuses the work window, no new split.
     editor.buffers.push(Buffer::new());
     let idx2 = editor.buffers.len() - 1;
-    editor.switch_to_buffer_non_conversation(idx2);
+    editor.display_buffer_for_agent(idx2);
     assert_eq!(
         editor.window_mgr.window_count(),
         window_count_after_first,
         "should not create additional windows"
     );
-    assert_eq!(editor.ai.work_window_id, Some(work_id));
+    assert_eq!(
+        editor.ai.work_window.get_valid(&editor.window_mgr),
+        Some(work_id)
+    );
     let win = editor.window_mgr.window(work_id).unwrap();
     assert_eq!(
         win.buffer_idx, idx2,
@@ -643,13 +650,177 @@ fn ai_work_window_reused_across_open_file() {
 fn ai_work_window_cleared_on_stale() {
     let mut editor = Editor::new();
     // Set a fake work window ID that doesn't exist.
-    editor.ai.work_window_id = Some(999u32);
+    editor.ai.work_window.set(Some(999u32));
 
     editor.buffers.push(Buffer::new());
     let idx = editor.buffers.len() - 1;
     // Should detect stale reference and fall through to normal logic.
-    let ok = editor.switch_to_buffer_non_conversation(idx);
+    let ok = editor.display_buffer_for_agent(idx);
     assert!(ok);
     // Stale ID should be cleared.
-    assert_ne!(editor.ai.work_window_id, Some(999u32));
+    assert_ne!(
+        editor.ai.work_window.get_valid(&editor.window_mgr),
+        Some(999u32)
+    );
+}
+
+// --- Regression coverage for the reported cascading-splits bug (Part A of
+// the DrivenWindow architecture plan): an agent-driven sequence that
+// alternates BufferKind must reuse ONE driven window throughout, not
+// manufacture a fresh split every time it crosses a kind boundary. Before
+// `display_buffer_for_agent` was generalized past Text/Diff, this exact
+// sequence (open a file, open a KB node, open a shell, open another file)
+// would grow the window count by one on every non-Text/Diff step, because
+// `self.ai.work_window` was never consulted for those kinds.
+
+#[test]
+fn agent_driven_sequence_reuses_single_window_across_buffer_kinds() {
+    let mut editor = Editor::new();
+    // Human already has one window open (buffer 0, the default scratch buffer).
+    let human_window_count = editor.window_mgr.window_count();
+    assert_eq!(human_window_count, 1);
+
+    // 1. Agent "opens a file" — a Text buffer.
+    let mut file_buf = Buffer::new();
+    file_buf.name = "file1.rs".to_string();
+    editor.buffers.push(file_buf);
+    let file1_idx = editor.buffers.len() - 1;
+    assert!(editor.display_buffer_for_agent(file1_idx));
+    // First agent-triggered display creates exactly one driven window.
+    assert_eq!(editor.window_mgr.window_count(), human_window_count + 1);
+    let driven_window_id = editor
+        .ai
+        .work_window
+        .get_valid(&editor.window_mgr)
+        .expect("work window must be recorded after first agent display");
+
+    // 2. Agent "opens a KB node" — a Kb buffer. Must reuse the SAME window,
+    // not split again, even though Kb previously routed through an entirely
+    // different, kind-based code path than Text/Diff.
+    let mut kb_buf = Buffer::new();
+    kb_buf.kind = crate::BufferKind::Kb;
+    kb_buf.name = "*KB: concept:foo*".to_string();
+    editor.buffers.push(kb_buf);
+    let kb_idx = editor.buffers.len() - 1;
+    assert!(editor.display_buffer_for_agent(kb_idx));
+    assert_eq!(
+        editor.window_mgr.window_count(),
+        human_window_count + 1,
+        "displaying a KB node must reuse the driven window, not split"
+    );
+    assert_eq!(
+        editor.ai.work_window.get_valid(&editor.window_mgr),
+        Some(driven_window_id),
+        "the driven window identity must not change across buffer kinds"
+    );
+    assert_eq!(
+        editor
+            .window_mgr
+            .window(driven_window_id)
+            .unwrap()
+            .buffer_idx,
+        kb_idx
+    );
+
+    // 3. Agent "opens a shell" — a Shell buffer (non-agent terminal).
+    let shell_buf = Buffer::new_shell("*Terminal*");
+    editor.buffers.push(shell_buf);
+    let shell_idx = editor.buffers.len() - 1;
+    assert!(editor.display_buffer_for_agent(shell_idx));
+    assert_eq!(
+        editor.window_mgr.window_count(),
+        human_window_count + 1,
+        "displaying a shell must reuse the driven window, not split"
+    );
+    assert_eq!(
+        editor.ai.work_window.get_valid(&editor.window_mgr),
+        Some(driven_window_id)
+    );
+
+    // 4. Agent "opens another file" — back to Text.
+    let mut file2_buf = Buffer::new();
+    file2_buf.name = "file2.rs".to_string();
+    editor.buffers.push(file2_buf);
+    let file2_idx = editor.buffers.len() - 1;
+    assert!(editor.display_buffer_for_agent(file2_idx));
+    assert_eq!(
+        editor.window_mgr.window_count(),
+        human_window_count + 1,
+        "cycling back to Text must still reuse the driven window"
+    );
+    assert_eq!(
+        editor.ai.work_window.get_valid(&editor.window_mgr),
+        Some(driven_window_id)
+    );
+    assert_eq!(
+        editor
+            .window_mgr
+            .window(driven_window_id)
+            .unwrap()
+            .buffer_idx,
+        file2_idx,
+        "driven window should show the most recently displayed buffer"
+    );
+}
+
+#[test]
+fn agent_action_never_commandeers_human_kb_window() {
+    // A human has deliberately navigated a KB pane open in a second window
+    // (e.g. `SPC h k` to read docs). An unrelated agent action (opening a
+    // file) must not silently repurpose that window — BufferKind::Kb is
+    // part of `is_sidebar()` specifically to prevent this.
+    let mut editor = Editor::new();
+    editor.last_layout_area = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 120,
+        height: 40,
+    };
+
+    let mut kb_buf = Buffer::new();
+    kb_buf.kind = crate::BufferKind::Kb;
+    kb_buf.name = "*KB: concept:human-reading*".to_string();
+    editor.buffers.push(kb_buf);
+    let human_kb_idx = editor.buffers.len() - 1;
+
+    // Human splits and puts the KB buffer in the new window, then returns
+    // focus to their original (Text) window — a realistic "reading docs on
+    // the side" layout.
+    let area = editor.default_area();
+    let kb_window_id = editor
+        .window_mgr
+        .split(crate::window::SplitDirection::Vertical, human_kb_idx, area)
+        .expect("split should succeed");
+    let original_window_id = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.id != kb_window_id)
+        .unwrap()
+        .id;
+    editor.window_mgr.set_focused(original_window_id);
+
+    // Agent opens a file — should NOT land in the human's KB window.
+    let mut file_buf = Buffer::new();
+    file_buf.name = "file.rs".to_string();
+    editor.buffers.push(file_buf);
+    let file_idx = editor.buffers.len() - 1;
+    assert!(editor.display_buffer_for_agent(file_idx));
+
+    // The human's KB window must still show the KB buffer, untouched.
+    let kb_window = editor.window_mgr.window(kb_window_id).unwrap();
+    assert_eq!(
+        kb_window.buffer_idx, human_kb_idx,
+        "agent action must not commandeer a human's KB window"
+    );
+
+    // The agent's file must have landed somewhere else (a new split, since
+    // the only other window — the original focused one — is where the
+    // human's own cursor was, and the KB window is protected).
+    assert!(
+        editor
+            .window_mgr
+            .iter_windows()
+            .any(|w| w.buffer_idx == file_idx),
+        "the agent's file must still be displayed somewhere"
+    );
 }

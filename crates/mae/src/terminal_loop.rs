@@ -64,6 +64,15 @@ pub(crate) async fn run_terminal_loop(
     let mut last_theme_name = editor.theme.name.clone();
     let mut tui_dirty = true; // start dirty for initial render
 
+    // Idle-tick tracking (Part B shared idle-dispatch mechanism, ROADMAP #83):
+    // the TUI has no `idle_work()` poller (unlike the GUI's fixed 100ms
+    // `MaeEvent::IdleTick` — see the `drain_kb_preload` comment below for the
+    // pre-existing, still-open gap), but it now drives `Editor::on_idle_tick`
+    // on the same ~100ms cadence via `last_input_time`, updated on every key
+    // and mouse event, mirroring the GUI App struct's field of the same name.
+    let mut last_input_time = std::time::Instant::now();
+    const IDLE_TICK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
     // Frame rate limiting: render at most once per MIN_FRAME_INTERVAL.
     // First event after idle renders immediately (no input latency).
     // Rapid events coalesce into the next frame slot (Alacritty/Helix pattern).
@@ -446,6 +455,12 @@ pub(crate) async fn run_terminal_loop(
             }
         };
 
+        // Idle-tick timer: fires every ~100ms regardless of other pending work,
+        // mirroring the GUI's fixed `idle_interval`. Drives `on_idle_tick` so
+        // idle-triggered UI (e.g. the which-key popup's `which_key_idle_delay`,
+        // ROADMAP #83) works the same in both backends.
+        let idle_tick_timer = tokio::time::sleep(IDLE_TICK_INTERVAL);
+
         tokio::select! {
             _ = frame_timer => {
                 // Frame slot arrived — mark dirty so the render section fires.
@@ -453,6 +468,21 @@ pub(crate) async fn run_terminal_loop(
                 render_pending = false;
                 // Drain sync updates on frame tick (~16ms max latency).
                 crate::sync_broadcast::drain_and_broadcast(editor, sync_broadcaster, Some(collab_command_tx));
+                // Self-healing resync: refresh the open *Messages* buffer's
+                // rope against new log entries — TUI parity with the GUI's
+                // identical `about_to_wait` call (principle #13); the TUI
+                // renderer reads `message_log` live too, so it has the
+                // exact same yank/visual-select/search drift otherwise.
+                editor.sync_open_messages_buffer();
+            }
+            _ = idle_tick_timer => {
+                // Shared idle-dispatch (Part B): which-key idle-delay (ROADMAP #83)
+                // and the Part-D KB-preview hook point. Doesn't call idle_work()
+                // itself (see the drain_kb_preload comment above — that's a
+                // separate, pre-existing gap) — this is scoped to on_idle_tick only.
+                if editor.on_idle_tick(last_input_time.elapsed().as_millis() as u64) {
+                    tui_dirty = true;
+                }
             }
             _ = syntax_reparse_timer => {
                 // Debounce expired — drain pending reparses.
@@ -463,6 +493,7 @@ pub(crate) async fn run_terminal_loop(
                 match maybe_event {
                     Some(Ok(Event::Key(key))) if key.kind == KeyEventKind::Press || key.kind == KeyEventKind::Repeat => {
                         tui_dirty = true;
+                        last_input_time = std::time::Instant::now();
                         editor.last_edit_time = std::time::Instant::now();
                         editor.clear_highlights();
                         if editor.ai.input_lock != mae_core::InputLock::None {
@@ -510,6 +541,7 @@ pub(crate) async fn run_terminal_loop(
                     Some(Ok(Event::Mouse(mouse))) => {
                         use crossterm::event::{MouseButton as XButton, MouseEventKind};
                         tui_dirty = true;
+                        last_input_time = std::time::Instant::now();
                         match mouse.kind {
                             MouseEventKind::Down(XButton::Left) => {
                                 let shift = mouse.modifiers.contains(crossterm::event::KeyModifiers::SHIFT);

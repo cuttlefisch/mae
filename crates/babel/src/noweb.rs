@@ -111,7 +111,7 @@ mod tests {
             header_args: HeaderArgs::default(),
             body: body.to_string(),
             line_range: (0, 2),
-            body_byte_range: (0, body.len()),
+            body_char_range: (0, body.len()),
         }
     }
 

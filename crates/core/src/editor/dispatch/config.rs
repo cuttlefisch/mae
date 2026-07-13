@@ -16,7 +16,7 @@ impl Editor {
                 // the layer clears after one command or on Esc/C-g (handled in
                 // key routing). Base mode is untouched, so it returns to Insert
                 // (non-modal) or Normal (doom) automatically.
-                self.leader_active = true;
+                self.set_leader_active(true);
                 self.clear_which_key_prefix();
                 self.set_status("-- leader -- (Esc cancels)".to_string());
                 // Lifecycle hook: keypad opened (paired with leader-execute /

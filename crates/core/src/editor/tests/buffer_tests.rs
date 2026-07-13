@@ -361,8 +361,8 @@ fn dashboard_replaced_by_agent_shell_when_replaceable() {
     editor.buffers.push(shell_buf);
     let shell_idx = editor.buffers.len() - 1;
 
-    // switch_to_buffer_non_conversation should replace dashboard, not split
-    let ok = editor.switch_to_buffer_non_conversation(shell_idx);
+    // display_buffer_for_agent should replace dashboard, not split
+    let ok = editor.display_buffer_for_agent(shell_idx);
     assert!(ok, "switch should succeed");
 
     // Should still be 1 window (dashboard replaced), not 2 (split)
@@ -398,7 +398,7 @@ fn dashboard_stays_when_not_replaceable() {
     editor.buffers.push(shell_buf);
     let shell_idx = editor.buffers.len() - 1;
 
-    let ok = editor.switch_to_buffer_non_conversation(shell_idx);
+    let ok = editor.display_buffer_for_agent(shell_idx);
     assert!(ok, "switch should succeed");
 
     // Should have 2 windows (split alongside dashboard)
@@ -510,6 +510,139 @@ fn display_buffer_and_focus_preserves_scroll() {
     editor.display_buffer_and_focus(0);
     // Scroll should be restored
     assert_eq!(editor.window_mgr.focused_window().scroll_offset, 5);
+}
+
+#[test]
+fn display_buffer_resets_a_stale_shell_insert_mode() {
+    // Regression guard: `display_buffer` is the root buffer-display
+    // primitive ~35 call sites use directly (open_file among them) — only
+    // `switch_to_buffer`/`display_buffer_and_focus` used to keep
+    // per-buffer mode consistent, so opening a brand-new file while
+    // `Editor.mode` was still `ShellInsert` (e.g. left over from an
+    // earlier terminal interaction — this field is global, not
+    // per-buffer) silently routed every keypress in the new buffer
+    // through the shell keymap instead of its real one, with no visible
+    // symptom beyond "keybindings do nothing."
+    let mut editor = Editor::new();
+    let mut buf2 = Buffer::new();
+    buf2.name = "buf2".to_string();
+    buf2.insert_text_at(0, "hello\n");
+    editor.buffers.push(buf2);
+    let idx = editor.buffers.len() - 1;
+    assert_eq!(editor.buffers[idx].kind, crate::BufferKind::Text);
+
+    editor.mode = Mode::ShellInsert;
+
+    editor.display_buffer(idx);
+
+    assert_eq!(
+        editor.mode,
+        Mode::Normal,
+        "opening a Text buffer must reset a stale ShellInsert mode"
+    );
+}
+
+#[test]
+fn display_buffer_for_agent_resets_stale_mode_when_it_changes_the_focused_window() {
+    // Regression guard: `display_buffer_for_agent` is a THIRD, separate
+    // buffer-display primitive (used by the AI/MCP `open_file` tool,
+    // among others) with the exact same mode-sync gap `display_buffer`
+    // had — several branches directly mutate a window's `buffer_idx`
+    // without ever syncing `Editor.mode`. Exercise the branch where the
+    // reused AI work_window IS the currently-focused window, so the fix
+    // (which conditionally resyncs only when the FOCUSED window's buffer
+    // actually changed) has something to actually correct.
+    let mut editor = Editor::new();
+    let mut buf2 = Buffer::new();
+    buf2.name = "buf2".to_string();
+    buf2.insert_text_at(0, "hello\n");
+    editor.buffers.push(buf2);
+    let idx = editor.buffers.len() - 1;
+
+    let focused_id = editor.window_mgr.focused_id();
+    editor.ai.work_window.set(Some(focused_id));
+    editor.mode = Mode::ShellInsert;
+
+    assert!(editor.display_buffer_for_agent(idx));
+
+    assert_eq!(
+        editor.window_mgr.focused_window().buffer_idx,
+        idx,
+        "sanity: the focused window's buffer must have actually changed"
+    );
+    assert_eq!(
+        editor.mode,
+        Mode::Normal,
+        "the focused window's buffer changed, so a stale ShellInsert mode must reset"
+    );
+}
+
+#[test]
+fn display_buffer_for_agent_does_not_disturb_mode_when_focused_window_is_untouched() {
+    // The flip side: display_buffer_for_agent's whole design intent is to
+    // avoid stealing focus — when it routes the buffer to a DIFFERENT,
+    // non-focused window, the human's mode/focus must be left alone.
+    let mut editor = Editor::new();
+    let mut buf2 = Buffer::new();
+    buf2.name = "buf2".to_string();
+    buf2.insert_text_at(0, "hello\n");
+    editor.buffers.push(buf2);
+    let idx = editor.buffers.len() - 1;
+
+    // Split so a second, non-focused, non-dedicated window exists —
+    // routes through branch 2 ("non-focused, non-dedicated window").
+    let area = editor.default_area();
+    let text_idx = editor.buffers.len();
+    editor.buffers.push(Buffer::new());
+    editor
+        .window_mgr
+        .split(crate::window::SplitDirection::Vertical, text_idx, area)
+        .unwrap();
+    // Re-focus the original (first) window so the split is the non-focused one.
+    let first_win_id = editor
+        .window_mgr
+        .iter_windows()
+        .next()
+        .map(|w| w.id)
+        .unwrap();
+    editor.window_mgr.set_focused(first_win_id);
+    let focused_buf_before = editor.window_mgr.focused_window().buffer_idx;
+
+    editor.mode = Mode::Insert;
+    assert!(editor.display_buffer_for_agent(idx));
+
+    assert_eq!(
+        editor.window_mgr.focused_window().buffer_idx,
+        focused_buf_before,
+        "sanity: the focused window's buffer must be untouched"
+    );
+    assert_eq!(
+        editor.mode,
+        Mode::Insert,
+        "must not disturb mode when the focused window wasn't touched"
+    );
+}
+
+#[test]
+fn display_buffer_does_not_disturb_an_already_normal_mode() {
+    // The flip side: the fix must be a no-op for the overwhelmingly
+    // common case, not force every display_buffer call back to Normal
+    // regardless of what mode the human was legitimately in.
+    let mut editor = Editor::new();
+    let mut buf2 = Buffer::new();
+    buf2.name = "buf2".to_string();
+    buf2.insert_text_at(0, "hello\n");
+    editor.buffers.push(buf2);
+    let idx = editor.buffers.len() - 1;
+
+    editor.mode = Mode::Insert;
+    editor.display_buffer(idx);
+
+    assert_eq!(
+        editor.mode,
+        Mode::Insert,
+        "display_buffer must not clobber a legitimate non-shell mode"
+    );
 }
 
 #[test]

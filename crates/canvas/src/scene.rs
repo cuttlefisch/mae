@@ -9,6 +9,11 @@ pub struct SceneGraph {
     pub edges: Vec<SceneEdge>,
     pub viewport: Viewport,
     pub selection: Option<usize>,
+    /// Index into `nodes` of the node currently under the mouse cursor
+    /// (real-time hover, distinct from `selection` which is click/keyboard-
+    /// driven). `None` when nothing is hovered or the cursor is off the
+    /// graph entirely.
+    pub hovered: Option<usize>,
 }
 
 impl SceneGraph {
@@ -19,12 +24,18 @@ impl SceneGraph {
             edges: Vec::new(),
             viewport: Viewport::default(),
             selection: None,
+            hovered: None,
         }
     }
 
     /// Get the selected node, if any.
     pub fn selected_node(&self) -> Option<&SceneNode> {
         self.selection.and_then(|i| self.nodes.get(i))
+    }
+
+    /// Get the hovered node, if any.
+    pub fn hovered_node(&self) -> Option<&SceneNode> {
+        self.hovered.and_then(|i| self.nodes.get(i))
     }
 }
 
@@ -48,16 +59,47 @@ pub struct SceneNode {
     pub pinned: bool,
 }
 
-/// Kind of scene node — maps to KB node namespaces.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Kind of scene node.
+///
+/// Structurally mirrors `shared_kb::NodeKind` (`shared/kb/src/lib.rs`) —
+/// same 14 variants, same names — WITHOUT `mae-canvas` taking a hard
+/// dependency on `mae-kb` (this crate is deliberately kept a leaf crate with
+/// no dependency on the KB layer; see `kb_graph.rs`'s module docs). Callers
+/// that have a real `shared_kb::NodeKind` convert it via
+/// `mae_core::graph_view_support::shared_kind_to_canvas_kind` (the
+/// conversion lives in `crates/core` — the first crate in the dependency
+/// graph that can see BOTH `mae-kb` and `mae-canvas` — since an inherent
+/// `From` impl can't live in either leaf crate per Rust's orphan rule).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NodeKind {
-    Concept,
-    Note,
+    /// The help index page (there is usually exactly one of these).
+    Index,
+    /// An editor command.
     Command,
+    /// An architectural concept.
+    Concept,
+    /// A keybinding or key sequence documentation entry.
+    Key,
+    /// Free-form user note (org-roam-style).
+    Note,
+    /// Project node.
+    Project,
+    /// Grouping node for organizing related concepts.
+    Category,
+    /// Tutorial lesson.
     Lesson,
-    Scheme,
-    Option,
-    Custom(String),
+    /// Multi-step tutorial track.
+    Tutorial,
+    /// Composite node whose body is cached from component nodes.
+    Meta,
+    /// Paragraph-level sub-node for fine-grained linking.
+    Block,
+    /// Scheme API documentation.
+    SchemeApi,
+    /// Work item with todo_state/priority/etc.
+    Task,
+    /// Configurable query+display node (kanban, backlog, sprint, …).
+    View,
 }
 
 /// Visual style for a node.

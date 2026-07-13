@@ -460,7 +460,7 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 - [ ] **Custom theme filesystem loading** **→ #84**: Only bundled themes work. No user theme search path (~/.config/mae/themes/). Emacs, Vim, Helix all support this.
 - [ ] **Binding ownership audit**: Every kernel-dispatched command should have a kernel default binding. Module bindings are for module-specific commands or user-facing overrides only.
 - [ ] **Ad-hoc solution review**: Thorough code review for hardcoded values, duplicated logic between TUI/GUI, and workarounds that should be proper abstractions — in prep for server-client architecture.
-- [ ] **Which-key idle delay** **→ #83**: Wire `which-key-idle-delay` option to event loop timer (default 0ms = immediate).
+- [x] **Which-key idle delay** **→ #83**: Wire `which-key-idle-delay` option to event loop timer (default 0ms = immediate). Landed as `Editor::on_idle_tick` (`crates/core/src/editor/idle_ops.rs`), a shared GUI+TUI idle-dispatch entry point; `leader_popup_ready()` gates the which-key overlay in `render_common::overlay::active_overlay`.
 - [ ] **Which-key floating popup mode** **→ #83**: Option to render which-key as a centered floating popup (like find-file/command-palette) instead of docked to bottom. Controlled by a `which-key-display` option (`docked` | `floating`).
 - [ ] **Scheme configurability audit**: Audit ALL OptionRegistry entries for missing `config_key` (prevents `:set-save` persistence). Verify every option round-trips through `:set-save` persistence to `init.scm` (the primary config surface). Document full option surface in `:help concept:options` KB node.
 - [x] **Performance regression testing**: Criterion benchmark suite for buffer_ops + crdt_ops. `make bench/bench-save/bench-compare`. *(0829dd5)*
@@ -533,6 +533,60 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   workspace members. Fixed by gating the `mae_sync` usage behind `#[cfg(feature = "crdt")]` via a
   new `decode_crdt_state()` helper, with a non-crdt fallback returning `None` (the call's own
   caller already treats `None` as an expected, handled case).
+- [ ] **GPU-accelerated rendering** (MAE-wide, future): MAE's GUI renderer is confirmed 100%
+  CPU-rasterized today (`skia-safe` has no `gl`/`vulkan` feature enabled; `crates/gui/src/canvas.rs`
+  creates a `surfaces::raster_n32_premul` CPU surface, presented via `softbuffer`) — confirmed while
+  scoping the native KB graph view (2026-07). Standing up a GPU-backed Skia surface is a large,
+  separate, MAE-wide rendering-architecture initiative, not scoped to any single feature.
+- [ ] **Full per-MCP-session window isolation** (candidate for a future ADR): `DrivenWindow`
+  (`crates/core/src/driven_window.rs`, 2026-07) fixes the single-actor/single-session AI/MCP
+  window-cascade bug (repeated new splits during agent tool-call sequences), but two *simultaneous*
+  MCP clients still share one global driven window — `AiState.work_window` is one field on the
+  single process-wide `Editor`, with no session id threaded through `McpToolRequest` →
+  `handle_mcp_request` → `execute_tool`. A narrow gap against principle #10 ("no operation assumes
+  single-client"); needs a session id threaded end-to-end before it can close.
+- [ ] **KB graph view wheel-zoom has no visible effect yet**: mouse-wheel input correctly updates
+  `GraphView.scene.viewport.zoom`/`center` (Phase 4, `ab3bc7ef`), but `flatten_scene_graph`
+  (`crates/core/src/graph_view.rs`) doesn't yet apply a camera transform when drawing nodes — a
+  pre-existing gap from the graph view's first rendering pass (Phase 1), not a Phase 4 regression.
+  Needs a rendering-pipeline follow-up threading window pixel dimensions into the flattener before
+  zoom is visible on screen.
+- [ ] **`kb_graph_view_mode` option for non-ego-network views**: the native KB graph view
+  (`crates/core/src/graph_view.rs`) only renders an ego-network centered on the current node
+  (`kb_graph_default_depth`). A `local`/`related`/`global` mode option was scoped out of the initial
+  build (2026-07), deferred.
+- [ ] **`kb-shortest-path` path-highlighting UI**: `KbStore::shortest_path`
+  (`shared/kb/src/cozo_store/graph.rs`) was fixed in the same pass that built the KB graph view
+  (2026-07 — it previously errored on every call due to a Datalog parser rejection, with zero test
+  coverage), but it's still a reachability check capped at depth 10 that returns only `[from, to]`,
+  not a real path with intermediate nodes. Path-highlighting on top of it isn't buildable until it
+  reconstructs an actual path.
+- [ ] **AI-summary content source for KB hover preview**: `fetch_kb_preview_content`
+  (`crates/core/src/editor/kb_preview_ops.rs`) is a deliberately swappable seam left for a future
+  AI-summarization primitive; only the raw node-body fetch (noise-stripped, truncated) is
+  implemented today.
+- [ ] **KB graph view: per-window viewport isolation** **→ #321**: `GraphView.scene` (one
+  `Viewport`/`SceneGraph` per buffer, not per-window) means a second window opened onto the same
+  `*KB Graph*` buffer (e.g. `:split-vertical` while it's focused) silently hit-tests/renders
+  against whichever window `graph_viewport_pixel_size` finds first. Not introduced/worsened by the
+  2026-07 resize-adaptivity + hover/selection introspection pass; flagged there as a pre-existing
+  limitation.
+- [ ] **KB graph view: expose zoom/pin/click-equivalent actions to Scheme + MCP** **→ #322**:
+  `kb_graph_view_click_at`/`zoom`/`drag_node`/`drag_end` (`crates/core/src/editor/
+  graph_view_ops.rs`) are deliberately GUI-mouse-only — raw pixel coordinates/wheel deltas have no
+  meaningful AI-driven equivalent as-is. If AI-driven zoom/pin is ever needed, it needs an
+  AI-appropriate (non-pixel) API shape, not a direct exposure of these methods.
+- [ ] **mae-daemon: surface version/staleness drift instead of silently serving it** **→ #323**:
+  the daemon (`daemon_mode = "shared"`) is a persistent background service with no mechanism to
+  report its own version/build identity on connect, or to flag that a KB instance's *persisted*
+  data was ingested by an older, possibly behaviorally-different `mae-kb`. A 2026-07 debugging
+  session hit exactly this: an editor-side `mae-kb` ingestion fix (`source_file` stamping) appeared
+  not to work across several rebuild+relaunch cycles because the long-running daemon process (and
+  its already-persisted, stale rows) was never restarted/re-ingested — nothing surfaced that it
+  needed to be. Proposed: version/build reporting in the connection handshake + a visible warning
+  on mismatch (`collab_doctor`/`daemon_status`), NOT auto-restart (the daemon is explicitly
+  multi-client — principle #10 — so silently restarting it out from under other sessions would be
+  actively harmful; this is about detection/surfacing only).
 
 ---
 
@@ -705,6 +759,40 @@ Multi-agent collaboration over MAE's collab infrastructure — enabling AI agent
 - Session detach/resume (tmux-style): persist editor state, reconnect from another terminal
 - Shared P2P sessions with focus handoff: collaborative cursor, presence indicators
 - Granular KB connection/search configuration: users can select/deselect which KB instances are active by default, run scoped queries across a subset of KBs, AI tool parity (e.g. `kb_search` accepts optional `instances` filter param)
+
+</details>
+
+<details>
+<summary>DrivenWindow + native KB graph view + KB hover preview (v0.14.x)</summary>
+
+- **`DrivenWindow`** (`crates/core/src/driven_window.rs`): a first-class "window this actor is
+  driving" primitive with two named strategies — `resolve_persistent` (AI/MCP tool-call sequences
+  that own and reuse one window) and `follow_focus_away_from` (reactive capture of "whichever
+  window last had focus"). Fixes a real, previously-reported bug: AI/MCP agent actions — including
+  external Claude Code connected via the MCP shim — cascading into repeated new window splits
+  instead of reusing one driven window. `AiState.work_window` now uses it; `BufferKind::is_sidebar()`
+  extended to protect `Kb`/`Shell` windows from being commandeered by agent actions.
+- **Shared idle-dispatch mechanism** (`Editor::on_idle_tick`, `crates/core/src/editor/idle_ops.rs`):
+  closes Architecture Debt **#83** (which-key idle delay), wired into both the GUI and TUI event
+  loops; also the trigger for the KB hover preview below.
+- **Native KB graph view** (`BufferKind::Graph`, `crates/core/src/graph_view.rs`,
+  `crates/core/src/editor/graph_view_ops.rs`): an org-roam-ui-style ego-network visualization built
+  on the previously-orphaned `mae-canvas` crate — force-directed layout, background-threaded layout
+  computation (`crates/mae/src/graph_layout_bridge.rs`), follow-current-node auto-recentering,
+  opt-in physics animation (`kb_graph_animate`, default off), mouse click-to-navigate (drives a
+  captured companion window via `DrivenWindow`), drag-to-pin, wheel-zoom (viewport state only — see
+  Architecture Debt), full Scheme + MCP parity (`kb-graph-view-open/close/refresh/set-depth/
+  navigate/select-current`), theme-driven styling (`ui.graph.*` keys, no hardcoded colors), TUI
+  textual fallback reusing the existing KB-view "Neighborhood" rendering. Also added previously-missing
+  Scheme primitives `kb-graph`/`kb-neighborhood`/`kb-related`/`kb-shortest-path` (the MCP tools
+  existed, Scheme didn't) and fixed `CozoKbStore::shortest_path`, which was completely broken (a
+  Datalog parser rejection meant every call errored, with zero test coverage before now).
+- **KB-link hover preview** (`KbPreviewPopup` on `KbView`, `crates/core/src/kb_view.rs` +
+  `crates/core/src/editor/kb_preview_ops.rs`): an LSP-hover-style scrollable popup previewing a KB
+  node's content when the cursor pauses on a `[[id:...]]` link inside a KB-view buffer, driven by
+  the new idle-dispatch mechanism. Scheme + MCP parity (`kb-preview-show`/`kb-preview-dismiss`).
+  Content-fetch (`fetch_kb_preview_content`) is a deliberately swappable seam for a future
+  AI-summary source, not built yet.
 
 </details>
 

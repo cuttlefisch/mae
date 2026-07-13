@@ -4,6 +4,7 @@
       "path": "crates/mae/src/main.rs",
       "dependencies": [
         "mae-ai",
+        "mae-canvas",
         "mae-core",
         "mae-dap",
         "mae-gui",
@@ -126,6 +127,10 @@
           "kind": "mod"
         },
         {
+          "name": "shell_env",
+          "kind": "mod"
+        },
+        {
           "name": "tangle",
           "kind": "mod"
         },
@@ -229,6 +234,7 @@
       "path": "crates/core/src/lib.rs",
       "dependencies": [
         "mae-babel",
+        "mae-canvas",
         "mae-export",
         "mae-format",
         "mae-kb",
@@ -300,6 +306,10 @@
           "kind": "mod"
         },
         {
+          "name": "driven_window",
+          "kind": "mod"
+        },
+        {
           "name": "editor",
           "kind": "mod"
         },
@@ -329,6 +339,14 @@
         },
         {
           "name": "git_status",
+          "kind": "mod"
+        },
+        {
+          "name": "graph_view",
+          "kind": "mod"
+        },
+        {
+          "name": "graph_view_support",
           "kind": "mod"
         },
         {
@@ -639,6 +657,10 @@
         },
         {
           "name": "fuzzy",
+          "kind": "mod"
+        },
+        {
+          "name": "graph_query",
           "kind": "mod"
         },
         {
@@ -2977,6 +2999,22 @@
     {
       "name": "help-reopen",
       "doc": "Reopen the last-closed KB viewer"
+    },
+    {
+      "name": "kb-preview",
+      "doc": "Show a hover preview of the KB link under cursor, or scroll it if already showing (K in a KB buffer)"
+    },
+    {
+      "name": "dismiss-kb-preview-popup",
+      "doc": "Dismiss the KB-link hover preview popup"
+    },
+    {
+      "name": "kb-preview-scroll-down",
+      "doc": "Scroll the KB-link hover preview popup down"
+    },
+    {
+      "name": "kb-preview-scroll-up",
+      "doc": "Scroll the KB-link hover preview popup up"
     },
     {
       "name": "kb-view",

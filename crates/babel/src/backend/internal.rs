@@ -44,7 +44,7 @@ mod tests {
             header_args: HeaderArgs::default(),
             body: "(+ 1 2)".to_string(),
             line_range: (0, 2),
-            body_byte_range: (0, 7),
+            body_char_range: (0, 7),
         };
         let result = b.execute(&block, Path::new("/tmp"), &[]);
         match result {
