@@ -19,6 +19,13 @@ impl Editor {
         executor.compiled.cxx = self.babel_cxx_compiler.clone();
         executor.compiled.cc = self.babel_c_compiler.clone();
         executor.compiled.cxx_std = self.babel_cxx_std.clone();
+        executor.shell_env_enabled = self.babel_inherit_shell_env;
+        // `sessions` is REUSED (persistent across calls, per :session
+        // semantics), not freshly constructed — its shell_env_enabled must
+        // be re-applied here too, not just at SessionManager::default()
+        // time, so a live `:set babel_inherit_shell_env` takes effect for
+        // sessions created afterward even on an already-existing manager.
+        executor.sessions.shell_env_enabled = self.babel_inherit_shell_env;
         executor
     }
 

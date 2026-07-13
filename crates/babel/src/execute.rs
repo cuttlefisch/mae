@@ -31,6 +31,10 @@ pub struct BabelExecutor {
     /// Compile-cache-execute backend for compiled languages (rust/go/c/c++).
     /// Its compiler options are set from the editor's babel options.
     pub compiled: CompiledBackend,
+    /// Whether to merge the user's resolved shell environment (see
+    /// `shell_env`) into spawned processes — set from the editor's
+    /// `babel_inherit_shell_env` option.
+    pub shell_env_enabled: bool,
 }
 
 impl Default for BabelExecutor {
@@ -40,6 +44,7 @@ impl Default for BabelExecutor {
             timeout_secs: 30,
             max_output_bytes: 100 * 1024, // 100KB
             compiled: CompiledBackend::new(),
+            shell_env_enabled: true,
         }
     }
 }
@@ -130,14 +135,16 @@ impl BabelExecutor {
     ) -> ExecResult {
         let (cmd, cmd_args) = resolve_command(language, args);
 
-        let result = Command::new(&cmd)
+        let mut command = Command::new(&cmd);
+        command
             .args(&cmd_args)
             .current_dir(working_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .env("MAE_BABEL", "1")
-            .spawn();
+            .stderr(Stdio::piped());
+        crate::shell_env::apply_to(&mut command, self.shell_env_enabled);
+        command.env("MAE_BABEL", "1");
+        let result = command.spawn();
 
         let mut child = match result {
             Ok(c) => c,
