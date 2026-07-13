@@ -127,6 +127,10 @@
           "kind": "mod"
         },
         {
+          "name": "shell_env",
+          "kind": "mod"
+        },
+        {
           "name": "tangle",
           "kind": "mod"
         },

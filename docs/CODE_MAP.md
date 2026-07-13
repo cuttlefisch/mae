@@ -105,6 +105,7 @@ Source: `crates/babel/src/lib.rs`
 | `results` | mod |
 | `safety` | mod |
 | `session` | mod |
+| `shell_env` | mod |
 | `tangle` | mod |
 | `vars` | mod |
 | `SrcBlock` | struct |

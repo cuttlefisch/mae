@@ -438,6 +438,21 @@ pub(crate) fn compute_org_spans(source: &str) -> Vec<HighlightSpan> {
         }
     }
 
+    // Filter out every org-markup span computed above that falls entirely
+    // inside a #+begin_src/#+end_src block's content. Regex-based inline
+    // markup (bold/italic/code/verbatim/comment/timestamp/etc.) routinely
+    // false-positives inside real source code — e.g. two `=` signs on one
+    // line (`key=lambda x: x`, `plugins = sorted(...)`) look exactly like
+    // an org =verbatim= span, and a `#`-prefixed Python comment at column
+    // 0 looks exactly like an org comment line — corrupting the
+    // language-specific highlighting the src-block injection below adds
+    // for that same range. Mirrors `compute_markup_spans`'s identical
+    // filtering (already applied to the KB/conversation-buffer code path
+    // via `compute_org_style_spans`) — this closes the same gap for the
+    // actual org file-buffer path, which was missing it.
+    let code_ranges = code_block_byte_ranges(source, MarkupFlavor::Org);
+    spans = filter_code_block_spans(spans, &code_ranges);
+
     // Org src block injection: highlight code inside #+begin_src <lang> ... #+end_src
     {
         static SRC_BLOCK: OnceLock<Regex> = OnceLock::new();
@@ -1131,6 +1146,65 @@ mod tests {
         let src = "#+begin_src python\nprint(\"hello\")\n#+end_src\n";
         let spans = compute_org_spans(src);
         assert!(has_span(&spans, "attribute"), "directive span");
+    }
+
+    #[test]
+    fn org_spans_src_block_two_equals_signs_is_not_treated_as_verbatim() {
+        // Regression guard: a source line with two `=` signs (extremely
+        // common in real code — keyword args, assignment, comparisons)
+        // looks exactly like an org =verbatim= span if the org-level
+        // regex passes aren't excluded from code-block content. Before
+        // the fix, this produced a spurious `markup.literal` span running
+        // from the first `=` to the second, corrupting the injected
+        // Python highlighting underneath it.
+        let src = "#+begin_src python\nresult = sorted(xs, key=len)\n#+end_src\n";
+        let spans = compute_org_spans(src);
+        let code_start = src.find("result").unwrap();
+        let code_end = src.find("\n#+end_src").unwrap();
+        assert!(
+            !spans.iter().any(|s| s.theme_key == "markup.literal"
+                && s.byte_start >= code_start
+                && s.byte_end <= code_end),
+            "no org =verbatim= span should be produced inside the code block: {spans:?}"
+        );
+        // The injected Python highlighting itself must survive the filter
+        // (the `=` and `sorted(...)` are still tree-sitter-highlighted).
+        assert!(
+            has_span(&spans, "operator"),
+            "expected injected python operator span (=) to survive filtering: {spans:?}"
+        );
+        assert!(
+            has_span(&spans, "function"),
+            "expected injected python function span (sorted) to survive filtering: {spans:?}"
+        );
+    }
+
+    #[test]
+    fn org_spans_src_block_comment_line_is_not_double_tagged() {
+        // Regression guard for the same class of bug: a `#`-prefixed
+        // comment at column 0 inside a source block looks exactly like an
+        // org comment line (`^#\s.*$`) unless code-block content is
+        // excluded from that regex pass too. Both the (buggy) org-regex
+        // match and the (correct) injected Python tree-sitter highlight
+        // use the same "comment" theme_key, so this doesn't corrupt the
+        // *color* — but before the fix it produced a genuine duplicate/
+        // overlapping span for the same range. Assert exactly one.
+        let src = "#+begin_src python\n# a real python comment\nx = 1\n#+end_src\n";
+        let spans = compute_org_spans(src);
+        let comment_start = src.find("# a real").unwrap();
+        let comment_end = src.find("\nx = 1").unwrap();
+        let comment_spans_in_range = spans
+            .iter()
+            .filter(|s| {
+                s.theme_key == "comment"
+                    && s.byte_start >= comment_start
+                    && s.byte_end <= comment_end
+            })
+            .count();
+        assert_eq!(
+            comment_spans_in_range, 1,
+            "expected exactly one comment span (from Python's injected highlighting only), got: {spans:?}"
+        );
     }
 
     // --- Sort order ---
