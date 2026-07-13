@@ -453,4 +453,15 @@ impl SchemeRuntime {
             move |_args: &[Value]| Ok(Value::Bool(has_redo)),
         );
     }
+
+    /// Snapshot the open KB graph view's introspection state (if any) into
+    /// `SharedState.graph_view_state`, read by `(kb-graph-view-state)`
+    /// (`kb_graph_view.rs`). `GraphView` is transient `Editor`-owned UI
+    /// state with no live handle the Scheme VM can hold onto (unlike
+    /// `kb_store`), so — mirroring `option_values`'s snapshot-into-
+    /// SharedState pattern above — this is refreshed once per eval rather
+    /// than queried live.
+    pub(super) fn inject_graph_view_state(&mut self, editor: &Editor) {
+        self.shared.lock().graph_view_state = editor.kb_graph_view_state();
+    }
 }

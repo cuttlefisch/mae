@@ -25,6 +25,7 @@ impl SchemeRuntime {
         self.inject_buffer_list_and_command_fns(editor);
         self.inject_daemon_capability_fns(editor);
         self.inject_sync_crdt_fns(editor);
+        self.inject_graph_view_state(editor);
         self.inject_shared_state_snapshot(editor, text, mode_str);
     }
 

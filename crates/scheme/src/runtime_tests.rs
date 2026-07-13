@@ -1748,6 +1748,34 @@ fn kb_graph_view_open_defaults_center_and_depth_when_omitted() {
 }
 
 #[test]
+fn kb_graph_view_state_from_scheme_is_false_when_not_open() {
+    let mut rt = new_runtime();
+    let editor = Editor::new();
+
+    rt.inject_editor_state(&editor);
+    let result = rt.eval("(kb-graph-view-state)").unwrap();
+    assert_eq!(result, "#f");
+}
+
+#[test]
+fn kb_graph_view_state_from_scheme_reflects_open_graph() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new(); // seeds the built-in "index" node
+
+    rt.eval(r#"(kb-graph-view-open "index" 1)"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    // Read-only snapshot: refresh the injected state now that the graph
+    // buffer exists, then query it — mirrors `option_values`'s
+    // snapshot-per-eval pattern (see `inject_graph_view_state`'s doc
+    // comment).
+    rt.inject_editor_state(&editor);
+    let result = rt.eval("(kb-graph-view-state)").unwrap();
+    assert!(result.contains("index"), "got: {result}");
+    assert!(!result.starts_with("#f"), "got: {result}");
+}
+
+#[test]
 fn kb_preview_show_from_scheme_populates_popup() {
     let mut rt = new_runtime();
     let mut editor = Editor::new();

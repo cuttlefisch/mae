@@ -9,6 +9,11 @@ pub struct SceneGraph {
     pub edges: Vec<SceneEdge>,
     pub viewport: Viewport,
     pub selection: Option<usize>,
+    /// Index into `nodes` of the node currently under the mouse cursor
+    /// (real-time hover, distinct from `selection` which is click/keyboard-
+    /// driven). `None` when nothing is hovered or the cursor is off the
+    /// graph entirely.
+    pub hovered: Option<usize>,
 }
 
 impl SceneGraph {
@@ -19,12 +24,18 @@ impl SceneGraph {
             edges: Vec::new(),
             viewport: Viewport::default(),
             selection: None,
+            hovered: None,
         }
     }
 
     /// Get the selected node, if any.
     pub fn selected_node(&self) -> Option<&SceneNode> {
         self.selection.and_then(|i| self.nodes.get(i))
+    }
+
+    /// Get the hovered node, if any.
+    pub fn hovered_node(&self) -> Option<&SceneNode> {
+        self.hovered.and_then(|i| self.nodes.get(i))
     }
 }
 

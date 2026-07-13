@@ -249,6 +249,15 @@ struct SharedState {
     /// Snapshot of option values: (name, value_string).
     option_values: Vec<(String, String)>,
 
+    /// Snapshot of the open KB graph view's introspection state (hovered/
+    /// selected node, rendered nodes/edges), if one is open — updated by
+    /// `inject_graph_view_state` (`state_sync_inject_kb.rs`), read by
+    /// `(kb-graph-view-state)`. `GraphView` is transient `Editor`-owned UI
+    /// state with no live handle the Scheme VM can hold (unlike
+    /// `kb_store`), so this is snapshotted once per eval rather than
+    /// queried live.
+    graph_view_state: Option<mae_core::graph_view::GraphViewState>,
+
     /// KB store reference for read-only queries (updated by inject_editor_state).
     kb_store: Option<Arc<dyn mae_kb::KbStore>>,
 

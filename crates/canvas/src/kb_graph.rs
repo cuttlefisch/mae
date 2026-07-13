@@ -110,15 +110,43 @@ pub fn build_kb_graph_positions_only(
         })
         .collect();
 
-    // Add boundary links as dashed red edges
+    // Add boundary links as dashed red edges — one per SOURCE node, not
+    // one per (source, target) pair. A boundary link's target is never
+    // rendered (it's outside the subgraph), so the self-loop below already
+    // discards the target's identity — it's a generic "there's more beyond
+    // this depth" indicator, not a specific connection. Without
+    // deduplicating by source first, a hub node with many out-of-subgraph
+    // links (e.g. a category node connected to hundreds of other nodes)
+    // produced hundreds of visually-identical, perfectly-overlapping stub
+    // edges: pure waste for rendering, and for anything introspecting
+    // `SceneGraph.edges` (e.g. `kb-graph-view-state`) it made an otherwise
+    // small subgraph look like it had hundreds of edges. The count is
+    // preserved in the label instead of silently dropped, so "this node
+    // has N more connections beyond what's shown" is still visible.
+    let mut boundary_by_source: Vec<(&str, usize)> = Vec::new();
     for (src, _tgt) in boundary_links {
-        if let Some(&s) = id_to_idx.get(src.as_str()) {
+        if let Some(entry) = boundary_by_source
+            .iter_mut()
+            .find(|(s, _)| *s == src.as_str())
+        {
+            entry.1 += 1;
+        } else {
+            boundary_by_source.push((src.as_str(), 1));
+        }
+    }
+    for (src, count) in boundary_by_source {
+        if let Some(&s) = id_to_idx.get(src) {
             // Boundary target is outside the graph — just show the outgoing edge
             // pointing to the edge of the source node (no target node rendered)
+            let label = if count > 1 {
+                format!("... (+{count})")
+            } else {
+                "...".to_string()
+            };
             scene_edges.push(SceneEdge {
                 source: s,
                 target: s, // self-loop as visual indicator
-                label: Some("...".to_string()),
+                label: Some(label),
                 style: EdgeStyle {
                     color: "#ff6666".to_string(),
                     width: 1.0,
@@ -133,6 +161,7 @@ pub fn build_kb_graph_positions_only(
         edges: scene_edges,
         viewport: Viewport::default(),
         selection: if n > 0 { Some(0) } else { None },
+        hovered: None,
     }
 }
 
@@ -223,6 +252,50 @@ mod tests {
         // 2 internal + 1 boundary edge
         assert_eq!(graph.edges.len(), 3);
         assert!(graph.edges[2].style.dashed);
+    }
+
+    #[test]
+    fn build_graph_boundary_links_from_the_same_source_collapse_to_one_edge() {
+        // Regression guard: a hub node (e.g. a category node) with MANY
+        // out-of-subgraph links previously produced one visually-identical,
+        // perfectly-overlapping self-loop stub edge PER boundary link —
+        // e.g. 150 boundary links from one source node meant 150 duplicate
+        // edges. Real distinct targets collapse to one edge per source,
+        // since the self-loop already discards target identity.
+        let (nodes, links) = nodes_and_links();
+        let boundary = vec![
+            ("concept:buffer".to_string(), "external:a".to_string()),
+            ("concept:buffer".to_string(), "external:b".to_string()),
+            ("concept:buffer".to_string(), "external:c".to_string()),
+        ];
+        let graph = build_kb_graph(&nodes, &links, &boundary, &[]);
+        // 2 internal + 1 collapsed boundary edge (not 3 boundary edges).
+        assert_eq!(graph.edges.len(), 3);
+        let boundary_edge = &graph.edges[2];
+        assert!(boundary_edge.style.dashed);
+        assert_eq!(boundary_edge.source, boundary_edge.target);
+        assert_eq!(boundary_edge.label.as_deref(), Some("... (+3)"));
+    }
+
+    #[test]
+    fn build_graph_boundary_links_from_different_sources_stay_separate() {
+        let (nodes, links) = nodes_and_links();
+        let boundary = vec![
+            ("concept:buffer".to_string(), "external:a".to_string()),
+            ("concept:window".to_string(), "external:b".to_string()),
+        ];
+        let graph = build_kb_graph(&nodes, &links, &boundary, &[]);
+        // 2 internal + 2 boundary edges (one per distinct source, each
+        // with count 1 so the label stays the plain "...").
+        assert_eq!(graph.edges.len(), 4);
+        let boundary_edges: Vec<_> = graph.edges[2..].to_vec();
+        assert_eq!(boundary_edges.len(), 2);
+        assert!(boundary_edges
+            .iter()
+            .all(|e| e.label.as_deref() == Some("...")));
+        let sources: std::collections::HashSet<_> =
+            boundary_edges.iter().map(|e| e.source).collect();
+        assert_eq!(sources.len(), 2, "each source keeps its own boundary edge");
     }
 
     #[test]

@@ -31,6 +31,17 @@ pub struct GraphView {
     /// Snapshotted from `kb_graph_follow_current_node` on open.
     pub follow_current: bool,
     /// The `mae-canvas` scene graph — nodes, edges, viewport, selection.
+    ///
+    /// @ai-caution: [architecture-debt] One `Viewport`/`SceneGraph` per
+    /// `GraphView` (i.e. per buffer), NOT per-window. If a second window is
+    /// ever opened onto this same graph buffer (e.g. `:split-vertical`
+    /// while it's focused — `WindowManager` allows this), rendering/hit-
+    /// testing/resize-sync all key off whichever window
+    /// `graph_viewport_pixel_size` happens to find first
+    /// (`self.window_mgr.iter_windows().find(...)`), silently misaligning
+    /// the other window. Tracked in
+    /// https://github.com/cuttlefisch/mae/issues/321 — see ROADMAP.md's
+    /// Architecture Debt section.
     pub scene: mae_canvas::scene::SceneGraph,
     /// "The window this actor is driving" (Part A `DrivenWindow`), captured
     /// reactively via `follow_focus_away_from` every time editor focus
@@ -65,6 +76,102 @@ pub struct GraphView {
     /// `ANIMATION_INITIAL_TEMPERATURE` on every fresh (re)populate; not
     /// meaningful when `animating` is false.
     pub anim_temperature: f64,
+}
+
+impl GraphView {
+    /// Structured, read-only snapshot of everything a human or the AI
+    /// agent might want to introspect about the currently-rendered graph:
+    /// which node is hovered/selected, which nodes are rendered at all
+    /// (the current ego-network), and which edges connect them. A PURE
+    /// method — needs nothing from `Editor`, every field it resolves
+    /// already lives on `GraphView`/`SceneGraph` — independently
+    /// unit-testable exactly like `flatten_scene_graph`. Resolves
+    /// scene-array indices (`selection`, `hovered`, edge `source`/
+    /// `target`) to real KB node ids via `scene.nodes[i].id`, so the
+    /// introspection boundary exposes semantic identity, not internal
+    /// array positions. This is the single shared data source for both
+    /// the `kb_graph_view_state` MCP tool (serializes directly) and the
+    /// `(kb-graph-view-state)` Scheme primitive (hand-converted to a
+    /// `Value`, snapshot-injected — see `crates/scheme/src/runtime/
+    /// state_sync_inject_kb.rs`) — parity at the data-shape level.
+    pub fn describe_state(&self) -> GraphViewState {
+        let node_id = |i: usize| self.scene.nodes.get(i).map(|n| n.id.clone());
+        GraphViewState {
+            center_node: self.center_node.clone(),
+            depth: self.depth,
+            kb_instance: self.kb_instance.clone(),
+            follow_current: self.follow_current,
+            selected_node: self.scene.selection.and_then(node_id),
+            hovered_node: self.scene.hovered.and_then(node_id),
+            nodes: self
+                .scene
+                .nodes
+                .iter()
+                .enumerate()
+                .map(|(i, n)| GraphViewNodeState {
+                    id: n.id.clone(),
+                    title: n.label.clone(),
+                    kind: n.kind,
+                    x: n.x,
+                    y: n.y,
+                    pinned: n.pinned,
+                    selected: self.scene.selection == Some(i),
+                    hovered: self.scene.hovered == Some(i),
+                })
+                .collect(),
+            edges: self
+                .scene
+                .edges
+                .iter()
+                .filter_map(|e| {
+                    Some(GraphViewEdgeState {
+                        source_id: node_id(e.source)?,
+                        target_id: node_id(e.target)?,
+                        boundary: e.style.dashed,
+                        label: e.label.clone(),
+                    })
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Structured introspection snapshot of a `GraphView` — see
+/// `GraphView::describe_state`.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GraphViewState {
+    pub center_node: Option<String>,
+    pub depth: usize,
+    pub kb_instance: Option<String>,
+    pub follow_current: bool,
+    pub selected_node: Option<String>,
+    pub hovered_node: Option<String>,
+    pub nodes: Vec<GraphViewNodeState>,
+    pub edges: Vec<GraphViewEdgeState>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GraphViewNodeState {
+    pub id: String,
+    pub title: String,
+    pub kind: mae_canvas::scene::NodeKind,
+    pub x: f64,
+    pub y: f64,
+    pub pinned: bool,
+    pub selected: bool,
+    pub hovered: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GraphViewEdgeState {
+    pub source_id: String,
+    pub target_id: String,
+    /// True for the dashed subgraph-fringe self-loop edges
+    /// `mae_canvas::kb_graph::build_kb_graph` emits (`edge.style.dashed`),
+    /// NOT the same as the unrelated `NodeStyle.highlighted` "starter node"
+    /// flag.
+    pub boundary: bool,
+    pub label: Option<String>,
 }
 
 /// Initial per-tick temperature for a freshly (re)populated animated layout
@@ -226,6 +333,10 @@ pub struct GraphStyleOptions {
     /// Hex fill color per canvas `NodeKind`, indexed via `kind_index`.
     node_colors: [String; 14],
     pub selected_color: String,
+    /// Color for the node currently under the mouse cursor (real-time
+    /// hover — see `mae_canvas::scene::SceneGraph.hovered`). Loses priority
+    /// to `selected_color` when a node is both selected and hovered.
+    pub hover_color: String,
     pub edge_color: String,
     pub boundary_edge_color: String,
     pub background_color: String,
@@ -309,6 +420,7 @@ impl GraphStyleOptions {
             font_size: editor.kb_graph_font_size as f32,
             node_colors,
             selected_color: theme_hex_fg(editor, "ui.graph.node.selected", "#ff9933"),
+            hover_color: theme_hex_fg(editor, "ui.graph.node.hover", "#66ccff"),
             edge_color: theme_hex_fg(editor, "ui.graph.edge", "#6a6d7e"),
             boundary_edge_color: theme_hex_fg(editor, "ui.graph.edge.boundary", "#ff6666"),
             background_color: theme_hex_fg(editor, "ui.graph.background", "#0d0d0d"),
@@ -385,8 +497,14 @@ pub fn flatten_scene_graph(
 
     for (i, node) in scene.nodes.iter().enumerate() {
         let is_selected = scene.selection == Some(i);
+        let is_hovered = scene.hovered == Some(i);
+        // Selected always wins over hovered when both target the same
+        // node — a deliberate action (click/keyboard-select) outranks
+        // incidental mouse position.
         let color = if is_selected {
             style.selected_color.clone()
+        } else if is_hovered {
+            style.hover_color.clone()
         } else {
             style.color_for_kind(node.kind).to_string()
         };
@@ -436,6 +554,7 @@ mod tests {
                 "#a14".into(),
             ],
             selected_color: "#selected".into(),
+            hover_color: "#hovered".into(),
             edge_color: "#edge".into(),
             boundary_edge_color: "#boundary".into(),
             background_color: "#bg".into(),
@@ -565,6 +684,47 @@ mod tests {
     }
 
     #[test]
+    fn flatten_hovered_node_uses_hover_color() {
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("a", 0.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("b", 100.0, 0.0, NodeKind::Note));
+        scene.hovered = Some(1);
+        let style = test_style();
+        let elements = flatten_scene_graph(&scene, &style);
+        match &elements[0] {
+            VisualElement::Circle { fill, .. } => {
+                assert_eq!(fill.as_deref(), Some(style.color_for_kind(NodeKind::Note)));
+            }
+            other => panic!("expected Circle, got {other:?}"),
+        }
+        match &elements[2] {
+            VisualElement::Circle { fill, .. } => {
+                assert_eq!(fill.as_deref(), Some(style.hover_color.as_str()));
+            }
+            other => panic!("expected Circle, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn flatten_selected_and_hovered_same_node_prefers_selected_color() {
+        // Regression guard: a future edit that reorders the if/else-if
+        // priority in `flatten_scene_graph` must not silently make hover
+        // outrank a deliberate selection.
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("a", 0.0, 0.0, NodeKind::Note));
+        scene.selection = Some(0);
+        scene.hovered = Some(0);
+        let style = test_style();
+        let elements = flatten_scene_graph(&scene, &style);
+        match &elements[0] {
+            VisualElement::Circle { fill, .. } => {
+                assert_eq!(fill.as_deref(), Some(style.selected_color.as_str()));
+            }
+            other => panic!("expected Circle, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn flatten_internal_edge_is_solid() {
         let mut scene = SceneGraph::new();
         scene.nodes.push(test_node("a", 0.0, 0.0, NodeKind::Note));
@@ -638,5 +798,97 @@ mod tests {
         let elements = flatten_scene_graph(&scene, &style);
         // Only the node's circle+text — the bogus edge is skipped.
         assert_eq!(elements.len(), 2);
+    }
+
+    #[test]
+    fn describe_state_with_no_nodes_has_no_selected_or_hovered() {
+        let mut gv = GraphView::new();
+        gv.center_node = Some("concept:buffer".to_string());
+        gv.depth = 2;
+        let state = gv.describe_state();
+        assert_eq!(state.center_node.as_deref(), Some("concept:buffer"));
+        assert_eq!(state.depth, 2);
+        assert_eq!(state.selected_node, None);
+        assert_eq!(state.hovered_node, None);
+        assert!(state.nodes.is_empty());
+        assert!(state.edges.is_empty());
+    }
+
+    #[test]
+    fn describe_state_resolves_nodes_edges_selected_and_hovered_to_real_ids() {
+        let mut gv = GraphView::new();
+        gv.center_node = Some("concept:a".to_string());
+        gv.scene
+            .nodes
+            .push(test_node("concept:a", 0.0, 0.0, NodeKind::Concept));
+        gv.scene
+            .nodes
+            .push(test_node("concept:b", 50.0, 0.0, NodeKind::Note));
+        gv.scene.edges.push(SceneEdge {
+            source: 0,
+            target: 1,
+            label: Some("relates-to".to_string()),
+            style: EdgeStyle::default(),
+        });
+        gv.scene.selection = Some(0);
+        gv.scene.hovered = Some(1);
+
+        let state = gv.describe_state();
+
+        assert_eq!(state.selected_node.as_deref(), Some("concept:a"));
+        assert_eq!(state.hovered_node.as_deref(), Some("concept:b"));
+        assert_eq!(state.nodes.len(), 2);
+        assert_eq!(state.nodes[0].id, "concept:a");
+        assert!(state.nodes[0].selected);
+        assert!(!state.nodes[0].hovered);
+        assert_eq!(state.nodes[1].id, "concept:b");
+        assert!(!state.nodes[1].selected);
+        assert!(state.nodes[1].hovered);
+        assert_eq!(state.edges.len(), 1);
+        assert_eq!(state.edges[0].source_id, "concept:a");
+        assert_eq!(state.edges[0].target_id, "concept:b");
+        assert!(!state.edges[0].boundary);
+        assert_eq!(state.edges[0].label.as_deref(), Some("relates-to"));
+    }
+
+    #[test]
+    fn describe_state_marks_dashed_self_loop_edges_as_boundary() {
+        let mut gv = GraphView::new();
+        gv.scene
+            .nodes
+            .push(test_node("concept:a", 0.0, 0.0, NodeKind::Concept));
+        gv.scene.edges.push(SceneEdge {
+            source: 0,
+            target: 0,
+            label: Some("...".to_string()),
+            style: EdgeStyle {
+                color: "#unused".to_string(),
+                width: 1.0,
+                dashed: true,
+            },
+        });
+
+        let state = gv.describe_state();
+
+        assert_eq!(state.edges.len(), 1);
+        assert!(state.edges[0].boundary);
+    }
+
+    #[test]
+    fn describe_state_skips_edges_with_out_of_range_endpoints() {
+        let mut gv = GraphView::new();
+        gv.scene
+            .nodes
+            .push(test_node("concept:a", 0.0, 0.0, NodeKind::Concept));
+        gv.scene.edges.push(SceneEdge {
+            source: 5, // out of range — must not panic, must be skipped
+            target: 0,
+            label: None,
+            style: EdgeStyle::default(),
+        });
+
+        let state = gv.describe_state();
+
+        assert!(state.edges.is_empty());
     }
 }

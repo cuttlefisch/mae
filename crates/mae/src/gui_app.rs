@@ -1123,6 +1123,56 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
                 self.cursor_y = position.y;
                 let (cell_w, cell_h) = self.renderer.cell_dimensions();
                 if cell_w > 0.0 && cell_h > 0.0 {
+                    // Real-time graph-node hover (introspection/UX pass):
+                    // independent of the drag/mouse_pressed/autoselect
+                    // chain below, and deliberately does NOT use
+                    // `focus_window_at` (unlike click-to-focus) — hovering
+                    // must work over an UNFOCUSED Graph window (e.g.
+                    // visible in a split while a text buffer has focus)
+                    // without stealing focus just from moving the mouse.
+                    // Skipped entirely while dragging a node (the drag path
+                    // above already tracks that node explicitly).
+                    if self.graph_drag.is_none() && self.editor.kb_graph_hover_enabled {
+                        let col = (self.cursor_x / cell_w as f64) as u16;
+                        let row = (self.cursor_y / cell_h as f64) as u16;
+                        let win_at_cursor = self.editor.window_mgr.window_at_cell(
+                            col,
+                            row,
+                            self.editor.last_layout_area,
+                        );
+                        let graph_hit = win_at_cursor.and_then(|win_id| {
+                            let buf_idx = self.editor.window_mgr.window(win_id)?.buffer_idx;
+                            let is_graph = self
+                                .editor
+                                .buffers
+                                .get(buf_idx)
+                                .is_some_and(|b| b.kind == mae_core::BufferKind::Graph);
+                            is_graph.then_some(win_id)
+                        });
+                        let changed = if let Some(win_id) = graph_hit {
+                            let rect = self
+                                .editor
+                                .window_mgr
+                                .layout_rects(self.editor.last_layout_area)
+                                .into_iter()
+                                .find(|(id, _)| *id == win_id)
+                                .map(|(_, rect)| rect);
+                            match rect {
+                                Some(rect) => {
+                                    let rel_x = self.cursor_x as f32 - (rect.x as f32 * cell_w);
+                                    let rel_y = self.cursor_y as f32 - (rect.y as f32 * cell_h);
+                                    self.editor.kb_graph_view_hover_at(win_id, rel_x, rel_y)
+                                }
+                                None => false,
+                            }
+                        } else {
+                            self.editor.kb_graph_view_clear_hover()
+                        };
+                        if changed {
+                            self.dirty = true;
+                        }
+                    }
+
                     if let Some(drag) = self.graph_drag.as_mut() {
                         // Part C Phase 4 (drag-to-pin): dragging a graph
                         // node. Recompute the window-relative pixel
@@ -1166,6 +1216,18 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
                             self.dirty = true;
                         }
                     }
+                }
+            }
+            WindowEvent::CursorLeft { .. } => {
+                // The cursor left the OS window's client area entirely —
+                // winit stops delivering CursorMoved altogether after this,
+                // so without an explicit clear here a graph-node hover
+                // highlight could stay stuck lit indefinitely (the
+                // CursorMoved "moved off the graph window onto something
+                // else within the same OS window" case is already covered
+                // above; this handles leaving the OS window's bounds).
+                if self.editor.kb_graph_view_clear_hover() {
+                    self.dirty = true;
                 }
             }
             WindowEvent::MouseInput {
@@ -1280,6 +1342,15 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
         let (cw, ch) = self.renderer.cell_dimensions();
         self.editor.gui_cell_width = cw;
         self.editor.gui_cell_height = ch;
+
+        // Resize adaptivity: self-heals any open KB graph view's cached
+        // viewport size against a full GUI window resize OR an in-editor
+        // split/pane resize, on every event-loop iteration rather than
+        // hooking every individual resize command — see
+        // `Editor::sync_open_graph_viewports`'s doc comment.
+        if self.editor.sync_open_graph_viewports() {
+            self.dirty = true;
+        }
 
         // Self-healing resync: refresh the open *Messages* buffer's rope
         // against new log entries, on every event-loop iteration — see

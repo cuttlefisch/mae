@@ -139,6 +139,42 @@ impl Editor {
         self.mark_full_redraw();
     }
 
+    /// Self-healing resize sync: re-flatten every open `BufferKind::Graph`
+    /// buffer whose cached `scene.viewport` pixel size no longer matches
+    /// the real size of the window currently showing it. Called every GUI
+    /// event-loop iteration from `gui_app.rs`'s `about_to_wait` (before any
+    /// redraw is requested) rather than hooked into every individual
+    /// window-resize/split-resize command — `last_layout_area`/window-tree
+    /// ratios are already correctly updated by those commands (each already
+    /// triggers `mark_full_redraw`/a GUI redraw), so this single check
+    /// self-heals on the next iteration after ANY layout change (full GUI
+    /// window resize, split grow/shrink/balance/maximize, or a sibling
+    /// window closing) without needing to enumerate every call site that
+    /// could change a window's rect. Returns whether anything was
+    /// resynced, so the caller can set its own dirty flag accordingly
+    /// (`graph_view_reflatten`'s `mark_full_redraw` only affects `Editor`'s
+    /// own redraw-level tracking, not `GuiApp.dirty`, which is a separate
+    /// field the GUI event loop manages itself).
+    pub fn sync_open_graph_viewports(&mut self) -> bool {
+        let stale: Vec<usize> = self
+            .buffers
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.kind == BufferKind::Graph)
+            .filter_map(|(i, b)| {
+                let gv = b.graph_view()?;
+                let (w, h) = self.graph_viewport_pixel_size(i);
+                (gv.scene.viewport.width != w as f64 || gv.scene.viewport.height != h as f64)
+                    .then_some(i)
+            })
+            .collect();
+        let changed = !stale.is_empty();
+        for i in stale {
+            self.graph_view_reflatten(i);
+        }
+        changed
+    }
+
     /// Rebuild `GraphView.scene`/`rendered` for `buf_idx` from a fresh
     /// `extract_subgraph` around `center` at `depth` hops, resolving which
     /// KB instance owns `center` via `kb_owner_of` (federated KB scoping —
@@ -263,6 +299,19 @@ impl Editor {
         // fallback corrected on a later refresh.
         self.display_buffer(buf_idx);
         self.populate_graph_buffer(buf_idx, center, depth);
+    }
+
+    /// Structured, read-only introspection snapshot of the open graph view
+    /// (hovered/selected node, every rendered node and edge) — `None` if no
+    /// `BufferKind::Graph` buffer is open. Thin wrapper around
+    /// `GraphView::describe_state`; the single shared data source for both
+    /// the `kb_graph_view_state` MCP tool and the `(kb-graph-view-state)`
+    /// Scheme primitive.
+    pub fn kb_graph_view_state(&self) -> Option<crate::graph_view::GraphViewState> {
+        self.buffers
+            .iter()
+            .find_map(|b| b.graph_view())
+            .map(|gv| gv.describe_state())
     }
 
     /// Close the graph view buffer (mirrors `close_debug_panel`).
@@ -463,6 +512,93 @@ impl Editor {
         node_hit
     }
 
+    /// Real-time mouse hover (introspection/UX pass): update the hovered
+    /// node for the Graph buffer shown in `graph_win_id`, structurally
+    /// mirroring `kb_graph_view_hit_test_and_select` (same
+    /// `graph_scene_point` + `mae_canvas::interaction::hit_test` call), but
+    /// writing `gv.scene.hovered` instead of `gv.scene.selection` and never
+    /// touching selection. Unlike hit-test-and-select (click-triggered,
+    /// rare, always reflattens), this only reflattens when the hovered
+    /// index actually CHANGES — `CursorMoved` fires far more often than
+    /// clicks, and an unconditional reflatten on every pixel of mouse
+    /// jitter would be wasteful. Not idle-debounced (unlike
+    /// `KbPreviewPopup`): a lightweight color-highlight should feel
+    /// immediate, not delayed. No-op (returns `false`) if `graph_win_id`
+    /// doesn't resolve to an open `BufferKind::Graph` window. Returns
+    /// whether the hovered node actually changed, so callers (`gui_app.rs`)
+    /// can set their own dirty flag only when a redraw is actually needed,
+    /// not on every pixel of mouse movement over the graph window.
+    pub fn kb_graph_view_hover_at(
+        &mut self,
+        graph_win_id: WindowId,
+        rel_x: f32,
+        rel_y: f32,
+    ) -> bool {
+        let Some(buf_idx) = self.window_mgr.window(graph_win_id).map(|w| w.buffer_idx) else {
+            return false;
+        };
+        if buf_idx >= self.buffers.len() || self.buffers[buf_idx].kind != BufferKind::Graph {
+            return false;
+        }
+
+        let Some(node_hit) = self.buffers[buf_idx].graph_view().map(|gv| {
+            let (scene_x, scene_y) = graph_scene_point(gv, rel_x, rel_y);
+            mae_canvas::interaction::hit_test(&gv.scene, scene_x, scene_y)
+        }) else {
+            return false;
+        };
+
+        let changed = self.buffers[buf_idx]
+            .graph_view()
+            .is_some_and(|gv| gv.scene.hovered != node_hit);
+        if !changed {
+            return false;
+        }
+        if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+            gv.scene.hovered = node_hit;
+        }
+        self.graph_view_reflatten(buf_idx);
+        true
+    }
+
+    /// Clear the hovered node on whichever `BufferKind::Graph` buffer
+    /// currently has one set (there's normally at most one graph buffer —
+    /// see `ensure_graph_buffer_idx` — so this doesn't need a window/buffer
+    /// argument). Called from `gui_app.rs` both when the cursor moves off
+    /// the graph window onto something else within the same OS window, and
+    /// on `WindowEvent::CursorLeft` (the cursor leaving the OS window's
+    /// client area entirely, after which winit stops delivering
+    /// `CursorMoved` altogether — without this, a hover highlight could
+    /// stay stuck lit indefinitely). Returns whether anything changed, so
+    /// callers can set their own dirty flag accordingly. Reflattens only
+    /// when something was actually cleared.
+    pub fn kb_graph_view_clear_hover(&mut self) -> bool {
+        let Some(buf_idx) = self
+            .buffers
+            .iter()
+            .position(|b| b.graph_view().is_some_and(|gv| gv.scene.hovered.is_some()))
+        else {
+            return false;
+        };
+        if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+            gv.scene.hovered = None;
+        }
+        self.graph_view_reflatten(buf_idx);
+        true
+    }
+
+    /// @ai-caution: [architecture-debt] This method, `kb_graph_view_zoom`,
+    /// `kb_graph_view_drag_node`, and `kb_graph_view_drag_end` are
+    /// deliberately GUI-mouse-only — NOT exposed to Scheme or MCP, unlike
+    /// every other `kb_graph_view_*` method in this file. They take raw
+    /// pixel coordinates / wheel deltas, which have no meaningful AI-driven
+    /// equivalent; the AI-relevant actions ("pick a node," "adjust hop
+    /// radius," "re-center") are already covered by `navigate`/
+    /// `select_current`/`set_depth`/`open`. If AI-driven zoom/pin is ever
+    /// needed, see https://github.com/cuttlefisch/mae/issues/322 for the
+    /// AI-appropriate (non-pixel) API shape to add instead of exposing
+    /// these directly.
+    ///
     /// Mouse click-to-navigate (Part C Phase 1 item 6): `graph_win_id` is
     /// the window a click just landed in (already confirmed by the caller —
     /// `gui_app.rs`'s `handle_mouse_button_pressed`/mouse-release path — to
@@ -638,16 +774,27 @@ impl Editor {
     /// until either the settlement signal drops below
     /// `ANIMATION_SETTLE_EPSILON` or `kb_graph_animate` has been turned off
     /// in the meantime.
+    ///
+    /// `scene` is a background-thread snapshot cloned when the PREVIOUS
+    /// tick was queued, so a hover/selection change that landed after that
+    /// snapshot was taken (e.g. the mouse moved to a new node mid-tick)
+    /// would otherwise be silently reverted by this wholesale scene
+    /// replace — `ForceLayout::step` only ever moves node positions, never
+    /// touches `hovered`/`selection`, so it's always correct to carry the
+    /// CURRENT values forward onto the incoming scene rather than the
+    /// snapshot's stale ones.
     pub fn apply_graph_layout_result(
         &mut self,
         buf_idx: usize,
-        scene: mae_canvas::scene::SceneGraph,
+        mut scene: mae_canvas::scene::SceneGraph,
         max_displacement: Option<f32>,
     ) {
         if buf_idx >= self.buffers.len() || self.buffers[buf_idx].kind != BufferKind::Graph {
             return;
         }
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+            scene.hovered = gv.scene.hovered;
+            scene.selection = gv.scene.selection;
             gv.scene = scene;
         }
         self.graph_view_reflatten(buf_idx);
@@ -949,6 +1096,34 @@ mod tests {
     }
 
     #[test]
+    fn state_is_none_when_no_graph_view_is_open() {
+        let editor = Editor::new();
+        assert!(editor.kb_graph_view_state().is_none());
+    }
+
+    #[test]
+    fn state_reflects_open_graph_and_selection() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "[[concept:window]]");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:window",
+            "Window",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), Some(1));
+
+        let state = editor.kb_graph_view_state().expect("a graph view is open");
+        assert_eq!(state.center_node.as_deref(), Some("concept:buffer"));
+        assert_eq!(state.depth, 1);
+        assert!(
+            state.nodes.len() >= 2,
+            "the center node + its one link should both be present at depth 1"
+        );
+        assert!(state.nodes.iter().any(|n| n.id == "concept:buffer"));
+        assert!(state.nodes.iter().any(|n| n.id == "concept:window"));
+    }
+
+    #[test]
     fn refresh_if_open_repopulates_without_resplitting() {
         let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
         editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
@@ -999,6 +1174,57 @@ mod tests {
         // Must not panic even though no graph buffer/center exists.
         editor.kb_graph_view_refresh_if_open();
         assert!(!editor.buffers.iter().any(|b| b.kind == BufferKind::Graph));
+    }
+
+    #[test]
+    fn sync_open_graph_viewports_is_a_no_op_when_no_graph_buffer_is_open() {
+        let mut editor = Editor::new();
+        assert!(!editor.sync_open_graph_viewports());
+    }
+
+    #[test]
+    fn sync_open_graph_viewports_is_a_no_op_when_size_is_unchanged() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        // kb_graph_view_open already reflattened against the current
+        // last_layout_area/window rect — nothing has changed since.
+        assert!(!editor.sync_open_graph_viewports());
+    }
+
+    #[test]
+    fn sync_open_graph_viewports_reflattens_on_a_simulated_resize() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let (w0, h0) = {
+            let gv = editor.buffers[idx].graph_view().unwrap();
+            (gv.scene.viewport.width, gv.scene.viewport.height)
+        };
+
+        // Simulate a GUI window resize: last_layout_area changes size
+        // (mirrors gui_app.rs's WindowEvent::Resized handler), nothing else
+        // touches the graph buffer.
+        editor.last_layout_area = crate::window::Rect {
+            x: 0,
+            y: 0,
+            width: editor.last_layout_area.width + 40,
+            height: editor.last_layout_area.height + 20,
+        };
+
+        assert!(
+            editor.sync_open_graph_viewports(),
+            "a real size change must be detected and resynced"
+        );
+        let gv = editor.buffers[idx].graph_view().unwrap();
+        assert_ne!(gv.scene.viewport.width, w0);
+        assert_ne!(gv.scene.viewport.height, h0);
+
+        // Calling again with no further size change must be a no-op.
+        assert!(!editor.sync_open_graph_viewports());
     }
 
     #[test]
@@ -1353,6 +1579,153 @@ mod tests {
         editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
         // 999_999 was never allocated by this WindowManager.
         editor.kb_graph_view_click_at(999_999, 0.0, 0.0);
+    }
+
+    // --- Hover introspection (resize-adaptivity + hover/selection
+    // introspection parity pass) ---
+
+    #[test]
+    fn hover_at_a_node_sets_hovered_without_touching_selection() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "[[concept:window]]");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:window",
+            "Window",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), Some(1));
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        let (x, y, selection_before) = {
+            let gv = editor.buffers[graph_idx].graph_view().unwrap();
+            let node = &gv.scene.nodes[0];
+            let (x, y) = scene_to_click_px(gv, node.x, node.y);
+            (x, y, gv.scene.selection)
+        };
+
+        assert!(
+            editor.kb_graph_view_hover_at(graph_win_id, x, y),
+            "hovering a previously-unhovered node must report a change"
+        );
+
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        assert_eq!(gv.scene.hovered, Some(0));
+        assert_eq!(
+            gv.scene.selection, selection_before,
+            "hover must never mutate selection"
+        );
+    }
+
+    #[test]
+    fn hover_miss_clears_hovered() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        editor.buffers[graph_idx]
+            .graph_view_mut()
+            .unwrap()
+            .scene
+            .hovered = Some(0);
+
+        // Hover far away from any node's bounding box — a guaranteed miss.
+        assert!(
+            editor.kb_graph_view_hover_at(graph_win_id, 1_000_000.0, 1_000_000.0),
+            "clearing a previously-hovered node via a miss must report a change"
+        );
+
+        assert_eq!(
+            editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .scene
+                .hovered,
+            None
+        );
+    }
+
+    #[test]
+    fn hover_on_a_non_graph_window_or_stale_window_is_a_harmless_no_op() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let non_graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx != graph_idx)
+            .map(|w| w.id)
+            .expect("opening the graph view should have split");
+
+        // Must not panic, must report no change, and must not touch the
+        // graph's hovered state.
+        assert!(!editor.kb_graph_view_hover_at(non_graph_win_id, 0.0, 0.0));
+        assert!(!editor.kb_graph_view_hover_at(999_999, 0.0, 0.0));
+
+        assert_eq!(
+            editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .scene
+                .hovered,
+            None
+        );
+    }
+
+    #[test]
+    fn clear_hover_returns_false_and_is_a_no_op_when_nothing_is_hovered() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        assert!(!editor.kb_graph_view_clear_hover());
+    }
+
+    #[test]
+    fn clear_hover_clears_and_returns_true_when_something_was_hovered() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        editor.buffers[graph_idx]
+            .graph_view_mut()
+            .unwrap()
+            .scene
+            .hovered = Some(0);
+
+        assert!(editor.kb_graph_view_clear_hover());
+        assert_eq!(
+            editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .scene
+                .hovered,
+            None
+        );
+        // Idempotent: calling again once already clear is a no-op.
+        assert!(!editor.kb_graph_view_clear_hover());
     }
 
     // --- Part C Phase 4: drag-to-pin + wheel-zoom ---
@@ -1876,6 +2249,58 @@ mod tests {
                 .unwrap()
                 .x,
             12345.0
+        );
+    }
+
+    #[test]
+    fn apply_layout_result_preserves_hover_and_selection_across_the_scene_replace() {
+        // Regression guard: apply_graph_layout_result's `scene` argument is
+        // a background-thread snapshot cloned when the PREVIOUS tick was
+        // queued — a hover/selection change that landed after that
+        // snapshot must survive the wholesale `gv.scene = scene` replace,
+        // not get silently reverted.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "[[concept:window]]");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:window",
+            "Window",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), Some(1));
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+
+        // Snapshot the scene BEFORE the hover/selection change below, as
+        // the background layout thread would have.
+        let stale_snapshot = editor.buffers[idx].graph_view().unwrap().scene.clone();
+        assert_eq!(
+            stale_snapshot.hovered, None,
+            "sanity: nothing hovered in the stale snapshot"
+        );
+
+        // Hover/select node 1 AFTER the snapshot was taken (simulating a
+        // mouse move / click landing mid-tick).
+        {
+            let gv = editor.buffers[idx].graph_view_mut().unwrap();
+            gv.scene.hovered = Some(1);
+            gv.scene.selection = Some(1);
+        }
+
+        editor.apply_graph_layout_result(idx, stale_snapshot, Some(0.5));
+
+        let gv = editor.buffers[idx].graph_view().unwrap();
+        assert_eq!(
+            gv.scene.hovered,
+            Some(1),
+            "hover must survive the animation-tick scene replace"
+        );
+        assert_eq!(
+            gv.scene.selection,
+            Some(1),
+            "selection must survive the animation-tick scene replace"
         );
     }
 

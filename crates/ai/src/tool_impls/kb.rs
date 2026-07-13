@@ -716,6 +716,13 @@ pub fn execute_kb_graph_view_select_current(
     Ok("Companion window navigated to the selected node".to_string())
 }
 
+pub fn execute_kb_graph_view_state(
+    editor: &mut Editor,
+    _args: &serde_json::Value,
+) -> Result<String, String> {
+    serde_json::to_string_pretty(&editor.kb_graph_view_state()).map_err(|e| e.to_string())
+}
+
 // --- KB-link hover preview (Part D) ---
 //
 // Each executor calls the SAME `Editor::kb_preview_*` method the Scheme
@@ -1482,6 +1489,26 @@ mod tests {
             .buffers
             .iter()
             .any(|b| b.kind == mae_core::BufferKind::Kb));
+    }
+
+    #[test]
+    fn kb_graph_view_state_is_null_when_no_graph_is_open() {
+        let mut editor = Editor::new();
+        let result = execute_kb_graph_view_state(&mut editor, &serde_json::json!({})).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(v.is_null());
+    }
+
+    #[test]
+    fn kb_graph_view_state_reflects_open_graph() {
+        let mut editor = Editor::new();
+        execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index", "depth": 1}))
+            .unwrap();
+        let result = execute_kb_graph_view_state(&mut editor, &serde_json::json!({})).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["center_node"], "index");
+        assert_eq!(v["depth"], 1);
+        assert!(v["nodes"].as_array().is_some_and(|n| !n.is_empty()));
     }
 
     #[test]

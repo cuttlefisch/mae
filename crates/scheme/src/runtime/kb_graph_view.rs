@@ -124,4 +124,78 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
             Ok(Value::Void)
         },
     );
+
+    // (kb-graph-view-state) → #f if no graph view is open, else
+    // (center depth kb-instance follow-current? selected-node hovered-node
+    //  nodes edges)
+    //   nodes: list of (id title kind x y pinned? selected? hovered?)
+    //   edges: list of (source-id target-id boundary? label-or-#f)
+    // Read-only, so — unlike every other primitive in this file — this
+    // does NOT queue a GraphViewIntent; it reads the SharedState snapshot
+    // `inject_graph_view_state` (`state_sync_inject_kb.rs`) populates fresh
+    // before every eval, the same snapshot-not-live pattern `get-option`
+    // uses for `option_values`. Kept in this file (not `kb_queries.rs`)
+    // alongside its 6 driving siblings so the whole `kb-graph-view-*`
+    // family stays discoverable in one place.
+    let s = shared.clone();
+    vm.register_fn(
+        "kb-graph-view-state",
+        "Structured introspection snapshot of the open native KB graph view: which node is hovered, which is selected, every node currently rendered (the ego-network), and every edge/link shown between them. Returns #f if no graph view is open. Returns (center depth kb-instance follow-current? selected-node hovered-node nodes edges) — nodes: list of (id title kind x y pinned? selected? hovered?); edges: list of (source-id target-id boundary? label-or-#f).",
+        Arity::Fixed(0),
+        move |_args: &[Value]| {
+            let state = s.lock();
+            let Some(gv) = state.graph_view_state.as_ref() else {
+                return Ok(Value::Bool(false));
+            };
+
+            let opt_string = |v: &Option<String>| {
+                v.clone().map(Value::string).unwrap_or(Value::Bool(false))
+            };
+
+            let nodes = Value::list(
+                gv.nodes
+                    .iter()
+                    .map(|n| {
+                        Value::list(vec![
+                            Value::string(n.id.clone()),
+                            Value::string(n.title.clone()),
+                            Value::string(format!("{:?}", n.kind)),
+                            Value::Float(n.x),
+                            Value::Float(n.y),
+                            Value::Bool(n.pinned),
+                            Value::Bool(n.selected),
+                            Value::Bool(n.hovered),
+                        ])
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            let edges = Value::list(
+                gv.edges
+                    .iter()
+                    .map(|e| {
+                        Value::list(vec![
+                            Value::string(e.source_id.clone()),
+                            Value::string(e.target_id.clone()),
+                            Value::Bool(e.boundary),
+                            e.label
+                                .clone()
+                                .map(Value::string)
+                                .unwrap_or(Value::Bool(false)),
+                        ])
+                    })
+                    .collect::<Vec<_>>(),
+            );
+
+            Ok(Value::list(vec![
+                opt_string(&gv.center_node),
+                Value::Int(gv.depth as i64),
+                opt_string(&gv.kb_instance),
+                Value::Bool(gv.follow_current),
+                opt_string(&gv.selected_node),
+                opt_string(&gv.hovered_node),
+                nodes,
+                edges,
+            ]))
+        },
+    );
 }
