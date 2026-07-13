@@ -12,6 +12,7 @@ pub mod noweb;
 pub mod results;
 pub mod safety;
 pub mod session;
+pub mod shell_env;
 pub mod tangle;
 pub mod vars;
 
