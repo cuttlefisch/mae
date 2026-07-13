@@ -565,6 +565,28 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   (`crates/core/src/editor/kb_preview_ops.rs`) is a deliberately swappable seam left for a future
   AI-summarization primitive; only the raw node-body fetch (noise-stripped, truncated) is
   implemented today.
+- [ ] **KB graph view: per-window viewport isolation** **→ #321**: `GraphView.scene` (one
+  `Viewport`/`SceneGraph` per buffer, not per-window) means a second window opened onto the same
+  `*KB Graph*` buffer (e.g. `:split-vertical` while it's focused) silently hit-tests/renders
+  against whichever window `graph_viewport_pixel_size` finds first. Not introduced/worsened by the
+  2026-07 resize-adaptivity + hover/selection introspection pass; flagged there as a pre-existing
+  limitation.
+- [ ] **KB graph view: expose zoom/pin/click-equivalent actions to Scheme + MCP** **→ #322**:
+  `kb_graph_view_click_at`/`zoom`/`drag_node`/`drag_end` (`crates/core/src/editor/
+  graph_view_ops.rs`) are deliberately GUI-mouse-only — raw pixel coordinates/wheel deltas have no
+  meaningful AI-driven equivalent as-is. If AI-driven zoom/pin is ever needed, it needs an
+  AI-appropriate (non-pixel) API shape, not a direct exposure of these methods.
+- [ ] **mae-daemon: surface version/staleness drift instead of silently serving it** **→ #323**:
+  the daemon (`daemon_mode = "shared"`) is a persistent background service with no mechanism to
+  report its own version/build identity on connect, or to flag that a KB instance's *persisted*
+  data was ingested by an older, possibly behaviorally-different `mae-kb`. A 2026-07 debugging
+  session hit exactly this: an editor-side `mae-kb` ingestion fix (`source_file` stamping) appeared
+  not to work across several rebuild+relaunch cycles because the long-running daemon process (and
+  its already-persisted, stale rows) was never restarted/re-ingested — nothing surfaced that it
+  needed to be. Proposed: version/build reporting in the connection handshake + a visible warning
+  on mismatch (`collab_doctor`/`daemon_status`), NOT auto-restart (the daemon is explicitly
+  multi-client — principle #10 — so silently restarting it out from under other sessions would be
+  actively harmful; this is about detection/surfacing only).
 
 ---
 

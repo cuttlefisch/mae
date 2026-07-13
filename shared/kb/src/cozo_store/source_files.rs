@@ -5,6 +5,7 @@
 
 use super::util::{btree_params, cozo_err, dv_str};
 use super::*;
+use std::collections::HashMap;
 
 impl CozoKbStore {
     /// Persist all nodes from an in-memory `KnowledgeBase` into this CozoDB store.
@@ -101,6 +102,37 @@ impl CozoKbStore {
         )
         .map_err(cozo_err)?;
         Ok(node_ids)
+    }
+    /// Build a reverse index (node id -> source file path) from the
+    /// `source_files` relation.
+    ///
+    /// The `nodes` relation itself has no `source_file` column — only this
+    /// file->node_ids mapping persists it, written by `record_source_file`
+    /// during ingest. `load_all` uses this to reconstruct each `Node`'s
+    /// `source_file` at load time; without it, `source_file` is `None` for
+    /// every node loaded from a fresh store open (correct only transiently,
+    /// in the same process that just ingested it), and `kb_node_source_file`
+    /// reports "No source file" for nodes whose backing file plainly exists
+    /// on disk. See #323-adjacent investigation, 2026-07-13.
+    pub fn source_file_by_node_id(&self) -> Result<HashMap<String, PathBuf>, KbStoreError> {
+        let result = self
+            .run_immut(r#"?[file_path, node_ids_json] := *source_files{file_path, node_ids_json}"#)
+            .map_err(cozo_err)?;
+        let mut map = HashMap::new();
+        for row in &result.rows {
+            let Some(file_path) = row.first().and_then(|v| v.get_str()) else {
+                continue;
+            };
+            let Some(json) = row.get(1).and_then(|v| v.get_str()) else {
+                continue;
+            };
+            let ids: Vec<String> = serde_json::from_str(json).unwrap_or_default();
+            let path = PathBuf::from(file_path);
+            for id in ids {
+                map.insert(id, path.clone());
+            }
+        }
+        Ok(map)
     }
     /// List all tracked source files with their content hashes.
     pub fn list_source_files(&self) -> Result<Vec<(String, String, i64)>, KbStoreError> {

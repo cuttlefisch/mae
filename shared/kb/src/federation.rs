@@ -410,6 +410,20 @@ impl FederatedKb {
 }
 
 /// How to ingest an external KB directory.
+///
+/// @ai-caution: [architecture-debt] `Incremental` skips re-parsing (and
+/// re-stamping any per-node metadata a code fix might newly add, e.g. the
+/// `source_file` field — see the 2026-07 fix in `org.rs`'s `ingest_org_dir`
+/// and this file's `import_org_dir`/`import_org_dir_to_store`) for any file
+/// whose content hash hasn't changed since the last import. A node
+/// persisted by an older version of this ingestion logic stays exactly as
+/// stale as it was until a `Full` reimport runs — restarting the daemon
+/// process alone does NOT fix this, since it just reloads the same
+/// persisted rows. `Full` is the enum default, but callers reaching this
+/// through anything that explicitly requests `Incremental` won't get the
+/// fix. Tracked more broadly (the daemon has no way to surface "this
+/// instance's persisted data predates the code currently running") in
+/// https://github.com/cuttlefisch/mae/issues/323.
 #[derive(Debug, Clone, Default)]
 pub enum IngestMode {
     /// Re-parse all files. Existing nodes updated, deleted files' nodes removed.

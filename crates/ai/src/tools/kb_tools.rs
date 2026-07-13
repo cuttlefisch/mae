@@ -444,14 +444,30 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             description: "Re-import a registered KB instance from its org directory. Use after editing org files to refresh the graph. Returns updated import stats and health metrics.".into(),
             parameters: ToolParameters {
                 schema_type: "object".into(),
-                properties: HashMap::from([(
-                    "name".into(),
-                    ToolProperty {
-                        prop_type: "string".into(),
-                        description: "Name or UUID of the instance to reimport".into(),
-                        enum_values: None,
-                    },
-                )]),
+                properties: HashMap::from([
+                    (
+                        "name".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Name or UUID of the instance to reimport".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "mode".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "Ingest mode (default: full). \"incremental\" only \
+                                re-parses files whose content hash changed since the last \
+                                import — it will NOT pick up a per-node metadata fix (e.g. a \
+                                newly-added source_file stamp) for files whose content is \
+                                unchanged. Use \"full\" (the default) after any ingestion-logic \
+                                change, not just after editing org files."
+                                .into(),
+                            enum_values: Some(vec!["full".into(), "incremental".into()]),
+                        },
+                    ),
+                ]),
                 required: vec!["name".into()],
             },
             permission: Some(PermissionTier::Shell),
