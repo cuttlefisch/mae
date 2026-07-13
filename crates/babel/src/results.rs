@@ -130,7 +130,9 @@ pub fn build_results_text(name: Option<&str>, formatted: &str) -> String {
 }
 
 /// Calculate the insertion point and deletion range for results.
-/// Returns `(delete_start_byte, delete_end_byte, insert_text)`.
+/// Returns `(delete_start_char, delete_end_char, insert_text)` — CHARACTER
+/// offsets, matching `Buffer::insert_text_at`/`delete_range`'s `ropey`-backed
+/// char-index API (not byte offsets — see `line_char_offset_of`).
 /// If no existing results block, `delete_start == delete_end` (pure insertion).
 pub fn compute_results_edit(
     source: &str,
@@ -143,16 +145,16 @@ pub fn compute_results_edit(
     if let Some((results_start, results_end)) = find_results_block(source, block_end_line + 1) {
         // Replace existing results block
         let lines: Vec<&str> = source.lines().collect();
-        let del_start = line_byte_offset_of(source, results_start);
+        let del_start = line_char_offset_of(source, results_start);
         let del_end = if results_end + 1 < lines.len() {
-            line_byte_offset_of(source, results_end + 1)
+            line_char_offset_of(source, results_end + 1)
         } else {
-            source.len()
+            source.chars().count()
         };
         (del_start, del_end, format!("{}\n", results_text))
     } else {
         // Insert after #+end_src line
-        let insert_at = line_byte_offset_of(source, block_end_line + 1);
+        let insert_at = line_char_offset_of(source, block_end_line + 1);
         (insert_at, insert_at, format!("\n{}\n", results_text))
     }
 }
@@ -177,15 +179,23 @@ pub fn read_results_content(source: &str, results_start: usize, results_end: usi
     content.join("\n")
 }
 
-fn line_byte_offset_of(source: &str, line: usize) -> usize {
+/// Compute the CHARACTER offset (not byte offset) where line `line` starts
+/// in `source`. `Buffer::insert_text_at`/`delete_range` index into a `ropey`
+/// rope by character, so a byte offset here silently drifts the target
+/// position forward by however many extra UTF-8 bytes any multi-byte
+/// character earlier in the buffer contributes — landing mid-word in
+/// whatever text follows, and (since the drifted position is never where
+/// `find_results_block` looks next time) making every re-execution insert a
+/// fresh, again-mis-positioned block instead of replacing the old one.
+fn line_char_offset_of(source: &str, line: usize) -> usize {
     let mut offset = 0;
     for (i, l) in source.lines().enumerate() {
         if i == line {
             return offset;
         }
-        offset += l.len() + 1;
+        offset += l.chars().count() + 1;
     }
-    offset.min(source.len())
+    offset.min(source.chars().count())
 }
 
 #[cfg(test)]
@@ -253,6 +263,86 @@ mod tests {
         let (del_start, del_end, text) = compute_results_edit(src, 2, None, ": new");
         assert!(del_start < del_end); // deletion range
         assert!(text.contains(": new"));
+    }
+
+    /// Apply a `(del_start, del_end, insert_text)` edit to `source` using
+    /// CHARACTER offsets — mirroring `Buffer::delete_range`/`insert_text_at`
+    /// (ropey char-index semantics), which is what every real caller
+    /// (`babel_run_block`, `babel_execute_all`) actually applies these
+    /// offsets to.
+    fn apply_char_edit(source: &str, del_start: usize, del_end: usize, insert: &str) -> String {
+        let mut chars: Vec<char> = source.chars().collect();
+        chars.splice(del_start..del_end, insert.chars());
+        chars.into_iter().collect()
+    }
+
+    #[test]
+    fn compute_edit_new_results_lands_right_after_end_src_with_multibyte_content_earlier() {
+        // Regression guard: `line_char_offset_of` used to compute a BYTE
+        // offset (`l.len()`) and hand it to a char-offset consumer. Any
+        // multi-byte character earlier in the buffer (em dash, smart quotes,
+        // checkmark, accented letter — all plausible in real org notes) then
+        // drifted the insertion point forward by the extra byte count,
+        // landing the results block mid-word somewhere past the intended
+        // spot instead of directly after `#+end_src`.
+        let src = "* Café — Notes\nSome unicode: \u{2192} \u{2713} \u{201c}quotes\u{201d}\n\n\
+                   #+begin_src python\nprint(1)\n#+end_src\n\n** Downstream Section\n";
+        let block_end_line = src.lines().position(|l| l.trim() == "#+end_src").unwrap();
+        let (del_start, del_end, insert_text) =
+            compute_results_edit(src, block_end_line, None, ": 1");
+        assert_eq!(
+            del_start, del_end,
+            "pure insertion, no existing results block"
+        );
+
+        let result = apply_char_edit(src, del_start, del_end, &insert_text);
+        assert!(
+            result.contains("#+end_src\n\n#+RESULTS:\n: 1\n\n** Downstream Section"),
+            "results must land directly after #+end_src, and the following heading \
+             must survive completely intact — got:\n{result}"
+        );
+        assert!(
+            result.contains("** Downstream Section"),
+            "the heading must not be split mid-word — got:\n{result}"
+        );
+    }
+
+    #[test]
+    fn compute_edit_replaces_rather_than_stacks_on_second_execution() {
+        // Regression guard: bug #2 (stacking output) was a *consequence* of
+        // bug #1 — because the first execution landed at a drifted (wrong)
+        // position, `find_results_block` never found it on the next run, so
+        // every re-execution fell into the "insert new" branch instead of
+        // "replace existing", and results piled up indefinitely. Exercises
+        // the full apply -> reparse -> apply-again cycle a real user's
+        // repeated block execution goes through.
+        let src = "* Café notes\n\n#+begin_src python\nprint(1)\n#+end_src\n";
+        let block_end_line = src.lines().position(|l| l.trim() == "#+end_src").unwrap();
+
+        let (s1, e1, t1) = compute_results_edit(src, block_end_line, None, ": 1");
+        let after_first = apply_char_edit(src, s1, e1, &t1);
+        assert_eq!(
+            after_first.matches("#+RESULTS:").count(),
+            1,
+            "exactly one results block after the first execution"
+        );
+
+        // Block itself hasn't moved (only content after it did), so
+        // block_end_line is still valid against the mutated source.
+        let (s2, e2, t2) = compute_results_edit(&after_first, block_end_line, None, ": 2");
+        assert!(
+            s2 < e2,
+            "second execution must find and replace the existing results block, \
+             not append a new one"
+        );
+        let after_second = apply_char_edit(&after_first, s2, e2, &t2);
+        assert_eq!(
+            after_second.matches("#+RESULTS:").count(),
+            1,
+            "still exactly one results block after re-executing — got:\n{after_second}"
+        );
+        assert!(after_second.contains(": 2"));
+        assert!(!after_second.contains(": 1"));
     }
 
     #[test]

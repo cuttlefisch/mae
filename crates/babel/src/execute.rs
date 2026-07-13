@@ -377,7 +377,7 @@ mod tests {
             header_args: HeaderArgs::default(),
             body: "echo hello".to_string(),
             line_range: (0, 2),
-            body_byte_range: (0, 10),
+            body_char_range: (0, 10),
         };
         let result = executor.execute_block(&block, Path::new("/tmp"), &[]);
         match result {
@@ -395,7 +395,7 @@ mod tests {
             header_args: HeaderArgs::default(),
             body: "print(2 + 2)".to_string(),
             line_range: (0, 2),
-            body_byte_range: (0, 12),
+            body_char_range: (0, 12),
         };
         let result = executor.execute_block(&block, Path::new("/tmp"), &[]);
         match result {
@@ -425,7 +425,7 @@ mod tests {
             // 64-byte limit for the bounded-read path to actually exercise.
             body: "yes x | head -c 1000000".to_string(),
             line_range: (0, 2),
-            body_byte_range: (0, 20),
+            body_char_range: (0, 20),
         };
         let result = executor.execute_block(&block, Path::new("/tmp"), &[]);
         match result {
@@ -452,7 +452,7 @@ mod tests {
             header_args: HeaderArgs::default(),
             body: body.to_string(),
             line_range: (0, 2),
-            body_byte_range: (0, body.len()),
+            body_char_range: (0, body.len()),
         }
     }
 
@@ -539,7 +539,7 @@ mod tests {
             header_args: args,
             body: "echo should not run".to_string(),
             line_range: (0, 2),
-            body_byte_range: (0, 0),
+            body_char_range: (0, 0),
         };
         let result = executor.execute_block(&block, Path::new("/tmp"), &[]);
         match result {

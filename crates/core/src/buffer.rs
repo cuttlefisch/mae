@@ -352,8 +352,9 @@ pub struct BabelEditContext {
     pub source_buffer: usize,
     /// Line range of the src block in the source buffer (begin_src..end_src, inclusive).
     pub block_line_range: (usize, usize),
-    /// Byte range of the body within the source buffer.
-    pub body_byte_range: (usize, usize),
+    /// Character range (ropey char-index, not byte offset) of the body
+    /// within the source buffer.
+    pub body_char_range: (usize, usize),
     /// Block name (for status display).
     pub block_name: Option<String>,
     /// Language (for restoring context).
@@ -1328,7 +1329,7 @@ impl Buffer {
         self.sync_insert(offset, text);
         let end_line = self
             .rope
-            .char_to_line((offset + text.len()).min(self.rope.len_chars()));
+            .char_to_line((offset + text.chars().count()).min(self.rope.len_chars()));
         for line in start_line..=end_line {
             self.changed_lines.insert(line);
         }
