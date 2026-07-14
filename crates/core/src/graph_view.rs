@@ -404,6 +404,10 @@ pub struct GraphStyleOptions {
     /// Absolute ceiling (logical px) on the FINAL render radius. Mirrors
     /// `kb_graph_node_max_radius`.
     pub node_max_radius: f32,
+    /// Below this `viewport.zoom` level, node labels are hidden (the
+    /// `Circle` is always still pushed — nodes stay visible/clickable
+    /// regardless). Mirrors `kb_graph_label_zoom_threshold`.
+    pub label_zoom_threshold: f32,
     /// Hex fill color per canvas `NodeKind`, indexed via `kind_index`.
     node_colors: [String; 14],
     pub selected_color: String,
@@ -539,6 +543,7 @@ impl GraphStyleOptions {
             size_scales_with_zoom: editor.kb_graph_node_size_scales_with_zoom,
             node_min_radius: editor.kb_graph_node_min_radius as f32,
             node_max_radius: editor.kb_graph_node_max_radius as f32,
+            label_zoom_threshold: editor.kb_graph_label_zoom_threshold,
             node_colors,
             selected_color: theme_hex_fg(editor, "ui.graph.node.selected", "#ff9933"),
             hover_color: theme_hex_fg(editor, "ui.graph.node.hover", "#66ccff"),
@@ -638,6 +643,46 @@ pub fn node_render_radius(style: &GraphStyleOptions, degree: u32, zoom: f64) -> 
 /// label `Text` element. Pure function — no `Editor`/theme access, so it's
 /// independently unit-testable against a hand-built `SceneGraph` +
 /// `Viewport` + `GraphStyleOptions`.
+/// Generous fixed screen-space margin (px) added to a node's AABB before
+/// culling, to account for its label — text draws to the right of the
+/// node and this function has no font-metrics access to measure its real
+/// width. Deliberately generous: a false negative here (culling something
+/// actually visible) is a correctness bug, a false positive (keeping
+/// something that's actually off-screen) just costs one extra draw call.
+const LABEL_CULL_MARGIN_PX: f32 = 220.0;
+
+/// Whether a node's screen-space AABB (circle + the generous label margin
+/// on its right side) doesn't intersect `[0, width] x [0, height]` at
+/// all — if so, its `Circle`/`Text` are skipped entirely by
+/// `flatten_scene_graph`. Never affects hit-testing/keyboard-nav/
+/// `describe_state` — those operate on `scene`/`Viewport` directly, never
+/// on this function's `VisualElement` output.
+fn node_is_offscreen(scx: f32, scy: f32, r: f32, viewport: &mae_canvas::scene::Viewport) -> bool {
+    let right = scx + r + LABEL_CULL_MARGIN_PX;
+    let left = scx - r;
+    let top = scy - r;
+    let bottom = scy + r;
+    right < 0.0 || left > viewport.width as f32 || bottom < 0.0 || top > viewport.height as f32
+}
+
+/// Whether an edge's two screen-space endpoints are BOTH off-screen on the
+/// SAME side — the only case it's safe to cull. Deliberately conservative:
+/// a long edge with both endpoints off-screen on DIFFERENT sides might
+/// still cross the visible viewport, so it's never culled by this check
+/// (no full segment-vs-rect test — that correctness margin is worth more
+/// than the extra draw calls saved).
+fn edge_is_offscreen_same_side(
+    x1: f32,
+    y1: f32,
+    x2: f32,
+    y2: f32,
+    viewport: &mae_canvas::scene::Viewport,
+) -> bool {
+    let w = viewport.width as f32;
+    let h = viewport.height as f32;
+    (x1 < 0.0 && x2 < 0.0) || (x1 > w && x2 > w) || (y1 < 0.0 && y2 < 0.0) || (y1 > h && y2 > h)
+}
+
 pub fn flatten_scene_graph(
     scene: &mae_canvas::scene::SceneGraph,
     viewport: &mae_canvas::scene::Viewport,
@@ -683,6 +728,9 @@ pub fn flatten_scene_graph(
                 sy1 - style.node_radius as f64,
             )
         };
+        if edge_is_offscreen_same_side(sx1 as f32, sy1 as f32, sx2 as f32, sy2 as f32, viewport) {
+            continue;
+        }
         elements.push(VisualElement::Line {
             x1: sx1 as f32,
             y1: sy1 as f32,
@@ -710,6 +758,9 @@ pub fn flatten_scene_graph(
         let (scx, scy) = scene_to_viewport(viewport, node.x, node.y);
         let degree = degrees.get(i).copied().unwrap_or(0);
         let r = node_render_radius(style, degree, viewport.zoom);
+        if node_is_offscreen(scx as f32, scy as f32, r, viewport) {
+            continue;
+        }
         elements.push(VisualElement::Circle {
             cx: scx as f32,
             cy: scy as f32,
@@ -717,13 +768,19 @@ pub fn flatten_scene_graph(
             fill: Some(color.clone()),
             stroke: Some(style.edge_color.clone()),
         });
-        elements.push(VisualElement::Text {
-            x: scx as f32 + r + 4.0,
-            y: scy as f32,
-            text: node.label.clone(),
-            font_size: style.font_size,
-            color,
-        });
+        // Label LOD: below the configured zoom threshold, skip the Text
+        // element to reduce clutter/draw calls on dense graphs — the
+        // Circle above is ALWAYS pushed, so the node stays visible and
+        // clickable regardless.
+        if viewport.zoom >= style.label_zoom_threshold as f64 {
+            elements.push(VisualElement::Text {
+                x: scx as f32 + r + 4.0,
+                y: scy as f32,
+                text: node.label.clone(),
+                font_size: style.font_size,
+                color,
+            });
+        }
     }
 
     elements
@@ -749,6 +806,10 @@ mod tests {
             size_scales_with_zoom: true,
             node_min_radius: 4.0,
             node_max_radius: 36.0,
+            // Below Viewport::default()'s zoom (1.0), so every pre-Phase-D
+            // test here (all using the default viewport) keeps pushing
+            // Text elements unmodified.
+            label_zoom_threshold: 0.5,
             node_colors: [
                 "#a1".into(),
                 "#a2".into(),
@@ -998,6 +1059,139 @@ mod tests {
                 "duplicate index for {kind:?}"
             );
         }
+    }
+
+    #[test]
+    fn flatten_skips_text_below_zoom_threshold() {
+        let mut scene = SceneGraph::new();
+        scene
+            .nodes
+            .push(test_node("a", 10.0, 20.0, NodeKind::Concept));
+        let style = test_style(); // label_zoom_threshold: 0.5
+        let viewport = mae_canvas::scene::Viewport {
+            zoom: 0.3, // below threshold
+            ..Default::default()
+        };
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        // Circle only — Text is hidden, but the node stays visible/clickable.
+        assert_eq!(elements.len(), 1);
+        assert!(matches!(elements[0], VisualElement::Circle { .. }));
+    }
+
+    #[test]
+    fn flatten_keeps_text_at_or_above_zoom_threshold() {
+        let mut scene = SceneGraph::new();
+        scene
+            .nodes
+            .push(test_node("a", 10.0, 20.0, NodeKind::Concept));
+        let style = test_style(); // label_zoom_threshold: 0.5
+        let viewport = mae_canvas::scene::Viewport {
+            zoom: 0.5, // exactly at threshold — boundary is inclusive
+            ..Default::default()
+        };
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        assert_eq!(elements.len(), 2);
+        assert!(matches!(elements[1], VisualElement::Text { .. }));
+    }
+
+    #[test]
+    fn flatten_culls_offscreen_node() {
+        let mut scene = SceneGraph::new();
+        // Viewport::default() is 800x600 centered at scene origin (0,0) —
+        // a node far outside that (e.g. scene x=100000) draws way off any
+        // visible screen position.
+        scene
+            .nodes
+            .push(test_node("far", 100_000.0, 0.0, NodeKind::Concept));
+        let style = test_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        assert!(
+            elements.is_empty(),
+            "a node far outside the viewport must be culled"
+        );
+    }
+
+    #[test]
+    fn flatten_keeps_onscreen_node_near_edge_of_viewport() {
+        // Guards against an overly-aggressive cull margin: a node just
+        // inside the viewport's right edge must still render.
+        let mut scene = SceneGraph::new();
+        // Viewport::default() width=800, centered at scene x=0 -> screen
+        // x=400 is the middle; scene x=390 draws near screen x=790, just
+        // inside the 800px-wide viewport.
+        scene
+            .nodes
+            .push(test_node("near_edge", 390.0, 0.0, NodeKind::Concept));
+        let style = test_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        assert_eq!(
+            elements.len(),
+            2,
+            "a node just inside the viewport edge must not be culled"
+        );
+    }
+
+    #[test]
+    fn flatten_culls_offscreen_edge_when_both_endpoints_are_offscreen_same_side() {
+        let mut scene = SceneGraph::new();
+        scene
+            .nodes
+            .push(test_node("a", 100_000.0, 0.0, NodeKind::Concept));
+        scene
+            .nodes
+            .push(test_node("b", 100_100.0, 0.0, NodeKind::Concept));
+        scene.edges.push(test_edge(0, 1));
+        let style = test_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        assert!(
+            elements.is_empty(),
+            "an edge whose both endpoints are offscreen on the same side must be culled \
+             (and both its now-offscreen nodes too)"
+        );
+    }
+
+    #[test]
+    fn flatten_keeps_edge_that_crosses_the_viewport_even_if_both_endpoints_are_offscreen() {
+        // Regression guard for the conservative same-side-only rule: a
+        // long edge spanning from far off the left to far off the right
+        // must NOT be culled, even though neither endpoint is itself
+        // on-screen — it visibly crosses the viewport.
+        let mut scene = SceneGraph::new();
+        scene
+            .nodes
+            .push(test_node("left", -100_000.0, 0.0, NodeKind::Concept));
+        scene
+            .nodes
+            .push(test_node("right", 100_000.0, 0.0, NodeKind::Concept));
+        scene.edges.push(test_edge(0, 1));
+        let style = test_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        assert!(
+            elements
+                .iter()
+                .any(|e| matches!(e, VisualElement::Line { .. })),
+            "an edge crossing the viewport must be kept even with both endpoints offscreen"
+        );
+    }
+
+    #[test]
+    fn describe_state_is_unaffected_by_culling_or_lod() {
+        // Culling/LOD only affects the flattened VisualElement render
+        // list — scene-level introspection (selection/hover/topology)
+        // must be completely unaffected by an off-screen, low-zoom scene.
+        let mut gv = GraphView::new();
+        gv.scene
+            .nodes
+            .push(test_node("far", 100_000.0, 0.0, NodeKind::Concept));
+        gv.scene.selection = Some(0);
+        let state = gv.describe_state();
+        assert_eq!(state.selected_node.as_deref(), Some("far"));
+        assert_eq!(state.nodes.len(), 1);
+        assert!(state.nodes[0].selected);
     }
 
     #[test]

@@ -778,6 +778,9 @@ pub struct Editor {
     /// Maximum node circle radius (logical px), applied after degree/zoom
     /// scaling. Mirrors `kb_graph_node_max_radius`.
     pub kb_graph_node_max_radius: u32,
+    /// Below this viewport zoom level, graph-view node labels are hidden.
+    /// Mirrors `kb_graph_label_zoom_threshold`.
+    pub kb_graph_label_zoom_threshold: f32,
     /// Node label font size in points for the graph view's GUI rendering.
     /// Mirrors `kb_graph_font_size` — defaults to the same numeric default
     /// as the base `font_size` option (14), but is a fully independent
@@ -1267,6 +1270,7 @@ impl Editor {
             kb_graph_node_size_scales_with_zoom: true,
             kb_graph_node_min_radius: 4,
             kb_graph_node_max_radius: 36,
+            kb_graph_label_zoom_threshold: 0.5,
             kb_graph_font_size: 14,
             kb_graph_layout_iterations: 50,
             kb_graph_layout_kind_clustering: 0.5,

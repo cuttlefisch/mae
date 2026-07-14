@@ -475,6 +475,11 @@ impl OptionRegistry {
                     "Maximum node circle radius in logical pixels, applied after degree/zoom \
                      scaling.",
                     OptionKind::Int, "36", Some("kb-graph.node-max-radius"), &[]),
+                opt!("kb_graph_label_zoom_threshold", &["kb-graph-label-zoom-threshold"],
+                    "Below this viewport zoom level, node labels are hidden in the graph view \
+                     to reduce clutter/draw calls on dense graphs at low zoom. Node/edge \
+                     rendering (and clickability) is unaffected.",
+                    OptionKind::Float, "0.5", Some("kb-graph.label-zoom-threshold"), &[]),
                 opt!("kb_graph_font_size", &["kb-graph-font-size"],
                     "Node label font size in points for the graph view's GUI rendering. \
                      Independent of the base font_size option (same numeric default, no live \

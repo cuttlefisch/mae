@@ -231,6 +231,7 @@ impl super::Editor {
             }
             "kb_graph_node_min_radius" => self.kb_graph_node_min_radius.to_string(),
             "kb_graph_node_max_radius" => self.kb_graph_node_max_radius.to_string(),
+            "kb_graph_label_zoom_threshold" => self.kb_graph_label_zoom_threshold.to_string(),
             "kb_graph_font_size" => self.kb_graph_font_size.to_string(),
             "kb_graph_layout_iterations" => self.kb_graph_layout_iterations.to_string(),
             "kb_graph_layout_kind_clustering" => self.kb_graph_layout_kind_clustering.to_string(),
@@ -988,6 +989,12 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.kb_graph_node_max_radius = v.clamp(1, 500);
+            }
+            "kb_graph_label_zoom_threshold" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_label_zoom_threshold = v.clamp(0.0, 10.0);
             }
             "kb_graph_font_size" => {
                 let v: u32 = value
