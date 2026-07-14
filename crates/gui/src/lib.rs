@@ -1241,137 +1241,163 @@ fn render_visual_buffer_with_bg(
     bg: Option<skia_safe::Color4f>,
 ) {
     use mae_core::visual_buffer::VisualElement;
-    use skia_safe::{Color4f, Paint, PaintStyle};
+    use skia_safe::{paint, Color4f, Paint, PaintStyle};
 
-    // Draw background
-    canvas.draw_rect_fill(
-        r_row,
-        r_col,
-        r_width,
-        r_height,
-        bg.unwrap_or(Color4f::new(0.05, 0.05, 0.05, 1.0)),
-    );
+    // Clip all drawing to this window's own pixel rect — without this,
+    // elements whose computed screen position falls outside the window
+    // (e.g. a graph node near the edge of a force-directed layout, or any
+    // pan/zoom state that pushes content past the pane's bounds) draw
+    // directly onto neighboring windows, since it's all one shared Skia
+    // surface. Mirrors the identical clip already applied to the standard
+    // text-buffer path (see the `with_clip` call site in `render_window_area`
+    // above, "so images don't overflow into borders, status line, or
+    // command area") — this function just never adopted the same guard.
+    canvas.with_clip(r_row, r_col, r_width, r_height, |canvas| {
+        // Draw background
+        canvas.draw_rect_fill(
+            r_row,
+            r_col,
+            r_width,
+            r_height,
+            bg.unwrap_or(Color4f::new(0.05, 0.05, 0.05, 1.0)),
+        );
 
-    let (cw, ch) = canvas.cell_size();
-    let x_off = r_col as f32 * cw;
-    let y_off = r_row as f32 * ch;
+        let (cw, ch) = canvas.cell_size();
+        let x_off = r_col as f32 * cw;
+        let y_off = r_row as f32 * ch;
 
-    for element in &vb.elements {
-        match element {
-            VisualElement::Rect {
-                x,
-                y,
-                w,
-                h,
-                fill,
-                stroke,
-            } => {
-                let rect = skia_safe::Rect::from_xywh(x_off + x, y_off + y, *w, *h);
-                if let Some(f) = fill {
-                    if let Some(c) = theme::parse_hex_to_skia(f) {
-                        let mut paint = Paint::new(c, None);
-                        paint.set_style(PaintStyle::Fill);
-                        canvas.canvas().draw_rect(rect, &paint);
-                    }
-                }
-                if let Some(s) = stroke {
-                    if let Some(c) = theme::parse_hex_to_skia(s) {
-                        let mut paint = Paint::new(c, None);
-                        paint.set_style(PaintStyle::Stroke);
-                        paint.set_stroke_width(1.0);
-                        canvas.canvas().draw_rect(rect, &paint);
-                    }
-                }
-            }
-            VisualElement::Line {
-                x1,
-                y1,
-                x2,
-                y2,
-                color,
-                thickness,
-                dashed,
-            } => {
-                if let Some(c) = theme::parse_hex_to_skia(color) {
-                    let mut paint = Paint::new(c, None);
-                    paint.set_stroke_width(*thickness);
-                    paint.set_style(PaintStyle::Stroke);
-                    let (sx, sy) = (x_off + x1, y_off + y1);
-                    let (ex, ey) = (x_off + x2, y_off + y2);
-                    if *dashed {
-                        // No skia-safe PathEffect dependency needed for a
-                        // simple fixed-cadence dash — manually segment the
-                        // line into ~6px-on/4px-off strokes. Used for
-                        // subgraph boundary edges (graph view) to visually
-                        // distinguish them from internal ones.
-                        const ON: f32 = 6.0;
-                        const OFF: f32 = 4.0;
-                        let dx = ex - sx;
-                        let dy = ey - sy;
-                        let len = (dx * dx + dy * dy).sqrt();
-                        if len > 0.0 {
-                            let (ux, uy) = (dx / len, dy / len);
-                            let mut travelled = 0.0;
-                            while travelled < len {
-                                let seg_end = (travelled + ON).min(len);
-                                canvas.canvas().draw_line(
-                                    (sx + ux * travelled, sy + uy * travelled),
-                                    (sx + ux * seg_end, sy + uy * seg_end),
-                                    &paint,
-                                );
-                                travelled = seg_end + OFF;
-                            }
+        for element in &vb.elements {
+            match element {
+                VisualElement::Rect {
+                    x,
+                    y,
+                    w,
+                    h,
+                    fill,
+                    stroke,
+                } => {
+                    let rect = skia_safe::Rect::from_xywh(x_off + x, y_off + y, *w, *h);
+                    if let Some(f) = fill {
+                        if let Some(c) = theme::parse_hex_to_skia(f) {
+                            let mut paint = Paint::new(c, None);
+                            paint.set_anti_alias(true);
+                            paint.set_style(PaintStyle::Fill);
+                            canvas.canvas().draw_rect(rect, &paint);
                         }
-                    } else {
-                        canvas.canvas().draw_line((sx, sy), (ex, ey), &paint);
+                    }
+                    if let Some(s) = stroke {
+                        if let Some(c) = theme::parse_hex_to_skia(s) {
+                            let mut paint = Paint::new(c, None);
+                            paint.set_anti_alias(true);
+                            paint.set_style(PaintStyle::Stroke);
+                            paint.set_stroke_width(1.0);
+                            canvas.canvas().draw_rect(rect, &paint);
+                        }
                     }
                 }
-            }
-            VisualElement::Circle {
-                cx,
-                cy,
-                r,
-                fill,
-                stroke,
-            } => {
-                if let Some(f) = fill {
-                    if let Some(c) = theme::parse_hex_to_skia(f) {
+                VisualElement::Line {
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    color,
+                    thickness,
+                    dashed,
+                } => {
+                    if let Some(c) = theme::parse_hex_to_skia(color) {
                         let mut paint = Paint::new(c, None);
-                        paint.set_style(PaintStyle::Fill);
-                        canvas
-                            .canvas()
-                            .draw_circle((x_off + cx, y_off + cy), *r, &paint);
-                    }
-                }
-                if let Some(s) = stroke {
-                    if let Some(c) = theme::parse_hex_to_skia(s) {
-                        let mut paint = Paint::new(c, None);
+                        paint.set_anti_alias(true);
+                        paint.set_stroke_width(*thickness);
                         paint.set_style(PaintStyle::Stroke);
-                        paint.set_stroke_width(1.0);
-                        canvas
-                            .canvas()
-                            .draw_circle((x_off + cx, y_off + cy), *r, &paint);
+                        // Round caps/joins so edges converging on a node (or
+                        // a dash segment's own ends) read as smooth strokes
+                        // instead of Skia's default hard miter/butt corners.
+                        paint.set_stroke_cap(paint::Cap::Round);
+                        paint.set_stroke_join(paint::Join::Round);
+                        let (sx, sy) = (x_off + x1, y_off + y1);
+                        let (ex, ey) = (x_off + x2, y_off + y2);
+                        if *dashed {
+                            // No skia-safe PathEffect dependency needed for a
+                            // simple fixed-cadence dash — manually segment the
+                            // line into ~6px-on/4px-off strokes. Used for
+                            // subgraph boundary edges (graph view) to visually
+                            // distinguish them from internal ones.
+                            const ON: f32 = 6.0;
+                            const OFF: f32 = 4.0;
+                            let dx = ex - sx;
+                            let dy = ey - sy;
+                            let len = (dx * dx + dy * dy).sqrt();
+                            if len > 0.0 {
+                                let (ux, uy) = (dx / len, dy / len);
+                                let mut travelled = 0.0;
+                                while travelled < len {
+                                    let seg_end = (travelled + ON).min(len);
+                                    canvas.canvas().draw_line(
+                                        (sx + ux * travelled, sy + uy * travelled),
+                                        (sx + ux * seg_end, sy + uy * seg_end),
+                                        &paint,
+                                    );
+                                    travelled = seg_end + OFF;
+                                }
+                            }
+                        } else {
+                            canvas.canvas().draw_line((sx, sy), (ex, ey), &paint);
+                        }
                     }
                 }
-            }
-            VisualElement::Text {
-                x,
-                y,
-                text,
-                font_size: _,
-                color,
-            } => {
-                if let Some(c) = theme::parse_hex_to_skia(color) {
-                    let mut paint = Paint::new(c, None);
-                    paint.set_anti_alias(true);
-                    let font = skia_safe::Font::default(); // TODO: use real font
-                    canvas
-                        .canvas()
-                        .draw_str(text, (x_off + x, y_off + y), &font, &paint);
+                VisualElement::Circle {
+                    cx,
+                    cy,
+                    r,
+                    fill,
+                    stroke,
+                } => {
+                    if let Some(f) = fill {
+                        if let Some(c) = theme::parse_hex_to_skia(f) {
+                            let mut paint = Paint::new(c, None);
+                            paint.set_anti_alias(true);
+                            paint.set_style(PaintStyle::Fill);
+                            canvas
+                                .canvas()
+                                .draw_circle((x_off + cx, y_off + cy), *r, &paint);
+                        }
+                    }
+                    if let Some(s) = stroke {
+                        if let Some(c) = theme::parse_hex_to_skia(s) {
+                            let mut paint = Paint::new(c, None);
+                            paint.set_anti_alias(true);
+                            paint.set_style(PaintStyle::Stroke);
+                            paint.set_stroke_width(1.0);
+                            canvas
+                                .canvas()
+                                .draw_circle((x_off + cx, y_off + cy), *r, &paint);
+                        }
+                    }
+                }
+                VisualElement::Text {
+                    x,
+                    y,
+                    text,
+                    font_size,
+                    color,
+                } => {
+                    if let Some(c) = theme::parse_hex_to_skia(color) {
+                        let mut paint = Paint::new(c, None);
+                        paint.set_anti_alias(true);
+                        // Use the editor's actually-loaded monospace typeface
+                        // (matching every other piece of text in the UI)
+                        // scaled to this element's requested size, instead of
+                        // Skia's platform-default font.
+                        let scale = *font_size / canvas.base_font_size();
+                        let font = canvas.get_scaled_font(false, scale).clone();
+                        canvas
+                            .canvas()
+                            .draw_str(text, (x_off + x, y_off + y), &font, &paint);
+                    }
                 }
             }
         }
-    }
+    });
 }
 
 // ---------------------------------------------------------------------------
