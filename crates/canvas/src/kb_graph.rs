@@ -14,7 +14,7 @@
 //! variant, because no such variant exists upstream).
 
 use crate::layout::{ForceLayout, LayoutConfig};
-use crate::scene::{EdgeStyle, NodeKind, NodeStyle, SceneEdge, SceneGraph, SceneNode, Viewport};
+use crate::scene::{EdgeStyle, NodeKind, NodeStyle, SceneEdge, SceneGraph, SceneNode};
 
 /// A simplified KB node for graph building (no dependency on mae-kb — see
 /// module docs on why `kind` is `crate::scene::NodeKind`, not
@@ -159,7 +159,6 @@ pub fn build_kb_graph_positions_only(
     SceneGraph {
         nodes: scene_nodes,
         edges: scene_edges,
-        viewport: Viewport::default(),
         selection: if n > 0 { Some(0) } else { None },
         hovered: None,
     }

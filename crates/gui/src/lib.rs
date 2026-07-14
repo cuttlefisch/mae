@@ -1029,23 +1029,23 @@ fn render_window_area(
                     }
                 }
                 BufferKind::Graph => {
-                    // Native KB graph view (Part C Phase 1): the buffer's
-                    // `GraphView.rendered` cache is kept in sync (flattened
-                    // from `GraphView.scene`) by `graph_view_ops.rs` on every
-                    // open/refresh/navigate/layout-applied — this arm just
-                    // draws it through the same `VisualElement` pipeline
-                    // `BufferKind::Visual` uses, with a themed background.
-                    if let Some(gv) = buf.graph_view() {
+                    // Native KB graph view (issue #321 — per-window): the
+                    // buffer's `GraphView.rendered` cache holds one entry PER
+                    // WINDOW showing this buffer (a graph can be split into
+                    // more than one window, each with its own pan/zoom/
+                    // pixel-size), kept in sync by `graph_view_ops.rs` on
+                    // every open/refresh/navigate/layout-applied/zoom/resize.
+                    // This arm draws THIS window's entry through the same
+                    // `VisualElement` pipeline `BufferKind::Visual` uses, with
+                    // a themed background. A missing entry (e.g. a window
+                    // just split onto this buffer, not yet reflattened) draws
+                    // nothing this frame — self-heals on the very next
+                    // `sync_open_graph_viewports` tick.
+                    if let Some(vb) = buf.graph_view().and_then(|gv| gv.rendered.get(win_id)) {
                         let t = std::time::Instant::now();
                         let bg = theme::ts_bg(editor, "ui.graph.background");
                         render_visual_buffer_with_bg(
-                            canvas,
-                            &gv.rendered,
-                            r_row,
-                            r_col,
-                            r_width,
-                            r_height,
-                            bg,
+                            canvas, vb, r_row, r_col, r_width, r_height, bg,
                         );
                         *draw_time_us += t.elapsed().as_micros() as u64;
                     }

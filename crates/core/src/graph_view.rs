@@ -14,6 +14,8 @@
 use crate::driven_window::DrivenWindow;
 use crate::editor::Editor;
 use crate::visual_buffer::{VisualBuffer, VisualElement};
+use crate::window::WindowId;
+use std::collections::HashMap;
 
 /// View state for a `BufferKind::Graph` buffer.
 #[derive(Debug)]
@@ -30,19 +32,20 @@ pub struct GraphView {
     /// when the human/AI navigates to a different KB node elsewhere.
     /// Snapshotted from `kb_graph_follow_current_node` on open.
     pub follow_current: bool,
-    /// The `mae-canvas` scene graph — nodes, edges, viewport, selection.
-    ///
-    /// @ai-caution: [architecture-debt] One `Viewport`/`SceneGraph` per
-    /// `GraphView` (i.e. per buffer), NOT per-window. If a second window is
-    /// ever opened onto this same graph buffer (e.g. `:split-vertical`
-    /// while it's focused — `WindowManager` allows this), rendering/hit-
-    /// testing/resize-sync all key off whichever window
-    /// `graph_viewport_pixel_size` happens to find first
-    /// (`self.window_mgr.iter_windows().find(...)`), silently misaligning
-    /// the other window. Tracked in
-    /// https://github.com/cuttlefisch/mae/issues/321 — see ROADMAP.md's
-    /// Architecture Debt section.
+    /// The `mae-canvas` scene graph — nodes, edges, selection, hover. This
+    /// is buffer-level/shared topology, legitimately the SAME for every
+    /// window showing this graph buffer (see `viewports`/`rendered` below
+    /// for the per-window state a second window needs its own copy of).
     pub scene: mae_canvas::scene::SceneGraph,
+    /// Per-window pan/zoom/pixel-size (issue #321). A graph buffer can be
+    /// shown in more than one window (`:split-vertical` while it's focused
+    /// — `WindowManager` has no one-window-per-buffer-kind guard), and each
+    /// window's view into the shared `scene` above is independent, the same
+    /// way `Window.saved_view_states` already treats scroll/cursor as
+    /// per-window rather than per-buffer. Populated lazily (via
+    /// `Default::default()`) the first time a window is reflattened;
+    /// pruned in `Editor::sync_open_graph_viewports` once a window closes.
+    pub viewports: HashMap<WindowId, mae_canvas::scene::Viewport>,
     /// "The window this actor is driving" (Part A `DrivenWindow`), captured
     /// reactively via `follow_focus_away_from` every time editor focus
     /// changes to a window other than the graph's own — see
@@ -52,11 +55,16 @@ pub struct GraphView {
     /// `display_buffer`'s reuse-or-split policy.
     pub companion_window: DrivenWindow,
     /// `scene` flattened into `VisualElement`s for the GUI's
-    /// `render_visual_buffer` pipeline (`flatten_scene_graph`). Rebuilt by
-    /// `graph_view_ops.rs` on every open/refresh/navigate/layout-applied so
-    /// the GUI render path never needs to know about `SceneGraph` at all —
-    /// it just draws `rendered` exactly like a `BufferKind::Visual` buffer.
-    pub rendered: VisualBuffer,
+    /// `render_visual_buffer` pipeline (`flatten_scene_graph`), one entry
+    /// per window currently showing this buffer (issue #321 — flattening
+    /// bakes a specific window's `Viewport` into absolute pixel
+    /// coordinates, so the result can't be shared across windows at
+    /// different sizes/zoom levels). Rebuilt by `graph_view_ops.rs` on
+    /// every open/refresh/navigate/layout-applied/zoom/resize so the GUI
+    /// render path never needs to know about `SceneGraph` at all — it just
+    /// draws the current window's entry exactly like a `BufferKind::Visual`
+    /// buffer.
+    pub rendered: HashMap<WindowId, VisualBuffer>,
     /// Part C Phase 3 (`kb_graph_animate`): true while this graph's layout
     /// is still settling — i.e. `ForceLayout::step`'s per-tick settlement
     /// signal (max node displacement) has not yet dropped below
@@ -206,8 +214,9 @@ impl GraphView {
             kb_instance: None,
             follow_current: true,
             scene: mae_canvas::scene::SceneGraph::new(),
+            viewports: HashMap::new(),
             companion_window: DrivenWindow::none(),
-            rendered: VisualBuffer::new(),
+            rendered: HashMap::new(),
             animating: false,
             anim_temperature: ANIMATION_INITIAL_TEMPERATURE,
         }
@@ -433,17 +442,21 @@ impl GraphStyleOptions {
 }
 
 /// Flatten a `mae-canvas` `SceneGraph` into `VisualElement`s for the GUI's
-/// `render_visual_buffer` pipeline. Edges are emitted before nodes (drawn
-/// under them); boundary edges (`SceneEdge.style.dashed`, the subgraph
-/// fringe — see `mae_canvas::kb_graph::build_kb_graph`) render as dashed
-/// lines using `style.boundary_edge_color`, internal edges as solid lines
-/// using `style.edge_color`. Nodes render as a themed circle (selected node
-/// uses `style.selected_color`, others their `NodeKind`'s themed color) plus
-/// a label `Text` element. Pure function — no `Editor`/theme access, so it's
+/// `render_visual_buffer` pipeline, projected through one window's
+/// `Viewport` (issue #321 — the same shared `scene` can be flattened once
+/// per window showing it, each through its own pan/zoom/pixel-size). Edges
+/// are emitted before nodes (drawn under them); boundary edges
+/// (`SceneEdge.style.dashed`, the subgraph fringe — see
+/// `mae_canvas::kb_graph::build_kb_graph`) render as dashed lines using
+/// `style.boundary_edge_color`, internal edges as solid lines using
+/// `style.edge_color`. Nodes render as a themed circle (selected node uses
+/// `style.selected_color`, others their `NodeKind`'s themed color) plus a
+/// label `Text` element. Pure function — no `Editor`/theme access, so it's
 /// independently unit-testable against a hand-built `SceneGraph` +
-/// `GraphStyleOptions`.
+/// `Viewport` + `GraphStyleOptions`.
 pub fn flatten_scene_graph(
     scene: &mae_canvas::scene::SceneGraph,
+    viewport: &mae_canvas::scene::Viewport,
     style: &GraphStyleOptions,
 ) -> Vec<VisualElement> {
     use mae_canvas::interaction::scene_to_viewport;
@@ -453,11 +466,12 @@ pub fn flatten_scene_graph(
     // scene<->screen transform hit-testing/drag/zoom already use via
     // `viewport_to_scene` (see `graph_view_ops.rs::graph_scene_point`) — so
     // drawing and interaction always agree on where a node actually is,
-    // driven by `scene.viewport` alone (kept in sync with the real window's
-    // pixel size by `Editor::graph_view_reflatten`, the single call site
-    // that invokes this function). Sizes (node radius, font size, stub/line
-    // offsets, stroke width) stay fixed screen-space pixels, NOT scaled by
-    // zoom — zoom moves nodes apart/together, it doesn't grow/shrink them.
+    // driven by the CALLER's chosen `viewport` (kept in sync with that
+    // specific window's pixel size by `Editor::graph_view_reflatten_window`,
+    // the single call site that invokes this function). Sizes (node radius,
+    // font size, stub/line offsets, stroke width) stay fixed screen-space
+    // pixels, NOT scaled by zoom — zoom moves nodes apart/together, it
+    // doesn't grow/shrink them.
 
     for edge in &scene.edges {
         let Some(src) = scene.nodes.get(edge.source) else {
@@ -469,7 +483,7 @@ pub fn flatten_scene_graph(
         } else {
             style.edge_color.clone()
         };
-        let (sx1, sy1) = scene_to_viewport(&scene.viewport, src.x, src.y);
+        let (sx1, sy1) = scene_to_viewport(viewport, src.x, src.y);
         // A boundary edge is represented as a self-loop (source == target,
         // see `build_kb_graph`) — draw a short stub off to the side instead
         // of a zero-length line, so it's visually distinguishable. The stub
@@ -477,7 +491,7 @@ pub fn flatten_scene_graph(
         // node), so it stays a constant visual size regardless of zoom.
         let (sx2, sy2) = if edge.target < scene.nodes.len() && edge.target != edge.source {
             let t = &scene.nodes[edge.target];
-            scene_to_viewport(&scene.viewport, t.x, t.y)
+            scene_to_viewport(viewport, t.x, t.y)
         } else {
             (
                 sx1 + (style.node_radius * 2.0) as f64,
@@ -508,7 +522,7 @@ pub fn flatten_scene_graph(
         } else {
             style.color_for_kind(node.kind).to_string()
         };
-        let (scx, scy) = scene_to_viewport(&scene.viewport, node.x, node.y);
+        let (scx, scy) = scene_to_viewport(viewport, node.x, node.y);
         elements.push(VisualElement::Circle {
             cx: scx as f32,
             cy: scy as f32,
@@ -615,7 +629,8 @@ mod tests {
     #[test]
     fn flatten_empty_scene_produces_no_elements() {
         let scene = SceneGraph::new();
-        let elements = flatten_scene_graph(&scene, &test_style());
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &test_style());
         assert!(elements.is_empty());
     }
 
@@ -626,7 +641,8 @@ mod tests {
             .nodes
             .push(test_node("concept:buffer", 10.0, 20.0, NodeKind::Concept));
         let style = test_style();
-        let elements = flatten_scene_graph(&scene, &style);
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style);
         assert_eq!(elements.len(), 2);
         // Default `Viewport` (center 0,0, zoom 1.0, 800x600) is NOT an
         // identity transform — `scene_to_viewport` centers the origin in
@@ -634,7 +650,7 @@ mod tests {
         // (10 + width/2, 20 + height/2), matching `graph_scene_point`'s
         // inverse used by hit-testing.
         let (expected_cx, expected_cy) =
-            mae_canvas::interaction::scene_to_viewport(&scene.viewport, 10.0, 20.0);
+            mae_canvas::interaction::scene_to_viewport(&viewport, 10.0, 20.0);
         match &elements[0] {
             VisualElement::Circle {
                 cx, cy, r, fill, ..
@@ -667,7 +683,8 @@ mod tests {
         scene.nodes.push(test_node("b", 100.0, 0.0, NodeKind::Note));
         scene.selection = Some(1);
         let style = test_style();
-        let elements = flatten_scene_graph(&scene, &style);
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style);
         // Node 0 (unselected) circle first, then node 1 (selected) circle.
         match &elements[0] {
             VisualElement::Circle { fill, .. } => {
@@ -690,7 +707,8 @@ mod tests {
         scene.nodes.push(test_node("b", 100.0, 0.0, NodeKind::Note));
         scene.hovered = Some(1);
         let style = test_style();
-        let elements = flatten_scene_graph(&scene, &style);
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style);
         match &elements[0] {
             VisualElement::Circle { fill, .. } => {
                 assert_eq!(fill.as_deref(), Some(style.color_for_kind(NodeKind::Note)));
@@ -715,7 +733,8 @@ mod tests {
         scene.selection = Some(0);
         scene.hovered = Some(0);
         let style = test_style();
-        let elements = flatten_scene_graph(&scene, &style);
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style);
         match &elements[0] {
             VisualElement::Circle { fill, .. } => {
                 assert_eq!(fill.as_deref(), Some(style.selected_color.as_str()));
@@ -736,12 +755,13 @@ mod tests {
             style: EdgeStyle::default(),
         });
         let style = test_style();
-        let elements = flatten_scene_graph(&scene, &style);
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style);
         // Same non-identity default-viewport transform as `flatten_single_
         // node_produces_circle_and_text` — target node (50, 0) draws at
         // (50 + width/2, 0 + height/2).
         let (expected_x2, expected_y2) =
-            mae_canvas::interaction::scene_to_viewport(&scene.viewport, 50.0, 0.0);
+            mae_canvas::interaction::scene_to_viewport(&viewport, 50.0, 0.0);
         match &elements[0] {
             VisualElement::Line {
                 dashed,
@@ -774,7 +794,8 @@ mod tests {
             },
         });
         let style = test_style();
-        let elements = flatten_scene_graph(&scene, &style);
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style);
         match &elements[0] {
             VisualElement::Line { dashed, color, .. } => {
                 assert!(dashed);
@@ -795,7 +816,8 @@ mod tests {
             style: EdgeStyle::default(),
         });
         let style = test_style();
-        let elements = flatten_scene_graph(&scene, &style);
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style);
         // Only the node's circle+text — the bogus edge is skipped.
         assert_eq!(elements.len(), 2);
     }

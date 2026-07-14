@@ -25,13 +25,18 @@ use super::Editor;
 /// Convert a Graph window's window-relative pixel click/drag position into
 /// scene coordinates via `mae_canvas::interaction::viewport_to_scene` — the
 /// exact inverse of `flatten_scene_graph`'s `scene_to_viewport` draw
-/// transform. Both are driven by the SAME `GraphView.scene.viewport`,
-/// which `Editor::graph_view_reflatten` keeps synced to the real window's
-/// pixel size before every render — so a click always resolves to the
-/// scene point actually under the cursor, matching what's drawn, with no
-/// separate/neutralized convention to keep in sync by hand.
-fn graph_scene_point(gv: &GraphView, rel_x: f32, rel_y: f32) -> (f64, f64) {
-    mae_canvas::interaction::viewport_to_scene(&gv.scene.viewport, rel_x as f64, rel_y as f64)
+/// transform. Looks up `win_id`'s own entry in `GraphView.viewports`
+/// (issue #321 — each window showing this graph buffer has its own pan/
+/// zoom/pixel-size, kept synced by `Editor::graph_view_reflatten_window`
+/// before every render), falling back to `Viewport::default()` if this
+/// window hasn't been reflattened yet (e.g. a just-split second window —
+/// self-heals on the next `sync_open_graph_viewports` tick) — so a click
+/// always resolves to the scene point actually under the cursor IN THAT
+/// WINDOW, matching what's drawn there, with no separate/neutralized
+/// convention to keep in sync by hand.
+fn graph_scene_point(gv: &GraphView, win_id: WindowId, rel_x: f32, rel_y: f32) -> (f64, f64) {
+    let viewport = gv.viewports.get(&win_id).copied().unwrap_or_default();
+    mae_canvas::interaction::viewport_to_scene(&viewport, rel_x as f64, rel_y as f64)
 }
 
 /// Part C Phase 4 (wheel-zoom): per-wheel-event zoom-factor tuning.
@@ -80,24 +85,16 @@ impl Editor {
         GraphStyleOptions::from_editor(self)
     }
 
-    /// Real pixel dimensions of the window currently showing `buf_idx`, for
-    /// centering the graph's viewport within it (via `Editor::
-    /// graph_view_reflatten`). Falls back to `mae_canvas::scene::
-    /// Viewport::default()`'s 800x600 if no window is showing this buffer
-    /// yet — e.g. the very first `populate_graph_buffer` call, before
-    /// `display_buffer` has created its window.
-    fn graph_viewport_pixel_size(&self, buf_idx: usize) -> (f32, f32) {
+    /// Real pixel dimensions of window `win_id`, for centering the graph's
+    /// viewport within it (via `Editor::graph_view_reflatten_window`). Falls
+    /// back to `mae_canvas::scene::Viewport::default()`'s 800x600 if the
+    /// window no longer resolves — e.g. the very first `populate_graph_
+    /// buffer` call before `display_buffer` has created its window, or a
+    /// window that closed mid-flight.
+    fn graph_viewport_pixel_size(&self, win_id: WindowId) -> (f32, f32) {
         let default = mae_canvas::scene::Viewport::default();
         let fallback = (default.width as f32, default.height as f32);
 
-        let Some(win_id) = self
-            .window_mgr
-            .iter_windows()
-            .find(|w| w.buffer_idx == buf_idx)
-            .map(|w| w.id)
-        else {
-            return fallback;
-        };
         let Some((_, rect)) = self
             .window_mgr
             .layout_rects(self.last_layout_area)
@@ -112,65 +109,114 @@ impl Editor {
         )
     }
 
-    /// The single path that re-flattens a graph buffer's `VisualBuffer`
-    /// cache for render. First syncs `GraphView.scene.viewport`'s pixel
-    /// size to the real window currently showing `buf_idx` (see
-    /// `graph_viewport_pixel_size`), THEN flattens — so `flatten_scene_
-    /// graph`'s `scene_to_viewport` transform and `graph_scene_point`'s
-    /// `viewport_to_scene` transform (used by hit-testing/drag/zoom) always
-    /// agree on where a node actually is, driven by one synced `Viewport`,
-    /// not two independently-maintained ideas of window size. Every
-    /// graph-mutating method (open, refresh, navigate, hit-test/select,
-    /// drag, zoom, a completed background layout) calls this instead of
-    /// calling `flatten_scene_graph` directly, so viewport sizing can never
-    /// be forgotten at a call site.
-    fn graph_view_reflatten(&mut self, buf_idx: usize) {
-        let (width, height) = self.graph_viewport_pixel_size(buf_idx);
-        if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
-            gv.scene.viewport.width = width as f64;
-            gv.scene.viewport.height = height as f64;
-        }
+    /// Re-flatten just ONE window's cached `VisualBuffer` entry (issue
+    /// #321 — a graph buffer can be shown in more than one window, each
+    /// with its own `Viewport`). First syncs that window's `Viewport`
+    /// pixel size (see `graph_viewport_pixel_size`), THEN flattens through
+    /// it — so `flatten_scene_graph`'s `scene_to_viewport` transform and
+    /// `graph_scene_point`'s `viewport_to_scene` transform (used by
+    /// hit-testing/drag/zoom) always agree on where a node actually is IN
+    /// THIS WINDOW, driven by one synced `Viewport`, not two
+    /// independently-maintained ideas of window size. Cheap — use for a
+    /// change genuinely scoped to one window (zoom, resize). For a change
+    /// to the shared topology/selection/hover (which every window showing
+    /// this buffer must reflect), use `graph_view_reflatten_all_windows`
+    /// instead, so viewport sizing/flattening can never be forgotten at a
+    /// call site either way.
+    fn graph_view_reflatten_window(&mut self, buf_idx: usize, win_id: WindowId) {
+        let (width, height) = self.graph_viewport_pixel_size(win_id);
         let style = self.graph_style_options();
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
-            gv.rendered = VisualBuffer {
-                elements: flatten_scene_graph(&gv.scene, &style),
-            };
+            let viewport = gv.viewports.entry(win_id).or_default();
+            viewport.width = width as f64;
+            viewport.height = height as f64;
+            let viewport = *viewport;
+            let elements = flatten_scene_graph(&gv.scene, &viewport, &style);
+            gv.rendered.insert(win_id, VisualBuffer { elements });
         }
         self.mark_full_redraw();
     }
 
-    /// Self-healing resize sync: re-flatten every open `BufferKind::Graph`
-    /// buffer whose cached `scene.viewport` pixel size no longer matches
-    /// the real size of the window currently showing it. Called every GUI
-    /// event-loop iteration from `gui_app.rs`'s `about_to_wait` (before any
-    /// redraw is requested) rather than hooked into every individual
+    /// Re-flatten EVERY window currently showing graph buffer `buf_idx` —
+    /// use after a change to the shared topology/selection/hover state
+    /// (node position, selection, hover, a completed background layout),
+    /// since that data is the SAME for every window showing it and every
+    /// window's `rendered` cache must stay in sync. See `graph_view_
+    /// reflatten_window` for the cheaper single-window variant (zoom,
+    /// resize — genuinely scoped to one window).
+    fn graph_view_reflatten_all_windows(&mut self, buf_idx: usize) {
+        let win_ids: Vec<WindowId> = self
+            .window_mgr
+            .iter_windows()
+            .filter(|w| w.buffer_idx == buf_idx)
+            .map(|w| w.id)
+            .collect();
+        for win_id in win_ids {
+            self.graph_view_reflatten_window(buf_idx, win_id);
+        }
+    }
+
+    /// Self-healing resize sync: re-flatten every window on every open
+    /// `BufferKind::Graph` buffer whose cached per-window `Viewport` pixel
+    /// size no longer matches the real size of that window (issue #321 —
+    /// iterates every window showing a graph buffer, not just the first
+    /// one found, so a second window split onto the same buffer stays in
+    /// sync too). Also prunes `viewports`/`rendered` entries for windows
+    /// that no longer show this buffer (closed, or reassigned) — this is
+    /// the only place that needs to, since it already walks every open
+    /// graph buffer's live window set every tick; no dedicated
+    /// window-close hook needed. Called every GUI event-loop iteration
+    /// from `gui_app.rs`'s `about_to_wait` (before any redraw is
+    /// requested) rather than hooked into every individual
     /// window-resize/split-resize command — `last_layout_area`/window-tree
     /// ratios are already correctly updated by those commands (each already
     /// triggers `mark_full_redraw`/a GUI redraw), so this single check
     /// self-heals on the next iteration after ANY layout change (full GUI
-    /// window resize, split grow/shrink/balance/maximize, or a sibling
-    /// window closing) without needing to enumerate every call site that
-    /// could change a window's rect. Returns whether anything was
-    /// resynced, so the caller can set its own dirty flag accordingly
-    /// (`graph_view_reflatten`'s `mark_full_redraw` only affects `Editor`'s
-    /// own redraw-level tracking, not `GuiApp.dirty`, which is a separate
-    /// field the GUI event loop manages itself).
+    /// window resize, split grow/shrink/balance/maximize, a new window
+    /// split onto the buffer, or a sibling window closing) without needing
+    /// to enumerate every call site that could change a window's rect.
+    /// Returns whether anything was resynced, so the caller can set its
+    /// own dirty flag accordingly (`graph_view_reflatten_window`'s
+    /// `mark_full_redraw` only affects `Editor`'s own redraw-level
+    /// tracking, not `GuiApp.dirty`, which is a separate field the GUI
+    /// event loop manages itself).
     pub fn sync_open_graph_viewports(&mut self) -> bool {
-        let stale: Vec<usize> = self
+        let mut changed = false;
+        let graph_buf_indices: Vec<usize> = self
             .buffers
             .iter()
             .enumerate()
             .filter(|(_, b)| b.kind == BufferKind::Graph)
-            .filter_map(|(i, b)| {
-                let gv = b.graph_view()?;
-                let (w, h) = self.graph_viewport_pixel_size(i);
-                (gv.scene.viewport.width != w as f64 || gv.scene.viewport.height != h as f64)
-                    .then_some(i)
-            })
+            .map(|(i, _)| i)
             .collect();
-        let changed = !stale.is_empty();
-        for i in stale {
-            self.graph_view_reflatten(i);
+
+        for buf_idx in graph_buf_indices {
+            let live_win_ids: std::collections::HashSet<WindowId> = self
+                .window_mgr
+                .iter_windows()
+                .filter(|w| w.buffer_idx == buf_idx)
+                .map(|w| w.id)
+                .collect();
+
+            if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+                gv.viewports.retain(|id, _| live_win_ids.contains(id));
+                gv.rendered.retain(|id, _| live_win_ids.contains(id));
+            }
+
+            for win_id in live_win_ids {
+                let (w, h) = self.graph_viewport_pixel_size(win_id);
+                let stale = match self.buffers[buf_idx]
+                    .graph_view()
+                    .and_then(|gv| gv.viewports.get(&win_id))
+                {
+                    Some(vp) => vp.width != w as f64 || vp.height != h as f64,
+                    None => true,
+                };
+                if stale {
+                    self.graph_view_reflatten_window(buf_idx, win_id);
+                    changed = true;
+                }
+            }
         }
         changed
     }
@@ -257,7 +303,7 @@ impl Editor {
             gv.animating = self.kb_graph_animate;
             gv.anim_temperature = ANIMATION_INITIAL_TEMPERATURE;
         }
-        self.graph_view_reflatten(buf_idx);
+        self.graph_view_reflatten_all_windows(buf_idx);
     }
 
     /// Part C Phase 3: is there an open `BufferKind::Graph` buffer whose
@@ -404,7 +450,7 @@ impl Editor {
         if let Some(gv) = self.buffers[idx].graph_view_mut() {
             mae_canvas::interaction::navigate_direction(&mut gv.scene, dir.into());
         }
-        self.graph_view_reflatten(idx);
+        self.graph_view_reflatten_all_windows(idx);
     }
 
     /// Navigate the graph's captured companion window (Part A
@@ -499,7 +545,7 @@ impl Editor {
         }
 
         let hit_result: Option<Option<usize>> = self.buffers[buf_idx].graph_view().map(|gv| {
-            let (scene_x, scene_y) = graph_scene_point(gv, rel_x, rel_y);
+            let (scene_x, scene_y) = graph_scene_point(gv, graph_win_id, rel_x, rel_y);
             mae_canvas::interaction::hit_test(&gv.scene, scene_x, scene_y)
         });
         let node_hit = hit_result?;
@@ -507,7 +553,7 @@ impl Editor {
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
             gv.scene.selection = node_hit;
         }
-        self.graph_view_reflatten(buf_idx);
+        self.graph_view_reflatten_all_windows(buf_idx);
 
         node_hit
     }
@@ -542,7 +588,7 @@ impl Editor {
         }
 
         let Some(node_hit) = self.buffers[buf_idx].graph_view().map(|gv| {
-            let (scene_x, scene_y) = graph_scene_point(gv, rel_x, rel_y);
+            let (scene_x, scene_y) = graph_scene_point(gv, graph_win_id, rel_x, rel_y);
             mae_canvas::interaction::hit_test(&gv.scene, scene_x, scene_y)
         }) else {
             return false;
@@ -557,7 +603,7 @@ impl Editor {
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
             gv.scene.hovered = node_hit;
         }
-        self.graph_view_reflatten(buf_idx);
+        self.graph_view_reflatten_all_windows(buf_idx);
         true
     }
 
@@ -583,7 +629,7 @@ impl Editor {
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
             gv.scene.hovered = None;
         }
-        self.graph_view_reflatten(buf_idx);
+        self.graph_view_reflatten_all_windows(buf_idx);
         true
     }
 
@@ -670,7 +716,7 @@ impl Editor {
         }
         let Some(scene_point) = self.buffers[buf_idx]
             .graph_view()
-            .map(|gv| graph_scene_point(gv, rel_x, rel_y))
+            .map(|gv| graph_scene_point(gv, graph_win_id, rel_x, rel_y))
         else {
             return;
         };
@@ -690,7 +736,7 @@ impl Editor {
             return;
         }
 
-        self.graph_view_reflatten(buf_idx);
+        self.graph_view_reflatten_all_windows(buf_idx);
     }
 
     /// Part C Phase 4 (drag-to-pin): finish an in-progress node drag on
@@ -751,14 +797,13 @@ impl Editor {
             + (delta as f64 / GRAPH_ZOOM_SENSITIVITY)
                 .clamp(-GRAPH_ZOOM_MAX_STEP, GRAPH_ZOOM_MAX_STEP);
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
-            mae_canvas::interaction::zoom(
-                &mut gv.scene.viewport,
-                factor,
-                focus_x as f64,
-                focus_y as f64,
-            );
+            let viewport = gv.viewports.entry(graph_win_id).or_default();
+            mae_canvas::interaction::zoom(viewport, factor, focus_x as f64, focus_y as f64);
         }
-        self.graph_view_reflatten(buf_idx);
+        // Viewport-only change, scoped to THIS window — other windows
+        // showing the same buffer are unaffected, so only this one needs
+        // reflattening.
+        self.graph_view_reflatten_window(buf_idx, graph_win_id);
     }
 
     /// Apply a completed background layout (`mae::graph_layout_bridge`)
@@ -797,7 +842,7 @@ impl Editor {
             scene.selection = gv.scene.selection;
             gv.scene = scene;
         }
-        self.graph_view_reflatten(buf_idx);
+        self.graph_view_reflatten_all_windows(buf_idx);
 
         if let Some(disp) = max_displacement {
             let settled = disp.abs() < ANIMATION_SETTLE_EPSILON;
@@ -932,13 +977,15 @@ mod tests {
     /// Convert a node's SCENE position into the window-relative PIXEL
     /// position that would actually land a click on it — the exact inverse
     /// of `graph_scene_point`'s `viewport_to_scene`, driven by the same
-    /// `GraphView.scene.viewport` the click/drag/hit-test methods under
-    /// test read. Click/drag tests must click in pixel space (what real
-    /// mouse events deliver), not raw scene coordinates — the default
-    /// `Viewport` centers the scene origin at (width/2, height/2), so scene
-    /// and pixel coordinates are NOT interchangeable.
-    fn scene_to_click_px(gv: &GraphView, x: f64, y: f64) -> (f32, f32) {
-        let (px, py) = mae_canvas::interaction::scene_to_viewport(&gv.scene.viewport, x, y);
+    /// per-window `Viewport` (`gv.viewports[&win_id]`) the click/drag/
+    /// hit-test methods under test read. Click/drag tests must click in
+    /// pixel space (what real mouse events deliver), not raw scene
+    /// coordinates — the default `Viewport` centers the scene origin at
+    /// (width/2, height/2), so scene and pixel coordinates are NOT
+    /// interchangeable.
+    fn scene_to_click_px(gv: &GraphView, win_id: WindowId, x: f64, y: f64) -> (f32, f32) {
+        let viewport = gv.viewports.get(&win_id).copied().unwrap_or_default();
+        let (px, py) = mae_canvas::interaction::scene_to_viewport(&viewport, x, y);
         (px as f32, py as f32)
     }
 
@@ -1200,9 +1247,16 @@ mod tests {
             .iter()
             .position(|b| b.kind == BufferKind::Graph)
             .unwrap();
+        let win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == idx)
+            .map(|w| w.id)
+            .unwrap();
         let (w0, h0) = {
             let gv = editor.buffers[idx].graph_view().unwrap();
-            (gv.scene.viewport.width, gv.scene.viewport.height)
+            let vp = gv.viewports.get(&win_id).unwrap();
+            (vp.width, vp.height)
         };
 
         // Simulate a GUI window resize: last_layout_area changes size
@@ -1220,8 +1274,9 @@ mod tests {
             "a real size change must be detected and resynced"
         );
         let gv = editor.buffers[idx].graph_view().unwrap();
-        assert_ne!(gv.scene.viewport.width, w0);
-        assert_ne!(gv.scene.viewport.height, h0);
+        let vp = gv.viewports.get(&win_id).unwrap();
+        assert_ne!(vp.width, w0);
+        assert_ne!(vp.height, h0);
 
         // Calling again with no further size change must be a no-op.
         assert!(!editor.sync_open_graph_viewports());
@@ -1270,7 +1325,10 @@ mod tests {
         // (non-empty for a 2-node graph).
         let after = editor.buffers[idx].graph_view().unwrap();
         assert!(before.is_some() || after.scene.selection.is_some());
-        assert!(!after.rendered.elements.is_empty());
+        assert!(
+            after.rendered.values().any(|vb| !vb.elements.is_empty()),
+            "at least one window's rendered cache must reflect the current scene"
+        );
     }
 
     #[test]
@@ -1402,7 +1460,7 @@ mod tests {
                 "a center node + its one link should both be present at depth 1"
             );
             let node = &gv.scene.nodes[0];
-            let (x, y) = scene_to_click_px(gv, node.x, node.y);
+            let (x, y) = scene_to_click_px(gv, graph_win_id, node.x, node.y);
             (node.id.clone(), x, y)
         };
 
@@ -1464,7 +1522,7 @@ mod tests {
         let (x, y) = {
             let gv = editor.buffers[graph_idx].graph_view().unwrap();
             let node = &gv.scene.nodes[0];
-            scene_to_click_px(gv, node.x, node.y)
+            scene_to_click_px(gv, graph_win_id, node.x, node.y)
         };
 
         let window_count_before = editor.window_mgr.iter_windows().count();
@@ -1608,7 +1666,7 @@ mod tests {
         let (x, y, selection_before) = {
             let gv = editor.buffers[graph_idx].graph_view().unwrap();
             let node = &gv.scene.nodes[0];
-            let (x, y) = scene_to_click_px(gv, node.x, node.y);
+            let (x, y) = scene_to_click_px(gv, graph_win_id, node.x, node.y);
             (x, y, gv.scene.selection)
         };
 
@@ -1764,7 +1822,7 @@ mod tests {
         let (x, y) = {
             let gv = editor.buffers[graph_idx].graph_view().unwrap();
             let node = &gv.scene.nodes[0];
-            scene_to_click_px(gv, node.x, node.y)
+            scene_to_click_px(gv, graph_win_id, node.x, node.y)
         };
         let kb_buf_count_before = editor
             .buffers
@@ -1828,7 +1886,7 @@ mod tests {
                 !node.pinned,
                 "sanity: a freshly laid-out node must start unpinned"
             );
-            let (px, py) = scene_to_click_px(gv, node.x, node.y);
+            let (px, py) = scene_to_click_px(gv, graph_win_id, node.x, node.y);
             (node.x, node.y, px, py)
         };
         let kb_buf_count_before = editor
@@ -1989,7 +2047,7 @@ mod tests {
         let (node_id, x, y) = {
             let gv = editor.buffers[graph_idx].graph_view().unwrap();
             let node = &gv.scene.nodes[0];
-            let (x, y) = scene_to_click_px(gv, node.x, node.y);
+            let (x, y) = scene_to_click_px(gv, graph_win_id, node.x, node.y);
             (node.id.clone(), x, y)
         };
 
@@ -2039,6 +2097,17 @@ mod tests {
         editor.kb_graph_view_drag_end(graph_win_id, 999);
     }
 
+    /// Read window `win_id`'s current zoom level on graph buffer `graph_idx`.
+    fn zoom_of(editor: &Editor, graph_idx: usize, win_id: WindowId) -> f64 {
+        editor.buffers[graph_idx]
+            .graph_view()
+            .unwrap()
+            .viewports
+            .get(&win_id)
+            .unwrap()
+            .zoom
+    }
+
     #[test]
     fn zoom_changes_viewport_zoom_within_clamped_range_and_reflattens() {
         let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
@@ -2054,21 +2123,11 @@ mod tests {
             .find(|w| w.buffer_idx == graph_idx)
             .map(|w| w.id)
             .unwrap();
-        let zoom_before = editor.buffers[graph_idx]
-            .graph_view()
-            .unwrap()
-            .scene
-            .viewport
-            .zoom;
+        let zoom_before = zoom_of(&editor, graph_idx, graph_win_id);
 
         // Zoom in (positive delta).
         editor.kb_graph_view_zoom(graph_win_id, 100.0, 400.0, 300.0);
-        let zoom_after_in = editor.buffers[graph_idx]
-            .graph_view()
-            .unwrap()
-            .scene
-            .viewport
-            .zoom;
+        let zoom_after_in = zoom_of(&editor, graph_idx, graph_win_id);
         assert!(
             zoom_after_in > zoom_before,
             "a positive wheel delta must increase zoom (before={zoom_before}, after={zoom_after_in})"
@@ -2079,6 +2138,8 @@ mod tests {
                 .graph_view()
                 .unwrap()
                 .rendered
+                .get(&graph_win_id)
+                .unwrap()
                 .elements
                 .is_empty(),
             "zoom must re-flatten (rendered must reflect the current scene)"
@@ -2089,12 +2150,7 @@ mod tests {
         for _ in 0..200 {
             editor.kb_graph_view_zoom(graph_win_id, -100.0, 400.0, 300.0);
         }
-        let zoom_after_out = editor.buffers[graph_idx]
-            .graph_view()
-            .unwrap()
-            .scene
-            .viewport
-            .zoom;
+        let zoom_after_out = zoom_of(&editor, graph_idx, graph_win_id);
         assert!(
             zoom_after_out >= 0.1,
             "zoom must respect the lower clamp even under sustained zoom-out, got {zoom_after_out}"
@@ -2104,12 +2160,7 @@ mod tests {
         for _ in 0..200 {
             editor.kb_graph_view_zoom(graph_win_id, 100.0, 400.0, 300.0);
         }
-        let zoom_after_max = editor.buffers[graph_idx]
-            .graph_view()
-            .unwrap()
-            .scene
-            .viewport
-            .zoom;
+        let zoom_after_max = zoom_of(&editor, graph_idx, graph_win_id);
         assert!(
             zoom_after_max <= 10.0,
             "zoom must respect the upper clamp even under sustained zoom-in, got {zoom_after_max}"
@@ -2125,6 +2176,12 @@ mod tests {
             .iter()
             .position(|b| b.kind == BufferKind::Graph)
             .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
         let non_graph_win_id = editor
             .window_mgr
             .iter_windows()
@@ -2133,23 +2190,239 @@ mod tests {
             .expect("opening the graph view should have split");
 
         // Must not panic, and must not affect the graph's own viewport.
-        let zoom_before = editor.buffers[graph_idx]
-            .graph_view()
-            .unwrap()
-            .scene
-            .viewport
-            .zoom;
+        let zoom_before = zoom_of(&editor, graph_idx, graph_win_id);
         editor.kb_graph_view_zoom(non_graph_win_id, 100.0, 0.0, 0.0);
         editor.kb_graph_view_zoom(999_999, 100.0, 0.0, 0.0);
         assert_eq!(
+            zoom_of(&editor, graph_idx, graph_win_id),
+            zoom_before,
+            "zooming a non-graph/stale window must not affect the graph's own viewport"
+        );
+    }
+
+    // --- Per-window viewport isolation (issue #321) ---
+    //
+    // `WindowManager` has no one-window-per-buffer-kind guard, so a second
+    // window can be split onto the SAME `*KB Graph*` buffer
+    // (`:split-vertical`/`-horizontal` while it's focused). These tests
+    // exercise that exact scenario directly, rather than assuming it can't
+    // happen.
+
+    #[test]
+    fn two_windows_on_the_same_graph_buffer_have_independent_viewports() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let win_a = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+
+        let area = editor.default_area();
+        let win_b = editor
+            .window_mgr
+            .split(SplitDirection::Vertical, graph_idx, area)
+            .expect("a second window on the same graph buffer must be allowed");
+        assert_ne!(win_a, win_b);
+        editor.sync_open_graph_viewports();
+
+        assert!(
             editor.buffers[graph_idx]
                 .graph_view()
                 .unwrap()
-                .scene
-                .viewport
-                .zoom,
-            zoom_before,
-            "zooming a non-graph/stale window must not affect the graph's own viewport"
+                .viewports
+                .contains_key(&win_a),
+            "window A must have its own viewport entry"
+        );
+        assert!(
+            editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .viewports
+                .contains_key(&win_b),
+            "window B must have its own viewport entry"
+        );
+
+        // Zoom window A only.
+        editor.kb_graph_view_zoom(win_a, 100.0, 400.0, 300.0);
+        let zoom_a = zoom_of(&editor, graph_idx, win_a);
+        let zoom_b = zoom_of(&editor, graph_idx, win_b);
+        assert!(zoom_a > 1.0, "window A's zoom must have increased");
+        assert_eq!(
+            zoom_b, 1.0,
+            "zooming window A must not affect window B's independent viewport"
+        );
+    }
+
+    #[test]
+    fn hit_test_in_one_window_does_not_use_another_windows_viewport() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let win_a = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        let area = editor.default_area();
+        let win_b = editor
+            .window_mgr
+            .split(SplitDirection::Vertical, graph_idx, area)
+            .unwrap();
+        editor.sync_open_graph_viewports();
+
+        // Zoom window A substantially (each call's step is clamped — see
+        // GRAPH_ZOOM_MAX_STEP — so repeat it) so its scene<->pixel transform
+        // genuinely diverges from window B's (still at the default 1.0x).
+        for _ in 0..5 {
+            editor.kb_graph_view_zoom(win_a, 300.0, 400.0, 300.0);
+        }
+        assert!(zoom_of(&editor, graph_idx, win_a) > 1.5);
+        assert_eq!(zoom_of(&editor, graph_idx, win_b), 1.0);
+
+        let (node_x, node_y) = {
+            let gv = editor.buffers[graph_idx].graph_view().unwrap();
+            let node = &gv.scene.nodes[0];
+            (node.x, node.y)
+        };
+
+        // The pixel position that lands on the node UNDER WINDOW A's
+        // (zoomed) viewport.
+        let (px_a, py_a) = {
+            let gv = editor.buffers[graph_idx].graph_view().unwrap();
+            scene_to_click_px(gv, win_a, node_x, node_y)
+        };
+        let hit_in_a = editor.kb_graph_view_hit_test_and_select(win_a, px_a, py_a);
+        assert_eq!(
+            hit_in_a,
+            Some(0),
+            "clicking the node's own zoomed pixel position in window A must hit it"
+        );
+
+        // Clicking that SAME pixel position in window B (unzoomed) resolves
+        // through a DIFFERENT viewport and must not land on the same node —
+        // if it did, the two windows would still be sharing one viewport.
+        let hit_in_b = editor.kb_graph_view_hit_test_and_select(win_b, px_a, py_a);
+        assert_ne!(
+            hit_in_b,
+            Some(0),
+            "the same pixel position must not hit the same node in window B, \
+             which has an independent (unzoomed) viewport"
+        );
+
+        // Window B's OWN pixel position for the node (computed via B's own
+        // viewport) must still hit correctly — proving B has a genuinely
+        // correct, independent viewport, not just a "doesn't match A" one.
+        let (px_b, py_b) = {
+            let gv = editor.buffers[graph_idx].graph_view().unwrap();
+            scene_to_click_px(gv, win_b, node_x, node_y)
+        };
+        let hit_in_b_own_coords = editor.kb_graph_view_hit_test_and_select(win_b, px_b, py_b);
+        assert_eq!(
+            hit_in_b_own_coords,
+            Some(0),
+            "clicking the node's own pixel position, computed via window B's own viewport, \
+             must hit it in window B"
+        );
+    }
+
+    #[test]
+    fn a_node_position_change_reflattens_every_window_showing_the_buffer() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let win_a = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        let area = editor.default_area();
+        let win_b = editor
+            .window_mgr
+            .split(SplitDirection::Vertical, graph_idx, area)
+            .unwrap();
+        editor.sync_open_graph_viewports();
+
+        let (press_x, press_y) = {
+            let gv = editor.buffers[graph_idx].graph_view().unwrap();
+            let node = &gv.scene.nodes[0];
+            scene_to_click_px(gv, win_a, node.x, node.y)
+        };
+        editor.kb_graph_view_hit_test_and_select(win_a, press_x, press_y);
+        editor.kb_graph_view_drag_node(win_a, 0, press_x + 300.0, press_y - 200.0);
+        editor.kb_graph_view_drag_end(win_a, 0);
+
+        // The node moved (shared topology) — BOTH windows' rendered caches
+        // must reflect it, not just window A's.
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        assert!(gv.rendered.contains_key(&win_a));
+        assert!(gv.rendered.contains_key(&win_b));
+        assert!(!gv.rendered[&win_a].elements.is_empty());
+        assert!(
+            !gv.rendered[&win_b].elements.is_empty(),
+            "dragging a node in window A must also reflatten window B, \
+             since the node's new position is shared topology"
+        );
+    }
+
+    #[test]
+    fn sync_open_graph_viewports_prunes_a_closed_windows_entries() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let win_a = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        let area = editor.default_area();
+        let win_b = editor
+            .window_mgr
+            .split(SplitDirection::Vertical, graph_idx, area)
+            .unwrap();
+        editor.sync_open_graph_viewports();
+        assert!(editor.buffers[graph_idx]
+            .graph_view()
+            .unwrap()
+            .viewports
+            .contains_key(&win_b));
+
+        editor.window_mgr.close(win_b);
+        editor.sync_open_graph_viewports();
+
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        assert!(
+            !gv.viewports.contains_key(&win_b),
+            "a closed window's viewport entry must be pruned"
+        );
+        assert!(
+            !gv.rendered.contains_key(&win_b),
+            "a closed window's rendered entry must be pruned"
+        );
+        assert!(
+            gv.viewports.contains_key(&win_a),
+            "the surviving window's entry must remain"
         );
     }
 
