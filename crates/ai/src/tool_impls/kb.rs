@@ -770,6 +770,17 @@ pub fn execute_kb_graph_view_set_pinned(
     }
 }
 
+pub fn execute_kb_graph_view_toggle_overlay(
+    editor: &mut Editor,
+    _args: &serde_json::Value,
+) -> Result<String, String> {
+    let active = editor.kb_graph_view_toggle_overlay();
+    Ok(format!(
+        "KB graph view overlay: {}",
+        if active { "on" } else { "off" }
+    ))
+}
+
 pub fn execute_kb_graph_view_state(
     editor: &mut Editor,
     _args: &serde_json::Value,

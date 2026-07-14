@@ -325,6 +325,16 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             permission: Some(PermissionTier::ReadOnly),
         },
         ToolDefinition {
+            name: "kb_graph_view_toggle_overlay".into(),
+            description: "Toggle the native KB graph view between its normal tiled split-window pane and a full-frame modal overlay with a dimmed background, so the graph can be inspected without the tiled pane's size constraints. No-op if no graph view is open. Returns the new overlay state (true = overlay active).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::new(),
+                required: vec![],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
             name: "kb_graph_view_state".into(),
             description: "Structured introspection snapshot of the open native KB graph view: which node is hovered, which is selected, every node currently rendered (the ego-network), and every edge/link shown between them. Returns null if no graph view is open. Same data both the human's visual rendering and the (kb-graph-view-state) Scheme primitive read from — use this to reason about or narrate what the graph currently looks like.".into(),
             parameters: ToolParameters {

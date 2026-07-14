@@ -787,6 +787,17 @@ pub struct Editor {
     /// real time. Mirrors `kb_graph_hover_enabled`; read by `gui_app.rs`'s
     /// `CursorMoved` handler to gate the hover hit-test branch.
     pub kb_graph_hover_enabled: bool,
+    /// Whether the graph view is currently showing as a full-frame modal
+    /// overlay (dimmed background, drawn via `render_common::overlay`)
+    /// instead of its normal tiled split-window pane. Deliberately NOT an
+    /// `OptionRegistry` entry — this is momentary interaction state (like
+    /// `mini_dialog`/`leader_active`), not a persisted preference; the
+    /// preference part (how much to dim) is `kb_graph_view_overlay_dim_opacity`.
+    /// Toggled by `Editor::kb_graph_view_toggle_overlay`.
+    pub kb_graph_view_overlay_active: bool,
+    /// Opacity (0.0-1.0) of the dimming scrim drawn behind the graph view
+    /// when `kb_graph_view_overlay_active` is true.
+    pub kb_graph_view_overlay_dim_opacity: f32,
     /// Queued background layout request for the open/refreshed graph-view
     /// buffer (`mae::graph_layout_bridge`, Part C Phase 1) — drained once
     /// per GUI event-loop tick, see `crate::graph_view::GraphLayoutIntent`'s
@@ -1235,6 +1246,8 @@ impl Editor {
             kb_graph_follow_current_node: true,
             kb_graph_animate: false,
             kb_graph_hover_enabled: true,
+            kb_graph_view_overlay_active: false,
+            kb_graph_view_overlay_dim_opacity: 0.6,
             pending_graph_layout: None,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)
             messages_synced_seq: None,

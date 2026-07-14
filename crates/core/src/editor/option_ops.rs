@@ -229,6 +229,9 @@ impl super::Editor {
             "kb_graph_follow_current_node" => self.kb_graph_follow_current_node.to_string(),
             "kb_graph_animate" => self.kb_graph_animate.to_string(),
             "kb_graph_hover_enabled" => self.kb_graph_hover_enabled.to_string(),
+            "kb_graph_view_overlay_dim_opacity" => {
+                self.kb_graph_view_overlay_dim_opacity.to_string()
+            }
             _ => return None,
         };
         Some((value, def))
@@ -974,6 +977,12 @@ impl super::Editor {
             }
             "kb_graph_hover_enabled" => {
                 self.kb_graph_hover_enabled = parse_option_bool(value)?;
+            }
+            "kb_graph_view_overlay_dim_opacity" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_view_overlay_dim_opacity = v.clamp(0.0, 1.0);
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }

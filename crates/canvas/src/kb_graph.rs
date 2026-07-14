@@ -67,16 +67,34 @@ pub fn build_kb_graph_positions_only(
         .map(|(i, n)| (n.id.as_str(), i))
         .collect();
 
-    // Create scene nodes with initial positions on a circle
+    // Create scene nodes with initial positions via a 2-D "sunflower"
+    // (Vogel/Fibonacci-spiral) point distribution — NOT a plain ring. A
+    // 1-D ring can't simultaneously satisfy two constraints at once for
+    // large n: (a) overall spread small enough for the force-layout's
+    // temperature-bounded relaxation budget to actually reach equilibrium
+    // from (see `IDEAL_AREA_PER_NODE`'s doc comment), and (b) adjacent
+    // nodes non-overlapping — a ring's local point density is forced to
+    // scale as 1/n independent of how large its radius is, so a radius
+    // small enough for (a) inevitably crams nodes into overlapping
+    // hit-circles/render-circles for a large KB subgraph. Vogel's method
+    // distributes n points evenly across a genuinely 2-D disk of area
+    // `n * IDEAL_AREA_PER_NODE`; average nearest-neighbor spacing works out
+    // to a CONSTANT `sqrt(IDEAL_AREA_PER_NODE)` regardless of n, satisfying
+    // both constraints at once (and incidentally not reading as an obvious
+    // circle outline pre-layout, unlike the plain ring).
     let n = nodes.len();
-    let radius = (n as f64 * 30.0).max(100.0);
+    let disk_radius = ((n as f64 * crate::layout::IDEAL_AREA_PER_NODE) / std::f64::consts::PI)
+        .sqrt()
+        .max(100.0);
+    let golden_angle = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
     let scene_nodes: Vec<SceneNode> = nodes
         .iter()
         .enumerate()
         .map(|(i, node)| {
-            let angle = 2.0 * std::f64::consts::PI * (i as f64) / (n.max(1) as f64);
-            let x = radius * angle.cos();
-            let y = radius * angle.sin();
+            let r = disk_radius * (((i as f64) + 0.5) / (n.max(1) as f64)).sqrt();
+            let angle = (i as f64) * golden_angle;
+            let x = r * angle.cos();
+            let y = r * angle.sin();
             let kind = node.kind;
             let is_starter = starter_ids.contains(&node.id);
             let style = kind_to_style(&kind, is_starter);
@@ -351,18 +369,63 @@ mod tests {
 
     #[test]
     fn positions_only_skips_force_layout() {
-        // Two nodes placed on the initial circle stay EXACTLY on it (no
-        // force-layout displacement) — confirms `build_kb_graph_positions_only`
-        // really is layout-free, the property `graph_view_ops.rs` depends on
-        // to defer layout to the background bridge.
+        // Nodes placed on the initial sunflower-spiral stay EXACTLY there
+        // (no force-layout displacement) — confirms
+        // `build_kb_graph_positions_only` really is layout-free, the
+        // property `graph_view_ops.rs` depends on to defer layout to the
+        // background bridge.
         let (nodes, links) = nodes_and_links();
         let graph = build_kb_graph_positions_only(&nodes, &links, &[], &[]);
-        let radius = (nodes.len() as f64 * 30.0).max(100.0);
+        let n = nodes.len();
+        let disk_radius = ((n as f64 * crate::layout::IDEAL_AREA_PER_NODE) / std::f64::consts::PI)
+            .sqrt()
+            .max(100.0);
+        let golden_angle = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
         for (i, node) in graph.nodes.iter().enumerate() {
-            let angle = 2.0 * std::f64::consts::PI * (i as f64) / (nodes.len().max(1) as f64);
-            assert!((node.x - radius * angle.cos()).abs() < 1e-9);
-            assert!((node.y - radius * angle.sin()).abs() < 1e-9);
+            let r = disk_radius * (((i as f64) + 0.5) / (n.max(1) as f64)).sqrt();
+            let angle = (i as f64) * golden_angle;
+            assert!((node.x - r * angle.cos()).abs() < 1e-9);
+            assert!((node.y - r * angle.sin()).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn positions_only_spacing_stays_roughly_constant_regardless_of_node_count() {
+        // The whole point of the sunflower distribution over a plain ring:
+        // average nearest-neighbor spacing must NOT shrink toward zero as
+        // the node count grows (a ring's does, since its local density is
+        // 1/n independent of radius) — it should stay near
+        // `sqrt(IDEAL_AREA_PER_NODE)` = 100 regardless of n, so nodes never
+        // start out visually/hit-test overlapping no matter how large a KB
+        // subgraph is opened.
+        fn min_pairwise_dist(n: usize) -> f64 {
+            let nodes: Vec<KbNodeInfo> = (0..n)
+                .map(|i| KbNodeInfo {
+                    id: format!("n{i}"),
+                    title: "x".to_string(),
+                    kind: NodeKind::Concept,
+                })
+                .collect();
+            let graph = build_kb_graph_positions_only(&nodes, &[], &[], &[]);
+            let mut min_dist = f64::MAX;
+            for i in 0..graph.nodes.len() {
+                for j in (i + 1)..graph.nodes.len() {
+                    let dx = graph.nodes[i].x - graph.nodes[j].x;
+                    let dy = graph.nodes[i].y - graph.nodes[j].y;
+                    min_dist = min_dist.min((dx * dx + dy * dy).sqrt());
+                }
+            }
+            min_dist
+        }
+
+        // A real KB-sized subgraph (matches the ~1000-node depth-2 case
+        // observed live) must still keep its nodes meaningfully apart, not
+        // crammed into overlapping hit-circles.
+        let min_dist_large = min_pairwise_dist(1000);
+        assert!(
+            min_dist_large > 30.0,
+            "min pairwise spacing at n=1000 collapsed to {min_dist_large}, nodes will overlap"
+        );
     }
 
     #[test]

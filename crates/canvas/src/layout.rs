@@ -8,6 +8,25 @@
 
 use crate::scene::{SceneEdge, SceneNode};
 
+/// Target scene-space area (px²) budgeted per node, shared by the
+/// force-layout's own `ideal_distance` calculation AND
+/// `kb_graph::build_kb_graph_positions_only`'s initial circular placement
+/// (single source of truth, not two independently-tuned magic numbers).
+/// Keeping `k = sqrt(area / n)` constant regardless of graph size (by
+/// scaling `area` linearly with `n`, below) means the ideal edge length
+/// doesn't shrink toward zero as a KB subgraph grows — a graph of 1000+
+/// nodes needs proportionally more room, not a denser hairball. Just as
+/// importantly, it keeps the INITIAL circle's radius in the same order of
+/// magnitude as the eventual equilibrium layout, so the temperature-cooling
+/// schedule's bounded per-iteration displacement budget (`LayoutConfig::
+/// max_iterations` ticks, each capped near `temperature`) can actually
+/// traverse the gap and produce a real force-directed arrangement — with a
+/// radius that instead grew LINEARLY in `n` (the pre-fix formula), a
+/// realistically-sized KB subgraph's starting spread vastly exceeded what
+/// 50 iterations of cooling could ever cover, so nodes settled having
+/// barely moved off their initial ring.
+pub const IDEAL_AREA_PER_NODE: f64 = 10_000.0;
+
 /// Configuration for the force layout algorithm.
 #[derive(Debug, Clone)]
 pub struct LayoutConfig {
@@ -68,7 +87,9 @@ impl ForceLayout {
             return 0.0;
         }
 
-        let area = 800.0 * 600.0; // Default layout area
+        // Area scales with node count so `k` (ideal edge length) stays
+        // constant regardless of graph size — see `IDEAL_AREA_PER_NODE`.
+        let area = n as f64 * IDEAL_AREA_PER_NODE;
         let k = self.ideal_distance(n, area);
         let k_sq = k * k;
 
@@ -219,7 +240,8 @@ mod tests {
         layout.run(&mut nodes, &edges, 100);
         let dist = ((nodes[0].x - nodes[1].x).powi(2) + (nodes[0].y - nodes[1].y).powi(2)).sqrt();
         // Connected nodes should settle at a finite equilibrium distance
-        // (initial distance was 400; with repulsion they settle near ideal k ~ 490)
+        // (initial distance was 400; with repulsion they settle near ideal
+        // k = sqrt(IDEAL_AREA_PER_NODE) = 100, constant regardless of n).
         assert!(
             dist < 600.0,
             "connected nodes should settle at bounded distance, dist={}",

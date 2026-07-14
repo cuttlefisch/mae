@@ -299,6 +299,9 @@ impl SchemeRuntime {
                 mae_core::GraphViewIntent::SetPinned { id, pinned, pos } => {
                     editor.kb_graph_view_set_pinned(&id, pinned, pos);
                 }
+                mae_core::GraphViewIntent::ToggleOverlay => {
+                    editor.kb_graph_view_toggle_overlay();
+                }
             }
         }
 

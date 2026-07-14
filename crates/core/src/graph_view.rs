@@ -303,6 +303,10 @@ pub enum GraphViewIntent {
         pinned: bool,
         pos: Option<(f64, f64)>,
     },
+    /// Toggle the graph view between its normal tiled pane and a full-frame
+    /// modal overlay with a dimmed background — see
+    /// `Editor::kb_graph_view_toggle_overlay`.
+    ToggleOverlay,
 }
 
 /// Which background layout pass a `GraphLayoutIntent` requests.

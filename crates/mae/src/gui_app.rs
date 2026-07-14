@@ -266,17 +266,29 @@ async fn bridge_task(
 #[cfg(feature = "gui")]
 struct GraphDragState {
     window: mae_core::WindowId,
-    node_index: usize,
+    /// `Some(index)` when mouse-DOWN hit a node — drag repositions/pins it
+    /// (Phase 4, unchanged). `None` when mouse-DOWN hit empty canvas space —
+    /// drag instead pans the viewport (`Editor::kb_graph_view_pan`), the
+    /// Obsidian/org-roam-ui-style canvas-drag gesture.
+    node_index: Option<usize>,
     /// Window-relative pixel position at mouse-DOWN — replayed as the
     /// hit-test coordinates for a plain click (`Editor::kb_graph_view_click_at`)
     /// if the drag never exceeds `GRAPH_DRAG_THRESHOLD_PX` (see `moved`).
     press_rel_x: f32,
     press_rel_y: f32,
+    /// Window-relative pixel position at the LAST `CursorMoved` tick this
+    /// drag processed — used only by the panning path to compute a
+    /// per-event delta (node-drag instead recomputes an absolute target
+    /// position every tick via `kb_graph_view_drag_node`, so it doesn't
+    /// need this).
+    last_rel_x: f32,
+    last_rel_y: f32,
     /// Set once cumulative movement from `press_rel_x`/`press_rel_y`
     /// exceeds `GRAPH_DRAG_THRESHOLD_PX` — the click-vs-drag split: on
     /// release, `moved == false` navigates the companion window (Phase 1b
-    /// behavior, preserved); `moved == true` pins the node instead
-    /// (Phase 4), never navigating.
+    /// behavior, preserved); `moved == true` pins the node (Phase 4) or, for
+    /// a pan, simply ends (the viewport already moved live), never
+    /// navigating.
     moved: bool,
 }
 
@@ -705,15 +717,20 @@ impl GuiApp {
                         // rather than a click. Navigation (Phase 1b
                         // behavior) happens on release if no drag occurred;
                         // pinning (Phase 4) happens on release if it did —
-                        // see the `MouseInput { Released, Left }` arm.
+                        // see the `MouseInput { Released, Left }` arm. A
+                        // miss (empty canvas) still starts a drag — it may
+                        // become a pan instead of a node-drag/click, see
+                        // `GraphDragState::node_index`'s doc comment.
                         let hit = self
                             .editor
                             .kb_graph_view_hit_test_and_select(focused_id, rel_x, rel_y);
-                        self.graph_drag = hit.map(|node_index| GraphDragState {
+                        self.graph_drag = Some(GraphDragState {
                             window: focused_id,
-                            node_index,
+                            node_index: hit,
                             press_rel_x: rel_x,
                             press_rel_y: rel_y,
+                            last_rel_x: rel_x,
+                            last_rel_y: rel_y,
                             moved: false,
                         });
                         self.dirty = true;
@@ -1174,14 +1191,16 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
                     }
 
                     if let Some(drag) = self.graph_drag.as_mut() {
-                        // Part C Phase 4 (drag-to-pin): dragging a graph
-                        // node. Recompute the window-relative pixel
-                        // position each move (not just once at press) in
-                        // case the window was resized mid-drag. Deliberately
-                        // does NOT call `focus_window_at` (unlike the
-                        // text-selection drag path below) — the drag must
-                        // keep tracking the SAME graph window's node even if
-                        // the cursor strays outside that window's bounds.
+                        // Part C Phase 4 (drag-to-pin) + canvas pan:
+                        // dragging either a graph node or empty canvas
+                        // space (see `GraphDragState::node_index`).
+                        // Recompute the window-relative pixel position each
+                        // move (not just once at press) in case the window
+                        // was resized mid-drag. Deliberately does NOT call
+                        // `focus_window_at` (unlike the text-selection drag
+                        // path below) — the drag must keep tracking the
+                        // SAME graph window even if the cursor strays
+                        // outside that window's bounds.
                         let window_rect = self
                             .editor
                             .window_mgr
@@ -1196,9 +1215,25 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
                             let dy = rel_y - drag.press_rel_y;
                             if drag.moved || (dx * dx + dy * dy).sqrt() > GRAPH_DRAG_THRESHOLD_PX {
                                 drag.moved = true;
-                                let (window, node_index) = (drag.window, drag.node_index);
-                                self.editor
-                                    .kb_graph_view_drag_node(window, node_index, rel_x, rel_y);
+                                let window = drag.window;
+                                let node_index = drag.node_index;
+                                let (last_x, last_y) = (drag.last_rel_x, drag.last_rel_y);
+                                drag.last_rel_x = rel_x;
+                                drag.last_rel_y = rel_y;
+                                match node_index {
+                                    Some(node_index) => {
+                                        self.editor.kb_graph_view_drag_node(
+                                            window, node_index, rel_x, rel_y,
+                                        );
+                                    }
+                                    None => {
+                                        self.editor.kb_graph_view_pan(
+                                            window,
+                                            rel_x - last_x,
+                                            rel_y - last_y,
+                                        );
+                                    }
+                                }
                                 self.dirty = true;
                             }
                         }
@@ -1245,14 +1280,16 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
                 self.mouse_pressed = false;
                 if let Some(drag) = self.graph_drag.take() {
                     // Part C Phase 4: finish the graph-node press/drag
-                    // gesture. `moved` distinguishes a real drag (pin the
-                    // node where it was left) from a plain click-and-release
-                    // (fall back to the Phase 1b click-to-navigate path, at
-                    // the ORIGINAL press position — the node never actually
-                    // moved in that case).
+                    // gesture, or a canvas pan. `moved` distinguishes a real
+                    // drag (pin the node where it was left, or — for a pan —
+                    // just stop, the viewport already moved live) from a
+                    // plain click-and-release (fall back to the Phase 1b
+                    // click-to-navigate path, at the ORIGINAL press
+                    // position — nothing actually moved in that case).
                     if drag.moved {
-                        self.editor
-                            .kb_graph_view_drag_end(drag.window, drag.node_index);
+                        if let Some(node_index) = drag.node_index {
+                            self.editor.kb_graph_view_drag_end(drag.window, node_index);
+                        }
                     } else {
                         self.editor.kb_graph_view_click_at(
                             drag.window,

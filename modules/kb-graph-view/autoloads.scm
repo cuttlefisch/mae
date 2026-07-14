@@ -33,6 +33,7 @@
 (define-command "kb-graph-view-close" "Close the native KB graph view" "kb-graph-view-close")
 (define-command "kb-graph-view-refresh" "Refresh the native KB graph view in place" "kb-graph-view-refresh")
 (define-command "kb-graph-view-select-current" "Navigate the companion window to the selected graph node" "kb-graph-view-select-current")
+(define-command "kb-graph-view-toggle-overlay" "Toggle the KB graph view between its tiled pane and a full-frame dimmed overlay" "kb-graph-view-toggle-overlay")
 
 ;; Buffer-local keymap inheriting read-only navigation (base j/k/etc.).
 (define-keymap "graph" "navigation")
@@ -43,6 +44,7 @@
 (define-key "graph" "l" "kb-graph-view-navigate-right")
 (define-key "graph" "Enter" "kb-graph-view-select-current")
 (define-key "graph" "g r" "kb-graph-view-refresh")
+(define-key "graph" "o" "kb-graph-view-toggle-overlay")
 (define-key "graph" "q" "kb-graph-view-close")
 (define-key "graph" "Escape" "kb-graph-view-close")
 (define-key "graph" "?" "show-buffer-keys")

@@ -39,6 +39,23 @@ fn graph_scene_point(gv: &GraphView, win_id: WindowId, rel_x: f32, rel_y: f32) -
     mae_canvas::interaction::viewport_to_scene(&viewport, rel_x as f64, rel_y as f64)
 }
 
+/// Convert the graph's fixed SCREEN-space node radius
+/// (`Editor::kb_graph_node_radius` — never scaled by zoom when drawn, see
+/// `flatten_scene_graph`'s doc comment) into the equivalent SCENE-space
+/// radius for window `win_id`'s current zoom, for `mae_canvas::interaction
+/// ::hit_test`. The hit-testing analog of `graph_scene_point`'s position
+/// conversion — without this, a click's hit radius stayed FIXED in
+/// scene-space units (the node's now-vestigial `width`/`height` fields, a
+/// leftover from an earlier rectangular-node model) while the rendered
+/// circle stayed fixed in SCREEN-space, so the two drifted apart at any
+/// zoom other than 1.0 — most severely once zoomed out to see a large
+/// graph, where the clickable circle shrank to a sliver of the visibly
+/// drawn one.
+fn graph_scene_hit_radius(gv: &GraphView, win_id: WindowId, node_radius_px: f64) -> f64 {
+    let viewport = gv.viewports.get(&win_id).copied().unwrap_or_default();
+    node_radius_px / viewport.zoom.max(f64::EPSILON)
+}
+
 /// Part C Phase 4 (wheel-zoom): per-wheel-event zoom-factor tuning.
 /// `GRAPH_ZOOM_SENSITIVITY` scales a raw wheel pixel delta (the same units
 /// `gui_app.rs::handle_mouse_wheel` already computes for text scroll) down
@@ -598,6 +615,31 @@ impl Editor {
         found
     }
 
+    /// Toggle the graph view between its normal tiled split-window pane and
+    /// a full-frame modal overlay (dimmed background, drawn on top of the
+    /// rest of the editor — see `render_common::overlay::ActiveOverlay::
+    /// GraphView`). No-op (returns `false`, unchanged) if no `BufferKind::
+    /// Graph` buffer is open — there's nothing to overlay. Returns the new
+    /// state so callers (the Scheme primitive / MCP tool / keybinding) can
+    /// report "overlay: on"/"overlay: off".
+    pub fn kb_graph_view_toggle_overlay(&mut self) -> bool {
+        if !self.buffers.iter().any(|b| b.kind == BufferKind::Graph) {
+            self.set_status("No KB graph view is open".to_string());
+            return false;
+        }
+        self.kb_graph_view_overlay_active = !self.kb_graph_view_overlay_active;
+        self.mark_full_redraw();
+        self.set_status(format!(
+            "KB graph view overlay: {}",
+            if self.kb_graph_view_overlay_active {
+                "on"
+            } else {
+                "off"
+            }
+        ));
+        self.kb_graph_view_overlay_active
+    }
+
     /// Hit-test a Graph window position and update the scene's selection —
     /// WITHOUT navigating the companion window. Factored out of
     /// `kb_graph_view_click_at` (Part C Phase 1 item 6) so Part C Phase 4's
@@ -627,9 +669,11 @@ impl Editor {
             return None;
         }
 
+        let node_radius_px = self.kb_graph_node_radius as f64;
         let hit_result: Option<Option<usize>> = self.buffers[buf_idx].graph_view().map(|gv| {
             let (scene_x, scene_y) = graph_scene_point(gv, graph_win_id, rel_x, rel_y);
-            mae_canvas::interaction::hit_test(&gv.scene, scene_x, scene_y)
+            let radius = graph_scene_hit_radius(gv, graph_win_id, node_radius_px);
+            mae_canvas::interaction::hit_test(&gv.scene, scene_x, scene_y, radius)
         });
         let node_hit = hit_result?;
 
@@ -670,9 +714,11 @@ impl Editor {
             return false;
         }
 
+        let node_radius_px = self.kb_graph_node_radius as f64;
         let Some(node_hit) = self.buffers[buf_idx].graph_view().map(|gv| {
             let (scene_x, scene_y) = graph_scene_point(gv, graph_win_id, rel_x, rel_y);
-            mae_canvas::interaction::hit_test(&gv.scene, scene_x, scene_y)
+            let radius = graph_scene_hit_radius(gv, graph_win_id, node_radius_px);
+            mae_canvas::interaction::hit_test(&gv.scene, scene_x, scene_y, radius)
         }) else {
             return false;
         };
@@ -886,6 +932,34 @@ impl Editor {
         // Viewport-only change, scoped to THIS window — other windows
         // showing the same buffer are unaffected, so only this one needs
         // reflattening.
+        self.graph_view_reflatten_window(buf_idx, graph_win_id);
+    }
+
+    /// Click-and-drag-on-empty-canvas-space panning (the Obsidian/org-roam-
+    /// ui-style gesture): shift a Graph window's viewport by a per-event
+    /// screen-space pixel delta via `mae_canvas::interaction::pan` (the
+    /// exact inverse of `scene_to_viewport`'s transform, already used
+    /// nowhere else in this codebase until now — reused, not reimplemented,
+    /// per CLAUDE.md principle #8). `dx_px`/`dy_px` are the delta since the
+    /// LAST drag event (not since mouse-down) — `gui_app.rs`'s drag handler
+    /// calls this every `CursorMoved` tick while panning, mirroring how
+    /// `kb_graph_view_drag_node` is called every tick with an absolute
+    /// target position; panning has no analogous "absolute" target, so it
+    /// accumulates incrementally instead.
+    ///
+    /// No-op if `graph_win_id` doesn't resolve to an open `BufferKind::
+    /// Graph` window.
+    pub fn kb_graph_view_pan(&mut self, graph_win_id: WindowId, dx_px: f32, dy_px: f32) {
+        let Some(buf_idx) = self.window_mgr.window(graph_win_id).map(|w| w.buffer_idx) else {
+            return;
+        };
+        if buf_idx >= self.buffers.len() || self.buffers[buf_idx].kind != BufferKind::Graph {
+            return;
+        }
+        if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+            let viewport = gv.viewports.entry(graph_win_id).or_default();
+            mae_canvas::interaction::pan(viewport, dx_px as f64, dy_px as f64);
+        }
         self.graph_view_reflatten_window(buf_idx, graph_win_id);
     }
 
@@ -2280,6 +2354,91 @@ mod tests {
             zoom_of(&editor, graph_idx, graph_win_id),
             zoom_before,
             "zooming a non-graph/stale window must not affect the graph's own viewport"
+        );
+    }
+
+    /// Read window `win_id`'s current viewport center on graph buffer `graph_idx`.
+    fn center_of(editor: &Editor, graph_idx: usize, win_id: WindowId) -> (f64, f64) {
+        let vp = editor.buffers[graph_idx]
+            .graph_view()
+            .unwrap()
+            .viewports
+            .get(&win_id)
+            .unwrap();
+        (vp.center_x, vp.center_y)
+    }
+
+    #[test]
+    fn pan_moves_viewport_center_opposite_the_drag_direction_and_reflattens() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        let (cx_before, cy_before) = center_of(&editor, graph_idx, graph_win_id);
+
+        // Dragging right (positive dx) reveals content further left —
+        // "grab and pull" semantics, matching `mae_canvas::interaction::pan`.
+        editor.kb_graph_view_pan(graph_win_id, 50.0, -20.0);
+        let (cx_after, cy_after) = center_of(&editor, graph_idx, graph_win_id);
+        assert!(
+            cx_after < cx_before,
+            "dragging right must decrease center_x (before={cx_before}, after={cx_after})"
+        );
+        assert!(
+            cy_after > cy_before,
+            "dragging up (negative dy) must increase center_y (before={cy_before}, after={cy_after})"
+        );
+        assert!(
+            !editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .rendered
+                .get(&graph_win_id)
+                .unwrap()
+                .elements
+                .is_empty(),
+            "pan must re-flatten (rendered must reflect the current scene)"
+        );
+    }
+
+    #[test]
+    fn pan_on_non_graph_or_stale_window_is_a_harmless_no_op() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        let non_graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx != graph_idx)
+            .map(|w| w.id)
+            .expect("opening the graph view should have split");
+
+        let center_before = center_of(&editor, graph_idx, graph_win_id);
+        editor.kb_graph_view_pan(non_graph_win_id, 50.0, 50.0);
+        editor.kb_graph_view_pan(999_999, 50.0, 50.0);
+        assert_eq!(
+            center_of(&editor, graph_idx, graph_win_id),
+            center_before,
+            "panning a non-graph/stale window must not affect the graph's own viewport"
         );
     }
 

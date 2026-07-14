@@ -514,7 +514,7 @@ impl Renderer for GuiRenderer {
         let overlay = active_overlay(editor);
         if overlay == ActiveOverlay::MiniDialog {
             debug!("render: mini_dialog modal overlay");
-            render_window_area(
+            render_window_area_with_graph_overlay(
                 canvas,
                 editor,
                 &syntax_spans,
@@ -534,7 +534,7 @@ impl Renderer for GuiRenderer {
             popup_render::render_command_palette(canvas, editor, cols, rows);
         } else if overlay == ActiveOverlay::FilePicker {
             debug!("render: file_picker overlay");
-            render_window_area(
+            render_window_area_with_graph_overlay(
                 canvas,
                 editor,
                 &syntax_spans,
@@ -553,7 +553,7 @@ impl Renderer for GuiRenderer {
             popup_render::render_file_picker(canvas, editor, cols, rows);
         } else if overlay == ActiveOverlay::FileBrowser {
             debug!("render: file_browser overlay");
-            render_window_area(
+            render_window_area_with_graph_overlay(
                 canvas,
                 editor,
                 &syntax_spans,
@@ -572,7 +572,7 @@ impl Renderer for GuiRenderer {
             popup_render::render_file_browser(canvas, editor, cols, rows);
         } else if overlay == ActiveOverlay::CommandPalette {
             debug!("render: command_palette overlay");
-            render_window_area(
+            render_window_area_with_graph_overlay(
                 canvas,
                 editor,
                 &syntax_spans,
@@ -631,7 +631,7 @@ impl Renderer for GuiRenderer {
                 .max(mae_core::text_utils::WK_MIN_HEIGHT);
 
             let win_height = rows.saturating_sub(popup_height);
-            render_window_area(
+            render_window_area_with_graph_overlay(
                 canvas,
                 editor,
                 &syntax_spans,
@@ -654,6 +654,27 @@ impl Renderer for GuiRenderer {
                 &entries,
                 title_override.as_deref(),
             );
+        } else if overlay == ActiveOverlay::GraphView {
+            debug!("render: KB graph view full-frame overlay");
+            // Same background step every higher-priority overlay branch
+            // above uses when the graph overlay flag is set — here it's
+            // the ONLY thing to draw, since no popup sits on top.
+            render_window_area_with_graph_overlay(
+                canvas,
+                editor,
+                &syntax_spans,
+                shells,
+                0,
+                0,
+                cols,
+                window_height,
+                &mut all_layouts,
+                &mut layout_time_us,
+                &mut draw_time_us,
+                wrc,
+            );
+            status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
+            status_render::render_command_line(canvas, editor, cmd_row, cols);
         } else if overlay == ActiveOverlay::Splash {
             debug!("render: splash screen");
             splash_render::render_splash(canvas, editor, 0, 0, cols, window_height);
@@ -1212,6 +1233,85 @@ fn render_window_area(
             }
         }
     }
+}
+
+/// `render_window_area`, plus — if the KB graph view is toggled into
+/// full-frame overlay mode (`kb-graph-view-toggle-overlay`) — a dim scrim
+/// and the graph drawn on top. Every fullscreen-overlay branch below
+/// (`MiniDialog`/`FilePicker`/`FileBrowser`/`CommandPalette`/`WhichKey`)
+/// uses this as its background step instead of a bare `render_window_area`
+/// call: `ActiveOverlay::GraphView` sits BELOW those in `active_overlay`'s
+/// priority order (a leader-key hint must still show over the graph — see
+/// `render_common::overlay`), so without this, opening one of those while
+/// the graph overlay is up would resolve to a DIFFERENT `ActiveOverlay`
+/// variant and fall through to a plain `render_window_area` call — flashing
+/// back to the underlying tiled split-window view (revealing whatever
+/// window sits beside the graph) for the duration of the popup, instead of
+/// layering the popup over the still-dimmed graph as the overlay-priority
+/// comment promises.
+#[allow(clippy::too_many_arguments)]
+fn render_window_area_with_graph_overlay(
+    canvas: &mut canvas::SkiaCanvas,
+    editor: &Editor,
+    syntax_spans: &SyntaxSpanMap,
+    shells: &HashMap<usize, ShellTerminal>,
+    area_row: usize,
+    area_col: usize,
+    area_width: usize,
+    area_height: usize,
+    layouts_out: &mut HashMap<mae_core::WindowId, layout::FrameLayout>,
+    layout_time_us: &mut u64,
+    draw_time_us: &mut u64,
+    window_render_cache: &mut HashMap<mae_core::WindowId, WindowRenderCache>,
+) {
+    render_window_area(
+        canvas,
+        editor,
+        syntax_spans,
+        shells,
+        area_row,
+        area_col,
+        area_width,
+        area_height,
+        layouts_out,
+        layout_time_us,
+        draw_time_us,
+        window_render_cache,
+    );
+
+    if !editor.kb_graph_view_overlay_active {
+        return;
+    }
+    let Some(win) = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| editor.buffers[w.buffer_idx].kind == BufferKind::Graph)
+    else {
+        return;
+    };
+    let (buf_idx, win_id) = (win.buffer_idx, win.id);
+    let Some(gv) = editor.buffers[buf_idx].graph_view() else {
+        return;
+    };
+
+    let dim_opacity = editor.kb_graph_view_overlay_dim_opacity;
+    canvas.draw_rect_fill(
+        area_row,
+        area_col,
+        area_width,
+        area_height,
+        skia_safe::Color4f::new(0.0, 0.0, 0.0, dim_opacity),
+    );
+
+    let mut viewport = gv.viewports.get(&win_id).copied().unwrap_or_default();
+    viewport.width = (area_width as f32 * editor.gui_cell_width) as f64;
+    viewport.height = (area_height as f32 * editor.gui_cell_height) as f64;
+
+    let style = mae_core::graph_view::GraphStyleOptions::from_editor(editor);
+    let elements = mae_core::graph_view::flatten_scene_graph(&gv.scene, &viewport, &style);
+    let vb = mae_core::visual_buffer::VisualBuffer { elements };
+    let bg = theme::ts_bg(editor, "ui.graph.background");
+    render_visual_buffer_with_bg(canvas, &vb, area_row, area_col, area_width, area_height, bg);
 }
 
 fn render_visual_buffer(

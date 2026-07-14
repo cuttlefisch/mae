@@ -31,6 +31,11 @@ pub enum ActiveOverlay {
     CommandPalette,
     /// which-key / buffer-keys / leader transient hint.
     WhichKey,
+    /// Native KB graph view in full-frame overlay mode (dimmed background,
+    /// `kb-graph-view-toggle-overlay`) — deliberately below `WhichKey` (a
+    /// leader-key hint should still show over it) but above `Splash` (an
+    /// intentionally-toggled view outranks the idle dashboard).
+    GraphView,
     /// Dashboard splash screen.
     Splash,
     /// No fullscreen overlay — the normal editing view (windows + additive popups).
@@ -53,6 +58,13 @@ pub fn active_overlay(editor: &Editor) -> ActiveOverlay {
         || editor.leader_popup_ready()
     {
         ActiveOverlay::WhichKey
+    } else if editor.kb_graph_view_overlay_active
+        && editor
+            .buffers
+            .iter()
+            .any(|b| b.kind == crate::BufferKind::Graph)
+    {
+        ActiveOverlay::GraphView
     } else if super::splash::should_show_splash(editor) {
         ActiveOverlay::Splash
     } else {
@@ -91,6 +103,57 @@ mod tests {
         assert_eq!(active_overlay(&ed), ActiveOverlay::WhichKey);
         ed.set_leader_active(false);
         assert_eq!(active_overlay(&ed), ActiveOverlay::None);
+    }
+
+    #[test]
+    fn graph_view_overlay_requires_both_the_flag_and_an_open_graph_buffer() {
+        let mut ed = Editor::new();
+
+        // Flag alone, no graph buffer open — must not activate the overlay.
+        ed.kb_graph_view_overlay_active = true;
+        assert_ne!(
+            active_overlay(&ed),
+            ActiveOverlay::GraphView,
+            "toggling the flag with no graph view open must not show an empty overlay"
+        );
+
+        // Open a graph buffer — now the flag takes effect.
+        ed.kb_graph_view_open(Some("index".to_string()), Some(1));
+        assert_eq!(active_overlay(&ed), ActiveOverlay::GraphView);
+
+        // Flipping the flag back off (e.g. via kb_graph_view_toggle_overlay)
+        // returns to the normal view even with the graph buffer still open.
+        ed.kb_graph_view_overlay_active = false;
+        assert_ne!(active_overlay(&ed), ActiveOverlay::GraphView);
+    }
+
+    #[test]
+    fn which_key_outranks_the_graph_view_overlay() {
+        let mut ed = Editor::new();
+        ed.kb_graph_view_open(Some("index".to_string()), Some(1));
+        ed.kb_graph_view_overlay_active = true;
+        assert_eq!(active_overlay(&ed), ActiveOverlay::GraphView);
+
+        ed.set_leader_active(true);
+        assert_eq!(
+            active_overlay(&ed),
+            ActiveOverlay::WhichKey,
+            "a leader-key hint must still show over the graph overlay"
+        );
+    }
+
+    #[test]
+    fn toggle_overlay_flips_the_flag_and_reports_the_new_state() {
+        let mut ed = Editor::new();
+        // No graph open — no-op.
+        assert!(!ed.kb_graph_view_toggle_overlay());
+        assert!(!ed.kb_graph_view_overlay_active);
+
+        ed.kb_graph_view_open(Some("index".to_string()), Some(1));
+        assert!(ed.kb_graph_view_toggle_overlay());
+        assert!(ed.kb_graph_view_overlay_active);
+        assert!(!ed.kb_graph_view_toggle_overlay());
+        assert!(!ed.kb_graph_view_overlay_active);
     }
 
     #[test]

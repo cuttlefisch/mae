@@ -471,6 +471,12 @@ impl OptionRegistry {
                      time (immediate, not idle-delayed — see kb_preview_idle_delay for the \
                      unrelated idle-triggered KB-link hover preview).",
                     OptionKind::Bool, "true", Some("kb-graph.hover-enabled"), &[]),
+                opt!("kb_graph_view_overlay_dim_opacity", &["kb-graph-view-overlay-dim-opacity"],
+                    "Opacity (0.0-1.0) of the dark scrim drawn over the rest of the editor when \
+                     the graph view is toggled into full-frame overlay mode \
+                     (kb-graph-view-toggle-overlay), so underlying text stays legible but \
+                     visually de-emphasized while the graph is on top.",
+                    OptionKind::Float, "0.6", Some("kb-graph.view-overlay-dim-opacity"), &[]),
                 // --- File tree ---
                 opt!("file_tree_focus_on_open", &["file-tree-focus-on-open"],
                     "Auto-focus the file tree window when it opens",

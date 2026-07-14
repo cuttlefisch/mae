@@ -168,6 +168,20 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
         },
     );
 
+    // (kb-graph-view-toggle-overlay)
+    let s = shared.clone();
+    vm.register_fn(
+        "kb-graph-view-toggle-overlay",
+        "Toggle the native KB graph view between its normal tiled split-window pane and a full-frame modal overlay with a dimmed background, so the graph can be inspected without the tiled pane's size constraints. No-op if no graph view is open.",
+        Arity::Fixed(0),
+        move |_args: &[Value]| {
+            s.lock()
+                .pending_graph_view_intents
+                .push(mae_core::GraphViewIntent::ToggleOverlay);
+            Ok(Value::Void)
+        },
+    );
+
     // (kb-graph-view-state) → #f if no graph view is open, else
     // (center depth kb-instance follow-current? selected-node hovered-node
     //  nodes edges)
