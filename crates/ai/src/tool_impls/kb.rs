@@ -724,8 +724,17 @@ pub fn execute_kb_graph_view_zoom_to(
         .get("zoom")
         .and_then(|v| v.as_f64())
         .ok_or("Missing required parameter: zoom")?;
-    editor.kb_graph_view_zoom_to(target);
-    Ok(format!("KB graph view zoom set to {}", target))
+    match editor.kb_graph_view_zoom_to(target) {
+        // Report the ACTUAL applied (post-clamp) zoom, not `target` echoed
+        // back — an out-of-range request (e.g. 999) is silently clamped to
+        // 10.0 internally, and a caller reasoning about its own action must
+        // never be told the raw, un-applied value "worked."
+        Some(applied) if applied == target => Ok(format!("KB graph view zoom set to {applied}")),
+        Some(applied) => Ok(format!(
+            "KB graph view zoom set to {applied} (clamped from requested {target})"
+        )),
+        None => Err("No KB graph view is open".to_string()),
+    }
 }
 
 pub fn execute_kb_graph_view_set_pinned(
@@ -1594,6 +1603,53 @@ mod tests {
         let mut editor = Editor::new();
         let err = execute_kb_graph_view_zoom_to(&mut editor, &serde_json::json!({})).unwrap_err();
         assert!(err.contains("zoom"));
+    }
+
+    #[test]
+    fn kb_graph_view_zoom_to_out_of_range_message_reports_the_clamped_value_not_the_raw_request() {
+        // Regression guard (found during live MCP validation): the response
+        // message used to echo the raw requested `target` verbatim even
+        // when it was clamped internally — a caller (human or the AI peer
+        // itself) reading "zoom set to 999" would wrongly believe zoom is
+        // now 999x, when it's actually 10.0x. The message must report what
+        // ACTUALLY got applied.
+        let mut editor = Editor::new();
+        execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == mae_core::BufferKind::Graph)
+            .unwrap();
+        let win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == idx)
+            .map(|w| w.id)
+            .unwrap();
+        editor.window_mgr.set_focused(win_id);
+
+        let result =
+            execute_kb_graph_view_zoom_to(&mut editor, &serde_json::json!({"zoom": 999.0}))
+                .unwrap();
+
+        assert!(
+            result.contains("set to 10"),
+            "message must report the ACTUAL applied zoom (10.0, the clamp ceiling), not \
+             claim 999 was applied verbatim: {result}"
+        );
+        assert!(
+            result.to_lowercase().contains("clamp"),
+            "message should transparently note the request was clamped, not silently \
+             substitute a different number: {result}"
+        );
+    }
+
+    #[test]
+    fn kb_graph_view_zoom_to_no_graph_open_is_error() {
+        let mut editor = Editor::new();
+        let err = execute_kb_graph_view_zoom_to(&mut editor, &serde_json::json!({"zoom": 2.0}))
+            .unwrap_err();
+        assert!(err.to_lowercase().contains("no") && err.to_lowercase().contains("graph"));
     }
 
     #[test]

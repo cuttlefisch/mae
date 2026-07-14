@@ -518,22 +518,24 @@ impl Editor {
     /// Issue #322: set the graph's zoom to an explicit level — the
     /// AI-appropriate equivalent of `kb_graph_view_zoom`'s pixel-focus-
     /// based wheel delta (which has no meaningful non-pointer input). No-op
-    /// if no `BufferKind::Graph` buffer is open. Applies to the focused
-    /// window if it's currently showing the graph buffer (the common case:
-    /// a human and the AI peer looking at the same window), else the first
-    /// window found showing it (issue #321 made the viewport genuinely
-    /// per-window, so SOME window must be chosen — an AI-driven call has no
-    /// pixel focus point to disambiguate further).
-    pub fn kb_graph_view_zoom_to(&mut self, target: f64) {
-        let Some(graph_idx) = self
+    /// (returns `None`) if no `BufferKind::Graph` buffer is open. Applies
+    /// to the focused window if it's currently showing the graph buffer
+    /// (the common case: a human and the AI peer looking at the same
+    /// window), else the first window found showing it (issue #321 made
+    /// the viewport genuinely per-window, so SOME window must be chosen —
+    /// an AI-driven call has no pixel focus point to disambiguate
+    /// further). Returns the ACTUAL applied zoom (post-clamp — see
+    /// `mae_canvas::interaction::set_zoom`'s 0.1-10.0 range), not simply
+    /// `target` echoed back, so a caller reporting the result to a human or
+    /// reasoning about its own action (the MCP tool / Scheme primitive)
+    /// never claims an out-of-range value silently "worked" as requested.
+    pub fn kb_graph_view_zoom_to(&mut self, target: f64) -> Option<f64> {
+        let graph_idx = self
             .buffers
             .iter()
-            .position(|b| b.kind == BufferKind::Graph)
-        else {
-            return;
-        };
+            .position(|b| b.kind == BufferKind::Graph)?;
         let focused_id = self.window_mgr.focused_id();
-        let target_win = if self
+        let win_id = if self
             .window_mgr
             .window(focused_id)
             .is_some_and(|w| w.buffer_idx == graph_idx)
@@ -544,15 +546,14 @@ impl Editor {
                 .iter_windows()
                 .find(|w| w.buffer_idx == graph_idx)
                 .map(|w| w.id)
-        };
-        let Some(win_id) = target_win else {
-            return;
-        };
-        if let Some(gv) = self.buffers[graph_idx].graph_view_mut() {
+        }?;
+        let applied = self.buffers[graph_idx].graph_view_mut().map(|gv| {
             let viewport = gv.viewports.entry(win_id).or_default();
             mae_canvas::interaction::set_zoom(viewport, target);
-        }
+            viewport.zoom
+        })?;
         self.graph_view_reflatten_window(graph_idx, win_id);
+        Some(applied)
     }
 
     /// Issue #322: pin or unpin a node by KB id, optionally repositioning
@@ -2527,8 +2528,9 @@ mod tests {
             .unwrap();
         editor.window_mgr.set_focused(graph_win_id);
 
-        editor.kb_graph_view_zoom_to(2.5);
+        let applied = editor.kb_graph_view_zoom_to(2.5);
 
+        assert_eq!(applied, Some(2.5), "must return the actual applied zoom");
         assert_eq!(zoom_of(&editor, graph_idx, graph_win_id), 2.5);
     }
 
@@ -2549,10 +2551,18 @@ mod tests {
             .unwrap();
         editor.window_mgr.set_focused(graph_win_id);
 
-        editor.kb_graph_view_zoom_to(999.0);
+        let applied_high = editor.kb_graph_view_zoom_to(999.0);
+        assert_eq!(
+            applied_high,
+            Some(10.0),
+            "the returned value must be the CLAMPED result, not the raw 999.0 request — \
+             a caller reporting this to a human or reasoning about its own action must \
+             never be told the out-of-range value \"worked\""
+        );
         assert_eq!(zoom_of(&editor, graph_idx, graph_win_id), 10.0);
 
-        editor.kb_graph_view_zoom_to(-5.0);
+        let applied_low = editor.kb_graph_view_zoom_to(-5.0);
+        assert_eq!(applied_low, Some(0.1));
         assert_eq!(zoom_of(&editor, graph_idx, graph_win_id), 0.1);
     }
 
@@ -2582,15 +2592,17 @@ mod tests {
             .expect("opening the graph view should have split");
         editor.window_mgr.set_focused(non_graph_win_id);
 
-        editor.kb_graph_view_zoom_to(3.0);
+        let applied = editor.kb_graph_view_zoom_to(3.0);
 
+        assert_eq!(applied, Some(3.0));
         assert_eq!(zoom_of(&editor, graph_idx, graph_win_id), 3.0);
     }
 
     #[test]
     fn zoom_to_is_a_harmless_no_op_when_no_graph_is_open() {
         let mut editor = Editor::new();
-        editor.kb_graph_view_zoom_to(2.0); // must not panic
+        let applied = editor.kb_graph_view_zoom_to(2.0); // must not panic
+        assert_eq!(applied, None);
         assert!(!editor.buffers.iter().any(|b| b.kind == BufferKind::Graph));
     }
 
