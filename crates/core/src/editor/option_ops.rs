@@ -226,6 +226,7 @@ impl super::Editor {
             "kb_graph_node_radius" => self.kb_graph_node_radius.to_string(),
             "kb_graph_font_size" => self.kb_graph_font_size.to_string(),
             "kb_graph_layout_iterations" => self.kb_graph_layout_iterations.to_string(),
+            "kb_graph_layout_kind_clustering" => self.kb_graph_layout_kind_clustering.to_string(),
             "kb_graph_follow_current_node" => self.kb_graph_follow_current_node.to_string(),
             "kb_graph_animate" => self.kb_graph_animate.to_string(),
             "kb_graph_hover_enabled" => self.kb_graph_hover_enabled.to_string(),
@@ -968,6 +969,12 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.kb_graph_layout_iterations = v.clamp(0, 10_000);
+            }
+            "kb_graph_layout_kind_clustering" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_layout_kind_clustering = v.clamp(0.0, 1.0);
             }
             "kb_graph_follow_current_node" => {
                 self.kb_graph_follow_current_node = parse_option_bool(value)?;

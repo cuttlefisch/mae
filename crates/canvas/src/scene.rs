@@ -141,6 +141,16 @@ pub struct SceneEdge {
     pub target: usize,
     pub label: Option<String>,
     pub style: EdgeStyle,
+    /// ADR-030 relationship strength, 0.0-1.0 (`1.0` when not explicitly
+    /// authored, or for edges with no underlying KB link weight, e.g.
+    /// boundary/self-loop stub edges). Drives the force layout's
+    /// attraction strength for this edge — a link the user tagged as
+    /// weaker settles at a looser equilibrium distance than the default.
+    pub weight: f64,
+    /// ADR-030 relationship type (e.g. "implements", "references"). Not
+    /// used by the force layout itself (weight drives that) — carried
+    /// through for potential future edge styling (color/dash by type).
+    pub rel_type: Option<String>,
 }
 
 /// Visual style for an edge.

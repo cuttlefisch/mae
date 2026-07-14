@@ -773,6 +773,11 @@ pub struct Editor {
     /// `graph_layout_bridge` on each open/refresh/set-depth. Mirrors
     /// `kb_graph_layout_iterations`.
     pub kb_graph_layout_iterations: usize,
+    /// Strength (0.0-1.0) of node-kind-based visual clustering in the
+    /// force-directed layout. Mirrors `kb_graph_layout_kind_clustering`;
+    /// see `graph_view::kind_affinity_from_strength` for how this single
+    /// knob maps onto the layout's repulsion/attraction multipliers.
+    pub kb_graph_layout_kind_clustering: f32,
     /// TODO(Part C Phase 2, not wired yet): whether the graph view
     /// re-centers on the human/AI's current KB node automatically. Mirrors
     /// `kb_graph_follow_current_node` — registered now so the OptionRegistry
@@ -1243,6 +1248,7 @@ impl Editor {
             kb_graph_node_radius: 18,
             kb_graph_font_size: 14,
             kb_graph_layout_iterations: 50,
+            kb_graph_layout_kind_clustering: 0.5,
             kb_graph_follow_current_node: true,
             kb_graph_animate: false,
             kb_graph_hover_enabled: true,

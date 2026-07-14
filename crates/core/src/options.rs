@@ -456,6 +456,12 @@ impl OptionRegistry {
                     "Force-directed layout iteration count run by the background \
                      graph_layout_bridge on each open/refresh/set-depth.",
                     OptionKind::Int, "50", Some("kb-graph.layout-iterations"), &[]),
+                opt!("kb_graph_layout_kind_clustering", &["kb-graph-layout-kind-clustering"],
+                    "Strength (0.0-1.0) of node-kind-based visual clustering in the graph \
+                     view's force-directed layout — same-kind nodes (e.g. two Concepts) pull \
+                     together more than cross-kind pairs. 0.0 reproduces the pre-clustering \
+                     layout exactly.",
+                    OptionKind::Float, "0.5", Some("kb-graph.layout-kind-clustering"), &[]),
                 opt!("kb_graph_follow_current_node", &["kb-graph-follow-current-node"],
                     "Whether the graph view re-centers on the human/AI's current KB node \
                      automatically. Registered ahead of the Phase 2 command-post wiring that \

@@ -13,9 +13,9 @@
 
 use crate::buffer::{Buffer, BufferKind};
 use crate::graph_view::{
-    flatten_scene_graph, GraphLayoutIntent, GraphLayoutMode, GraphNavDirection, GraphStyleOptions,
-    GraphView, ANIMATION_COOLING_FACTOR, ANIMATION_INITIAL_TEMPERATURE, ANIMATION_SETTLE_EPSILON,
-    ANIMATION_TEMPERATURE_FLOOR,
+    flatten_scene_graph, kind_affinity_from_strength, GraphLayoutIntent, GraphLayoutMode,
+    GraphNavDirection, GraphStyleOptions, GraphView, ANIMATION_COOLING_FACTOR,
+    ANIMATION_INITIAL_TEMPERATURE, ANIMATION_SETTLE_EPSILON, ANIMATION_TEMPERATURE_FLOOR,
 };
 use crate::visual_buffer::VisualBuffer;
 use crate::window::WindowId;
@@ -280,11 +280,26 @@ impl Editor {
                 kind: crate::graph_view_support::shared_kind_to_canvas_kind(n.kind),
             })
             .collect();
+        // Bridge from `mae_kb::SubgraphLink` to `mae_canvas::kb_graph::
+        // KbLinkInfo` — `mae-canvas` deliberately has no dependency on
+        // `mae-kb` (see `KbNodeInfo`'s doc comment for the same pattern
+        // applied to nodes), so this conversion lives here, the first
+        // place in the dependency graph that can see both crates.
+        let to_link_info = |l: &mae_kb::SubgraphLink| mae_canvas::kb_graph::KbLinkInfo {
+            source: l.source.clone(),
+            target: l.target.clone(),
+            rel_type: l.rel_type.clone(),
+            weight: l.weight,
+        };
+        let kb_links: Vec<mae_canvas::kb_graph::KbLinkInfo> =
+            result.links.iter().map(to_link_info).collect();
+        let kb_boundary_links: Vec<mae_canvas::kb_graph::KbLinkInfo> =
+            result.boundary_links.iter().map(to_link_info).collect();
 
         let scene = mae_canvas::kb_graph::build_kb_graph_positions_only(
             &kb_nodes,
-            &result.links,
-            &result.boundary_links,
+            &kb_links,
+            &kb_boundary_links,
             std::slice::from_ref(&center),
         );
 
@@ -306,10 +321,20 @@ impl Editor {
                 iterations: self.kb_graph_layout_iterations,
             }
         };
+        // Computed once here and cached on `GraphView.layout_config` below
+        // — every subsequent intent this view queues (including the Phase
+        // 3 tick-requeue in `apply_graph_layout_result`) reads the cached
+        // value instead of rebuilding one, so a later tick can never
+        // silently drop back to `LayoutConfig::default()`.
+        let layout_config = mae_canvas::layout::LayoutConfig {
+            kind_affinity: kind_affinity_from_strength(self.kb_graph_layout_kind_clustering),
+            ..mae_canvas::layout::LayoutConfig::default()
+        };
         self.pending_graph_layout = Some(GraphLayoutIntent {
             buf_idx,
             scene: scene.clone(),
             mode,
+            layout_config: layout_config.clone(),
         });
 
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
@@ -319,6 +344,7 @@ impl Editor {
             gv.scene = scene;
             gv.animating = self.kb_graph_animate;
             gv.anim_temperature = ANIMATION_INITIAL_TEMPERATURE;
+            gv.layout_config = layout_config;
         }
         self.graph_view_reflatten_all_windows(buf_idx);
     }
@@ -1018,11 +1044,22 @@ impl Editor {
                 let next_temperature = self.buffers[buf_idx]
                     .graph_view()
                     .map(|gv| gv.anim_temperature);
-                if let (Some(scene), Some(temperature)) = (next_scene, next_temperature) {
+                // Read the CACHED `layout_config` (set once by
+                // `populate_graph_buffer`) rather than defaulting — see
+                // `GraphView.layout_config`'s doc comment. Without this, a
+                // kind-clustered graph would silently lose its clustering
+                // on the second and every subsequent animation tick.
+                let layout_config = self.buffers[buf_idx]
+                    .graph_view()
+                    .map(|gv| gv.layout_config.clone());
+                if let (Some(scene), Some(temperature), Some(layout_config)) =
+                    (next_scene, next_temperature, layout_config)
+                {
                     self.pending_graph_layout = Some(GraphLayoutIntent {
                         buf_idx,
                         scene,
                         mode: GraphLayoutMode::Tick { temperature },
+                        layout_config,
                     });
                 }
             }

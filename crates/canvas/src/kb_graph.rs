@@ -26,16 +26,28 @@ pub struct KbNodeInfo {
     pub kind: NodeKind,
 }
 
+/// A simplified typed KB link for graph building (no dependency on mae-kb
+/// — mirrors `KbNodeInfo`'s role for nodes; the `crates/core` call site
+/// bridges from `shared_kb::SubgraphLink`).
+#[derive(Debug, Clone)]
+pub struct KbLinkInfo {
+    pub source: String,
+    pub target: String,
+    pub rel_type: String,
+    /// 0.0-1.0, ADR-030 authored/default relationship weight.
+    pub weight: f64,
+}
+
 /// Build a scene graph from KB nodes and links.
 ///
 /// - `nodes`: KB nodes with id and title
-/// - `links`: (source_id, target_id) pairs within the subgraph
-/// - `boundary_links`: (source_id, target_id) pairs crossing the subgraph boundary
+/// - `links`: typed links within the subgraph
+/// - `boundary_links`: typed links crossing the subgraph boundary
 /// - `starter_ids`: IDs of the starting nodes (highlighted)
 pub fn build_kb_graph(
     nodes: &[KbNodeInfo],
-    links: &[(String, String)],
-    boundary_links: &[(String, String)],
+    links: &[KbLinkInfo],
+    boundary_links: &[KbLinkInfo],
     starter_ids: &[String],
 ) -> SceneGraph {
     let mut graph = build_kb_graph_positions_only(nodes, links, boundary_links, starter_ids);
@@ -56,8 +68,8 @@ pub fn build_kb_graph(
 /// any future non-backgrounded caller) that want a complete one-call result.
 pub fn build_kb_graph_positions_only(
     nodes: &[KbNodeInfo],
-    links: &[(String, String)],
-    boundary_links: &[(String, String)],
+    links: &[KbLinkInfo],
+    boundary_links: &[KbLinkInfo],
     starter_ids: &[String],
 ) -> SceneGraph {
     // Build index: id -> node position
@@ -116,14 +128,16 @@ pub fn build_kb_graph_positions_only(
     // Create edges for internal links
     let mut scene_edges: Vec<SceneEdge> = links
         .iter()
-        .filter_map(|(src, tgt)| {
-            let s = *id_to_idx.get(src.as_str())?;
-            let t = *id_to_idx.get(tgt.as_str())?;
+        .filter_map(|link| {
+            let s = *id_to_idx.get(link.source.as_str())?;
+            let t = *id_to_idx.get(link.target.as_str())?;
             Some(SceneEdge {
                 source: s,
                 target: t,
                 label: None,
                 style: EdgeStyle::default(),
+                weight: link.weight,
+                rel_type: Some(link.rel_type.clone()),
             })
         })
         .collect();
@@ -142,14 +156,14 @@ pub fn build_kb_graph_positions_only(
     // preserved in the label instead of silently dropped, so "this node
     // has N more connections beyond what's shown" is still visible.
     let mut boundary_by_source: Vec<(&str, usize)> = Vec::new();
-    for (src, _tgt) in boundary_links {
+    for link in boundary_links {
         if let Some(entry) = boundary_by_source
             .iter_mut()
-            .find(|(s, _)| *s == src.as_str())
+            .find(|(s, _)| *s == link.source.as_str())
         {
             entry.1 += 1;
         } else {
-            boundary_by_source.push((src.as_str(), 1));
+            boundary_by_source.push((link.source.as_str(), 1));
         }
     }
     for (src, count) in boundary_by_source {
@@ -170,6 +184,13 @@ pub fn build_kb_graph_positions_only(
                     width: 1.0,
                     dashed: true,
                 },
+                // A boundary stub represents one-or-more collapsed links of
+                // possibly differing weight/type — no single value applies,
+                // so it's left at the layout-neutral default (self-loops
+                // apply zero attraction force regardless, per
+                // `ForceLayout::step`).
+                weight: 1.0,
+                rel_type: None,
             });
         }
     }
@@ -224,7 +245,16 @@ fn kind_to_style(kind: &NodeKind, highlighted: bool) -> NodeStyle {
 mod tests {
     use super::*;
 
-    fn nodes_and_links() -> (Vec<KbNodeInfo>, Vec<(String, String)>) {
+    fn link(source: &str, target: &str) -> KbLinkInfo {
+        KbLinkInfo {
+            source: source.to_string(),
+            target: target.to_string(),
+            rel_type: "references".to_string(),
+            weight: 1.0,
+        }
+    }
+
+    fn nodes_and_links() -> (Vec<KbNodeInfo>, Vec<KbLinkInfo>) {
         let nodes = vec![
             KbNodeInfo {
                 id: "concept:buffer".to_string(),
@@ -243,8 +273,8 @@ mod tests {
             },
         ];
         let links = vec![
-            ("concept:buffer".to_string(), "concept:window".to_string()),
-            ("cmd:save".to_string(), "concept:buffer".to_string()),
+            link("concept:buffer", "concept:window"),
+            link("cmd:save", "concept:buffer"),
         ];
         (nodes, links)
     }
@@ -266,7 +296,7 @@ mod tests {
     #[test]
     fn build_graph_with_boundary() {
         let (nodes, links) = nodes_and_links();
-        let boundary = vec![("concept:buffer".to_string(), "external:xyz".to_string())];
+        let boundary = vec![link("concept:buffer", "external:xyz")];
         let graph = build_kb_graph(&nodes, &links, &boundary, &[]);
         // 2 internal + 1 boundary edge
         assert_eq!(graph.edges.len(), 3);
@@ -283,9 +313,9 @@ mod tests {
         // since the self-loop already discards target identity.
         let (nodes, links) = nodes_and_links();
         let boundary = vec![
-            ("concept:buffer".to_string(), "external:a".to_string()),
-            ("concept:buffer".to_string(), "external:b".to_string()),
-            ("concept:buffer".to_string(), "external:c".to_string()),
+            link("concept:buffer", "external:a"),
+            link("concept:buffer", "external:b"),
+            link("concept:buffer", "external:c"),
         ];
         let graph = build_kb_graph(&nodes, &links, &boundary, &[]);
         // 2 internal + 1 collapsed boundary edge (not 3 boundary edges).
@@ -300,8 +330,8 @@ mod tests {
     fn build_graph_boundary_links_from_different_sources_stay_separate() {
         let (nodes, links) = nodes_and_links();
         let boundary = vec![
-            ("concept:buffer".to_string(), "external:a".to_string()),
-            ("concept:window".to_string(), "external:b".to_string()),
+            link("concept:buffer", "external:a"),
+            link("concept:window", "external:b"),
         ];
         let graph = build_kb_graph(&nodes, &links, &boundary, &[]);
         // 2 internal + 2 boundary edges (one per distinct source, each
@@ -485,10 +515,7 @@ mod tests {
                 kind: NodeKind::Note,
             },
         ];
-        let links = vec![
-            ("a".to_string(), "b".to_string()),
-            ("b".to_string(), "c".to_string()),
-        ];
+        let links = vec![link("a", "b"), link("b", "c")];
         let graph = build_kb_graph(&nodes, &links, &[], &[]);
         // After layout, nodes should not be at identical positions
         let positions: Vec<(f64, f64)> = graph.nodes.iter().map(|n| (n.x, n.y)).collect();

@@ -84,6 +84,14 @@ pub struct GraphView {
     /// `ANIMATION_INITIAL_TEMPERATURE` on every fresh (re)populate; not
     /// meaningful when `animating` is false.
     pub anim_temperature: f64,
+    /// The `LayoutConfig` (kind-clustering strength, etc.) computed once by
+    /// `populate_graph_buffer` and cached here — every subsequent
+    /// `GraphLayoutIntent` this `GraphView` queues (including Phase 3's
+    /// per-tick animation requeue in `apply_graph_layout_result`) reads
+    /// this cached value rather than rebuilding one, so a background layout
+    /// tick can never silently drop back to `LayoutConfig::default()` after
+    /// the first request.
+    pub layout_config: mae_canvas::layout::LayoutConfig,
 }
 
 impl GraphView {
@@ -219,6 +227,7 @@ impl GraphView {
             rendered: HashMap::new(),
             animating: false,
             anim_temperature: ANIMATION_INITIAL_TEMPERATURE,
+            layout_config: mae_canvas::layout::LayoutConfig::default(),
         }
     }
 }
@@ -345,6 +354,11 @@ pub struct GraphLayoutIntent {
     pub buf_idx: usize,
     pub scene: mae_canvas::scene::SceneGraph,
     pub mode: GraphLayoutMode,
+    /// Carries `GraphView.layout_config` through to the background
+    /// computation — see that field's doc comment for why every intent
+    /// (including the Phase 3 tick-requeue) must read the cached value
+    /// rather than defaulting.
+    pub layout_config: mae_canvas::layout::LayoutConfig,
 }
 
 /// Resolved, theme-driven styling inputs for `flatten_scene_graph` — sizing
@@ -450,6 +464,31 @@ fn theme_hex_bg(editor: &Editor, key: &str, fallback: &str) -> String {
         }
         None => fallback.to_string(),
     }
+}
+
+/// Map a single 0.0-1.0 "clustering strength" knob (the
+/// `kb_graph_layout_kind_clustering` option) onto the four
+/// `mae_canvas::layout::KindAffinityConfig` multipliers `ForceLayout::step`
+/// actually consumes. `strength <= 0.0` returns `None` exactly — a provable
+/// non-regression at the default-off setting, since `LayoutConfig`'s own
+/// `kind_affinity: None` reproduces the pre-clustering layout byte-for-byte.
+/// Softens same-kind repulsion and boosts same-kind attraction
+/// symmetrically as `strength` rises toward `1.0`; cross-kind pairs are
+/// always left at `1.0` (neutral) — clustering pulls same-kind nodes
+/// together, it doesn't push different kinds apart beyond the base force.
+pub fn kind_affinity_from_strength(
+    strength: f32,
+) -> Option<mae_canvas::layout::KindAffinityConfig> {
+    if strength <= 0.0 {
+        return None;
+    }
+    let strength = strength.min(1.0) as f64;
+    Some(mae_canvas::layout::KindAffinityConfig {
+        same_kind_repulsion: 1.0 - 0.4 * strength,
+        cross_kind_repulsion: 1.0,
+        same_kind_attraction: 1.0 + 0.2 * strength,
+        cross_kind_attraction: 1.0,
+    })
 }
 
 impl GraphStyleOptions {
@@ -622,6 +661,41 @@ mod tests {
             kind,
             style: NodeStyle::default(),
             pinned: false,
+        }
+    }
+
+    #[test]
+    fn kind_affinity_from_strength_zero_is_none() {
+        // Provable non-regression: strength <= 0.0 must reproduce the
+        // pre-clustering layout exactly (LayoutConfig::default()'s own
+        // `kind_affinity: None`), not just "small" multipliers.
+        assert_eq!(kind_affinity_from_strength(0.0), None);
+        assert_eq!(kind_affinity_from_strength(-1.0), None);
+    }
+
+    #[test]
+    fn kind_affinity_from_strength_is_monotonic_in_strength() {
+        // Sampled across the range, not one hand-picked value — same-kind
+        // repulsion should strictly decrease and same-kind attraction
+        // should strictly increase as strength rises; cross-kind
+        // multipliers stay pinned at neutral (1.0) throughout.
+        let samples = [0.1, 0.3, 0.5, 0.7, 1.0];
+        let mut prev_repulsion = f64::MAX;
+        let mut prev_attraction = f64::MIN;
+        for s in samples {
+            let cfg = kind_affinity_from_strength(s).unwrap();
+            assert_eq!(cfg.cross_kind_repulsion, 1.0);
+            assert_eq!(cfg.cross_kind_attraction, 1.0);
+            assert!(
+                cfg.same_kind_repulsion < prev_repulsion,
+                "same_kind_repulsion should strictly decrease as strength rises"
+            );
+            assert!(
+                cfg.same_kind_attraction > prev_attraction,
+                "same_kind_attraction should strictly increase as strength rises"
+            );
+            prev_repulsion = cfg.same_kind_repulsion;
+            prev_attraction = cfg.same_kind_attraction;
         }
     }
 
@@ -811,6 +885,8 @@ mod tests {
             target: 1,
             label: None,
             style: EdgeStyle::default(),
+            weight: 1.0,
+            rel_type: None,
         });
         let style = test_style();
         let viewport = mae_canvas::scene::Viewport::default();
@@ -850,6 +926,8 @@ mod tests {
                 width: 1.0,
                 dashed: true,
             },
+            weight: 1.0,
+            rel_type: None,
         });
         let style = test_style();
         let viewport = mae_canvas::scene::Viewport::default();
@@ -872,6 +950,8 @@ mod tests {
             target: 0,
             label: None,
             style: EdgeStyle::default(),
+            weight: 1.0,
+            rel_type: None,
         });
         let style = test_style();
         let viewport = mae_canvas::scene::Viewport::default();
@@ -909,6 +989,8 @@ mod tests {
             target: 1,
             label: Some("relates-to".to_string()),
             style: EdgeStyle::default(),
+            weight: 1.0,
+            rel_type: None,
         });
         gv.scene.selection = Some(0);
         gv.scene.hovered = Some(1);
@@ -946,6 +1028,8 @@ mod tests {
                 width: 1.0,
                 dashed: true,
             },
+            weight: 1.0,
+            rel_type: None,
         });
 
         let state = gv.describe_state();
@@ -965,6 +1049,8 @@ mod tests {
             target: 0,
             label: None,
             style: EdgeStyle::default(),
+            weight: 1.0,
+            rel_type: None,
         });
 
         let state = gv.describe_state();

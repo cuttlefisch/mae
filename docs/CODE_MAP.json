@@ -708,6 +708,10 @@
           "kind": "struct"
         },
         {
+          "name": "SubgraphLink",
+          "kind": "struct"
+        },
+        {
           "name": "SubgraphResult",
           "kind": "struct"
         },
