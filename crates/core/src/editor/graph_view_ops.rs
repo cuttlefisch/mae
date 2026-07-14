@@ -515,6 +515,88 @@ impl Editor {
         self.navigate_companion_window_to_node(graph_idx, &node_id);
     }
 
+    /// Issue #322: set the graph's zoom to an explicit level — the
+    /// AI-appropriate equivalent of `kb_graph_view_zoom`'s pixel-focus-
+    /// based wheel delta (which has no meaningful non-pointer input). No-op
+    /// if no `BufferKind::Graph` buffer is open. Applies to the focused
+    /// window if it's currently showing the graph buffer (the common case:
+    /// a human and the AI peer looking at the same window), else the first
+    /// window found showing it (issue #321 made the viewport genuinely
+    /// per-window, so SOME window must be chosen — an AI-driven call has no
+    /// pixel focus point to disambiguate further).
+    pub fn kb_graph_view_zoom_to(&mut self, target: f64) {
+        let Some(graph_idx) = self
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+        else {
+            return;
+        };
+        let focused_id = self.window_mgr.focused_id();
+        let target_win = if self
+            .window_mgr
+            .window(focused_id)
+            .is_some_and(|w| w.buffer_idx == graph_idx)
+        {
+            Some(focused_id)
+        } else {
+            self.window_mgr
+                .iter_windows()
+                .find(|w| w.buffer_idx == graph_idx)
+                .map(|w| w.id)
+        };
+        let Some(win_id) = target_win else {
+            return;
+        };
+        if let Some(gv) = self.buffers[graph_idx].graph_view_mut() {
+            let viewport = gv.viewports.entry(win_id).or_default();
+            mae_canvas::interaction::set_zoom(viewport, target);
+        }
+        self.graph_view_reflatten_window(graph_idx, win_id);
+    }
+
+    /// Issue #322: pin or unpin a node by KB id, optionally repositioning
+    /// it — the AI-appropriate equivalent of drag-to-pin (no drag gesture
+    /// needed; `SceneNode.pinned` is already fully respected by
+    /// `ForceLayout`, this is pure plumbing onto an existing concept). No-op
+    /// if no graph is open or `id` isn't among the currently-rendered
+    /// nodes (returns whether a node was found and updated, so callers —
+    /// the Scheme primitive / MCP tool — can report a clear miss rather
+    /// than a silent no-op). Reflattens EVERY window showing this buffer
+    /// (`pinned`/position is shared topology, not per-window state).
+    pub fn kb_graph_view_set_pinned(
+        &mut self,
+        id: &str,
+        pinned: bool,
+        pos: Option<(f64, f64)>,
+    ) -> bool {
+        let Some(graph_idx) = self
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+        else {
+            return false;
+        };
+        let found = if let Some(gv) = self.buffers[graph_idx].graph_view_mut() {
+            if let Some(node) = gv.scene.nodes.iter_mut().find(|n| n.id == id) {
+                node.pinned = pinned;
+                if let Some((x, y)) = pos {
+                    node.x = x;
+                    node.y = y;
+                }
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if found {
+            self.graph_view_reflatten_all_windows(graph_idx);
+        }
+        found
+    }
+
     /// Hit-test a Graph window position and update the scene's selection —
     /// WITHOUT navigating the companion window. Factored out of
     /// `kb_graph_view_click_at` (Part C Phase 1 item 6) so Part C Phase 4's
@@ -2424,6 +2506,202 @@ mod tests {
             gv.viewports.contains_key(&win_a),
             "the surviving window's entry must remain"
         );
+    }
+
+    // --- AI-appropriate zoom-to/pin primitives (issue #322) ---
+
+    #[test]
+    fn zoom_to_sets_the_focused_windows_zoom_to_an_explicit_level() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        editor.window_mgr.set_focused(graph_win_id);
+
+        editor.kb_graph_view_zoom_to(2.5);
+
+        assert_eq!(zoom_of(&editor, graph_idx, graph_win_id), 2.5);
+    }
+
+    #[test]
+    fn zoom_to_clamps_to_the_same_range_as_wheel_zoom() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        editor.window_mgr.set_focused(graph_win_id);
+
+        editor.kb_graph_view_zoom_to(999.0);
+        assert_eq!(zoom_of(&editor, graph_idx, graph_win_id), 10.0);
+
+        editor.kb_graph_view_zoom_to(-5.0);
+        assert_eq!(zoom_of(&editor, graph_idx, graph_win_id), 0.1);
+    }
+
+    #[test]
+    fn zoom_to_targets_a_window_showing_the_graph_when_focus_is_elsewhere() {
+        // No focused-graph-window context (e.g. an AI-driven session with
+        // focus on a text buffer) — must still resolve to SOME window
+        // showing the graph, not silently no-op.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        let non_graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx != graph_idx)
+            .map(|w| w.id)
+            .expect("opening the graph view should have split");
+        editor.window_mgr.set_focused(non_graph_win_id);
+
+        editor.kb_graph_view_zoom_to(3.0);
+
+        assert_eq!(zoom_of(&editor, graph_idx, graph_win_id), 3.0);
+    }
+
+    #[test]
+    fn zoom_to_is_a_harmless_no_op_when_no_graph_is_open() {
+        let mut editor = Editor::new();
+        editor.kb_graph_view_zoom_to(2.0); // must not panic
+        assert!(!editor.buffers.iter().any(|b| b.kind == BufferKind::Graph));
+    }
+
+    #[test]
+    fn set_pinned_pins_a_node_by_id_and_optionally_repositions_it() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let node_id = editor.buffers[graph_idx].graph_view().unwrap().scene.nodes[0]
+            .id
+            .clone();
+        assert!(
+            !editor.buffers[graph_idx].graph_view().unwrap().scene.nodes[0].pinned,
+            "sanity: a freshly laid-out node must start unpinned"
+        );
+
+        let found = editor.kb_graph_view_set_pinned(&node_id, true, Some((123.0, -45.0)));
+
+        assert!(found);
+        let node = &editor.buffers[graph_idx].graph_view().unwrap().scene.nodes[0];
+        assert!(node.pinned);
+        assert_eq!(node.x, 123.0);
+        assert_eq!(node.y, -45.0);
+    }
+
+    #[test]
+    fn set_pinned_without_a_position_leaves_the_node_wherever_it_currently_is() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let (node_id, x0, y0) = {
+            let node = &editor.buffers[graph_idx].graph_view().unwrap().scene.nodes[0];
+            (node.id.clone(), node.x, node.y)
+        };
+
+        editor.kb_graph_view_set_pinned(&node_id, true, None);
+
+        let node = &editor.buffers[graph_idx].graph_view().unwrap().scene.nodes[0];
+        assert!(node.pinned);
+        assert_eq!(node.x, x0);
+        assert_eq!(node.y, y0);
+    }
+
+    #[test]
+    fn set_pinned_can_unpin() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let node_id = editor.buffers[graph_idx].graph_view().unwrap().scene.nodes[0]
+            .id
+            .clone();
+        editor.kb_graph_view_set_pinned(&node_id, true, None);
+        assert!(editor.buffers[graph_idx].graph_view().unwrap().scene.nodes[0].pinned);
+
+        editor.kb_graph_view_set_pinned(&node_id, false, None);
+
+        assert!(!editor.buffers[graph_idx].graph_view().unwrap().scene.nodes[0].pinned);
+    }
+
+    #[test]
+    fn set_pinned_reports_a_miss_for_an_unknown_id() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+
+        let found = editor.kb_graph_view_set_pinned("concept:does-not-exist", true, None);
+
+        assert!(!found);
+    }
+
+    #[test]
+    fn set_pinned_is_a_harmless_no_op_when_no_graph_is_open() {
+        let mut editor = Editor::new();
+        let found = editor.kb_graph_view_set_pinned("anything", true, None);
+        assert!(!found);
+    }
+
+    #[test]
+    fn set_pinned_reflattens_every_window_showing_the_buffer() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let area = editor.default_area();
+        let win_b = editor
+            .window_mgr
+            .split(SplitDirection::Vertical, graph_idx, area)
+            .unwrap();
+        editor.sync_open_graph_viewports();
+        let node_id = editor.buffers[graph_idx].graph_view().unwrap().scene.nodes[0]
+            .id
+            .clone();
+
+        editor.kb_graph_view_set_pinned(&node_id, true, Some((10.0, 10.0)));
+
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        assert!(!gv.rendered[&win_b].elements.is_empty());
     }
 
     #[test]

@@ -288,6 +288,21 @@ pub enum GraphViewIntent {
     SetDepth(usize),
     Navigate(GraphNavDirection),
     SelectCurrent,
+    /// Issue #322 — set the graph's zoom to an explicit level (not a
+    /// pixel-focus-based wheel delta, which has no AI-appropriate
+    /// equivalent). Applies to the focused window if it's showing the
+    /// graph buffer, else the first window found showing it — see
+    /// `Editor::kb_graph_view_zoom_to`.
+    ZoomTo(f64),
+    /// Issue #322 — pin or unpin a node by KB id, optionally repositioning
+    /// it. No drag gesture needed; `SceneNode.pinned` is already fully
+    /// respected by `ForceLayout` (pinned nodes are skipped when applying
+    /// displacement) — this is pure plumbing onto an existing concept.
+    SetPinned {
+        id: String,
+        pinned: bool,
+        pos: Option<(f64, f64)>,
+    },
 }
 
 /// Which background layout pass a `GraphLayoutIntent` requests.

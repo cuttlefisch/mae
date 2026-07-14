@@ -716,6 +716,51 @@ pub fn execute_kb_graph_view_select_current(
     Ok("Companion window navigated to the selected node".to_string())
 }
 
+pub fn execute_kb_graph_view_zoom_to(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let target = args
+        .get("zoom")
+        .and_then(|v| v.as_f64())
+        .ok_or("Missing required parameter: zoom")?;
+    editor.kb_graph_view_zoom_to(target);
+    Ok(format!("KB graph view zoom set to {}", target))
+}
+
+pub fn execute_kb_graph_view_set_pinned(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: id")?;
+    let pinned = args
+        .get("pinned")
+        .and_then(|v| v.as_bool())
+        .ok_or("Missing required parameter: pinned")?;
+    let x = args.get("x").and_then(|v| v.as_f64());
+    let y = args.get("y").and_then(|v| v.as_f64());
+    let pos = match (x, y) {
+        (Some(x), Some(y)) => Some((x, y)),
+        (None, None) => None,
+        _ => return Err("x and y must be given together, or both omitted".to_string()),
+    };
+    if editor.kb_graph_view_set_pinned(id, pinned, pos) {
+        Ok(format!(
+            "Node '{}' {}",
+            id,
+            if pinned { "pinned" } else { "unpinned" }
+        ))
+    } else {
+        Err(format!(
+            "No graph node with id '{}' is currently rendered",
+            id
+        ))
+    }
+}
+
 pub fn execute_kb_graph_view_state(
     editor: &mut Editor,
     _args: &serde_json::Value,
@@ -1509,6 +1554,140 @@ mod tests {
         assert_eq!(v["center_node"], "index");
         assert_eq!(v["depth"], 1);
         assert!(v["nodes"].as_array().is_some_and(|n| !n.is_empty()));
+    }
+
+    #[test]
+    fn kb_graph_view_zoom_to_sets_the_focused_windows_zoom() {
+        let mut editor = Editor::new();
+        execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == mae_core::BufferKind::Graph)
+            .unwrap();
+        let win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == idx)
+            .map(|w| w.id)
+            .unwrap();
+        editor.window_mgr.set_focused(win_id);
+
+        let result =
+            execute_kb_graph_view_zoom_to(&mut editor, &serde_json::json!({"zoom": 3.5})).unwrap();
+
+        assert!(result.contains("3.5"));
+        assert_eq!(
+            editor.buffers[idx]
+                .graph_view()
+                .unwrap()
+                .viewports
+                .get(&win_id)
+                .unwrap()
+                .zoom,
+            3.5
+        );
+    }
+
+    #[test]
+    fn kb_graph_view_zoom_to_missing_arg_is_error() {
+        let mut editor = Editor::new();
+        let err = execute_kb_graph_view_zoom_to(&mut editor, &serde_json::json!({})).unwrap_err();
+        assert!(err.contains("zoom"));
+    }
+
+    #[test]
+    fn kb_graph_view_set_pinned_pins_a_node_and_repositions_it() {
+        let mut editor = Editor::new();
+        execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == mae_core::BufferKind::Graph)
+            .unwrap();
+        let node_id = editor.buffers[idx].graph_view().unwrap().scene.nodes[0]
+            .id
+            .clone();
+
+        let result = execute_kb_graph_view_set_pinned(
+            &mut editor,
+            &serde_json::json!({"id": node_id, "pinned": true, "x": 5.0, "y": 6.0}),
+        )
+        .unwrap();
+
+        assert!(result.contains("pinned"));
+        let node = &editor.buffers[idx].graph_view().unwrap().scene.nodes[0];
+        assert!(node.pinned);
+        assert_eq!(node.x, 5.0);
+        assert_eq!(node.y, 6.0);
+    }
+
+    #[test]
+    fn kb_graph_view_set_pinned_without_position_leaves_it_in_place() {
+        let mut editor = Editor::new();
+        execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == mae_core::BufferKind::Graph)
+            .unwrap();
+        let (node_id, x0, y0) = {
+            let node = &editor.buffers[idx].graph_view().unwrap().scene.nodes[0];
+            (node.id.clone(), node.x, node.y)
+        };
+
+        execute_kb_graph_view_set_pinned(
+            &mut editor,
+            &serde_json::json!({"id": node_id, "pinned": true}),
+        )
+        .unwrap();
+
+        let node = &editor.buffers[idx].graph_view().unwrap().scene.nodes[0];
+        assert!(node.pinned);
+        assert_eq!(node.x, x0);
+        assert_eq!(node.y, y0);
+    }
+
+    #[test]
+    fn kb_graph_view_set_pinned_unknown_id_is_error() {
+        let mut editor = Editor::new();
+        execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
+        let err = execute_kb_graph_view_set_pinned(
+            &mut editor,
+            &serde_json::json!({"id": "concept:does-not-exist", "pinned": true}),
+        )
+        .unwrap_err();
+        assert!(err.contains("does-not-exist"));
+    }
+
+    #[test]
+    fn kb_graph_view_set_pinned_only_x_without_y_is_error() {
+        let mut editor = Editor::new();
+        execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index"})).unwrap();
+        let node_id = editor
+            .buffers
+            .iter()
+            .find(|b| b.kind == mae_core::BufferKind::Graph)
+            .and_then(|b| b.graph_view())
+            .unwrap()
+            .scene
+            .nodes[0]
+            .id
+            .clone();
+        let err = execute_kb_graph_view_set_pinned(
+            &mut editor,
+            &serde_json::json!({"id": node_id, "pinned": true, "x": 1.0}),
+        )
+        .unwrap_err();
+        assert!(err.contains('x') && err.contains('y'));
+    }
+
+    #[test]
+    fn kb_graph_view_set_pinned_missing_required_args_is_error() {
+        let mut editor = Editor::new();
+        let err =
+            execute_kb_graph_view_set_pinned(&mut editor, &serde_json::json!({})).unwrap_err();
+        assert!(err.contains("id"));
     }
 
     #[test]

@@ -265,6 +265,66 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             permission: Some(PermissionTier::ReadOnly),
         },
         ToolDefinition {
+            name: "kb_graph_view_zoom_to".into(),
+            description: "Set the native KB graph view's zoom to an explicit level (0.1-10.0, clamped) — the AI-appropriate equivalent of the mouse wheel's pixel-focus-based zoom, which has no meaningful non-pointer input. Applies to the focused window if it's showing the graph, else the first window found showing it.".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([(
+                    "zoom".into(),
+                    ToolProperty {
+                        prop_type: "number".into(),
+                        description: "Target zoom level (0.1-10.0; out-of-range values are clamped)".into(),
+                        enum_values: None,
+                    },
+                )]),
+                required: vec!["zoom".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
+            name: "kb_graph_view_set_pinned".into(),
+            description: "Pin or unpin a graph node by KB id — the AI-appropriate equivalent of drag-to-pin, no drag gesture needed. Optionally repositions it to (x, y) in scene coordinates; omit both to leave it wherever it currently is. Reflattens every window showing the graph (shared topology, not per-window state).".into(),
+            parameters: ToolParameters {
+                schema_type: "object".into(),
+                properties: HashMap::from([
+                    (
+                        "id".into(),
+                        ToolProperty {
+                            prop_type: "string".into(),
+                            description: "KB node id to pin/unpin".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "pinned".into(),
+                        ToolProperty {
+                            prop_type: "boolean".into(),
+                            description: "true to pin, false to unpin".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "x".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Optional new scene x-position (must be given together with y, or omitted)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                    (
+                        "y".into(),
+                        ToolProperty {
+                            prop_type: "number".into(),
+                            description: "Optional new scene y-position (must be given together with x, or omitted)".into(),
+                            enum_values: None,
+                        },
+                    ),
+                ]),
+                required: vec!["id".into(), "pinned".into()],
+            },
+            permission: Some(PermissionTier::ReadOnly),
+        },
+        ToolDefinition {
             name: "kb_graph_view_state".into(),
             description: "Structured introspection snapshot of the open native KB graph view: which node is hovered, which is selected, every node currently rendered (the ego-network), and every edge/link shown between them. Returns null if no graph view is open. Same data both the human's visual rendering and the (kb-graph-view-state) Scheme primitive read from — use this to reason about or narrate what the graph currently looks like.".into(),
             parameters: ToolParameters {

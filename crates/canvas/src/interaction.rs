@@ -56,6 +56,16 @@ pub fn zoom(vp: &mut Viewport, factor: f64, focus_x: f64, focus_y: f64) {
     vp.center_y = scene_y - (focus_y - vp.height / 2.0) / vp.zoom;
 }
 
+/// Set the viewport to an explicit absolute zoom level, clamped to the same
+/// [0.1, 10.0] range `zoom()` enforces. Unlike `zoom()`, this takes no pixel
+/// focus point and never touches `center_x`/`center_y` — the pan position
+/// stays put. Meant for callers with no meaningful screen coordinate to
+/// anchor around (e.g. an AI agent's "set the graph zoom to 2x" request),
+/// as opposed to a mouse wheel event's inherently pixel-anchored zoom.
+pub fn set_zoom(vp: &mut Viewport, target: f64) {
+    vp.zoom = target.clamp(0.1, 10.0);
+}
+
 /// Navigate to the nearest node in the given direction from the current selection.
 pub fn navigate_direction(graph: &mut SceneGraph, dir: Direction) {
     let current = match graph.selection {
@@ -184,6 +194,28 @@ mod tests {
         let mut vp2 = Viewport::default();
         zoom(&mut vp2, 0.001, 400.0, 300.0); // extreme zoom out
         assert!(vp2.zoom >= 0.1);
+    }
+
+    #[test]
+    fn set_zoom_sets_the_exact_level_and_never_touches_pan() {
+        let mut vp = Viewport {
+            center_x: 42.0,
+            center_y: -17.0,
+            ..Viewport::default()
+        };
+        set_zoom(&mut vp, 2.5);
+        assert_eq!(vp.zoom, 2.5);
+        assert_eq!(vp.center_x, 42.0, "set_zoom must never touch pan");
+        assert_eq!(vp.center_y, -17.0, "set_zoom must never touch pan");
+    }
+
+    #[test]
+    fn set_zoom_clamps_to_the_same_range_as_zoom() {
+        let mut vp = Viewport::default();
+        set_zoom(&mut vp, 999.0);
+        assert_eq!(vp.zoom, 10.0);
+        set_zoom(&mut vp, -5.0);
+        assert_eq!(vp.zoom, 0.1);
     }
 
     #[test]
