@@ -13,9 +13,10 @@
 
 use crate::buffer::{Buffer, BufferKind};
 use crate::graph_view::{
-    flatten_scene_graph, kind_affinity_from_strength, node_render_radius, GraphLayoutIntent,
-    GraphLayoutMode, GraphNavDirection, GraphStyleOptions, GraphView, ANIMATION_COOLING_FACTOR,
-    ANIMATION_INITIAL_TEMPERATURE, ANIMATION_SETTLE_EPSILON, ANIMATION_TEMPERATURE_FLOOR,
+    flatten_scene_graph, kind_affinity_from_strength, node_render_radius, GraphColorTween,
+    GraphLayoutIntent, GraphLayoutMode, GraphNavDirection, GraphStyleOptions, GraphView,
+    ANIMATION_COOLING_FACTOR, ANIMATION_INITIAL_TEMPERATURE, ANIMATION_SETTLE_EPSILON,
+    ANIMATION_TEMPERATURE_FLOOR,
 };
 use crate::visual_buffer::VisualBuffer;
 use crate::window::WindowId;
@@ -153,8 +154,15 @@ impl Editor {
     /// call site either way.
     fn graph_view_reflatten_window(&mut self, buf_idx: usize, win_id: WindowId) {
         let (width, height) = self.graph_viewport_pixel_size(win_id);
-        let style = self.graph_style_options();
+        let mut style = self.graph_style_options();
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+            // Merge in the active color tween's current eased color, if
+            // any — `from_editor` has no per-`GraphView` knowledge, so
+            // this is the call site that bridges `GraphView.color_tween`
+            // into `GraphStyleOptions.color_override`.
+            if let Some(tween) = &gv.color_tween {
+                style.color_override = Some((tween.node_index, tween.current_color()));
+            }
             let viewport = gv.viewports.entry(win_id).or_default();
             viewport.width = width as f64;
             viewport.height = height as f64;
@@ -378,6 +386,66 @@ impl Editor {
                 .buffers
                 .iter()
                 .any(|b| b.graph_view().map(|gv| gv.animating).unwrap_or(false))
+    }
+
+    /// Is any open `BufferKind::Graph` buffer mid hover/selection color
+    /// tween? Mirrors `has_active_graph_animation` exactly — read by
+    /// `gui_app.rs`'s `ControlFlow::WaitUntil` wake condition so a running
+    /// tween keeps the 60fps cadence alive without a second animation
+    /// scheduler. `GraphView.color_tween` is only ever `Some` when
+    /// `kb_graph_color_tween_enabled` was on at the moment it started (see
+    /// the start call sites), so no live option re-check is needed here.
+    pub fn has_active_color_tween(&self) -> bool {
+        self.buffers.iter().any(|b| {
+            b.graph_view()
+                .map(|gv| gv.color_tween.is_some())
+                .unwrap_or(false)
+        })
+    }
+
+    /// Advance every open graph buffer's in-flight color tween one tick:
+    /// clears it (and reflattens once more so the final resting color
+    /// renders) once `GraphColorTween::is_complete()`, otherwise just
+    /// reflattens so the eased-interpolated `current_color()` actually
+    /// shows up in this frame's render. Called every event-loop iteration
+    /// from `drain_intents_and_lifecycle`, right after
+    /// `drain_graph_layout_intent` — same hook neighborhood, no new call
+    /// site invented.
+    pub fn tick_graph_color_tweens(&mut self) {
+        let buf_win_ids: Vec<(usize, Vec<WindowId>)> = self
+            .buffers
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| {
+                b.graph_view()
+                    .map(|gv| gv.color_tween.is_some())
+                    .unwrap_or(false)
+            })
+            .map(|(buf_idx, _)| {
+                let win_ids = self
+                    .window_mgr
+                    .iter_windows()
+                    .filter(|w| w.buffer_idx == buf_idx)
+                    .map(|w| w.id)
+                    .collect();
+                (buf_idx, win_ids)
+            })
+            .collect();
+        for (buf_idx, win_ids) in buf_win_ids {
+            let completed = self.buffers[buf_idx]
+                .graph_view()
+                .and_then(|gv| gv.color_tween.as_ref())
+                .map(|tween| tween.is_complete())
+                .unwrap_or(false);
+            if completed {
+                if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+                    gv.color_tween = None;
+                }
+            }
+            for win_id in win_ids {
+                self.graph_view_reflatten_window(buf_idx, win_id);
+            }
+        }
     }
 
     /// Open the KB graph view, centered on `center` (default: whichever KB
@@ -678,6 +746,37 @@ impl Editor {
         self.kb_graph_view_overlay_active
     }
 
+    /// Start a color tween (if `kb_graph_color_tween_enabled`) for
+    /// `node_index` transitioning INTO `to_hex` (its new selected/hover
+    /// highlight color) FROM its plain kind-color — the asymmetric design:
+    /// only the newly-highlighted node tweens in; the previously-
+    /// highlighted node's own return to its kind-color is an instant snap
+    /// (simply no longer being the `color_tween`/`selection`/`hovered`
+    /// target — no code needed for that side). No-op if the buffer/node
+    /// index is invalid; overwrites any previous tween on this `GraphView`
+    /// (one slot, not N concurrent tweens).
+    fn maybe_start_color_tween(&mut self, buf_idx: usize, node_index: usize, to_hex: String) {
+        if !self.kb_graph_color_tween_enabled {
+            return;
+        }
+        let duration =
+            std::time::Duration::from_millis(self.kb_graph_color_tween_duration_ms as u64);
+        let style = self.graph_style_options();
+        if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+            let Some(node) = gv.scene.nodes.get(node_index) else {
+                return;
+            };
+            let from_hex = style.color_for_kind(node.kind).to_string();
+            gv.color_tween = Some(GraphColorTween {
+                node_index,
+                from_hex,
+                to_hex,
+                started_at: std::time::Instant::now(),
+                duration,
+            });
+        }
+    }
+
     /// Hit-test a Graph window position and update the scene's selection —
     /// WITHOUT navigating the companion window. Factored out of
     /// `kb_graph_view_click_at` (Part C Phase 1 item 6) so Part C Phase 4's
@@ -715,8 +814,16 @@ impl Editor {
         });
         let node_hit = hit_result?;
 
+        let previous_selection = self.buffers[buf_idx]
+            .graph_view()
+            .and_then(|gv| gv.scene.selection);
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
             gv.scene.selection = node_hit;
+        }
+        if let Some(newly_selected) = node_hit {
+            if previous_selection != node_hit {
+                self.maybe_start_color_tween(buf_idx, newly_selected, style.selected_color.clone());
+            }
         }
         self.graph_view_reflatten_all_windows(buf_idx);
 
@@ -769,6 +876,18 @@ impl Editor {
         }
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
             gv.scene.hovered = node_hit;
+        }
+        if let Some(newly_hovered) = node_hit {
+            // Selected always wins over hovered in the color-priority
+            // chain, so don't start a tween toward hover_color for a node
+            // that's already selected — color_override would otherwise
+            // briefly override the correct selected_color mid-tween.
+            let already_selected = self.buffers[buf_idx]
+                .graph_view()
+                .is_some_and(|gv| gv.scene.selection == Some(newly_hovered));
+            if !already_selected {
+                self.maybe_start_color_tween(buf_idx, newly_hovered, style.hover_color.clone());
+            }
         }
         self.graph_view_reflatten_all_windows(buf_idx);
         true
@@ -1178,6 +1297,85 @@ mod tests {
             body,
         ));
         editor
+    }
+
+    #[test]
+    fn tick_graph_color_tweens_clears_completed_tweens_and_reflattens() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        if let Some(gv) = editor.buffers[graph_idx].graph_view_mut() {
+            gv.color_tween = Some(GraphColorTween {
+                node_index: 0,
+                from_hex: "#000000".to_string(),
+                to_hex: "#ffffff".to_string(),
+                started_at: std::time::Instant::now() - std::time::Duration::from_secs(10),
+                duration: std::time::Duration::from_millis(100),
+            });
+        }
+        editor.tick_graph_color_tweens();
+        assert!(
+            editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .color_tween
+                .is_none(),
+            "a tween well past its duration must be cleared"
+        );
+    }
+
+    #[test]
+    fn tick_graph_color_tweens_keeps_in_flight_tweens_and_reflattens() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        if let Some(gv) = editor.buffers[graph_idx].graph_view_mut() {
+            gv.color_tween = Some(GraphColorTween {
+                node_index: 0,
+                from_hex: "#000000".to_string(),
+                to_hex: "#ffffff".to_string(),
+                started_at: std::time::Instant::now(),
+                duration: std::time::Duration::from_secs(60),
+            });
+        }
+        editor.tick_graph_color_tweens();
+        assert!(
+            editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .color_tween
+                .is_some(),
+            "a tween well within its duration must survive a tick"
+        );
+    }
+
+    #[test]
+    fn maybe_start_color_tween_is_a_no_op_when_disabled() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_color_tween_enabled = false;
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        editor.maybe_start_color_tween(graph_idx, 0, "#ffffff".to_string());
+        assert!(
+            editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .color_tween
+                .is_none(),
+            "must not start a tween when kb_graph_color_tween_enabled is off"
+        );
     }
 
     /// Convert a node's SCENE position into the window-relative PIXEL

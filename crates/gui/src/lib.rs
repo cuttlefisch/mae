@@ -1307,7 +1307,10 @@ fn render_window_area_with_graph_overlay(
     viewport.width = (area_width as f32 * editor.gui_cell_width) as f64;
     viewport.height = (area_height as f32 * editor.gui_cell_height) as f64;
 
-    let style = mae_core::graph_view::GraphStyleOptions::from_editor(editor);
+    let mut style = mae_core::graph_view::GraphStyleOptions::from_editor(editor);
+    if let Some(tween) = &gv.color_tween {
+        style.color_override = Some((tween.node_index, tween.current_color()));
+    }
     let elements =
         mae_core::graph_view::flatten_scene_graph(&gv.scene, &viewport, &style, &gv.node_degrees);
     let vb = mae_core::visual_buffer::VisualBuffer { elements };
@@ -1444,6 +1447,33 @@ fn render_visual_buffer_with_bg(
                         } else {
                             canvas.canvas().draw_line((sx, sy), (ex, ey), &paint);
                         }
+                    }
+                }
+                VisualElement::Curve {
+                    x1,
+                    y1,
+                    ctrl_x,
+                    ctrl_y,
+                    x2,
+                    y2,
+                    color,
+                    thickness,
+                } => {
+                    // Mirrors canvas.rs's `draw_wavy_underline_at_pixel` —
+                    // same PathBuilder/quad_to/detach/draw_path shape, just
+                    // one control point instead of many.
+                    if let Some(c) = theme::parse_hex_to_skia(color) {
+                        let mut paint = Paint::new(c, None);
+                        paint.set_anti_alias(true);
+                        paint.set_stroke_width(*thickness);
+                        paint.set_style(PaintStyle::Stroke);
+                        paint.set_stroke_cap(paint::Cap::Round);
+                        paint.set_stroke_join(paint::Join::Round);
+                        let mut builder = skia_safe::PathBuilder::new();
+                        builder.move_to((x_off + x1, y_off + y1));
+                        builder.quad_to((x_off + ctrl_x, y_off + ctrl_y), (x_off + x2, y_off + y2));
+                        let path = builder.detach();
+                        canvas.canvas().draw_path(&path, &paint);
                     }
                 }
                 VisualElement::Circle {

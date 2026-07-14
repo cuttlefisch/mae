@@ -43,6 +43,20 @@ pub enum VisualElement {
         font_size: f32,
         color: String,
     },
+    /// A quadratic bezier curve — used by the native KB graph view
+    /// (`crate::graph_view::flatten_scene_graph`) for edges, so adjacent/
+    /// parallel edges bow apart instead of overlapping as straight lines.
+    /// `(ctrl_x, ctrl_y)` is the single quadratic control point.
+    Curve {
+        x1: f32,
+        y1: f32,
+        ctrl_x: f32,
+        ctrl_y: f32,
+        x2: f32,
+        y2: f32,
+        color: String,
+        thickness: f32,
+    },
 }
 
 /// Structured state for `BufferKind::Visual`.

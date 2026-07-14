@@ -781,6 +781,15 @@ pub struct Editor {
     /// Below this viewport zoom level, graph-view node labels are hidden.
     /// Mirrors `kb_graph_label_zoom_threshold`.
     pub kb_graph_label_zoom_threshold: f32,
+    /// Curvature of internal graph-view edges, as a fraction of edge
+    /// length. Mirrors `kb_graph_edge_curvature`.
+    pub kb_graph_edge_curvature: f32,
+    /// Whether the graph view animates hover/selection color transitions.
+    /// Mirrors `kb_graph_color_tween_enabled`.
+    pub kb_graph_color_tween_enabled: bool,
+    /// Duration (ms) of the graph view's hover/selection color tween.
+    /// Mirrors `kb_graph_color_tween_duration_ms`.
+    pub kb_graph_color_tween_duration_ms: u32,
     /// Node label font size in points for the graph view's GUI rendering.
     /// Mirrors `kb_graph_font_size` — defaults to the same numeric default
     /// as the base `font_size` option (14), but is a fully independent
@@ -1271,6 +1280,9 @@ impl Editor {
             kb_graph_node_min_radius: 4,
             kb_graph_node_max_radius: 36,
             kb_graph_label_zoom_threshold: 0.5,
+            kb_graph_edge_curvature: 0.12,
+            kb_graph_color_tween_enabled: true,
+            kb_graph_color_tween_duration_ms: 150,
             kb_graph_font_size: 14,
             kb_graph_layout_iterations: 50,
             kb_graph_layout_kind_clustering: 0.5,

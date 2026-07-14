@@ -480,6 +480,22 @@ impl OptionRegistry {
                      to reduce clutter/draw calls on dense graphs at low zoom. Node/edge \
                      rendering (and clickability) is unaffected.",
                     OptionKind::Float, "0.5", Some("kb-graph.label-zoom-threshold"), &[]),
+                opt!("kb_graph_edge_curvature", &["kb-graph-edge-curvature"],
+                    "Curvature of internal (non-boundary) graph-view edges, as a fraction of \
+                     edge length. 0.0 renders straight lines (the pre-Phase-2b default \
+                     behavior). Adjacent/parallel edges curve in alternating directions so \
+                     they bow apart instead of overlapping.",
+                    OptionKind::Float, "0.12", Some("kb-graph.edge-curvature"), &[]),
+                opt!("kb_graph_color_tween_enabled", &["kb-graph-color-tween-enabled"],
+                    "Whether the graph view animates a node's color transition when it becomes \
+                     hovered/selected (asymmetric — only the newly-highlighted node tweens in; \
+                     the previous one snaps back instantly). When off, both directions snap \
+                     instantly.",
+                    OptionKind::Bool, "true", Some("kb-graph.color-tween-enabled"), &[]),
+                opt!("kb_graph_color_tween_duration_ms", &["kb-graph-color-tween-duration-ms"],
+                    "Duration in milliseconds of the graph view's hover/selection color tween, \
+                     when kb_graph_color_tween_enabled is on.",
+                    OptionKind::Int, "150", Some("kb-graph.color-tween-duration-ms"), &[]),
                 opt!("kb_graph_font_size", &["kb-graph-font-size"],
                     "Node label font size in points for the graph view's GUI rendering. \
                      Independent of the base font_size option (same numeric default, no live \

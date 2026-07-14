@@ -406,6 +406,7 @@ impl GuiApp {
             &mut self.editor,
             &self.graph_layout_tx,
         );
+        self.editor.tick_graph_color_tweens();
 
         crate::shell_lifecycle::drain_agent_setup(&mut self.editor);
         crate::shell_lifecycle::spawn_pending_shells(
@@ -1600,6 +1601,11 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
         // fires and the loop's idle-vs-ticking behavior is unchanged from
         // before Phase 3 existed.
         let graph_animating = self.editor.has_active_graph_animation();
+        // Mirrors `graph_animating` exactly, for the hover/selection color
+        // tween mechanism — a separate, main-thread-only tick (see
+        // `GraphView.color_tween`'s doc comment for why it's not folded
+        // into `graph_animating`/the force-layout settling schedule).
+        let graph_color_tweening = self.editor.has_active_color_tween();
 
         // Frame-capped redraw (60fps = 16.667ms).
         // Emacs pattern (dispnew.c:3254): input-pending bypasses frame cap
@@ -1616,9 +1622,14 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
                     std::time::Instant::now() + (frame_budget - elapsed),
                 ));
             }
-        } else if any_inertia || self.last_scroll_time.is_some() || graph_animating {
-            // Inertia pending/about to activate, or a graph layout still
-            // settling — keep 60fps cadence.
+        } else if any_inertia
+            || self.last_scroll_time.is_some()
+            || graph_animating
+            || graph_color_tweening
+        {
+            // Inertia pending/about to activate, a graph layout still
+            // settling, or a hover/selection color tween in flight — keep
+            // 60fps cadence.
             let frame_budget = std::time::Duration::from_micros(16_667);
             event_loop.set_control_flow(winit::event_loop::ControlFlow::WaitUntil(
                 std::time::Instant::now() + frame_budget,

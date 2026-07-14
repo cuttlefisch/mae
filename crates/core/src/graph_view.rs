@@ -100,6 +100,82 @@ pub struct GraphView {
     /// `graph_scene_hit_radii` (hit-test radius), so the two can never
     /// disagree about a node's size.
     pub node_degrees: Vec<u32>,
+    /// Asymmetric hover/selection color tween: only the newly-hovered/
+    /// selected node tweens INTO its highlight color; the previously
+    /// highlighted node snaps back instantly (no fade-out) — one slot, not
+    /// N concurrent tweens. Started by `kb_graph_view_hover_at`/the
+    /// selection path when the target changes; cleared once
+    /// `GraphColorTween::is_complete()`. Ticked by a separate,
+    /// main-thread-only mechanism (`Editor::tick_graph_color_tweens`) —
+    /// deliberately NOT `animating`/`anim_temperature` above, which is the
+    /// off-thread force-layout settling schedule; a trivial color lerp has
+    /// no business going through that IPC-shaped plumbing.
+    pub color_tween: Option<GraphColorTween>,
+}
+
+/// An in-flight color transition for one node — see `GraphView.color_tween`.
+#[derive(Debug, Clone)]
+pub struct GraphColorTween {
+    pub node_index: usize,
+    pub from_hex: String,
+    pub to_hex: String,
+    pub started_at: std::time::Instant,
+    pub duration: std::time::Duration,
+}
+
+impl GraphColorTween {
+    /// The eased, interpolated color at the current instant.
+    pub fn current_color(&self) -> String {
+        let elapsed = self.started_at.elapsed().as_secs_f32();
+        let dur = self.duration.as_secs_f32().max(0.0001);
+        lerp_hex(&self.from_hex, &self.to_hex, ease_out_cubic(elapsed / dur))
+    }
+
+    pub fn is_complete(&self) -> bool {
+        self.started_at.elapsed() >= self.duration
+    }
+}
+
+/// Ease-out cubic: `1 - (1-t)^3`, `t` clamped to `[0, 1]` — starts fast,
+/// settles gently, the standard "pop in" curve for a UI highlight.
+fn ease_out_cubic(t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    1.0 - (1.0 - t).powi(3)
+}
+
+/// Parse a `"#rrggbb"` hex string into `(r, g, b)` byte components.
+/// `None` for anything malformed — callers fall back to the raw `to`
+/// color verbatim rather than panicking on a bad hex string.
+fn parse_hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
+    let hex = hex.strip_prefix('#')?;
+    if hex.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+    Some((r, g, b))
+}
+
+/// Linearly interpolate between two `"#rrggbb"` hex colors at `t` (already
+/// eased, `[0, 1]`). Falls back to `to` verbatim if either color fails to
+/// parse — a malformed color never panics, it just snaps instead of
+/// animating.
+fn lerp_hex(from: &str, to: &str, t: f32) -> String {
+    let t = t.clamp(0.0, 1.0);
+    match (parse_hex_rgb(from), parse_hex_rgb(to)) {
+        (Some((fr, fg, fb)), Some((tr, tg, tb))) => {
+            let lerp_byte =
+                |a: u8, b: u8| -> u8 { (a as f32 + (b as f32 - a as f32) * t).round() as u8 };
+            format!(
+                "#{:02x}{:02x}{:02x}",
+                lerp_byte(fr, tr),
+                lerp_byte(fg, tg),
+                lerp_byte(fb, tb)
+            )
+        }
+        _ => to.to_string(),
+    }
 }
 
 impl GraphView {
@@ -237,6 +313,7 @@ impl GraphView {
             anim_temperature: ANIMATION_INITIAL_TEMPERATURE,
             layout_config: mae_canvas::layout::LayoutConfig::default(),
             node_degrees: Vec::new(),
+            color_tween: None,
         }
     }
 }
@@ -408,6 +485,18 @@ pub struct GraphStyleOptions {
     /// `Circle` is always still pushed — nodes stay visible/clickable
     /// regardless). Mirrors `kb_graph_label_zoom_threshold`.
     pub label_zoom_threshold: f32,
+    /// Curvature of internal (non-boundary) edges as a fraction of edge
+    /// length, `0.0` = straight lines. Mirrors `kb_graph_edge_curvature`;
+    /// see the curved-edge control-point computation in
+    /// `flatten_scene_graph`'s edge loop and `MAX_CURVE_OFFSET_PX`'s cap.
+    pub edge_curvature: f32,
+    /// `(node_index, hex_color)` — when set, that node's color is FORCED
+    /// to this value, checked before the selected/hovered/kind-color
+    /// chain below. Set by the call site (not `from_editor`, which has no
+    /// per-`GraphView` knowledge) from an active `GraphView.color_tween`'s
+    /// `current_color()`, letting `flatten_scene_graph`'s signature and
+    /// existing tests stay untouched by the tween mechanism entirely.
+    pub color_override: Option<(usize, String)>,
     /// Hex fill color per canvas `NodeKind`, indexed via `kind_index`.
     node_colors: [String; 14],
     pub selected_color: String,
@@ -544,6 +633,8 @@ impl GraphStyleOptions {
             node_min_radius: editor.kb_graph_node_min_radius as f32,
             node_max_radius: editor.kb_graph_node_max_radius as f32,
             label_zoom_threshold: editor.kb_graph_label_zoom_threshold,
+            edge_curvature: editor.kb_graph_edge_curvature,
+            color_override: None,
             node_colors,
             selected_color: theme_hex_fg(editor, "ui.graph.node.selected", "#ff9933"),
             hover_color: theme_hex_fg(editor, "ui.graph.node.hover", "#66ccff"),
@@ -553,7 +644,7 @@ impl GraphStyleOptions {
         }
     }
 
-    fn color_for_kind(&self, kind: mae_canvas::scene::NodeKind) -> &str {
+    pub(crate) fn color_for_kind(&self, kind: mae_canvas::scene::NodeKind) -> &str {
         &self.node_colors[kind_index(kind)]
     }
 }
@@ -665,12 +756,22 @@ fn node_is_offscreen(scx: f32, scy: f32, r: f32, viewport: &mae_canvas::scene::V
     right < 0.0 || left > viewport.width as f32 || bottom < 0.0 || top > viewport.height as f32
 }
 
+/// Maximum perpendicular offset (screen px) a curved edge's control point
+/// can bow away from the straight line between its endpoints — see the
+/// curved-edge control-point computation in `flatten_scene_graph`'s edge
+/// loop. Also used as `edge_is_offscreen_same_side`'s cull margin, so a
+/// curve that bows toward the viewport near a same-side-offscreen edge is
+/// never incorrectly culled.
+const MAX_CURVE_OFFSET_PX: f32 = 60.0;
+
 /// Whether an edge's two screen-space endpoints are BOTH off-screen on the
 /// SAME side — the only case it's safe to cull. Deliberately conservative:
 /// a long edge with both endpoints off-screen on DIFFERENT sides might
 /// still cross the visible viewport, so it's never culled by this check
 /// (no full segment-vs-rect test — that correctness margin is worth more
-/// than the extra draw calls saved).
+/// than the extra draw calls saved). Margined by `MAX_CURVE_OFFSET_PX` so
+/// a curved edge's bow (which can bring it into view even when both
+/// straight-line endpoints are just off-screen) is never wrongly culled.
 fn edge_is_offscreen_same_side(
     x1: f32,
     y1: f32,
@@ -680,7 +781,11 @@ fn edge_is_offscreen_same_side(
 ) -> bool {
     let w = viewport.width as f32;
     let h = viewport.height as f32;
-    (x1 < 0.0 && x2 < 0.0) || (x1 > w && x2 > w) || (y1 < 0.0 && y2 < 0.0) || (y1 > h && y2 > h)
+    let m = MAX_CURVE_OFFSET_PX;
+    (x1 < -m && x2 < -m)
+        || (x1 > w + m && x2 > w + m)
+        || (y1 < -m && y2 < -m)
+        || (y1 > h + m && y2 > h + m)
 }
 
 pub fn flatten_scene_graph(
@@ -731,6 +836,42 @@ pub fn flatten_scene_graph(
         if edge_is_offscreen_same_side(sx1 as f32, sy1 as f32, sx2 as f32, sy2 as f32, viewport) {
             continue;
         }
+        // Curved internal edges: a quadratic control point offset
+        // perpendicular to the edge's midpoint, alternating direction by
+        // (source_index + target_index) parity so adjacent/parallel edges
+        // bow apart instead of all curving identically (a uniform
+        // direction wouldn't reduce overlap at all). Boundary/self-loop
+        // stub edges stay straight — dashing here only ever applies to
+        // those short stubs, never a distinct-node-to-node edge, so the
+        // dash segmenter never needs to learn to dash a curve.
+        if !is_boundary && style.edge_curvature > 0.0 {
+            let dx = sx2 - sx1;
+            let dy = sy2 - sy1;
+            let len = (dx * dx + dy * dy).sqrt();
+            if len > 0.0 {
+                let (perp_x, perp_y) = (-dy / len, dx / len);
+                let sign = if (edge.source + edge.target) % 2 == 0 {
+                    1.0
+                } else {
+                    -1.0
+                };
+                let offset =
+                    ((style.edge_curvature as f64) * len).min(MAX_CURVE_OFFSET_PX as f64) * sign;
+                let mid_x = (sx1 + sx2) / 2.0 + perp_x * offset;
+                let mid_y = (sy1 + sy2) / 2.0 + perp_y * offset;
+                elements.push(VisualElement::Curve {
+                    x1: sx1 as f32,
+                    y1: sy1 as f32,
+                    ctrl_x: mid_x as f32,
+                    ctrl_y: mid_y as f32,
+                    x2: sx2 as f32,
+                    y2: sy2 as f32,
+                    color,
+                    thickness: edge.style.width as f32,
+                });
+                continue;
+            }
+        }
         elements.push(VisualElement::Line {
             x1: sx1 as f32,
             y1: sy1 as f32,
@@ -747,13 +888,15 @@ pub fn flatten_scene_graph(
         let is_hovered = scene.hovered == Some(i);
         // Selected always wins over hovered when both target the same
         // node — a deliberate action (click/keyboard-select) outranks
-        // incidental mouse position.
-        let color = if is_selected {
-            style.selected_color.clone()
-        } else if is_hovered {
-            style.hover_color.clone()
-        } else {
-            style.color_for_kind(node.kind).to_string()
+        // incidental mouse position. `color_override` (an in-flight tween
+        // toward this node's highlight color) wins over both — it's how
+        // the SAME target node reaches selected/hover_color smoothly
+        // instead of snapping the instant it becomes selected/hovered.
+        let color = match &style.color_override {
+            Some((idx, hex)) if *idx == i => hex.clone(),
+            _ if is_selected => style.selected_color.clone(),
+            _ if is_hovered => style.hover_color.clone(),
+            _ => style.color_for_kind(node.kind).to_string(),
         };
         let (scx, scy) = scene_to_viewport(viewport, node.x, node.y);
         let degree = degrees.get(i).copied().unwrap_or(0);
@@ -810,6 +953,12 @@ mod tests {
             // test here (all using the default viewport) keeps pushing
             // Text elements unmodified.
             label_zoom_threshold: 0.5,
+            // 0.0 (straight lines) so every pre-Phase-E edge test here
+            // (all asserting `VisualElement::Line`) stays valid unmodified
+            // — new curved-edge tests build their own style with a
+            // nonzero curvature explicitly.
+            edge_curvature: 0.0,
+            color_override: None,
             node_colors: [
                 "#a1".into(),
                 "#a2".into(),
@@ -965,6 +1114,65 @@ mod tests {
             hub_radius > leaf_radius,
             "the high-degree node must render a larger circle (hub={hub_radius}, leaf={leaf_radius})"
         );
+    }
+
+    #[test]
+    fn ease_out_cubic_endpoints_and_monotonic() {
+        assert_eq!(ease_out_cubic(0.0), 0.0);
+        assert!((ease_out_cubic(1.0) - 1.0).abs() < 1e-6);
+        // Monotonically increasing across the range.
+        let samples = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0];
+        for pair in samples.windows(2) {
+            assert!(ease_out_cubic(pair[0]) < ease_out_cubic(pair[1]));
+        }
+        // "Ease OUT" — starts fast: the first half covers MORE than half
+        // the distance (unlike linear, which covers exactly half).
+        assert!(ease_out_cubic(0.5) > 0.5);
+    }
+
+    #[test]
+    fn lerp_hex_endpoints_and_midpoint() {
+        assert_eq!(lerp_hex("#000000", "#ffffff", 0.0), "#000000");
+        assert_eq!(lerp_hex("#000000", "#ffffff", 1.0), "#ffffff");
+        // Midpoint of black->white is mid-gray (127 or 128, rounding-dependent).
+        let mid = lerp_hex("#000000", "#ffffff", 0.5);
+        assert!(mid == "#808080" || mid == "#7f7f7f");
+    }
+
+    #[test]
+    fn lerp_hex_falls_back_to_to_color_on_malformed_input() {
+        assert_eq!(lerp_hex("not-a-color", "#ff0000", 0.5), "#ff0000");
+        assert_eq!(lerp_hex("#ff0000", "also-bad", 0.5), "also-bad");
+    }
+
+    #[test]
+    fn graph_color_tween_current_color_progresses_and_completes() {
+        let tween = GraphColorTween {
+            node_index: 0,
+            from_hex: "#000000".to_string(),
+            to_hex: "#ffffff".to_string(),
+            started_at: std::time::Instant::now() - std::time::Duration::from_millis(1000),
+            duration: std::time::Duration::from_millis(100),
+        };
+        // Backdated well past its duration — must report complete and
+        // its current color must be (at least very close to) the target.
+        assert!(tween.is_complete());
+        assert_eq!(tween.current_color(), "#ffffff");
+    }
+
+    #[test]
+    fn graph_color_tween_mid_flight_is_between_endpoints_and_not_complete() {
+        let tween = GraphColorTween {
+            node_index: 0,
+            from_hex: "#000000".to_string(),
+            to_hex: "#ffffff".to_string(),
+            started_at: std::time::Instant::now(),
+            duration: std::time::Duration::from_secs(60), // long enough not to race in CI
+        };
+        assert!(!tween.is_complete());
+        let color = tween.current_color();
+        // Very early in a long tween: should be dark, not yet at the target.
+        assert_ne!(color, "#ffffff");
     }
 
     #[test]
@@ -1347,6 +1555,155 @@ mod tests {
             }
             other => panic!("expected Line, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn flatten_curves_internal_edges_when_curvature_is_nonzero() {
+        let mut scene = SceneGraph::new();
+        scene
+            .nodes
+            .push(test_node("a", -100.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("b", 100.0, 0.0, NodeKind::Note));
+        scene.edges.push(test_edge(0, 1));
+        let mut style = test_style();
+        style.edge_curvature = 0.2;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        match &elements[0] {
+            VisualElement::Curve {
+                ctrl_x,
+                ctrl_y,
+                x1,
+                y1,
+                x2,
+                y2,
+                ..
+            } => {
+                // Control point must be offset from the straight-line
+                // midpoint (a curve, not a disguised straight line).
+                let mid_x = (x1 + x2) / 2.0;
+                let mid_y = (y1 + y2) / 2.0;
+                assert!(
+                    (ctrl_x - mid_x).abs() > 0.01 || (ctrl_y - mid_y).abs() > 0.01,
+                    "control point ({ctrl_x}, {ctrl_y}) must be offset from the midpoint \
+                     ({mid_x}, {mid_y})"
+                );
+            }
+            other => panic!("expected Curve, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn flatten_curve_offset_direction_alternates_by_source_target_parity() {
+        // Two otherwise-identical edges differing only in (source+target)
+        // parity must curve in OPPOSITE perpendicular directions, so
+        // parallel/adjacent edges bow apart instead of overlapping.
+        let mut scene = SceneGraph::new();
+        for i in 0..4 {
+            scene
+                .nodes
+                .push(test_node(&format!("n{i}"), 0.0, 0.0, NodeKind::Note));
+        }
+        scene.edges.push(test_edge(0, 1)); // sum = 1 (odd)
+        scene.edges.push(test_edge(0, 3)); // sum = 3 (odd) — same parity as above
+        scene.edges.push(test_edge(0, 2)); // sum = 2 (even) — opposite parity
+        let mut style = test_style();
+        style.edge_curvature = 0.2;
+        let viewport = mae_canvas::scene::Viewport::default();
+
+        // All three edges share the same endpoints geometrically (every
+        // node is at the scene origin here), so any ctrl_y sign difference
+        // is purely from the parity-based sign flip, not edge geometry.
+        // Reposition node "b"/"c"/"d" so the edge actually has nonzero
+        // length (a zero-length edge has an undefined perpendicular).
+        scene.nodes[1].x = 100.0; // b
+        scene.nodes[3].x = 100.0; // d (same position as b)
+        scene.nodes[2].x = 100.0; // c (same position as b)
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+
+        let ctrl_y_of = |el: &VisualElement| match el {
+            VisualElement::Curve { ctrl_y, .. } => *ctrl_y,
+            other => panic!("expected Curve, got {other:?}"),
+        };
+        let odd_a = ctrl_y_of(&elements[0]); // 0-1, sum=1
+        let odd_b = ctrl_y_of(&elements[1]); // 0-3, sum=3
+        let even = ctrl_y_of(&elements[2]); // 0-2, sum=2
+
+        // Same parity (both odd sums) -> same side.
+        assert!(
+            (odd_a - 300.0).signum() == (odd_b - 300.0).signum(),
+            "same-parity edges should curve to the same side"
+        );
+        // Opposite parity -> opposite side (300.0 is the straight-line y,
+        // since Viewport::default() centers scene y=0 at screen y=height/2=300).
+        assert_ne!(
+            (odd_a - 300.0).signum(),
+            (even - 300.0).signum(),
+            "opposite-parity edges should curve to opposite sides"
+        );
+    }
+
+    #[test]
+    fn flatten_curve_offset_is_capped_at_max_curve_offset_px() {
+        let mut scene = SceneGraph::new();
+        scene
+            .nodes
+            .push(test_node("a", -10_000.0, 0.0, NodeKind::Note));
+        scene
+            .nodes
+            .push(test_node("b", 10_000.0, 0.0, NodeKind::Note));
+        scene.edges.push(test_edge(0, 1));
+        let mut style = test_style();
+        style.edge_curvature = 0.9; // large fraction of a very long edge
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        match &elements[0] {
+            VisualElement::Curve {
+                ctrl_x,
+                ctrl_y,
+                x1,
+                y1,
+                x2,
+                y2,
+                ..
+            } => {
+                let mid_x = (x1 + x2) / 2.0;
+                let mid_y = (y1 + y2) / 2.0;
+                let offset = ((ctrl_x - mid_x).powi(2) + (ctrl_y - mid_y).powi(2)).sqrt();
+                assert!(
+                    offset <= MAX_CURVE_OFFSET_PX + 0.01,
+                    "offset {offset} must respect the MAX_CURVE_OFFSET_PX cap"
+                );
+            }
+            other => panic!("expected Curve, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn flatten_boundary_edges_stay_straight_even_with_curvature_enabled() {
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("a", 0.0, 0.0, NodeKind::Note));
+        scene.edges.push(SceneEdge {
+            source: 0,
+            target: 0, // self-loop = boundary indicator
+            label: Some("...".to_string()),
+            style: EdgeStyle {
+                color: "#unused".to_string(),
+                width: 1.0,
+                dashed: true,
+            },
+            weight: 1.0,
+            rel_type: None,
+        });
+        let mut style = test_style();
+        style.edge_curvature = 0.5;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        assert!(
+            matches!(elements[0], VisualElement::Line { .. }),
+            "a boundary/self-loop stub edge must stay a straight (dashed) Line even when \
+             edge_curvature is enabled"
+        );
     }
 
     #[test]
