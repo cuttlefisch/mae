@@ -435,6 +435,23 @@ fn theme_hex_fg(editor: &Editor, key: &str, fallback: &str) -> String {
     }
 }
 
+/// Resolve a theme style-key's BACKGROUND color to a `"#rrggbb"` hex
+/// string, falling back to `fallback` when the theme has no `bg` for that
+/// key. Every shipped theme defines `"ui.graph.background"` with `bg`
+/// (never `fg` — it's a background, not a foreground) — `background_color`
+/// used to be built via `theme_hex_fg`, which only ever reads `.fg`, so it
+/// silently fell back to the Rust-hardcoded default for every theme,
+/// always, never actually theme-driven. This sibling function is the fix.
+fn theme_hex_bg(editor: &Editor, key: &str, fallback: &str) -> String {
+    match editor.theme.style(key).bg {
+        Some(color) => {
+            let (r, g, b) = crate::theme::Theme::resolve_to_rgb(&color);
+            format!("#{r:02x}{g:02x}{b:02x}")
+        }
+        None => fallback.to_string(),
+    }
+}
+
 impl GraphStyleOptions {
     /// Build from the current `Editor` option values + active theme.
     pub fn from_editor(editor: &Editor) -> Self {
@@ -451,7 +468,7 @@ impl GraphStyleOptions {
             hover_color: theme_hex_fg(editor, "ui.graph.node.hover", "#66ccff"),
             edge_color: theme_hex_fg(editor, "ui.graph.edge", "#6a6d7e"),
             boundary_edge_color: theme_hex_fg(editor, "ui.graph.edge.boundary", "#ff6666"),
-            background_color: theme_hex_fg(editor, "ui.graph.background", "#0d0d0d"),
+            background_color: theme_hex_bg(editor, "ui.graph.background", "#0d0d0d"),
         }
     }
 
@@ -606,6 +623,28 @@ mod tests {
             style: NodeStyle::default(),
             pinned: false,
         }
+    }
+
+    #[test]
+    fn graph_style_options_background_color_reads_theme_bg_not_fg() {
+        // Adversarial case matching every real shipped theme file's actual
+        // shape: "ui.graph.background" sets ONLY `bg` (it's a background,
+        // never a foreground). Regression for the bug where
+        // `background_color` was built via `theme_hex_fg` — which only
+        // ever reads `.fg` — so it silently fell back to the Rust-hardcoded
+        // default for every theme, always, never actually theme-driven.
+        let toml = r##"
+[styles]
+"ui.graph.background" = { bg = "#123456" }
+"##;
+        let theme = crate::theme::Theme::from_toml("test", toml).unwrap();
+        let mut editor = Editor::new();
+        editor.theme = theme;
+        let style = GraphStyleOptions::from_editor(&editor);
+        assert_eq!(
+            style.background_color, "#123456",
+            "background_color must read the theme's bg, not fall back to the hardcoded default"
+        );
     }
 
     #[test]

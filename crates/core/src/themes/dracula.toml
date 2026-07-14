@@ -92,6 +92,30 @@ yellow = "#f1fa8c"
 "markup.checkbox.checked" = { fg = "green" }
 "markup.drawer" = { fg = "comment" }
 
+# Native KB graph view. See catppuccin-mocha.toml's comment for the
+# role-mapping rationale — reuses this theme's own palette, not hand-picked
+# hexes. Mirrors default.toml's key set.
+"ui.graph.background" = { bg = "bg" }
+"ui.graph.node" = { fg = "fg" }
+"ui.graph.node.index" = { fg = "cyan" }        # namespace
+"ui.graph.node.command" = { fg = "pink" }      # keyword
+"ui.graph.node.concept" = { fg = "green" }     # function
+"ui.graph.node.key" = { fg = "purple" }        # constant
+"ui.graph.node.note" = { fg = "yellow" }       # string
+"ui.graph.node.project" = { fg = "cyan" }      # type
+"ui.graph.node.category" = { fg = "green" }    # attribute
+"ui.graph.node.lesson" = { fg = "green" }      # markup.done
+"ui.graph.node.tutorial" = { fg = "green" }    # diagnostic.info
+"ui.graph.node.meta" = { fg = "red" }          # diagnostic.error
+"ui.graph.node.block" = { fg = "purple" }      # number
+"ui.graph.node.scheme_api" = { fg = "purple" } # diagnostic.hint
+"ui.graph.node.task" = { fg = "red" }          # markup.todo
+"ui.graph.node.view" = { fg = "pink" }         # operator
+"ui.graph.node.selected" = { fg = "orange" }   # diagnostic.warn
+"ui.graph.node.hover" = { fg = "cyan" }        # markup.link
+"ui.graph.edge" = { fg = "comment" }           # comment
+"ui.graph.edge.boundary" = { fg = "red" }      # diagnostic.error
+
 "diff.added" = { fg = "green" }
 "diff.removed" = { fg = "red" }
 "diff.hunk" = { fg = "purple" }

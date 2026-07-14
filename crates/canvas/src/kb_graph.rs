@@ -182,13 +182,15 @@ pub fn build_kb_graph_positions_only(
     }
 }
 
-/// Map node kind to visual style.
-// TODO(graph-view Phase 1): route through MAE's Theme/ThemeResolver system
-// (`ui.graph.node.<kind>` keys) instead of this hardcoded palette — tracked
-// in the native KB graph view plan's Phase 1 (theme-driven styling section).
-// This hardcoded table is a Phase-0-appropriate placeholder that simply
-// extends coverage to the real 14-variant `NodeKind`; it is NOT the final
-// styling mechanism.
+/// Map node kind to visual style. Populates `SceneNode.style`, but that
+/// field is NOT read by the GUI render path — `flatten_scene_graph`
+/// (`crates/core/src/graph_view.rs`) colors nodes via
+/// `GraphStyleOptions::color_for_kind`, theme-driven (`ui.graph.node.<kind>`
+/// keys) with `NODE_KIND_FALLBACK_HEX` as its own fallback when a theme
+/// doesn't define them — the routing this function's old TODO asked for
+/// already happened, just not through this function. Kept for
+/// `SceneNode.style`'s struct completeness (e.g. a non-KB `mae-canvas`
+/// caller building a `SceneGraph` by hand) rather than deleted outright.
 fn kind_to_style(kind: &NodeKind, highlighted: bool) -> NodeStyle {
     let (fill, border) = match kind {
         NodeKind::Index => ("#3a2a1a", "#ffaa4a"),

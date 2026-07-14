@@ -106,6 +106,32 @@ crust = "#11111b"
 "markup.checkbox.checked" = { fg = "green" }
 "markup.drawer" = { fg = "overlay1" }
 
+# Native KB graph view. Each key reuses this theme's own color for the
+# syntax-highlighting role closest to that node kind's semantics (e.g.
+# Task -> markup.todo, since a Task node literally is a todo item) —
+# rather than hand-picked hexes with no rationale, so this stays grounded
+# in Catppuccin Mocha's actual palette. Mirrors default.toml's key set.
+"ui.graph.background" = { bg = "base" }
+"ui.graph.node" = { fg = "text" }
+"ui.graph.node.index" = { fg = "blue" }        # namespace
+"ui.graph.node.command" = { fg = "mauve" }     # keyword
+"ui.graph.node.concept" = { fg = "blue" }      # function
+"ui.graph.node.key" = { fg = "peach" }         # constant
+"ui.graph.node.note" = { fg = "green" }        # string
+"ui.graph.node.project" = { fg = "yellow" }    # type
+"ui.graph.node.category" = { fg = "teal" }     # attribute
+"ui.graph.node.lesson" = { fg = "green" }      # markup.done
+"ui.graph.node.tutorial" = { fg = "green" }    # diagnostic.info
+"ui.graph.node.meta" = { fg = "red" }          # diagnostic.error
+"ui.graph.node.block" = { fg = "peach" }       # number
+"ui.graph.node.scheme_api" = { fg = "sky" }    # diagnostic.hint
+"ui.graph.node.task" = { fg = "red" }          # markup.todo
+"ui.graph.node.view" = { fg = "sky" }          # operator
+"ui.graph.node.selected" = { fg = "yellow" }   # diagnostic.warn
+"ui.graph.node.hover" = { fg = "sapphire" }    # markup.link
+"ui.graph.edge" = { fg = "overlay1" }          # comment
+"ui.graph.edge.boundary" = { fg = "red" }      # diagnostic.error
+
 "diff.added" = { fg = "green" }
 "diff.removed" = { fg = "red" }
 "diff.hunk" = { fg = "mauve" }

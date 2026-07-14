@@ -147,6 +147,7 @@ gray = "#a89984"
 "ui.graph.node.task" = { fg = "#6aff9a" }
 "ui.graph.node.view" = { fg = "#ff4aaa" }
 "ui.graph.node.selected" = { fg = "#ff9933" }
+"ui.graph.node.hover" = { fg = "cyan" }
 "ui.graph.edge" = { fg = "#6a6d7e" }
 "ui.graph.edge.boundary" = { fg = "#ff6666" }
 
