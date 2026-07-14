@@ -92,6 +92,14 @@ pub struct GraphView {
     /// tick can never silently drop back to `LayoutConfig::default()` after
     /// the first request.
     pub layout_config: mae_canvas::layout::LayoutConfig,
+    /// Edge count touching each node (parallel to `scene.nodes`), computed
+    /// ONCE by `populate_graph_buffer` right after `scene`'s topology is
+    /// built — see `node_degrees`'s doc comment for why this is cached
+    /// rather than recomputed per-frame/per-hover. Read by both
+    /// `flatten_scene_graph` (render radius) and `graph_view_ops.rs`'s
+    /// `graph_scene_hit_radii` (hit-test radius), so the two can never
+    /// disagree about a node's size.
+    pub node_degrees: Vec<u32>,
 }
 
 impl GraphView {
@@ -228,6 +236,7 @@ impl GraphView {
             animating: false,
             anim_temperature: ANIMATION_INITIAL_TEMPERATURE,
             layout_config: mae_canvas::layout::LayoutConfig::default(),
+            node_degrees: Vec::new(),
         }
     }
 }
@@ -370,8 +379,31 @@ pub struct GraphLayoutIntent {
 /// flattener itself (principle #7/#8).
 #[derive(Debug, Clone)]
 pub struct GraphStyleOptions {
+    /// Base/reference node circle radius (logical px) at `viewport.zoom ==
+    /// 1.0`, before degree/zoom adjustments — see `node_render_radius`.
     pub node_radius: f32,
     pub font_size: f32,
+    /// Whether `node_render_radius` adds a `node_degree_scale *
+    /// sqrt(degree)` bump on top of `node_radius`. Mirrors
+    /// `kb_graph_node_size_by_degree`.
+    pub size_by_degree: bool,
+    /// Logical px added per `sqrt(degree)` when `size_by_degree` is on.
+    /// Mirrors `kb_graph_node_degree_scale`.
+    pub node_degree_scale: f32,
+    /// Whether `node_render_radius` scales the degree-adjusted radius by
+    /// `sqrt(viewport.zoom)` — the Sigma.js/org-roam-ui-precedented
+    /// sub-linear zoom scaling (see that function's doc comment for why
+    /// sub-linear, not full 1:1 geometric, is the established convention).
+    /// Mirrors `kb_graph_node_size_scales_with_zoom`.
+    pub size_scales_with_zoom: bool,
+    /// Absolute floor (logical px) on the FINAL render radius, applied
+    /// after both degree and zoom scaling — guarantees a node never
+    /// shrinks below a clickable/visible size even at extreme zoom-out.
+    /// Mirrors `kb_graph_node_min_radius`.
+    pub node_min_radius: f32,
+    /// Absolute ceiling (logical px) on the FINAL render radius. Mirrors
+    /// `kb_graph_node_max_radius`.
+    pub node_max_radius: f32,
     /// Hex fill color per canvas `NodeKind`, indexed via `kind_index`.
     node_colors: [String; 14],
     pub selected_color: String,
@@ -502,6 +534,11 @@ impl GraphStyleOptions {
         GraphStyleOptions {
             node_radius: editor.kb_graph_node_radius as f32,
             font_size: editor.kb_graph_font_size as f32,
+            size_by_degree: editor.kb_graph_node_size_by_degree,
+            node_degree_scale: editor.kb_graph_node_degree_scale,
+            size_scales_with_zoom: editor.kb_graph_node_size_scales_with_zoom,
+            node_min_radius: editor.kb_graph_node_min_radius as f32,
+            node_max_radius: editor.kb_graph_node_max_radius as f32,
             node_colors,
             selected_color: theme_hex_fg(editor, "ui.graph.node.selected", "#ff9933"),
             hover_color: theme_hex_fg(editor, "ui.graph.node.hover", "#66ccff"),
@@ -514,6 +551,78 @@ impl GraphStyleOptions {
     fn color_for_kind(&self, kind: mae_canvas::scene::NodeKind) -> &str {
         &self.node_colors[kind_index(kind)]
     }
+}
+
+/// Count edges touching each node (O(E)) — computed ONCE by
+/// `populate_graph_buffer` right after `scene` is built and cached on
+/// `GraphView.node_degrees`, NOT recomputed per-frame or per-hover: layout
+/// ticks only move positions, never change topology, so a cached count
+/// stays valid across the whole life of an open graph. A boundary self-loop
+/// (see `mae_canvas::kb_graph::build_kb_graph_positions_only`) counts once
+/// toward its source, same as any other edge.
+pub fn node_degrees(scene: &mae_canvas::scene::SceneGraph) -> Vec<u32> {
+    let mut degrees = vec![0u32; scene.nodes.len()];
+    for edge in &scene.edges {
+        if let Some(d) = degrees.get_mut(edge.source) {
+            *d += 1;
+        }
+        if edge.target != edge.source {
+            if let Some(d) = degrees.get_mut(edge.target) {
+                *d += 1;
+            }
+        }
+    }
+    degrees
+}
+
+/// Compute a node's FINAL render radius (logical px) — the single formula
+/// both drawing (`flatten_scene_graph`) and hit-testing
+/// (`graph_view_ops.rs::graph_scene_hit_radii`) share, so they can never
+/// disagree about where a node's clickable/visible boundary actually is.
+///
+/// Two independent, each-optional adjustments on top of `style.node_radius`
+/// (the base/reference size at `zoom == 1.0`):
+///
+/// - **Degree**: `+ node_degree_scale * sqrt(degree)` when `size_by_degree`
+///   is on — hub nodes read as visually prominent, a standard convention
+///   (Obsidian sizes graph-view nodes by link count) previously entirely
+///   absent here (every node rendered at the same fixed radius regardless
+///   of connectivity).
+/// - **Zoom**: `* sqrt(viewport.zoom)` when `size_scales_with_zoom` is on —
+///   SUB-LINEAR, not full 1:1 geometric scaling. Researched precedent:
+///   Sigma.js's documented default is exactly `sqrt(zoom ratio)` ("nodes
+///   and edges grow LESS than the zoom"); org-roam-ui ships a tunable
+///   "keep node size invariant across zoom" slider defaulting to a similar
+///   dampened curve. Pure linear/geometric scaling was considered and
+///   rejected: it makes nodes shrink to sub-pixel (unreadable, unclickable)
+///   at extreme zoom-out and balloon to overwhelming size at extreme
+///   zoom-in — sub-linear scaling still lets zooming out reveal the gaps
+///   between nodes (this codebase's fixed-screen-space-only sizing, the
+///   PRE-this-change behavior, was the opposite failure mode: node circles
+///   never shrank at all, so zooming out to see a large graph just produced
+///   an unreadable mass of same-size overlapping circles).
+///
+/// Finally clamped to `[node_min_radius, node_max_radius]` — the floor
+/// guarantees a node is never smaller than clickable/visible even at
+/// extreme zoom-out; the ceiling caps degree+zoom growth at extreme
+/// zoom-in/high-degree combinations.
+pub fn node_render_radius(style: &GraphStyleOptions, degree: u32, zoom: f64) -> f32 {
+    let mut r = style.node_radius;
+    if style.size_by_degree {
+        r += style.node_degree_scale * (degree as f32).sqrt();
+    }
+    if style.size_scales_with_zoom {
+        r *= (zoom.max(0.0) as f32).sqrt();
+    }
+    // `f32::clamp` panics if min > max — the two bounds are independently
+    // user-configurable options with no cross-validation at `:set` time, so
+    // guard against a misconfigured min > max rather than trust ordering.
+    let (lo, hi) = if style.node_min_radius <= style.node_max_radius {
+        (style.node_min_radius, style.node_max_radius)
+    } else {
+        (style.node_max_radius, style.node_min_radius)
+    };
+    r.clamp(lo, hi)
 }
 
 /// Flatten a `mae-canvas` `SceneGraph` into `VisualElement`s for the GUI's
@@ -533,6 +642,7 @@ pub fn flatten_scene_graph(
     scene: &mae_canvas::scene::SceneGraph,
     viewport: &mae_canvas::scene::Viewport,
     style: &GraphStyleOptions,
+    degrees: &[u32],
 ) -> Vec<VisualElement> {
     use mae_canvas::interaction::scene_to_viewport;
 
@@ -543,10 +653,10 @@ pub fn flatten_scene_graph(
     // drawing and interaction always agree on where a node actually is,
     // driven by the CALLER's chosen `viewport` (kept in sync with that
     // specific window's pixel size by `Editor::graph_view_reflatten_window`,
-    // the single call site that invokes this function). Sizes (node radius,
-    // font size, stub/line offsets, stroke width) stay fixed screen-space
-    // pixels, NOT scaled by zoom — zoom moves nodes apart/together, it
-    // doesn't grow/shrink them.
+    // the single call site that invokes this function). Font size and
+    // stub/line offsets stay fixed screen-space pixels regardless of zoom.
+    // Node radius is the exception — see `node_render_radius`'s doc comment
+    // for why it deliberately DOES scale (sub-linearly) with zoom.
 
     for edge in &scene.edges {
         let Some(src) = scene.nodes.get(edge.source) else {
@@ -598,15 +708,17 @@ pub fn flatten_scene_graph(
             style.color_for_kind(node.kind).to_string()
         };
         let (scx, scy) = scene_to_viewport(viewport, node.x, node.y);
+        let degree = degrees.get(i).copied().unwrap_or(0);
+        let r = node_render_radius(style, degree, viewport.zoom);
         elements.push(VisualElement::Circle {
             cx: scx as f32,
             cy: scy as f32,
-            r: style.node_radius,
+            r,
             fill: Some(color.clone()),
             stroke: Some(style.edge_color.clone()),
         });
         elements.push(VisualElement::Text {
-            x: scx as f32 + style.node_radius + 4.0,
+            x: scx as f32 + r + 4.0,
             y: scy as f32,
             text: node.label.clone(),
             font_size: style.font_size,
@@ -626,6 +738,17 @@ mod tests {
         GraphStyleOptions {
             node_radius: 18.0,
             font_size: 14.0,
+            // Matches production defaults. With degree=0 (every existing
+            // test here passes an empty/all-zero degrees slice) and
+            // Viewport::default()'s zoom=1.0, both scaling terms are
+            // no-ops, so `node_render_radius` == `node_radius` exactly —
+            // every pre-Phase-C test's radius assertions stay valid
+            // unmodified.
+            size_by_degree: true,
+            node_degree_scale: 4.0,
+            size_scales_with_zoom: true,
+            node_min_radius: 4.0,
+            node_max_radius: 36.0,
             node_colors: [
                 "#a1".into(),
                 "#a2".into(),
@@ -662,6 +785,125 @@ mod tests {
             style: NodeStyle::default(),
             pinned: false,
         }
+    }
+
+    fn test_edge(source: usize, target: usize) -> SceneEdge {
+        SceneEdge {
+            source,
+            target,
+            label: None,
+            style: EdgeStyle::default(),
+            weight: 1.0,
+            rel_type: None,
+        }
+    }
+
+    #[test]
+    fn node_degrees_counts_edges_touching_each_node() {
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("a", 0.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("b", 0.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("c", 0.0, 0.0, NodeKind::Note));
+        // a-b, a-c: "a" has degree 2, "b" and "c" degree 1 each.
+        scene.edges.push(test_edge(0, 1));
+        scene.edges.push(test_edge(0, 2));
+        assert_eq!(node_degrees(&scene), vec![2, 1, 1]);
+    }
+
+    #[test]
+    fn node_degrees_counts_a_self_loop_once() {
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("a", 0.0, 0.0, NodeKind::Note));
+        scene.edges.push(test_edge(0, 0)); // boundary self-loop stub
+        assert_eq!(node_degrees(&scene), vec![1]);
+    }
+
+    #[test]
+    fn node_render_radius_scales_with_degree_and_caps_at_max() {
+        let mut style = test_style();
+        style.size_scales_with_zoom = false; // isolate the degree term
+        let base = node_render_radius(&style, 0, 1.0);
+        let higher_degree = node_render_radius(&style, 25, 1.0);
+        assert!(
+            higher_degree > base,
+            "a higher-degree node should render larger (base={base}, higher_degree={higher_degree})"
+        );
+        // An absurdly high degree must still respect the ceiling.
+        let capped = node_render_radius(&style, 100_000, 1.0);
+        assert_eq!(capped, style.node_max_radius);
+    }
+
+    #[test]
+    fn node_render_radius_flat_when_size_by_degree_is_off() {
+        let mut style = test_style();
+        style.size_by_degree = false;
+        style.size_scales_with_zoom = false;
+        assert_eq!(node_render_radius(&style, 0, 1.0), style.node_radius);
+        assert_eq!(
+            node_render_radius(&style, 50, 1.0),
+            style.node_radius,
+            "degree must not affect radius when size_by_degree is off"
+        );
+    }
+
+    #[test]
+    fn node_render_radius_scales_sub_linearly_with_zoom_and_respects_the_floor() {
+        let mut style = test_style();
+        style.size_by_degree = false; // isolate the zoom term
+        let at_zoom_1 = node_render_radius(&style, 0, 1.0);
+        let zoomed_in = node_render_radius(&style, 0, 4.0);
+        let zoomed_out = node_render_radius(&style, 0, 0.25);
+        assert!(
+            zoomed_in > at_zoom_1,
+            "zooming in should grow the radius (at_zoom_1={at_zoom_1}, zoomed_in={zoomed_in})"
+        );
+        assert!(
+            zoomed_out < at_zoom_1,
+            "zooming out should shrink the radius (at_zoom_1={at_zoom_1}, zoomed_out={zoomed_out})"
+        );
+        // sqrt(4.0) = 2.0 exactly — confirms SUB-linear (not 1:1 geometric)
+        // scaling: a 4x zoom only doubles the radius, not quadruples it.
+        assert!((zoomed_in - at_zoom_1 * 2.0).abs() < 1e-4);
+        // At an extreme zoom-out, the floor must still hold.
+        let extreme_zoom_out = node_render_radius(&style, 0, 0.001);
+        assert_eq!(extreme_zoom_out, style.node_min_radius);
+    }
+
+    #[test]
+    fn node_render_radius_never_panics_when_min_exceeds_max() {
+        // The two bounds are independently user-configurable options with
+        // no cross-validation at `:set` time — a misconfigured min > max
+        // must not panic `f32::clamp`.
+        let mut style = test_style();
+        style.node_min_radius = 50.0;
+        style.node_max_radius = 10.0;
+        let r = node_render_radius(&style, 0, 1.0);
+        assert!((10.0..=50.0).contains(&r));
+    }
+
+    #[test]
+    fn flatten_scene_graph_high_degree_node_renders_larger_circle() {
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("hub", 0.0, 0.0, NodeKind::Note));
+        scene
+            .nodes
+            .push(test_node("leaf", 200.0, 0.0, NodeKind::Note));
+        let style = test_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        // degrees: "hub" has a high degree, "leaf" has none.
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[20, 0]);
+        let radius_of = |elements: &[VisualElement], idx: usize| match &elements[idx] {
+            VisualElement::Circle { r, .. } => *r,
+            other => panic!("expected Circle, got {other:?}"),
+        };
+        // Edges list is empty here, so elements are [hub_circle, hub_text,
+        // leaf_circle, leaf_text] — nodes are emitted in scene order.
+        let hub_radius = radius_of(&elements, 0);
+        let leaf_radius = radius_of(&elements, 2);
+        assert!(
+            hub_radius > leaf_radius,
+            "the high-degree node must render a larger circle (hub={hub_radius}, leaf={leaf_radius})"
+        );
     }
 
     #[test]
@@ -762,7 +1004,7 @@ mod tests {
     fn flatten_empty_scene_produces_no_elements() {
         let scene = SceneGraph::new();
         let viewport = mae_canvas::scene::Viewport::default();
-        let elements = flatten_scene_graph(&scene, &viewport, &test_style());
+        let elements = flatten_scene_graph(&scene, &viewport, &test_style(), &[]);
         assert!(elements.is_empty());
     }
 
@@ -774,7 +1016,7 @@ mod tests {
             .push(test_node("concept:buffer", 10.0, 20.0, NodeKind::Concept));
         let style = test_style();
         let viewport = mae_canvas::scene::Viewport::default();
-        let elements = flatten_scene_graph(&scene, &viewport, &style);
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
         assert_eq!(elements.len(), 2);
         // Default `Viewport` (center 0,0, zoom 1.0, 800x600) is NOT an
         // identity transform — `scene_to_viewport` centers the origin in
@@ -816,7 +1058,7 @@ mod tests {
         scene.selection = Some(1);
         let style = test_style();
         let viewport = mae_canvas::scene::Viewport::default();
-        let elements = flatten_scene_graph(&scene, &viewport, &style);
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
         // Node 0 (unselected) circle first, then node 1 (selected) circle.
         match &elements[0] {
             VisualElement::Circle { fill, .. } => {
@@ -840,7 +1082,7 @@ mod tests {
         scene.hovered = Some(1);
         let style = test_style();
         let viewport = mae_canvas::scene::Viewport::default();
-        let elements = flatten_scene_graph(&scene, &viewport, &style);
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
         match &elements[0] {
             VisualElement::Circle { fill, .. } => {
                 assert_eq!(fill.as_deref(), Some(style.color_for_kind(NodeKind::Note)));
@@ -866,7 +1108,7 @@ mod tests {
         scene.hovered = Some(0);
         let style = test_style();
         let viewport = mae_canvas::scene::Viewport::default();
-        let elements = flatten_scene_graph(&scene, &viewport, &style);
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
         match &elements[0] {
             VisualElement::Circle { fill, .. } => {
                 assert_eq!(fill.as_deref(), Some(style.selected_color.as_str()));
@@ -890,7 +1132,7 @@ mod tests {
         });
         let style = test_style();
         let viewport = mae_canvas::scene::Viewport::default();
-        let elements = flatten_scene_graph(&scene, &viewport, &style);
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
         // Same non-identity default-viewport transform as `flatten_single_
         // node_produces_circle_and_text` — target node (50, 0) draws at
         // (50 + width/2, 0 + height/2).
@@ -931,7 +1173,7 @@ mod tests {
         });
         let style = test_style();
         let viewport = mae_canvas::scene::Viewport::default();
-        let elements = flatten_scene_graph(&scene, &viewport, &style);
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
         match &elements[0] {
             VisualElement::Line { dashed, color, .. } => {
                 assert!(dashed);
@@ -955,7 +1197,7 @@ mod tests {
         });
         let style = test_style();
         let viewport = mae_canvas::scene::Viewport::default();
-        let elements = flatten_scene_graph(&scene, &viewport, &style);
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
         // Only the node's circle+text — the bogus edge is skipped.
         assert_eq!(elements.len(), 2);
     }

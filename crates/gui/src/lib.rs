@@ -1308,7 +1308,8 @@ fn render_window_area_with_graph_overlay(
     viewport.height = (area_height as f32 * editor.gui_cell_height) as f64;
 
     let style = mae_core::graph_view::GraphStyleOptions::from_editor(editor);
-    let elements = mae_core::graph_view::flatten_scene_graph(&gv.scene, &viewport, &style);
+    let elements =
+        mae_core::graph_view::flatten_scene_graph(&gv.scene, &viewport, &style, &gv.node_degrees);
     let vb = mae_core::visual_buffer::VisualBuffer { elements };
     let bg = theme::ts_bg(editor, "ui.graph.background");
     render_visual_buffer_with_bg(canvas, &vb, area_row, area_col, area_width, area_height, bg);

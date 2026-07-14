@@ -13,8 +13,8 @@
 
 use crate::buffer::{Buffer, BufferKind};
 use crate::graph_view::{
-    flatten_scene_graph, kind_affinity_from_strength, GraphLayoutIntent, GraphLayoutMode,
-    GraphNavDirection, GraphStyleOptions, GraphView, ANIMATION_COOLING_FACTOR,
+    flatten_scene_graph, kind_affinity_from_strength, node_render_radius, GraphLayoutIntent,
+    GraphLayoutMode, GraphNavDirection, GraphStyleOptions, GraphView, ANIMATION_COOLING_FACTOR,
     ANIMATION_INITIAL_TEMPERATURE, ANIMATION_SETTLE_EPSILON, ANIMATION_TEMPERATURE_FLOOR,
 };
 use crate::visual_buffer::VisualBuffer;
@@ -39,21 +39,32 @@ fn graph_scene_point(gv: &GraphView, win_id: WindowId, rel_x: f32, rel_y: f32) -
     mae_canvas::interaction::viewport_to_scene(&viewport, rel_x as f64, rel_y as f64)
 }
 
-/// Convert the graph's fixed SCREEN-space node radius
-/// (`Editor::kb_graph_node_radius` — never scaled by zoom when drawn, see
-/// `flatten_scene_graph`'s doc comment) into the equivalent SCENE-space
-/// radius for window `win_id`'s current zoom, for `mae_canvas::interaction
-/// ::hit_test`. The hit-testing analog of `graph_scene_point`'s position
-/// conversion — without this, a click's hit radius stayed FIXED in
-/// scene-space units (the node's now-vestigial `width`/`height` fields, a
-/// leftover from an earlier rectangular-node model) while the rendered
-/// circle stayed fixed in SCREEN-space, so the two drifted apart at any
-/// zoom other than 1.0 — most severely once zoomed out to see a large
-/// graph, where the clickable circle shrank to a sliver of the visibly
-/// drawn one.
-fn graph_scene_hit_radius(gv: &GraphView, win_id: WindowId, node_radius_px: f64) -> f64 {
+/// Compute every node's hit-test radius (SCENE-space units, parallel to
+/// `gv.scene.nodes`) for window `win_id`'s current zoom, for
+/// `mae_canvas::interaction::hit_test`. The hit-testing analog of
+/// `graph_scene_point`'s position conversion: each node's real SCREEN-space
+/// render radius (`node_render_radius` — varies by degree and zoom, see
+/// its doc comment) is converted back to scene-space by dividing by the
+/// window's zoom, so the clickable circle always matches the drawn one
+/// exactly, at any zoom/degree combination. Without this per-node,
+/// zoom-aware conversion, a click's hit radius either stayed FIXED in
+/// scene-space (the node's now-vestigial `width`/`height` fields, a
+/// leftover from an earlier rectangular-node model) or FIXED in
+/// screen-space (this codebase's own prior single-scalar-radius fix) while
+/// the rendered circle varied by both zoom and degree — either way the two
+/// drifted apart.
+fn graph_scene_hit_radii(gv: &GraphView, win_id: WindowId, style: &GraphStyleOptions) -> Vec<f64> {
     let viewport = gv.viewports.get(&win_id).copied().unwrap_or_default();
-    node_radius_px / viewport.zoom.max(f64::EPSILON)
+    let zoom = viewport.zoom.max(f64::EPSILON);
+    gv.scene
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            let degree = gv.node_degrees.get(i).copied().unwrap_or(0);
+            node_render_radius(style, degree, viewport.zoom) as f64 / zoom
+        })
+        .collect()
 }
 
 /// Part C Phase 4 (wheel-zoom): per-wheel-event zoom-factor tuning.
@@ -148,7 +159,7 @@ impl Editor {
             viewport.width = width as f64;
             viewport.height = height as f64;
             let viewport = *viewport;
-            let elements = flatten_scene_graph(&gv.scene, &viewport, &style);
+            let elements = flatten_scene_graph(&gv.scene, &viewport, &style, &gv.node_degrees);
             gv.rendered.insert(win_id, VisualBuffer { elements });
         }
         self.mark_full_redraw();
@@ -342,6 +353,7 @@ impl Editor {
             gv.depth = depth;
             gv.kb_instance = kb_instance;
             gv.scene = scene;
+            gv.node_degrees = crate::graph_view::node_degrees(&gv.scene);
             gv.animating = self.kb_graph_animate;
             gv.anim_temperature = ANIMATION_INITIAL_TEMPERATURE;
             gv.layout_config = layout_config;
@@ -695,11 +707,11 @@ impl Editor {
             return None;
         }
 
-        let node_radius_px = self.kb_graph_node_radius as f64;
+        let style = self.graph_style_options();
         let hit_result: Option<Option<usize>> = self.buffers[buf_idx].graph_view().map(|gv| {
             let (scene_x, scene_y) = graph_scene_point(gv, graph_win_id, rel_x, rel_y);
-            let radius = graph_scene_hit_radius(gv, graph_win_id, node_radius_px);
-            mae_canvas::interaction::hit_test(&gv.scene, scene_x, scene_y, radius)
+            let radii = graph_scene_hit_radii(gv, graph_win_id, &style);
+            mae_canvas::interaction::hit_test(&gv.scene, scene_x, scene_y, &radii)
         });
         let node_hit = hit_result?;
 
@@ -740,11 +752,11 @@ impl Editor {
             return false;
         }
 
-        let node_radius_px = self.kb_graph_node_radius as f64;
+        let style = self.graph_style_options();
         let Some(node_hit) = self.buffers[buf_idx].graph_view().map(|gv| {
             let (scene_x, scene_y) = graph_scene_point(gv, graph_win_id, rel_x, rel_y);
-            let radius = graph_scene_hit_radius(gv, graph_win_id, node_radius_px);
-            mae_canvas::interaction::hit_test(&gv.scene, scene_x, scene_y, radius)
+            let radii = graph_scene_hit_radii(gv, graph_win_id, &style);
+            mae_canvas::interaction::hit_test(&gv.scene, scene_x, scene_y, &radii)
         }) else {
             return false;
         };
@@ -2614,6 +2626,48 @@ mod tests {
             "clicking the node's own pixel position, computed via window B's own viewport, \
              must hit it in window B"
         );
+    }
+
+    #[test]
+    fn graph_scene_hit_radii_matches_flatten_scene_graphs_render_radius() {
+        // Parity guard, in the same spirit as `positions_only_and_full_
+        // agree_on_topology`: hit-testing and rendering must never
+        // disagree about how big a node is. Confirms
+        // graph_scene_hit_radii(...) * zoom == node_render_radius(...) for
+        // every node, at a non-default zoom (so a stale fixed-radius
+        // regression can't hide behind zoom == 1.0's no-op scaling term).
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        for _ in 0..3 {
+            editor.kb_graph_view_zoom(graph_win_id, 300.0, 400.0, 300.0);
+        }
+        let zoom = zoom_of(&editor, graph_idx, graph_win_id);
+        assert!(zoom > 1.0, "test setup: expected a non-default zoom");
+
+        let style = editor.graph_style_options();
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        let hit_radii = graph_scene_hit_radii(gv, graph_win_id, &style);
+        for (i, hit_radius) in hit_radii.iter().enumerate() {
+            let degree = gv.node_degrees.get(i).copied().unwrap_or(0);
+            let expected_render_radius = node_render_radius(&style, degree, zoom);
+            let actual_render_radius = (hit_radius * zoom) as f32;
+            assert!(
+                (actual_render_radius - expected_render_radius).abs() < 0.01,
+                "node {i}: hit radius * zoom ({actual_render_radius}) must match the render \
+                 radius ({expected_render_radius})"
+            );
+        }
     }
 
     #[test]

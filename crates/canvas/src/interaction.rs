@@ -13,25 +13,27 @@ pub enum Direction {
 
 /// Test whether a scene-space point hits a node. Returns the node index.
 ///
-/// `radius` is the node's hit-circle radius IN SCENE-SPACE UNITS — the KB
-/// graph view renders every node as a circle of a FIXED SCREEN-space radius
-/// (`GraphStyleOptions::node_radius`, never scaled by zoom — see
-/// `flatten_scene_graph`'s doc comment), so a caller must convert that
-/// screen-space radius to scene-space by dividing by the current zoom
-/// before calling this (`graph_view_ops.rs::graph_scene_hit_radius`) —
-/// otherwise the clickable area drifts away from the visible circle at any
-/// zoom level other than 1.0 (shrinking to a fraction of the drawn circle
-/// once zoomed out, since screen-space size stays fixed while scene-space
-/// distance-per-pixel grows). Deliberately NOT `node.width`/`node.height` —
-/// those are leftover fields from an earlier rectangular-node model the
-/// renderer no longer uses for the KB graph view; testing against them hit
-/// a box that had already diverged from the circle actually drawn.
-pub fn hit_test(graph: &SceneGraph, scene_x: f64, scene_y: f64, radius: f64) -> Option<usize> {
-    let r_sq = radius * radius;
+/// `radii` gives each node's hit-circle radius IN SCENE-SPACE UNITS,
+/// PARALLEL to `graph.nodes` (index `i` in `graph.nodes` uses `radii[i]`;
+/// a missing entry fails closed — unclickable, never a spurious nonzero
+/// default) — the KB graph view renders every node as a circle whose
+/// SCREEN-space radius varies by degree and zoom
+/// (`GraphStyleOptions::node_radius`/`node_render_radius`, see that
+/// function's doc comment), so a caller must convert each node's real
+/// screen-space render radius to scene-space (dividing by the current
+/// zoom) before calling this
+/// (`graph_view_ops.rs::graph_scene_hit_radii`) — otherwise the clickable
+/// area drifts away from the visible circle. Deliberately NOT
+/// `node.width`/`node.height` — those are leftover fields from an earlier
+/// rectangular-node model the renderer no longer uses for the KB graph
+/// view; testing against them hit a box that had already diverged from
+/// the circle actually drawn.
+pub fn hit_test(graph: &SceneGraph, scene_x: f64, scene_y: f64, radii: &[f64]) -> Option<usize> {
     for (i, node) in graph.nodes.iter().enumerate().rev() {
+        let radius = radii.get(i).copied().unwrap_or(0.0);
         let dx = scene_x - node.x;
         let dy = scene_y - node.y;
-        if dx * dx + dy * dy <= r_sq {
+        if dx * dx + dy * dy <= radius * radius {
             return Some(i);
         }
     }
@@ -154,15 +156,15 @@ mod tests {
     fn hit_test_inside_node() {
         let mut sg = SceneGraph::new();
         sg.nodes.push(test_node("a", 100.0, 100.0));
-        assert_eq!(hit_test(&sg, 100.0, 100.0, 50.0), Some(0));
-        assert_eq!(hit_test(&sg, 140.0, 110.0, 50.0), Some(0));
+        assert_eq!(hit_test(&sg, 100.0, 100.0, &[50.0]), Some(0));
+        assert_eq!(hit_test(&sg, 140.0, 110.0, &[50.0]), Some(0));
     }
 
     #[test]
     fn hit_test_outside_node() {
         let mut sg = SceneGraph::new();
         sg.nodes.push(test_node("a", 100.0, 100.0));
-        assert_eq!(hit_test(&sg, 300.0, 300.0, 50.0), None);
+        assert_eq!(hit_test(&sg, 300.0, 300.0, &[50.0]), None);
     }
 
     #[test]
@@ -172,8 +174,38 @@ mod tests {
         // check (not a leftover rectangular width/height check).
         let mut sg = SceneGraph::new();
         sg.nodes.push(test_node("a", 0.0, 0.0));
-        assert_eq!(hit_test(&sg, 18.0, 0.0, 18.0), Some(0));
-        assert_eq!(hit_test(&sg, 18.0, 0.0, 10.0), None);
+        assert_eq!(hit_test(&sg, 18.0, 0.0, &[18.0]), Some(0));
+        assert_eq!(hit_test(&sg, 18.0, 0.0, &[10.0]), None);
+    }
+
+    #[test]
+    fn hit_test_uses_per_node_radius() {
+        // A big node's larger radius is honored; a small neighbor's
+        // smaller radius doesn't over-claim territory it shouldn't.
+        let mut sg = SceneGraph::new();
+        sg.nodes.push(test_node("big", 0.0, 0.0));
+        sg.nodes.push(test_node("small", 100.0, 0.0));
+        let radii = [40.0, 5.0];
+        // Well inside the big node's larger radius.
+        assert_eq!(hit_test(&sg, 30.0, 0.0, &radii), Some(0));
+        // Just outside the small node's tiny radius.
+        assert_eq!(hit_test(&sg, 108.0, 0.0, &radii), None);
+        // Inside the small node's tiny radius.
+        assert_eq!(hit_test(&sg, 102.0, 0.0, &radii), Some(1));
+    }
+
+    #[test]
+    fn hit_test_missing_radius_entry_fails_closed() {
+        // A radii slice shorter than graph.nodes must never grant a
+        // spurious hit — missing entries are unclickable (radius 0), not a
+        // default nonzero radius. `radii` has only ONE entry (for "a"), so
+        // "b" (index 1) has no entry. Click 1 unit off "b"'s own center —
+        // with ANY nonzero radius this would hit; a miss here proves the
+        // missing entry really resolved to 0.0.
+        let mut sg = SceneGraph::new();
+        sg.nodes.push(test_node("a", 0.0, 0.0));
+        sg.nodes.push(test_node("b", 200.0, 0.0));
+        assert_eq!(hit_test(&sg, 201.0, 0.0, &[50.0]), None);
     }
 
     #[test]
@@ -182,7 +214,7 @@ mod tests {
         sg.nodes.push(test_node("a", 100.0, 100.0));
         sg.nodes.push(test_node("b", 110.0, 100.0)); // overlapping
                                                      // Later node wins (rendered on top)
-        assert_eq!(hit_test(&sg, 105.0, 100.0, 50.0), Some(1));
+        assert_eq!(hit_test(&sg, 105.0, 100.0, &[50.0, 50.0]), Some(1));
     }
 
     #[test]

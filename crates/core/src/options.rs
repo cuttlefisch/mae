@@ -445,8 +445,36 @@ impl OptionRegistry {
                      outgoing links.",
                     OptionKind::Bool, "true", Some("kb-graph.include-backlinks"), &[]),
                 opt!("kb_graph_node_radius", &["kb-graph-node-radius"],
-                    "Node circle radius in logical pixels for the graph view's GUI rendering.",
+                    "Base node circle radius in logical pixels for the graph view's GUI \
+                     rendering, at viewport zoom 1.0 before degree/zoom adjustments — see \
+                     kb_graph_node_size_by_degree and kb_graph_node_size_scales_with_zoom.",
                     OptionKind::Int, "18", Some("kb-graph.node-radius"), &[]),
+                opt!("kb_graph_node_size_by_degree", &["kb-graph-node-size-by-degree"],
+                    "Whether graph-view nodes are sized by their connection count (degree) — \
+                     hub nodes render larger, a standard graph-visualization convention \
+                     (Obsidian sizes its graph view this way). When off, every node renders at \
+                     kb_graph_node_radius regardless of connectivity.",
+                    OptionKind::Bool, "true", Some("kb-graph.node-size-by-degree"), &[]),
+                opt!("kb_graph_node_degree_scale", &["kb-graph-node-degree-scale"],
+                    "Logical pixels added to a node's radius per sqrt(degree) when \
+                     kb_graph_node_size_by_degree is on. Tune visually.",
+                    OptionKind::Float, "4.0", Some("kb-graph.node-degree-scale"), &[]),
+                opt!("kb_graph_node_size_scales_with_zoom", &["kb-graph-node-size-scales-with-zoom"],
+                    "Whether graph-view node circles shrink/grow with viewport zoom (sub-linear \
+                     — scaled by sqrt(zoom), the documented Sigma.js/org-roam-ui convention, not \
+                     full 1:1 geometric scaling). When off, nodes stay a fixed screen-space size \
+                     regardless of zoom, which can make a densely zoomed-out graph read as an \
+                     undifferentiated mass of same-size overlapping circles.",
+                    OptionKind::Bool, "true", Some("kb-graph.node-size-scales-with-zoom"), &[]),
+                opt!("kb_graph_node_min_radius", &["kb-graph-node-min-radius"],
+                    "Minimum node circle radius in logical pixels, applied after degree/zoom \
+                     scaling — guarantees a node never shrinks below a clickable/visible size \
+                     even at extreme zoom-out.",
+                    OptionKind::Int, "4", Some("kb-graph.node-min-radius"), &[]),
+                opt!("kb_graph_node_max_radius", &["kb-graph-node-max-radius"],
+                    "Maximum node circle radius in logical pixels, applied after degree/zoom \
+                     scaling.",
+                    OptionKind::Int, "36", Some("kb-graph.node-max-radius"), &[]),
                 opt!("kb_graph_font_size", &["kb-graph-font-size"],
                     "Node label font size in points for the graph view's GUI rendering. \
                      Independent of the base font_size option (same numeric default, no live \

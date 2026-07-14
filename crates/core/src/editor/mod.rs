@@ -762,6 +762,22 @@ pub struct Editor {
     /// Node circle radius in logical pixels for the graph view's GUI
     /// rendering. Mirrors `kb_graph_node_radius`.
     pub kb_graph_node_radius: u32,
+    /// Whether graph-view nodes are sized by connection count (degree).
+    /// Mirrors `kb_graph_node_size_by_degree`.
+    pub kb_graph_node_size_by_degree: bool,
+    /// Logical px added per sqrt(degree) when `kb_graph_node_size_by_degree`
+    /// is on. Mirrors `kb_graph_node_degree_scale`.
+    pub kb_graph_node_degree_scale: f32,
+    /// Whether graph-view node circles scale (sub-linearly, by
+    /// sqrt(zoom)) with viewport zoom. Mirrors
+    /// `kb_graph_node_size_scales_with_zoom`.
+    pub kb_graph_node_size_scales_with_zoom: bool,
+    /// Minimum node circle radius (logical px), applied after degree/zoom
+    /// scaling. Mirrors `kb_graph_node_min_radius`.
+    pub kb_graph_node_min_radius: u32,
+    /// Maximum node circle radius (logical px), applied after degree/zoom
+    /// scaling. Mirrors `kb_graph_node_max_radius`.
+    pub kb_graph_node_max_radius: u32,
     /// Node label font size in points for the graph view's GUI rendering.
     /// Mirrors `kb_graph_font_size` — defaults to the same numeric default
     /// as the base `font_size` option (14), but is a fully independent
@@ -1246,6 +1262,11 @@ impl Editor {
             kb_graph_default_depth: 2,
             kb_graph_include_backlinks: true,
             kb_graph_node_radius: 18,
+            kb_graph_node_size_by_degree: true,
+            kb_graph_node_degree_scale: 4.0,
+            kb_graph_node_size_scales_with_zoom: true,
+            kb_graph_node_min_radius: 4,
+            kb_graph_node_max_radius: 36,
             kb_graph_font_size: 14,
             kb_graph_layout_iterations: 50,
             kb_graph_layout_kind_clustering: 0.5,

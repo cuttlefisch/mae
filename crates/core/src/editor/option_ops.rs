@@ -224,6 +224,13 @@ impl super::Editor {
             "kb_graph_default_depth" => self.kb_graph_default_depth.to_string(),
             "kb_graph_include_backlinks" => self.kb_graph_include_backlinks.to_string(),
             "kb_graph_node_radius" => self.kb_graph_node_radius.to_string(),
+            "kb_graph_node_size_by_degree" => self.kb_graph_node_size_by_degree.to_string(),
+            "kb_graph_node_degree_scale" => self.kb_graph_node_degree_scale.to_string(),
+            "kb_graph_node_size_scales_with_zoom" => {
+                self.kb_graph_node_size_scales_with_zoom.to_string()
+            }
+            "kb_graph_node_min_radius" => self.kb_graph_node_min_radius.to_string(),
+            "kb_graph_node_max_radius" => self.kb_graph_node_max_radius.to_string(),
             "kb_graph_font_size" => self.kb_graph_font_size.to_string(),
             "kb_graph_layout_iterations" => self.kb_graph_layout_iterations.to_string(),
             "kb_graph_layout_kind_clustering" => self.kb_graph_layout_kind_clustering.to_string(),
@@ -957,6 +964,30 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.kb_graph_node_radius = v.clamp(1, 500);
+            }
+            "kb_graph_node_size_by_degree" => {
+                self.kb_graph_node_size_by_degree = parse_option_bool(value)?;
+            }
+            "kb_graph_node_degree_scale" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_node_degree_scale = v.clamp(0.0, 200.0);
+            }
+            "kb_graph_node_size_scales_with_zoom" => {
+                self.kb_graph_node_size_scales_with_zoom = parse_option_bool(value)?;
+            }
+            "kb_graph_node_min_radius" => {
+                let v: u32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_graph_node_min_radius = v.clamp(1, 500);
+            }
+            "kb_graph_node_max_radius" => {
+                let v: u32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_graph_node_max_radius = v.clamp(1, 500);
             }
             "kb_graph_font_size" => {
                 let v: u32 = value
