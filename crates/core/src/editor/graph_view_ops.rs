@@ -277,7 +277,7 @@ impl Editor {
             max_depth: depth,
             include_backlinks: self.kb_graph_include_backlinks,
         };
-        let owner = self.kb_owner_of(&center);
+        let owner = self.kb_owner_of_scoped(&center);
         let empty_result = || mae_kb::SubgraphResult {
             nodes: Vec::new(),
             links: Vec::new(),
@@ -1367,6 +1367,84 @@ mod tests {
                 .spacing_scale,
             7.5,
             "the option's value must flow into the cached layout_config"
+        );
+    }
+
+    #[test]
+    fn populate_graph_buffer_resolves_center_within_the_scoped_instance_when_search_scope_is_named()
+    {
+        // Regression guard for the graph-view/kb-search-scope integration:
+        // primary and a registered instance both have an "index" node —
+        // scoping to the instance must open THAT instance's node, not
+        // primary's (which `kb_owner_of`'s default primary-first order
+        // would otherwise always pick).
+        let mut editor = ed_with_kb_node("index", "Primary Index", "");
+        let mut inst = mae_kb::KnowledgeBase::new();
+        inst.insert(mae_kb::Node::new(
+            "index",
+            "Notes Index",
+            mae_kb::NodeKind::Index,
+            "",
+        ));
+        editor.kb.instances.insert("uuid-notes".into(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-notes".into(),
+                name: "notes".into(),
+                org_dir: std::path::PathBuf::from("/tmp/notes"),
+                db_path: std::path::PathBuf::from("/tmp/notes.db"),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+            });
+
+        editor.kb.search_scope = "notes".to_string();
+        editor.kb_graph_view_open(Some("index".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        assert_eq!(
+            editor.buffers[graph_idx].graph_view().unwrap().kb_instance,
+            Some("uuid-notes".to_string()),
+            "scoping to a named instance must resolve the graph's center within it"
+        );
+    }
+
+    #[test]
+    fn populate_graph_buffer_center_resolution_is_unchanged_when_search_scope_is_all() {
+        // Non-regression: default scope ("all") keeps the exact pre-existing
+        // primary-first behavior for users who never touch kb_search_scope.
+        let mut editor = ed_with_kb_node("index", "Primary Index", "");
+        let mut inst = mae_kb::KnowledgeBase::new();
+        inst.insert(mae_kb::Node::new(
+            "index",
+            "Notes Index",
+            mae_kb::NodeKind::Index,
+            "",
+        ));
+        editor.kb.instances.insert("uuid-notes".into(), inst);
+        assert_eq!(editor.kb.search_scope, "all");
+
+        editor.kb_graph_view_open(Some("index".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        assert_eq!(
+            editor.buffers[graph_idx].graph_view().unwrap().kb_instance,
+            None,
+            "with no scope set, the graph must still resolve to primary as before"
         );
     }
 

@@ -339,7 +339,7 @@ impl Editor {
                 true
             }
             "kb-save" | "kb-load" => {
-                self.set_status("KB persistence is now automatic via CozoDB. Use :kb-register / :kb-reimport for external KBs.");
+                self.set_status("KB persistence is now automatic via CozoDB. Use :kb-register / :kb-reimport for external KBs, or :kb-set-search-scope (SPC n S) to switch which already-registered KB you're working in.");
                 true
             }
             "theme" | "set-theme" => {

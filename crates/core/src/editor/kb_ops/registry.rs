@@ -570,4 +570,124 @@ impl Editor {
             .find(|(_, kb)| kb.contains(id))
             .map(|(uuid, _)| Some(uuid.clone()))
     }
+
+    /// Same resolution as `kb_owner_of`, but honors `kb.search_scope` when
+    /// it names a specific registered instance (set via
+    /// `:kb-set-search-scope` / `(set-option! "kb_search_scope" ...)`):
+    /// if that instance ALSO contains `id`, it wins over the default
+    /// primary-first order. This is what lets the graph view (or anything
+    /// else resolving a generic id like "index") target a specific
+    /// registered KB's own root once the user has scoped to it, instead of
+    /// `kb_owner_of` always finding primary's node of the same id first.
+    ///
+    /// Falls through to plain `kb_owner_of` (byte-identical result) when
+    /// the scope is a keyword (`"all"`/`"local"`/`"remote"`, including the
+    /// default empty/"all") or when the named instance doesn't actually
+    /// contain `id` — this is deliberately a narrowing preference, never a
+    /// way to make a resolvable id become unresolvable.
+    pub(crate) fn kb_owner_of_scoped(&self, id: &str) -> Option<Option<String>> {
+        let scope = self.kb.search_scope.trim();
+        let is_keyword = matches!(
+            scope.to_ascii_lowercase().as_str(),
+            "" | "all" | "local" | "local-only" | "remote" | "remote-only"
+        );
+        if !is_keyword {
+            if let Some(entry) = self.kb.registry.find(scope) {
+                if let Some(kb) = self.kb.instances.get(&entry.uuid) {
+                    if kb.contains(id) {
+                        return Some(Some(entry.uuid.clone()));
+                    }
+                }
+            }
+        }
+        self.kb_owner_of(id)
+    }
+}
+
+#[cfg(test)]
+mod scoped_owner_tests {
+    use crate::editor::Editor;
+
+    fn editor_with_a_registered_instance_sharing_an_id_with_primary() -> Editor {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "index",
+            "Primary Index",
+            mae_kb::NodeKind::Index,
+            "primary body",
+        ));
+        let mut inst = mae_kb::KnowledgeBase::new();
+        inst.insert(mae_kb::Node::new(
+            "index",
+            "Notes Index",
+            mae_kb::NodeKind::Index,
+            "instance body",
+        ));
+        editor.kb.instances.insert("uuid-notes".into(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-notes".into(),
+                name: "notes".into(),
+                org_dir: std::path::PathBuf::from("/tmp/notes"),
+                db_path: std::path::PathBuf::from("/tmp/notes.db"),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+            });
+        editor
+    }
+
+    #[test]
+    fn kb_owner_of_scoped_prefers_the_named_instance_over_primary_when_both_contain_the_id() {
+        let mut editor = editor_with_a_registered_instance_sharing_an_id_with_primary();
+        // Default scope ("all") behaves exactly like the unscoped lookup —
+        // primary wins, since kb_owner_of always checks primary first.
+        assert_eq!(editor.kb_owner_of_scoped("index"), Some(None));
+
+        editor.kb.search_scope = "notes".to_string();
+        assert_eq!(
+            editor.kb_owner_of_scoped("index"),
+            Some(Some("uuid-notes".to_string())),
+            "scoping to a named instance that also has this id must prefer it over primary"
+        );
+    }
+
+    #[test]
+    fn kb_owner_of_scoped_falls_back_to_unscoped_when_the_named_instance_lacks_the_id() {
+        let mut editor = editor_with_a_registered_instance_sharing_an_id_with_primary();
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:only-in-primary",
+            "Only In Primary",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        editor.kb.search_scope = "notes".to_string();
+        // "notes" doesn't contain this id — must still resolve via the
+        // normal primary-first search, not silently fail to resolve.
+        assert_eq!(
+            editor.kb_owner_of_scoped("concept:only-in-primary"),
+            Some(None)
+        );
+    }
+
+    #[test]
+    fn kb_owner_of_scoped_matches_unscoped_for_keyword_scopes() {
+        let mut editor = editor_with_a_registered_instance_sharing_an_id_with_primary();
+        for scope in ["all", "local", "remote", ""] {
+            editor.kb.search_scope = scope.to_string();
+            assert_eq!(
+                editor.kb_owner_of_scoped("index"),
+                editor.kb_owner_of("index"),
+                "keyword scope '{scope}' must behave identically to the unscoped lookup"
+            );
+        }
+    }
 }
