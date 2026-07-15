@@ -235,6 +235,7 @@ impl super::Editor {
             "kb_graph_node_min_radius" => self.kb_graph_node_min_radius.to_string(),
             "kb_graph_node_max_radius" => self.kb_graph_node_max_radius.to_string(),
             "kb_graph_label_zoom_threshold" => self.kb_graph_label_zoom_threshold.to_string(),
+            "kb_graph_label_declutter_enabled" => self.kb_graph_label_declutter_enabled.to_string(),
             "kb_graph_edge_curvature" => self.kb_graph_edge_curvature.to_string(),
             "kb_graph_color_tween_enabled" => self.kb_graph_color_tween_enabled.to_string(),
             "kb_graph_color_tween_duration_ms" => self.kb_graph_color_tween_duration_ms.to_string(),
@@ -242,6 +243,7 @@ impl super::Editor {
             "kb_graph_font_size" => self.kb_graph_font_size.to_string(),
             "kb_graph_layout_iterations" => self.kb_graph_layout_iterations.to_string(),
             "kb_graph_layout_kind_clustering" => self.kb_graph_layout_kind_clustering.to_string(),
+            "kb_graph_layout_spacing_scale" => self.kb_graph_layout_spacing_scale.to_string(),
             "kb_graph_follow_current_node" => self.kb_graph_follow_current_node.to_string(),
             "kb_graph_animate" => self.kb_graph_animate.to_string(),
             "kb_graph_hover_enabled" => self.kb_graph_hover_enabled.to_string(),
@@ -1009,6 +1011,9 @@ impl super::Editor {
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.kb_graph_label_zoom_threshold = v.clamp(0.0, 10.0);
             }
+            "kb_graph_label_declutter_enabled" => {
+                self.kb_graph_label_declutter_enabled = parse_option_bool(value)?;
+            }
             "kb_graph_edge_curvature" => {
                 let v: f32 = value
                     .parse()
@@ -1044,6 +1049,12 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.kb_graph_layout_kind_clustering = v.clamp(0.0, 1.0);
+            }
+            "kb_graph_layout_spacing_scale" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_layout_spacing_scale = v.clamp(0.1, 25.0);
             }
             "kb_graph_follow_current_node" => {
                 self.kb_graph_follow_current_node = parse_option_bool(value)?;
@@ -2290,6 +2301,81 @@ mod daemon_mode_tests {
         // Setting the mode reflects back through the legacy bool.
         editor.set_option("daemon_mode", "shared").unwrap();
         assert_eq!(editor.get_option("daemon_enabled").unwrap().0, "true");
+    }
+}
+
+#[cfg(test)]
+mod graph_view_option_tests {
+    use crate::editor::Editor;
+
+    #[test]
+    fn kb_graph_layout_spacing_scale_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor
+                .get_option("kb_graph_layout_spacing_scale")
+                .unwrap()
+                .0,
+            "2.25"
+        );
+
+        editor
+            .set_option("kb_graph_layout_spacing_scale", "5.0")
+            .unwrap();
+        assert_eq!(
+            editor
+                .get_option("kb_graph_layout_spacing_scale")
+                .unwrap()
+                .0,
+            "5"
+        );
+        assert_eq!(editor.kb_graph_layout_spacing_scale, 5.0);
+
+        // Out-of-range values clamp rather than error.
+        editor
+            .set_option("kb_graph_layout_spacing_scale", "0.0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_layout_spacing_scale, 0.1);
+        editor
+            .set_option("kb_graph_layout_spacing_scale", "100.0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_layout_spacing_scale, 25.0);
+
+        // Invalid input is rejected, state unchanged.
+        let before = editor.kb_graph_layout_spacing_scale;
+        assert!(editor
+            .set_option("kb_graph_layout_spacing_scale", "not-a-number")
+            .is_err());
+        assert_eq!(editor.kb_graph_layout_spacing_scale, before);
+    }
+
+    #[test]
+    fn kb_graph_label_declutter_enabled_option_roundtrips() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor
+                .get_option("kb_graph_label_declutter_enabled")
+                .unwrap()
+                .0,
+            "true"
+        );
+
+        editor
+            .set_option("kb_graph_label_declutter_enabled", "false")
+            .unwrap();
+        assert!(!editor.kb_graph_label_declutter_enabled);
+        assert_eq!(
+            editor
+                .get_option("kb_graph_label_declutter_enabled")
+                .unwrap()
+                .0,
+            "false"
+        );
+
+        editor
+            .set_option("kb_graph_label_declutter_enabled", "true")
+            .unwrap();
+        assert!(editor.kb_graph_label_declutter_enabled);
     }
 }
 

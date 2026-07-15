@@ -49,11 +49,16 @@ pub fn build_kb_graph(
     links: &[KbLinkInfo],
     boundary_links: &[KbLinkInfo],
     starter_ids: &[String],
+    spacing_scale: f64,
 ) -> SceneGraph {
-    let mut graph = build_kb_graph_positions_only(nodes, links, boundary_links, starter_ids);
+    let mut graph =
+        build_kb_graph_positions_only(nodes, links, boundary_links, starter_ids, spacing_scale);
 
     // Run force layout
-    let layout = ForceLayout::new(LayoutConfig::default());
+    let layout = ForceLayout::new(LayoutConfig {
+        spacing_scale,
+        ..LayoutConfig::default()
+    });
     layout.run(&mut graph.nodes, &graph.edges, 50);
 
     graph
@@ -71,6 +76,7 @@ pub fn build_kb_graph_positions_only(
     links: &[KbLinkInfo],
     boundary_links: &[KbLinkInfo],
     starter_ids: &[String],
+    spacing_scale: f64,
 ) -> SceneGraph {
     // Build index: id -> node position
     let id_to_idx: std::collections::HashMap<&str, usize> = nodes
@@ -94,8 +100,17 @@ pub fn build_kb_graph_positions_only(
     // to a CONSTANT `sqrt(IDEAL_AREA_PER_NODE)` regardless of n, satisfying
     // both constraints at once (and incidentally not reading as an obvious
     // circle outline pre-layout, unlike the plain ring).
+    //
+    // `* spacing_scale` mirrors `ForceLayout::step`'s identical `area`
+    // term exactly (`LayoutConfig::spacing_scale`'s doc comment) — without
+    // this, raising `spacing_scale` would widen the force layout's
+    // EQUILIBRIUM distance while leaving this INITIAL placement's spread
+    // fixed at the old, tighter size, reproducing the exact "nodes settled
+    // having barely moved off their initial ring" failure mode
+    // `IDEAL_AREA_PER_NODE`'s own doc comment says was already fixed once.
     let n = nodes.len();
-    let disk_radius = ((n as f64 * crate::layout::IDEAL_AREA_PER_NODE) / std::f64::consts::PI)
+    let disk_radius = ((n as f64 * crate::layout::IDEAL_AREA_PER_NODE * spacing_scale)
+        / std::f64::consts::PI)
         .sqrt()
         .max(100.0);
     let golden_angle = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
@@ -283,14 +298,14 @@ mod tests {
     #[test]
     fn build_graph_node_count() {
         let (nodes, links) = nodes_and_links();
-        let graph = build_kb_graph(&nodes, &links, &[], &[]);
+        let graph = build_kb_graph(&nodes, &links, &[], &[], 1.0);
         assert_eq!(graph.nodes.len(), 3);
     }
 
     #[test]
     fn build_graph_edge_count() {
         let (nodes, links) = nodes_and_links();
-        let graph = build_kb_graph(&nodes, &links, &[], &[]);
+        let graph = build_kb_graph(&nodes, &links, &[], &[], 1.0);
         assert_eq!(graph.edges.len(), 2);
     }
 
@@ -298,7 +313,7 @@ mod tests {
     fn build_graph_with_boundary() {
         let (nodes, links) = nodes_and_links();
         let boundary = vec![link("concept:buffer", "external:xyz")];
-        let graph = build_kb_graph(&nodes, &links, &boundary, &[]);
+        let graph = build_kb_graph(&nodes, &links, &boundary, &[], 1.0);
         // 2 internal + 1 boundary edge
         assert_eq!(graph.edges.len(), 3);
         assert!(graph.edges[2].style.dashed);
@@ -318,7 +333,7 @@ mod tests {
             link("concept:buffer", "external:b"),
             link("concept:buffer", "external:c"),
         ];
-        let graph = build_kb_graph(&nodes, &links, &boundary, &[]);
+        let graph = build_kb_graph(&nodes, &links, &boundary, &[], 1.0);
         // 2 internal + 1 collapsed boundary edge (not 3 boundary edges).
         assert_eq!(graph.edges.len(), 3);
         let boundary_edge = &graph.edges[2];
@@ -334,7 +349,7 @@ mod tests {
             link("concept:buffer", "external:a"),
             link("concept:window", "external:b"),
         ];
-        let graph = build_kb_graph(&nodes, &links, &boundary, &[]);
+        let graph = build_kb_graph(&nodes, &links, &boundary, &[], 1.0);
         // 2 internal + 2 boundary edges (one per distinct source, each
         // with its own count-1 label — always includes the count, even at
         // 1, so the label is unambiguous rather than a bare "...").
@@ -352,7 +367,7 @@ mod tests {
     #[test]
     fn build_graph_starter_highlighted() {
         let (nodes, links) = nodes_and_links();
-        let graph = build_kb_graph(&nodes, &links, &[], &["concept:buffer".to_string()]);
+        let graph = build_kb_graph(&nodes, &links, &[], &["concept:buffer".to_string()], 1.0);
         assert!(graph.nodes[0].style.highlighted);
         assert!(!graph.nodes[1].style.highlighted);
     }
@@ -367,7 +382,7 @@ mod tests {
             title: "Fooled you".to_string(),
             kind: NodeKind::Task,
         }];
-        let graph = build_kb_graph(&nodes, &[], &[], &[]);
+        let graph = build_kb_graph(&nodes, &[], &[], &[], 1.0);
         assert_eq!(graph.nodes[0].kind, NodeKind::Task);
     }
 
@@ -409,9 +424,10 @@ mod tests {
         // property `graph_view_ops.rs` depends on to defer layout to the
         // background bridge.
         let (nodes, links) = nodes_and_links();
-        let graph = build_kb_graph_positions_only(&nodes, &links, &[], &[]);
+        let graph = build_kb_graph_positions_only(&nodes, &links, &[], &[], 1.0);
         let n = nodes.len();
-        let disk_radius = ((n as f64 * crate::layout::IDEAL_AREA_PER_NODE) / std::f64::consts::PI)
+        let disk_radius = ((n as f64 * crate::layout::IDEAL_AREA_PER_NODE * 1.0)
+            / std::f64::consts::PI)
             .sqrt()
             .max(100.0);
         let golden_angle = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
@@ -440,7 +456,7 @@ mod tests {
                     kind: NodeKind::Concept,
                 })
                 .collect();
-            let graph = build_kb_graph_positions_only(&nodes, &[], &[], &[]);
+            let graph = build_kb_graph_positions_only(&nodes, &[], &[], &[], 1.0);
             let mut min_dist = f64::MAX;
             for i in 0..graph.nodes.len() {
                 for j in (i + 1)..graph.nodes.len() {
@@ -463,19 +479,48 @@ mod tests {
     }
 
     #[test]
+    fn positions_only_initial_spread_scales_with_spacing_scale() {
+        // Regression guard for the exact failure mode this parameter exists
+        // to avoid: raising `spacing_scale` must widen the INITIAL sunflower
+        // placement's spread too, not just the force layout's later
+        // equilibrium distance — otherwise a large `spacing_scale` default
+        // would reproduce "nodes settled having barely moved off their
+        // initial ring" on every graph-view open.
+        let nodes: Vec<KbNodeInfo> = (0..50)
+            .map(|i| KbNodeInfo {
+                id: format!("n{i}"),
+                title: "x".to_string(),
+                kind: NodeKind::Concept,
+            })
+            .collect();
+        let tight = build_kb_graph_positions_only(&nodes, &[], &[], &[], 1.0);
+        let wide = build_kb_graph_positions_only(&nodes, &[], &[], &[], 4.0);
+        let max_radius = |g: &SceneGraph| {
+            g.nodes
+                .iter()
+                .map(|n| (n.x * n.x + n.y * n.y).sqrt())
+                .fold(0.0_f64, f64::max)
+        };
+        assert!(
+            max_radius(&wide) > max_radius(&tight),
+            "a larger spacing_scale must widen the initial placement's spread"
+        );
+    }
+
+    #[test]
     fn positions_only_and_full_agree_on_topology() {
         // Same node/edge count and starter highlighting either way — only
         // the coordinates differ (before vs after layout).
         let (nodes, links) = nodes_and_links();
-        let positions_only = build_kb_graph_positions_only(&nodes, &links, &[], &[]);
-        let full = build_kb_graph(&nodes, &links, &[], &[]);
+        let positions_only = build_kb_graph_positions_only(&nodes, &links, &[], &[], 1.0);
+        let full = build_kb_graph(&nodes, &links, &[], &[], 1.0);
         assert_eq!(positions_only.nodes.len(), full.nodes.len());
         assert_eq!(positions_only.edges.len(), full.edges.len());
     }
 
     #[test]
     fn build_graph_empty() {
-        let graph = build_kb_graph(&[], &[], &[], &[]);
+        let graph = build_kb_graph(&[], &[], &[], &[], 1.0);
         assert!(graph.nodes.is_empty());
         assert!(graph.edges.is_empty());
     }
@@ -494,7 +539,7 @@ mod tests {
                 kind: NodeKind::Note,
             },
         ];
-        let graph = build_kb_graph(&nodes, &[], &[], &[]);
+        let graph = build_kb_graph(&nodes, &[], &[], &[], 1.0);
         assert!(graph.nodes[1].width > graph.nodes[0].width);
     }
 
@@ -518,7 +563,7 @@ mod tests {
             },
         ];
         let links = vec![link("a", "b"), link("b", "c")];
-        let graph = build_kb_graph(&nodes, &links, &[], &[]);
+        let graph = build_kb_graph(&nodes, &links, &[], &[], 1.0);
         // After layout, nodes should not be at identical positions
         let positions: Vec<(f64, f64)> = graph.nodes.iter().map(|n| (n.x, n.y)).collect();
         for i in 0..positions.len() {

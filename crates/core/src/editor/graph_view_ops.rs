@@ -328,6 +328,7 @@ impl Editor {
             &kb_links,
             &kb_boundary_links,
             std::slice::from_ref(&center),
+            self.kb_graph_layout_spacing_scale as f64,
         );
 
         // Queue the background layout pass with a snapshot of the fresh
@@ -355,6 +356,7 @@ impl Editor {
         // silently drop back to `LayoutConfig::default()`.
         let layout_config = mae_canvas::layout::LayoutConfig {
             kind_affinity: kind_affinity_from_strength(self.kb_graph_layout_kind_clustering),
+            spacing_scale: self.kb_graph_layout_spacing_scale as f64,
             ..mae_canvas::layout::LayoutConfig::default()
         };
         self.pending_graph_layout = Some(GraphLayoutIntent {
@@ -1340,6 +1342,32 @@ mod tests {
             body,
         ));
         editor
+    }
+
+    #[test]
+    fn kb_graph_layout_spacing_scale_option_flows_into_the_cached_layout_config() {
+        // Proves the option reaches `populate_graph_buffer`'s construction
+        // site, not just the OptionRegistry — set a non-default value
+        // BEFORE opening, then confirm the GraphView's cached
+        // `layout_config` (the value every subsequent animation tick reuses,
+        // per its own doc comment) actually carries it.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_layout_spacing_scale = 7.5;
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        assert_eq!(
+            editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .layout_config
+                .spacing_scale,
+            7.5,
+            "the option's value must flow into the cached layout_config"
+        );
     }
 
     #[test]

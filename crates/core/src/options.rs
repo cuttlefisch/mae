@@ -489,6 +489,18 @@ impl OptionRegistry {
                      to reduce clutter/draw calls on dense graphs at low zoom. Node/edge \
                      rendering (and clickability) is unaffected.",
                     OptionKind::Float, "0.5", Some("kb-graph.label-zoom-threshold"), &[]),
+                opt!("kb_graph_label_declutter_enabled", &["kb-graph-label-declutter-enabled"],
+                    "Whether the graph view suppresses lower-priority node labels that would \
+                     visually overlap a higher-priority one, at zoom levels at/above \
+                     kb_graph_label_zoom_threshold — greedy priority-based occlusion culling, \
+                     the standard real-time approximation used by cartographic label renderers \
+                     (e.g. Gephi's 'adjust text', org-roam-ui's degree-aware filtering). \
+                     Priority order: the selected/hovered node's label always wins first, then \
+                     higher-degree nodes, tie-broken by a stable node index. The node's circle \
+                     is ALWAYS drawn regardless — only the text label can be suppressed, so \
+                     nodes stay visible/clickable either way. When off, every node's label \
+                     shows above the zoom threshold exactly as before this option existed.",
+                    OptionKind::Bool, "true", Some("kb-graph.label-declutter-enabled"), &[]),
                 opt!("kb_graph_edge_curvature", &["kb-graph-edge-curvature"],
                     "Curvature of internal (non-boundary) graph-view edges, as a fraction of \
                      edge length. 0.0 renders straight lines (the pre-Phase-2b default \
@@ -524,6 +536,16 @@ impl OptionRegistry {
                      together more than cross-kind pairs. 0.0 reproduces the pre-clustering \
                      layout exactly.",
                     OptionKind::Float, "0.5", Some("kb-graph.layout-kind-clustering"), &[]),
+                opt!("kb_graph_layout_spacing_scale", &["kb-graph-layout-spacing-scale"],
+                    "Multiplies the force-directed layout's per-node area budget before \
+                     computing the equilibrium repulsion/attraction distance k = sqrt(area / \
+                     n) — the direct lever for nodes being packed too tightly when zoomed out. \
+                     k scales with sqrt(spacing_scale): the default of 2.25 gives ~50% more \
+                     equilibrium distance between nodes than the original 1.0 baseline; 4.0 \
+                     would double it. 1.0 reproduces the original, tighter spacing exactly. \
+                     Also scales the initial (pre-layout) node placement identically, so the \
+                     two never fall out of sync.",
+                    OptionKind::Float, "2.25", Some("kb-graph.layout-spacing-scale"), &[]),
                 opt!("kb_graph_follow_current_node", &["kb-graph-follow-current-node"],
                     "Whether the graph view re-centers on the human/AI's current KB node \
                      automatically. Registered ahead of the Phase 2 command-post wiring that \

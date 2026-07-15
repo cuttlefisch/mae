@@ -198,6 +198,22 @@ impl Editor {
         normal.bind(parse_key_seq_spaced("C-c C-c"), "capture-finalize");
         normal.bind(parse_key_seq_spaced("C-c C-k"), "capture-abort");
 
+        // Escape in Normal mode: previously unbound entirely, which meant it
+        // was silently swallowed as unbound input. `dispatch_builtin_inner`
+        // auto-dismisses several transient popups (LSP hover, KB-link
+        // preview, signature help, peek-definition, code-action menu) as a
+        // side effect of dispatching ANY command not on that popup's own
+        // exclusion list — but an UNBOUND key never reaches dispatch at all,
+        // so those popups had no way to be dismissed via Escape (only
+        // incidentally, by happening to press some other bound key).
+        // "enter-normal-mode" is already the Escape target in Insert/Visual
+        // modes and is a proven no-op when already in Normal mode
+        // (`set_mode` no-ops and skips the mode-change hook when the target
+        // mode matches the current one) — reusing it here needs no new
+        // command, just gets Escape flowing through the same dispatch path
+        // that already knows how to dismiss every one of those popups.
+        normal.bind(vec![KeyPress::special(Key::Escape)], "enter-normal-mode");
+
         let mut insert = Keymap::new("insert");
         insert.bind(vec![KeyPress::special(Key::Escape)], "enter-normal-mode");
         insert.bind(vec![KeyPress::special(Key::Left)], "move-left");
@@ -813,6 +829,61 @@ mod tests {
             normal.lookup(&keys),
             crate::keymap::LookupResult::Exact("file-info")
         );
+    }
+
+    #[test]
+    fn escape_resolves_to_enter_normal_mode_in_normal_mode() {
+        let editor = Editor::new();
+        let normal = editor.keymaps.get("normal").unwrap();
+        let keys = vec![KeyPress::special(Key::Escape)];
+        assert_eq!(
+            normal.lookup(&keys),
+            crate::keymap::LookupResult::Exact("enter-normal-mode")
+        );
+    }
+
+    #[test]
+    fn escape_in_normal_mode_dismisses_an_active_kb_preview_popup() {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:buffer",
+            "Buffer",
+            mae_kb::NodeKind::Concept,
+            "body",
+        ));
+        // `kb_preview_show` requires the active buffer to be a KB-view
+        // buffer (`BufferKind::Kb`) — `open_help_at` gets us there.
+        editor.open_help_at("concept:buffer");
+        editor.kb_preview_show("concept:buffer");
+        assert!(editor.kb_preview_popup().is_some());
+        // Escape resolves to "enter-normal-mode" (see the lookup test
+        // above) — dispatching it is exactly what pressing Escape now
+        // does, and `dispatch_builtin_inner`'s existing auto-dismiss logic
+        // clears the popup as a side effect since the command isn't on
+        // its exclusion list.
+        editor.dispatch_builtin("enter-normal-mode");
+        assert!(editor.kb_preview_popup().is_none());
+    }
+
+    #[test]
+    fn escape_in_normal_mode_dismisses_an_active_hover_popup() {
+        let mut editor = Editor::new();
+        editor.apply_hover_result("fn main()".into());
+        assert!(editor.lsp.hover_popup.is_some());
+        editor.dispatch_builtin("enter-normal-mode");
+        assert!(editor.lsp.hover_popup.is_none());
+    }
+
+    #[test]
+    fn escape_in_normal_mode_is_a_no_op_when_no_popup_is_active() {
+        let mut editor = Editor::new();
+        assert_eq!(editor.mode, Mode::Normal);
+        assert!(editor.kb_preview_popup().is_none());
+        assert!(editor.lsp.hover_popup.is_none());
+        // Must not panic, error, or change mode — Normal-mode Escape stays
+        // inert when there's nothing to dismiss, same as before this fix.
+        editor.dispatch_builtin("enter-normal-mode");
+        assert_eq!(editor.mode, Mode::Normal);
     }
 
     // org_keymap_fallback_to_normal — org keymap moved to modules/org/

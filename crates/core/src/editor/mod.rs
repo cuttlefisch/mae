@@ -785,6 +785,11 @@ pub struct Editor {
     /// Below this viewport zoom level, graph-view node labels are hidden.
     /// Mirrors `kb_graph_label_zoom_threshold`.
     pub kb_graph_label_zoom_threshold: f32,
+    /// Whether the graph view suppresses lower-priority overlapping node
+    /// labels via greedy priority-based occlusion culling — see
+    /// `graph_view::compute_label_winners`. Mirrors
+    /// `kb_graph_label_declutter_enabled`.
+    pub kb_graph_label_declutter_enabled: bool,
     /// Curvature of internal graph-view edges, as a fraction of edge
     /// length. Mirrors `kb_graph_edge_curvature`.
     pub kb_graph_edge_curvature: f32,
@@ -813,6 +818,11 @@ pub struct Editor {
     /// see `graph_view::kind_affinity_from_strength` for how this single
     /// knob maps onto the layout's repulsion/attraction multipliers.
     pub kb_graph_layout_kind_clustering: f32,
+    /// Multiplies the force-layout's per-node area budget — see
+    /// `mae_canvas::layout::LayoutConfig::spacing_scale`'s doc comment for
+    /// the `k = sqrt(area/n) ~ sqrt(spacing_scale)` relationship. Mirrors
+    /// `kb_graph_layout_spacing_scale`.
+    pub kb_graph_layout_spacing_scale: f32,
     /// TODO(Part C Phase 2, not wired yet): whether the graph view
     /// re-centers on the human/AI's current KB node automatically. Mirrors
     /// `kb_graph_follow_current_node` — registered now so the OptionRegistry
@@ -1288,6 +1298,7 @@ impl Editor {
             kb_graph_node_min_radius: 4,
             kb_graph_node_max_radius: 36,
             kb_graph_label_zoom_threshold: 0.5,
+            kb_graph_label_declutter_enabled: true,
             kb_graph_edge_curvature: 0.12,
             kb_graph_color_tween_enabled: true,
             kb_graph_color_tween_duration_ms: 150,
@@ -1295,6 +1306,7 @@ impl Editor {
             kb_graph_font_size: 14,
             kb_graph_layout_iterations: 50,
             kb_graph_layout_kind_clustering: 0.5,
+            kb_graph_layout_spacing_scale: 2.25,
             kb_graph_follow_current_node: true,
             kb_graph_animate: false,
             kb_graph_hover_enabled: true,

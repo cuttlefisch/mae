@@ -62,6 +62,16 @@ pub struct LayoutConfig {
     /// clustering; every existing test using `LayoutConfig::default()`
     /// (including `layout_deterministic`) is unaffected by its addition.
     pub kind_affinity: Option<KindAffinityConfig>,
+    /// Multiplies `IDEAL_AREA_PER_NODE` before computing `k = sqrt(area /
+    /// n)` (the equilibrium repulsion/attraction distance). `1.0`
+    /// reproduces the exact pre-existing spacing (byte-identical for
+    /// every `LayoutConfig::default()` caller/test). Raising it spreads
+    /// every node farther apart uniformly — the direct lever for "labels
+    /// read as an overlapping mountain of text": `k` scales with
+    /// `sqrt(spacing_scale)`, so e.g. `4.0` doubles the equilibrium
+    /// distance between nodes, `2.0` gives ~41% more. Mirrors
+    /// `kb_graph_layout_spacing_scale`.
+    pub spacing_scale: f64,
 }
 
 impl Default for LayoutConfig {
@@ -73,6 +83,7 @@ impl Default for LayoutConfig {
             max_iterations: 100,
             centering: 0.01,
             kind_affinity: None,
+            spacing_scale: 1.0,
         }
     }
 }
@@ -112,7 +123,9 @@ impl ForceLayout {
 
         // Area scales with node count so `k` (ideal edge length) stays
         // constant regardless of graph size — see `IDEAL_AREA_PER_NODE`.
-        let area = n as f64 * IDEAL_AREA_PER_NODE;
+        // `spacing_scale` (default 1.0, byte-identical) lets a caller widen
+        // that budget uniformly — see `LayoutConfig::spacing_scale`'s doc.
+        let area = n as f64 * IDEAL_AREA_PER_NODE * self.config.spacing_scale;
         let k = self.ideal_distance(n, area);
         let k_sq = k * k;
 
@@ -494,6 +507,40 @@ mod tests {
             "cross-kind spacing should stay roughly unchanged \
              (before={cross_before}, after={cross_after})"
         );
+    }
+
+    #[test]
+    fn raising_spacing_scale_increases_the_equilibrium_distance_between_connected_nodes() {
+        // Comparative, not a hand-picked "unicorn" value: same starting
+        // scene, run once at the default spacing_scale (1.0) and once at a
+        // clearly larger one, confirm the settled distance between two
+        // connected nodes grows.
+        fn settle_dist(spacing_scale: f64) -> f64 {
+            let mut nodes = vec![make_node("a", -10.0, 0.0), make_node("b", 10.0, 0.0)];
+            let layout = ForceLayout::new(LayoutConfig {
+                spacing_scale,
+                ..LayoutConfig::default()
+            });
+            layout.run(&mut nodes, &[make_edge(0, 1)], 100);
+            ((nodes[0].x - nodes[1].x).powi(2) + (nodes[0].y - nodes[1].y).powi(2)).sqrt()
+        }
+
+        let dist_default = settle_dist(1.0);
+        let dist_wide = settle_dist(4.0);
+        assert!(
+            dist_wide > dist_default,
+            "a larger spacing_scale must widen the settled inter-node distance \
+             (default={dist_default}, wide={dist_wide})"
+        );
+    }
+
+    #[test]
+    fn spacing_scale_defaults_to_1_0_and_layout_default_stays_deterministic() {
+        // `spacing_scale`'s default (1.0) is a no-op multiplier — this pins
+        // that invariant explicitly, on top of `layout_deterministic`
+        // already covering `LayoutConfig::default()`'s determinism
+        // unmodified by this field's addition.
+        assert_eq!(LayoutConfig::default().spacing_scale, 1.0);
     }
 
     #[test]

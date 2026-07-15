@@ -130,24 +130,36 @@ gray = "#a89984"
 # Native KB graph view (Part C). Falls back through Theme::style's
 # dot-hierarchy (ui.graph.node.<kind> -> ui.graph.node -> ui.graph -> ui.text
 # -> default) for themes that don't define every kind-specific key below.
+#
+# Node colors are hue-first, moderately desaturated (saturation capped at
+# ~55%, hue and lightness preserved from the original fully-saturated
+# values) — an Okabe-Ito/Wong-style qualitative palette rather than a
+# fully-saturated "neon" one. Hue is the primary, most robust
+# differentiator in a categorical palette (more reliable than saturation
+# or lightness alone), so muting saturation while keeping each kind's
+# distinct hue preserves at-a-glance differentiation while reducing
+# visual fatigue in a dense graph. This doesn't affect the independently
+# WCAG-AA-guaranteed TEXT color computed against the background
+# (graph_view.rs's `ensure_min_contrast`) — that's a separate contrast
+# check against these fill colors, not derived from them.
 "ui.graph.background" = { bg = "black" }
 "ui.graph.node" = { fg = "white" }
-"ui.graph.node.index" = { fg = "#ffaa4a" }
-"ui.graph.node.command" = { fg = "#ff6aff" }
-"ui.graph.node.concept" = { fg = "#4a9eff" }
-"ui.graph.node.key" = { fg = "#4aaaff" }
-"ui.graph.node.note" = { fg = "#6a6dff" }
-"ui.graph.node.project" = { fg = "#4affff" }
-"ui.graph.node.category" = { fg = "#aa4aff" }
-"ui.graph.node.lesson" = { fg = "#6aff6a" }
-"ui.graph.node.tutorial" = { fg = "#8fff8f" }
-"ui.graph.node.meta" = { fg = "#ff6a6a" }
-"ui.graph.node.block" = { fg = "#cccc4a" }
-"ui.graph.node.scheme_api" = { fg = "#ffff6a" }
-"ui.graph.node.task" = { fg = "#6aff9a" }
-"ui.graph.node.view" = { fg = "#ff4aaa" }
-"ui.graph.node.selected" = { fg = "#ff9933" }
-"ui.graph.node.hover" = { fg = "cyan" }
+"ui.graph.node.index" = { fg = "#d6a873" }
+"ui.graph.node.command" = { fg = "#dd8cdd" }
+"ui.graph.node.concept" = { fg = "#73a1d6" }
+"ui.graph.node.key" = { fg = "#73a8d6" }
+"ui.graph.node.note" = { fg = "#8c8ddd" }
+"ui.graph.node.project" = { fg = "#73d6d6" }
+"ui.graph.node.category" = { fg = "#a873d6" }
+"ui.graph.node.lesson" = { fg = "#8cdd8c" }
+"ui.graph.node.tutorial" = { fg = "#a8e6a8" }
+"ui.graph.node.meta" = { fg = "#dd8c8c" }
+"ui.graph.node.block" = { fg = "#cbcb4b" }
+"ui.graph.node.scheme_api" = { fg = "#dddd8c" }
+"ui.graph.node.task" = { fg = "#8cdda6" }
+"ui.graph.node.view" = { fg = "#d673a8" }
+"ui.graph.node.selected" = { fg = "#d19961" }
+"ui.graph.node.hover" = { fg = "#39c6c6" }
 "ui.graph.edge" = { fg = "#6a6d7e" }
 "ui.graph.edge.boundary" = { fg = "#ff6666" }
 

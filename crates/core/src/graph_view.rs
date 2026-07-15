@@ -582,6 +582,10 @@ pub struct GraphStyleOptions {
     /// `Circle` is always still pushed — nodes stay visible/clickable
     /// regardless). Mirrors `kb_graph_label_zoom_threshold`.
     pub label_zoom_threshold: f32,
+    /// Whether `flatten_scene_graph` suppresses lower-priority overlapping
+    /// labels via greedy occlusion culling — see `compute_label_winners`.
+    /// Mirrors `kb_graph_label_declutter_enabled`.
+    pub label_declutter_enabled: bool,
     /// Curvature of internal (non-boundary) edges as a fraction of edge
     /// length, `0.0` = straight lines. Mirrors `kb_graph_edge_curvature`;
     /// see the curved-edge control-point computation in
@@ -776,6 +780,7 @@ impl GraphStyleOptions {
             node_min_radius: editor.kb_graph_node_min_radius as f32,
             node_max_radius: editor.kb_graph_node_max_radius as f32,
             label_zoom_threshold: editor.kb_graph_label_zoom_threshold,
+            label_declutter_enabled: editor.kb_graph_label_declutter_enabled,
             edge_curvature: editor.kb_graph_edge_curvature,
             color_override: None,
             node_border_enabled: editor.kb_graph_node_border_enabled,
@@ -963,6 +968,108 @@ fn edge_is_offscreen_same_side(
         || (y1 > h + m && y2 > h + m)
 }
 
+/// Estimated per-character advance width, as a fraction of `font_size`,
+/// for the graph view's label text. This module has no real font-metrics
+/// access (pure geometry — Skia painting happens later in
+/// `crates/gui/src/lib.rs`), so label width must be ESTIMATED from
+/// character count. The GUI backend draws graph-view labels with a single
+/// monospace typeface, so a single ratio applies uniformly to every
+/// character — a materially better approximation than a general
+/// "0.5-0.6x for proportional fonts" rule of thumb would be. `0.6` sits
+/// at the generous end of typical monospace advance widths; erring
+/// generous only ever over-suppresses a lower-priority neighbor's label,
+/// never under-suppresses (which would be a correctness bug) — same
+/// generous-margin philosophy as `LABEL_CULL_MARGIN_PX` above.
+const LABEL_CHAR_WIDTH_RATIO: f32 = 0.6;
+
+/// Small screen-space gap (px) required between two placed label boxes on
+/// top of pure non-overlap, so surviving labels never read as visually
+/// merged even when their boxes technically just touch. A fixed
+/// rendering-tuning constant, not something a user would reasonably want
+/// to vary (principle #7's "truly fixed" carve-out).
+const LABEL_DECLUTTER_PADDING_PX: f32 = 2.0;
+
+/// A node's estimated screen-space label bounding box `(x0, y0, x1, y1)`,
+/// in the SAME coordinate space the node loop actually draws the label
+/// into (`x: scx + r + 4.0`, baseline-left at `y: scy`) — this is the
+/// ONLY place either `compute_label_winners` or the real draw computes
+/// that offset, so they can never disagree (principle #8, same discipline
+/// as `node_render_radius`).
+fn label_bbox(scx: f32, scy: f32, r: f32, label: &str, font_size: f32) -> (f32, f32, f32, f32) {
+    let x0 = scx + r + 4.0;
+    let width = label.chars().count() as f32 * font_size * LABEL_CHAR_WIDTH_RATIO;
+    // The real draw's `y` is the text baseline; approximate generous
+    // ascent/descent bounds around it (no real font-metrics query
+    // available here) — errs tall, same generous-on-purpose philosophy as
+    // the width estimate above.
+    (x0, scy - font_size, x0 + width, scy + font_size * 0.3)
+}
+
+fn label_boxes_overlap(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
+    a.0 < b.2 + LABEL_DECLUTTER_PADDING_PX
+        && a.2 + LABEL_DECLUTTER_PADDING_PX > b.0
+        && a.1 < b.3 + LABEL_DECLUTTER_PADDING_PX
+        && a.3 + LABEL_DECLUTTER_PADDING_PX > b.1
+}
+
+/// Greedy priority-based label occlusion culling — the standard real-time
+/// approximation to the NP-hard optimal label-placement problem, used by
+/// cartographic renderers (e.g. city labels dropping out at low zoom
+/// while major-city labels persist) and shipped graph-visualization tools
+/// (Gephi's "Label Adjust", org-roam-ui's degree-aware label filtering).
+/// Returns the set of node indices whose label wins a non-overlapping
+/// screen-space slot.
+///
+/// Priority order: the selected and/or hovered node(s) first (tier 0),
+/// then by degree descending, tie-broken by node index ascending — a pure
+/// function of `scene`/`degrees`, so the SAME input always produces the
+/// SAME visible-label set (no frame-to-frame flicker as ties resolve
+/// differently). Offscreen nodes (per `node_is_offscreen`) never enter
+/// the candidate pool, so a culled node can never consume a slot that
+/// would otherwise go to a visible neighbor. Boundary-stub labels are
+/// deliberately NOT part of this pool — see `flatten_scene_graph`'s edge
+/// loop, which draws them unconditionally; they carry no degree/selection
+/// state and their purpose (a correctness signal: "more graph beyond this
+/// depth, here") shouldn't be silently hidden by a denser node label.
+fn compute_label_winners(
+    scene: &mae_canvas::scene::SceneGraph,
+    positions: &[(f32, f32)],
+    radii: &[f32],
+    degrees: &[u32],
+    style: &GraphStyleOptions,
+    viewport: &mae_canvas::scene::Viewport,
+) -> std::collections::HashSet<usize> {
+    let mut candidates: Vec<usize> = (0..scene.nodes.len())
+        .filter(|&i| !node_is_offscreen(positions[i].0, positions[i].1, radii[i], viewport))
+        .collect();
+
+    candidates.sort_by_key(|&i| {
+        let is_priority = scene.selection == Some(i) || scene.hovered == Some(i);
+        let tier: u8 = if is_priority { 0 } else { 1 };
+        (
+            tier,
+            std::cmp::Reverse(degrees.get(i).copied().unwrap_or(0)),
+            i,
+        )
+    });
+
+    let mut placed: Vec<(f32, f32, f32, f32)> = Vec::with_capacity(candidates.len());
+    let mut winners = std::collections::HashSet::with_capacity(candidates.len());
+    for i in candidates {
+        let (scx, scy) = positions[i];
+        let bbox = label_bbox(scx, scy, radii[i], &scene.nodes[i].label, style.font_size);
+        // Early-exit on first overlap found — avoids scanning the full
+        // `placed` list for candidates rejected by the very first
+        // already-placed box, the common case in a dense hub region
+        // (exactly where this pass matters most).
+        if !placed.iter().any(|&p| label_boxes_overlap(bbox, p)) {
+            placed.push(bbox);
+            winners.insert(i);
+        }
+    }
+    winners
+}
+
 pub fn flatten_scene_graph(
     scene: &mae_canvas::scene::SceneGraph,
     viewport: &mae_canvas::scene::Viewport,
@@ -988,16 +1095,25 @@ pub fn flatten_scene_graph(
     // node loop draws — previously the stub used the flat, degree/zoom-
     // unaware `style.node_radius` base, so once node size started varying
     // (degree/zoom scaling), a shrunk node's stub stuck out disproportionately
-    // far relative to its own now-smaller circle.
-    let radii: Vec<f32> = scene
+    // far relative to its own now-smaller circle. Also precomputes each
+    // node's screen position — the node loop and the label-declutter pass
+    // below both need it, and previously the node loop called
+    // `scene_to_viewport` a second time redundantly; one shared computation
+    // (principle #8), numerically identical since no further `f64`
+    // arithmetic happens on the position between transform and use here.
+    let (positions, radii): (Vec<(f32, f32)>, Vec<f32>) = scene
         .nodes
         .iter()
         .enumerate()
-        .map(|(i, _)| {
+        .map(|(i, n)| {
+            let (x, y) = scene_to_viewport(viewport, n.x, n.y);
             let degree = degrees.get(i).copied().unwrap_or(0);
-            node_render_radius(style, degree, viewport.zoom)
+            (
+                (x as f32, y as f32),
+                node_render_radius(style, degree, viewport.zoom),
+            )
         })
-        .collect();
+        .unzip();
 
     for edge in &scene.edges {
         let Some(src) = scene.nodes.get(edge.source) else {
@@ -1096,6 +1212,20 @@ pub fn flatten_scene_graph(
         }
     }
 
+    // Greedy priority-based label occlusion culling (see
+    // `compute_label_winners`'s doc comment) — computed ONCE here, gated on
+    // the SAME zoom threshold that already hides all labels below it, so
+    // the pass is skipped entirely (not just its result discarded) at low
+    // zoom or when the feature is disabled.
+    let label_winners: Option<std::collections::HashSet<usize>> =
+        if style.label_declutter_enabled && viewport.zoom >= style.label_zoom_threshold as f64 {
+            Some(compute_label_winners(
+                scene, &positions, &radii, degrees, style, viewport,
+            ))
+        } else {
+            None
+        };
+
     for (i, node) in scene.nodes.iter().enumerate() {
         let is_selected = scene.selection == Some(i);
         let is_hovered = scene.hovered == Some(i);
@@ -1111,15 +1241,14 @@ pub fn flatten_scene_graph(
             _ if is_hovered => style.hover_color.clone(),
             _ => style.color_for_kind(node.kind).to_string(),
         };
-        let (scx, scy) = scene_to_viewport(viewport, node.x, node.y);
-        let degree = degrees.get(i).copied().unwrap_or(0);
-        let r = node_render_radius(style, degree, viewport.zoom);
-        if node_is_offscreen(scx as f32, scy as f32, r, viewport) {
+        let (scx, scy) = positions[i];
+        let r = radii[i];
+        if node_is_offscreen(scx, scy, r, viewport) {
             continue;
         }
         elements.push(VisualElement::Circle {
-            cx: scx as f32,
-            cy: scy as f32,
+            cx: scx,
+            cy: scy,
             r,
             fill: Some(color.clone()),
             // No flat, kind-unrelated outline by default — see
@@ -1133,8 +1262,19 @@ pub fn flatten_scene_graph(
         // Label LOD: below the configured zoom threshold, skip the Text
         // element to reduce clutter/draw calls on dense graphs — the
         // Circle above is ALWAYS pushed, so the node stays visible and
-        // clickable regardless.
-        if viewport.zoom >= style.label_zoom_threshold as f64 {
+        // clickable regardless. Above threshold, a second gate applies:
+        // greedy occlusion culling may have suppressed a lower-priority
+        // label that would visually overlap a higher-priority one (see
+        // `compute_label_winners`) — `label_winners` is `None` when the
+        // pass didn't run (declutter off, or already below-threshold),
+        // in which case every node's label shows exactly as before this
+        // feature existed.
+        let show_label = viewport.zoom >= style.label_zoom_threshold as f64
+            && label_winners
+                .as_ref()
+                .map(|w| w.contains(&i))
+                .unwrap_or(true);
+        if show_label {
             // Same WCAG AA guarantee as the boundary-stub label above, but
             // via the PRECOMPUTED per-kind lookup (`text_color_for_kind`/
             // `selected_text_color`/`hover_text_color` — see
@@ -1154,8 +1294,8 @@ pub fn flatten_scene_graph(
                 _ => style.text_color_for_kind(node.kind).to_string(),
             };
             elements.push(VisualElement::Text {
-                x: scx as f32 + r + 4.0,
-                y: scy as f32,
+                x: scx + r + 4.0,
+                y: scy,
                 text: node.label.clone(),
                 font_size: style.font_size,
                 color: text_color,
@@ -1193,6 +1333,15 @@ mod tests {
             // test here (all using the default viewport) keeps pushing
             // Text elements unmodified.
             label_zoom_threshold: 0.5,
+            // Off by default in the test fixture (unlike production's
+            // `true`) — every pre-existing test in this file asserts exact
+            // `Text` elements for every above-threshold node with no
+            // regard to overlap; defaulting this to `true` here would make
+            // several of those tests non-deterministically break depending
+            // on incidental fixture geometry. New declutter-specific tests
+            // build their own style with this set to `true` explicitly,
+            // same pattern as `edge_curvature` above.
+            label_declutter_enabled: false,
             // 0.0 (straight lines) so every pre-Phase-E edge test here
             // (all asserting `VisualElement::Line`) stays valid unmodified
             // — new curved-edge tests build their own style with a
@@ -1381,6 +1530,202 @@ mod tests {
             hub_radius > leaf_radius,
             "the high-degree node must render a larger circle (hub={hub_radius}, leaf={leaf_radius})"
         );
+    }
+
+    fn declutter_style() -> GraphStyleOptions {
+        let mut style = test_style();
+        style.label_declutter_enabled = true;
+        style
+    }
+
+    /// Two nodes placed at the SAME scene position (so their estimated
+    /// label boxes overlap regardless of exact width-estimate math) — one
+    /// high-degree, one low-degree, neither selected/hovered.
+    fn overlapping_nodes_scene(hi_id: &str, lo_id: &str) -> (SceneGraph, Vec<u32>) {
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node(hi_id, 0.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node(lo_id, 0.0, 0.0, NodeKind::Note));
+        (scene, vec![20, 0])
+    }
+
+    fn text_present_for(elements: &[VisualElement], approx_x: f32) -> bool {
+        elements.iter().any(|e| match e {
+            VisualElement::Text { x, .. } => (*x - approx_x).abs() < 0.01,
+            _ => false,
+        })
+    }
+
+    #[test]
+    fn flatten_suppresses_a_lower_priority_labels_overlapping_a_higher_degree_neighbor() {
+        let (scene, degrees) = overlapping_nodes_scene("hub", "leaf");
+        let style = declutter_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &degrees);
+        // Both circles present (nodes always stay visible/clickable).
+        assert_eq!(
+            elements
+                .iter()
+                .filter(|e| matches!(e, VisualElement::Circle { .. }))
+                .count(),
+            2,
+            "both nodes' circles must render regardless of label suppression"
+        );
+        // Only the higher-degree ("hub") node's label wins the overlapping slot.
+        let hub_r = node_render_radius(&style, 20, viewport.zoom);
+        let leaf_r = node_render_radius(&style, 0, viewport.zoom);
+        assert!(
+            text_present_for(&elements, 400.0 + hub_r + 4.0),
+            "the higher-degree node's label must win the overlapping slot"
+        );
+        assert!(
+            !text_present_for(&elements, 400.0 + leaf_r + 4.0),
+            "the lower-degree node's label must be suppressed"
+        );
+    }
+
+    #[test]
+    fn flatten_never_suppresses_the_selected_nodes_label_even_at_low_degree() {
+        let (mut scene, _) = overlapping_nodes_scene("hub", "selected_leaf");
+        // Index 0 ("hub") is selected but has the LOW degree — it must
+        // still win the overlapping slot over the higher-degree index 1.
+        let degrees = vec![0u32, 20u32];
+        scene.selection = Some(0);
+        let style = declutter_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &degrees);
+        let selected_r = node_render_radius(&style, 0, viewport.zoom);
+        assert!(
+            text_present_for(&elements, 400.0 + selected_r + 4.0),
+            "the selected node's label must win despite losing on degree"
+        );
+    }
+
+    #[test]
+    fn flatten_never_suppresses_the_hovered_nodes_label_even_at_low_degree() {
+        let (mut scene, _) = overlapping_nodes_scene("hub", "hovered_leaf");
+        let degrees = vec![0u32, 20u32];
+        scene.hovered = Some(0);
+        let style = declutter_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &degrees);
+        let hovered_r = node_render_radius(&style, 0, viewport.zoom);
+        assert!(
+            text_present_for(&elements, 400.0 + hovered_r + 4.0),
+            "the hovered node's label must win despite losing on degree"
+        );
+    }
+
+    #[test]
+    fn flatten_label_declutter_disabled_preserves_the_original_always_show_behavior() {
+        let (scene, degrees) = overlapping_nodes_scene("hub", "leaf");
+        let style = test_style(); // label_declutter_enabled: false
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &degrees);
+        assert_eq!(
+            elements
+                .iter()
+                .filter(|e| matches!(e, VisualElement::Text { .. }))
+                .count(),
+            2,
+            "with declutter disabled, both overlapping labels must still show"
+        );
+    }
+
+    #[test]
+    fn flatten_label_declutter_pre_pass_is_skipped_below_the_zoom_threshold() {
+        let (scene, degrees) = overlapping_nodes_scene("hub", "leaf");
+        let style = declutter_style(); // label_zoom_threshold: 0.5
+        let viewport = mae_canvas::scene::Viewport {
+            zoom: 0.1, // below threshold
+            ..mae_canvas::scene::Viewport::default()
+        };
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &degrees);
+        assert_eq!(
+            elements
+                .iter()
+                .filter(|e| matches!(e, VisualElement::Text { .. }))
+                .count(),
+            0,
+            "below the zoom threshold, neither label shows (unchanged from pre-declutter behavior)"
+        );
+    }
+
+    #[test]
+    fn flatten_boundary_stub_labels_are_exempt_from_node_label_declutter() {
+        // A node's label box positioned to overlap a boundary stub's own
+        // label — both must render, since boundary stubs never enter the
+        // node-label occlusion pool (see `compute_label_winners`'s doc
+        // comment).
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("a", 0.0, 0.0, NodeKind::Note));
+        scene.edges.push(SceneEdge {
+            source: 0,
+            target: 0, // self-loop = boundary indicator
+            label: Some("... (+1)".to_string()),
+            style: EdgeStyle {
+                color: "#unused".to_string(),
+                width: 1.0,
+                dashed: true,
+            },
+            weight: 1.0,
+            rel_type: None,
+        });
+        let style = declutter_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[0]);
+        let boundary_label_present = elements
+            .iter()
+            .any(|e| matches!(e, VisualElement::Text { text, .. } if text == "... (+1)"));
+        let node_label_present = elements
+            .iter()
+            .any(|e| matches!(e, VisualElement::Text { text, .. } if text == "a"));
+        assert!(boundary_label_present, "boundary stub label must render");
+        assert!(
+            node_label_present,
+            "the node's own label must also render — boundary stubs don't compete for slots"
+        );
+    }
+
+    #[test]
+    fn compute_label_winners_excludes_offscreen_nodes_and_is_deterministic() {
+        let mut scene = SceneGraph::new();
+        scene
+            .nodes
+            .push(test_node("onscreen", 0.0, 0.0, NodeKind::Note));
+        // Far enough scene-x that scene_to_viewport places it well beyond
+        // the viewport + LABEL_CULL_MARGIN_PX, at Viewport::default()'s
+        // zoom/center/size.
+        scene
+            .nodes
+            .push(test_node("offscreen", 10_000.0, 0.0, NodeKind::Note));
+        let degrees = vec![0u32, 0u32];
+        let style = declutter_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let positions: Vec<(f32, f32)> = scene
+            .nodes
+            .iter()
+            .map(|n| {
+                let (x, y) = mae_canvas::interaction::scene_to_viewport(&viewport, n.x, n.y);
+                (x as f32, y as f32)
+            })
+            .collect();
+        let radii: Vec<f32> = degrees
+            .iter()
+            .map(|&d| node_render_radius(&style, d, viewport.zoom))
+            .collect();
+
+        let winners1 =
+            compute_label_winners(&scene, &positions, &radii, &degrees, &style, &viewport);
+        assert!(winners1.contains(&0), "the onscreen node must win a slot");
+        assert!(
+            !winners1.contains(&1),
+            "the offscreen node must never win a slot"
+        );
+
+        // Determinism: repeated calls on identical input produce the same set.
+        let winners2 =
+            compute_label_winners(&scene, &positions, &radii, &degrees, &style, &viewport);
+        assert_eq!(winners1, winners2);
     }
 
     #[test]
@@ -1670,6 +2015,14 @@ mod tests {
                 style.background_color
             );
         }
+    }
+
+    #[test]
+    fn from_editor_reads_label_declutter_enabled() {
+        let mut editor = Editor::new();
+        assert!(GraphStyleOptions::from_editor(&editor).label_declutter_enabled);
+        editor.kb_graph_label_declutter_enabled = false;
+        assert!(!GraphStyleOptions::from_editor(&editor).label_declutter_enabled);
     }
 
     #[test]
