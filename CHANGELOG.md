@@ -6,6 +6,42 @@ All notable changes to this project will be documented in this file.
 
 ### Bug Fixes
 
+- *(kb-graph-view)* Per-window viewport isolation (#321) ([74eec5e](https://github.com/cuttlefisch/mae/commit/74eec5eb5465dd2b223c485671070b333e902343))
+- *(kb-graph-view)* Zoom_to reports the actual clamped value, not the raw request ([d5987cc](https://github.com/cuttlefisch/mae/commit/d5987cc0a25bab9e3e4f56fd0c04cd7141ee5a46))
+- *(kb-graph-view)* Clip to window bounds, antialias nodes/edges, real font ([133e819](https://github.com/cuttlefisch/mae/commit/133e819def3c261fe5317b6b25bc94b25ac2cbb4))
+- *(kb-graph-view)* Actually pull theme colors — background never worked, 6/8 themes had no palette ([9c69752](https://github.com/cuttlefisch/mae/commit/9c69752f4cc5ae8e8672cb7bc0a4091f0b6bddc1))
+- *(kb-graph-view)* Live-feedback UX + performance fixes ([985ee53](https://github.com/cuttlefisch/mae/commit/985ee53fae6324fe1dafe8e4d0ca53d3538f6be6))
+- *(kb-graph-view)* Settle-never-completes, drag snap-back, boundary label ([9f7fa05](https://github.com/cuttlefisch/mae/commit/9f7fa05a583cd69163f37864ebed92e36985cd77))
+- *(gui)* Render cache ignores buffer_idx, serving stale content ([aac35fe](https://github.com/cuttlefisch/mae/commit/aac35fe4b3ef4ef4171d5f4921ba001b585f8689))
+- *(kb)* Help/preview buffers report "no such KB node" for real nodes ([416c926](https://github.com/cuttlefisch/mae/commit/416c926221d6ca82bb78c864d3b528cda7731740))
+- *(kb)* Consolidate the query-layer-fallback fix onto one shared helper ([a91796b](https://github.com/cuttlefisch/mae/commit/a91796bbb6705ba336076c40f2fe4da76c079535))
+
+### Features
+
+- *(kb-graph-view)* Expose zoom-to-level + pin/unpin to Scheme + MCP (#322) ([c0666d0](https://github.com/cuttlefisch/mae/commit/c0666d07cc10a4b593efddc8bd5ba617dbf84f26))
+- *(kb-graph-view)* Full-frame overlay mode + mouse pan; fix layout spread and hit-test radius ([e37834c](https://github.com/cuttlefisch/mae/commit/e37834cdec4cc01fa2a7fd755a3e34551b8df53a))
+- *(kb-graph-view)* Relationship-aware force layout — node-kind clustering + edge-weight attraction ([0622aad](https://github.com/cuttlefisch/mae/commit/0622aadbaef994caab1a3fe2d410d731fda3fca8))
+- *(kb-graph-view)* Node sizing by degree + zoom (Sigma.js/org-roam-ui-style, clamped) ([66a6082](https://github.com/cuttlefisch/mae/commit/66a6082352bb2dce9a48304629631fd275a6d146))
+- *(kb-graph-view)* Zoom-dependent label LOD + viewport-bounds culling ([5c0ea67](https://github.com/cuttlefisch/mae/commit/5c0ea672d3b865877a98a002cb7c73e5508d863c))
+- *(kb-graph-view)* Curved edges + animated hover/selection color tweens ([b1f0786](https://github.com/cuttlefisch/mae/commit/b1f07866f07c4ef0e655ac6b1b9dd32723b85c5b))
+- *(kb-graph-view)* Node spacing, label decluttering, muted palette, Escape-dismiss ([567fd5e](https://github.com/cuttlefisch/mae/commit/567fd5e530e86e2bb07b5b2433126a5f9efee28b))
+- *(kb-graph-view)* Graph view respects kb_search_scope ([3bbc182](https://github.com/cuttlefisch/mae/commit/3bbc182dd52d5176a40572a2e69c923e85357b44))
+- *(kb-graph-view)* Live-tunable node color saturation cap ([9bd66a5](https://github.com/cuttlefisch/mae/commit/9bd66a5212c5c52eb66bb2cd277a33cbb080dd4d))
+
+### Miscellaneous
+
+- Regenerate manual KB to reflect this session's new graph-view options ([1106dc9](https://github.com/cuttlefisch/mae/commit/1106dc9ae2c9bbdbe5e497deb127d16280e697fd))
+- Regenerate manual KB to reflect new graph-view zoom-scale option ([965c74b](https://github.com/cuttlefisch/mae/commit/965c74be29df687c816f332be74f161347b4d067))
+- Regenerate manual KB after boundary-label fix ([c65a673](https://github.com/cuttlefisch/mae/commit/c65a6733837c2da170b00b0813bd815d9669ba81))
+- Regenerate manual KB after graph-view spacing/scope option additions ([2f484b8](https://github.com/cuttlefisch/mae/commit/2f484b8203ed478a1172c068b8a9ce39689d396e))
+- Regenerate manual KB after graph-view spacing/scope option additions ([cb4b07e](https://github.com/cuttlefisch/mae/commit/cb4b07e7159e573a3ba604f440ed31fce9f0e269))
+- Regenerate manual KB after query-layer-fallback fix ([7a3bf4d](https://github.com/cuttlefisch/mae/commit/7a3bf4dc3a6e9f04e5679a5ceb953a0a0270b6bb))
+- Regenerate manual KB after consolidated query-layer-fallback fix ([a94f767](https://github.com/cuttlefisch/mae/commit/a94f767a8d68769160a296194953c3cc6e4fd40e))
+
+## [0.14.42] - 2026-07-13
+
+### Bug Fixes
+
 - *(core)* Unify AI/MCP window-driving with a first-class DrivenWindow primitive ([dd1a9ae](https://github.com/cuttlefisch/mae/commit/dd1a9ae4a99da99fff0fc72590fb73dd63c487cd))
 - *(kb-graph-view)* Correct module.toml's leader-key description ([a3777d2](https://github.com/cuttlefisch/mae/commit/a3777d22a5cb7c198824e6039bcb084d20f4b673))
 - *(kb-graph-view)* Apply the viewport transform in render and hit-test ([08483bc](https://github.com/cuttlefisch/mae/commit/08483bc7a0805bf2ef8bb5279294dfc25af5128d))
@@ -45,6 +81,7 @@ All notable changes to this project will be documented in this file.
 - Regenerate manual KB to include the new Scheme API doc entries ([5fa5cdd](https://github.com/cuttlefisch/mae/commit/5fa5cddf50ea50dae5923953af8a89e1d34c4f40))
 - *(core)* Register option/state scaffolding for upcoming fixes ([674ad76](https://github.com/cuttlefisch/mae/commit/674ad76fe8b38ba481f94f6067dbb3b70c2fe8b6))
 - Regenerate manual KB to reflect this session's doc/API changes ([acdbeab](https://github.com/cuttlefisch/mae/commit/acdbeab7d8750535967f59c8756f0f198ea6c19e))
+- Bump version to 0.14.42 ([c51640a](https://github.com/cuttlefisch/mae/commit/c51640a2e1a795cd5885cda663be3194eda2688e))
 
 ### Refactor
 
