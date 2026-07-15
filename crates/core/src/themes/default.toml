@@ -130,6 +130,14 @@ gray = "#a89984"
 # Native KB graph view (Part C). Falls back through Theme::style's
 # dot-hierarchy (ui.graph.node.<kind> -> ui.graph.node -> ui.graph -> ui.text
 # -> default) for themes that don't define every kind-specific key below.
+#
+# These are each kind's TRUE, unmuted theme color — visual fatigue from
+# fully-saturated color is handled at RUNTIME instead of baked in here, via
+# kb_graph_node_saturation_cap (default 0.55, live-tunable/Scheme-settable;
+# see graph_view.rs's cap_saturation), so it applies uniformly to every
+# theme (bundled or user-authored) and can be disabled (1.0) to see a
+# theme's real colors. Don't hand-desaturate values here — that would only
+# affect this one theme and would fight the runtime cap.
 "ui.graph.background" = { bg = "black" }
 "ui.graph.node" = { fg = "white" }
 "ui.graph.node.index" = { fg = "#ffaa4a" }
@@ -147,6 +155,7 @@ gray = "#a89984"
 "ui.graph.node.task" = { fg = "#6aff9a" }
 "ui.graph.node.view" = { fg = "#ff4aaa" }
 "ui.graph.node.selected" = { fg = "#ff9933" }
+"ui.graph.node.hover" = { fg = "cyan" }
 "ui.graph.edge" = { fg = "#6a6d7e" }
 "ui.graph.edge.boundary" = { fg = "#ff6666" }
 

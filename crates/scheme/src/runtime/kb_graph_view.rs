@@ -14,7 +14,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::ffi::{arg_int, arg_string};
+use crate::ffi::{arg_bool, arg_float, arg_int, arg_string};
 use crate::lisp_error::{Arity, LispError};
 use crate::value::Value;
 use crate::vm::Vm;
@@ -121,6 +121,63 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
             s.lock()
                 .pending_graph_view_intents
                 .push(mae_core::GraphViewIntent::SelectCurrent);
+            Ok(Value::Void)
+        },
+    );
+
+    // (kb-graph-view-zoom-to FACTOR) — issue #322
+    let s = shared.clone();
+    vm.register_fn(
+        "kb-graph-view-zoom-to",
+        "Set the native KB graph view's zoom to an explicit level (0.1-10.0, clamped) — the AI-appropriate equivalent of the mouse wheel's pixel-focus-based zoom, which has no meaningful non-pointer input. Applies to the focused window if it's showing the graph, else the first window found showing it.",
+        Arity::Fixed(1),
+        move |args: &[Value]| {
+            let target = arg_float(args, 0, "kb-graph-view-zoom-to")?;
+            s.lock()
+                .pending_graph_view_intents
+                .push(mae_core::GraphViewIntent::ZoomTo(target));
+            Ok(Value::Void)
+        },
+    );
+
+    // (kb-graph-view-set-pinned ID PINNED [X] [Y]) — issue #322
+    let s = shared.clone();
+    vm.register_fn(
+        "kb-graph-view-set-pinned",
+        "Pin or unpin a graph node by KB ID — the AI-appropriate equivalent of drag-to-pin, no drag gesture needed. Optionally repositions it to (X Y) in scene coordinates; omit both to leave it wherever it currently is. Reflattens every window showing the graph (shared topology, not per-window state).",
+        Arity::Variadic(2),
+        move |args: &[Value]| {
+            let id = arg_string(args, 0, "kb-graph-view-set-pinned")?;
+            let pinned = arg_bool(args, 1, "kb-graph-view-set-pinned")?;
+            let pos = match args.len() {
+                2 => None,
+                4 => Some((
+                    arg_float(args, 2, "kb-graph-view-set-pinned")?,
+                    arg_float(args, 3, "kb-graph-view-set-pinned")?,
+                )),
+                n => {
+                    return Err(LispError::internal(format!(
+                        "kb-graph-view-set-pinned: expected 2 or 4 arguments (id pinned [x y]), got {n}"
+                    )))
+                }
+            };
+            s.lock()
+                .pending_graph_view_intents
+                .push(mae_core::GraphViewIntent::SetPinned { id, pinned, pos });
+            Ok(Value::Void)
+        },
+    );
+
+    // (kb-graph-view-toggle-overlay)
+    let s = shared.clone();
+    vm.register_fn(
+        "kb-graph-view-toggle-overlay",
+        "Toggle the native KB graph view between its normal tiled split-window pane and a full-frame modal overlay with a dimmed background, so the graph can be inspected without the tiled pane's size constraints. No-op if no graph view is open.",
+        Arity::Fixed(0),
+        move |_args: &[Value]| {
+            s.lock()
+                .pending_graph_view_intents
+                .push(mae_core::GraphViewIntent::ToggleOverlay);
             Ok(Value::Void)
         },
     );

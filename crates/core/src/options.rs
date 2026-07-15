@@ -445,8 +445,92 @@ impl OptionRegistry {
                      outgoing links.",
                     OptionKind::Bool, "true", Some("kb-graph.include-backlinks"), &[]),
                 opt!("kb_graph_node_radius", &["kb-graph-node-radius"],
-                    "Node circle radius in logical pixels for the graph view's GUI rendering.",
+                    "Base node circle radius in logical pixels for the graph view's GUI \
+                     rendering, at viewport zoom 1.0 before degree/zoom adjustments — see \
+                     kb_graph_node_size_by_degree and kb_graph_node_size_scales_with_zoom.",
                     OptionKind::Int, "18", Some("kb-graph.node-radius"), &[]),
+                opt!("kb_graph_node_size_by_degree", &["kb-graph-node-size-by-degree"],
+                    "Whether graph-view nodes are sized by their connection count (degree) — \
+                     hub nodes render larger, a standard graph-visualization convention \
+                     (Obsidian sizes its graph view this way). When off, every node renders at \
+                     kb_graph_node_radius regardless of connectivity.",
+                    OptionKind::Bool, "true", Some("kb-graph.node-size-by-degree"), &[]),
+                opt!("kb_graph_node_degree_scale", &["kb-graph-node-degree-scale"],
+                    "Logical pixels added to a node's radius per sqrt(degree) when \
+                     kb_graph_node_size_by_degree is on. Tune visually.",
+                    OptionKind::Float, "4.0", Some("kb-graph.node-degree-scale"), &[]),
+                opt!("kb_graph_node_size_scales_with_zoom", &["kb-graph-node-size-scales-with-zoom"],
+                    "Whether graph-view node circles shrink/grow with viewport zoom (sub-linear \
+                     — scaled by sqrt(zoom), the documented Sigma.js/org-roam-ui convention, not \
+                     full 1:1 geometric scaling). When off, nodes stay a fixed screen-space size \
+                     regardless of zoom, which can make a densely zoomed-out graph read as an \
+                     undifferentiated mass of same-size overlapping circles.",
+                    OptionKind::Bool, "true", Some("kb-graph.node-size-scales-with-zoom"), &[]),
+                opt!("kb_graph_node_zoom_scale_exponent", &["kb-graph-node-zoom-scale-exponent"],
+                    "Exponent applied to viewport zoom when kb_graph_node_size_scales_with_zoom \
+                     is on: radius *= zoom^exponent. 0.5 (default) is the sub-linear sqrt(zoom) \
+                     Sigma.js/org-roam-ui convention. Raise toward 1.0 to make node radius shrink \
+                     at the SAME rate as inter-node distance when zooming out, so the visual gap \
+                     between nodes stays proportionally constant instead of nodes dominating the \
+                     view at extreme zoom-out. 0.0 disables zoom scaling entirely (equivalent to \
+                     turning kb_graph_node_size_scales_with_zoom off).",
+                    OptionKind::Float, "0.5", Some("kb-graph.node-zoom-scale-exponent"), &[]),
+                opt!("kb_graph_node_min_radius", &["kb-graph-node-min-radius"],
+                    "Minimum node circle radius in logical pixels, applied after degree/zoom \
+                     scaling — guarantees a node never shrinks below a clickable/visible size \
+                     even at extreme zoom-out.",
+                    OptionKind::Int, "4", Some("kb-graph.node-min-radius"), &[]),
+                opt!("kb_graph_node_max_radius", &["kb-graph-node-max-radius"],
+                    "Maximum node circle radius in logical pixels, applied after degree/zoom \
+                     scaling.",
+                    OptionKind::Int, "36", Some("kb-graph.node-max-radius"), &[]),
+                opt!("kb_graph_label_zoom_threshold", &["kb-graph-label-zoom-threshold"],
+                    "Below this viewport zoom level, node labels are hidden in the graph view \
+                     to reduce clutter/draw calls on dense graphs at low zoom. Node/edge \
+                     rendering (and clickability) is unaffected.",
+                    OptionKind::Float, "0.5", Some("kb-graph.label-zoom-threshold"), &[]),
+                opt!("kb_graph_label_declutter_enabled", &["kb-graph-label-declutter-enabled"],
+                    "Whether the graph view suppresses lower-priority node labels that would \
+                     visually overlap a higher-priority one, at zoom levels at/above \
+                     kb_graph_label_zoom_threshold — greedy priority-based occlusion culling, \
+                     the standard real-time approximation used by cartographic label renderers \
+                     (e.g. Gephi's 'adjust text', org-roam-ui's degree-aware filtering). \
+                     Priority order: the selected/hovered node's label always wins first, then \
+                     higher-degree nodes, tie-broken by a stable node index. The node's circle \
+                     is ALWAYS drawn regardless — only the text label can be suppressed, so \
+                     nodes stay visible/clickable either way. When off, every node's label \
+                     shows above the zoom threshold exactly as before this option existed.",
+                    OptionKind::Bool, "true", Some("kb-graph.label-declutter-enabled"), &[]),
+                opt!("kb_graph_edge_curvature", &["kb-graph-edge-curvature"],
+                    "Curvature of internal (non-boundary) graph-view edges, as a fraction of \
+                     edge length. 0.0 renders straight lines (the pre-Phase-2b default \
+                     behavior). Adjacent/parallel edges curve in alternating directions so \
+                     they bow apart instead of overlapping.",
+                    OptionKind::Float, "0.12", Some("kb-graph.edge-curvature"), &[]),
+                opt!("kb_graph_color_tween_enabled", &["kb-graph-color-tween-enabled"],
+                    "Whether the graph view animates a node's color transition when it becomes \
+                     hovered/selected (asymmetric — only the newly-highlighted node tweens in; \
+                     the previous one snaps back instantly). When off, both directions snap \
+                     instantly.",
+                    OptionKind::Bool, "true", Some("kb-graph.color-tween-enabled"), &[]),
+                opt!("kb_graph_color_tween_duration_ms", &["kb-graph-color-tween-duration-ms"],
+                    "Duration in milliseconds of the graph view's hover/selection color tween, \
+                     when kb_graph_color_tween_enabled is on.",
+                    OptionKind::Int, "150", Some("kb-graph.color-tween-duration-ms"), &[]),
+                opt!("kb_graph_node_border_enabled", &["kb-graph-node-border-enabled"],
+                    "Whether graph-view node circles get a stroke outline (the same flat, muted \
+                     color used for edges). Off by default.",
+                    OptionKind::Bool, "false", Some("kb-graph.node-border-enabled"), &[]),
+                opt!("kb_graph_node_saturation_cap", &["kb-graph-node-saturation-cap"],
+                    "Caps the HSL saturation (0.0-1.0) of every graph-view node fill color \
+                     (plus selected/hover) resolved from the active theme, preserving hue and \
+                     lightness — a fully-saturated theme color reads as visually harsh when \
+                     many nodes of that kind render at once in a dense graph. Hue (the primary \
+                     categorical differentiator) is untouched, so kind differentiation is \
+                     unaffected. 1.0 disables capping entirely, showing the theme's true, \
+                     unmuted colors. Applies uniformly to every theme, bundled or user-authored \
+                     — not baked into any theme file.",
+                    OptionKind::Float, "0.55", Some("kb-graph.node-saturation-cap"), &[]),
                 opt!("kb_graph_font_size", &["kb-graph-font-size"],
                     "Node label font size in points for the graph view's GUI rendering. \
                      Independent of the base font_size option (same numeric default, no live \
@@ -456,6 +540,22 @@ impl OptionRegistry {
                     "Force-directed layout iteration count run by the background \
                      graph_layout_bridge on each open/refresh/set-depth.",
                     OptionKind::Int, "50", Some("kb-graph.layout-iterations"), &[]),
+                opt!("kb_graph_layout_kind_clustering", &["kb-graph-layout-kind-clustering"],
+                    "Strength (0.0-1.0) of node-kind-based visual clustering in the graph \
+                     view's force-directed layout — same-kind nodes (e.g. two Concepts) pull \
+                     together more than cross-kind pairs. 0.0 reproduces the pre-clustering \
+                     layout exactly.",
+                    OptionKind::Float, "0.5", Some("kb-graph.layout-kind-clustering"), &[]),
+                opt!("kb_graph_layout_spacing_scale", &["kb-graph-layout-spacing-scale"],
+                    "Multiplies the force-directed layout's per-node area budget before \
+                     computing the equilibrium repulsion/attraction distance k = sqrt(area / \
+                     n) — the direct lever for nodes being packed too tightly when zoomed out. \
+                     k scales with sqrt(spacing_scale): the default of 2.25 gives ~50% more \
+                     equilibrium distance between nodes than the original 1.0 baseline; 4.0 \
+                     would double it. 1.0 reproduces the original, tighter spacing exactly. \
+                     Also scales the initial (pre-layout) node placement identically, so the \
+                     two never fall out of sync.",
+                    OptionKind::Float, "2.25", Some("kb-graph.layout-spacing-scale"), &[]),
                 opt!("kb_graph_follow_current_node", &["kb-graph-follow-current-node"],
                     "Whether the graph view re-centers on the human/AI's current KB node \
                      automatically. Registered ahead of the Phase 2 command-post wiring that \
@@ -471,6 +571,12 @@ impl OptionRegistry {
                      time (immediate, not idle-delayed — see kb_preview_idle_delay for the \
                      unrelated idle-triggered KB-link hover preview).",
                     OptionKind::Bool, "true", Some("kb-graph.hover-enabled"), &[]),
+                opt!("kb_graph_view_overlay_dim_opacity", &["kb-graph-view-overlay-dim-opacity"],
+                    "Opacity (0.0-1.0) of the dark scrim drawn over the rest of the editor when \
+                     the graph view is toggled into full-frame overlay mode \
+                     (kb-graph-view-toggle-overlay), so underlying text stays legible but \
+                     visually de-emphasized while the graph is on top.",
+                    OptionKind::Float, "0.6", Some("kb-graph.view-overlay-dim-opacity"), &[]),
                 // --- File tree ---
                 opt!("file_tree_focus_on_open", &["file-tree-focus-on-open"],
                     "Auto-focus the file tree window when it opens",

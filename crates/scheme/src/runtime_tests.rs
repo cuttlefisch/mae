@@ -1919,3 +1919,102 @@ fn kb_graph_view_select_current_from_scheme_navigates_companion() {
         "select-current should have opened/found a KB buffer for the selected node"
     );
 }
+
+#[test]
+fn kb_graph_view_zoom_to_from_scheme_sets_the_focused_windows_zoom() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    rt.eval(r#"(kb-graph-view-open "index" 1)"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+    let idx = editor
+        .buffers
+        .iter()
+        .position(|b| b.kind == mae_core::BufferKind::Graph)
+        .unwrap();
+    let win_id = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| w.buffer_idx == idx)
+        .map(|w| w.id)
+        .unwrap();
+    editor.window_mgr.set_focused(win_id);
+
+    rt.eval("(kb-graph-view-zoom-to 4.0)").unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    assert_eq!(
+        editor.buffers[idx]
+            .graph_view()
+            .unwrap()
+            .viewports
+            .get(&win_id)
+            .unwrap()
+            .zoom,
+        4.0
+    );
+}
+
+#[test]
+fn kb_graph_view_set_pinned_from_scheme_pins_and_repositions_a_node() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    rt.eval(r#"(kb-graph-view-open "index" 1)"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+    let idx = editor
+        .buffers
+        .iter()
+        .position(|b| b.kind == mae_core::BufferKind::Graph)
+        .unwrap();
+    let node_id = editor.buffers[idx].graph_view().unwrap().scene.nodes[0]
+        .id
+        .clone();
+
+    rt.eval(&format!(
+        r#"(kb-graph-view-set-pinned "{node_id}" #t 7.0 8.0)"#
+    ))
+    .unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    let node = &editor.buffers[idx].graph_view().unwrap().scene.nodes[0];
+    assert!(node.pinned);
+    assert_eq!(node.x, 7.0);
+    assert_eq!(node.y, 8.0);
+}
+
+#[test]
+fn kb_graph_view_set_pinned_from_scheme_without_position_leaves_it_in_place() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    rt.eval(r#"(kb-graph-view-open "index" 1)"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+    let idx = editor
+        .buffers
+        .iter()
+        .position(|b| b.kind == mae_core::BufferKind::Graph)
+        .unwrap();
+    let (node_id, x0, y0) = {
+        let node = &editor.buffers[idx].graph_view().unwrap().scene.nodes[0];
+        (node.id.clone(), node.x, node.y)
+    };
+
+    rt.eval(&format!(r#"(kb-graph-view-set-pinned "{node_id}" #t)"#))
+        .unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    let node = &editor.buffers[idx].graph_view().unwrap().scene.nodes[0];
+    assert!(node.pinned);
+    assert_eq!(node.x, x0);
+    assert_eq!(node.y, y0);
+}
+
+#[test]
+fn kb_graph_view_set_pinned_from_scheme_rejects_a_lone_x_argument() {
+    let mut rt = new_runtime();
+    let err = rt
+        .eval(r#"(kb-graph-view-set-pinned "index" #t 1.0)"#)
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("2 or 4"),
+        "error should explain the expected arity: {err}"
+    );
+}

@@ -154,15 +154,28 @@ pub struct SubgraphSpec {
     pub include_backlinks: bool,
 }
 
+/// A typed link within a `SubgraphResult` — carries the ADR-030
+/// relationship type + authored/default weight through subgraph
+/// extraction (previously collapsed to a bare `(source, target)` pair,
+/// losing that data before it could reach the graph view's layout).
+#[derive(Debug, Clone)]
+pub struct SubgraphLink {
+    pub source: String,
+    pub target: String,
+    pub rel_type: String,
+    /// 0.0-1.0, `1.0` when not explicitly authored (ADR-030 default).
+    pub weight: f64,
+}
+
 /// Result of subgraph extraction.
 #[derive(Debug, Clone)]
 pub struct SubgraphResult {
     /// Nodes included in the subgraph.
     pub nodes: Vec<Node>,
     /// Internal links (both endpoints in the subgraph).
-    pub links: Vec<(String, String)>,
+    pub links: Vec<SubgraphLink>,
     /// Boundary links (source in subgraph, target outside).
-    pub boundary_links: Vec<(String, String)>,
+    pub boundary_links: Vec<SubgraphLink>,
 }
 
 /// Provenance of a node — how it was created.
@@ -346,6 +359,26 @@ impl Node {
         for link in crate::org::parse_typed_links(&self.body, &self.id) {
             if seen.insert(link.target.clone()) {
                 out.push(link.target);
+            }
+        }
+        out
+    }
+
+    /// Like `links()`, but keeps each link's ADR-030 relationship type and
+    /// authored/default weight (0.0-1.0, `1.0` when not explicitly
+    /// authored) instead of discarding them down to a bare target id —
+    /// used by `extract_subgraph` so the native KB graph view's
+    /// force-directed layout can weight edges by how strongly related the
+    /// user actually said two nodes are, rather than treating every edge
+    /// identically. Same dedup-by-target-first-seen behavior as `links()`
+    /// (first occurrence wins if a body somehow links the same target
+    /// twice with different rel/weight).
+    pub fn links_typed(&self) -> Vec<(String, String, f64)> {
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+        for link in crate::org::parse_typed_links(&self.body, &self.id) {
+            if seen.insert(link.target.clone()) {
+                out.push((link.target, link.rel_type, link.weight));
             }
         }
         out
@@ -1126,11 +1159,17 @@ impl KnowledgeBase {
         for id in &included {
             if let Some(node) = self.nodes.get(id) {
                 nodes.push(node.clone());
-                for target in node.links() {
+                for (target, rel_type, weight) in node.links_typed() {
+                    let link = SubgraphLink {
+                        source: id.clone(),
+                        target: target.clone(),
+                        rel_type,
+                        weight,
+                    };
                     if included.contains(&target) {
-                        internal_links.push((id.clone(), target));
+                        internal_links.push(link);
                     } else {
-                        boundary_links.push((id.clone(), target));
+                        boundary_links.push(link);
                     }
                 }
             }
@@ -1911,6 +1950,46 @@ mod tests {
     fn node_links_dedup() {
         let n = Node::new("x", "x", NodeKind::Note, "[[a]] [[a]] [[b]]");
         assert_eq!(n.links(), vec!["a".to_string(), "b".to_string()]);
+    }
+
+    #[test]
+    fn node_links_typed_keeps_rel_type_and_weight() {
+        let n = Node::new(
+            "x",
+            "x",
+            NodeKind::Note,
+            "See [[concept:buffer?rel=teaches&w=0.8][the buffer]] then [[concept:plain]]",
+        );
+        let links = n.links_typed();
+        assert_eq!(links.len(), 2);
+        assert_eq!(links[0].0, "concept:buffer");
+        assert_eq!(links[0].1, "teaches");
+        assert_eq!(links[0].2, 0.8);
+        // A link with no explicit query defaults to weight 1.0 (ADR-030),
+        // and "references" is parse_typed_links' own default rel_type.
+        assert_eq!(links[1].0, "concept:plain");
+        assert_eq!(links[1].2, 1.0);
+    }
+
+    #[test]
+    fn node_links_typed_dedup_matches_links() {
+        // Same dedup-by-target-first-seen behavior as `links()` — first
+        // occurrence's rel/weight wins if a body links the same target
+        // twice with different metadata.
+        let n = Node::new(
+            "x",
+            "x",
+            NodeKind::Note,
+            "[[a?rel=teaches&w=0.9]] [[a?rel=references&w=0.2]] [[b]]",
+        );
+        let typed = n.links_typed();
+        let plain = n.links();
+        assert_eq!(
+            typed.iter().map(|(t, _, _)| t.clone()).collect::<Vec<_>>(),
+            plain
+        );
+        assert_eq!(typed[0].1, "teaches");
+        assert_eq!(typed[0].2, 0.9);
     }
 
     #[test]

@@ -762,6 +762,50 @@ pub struct Editor {
     /// Node circle radius in logical pixels for the graph view's GUI
     /// rendering. Mirrors `kb_graph_node_radius`.
     pub kb_graph_node_radius: u32,
+    /// Whether graph-view nodes are sized by connection count (degree).
+    /// Mirrors `kb_graph_node_size_by_degree`.
+    pub kb_graph_node_size_by_degree: bool,
+    /// Logical px added per sqrt(degree) when `kb_graph_node_size_by_degree`
+    /// is on. Mirrors `kb_graph_node_degree_scale`.
+    pub kb_graph_node_degree_scale: f32,
+    /// Whether graph-view node circles scale (sub-linearly, by
+    /// sqrt(zoom)) with viewport zoom. Mirrors
+    /// `kb_graph_node_size_scales_with_zoom`.
+    pub kb_graph_node_size_scales_with_zoom: bool,
+    /// Exponent applied to viewport zoom when
+    /// `kb_graph_node_size_scales_with_zoom` is on. Mirrors
+    /// `kb_graph_node_zoom_scale_exponent`; see `graph_view::node_render_radius`.
+    pub kb_graph_node_zoom_scale_exponent: f32,
+    /// Minimum node circle radius (logical px), applied after degree/zoom
+    /// scaling. Mirrors `kb_graph_node_min_radius`.
+    pub kb_graph_node_min_radius: u32,
+    /// Maximum node circle radius (logical px), applied after degree/zoom
+    /// scaling. Mirrors `kb_graph_node_max_radius`.
+    pub kb_graph_node_max_radius: u32,
+    /// Below this viewport zoom level, graph-view node labels are hidden.
+    /// Mirrors `kb_graph_label_zoom_threshold`.
+    pub kb_graph_label_zoom_threshold: f32,
+    /// Whether the graph view suppresses lower-priority overlapping node
+    /// labels via greedy priority-based occlusion culling — see
+    /// `graph_view::compute_label_winners`. Mirrors
+    /// `kb_graph_label_declutter_enabled`.
+    pub kb_graph_label_declutter_enabled: bool,
+    /// Curvature of internal graph-view edges, as a fraction of edge
+    /// length. Mirrors `kb_graph_edge_curvature`.
+    pub kb_graph_edge_curvature: f32,
+    /// Whether the graph view animates hover/selection color transitions.
+    /// Mirrors `kb_graph_color_tween_enabled`.
+    pub kb_graph_color_tween_enabled: bool,
+    /// Duration (ms) of the graph view's hover/selection color tween.
+    /// Mirrors `kb_graph_color_tween_duration_ms`.
+    pub kb_graph_color_tween_duration_ms: u32,
+    /// Whether graph-view node circles get a stroke outline. Mirrors
+    /// `kb_graph_node_border_enabled`.
+    pub kb_graph_node_border_enabled: bool,
+    /// Caps the HSL saturation of every graph-view node fill color
+    /// resolved from the theme, preserving hue/lightness — see
+    /// `graph_view::cap_saturation`. Mirrors `kb_graph_node_saturation_cap`.
+    pub kb_graph_node_saturation_cap: f32,
     /// Node label font size in points for the graph view's GUI rendering.
     /// Mirrors `kb_graph_font_size` — defaults to the same numeric default
     /// as the base `font_size` option (14), but is a fully independent
@@ -773,6 +817,16 @@ pub struct Editor {
     /// `graph_layout_bridge` on each open/refresh/set-depth. Mirrors
     /// `kb_graph_layout_iterations`.
     pub kb_graph_layout_iterations: usize,
+    /// Strength (0.0-1.0) of node-kind-based visual clustering in the
+    /// force-directed layout. Mirrors `kb_graph_layout_kind_clustering`;
+    /// see `graph_view::kind_affinity_from_strength` for how this single
+    /// knob maps onto the layout's repulsion/attraction multipliers.
+    pub kb_graph_layout_kind_clustering: f32,
+    /// Multiplies the force-layout's per-node area budget — see
+    /// `mae_canvas::layout::LayoutConfig::spacing_scale`'s doc comment for
+    /// the `k = sqrt(area/n) ~ sqrt(spacing_scale)` relationship. Mirrors
+    /// `kb_graph_layout_spacing_scale`.
+    pub kb_graph_layout_spacing_scale: f32,
     /// TODO(Part C Phase 2, not wired yet): whether the graph view
     /// re-centers on the human/AI's current KB node automatically. Mirrors
     /// `kb_graph_follow_current_node` — registered now so the OptionRegistry
@@ -787,6 +841,17 @@ pub struct Editor {
     /// real time. Mirrors `kb_graph_hover_enabled`; read by `gui_app.rs`'s
     /// `CursorMoved` handler to gate the hover hit-test branch.
     pub kb_graph_hover_enabled: bool,
+    /// Whether the graph view is currently showing as a full-frame modal
+    /// overlay (dimmed background, drawn via `render_common::overlay`)
+    /// instead of its normal tiled split-window pane. Deliberately NOT an
+    /// `OptionRegistry` entry — this is momentary interaction state (like
+    /// `mini_dialog`/`leader_active`), not a persisted preference; the
+    /// preference part (how much to dim) is `kb_graph_view_overlay_dim_opacity`.
+    /// Toggled by `Editor::kb_graph_view_toggle_overlay`.
+    pub kb_graph_view_overlay_active: bool,
+    /// Opacity (0.0-1.0) of the dimming scrim drawn behind the graph view
+    /// when `kb_graph_view_overlay_active` is true.
+    pub kb_graph_view_overlay_dim_opacity: f32,
     /// Queued background layout request for the open/refreshed graph-view
     /// buffer (`mae::graph_layout_bridge`, Part C Phase 1) — drained once
     /// per GUI event-loop tick, see `crate::graph_view::GraphLayoutIntent`'s
@@ -1230,11 +1295,28 @@ impl Editor {
             kb_graph_default_depth: 2,
             kb_graph_include_backlinks: true,
             kb_graph_node_radius: 18,
+            kb_graph_node_size_by_degree: true,
+            kb_graph_node_degree_scale: 4.0,
+            kb_graph_node_size_scales_with_zoom: true,
+            kb_graph_node_zoom_scale_exponent: 0.5,
+            kb_graph_node_min_radius: 4,
+            kb_graph_node_max_radius: 36,
+            kb_graph_label_zoom_threshold: 0.5,
+            kb_graph_label_declutter_enabled: true,
+            kb_graph_edge_curvature: 0.12,
+            kb_graph_color_tween_enabled: true,
+            kb_graph_color_tween_duration_ms: 150,
+            kb_graph_node_border_enabled: false,
+            kb_graph_node_saturation_cap: 0.55,
             kb_graph_font_size: 14,
             kb_graph_layout_iterations: 50,
+            kb_graph_layout_kind_clustering: 0.5,
+            kb_graph_layout_spacing_scale: 2.25,
             kb_graph_follow_current_node: true,
             kb_graph_animate: false,
             kb_graph_hover_enabled: true,
+            kb_graph_view_overlay_active: false,
+            kb_graph_view_overlay_dim_opacity: 0.6,
             pending_graph_layout: None,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)
             messages_synced_seq: None,

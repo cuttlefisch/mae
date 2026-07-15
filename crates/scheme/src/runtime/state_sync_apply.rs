@@ -293,6 +293,15 @@ impl SchemeRuntime {
                 }
                 mae_core::GraphViewIntent::Navigate(dir) => editor.kb_graph_view_navigate(dir),
                 mae_core::GraphViewIntent::SelectCurrent => editor.kb_graph_view_select_current(),
+                mae_core::GraphViewIntent::ZoomTo(target) => {
+                    editor.kb_graph_view_zoom_to(target);
+                }
+                mae_core::GraphViewIntent::SetPinned { id, pinned, pos } => {
+                    editor.kb_graph_view_set_pinned(&id, pinned, pos);
+                }
+                mae_core::GraphViewIntent::ToggleOverlay => {
+                    editor.kb_graph_view_toggle_overlay();
+                }
             }
         }
 

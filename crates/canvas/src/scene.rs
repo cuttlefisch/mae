@@ -1,13 +1,22 @@
-//! Scene graph — nodes, edges, viewport, and selection state.
+//! Scene graph — nodes, edges, and selection state. Viewport (pan/zoom/
+//! pixel-size) is intentionally NOT part of `SceneGraph` — see its doc
+//! comment.
 
 use serde::{Deserialize, Serialize};
 
 /// A complete scene graph with positioned nodes and edges.
+///
+/// Deliberately has NO `Viewport` field — pan/zoom/pixel-size is per-WINDOW
+/// state (a graph buffer can be shown in more than one split, each at its
+/// own size/zoom), not per-graph. Callers thread a `&Viewport` through
+/// explicitly wherever a scene needs projecting to pixels (see
+/// `flatten_scene_graph`, `mae_canvas::interaction::*`). `GraphView.viewports:
+/// HashMap<WindowId, Viewport>` (`crates/core/src/graph_view.rs`) is the
+/// actual per-window store. See issue #321.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SceneGraph {
     pub nodes: Vec<SceneNode>,
     pub edges: Vec<SceneEdge>,
-    pub viewport: Viewport,
     pub selection: Option<usize>,
     /// Index into `nodes` of the node currently under the mouse cursor
     /// (real-time hover, distinct from `selection` which is click/keyboard-
@@ -17,12 +26,11 @@ pub struct SceneGraph {
 }
 
 impl SceneGraph {
-    /// Create an empty scene graph with default viewport.
+    /// Create an empty scene graph.
     pub fn new() -> Self {
         Self {
             nodes: Vec::new(),
             edges: Vec::new(),
-            viewport: Viewport::default(),
             selection: None,
             hovered: None,
         }
@@ -133,6 +141,16 @@ pub struct SceneEdge {
     pub target: usize,
     pub label: Option<String>,
     pub style: EdgeStyle,
+    /// ADR-030 relationship strength, 0.0-1.0 (`1.0` when not explicitly
+    /// authored, or for edges with no underlying KB link weight, e.g.
+    /// boundary/self-loop stub edges). Drives the force layout's
+    /// attraction strength for this edge — a link the user tagged as
+    /// weaker settles at a looser equilibrium distance than the default.
+    pub weight: f64,
+    /// ADR-030 relationship type (e.g. "implements", "references"). Not
+    /// used by the force layout itself (weight drives that) — carried
+    /// through for potential future edge styling (color/dash by type).
+    pub rel_type: Option<String>,
 }
 
 /// Visual style for an edge.
@@ -157,7 +175,7 @@ impl Default for EdgeStyle {
 }
 
 /// Viewport for panning and zooming the scene.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct Viewport {
     pub center_x: f64,
     pub center_y: f64,

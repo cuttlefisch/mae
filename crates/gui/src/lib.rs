@@ -66,6 +66,20 @@ pub use input::{winit_event_to_input, winit_key_to_keypress, winit_mouse_button}
 /// When a window's state is unchanged, the cached image is blitted instead
 /// of re-rendering the full layout/draw pipeline.
 struct WindowRenderCache {
+    /// Which buffer this cached image is of. A window's `buffer_idx` can
+    /// change while the window stays non-focused (e.g. the KB graph
+    /// view's companion-window navigation writes a new `buffer_idx`
+    /// directly into a non-focused window — see
+    /// `Editor::navigate_companion_window_to_node` — without going
+    /// through any focus change). Without this check, a stale cache entry
+    /// from the PREVIOUS buffer that window showed can be wrongly served
+    /// if the new buffer's `generation`/`scroll_offset`/`pixel_rect`
+    /// happen to coincide with the old one's (e.g. two freshly-populated
+    /// KB preview buffers both at generation 0, scroll_offset 0) — the
+    /// window would then silently keep showing the old buffer's content
+    /// until something else (like the user manually focusing it) forces
+    /// a fresh, uncached render.
+    buffer_idx: usize,
     /// Buffer content generation (invalidates on any edit).
     generation: u64,
     /// Viewport scroll position.
@@ -81,6 +95,15 @@ struct WindowRenderCache {
     image: skia_safe::Image,
     /// Cached layout for mouse click positioning.
     frame_layout: layout::FrameLayout,
+    /// `GraphView.render_epoch[win_id]` at the time this image was
+    /// captured, for a `BufferKind::Graph` window — `None` for every other
+    /// buffer kind. `generation` (rope-based) never changes for a Graph
+    /// buffer, so it alone can't invalidate the cache when the graph's own
+    /// state (pan/zoom/hover/selection/color-tween) changes what's drawn
+    /// without touching the buffer's text content; this field is what
+    /// does. `None == None` for non-graph windows, so this is a no-op
+    /// addition to the existing cache-hit check for every other kind.
+    graph_render_epoch: Option<u64>,
 }
 
 /// GUI renderer implementing the `Renderer` trait.
@@ -514,7 +537,7 @@ impl Renderer for GuiRenderer {
         let overlay = active_overlay(editor);
         if overlay == ActiveOverlay::MiniDialog {
             debug!("render: mini_dialog modal overlay");
-            render_window_area(
+            render_window_area_with_graph_overlay(
                 canvas,
                 editor,
                 &syntax_spans,
@@ -534,7 +557,7 @@ impl Renderer for GuiRenderer {
             popup_render::render_command_palette(canvas, editor, cols, rows);
         } else if overlay == ActiveOverlay::FilePicker {
             debug!("render: file_picker overlay");
-            render_window_area(
+            render_window_area_with_graph_overlay(
                 canvas,
                 editor,
                 &syntax_spans,
@@ -553,7 +576,7 @@ impl Renderer for GuiRenderer {
             popup_render::render_file_picker(canvas, editor, cols, rows);
         } else if overlay == ActiveOverlay::FileBrowser {
             debug!("render: file_browser overlay");
-            render_window_area(
+            render_window_area_with_graph_overlay(
                 canvas,
                 editor,
                 &syntax_spans,
@@ -572,7 +595,7 @@ impl Renderer for GuiRenderer {
             popup_render::render_file_browser(canvas, editor, cols, rows);
         } else if overlay == ActiveOverlay::CommandPalette {
             debug!("render: command_palette overlay");
-            render_window_area(
+            render_window_area_with_graph_overlay(
                 canvas,
                 editor,
                 &syntax_spans,
@@ -631,7 +654,7 @@ impl Renderer for GuiRenderer {
                 .max(mae_core::text_utils::WK_MIN_HEIGHT);
 
             let win_height = rows.saturating_sub(popup_height);
-            render_window_area(
+            render_window_area_with_graph_overlay(
                 canvas,
                 editor,
                 &syntax_spans,
@@ -654,6 +677,27 @@ impl Renderer for GuiRenderer {
                 &entries,
                 title_override.as_deref(),
             );
+        } else if overlay == ActiveOverlay::GraphView {
+            debug!("render: KB graph view full-frame overlay");
+            // Same background step every higher-priority overlay branch
+            // above uses when the graph overlay flag is set — here it's
+            // the ONLY thing to draw, since no popup sits on top.
+            render_window_area_with_graph_overlay(
+                canvas,
+                editor,
+                &syntax_spans,
+                shells,
+                0,
+                0,
+                cols,
+                window_height,
+                &mut all_layouts,
+                &mut layout_time_us,
+                &mut draw_time_us,
+                wrc,
+            );
+            status_render::render_status_bar(canvas, editor, status_row, cols, frame_ms);
+            status_render::render_command_line(canvas, editor, cmd_row, cols);
         } else if overlay == ActiveOverlay::Splash {
             debug!("render: splash screen");
             splash_render::render_splash(canvas, editor, 0, 0, cols, window_height);
@@ -969,6 +1013,15 @@ fn render_window_area(
             // unchanged state are blitted from cached pixels (GPU texture blit
             // ~100μs vs full render ~90ms for large files).
             let is_cacheable = !is_focused && !matches!(buf.kind, BufferKind::Shell);
+            // `buf.generation` (rope-based) never changes for a Graph
+            // buffer — this is the additional key that actually captures
+            // "did this window's graph picture change" (pan/zoom/hover/
+            // selection/tween). `None` for every non-Graph buffer kind, so
+            // the cache-hit check below is unaffected for them.
+            let graph_render_epoch = buf
+                .graph_view()
+                .and_then(|gv| gv.render_epoch.get(win_id))
+                .copied();
             if is_cacheable {
                 let (cw_px, ch_px) = canvas.cell_size();
                 let pixel_rect = skia_safe::IRect::from_xywh(
@@ -978,10 +1031,12 @@ fn render_window_area(
                     (r_height as f32 * ch_px) as i32,
                 );
                 if let Some(cached) = window_render_cache.get(win_id) {
-                    if cached.generation == buf.generation
+                    if cached.buffer_idx == win.buffer_idx
+                        && cached.generation == buf.generation
                         && cached.scroll_offset == win.scroll_offset
                         && cached.scroll_pixel_offset_bits == win.scroll_pixel_offset.to_bits()
                         && cached.pixel_rect == pixel_rect
+                        && cached.graph_render_epoch == graph_render_epoch
                     {
                         // Cache hit: blit cached image, reuse cached layout.
                         canvas.draw_cached_image(
@@ -1029,25 +1084,77 @@ fn render_window_area(
                     }
                 }
                 BufferKind::Graph => {
-                    // Native KB graph view (Part C Phase 1): the buffer's
-                    // `GraphView.rendered` cache is kept in sync (flattened
-                    // from `GraphView.scene`) by `graph_view_ops.rs` on every
-                    // open/refresh/navigate/layout-applied — this arm just
-                    // draws it through the same `VisualElement` pipeline
-                    // `BufferKind::Visual` uses, with a themed background.
-                    if let Some(gv) = buf.graph_view() {
+                    // Native KB graph view (issue #321 — per-window): the
+                    // buffer's `GraphView.rendered` cache holds one entry PER
+                    // WINDOW showing this buffer (a graph can be split into
+                    // more than one window, each with its own pan/zoom/
+                    // pixel-size), kept in sync by `graph_view_ops.rs` on
+                    // every open/refresh/navigate/layout-applied/zoom/resize.
+                    // This arm draws THIS window's entry through the same
+                    // `VisualElement` pipeline `BufferKind::Visual` uses, with
+                    // a themed background. A missing entry (e.g. a window
+                    // just split onto this buffer, not yet reflattened) draws
+                    // nothing this frame — self-heals on the very next
+                    // `sync_open_graph_viewports` tick.
+                    if let Some(vb) = buf.graph_view().and_then(|gv| gv.rendered.get(win_id)) {
                         let t = std::time::Instant::now();
                         let bg = theme::ts_bg(editor, "ui.graph.background");
                         render_visual_buffer_with_bg(
-                            canvas,
-                            &gv.rendered,
-                            r_row,
-                            r_col,
-                            r_width,
-                            r_height,
-                            bg,
+                            canvas, vb, r_row, r_col, r_width, r_height, bg,
                         );
                         *draw_time_us += t.elapsed().as_micros() as u64;
+                    }
+                    // Cache the rendered image for non-focused graph
+                    // windows — WITHOUT this, a graph window was
+                    // (previously) never eligible for the per-window
+                    // cache at all (only the generic text-buffer arm ever
+                    // wrote a cache entry), so it fully re-rendered on
+                    // EVERY frame that got redrawn for ANY reason —
+                    // including a keystroke in a completely unrelated
+                    // window — regardless of `is_cacheable`/`redraw_level`.
+                    // For a real ~1300-node/4000-edge subgraph this alone
+                    // accounted for the bulk of a reported typing-lag
+                    // complaint. `frame_layout` is a trivial empty
+                    // placeholder — confirmed unused for Graph windows,
+                    // which resolve mouse clicks via `window_mgr::
+                    // layout_rects` directly, not `window_layouts`.
+                    if is_cacheable {
+                        let (cw_px, ch_px) = canvas.cell_size();
+                        let pixel_rect = skia_safe::IRect::from_xywh(
+                            (r_col as f32 * cw_px) as i32,
+                            (r_row as f32 * ch_px) as i32,
+                            (r_width as f32 * cw_px) as i32,
+                            (r_height as f32 * ch_px) as i32,
+                        );
+                        if let Some(image) = canvas.snapshot_region(pixel_rect) {
+                            window_render_cache.insert(
+                                *win_id,
+                                WindowRenderCache {
+                                    buffer_idx: win.buffer_idx,
+                                    generation: buf.generation,
+                                    scroll_offset: win.scroll_offset,
+                                    scroll_pixel_offset_bits: win.scroll_pixel_offset.to_bits(),
+                                    pixel_rect,
+                                    image,
+                                    frame_layout: layout::FrameLayout {
+                                        lines: Vec::new(),
+                                        gutter_width: 0,
+                                        text_col: 0,
+                                        text_width: 0,
+                                        area_width: 0,
+                                        cell_width: 0.0,
+                                        cell_height: 0.0,
+                                        area_row: 0,
+                                        area_col: 0,
+                                        pixel_y_limit: 0.0,
+                                        scrollbar_col: None,
+                                        total_lines: 0,
+                                        scroll_offset: 0,
+                                    },
+                                    graph_render_epoch,
+                                },
+                            );
+                        }
                     }
                 }
                 BufferKind::FileTree => {
@@ -1180,12 +1287,14 @@ fn render_window_area(
                             window_render_cache.insert(
                                 *win_id,
                                 WindowRenderCache {
+                                    buffer_idx: win.buffer_idx,
                                     generation: buf.generation,
                                     scroll_offset: win.scroll_offset,
                                     scroll_pixel_offset_bits: win.scroll_pixel_offset.to_bits(),
                                     pixel_rect,
                                     image,
                                     frame_layout: fl.clone(),
+                                    graph_render_epoch: None,
                                 },
                             );
                         }
@@ -1212,6 +1321,89 @@ fn render_window_area(
             }
         }
     }
+}
+
+/// `render_window_area`, plus — if the KB graph view is toggled into
+/// full-frame overlay mode (`kb-graph-view-toggle-overlay`) — a dim scrim
+/// and the graph drawn on top. Every fullscreen-overlay branch below
+/// (`MiniDialog`/`FilePicker`/`FileBrowser`/`CommandPalette`/`WhichKey`)
+/// uses this as its background step instead of a bare `render_window_area`
+/// call: `ActiveOverlay::GraphView` sits BELOW those in `active_overlay`'s
+/// priority order (a leader-key hint must still show over the graph — see
+/// `render_common::overlay`), so without this, opening one of those while
+/// the graph overlay is up would resolve to a DIFFERENT `ActiveOverlay`
+/// variant and fall through to a plain `render_window_area` call — flashing
+/// back to the underlying tiled split-window view (revealing whatever
+/// window sits beside the graph) for the duration of the popup, instead of
+/// layering the popup over the still-dimmed graph as the overlay-priority
+/// comment promises.
+#[allow(clippy::too_many_arguments)]
+fn render_window_area_with_graph_overlay(
+    canvas: &mut canvas::SkiaCanvas,
+    editor: &Editor,
+    syntax_spans: &SyntaxSpanMap,
+    shells: &HashMap<usize, ShellTerminal>,
+    area_row: usize,
+    area_col: usize,
+    area_width: usize,
+    area_height: usize,
+    layouts_out: &mut HashMap<mae_core::WindowId, layout::FrameLayout>,
+    layout_time_us: &mut u64,
+    draw_time_us: &mut u64,
+    window_render_cache: &mut HashMap<mae_core::WindowId, WindowRenderCache>,
+) {
+    render_window_area(
+        canvas,
+        editor,
+        syntax_spans,
+        shells,
+        area_row,
+        area_col,
+        area_width,
+        area_height,
+        layouts_out,
+        layout_time_us,
+        draw_time_us,
+        window_render_cache,
+    );
+
+    if !editor.kb_graph_view_overlay_active {
+        return;
+    }
+    let Some(win) = editor
+        .window_mgr
+        .iter_windows()
+        .find(|w| editor.buffers[w.buffer_idx].kind == BufferKind::Graph)
+    else {
+        return;
+    };
+    let (buf_idx, win_id) = (win.buffer_idx, win.id);
+    let Some(gv) = editor.buffers[buf_idx].graph_view() else {
+        return;
+    };
+
+    let dim_opacity = editor.kb_graph_view_overlay_dim_opacity;
+    canvas.draw_rect_fill(
+        area_row,
+        area_col,
+        area_width,
+        area_height,
+        skia_safe::Color4f::new(0.0, 0.0, 0.0, dim_opacity),
+    );
+
+    let mut viewport = gv.viewports.get(&win_id).copied().unwrap_or_default();
+    viewport.width = (area_width as f32 * editor.gui_cell_width) as f64;
+    viewport.height = (area_height as f32 * editor.gui_cell_height) as f64;
+
+    let mut style = mae_core::graph_view::GraphStyleOptions::from_editor(editor);
+    if let Some(tween) = &gv.color_tween {
+        style.color_override = Some((tween.node_index, tween.current_color()));
+    }
+    let elements =
+        mae_core::graph_view::flatten_scene_graph(&gv.scene, &viewport, &style, &gv.node_degrees);
+    let vb = mae_core::visual_buffer::VisualBuffer { elements };
+    let bg = theme::ts_bg(editor, "ui.graph.background");
+    render_visual_buffer_with_bg(canvas, &vb, area_row, area_col, area_width, area_height, bg);
 }
 
 fn render_visual_buffer(
@@ -1241,137 +1433,190 @@ fn render_visual_buffer_with_bg(
     bg: Option<skia_safe::Color4f>,
 ) {
     use mae_core::visual_buffer::VisualElement;
-    use skia_safe::{Color4f, Paint, PaintStyle};
+    use skia_safe::{paint, Color4f, Paint, PaintStyle};
 
-    // Draw background
-    canvas.draw_rect_fill(
-        r_row,
-        r_col,
-        r_width,
-        r_height,
-        bg.unwrap_or(Color4f::new(0.05, 0.05, 0.05, 1.0)),
-    );
+    // Clip all drawing to this window's own pixel rect — without this,
+    // elements whose computed screen position falls outside the window
+    // (e.g. a graph node near the edge of a force-directed layout, or any
+    // pan/zoom state that pushes content past the pane's bounds) draw
+    // directly onto neighboring windows, since it's all one shared Skia
+    // surface. Mirrors the identical clip already applied to the standard
+    // text-buffer path (see the `with_clip` call site in `render_window_area`
+    // above, "so images don't overflow into borders, status line, or
+    // command area") — this function just never adopted the same guard.
+    canvas.with_clip(r_row, r_col, r_width, r_height, |canvas| {
+        // Draw background
+        canvas.draw_rect_fill(
+            r_row,
+            r_col,
+            r_width,
+            r_height,
+            bg.unwrap_or(Color4f::new(0.05, 0.05, 0.05, 1.0)),
+        );
 
-    let (cw, ch) = canvas.cell_size();
-    let x_off = r_col as f32 * cw;
-    let y_off = r_row as f32 * ch;
+        let (cw, ch) = canvas.cell_size();
+        let x_off = r_col as f32 * cw;
+        let y_off = r_row as f32 * ch;
 
-    for element in &vb.elements {
-        match element {
-            VisualElement::Rect {
-                x,
-                y,
-                w,
-                h,
-                fill,
-                stroke,
-            } => {
-                let rect = skia_safe::Rect::from_xywh(x_off + x, y_off + y, *w, *h);
-                if let Some(f) = fill {
-                    if let Some(c) = theme::parse_hex_to_skia(f) {
-                        let mut paint = Paint::new(c, None);
-                        paint.set_style(PaintStyle::Fill);
-                        canvas.canvas().draw_rect(rect, &paint);
-                    }
-                }
-                if let Some(s) = stroke {
-                    if let Some(c) = theme::parse_hex_to_skia(s) {
-                        let mut paint = Paint::new(c, None);
-                        paint.set_style(PaintStyle::Stroke);
-                        paint.set_stroke_width(1.0);
-                        canvas.canvas().draw_rect(rect, &paint);
-                    }
-                }
-            }
-            VisualElement::Line {
-                x1,
-                y1,
-                x2,
-                y2,
-                color,
-                thickness,
-                dashed,
-            } => {
-                if let Some(c) = theme::parse_hex_to_skia(color) {
-                    let mut paint = Paint::new(c, None);
-                    paint.set_stroke_width(*thickness);
-                    paint.set_style(PaintStyle::Stroke);
-                    let (sx, sy) = (x_off + x1, y_off + y1);
-                    let (ex, ey) = (x_off + x2, y_off + y2);
-                    if *dashed {
-                        // No skia-safe PathEffect dependency needed for a
-                        // simple fixed-cadence dash — manually segment the
-                        // line into ~6px-on/4px-off strokes. Used for
-                        // subgraph boundary edges (graph view) to visually
-                        // distinguish them from internal ones.
-                        const ON: f32 = 6.0;
-                        const OFF: f32 = 4.0;
-                        let dx = ex - sx;
-                        let dy = ey - sy;
-                        let len = (dx * dx + dy * dy).sqrt();
-                        if len > 0.0 {
-                            let (ux, uy) = (dx / len, dy / len);
-                            let mut travelled = 0.0;
-                            while travelled < len {
-                                let seg_end = (travelled + ON).min(len);
-                                canvas.canvas().draw_line(
-                                    (sx + ux * travelled, sy + uy * travelled),
-                                    (sx + ux * seg_end, sy + uy * seg_end),
-                                    &paint,
-                                );
-                                travelled = seg_end + OFF;
-                            }
+        for element in &vb.elements {
+            match element {
+                VisualElement::Rect {
+                    x,
+                    y,
+                    w,
+                    h,
+                    fill,
+                    stroke,
+                } => {
+                    let rect = skia_safe::Rect::from_xywh(x_off + x, y_off + y, *w, *h);
+                    if let Some(f) = fill {
+                        if let Some(c) = theme::parse_hex_to_skia(f) {
+                            let mut paint = Paint::new(c, None);
+                            paint.set_anti_alias(true);
+                            paint.set_style(PaintStyle::Fill);
+                            canvas.canvas().draw_rect(rect, &paint);
                         }
-                    } else {
-                        canvas.canvas().draw_line((sx, sy), (ex, ey), &paint);
+                    }
+                    if let Some(s) = stroke {
+                        if let Some(c) = theme::parse_hex_to_skia(s) {
+                            let mut paint = Paint::new(c, None);
+                            paint.set_anti_alias(true);
+                            paint.set_style(PaintStyle::Stroke);
+                            paint.set_stroke_width(1.0);
+                            canvas.canvas().draw_rect(rect, &paint);
+                        }
                     }
                 }
-            }
-            VisualElement::Circle {
-                cx,
-                cy,
-                r,
-                fill,
-                stroke,
-            } => {
-                if let Some(f) = fill {
-                    if let Some(c) = theme::parse_hex_to_skia(f) {
+                VisualElement::Line {
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    color,
+                    thickness,
+                    dashed,
+                } => {
+                    if let Some(c) = theme::parse_hex_to_skia(color) {
                         let mut paint = Paint::new(c, None);
-                        paint.set_style(PaintStyle::Fill);
-                        canvas
-                            .canvas()
-                            .draw_circle((x_off + cx, y_off + cy), *r, &paint);
-                    }
-                }
-                if let Some(s) = stroke {
-                    if let Some(c) = theme::parse_hex_to_skia(s) {
-                        let mut paint = Paint::new(c, None);
+                        paint.set_anti_alias(true);
+                        paint.set_stroke_width(*thickness);
                         paint.set_style(PaintStyle::Stroke);
-                        paint.set_stroke_width(1.0);
-                        canvas
-                            .canvas()
-                            .draw_circle((x_off + cx, y_off + cy), *r, &paint);
+                        // Round caps/joins so edges converging on a node (or
+                        // a dash segment's own ends) read as smooth strokes
+                        // instead of Skia's default hard miter/butt corners.
+                        paint.set_stroke_cap(paint::Cap::Round);
+                        paint.set_stroke_join(paint::Join::Round);
+                        let (sx, sy) = (x_off + x1, y_off + y1);
+                        let (ex, ey) = (x_off + x2, y_off + y2);
+                        if *dashed {
+                            // No skia-safe PathEffect dependency needed for a
+                            // simple fixed-cadence dash — manually segment the
+                            // line into ~6px-on/4px-off strokes. Used for
+                            // subgraph boundary edges (graph view) to visually
+                            // distinguish them from internal ones.
+                            const ON: f32 = 6.0;
+                            const OFF: f32 = 4.0;
+                            let dx = ex - sx;
+                            let dy = ey - sy;
+                            let len = (dx * dx + dy * dy).sqrt();
+                            if len > 0.0 {
+                                let (ux, uy) = (dx / len, dy / len);
+                                let mut travelled = 0.0;
+                                while travelled < len {
+                                    let seg_end = (travelled + ON).min(len);
+                                    canvas.canvas().draw_line(
+                                        (sx + ux * travelled, sy + uy * travelled),
+                                        (sx + ux * seg_end, sy + uy * seg_end),
+                                        &paint,
+                                    );
+                                    travelled = seg_end + OFF;
+                                }
+                            }
+                        } else {
+                            canvas.canvas().draw_line((sx, sy), (ex, ey), &paint);
+                        }
                     }
                 }
-            }
-            VisualElement::Text {
-                x,
-                y,
-                text,
-                font_size: _,
-                color,
-            } => {
-                if let Some(c) = theme::parse_hex_to_skia(color) {
-                    let mut paint = Paint::new(c, None);
-                    paint.set_anti_alias(true);
-                    let font = skia_safe::Font::default(); // TODO: use real font
-                    canvas
-                        .canvas()
-                        .draw_str(text, (x_off + x, y_off + y), &font, &paint);
+                VisualElement::Curve {
+                    x1,
+                    y1,
+                    ctrl_x,
+                    ctrl_y,
+                    x2,
+                    y2,
+                    color,
+                    thickness,
+                } => {
+                    // Mirrors canvas.rs's `draw_wavy_underline_at_pixel` —
+                    // same PathBuilder/quad_to/detach/draw_path shape, just
+                    // one control point instead of many.
+                    if let Some(c) = theme::parse_hex_to_skia(color) {
+                        let mut paint = Paint::new(c, None);
+                        paint.set_anti_alias(true);
+                        paint.set_stroke_width(*thickness);
+                        paint.set_style(PaintStyle::Stroke);
+                        paint.set_stroke_cap(paint::Cap::Round);
+                        paint.set_stroke_join(paint::Join::Round);
+                        let mut builder = skia_safe::PathBuilder::new();
+                        builder.move_to((x_off + x1, y_off + y1));
+                        builder.quad_to((x_off + ctrl_x, y_off + ctrl_y), (x_off + x2, y_off + y2));
+                        let path = builder.detach();
+                        canvas.canvas().draw_path(&path, &paint);
+                    }
+                }
+                VisualElement::Circle {
+                    cx,
+                    cy,
+                    r,
+                    fill,
+                    stroke,
+                } => {
+                    if let Some(f) = fill {
+                        if let Some(c) = theme::parse_hex_to_skia(f) {
+                            let mut paint = Paint::new(c, None);
+                            paint.set_anti_alias(true);
+                            paint.set_style(PaintStyle::Fill);
+                            canvas
+                                .canvas()
+                                .draw_circle((x_off + cx, y_off + cy), *r, &paint);
+                        }
+                    }
+                    if let Some(s) = stroke {
+                        if let Some(c) = theme::parse_hex_to_skia(s) {
+                            let mut paint = Paint::new(c, None);
+                            paint.set_anti_alias(true);
+                            paint.set_style(PaintStyle::Stroke);
+                            paint.set_stroke_width(1.0);
+                            canvas
+                                .canvas()
+                                .draw_circle((x_off + cx, y_off + cy), *r, &paint);
+                        }
+                    }
+                }
+                VisualElement::Text {
+                    x,
+                    y,
+                    text,
+                    font_size,
+                    color,
+                } => {
+                    if let Some(c) = theme::parse_hex_to_skia(color) {
+                        let mut paint = Paint::new(c, None);
+                        paint.set_anti_alias(true);
+                        // Use the editor's actually-loaded monospace typeface
+                        // (matching every other piece of text in the UI)
+                        // scaled to this element's requested size, instead of
+                        // Skia's platform-default font.
+                        let scale = *font_size / canvas.base_font_size();
+                        let font = canvas.get_scaled_font(false, scale).clone();
+                        canvas
+                            .canvas()
+                            .draw_str(text, (x_off + x, y_off + y), &font, &paint);
+                    }
                 }
             }
         }
-    }
+    });
 }
 
 // ---------------------------------------------------------------------------

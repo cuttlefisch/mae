@@ -27,6 +27,7 @@ pub struct GraphLayoutRequest {
     pub buf_idx: usize,
     pub scene: SceneGraph,
     pub mode: GraphLayoutMode,
+    pub layout_config: LayoutConfig,
 }
 
 impl From<GraphLayoutIntent> for GraphLayoutRequest {
@@ -35,6 +36,7 @@ impl From<GraphLayoutIntent> for GraphLayoutRequest {
             buf_idx: intent.buf_idx,
             scene: intent.scene,
             mode: intent.mode,
+            layout_config: intent.layout_config,
         }
     }
 }
@@ -84,7 +86,7 @@ pub(crate) fn spawn_layout_computation(
 ) {
     tokio::task::spawn_blocking(move || {
         let mut scene = req.scene;
-        let layout = ForceLayout::new(LayoutConfig::default());
+        let layout = ForceLayout::new(req.layout_config);
         let max_displacement = match req.mode {
             GraphLayoutMode::OneShot { iterations } => {
                 layout.run(&mut scene.nodes, &scene.edges, iterations);
@@ -120,6 +122,7 @@ mod tests {
             buf_idx: 3,
             scene: SceneGraph::new(),
             mode: GraphLayoutMode::OneShot { iterations: 42 },
+            layout_config: LayoutConfig::default(),
         };
         let req: GraphLayoutRequest = intent.into();
         assert_eq!(req.buf_idx, 3);
@@ -135,6 +138,7 @@ mod tests {
             buf_idx: 7,
             scene: SceneGraph::new(),
             mode: GraphLayoutMode::Tick { temperature: 12.5 },
+            layout_config: LayoutConfig::default(),
         };
         let req: GraphLayoutRequest = intent.into();
         assert_eq!(req.buf_idx, 7);
@@ -145,12 +149,38 @@ mod tests {
     }
 
     #[test]
+    fn intent_converts_layout_config_verbatim() {
+        // Regression guard for the tick-requeue trap fixed in
+        // `graph_view_ops.rs::apply_graph_layout_result`: a non-default
+        // `layout_config` (e.g. kind clustering enabled) must survive the
+        // Intent -> Request conversion unchanged, not silently reset.
+        let kind_affinity = mae_canvas::layout::KindAffinityConfig {
+            same_kind_repulsion: 0.7,
+            cross_kind_repulsion: 1.0,
+            same_kind_attraction: 1.3,
+            cross_kind_attraction: 1.0,
+        };
+        let intent = GraphLayoutIntent {
+            buf_idx: 1,
+            scene: SceneGraph::new(),
+            mode: GraphLayoutMode::OneShot { iterations: 1 },
+            layout_config: LayoutConfig {
+                kind_affinity: Some(kind_affinity),
+                ..LayoutConfig::default()
+            },
+        };
+        let req: GraphLayoutRequest = intent.into();
+        assert_eq!(req.layout_config.kind_affinity, Some(kind_affinity));
+    }
+
+    #[test]
     fn drain_takes_pending_intent_and_leaves_none_behind() {
         let mut editor = mae_core::Editor::new();
         editor.pending_graph_layout = Some(GraphLayoutIntent {
             buf_idx: 0,
             scene: SceneGraph::new(),
             mode: GraphLayoutMode::OneShot { iterations: 10 },
+            layout_config: LayoutConfig::default(),
         });
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         drain_graph_layout_intent(&mut editor, &tx);

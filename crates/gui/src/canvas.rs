@@ -396,8 +396,16 @@ impl SkiaCanvas {
         self.surface.canvas().draw_image(image, (x, y), None);
     }
 
+    /// Base (unscaled) primary font size, in points — for callers computing
+    /// a scale factor to pass to `get_scaled_font` from an absolute target
+    /// size (e.g. the graph view's per-node label `font_size`, which is
+    /// unrelated to cell size).
+    pub(crate) fn base_font_size(&self) -> f32 {
+        self.font.size()
+    }
+
     /// Get a cached scaled font. Avoids clone + set_size on every call.
-    fn get_scaled_font(&mut self, bold: bool, scale: f32) -> &Font {
+    pub(crate) fn get_scaled_font(&mut self, bold: bool, scale: f32) -> &Font {
         let key = (scale * 1000.0) as u32;
         let cache = if bold {
             &mut self.scaled_bold_fonts

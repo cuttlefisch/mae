@@ -8,6 +8,41 @@
 
 use crate::scene::{SceneEdge, SceneNode};
 
+/// Target scene-space area (px²) budgeted per node, shared by the
+/// force-layout's own `ideal_distance` calculation AND
+/// `kb_graph::build_kb_graph_positions_only`'s initial circular placement
+/// (single source of truth, not two independently-tuned magic numbers).
+/// Keeping `k = sqrt(area / n)` constant regardless of graph size (by
+/// scaling `area` linearly with `n`, below) means the ideal edge length
+/// doesn't shrink toward zero as a KB subgraph grows — a graph of 1000+
+/// nodes needs proportionally more room, not a denser hairball. Just as
+/// importantly, it keeps the INITIAL circle's radius in the same order of
+/// magnitude as the eventual equilibrium layout, so the temperature-cooling
+/// schedule's bounded per-iteration displacement budget (`LayoutConfig::
+/// max_iterations` ticks, each capped near `temperature`) can actually
+/// traverse the gap and produce a real force-directed arrangement — with a
+/// radius that instead grew LINEARLY in `n` (the pre-fix formula), a
+/// realistically-sized KB subgraph's starting spread vastly exceeded what
+/// 50 iterations of cooling could ever cover, so nodes settled having
+/// barely moved off their initial ring.
+pub const IDEAL_AREA_PER_NODE: f64 = 10_000.0;
+
+/// Node-kind-based visual clustering multipliers, applied on top of the
+/// base repulsion/attraction forces in `ForceLayout::step`. Same-kind pairs
+/// (e.g. two `Concept` nodes) get softened repulsion and boosted attraction
+/// relative to cross-kind pairs, so nodes naturally sort into loose
+/// kind-based clusters purely via the existing O(n²) force loop — no new
+/// pass, no topology change. See `crate::graph_view::kind_affinity_from_strength`
+/// (the `crates/core` call site) for how a single 0.0-1.0 "strength" knob
+/// maps to these four multipliers.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KindAffinityConfig {
+    pub same_kind_repulsion: f64,
+    pub cross_kind_repulsion: f64,
+    pub same_kind_attraction: f64,
+    pub cross_kind_attraction: f64,
+}
+
 /// Configuration for the force layout algorithm.
 #[derive(Debug, Clone)]
 pub struct LayoutConfig {
@@ -21,6 +56,22 @@ pub struct LayoutConfig {
     pub max_iterations: usize,
     /// Centering force strength.
     pub centering: f64,
+    /// Node-kind clustering multipliers — `None` reproduces the pre-
+    /// clustering layout exactly (byte-identical repulsion/attraction
+    /// math), so this is the ONLY field a caller needs to opt into
+    /// clustering; every existing test using `LayoutConfig::default()`
+    /// (including `layout_deterministic`) is unaffected by its addition.
+    pub kind_affinity: Option<KindAffinityConfig>,
+    /// Multiplies `IDEAL_AREA_PER_NODE` before computing `k = sqrt(area /
+    /// n)` (the equilibrium repulsion/attraction distance). `1.0`
+    /// reproduces the exact pre-existing spacing (byte-identical for
+    /// every `LayoutConfig::default()` caller/test). Raising it spreads
+    /// every node farther apart uniformly — the direct lever for "labels
+    /// read as an overlapping mountain of text": `k` scales with
+    /// `sqrt(spacing_scale)`, so e.g. `4.0` doubles the equilibrium
+    /// distance between nodes, `2.0` gives ~41% more. Mirrors
+    /// `kb_graph_layout_spacing_scale`.
+    pub spacing_scale: f64,
 }
 
 impl Default for LayoutConfig {
@@ -31,6 +82,8 @@ impl Default for LayoutConfig {
             damping: 0.85,
             max_iterations: 100,
             centering: 0.01,
+            kind_affinity: None,
+            spacing_scale: 1.0,
         }
     }
 }
@@ -68,7 +121,11 @@ impl ForceLayout {
             return 0.0;
         }
 
-        let area = 800.0 * 600.0; // Default layout area
+        // Area scales with node count so `k` (ideal edge length) stays
+        // constant regardless of graph size — see `IDEAL_AREA_PER_NODE`.
+        // `spacing_scale` (default 1.0, byte-identical) lets a caller widen
+        // that budget uniformly — see `LayoutConfig::spacing_scale`'s doc.
+        let area = n as f64 * IDEAL_AREA_PER_NODE * self.config.spacing_scale;
         let k = self.ideal_distance(n, area);
         let k_sq = k * k;
 
@@ -82,7 +139,14 @@ impl ForceLayout {
                 let dist_x = nodes[i].x - nodes[j].x;
                 let dist_y = nodes[i].y - nodes[j].y;
                 let dist = (dist_x * dist_x + dist_y * dist_y).sqrt().max(0.01);
-                let force = self.config.repulsion * (k_sq / dist);
+                let mut force = self.config.repulsion * (k_sq / dist);
+                if let Some(affinity) = &self.config.kind_affinity {
+                    force *= if nodes[i].kind == nodes[j].kind {
+                        affinity.same_kind_repulsion
+                    } else {
+                        affinity.cross_kind_repulsion
+                    };
+                }
                 let fx = (dist_x / dist) * force;
                 let fy = (dist_y / dist) * force;
                 dx[i] += fx;
@@ -102,7 +166,18 @@ impl ForceLayout {
             let dist_x = nodes[s].x - nodes[t].x;
             let dist_y = nodes[s].y - nodes[t].y;
             let dist = (dist_x * dist_x + dist_y * dist_y).sqrt().max(0.01);
-            let force = self.config.attraction * (dist * dist) / k;
+            // `edge.weight` (ADR-030 authored/default relationship
+            // strength, 1.0 = neutral) directly scales attraction — a link
+            // the user tagged as weaker settles at a looser equilibrium
+            // distance, no separate rel-type lookup table needed.
+            let mut force = self.config.attraction * edge.weight * (dist * dist) / k;
+            if let Some(affinity) = &self.config.kind_affinity {
+                force *= if nodes[s].kind == nodes[t].kind {
+                    affinity.same_kind_attraction
+                } else {
+                    affinity.cross_kind_attraction
+                };
+            }
             let fx = (dist_x / dist) * force;
             let fy = (dist_y / dist) * force;
             dx[s] -= fx;
@@ -164,6 +239,10 @@ mod tests {
     use crate::scene::{EdgeStyle, NodeKind, NodeStyle};
 
     fn make_node(id: &str, x: f64, y: f64) -> SceneNode {
+        make_node_kind(id, x, y, NodeKind::Concept)
+    }
+
+    fn make_node_kind(id: &str, x: f64, y: f64, kind: NodeKind) -> SceneNode {
         SceneNode {
             id: id.to_string(),
             label: id.to_string(),
@@ -171,18 +250,24 @@ mod tests {
             y,
             width: 100.0,
             height: 40.0,
-            kind: NodeKind::Concept,
+            kind,
             style: NodeStyle::default(),
             pinned: false,
         }
     }
 
     fn make_edge(source: usize, target: usize) -> SceneEdge {
+        make_weighted_edge(source, target, 1.0)
+    }
+
+    fn make_weighted_edge(source: usize, target: usize, weight: f64) -> SceneEdge {
         SceneEdge {
             source,
             target,
             label: None,
             style: EdgeStyle::default(),
+            weight,
+            rel_type: None,
         }
     }
 
@@ -219,7 +304,8 @@ mod tests {
         layout.run(&mut nodes, &edges, 100);
         let dist = ((nodes[0].x - nodes[1].x).powi(2) + (nodes[0].y - nodes[1].y).powi(2)).sqrt();
         // Connected nodes should settle at a finite equilibrium distance
-        // (initial distance was 400; with repulsion they settle near ideal k ~ 490)
+        // (initial distance was 400; with repulsion they settle near ideal
+        // k = sqrt(IDEAL_AREA_PER_NODE) = 100, constant regardless of n).
         assert!(
             dist < 600.0,
             "connected nodes should settle at bounded distance, dist={}",
@@ -374,5 +460,137 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn same_kind_nodes_cluster_closer_with_affinity_enabled() {
+        // Comparative test, not a hand-picked "unicorn" value: run the SAME
+        // starting scene once with kind_affinity off, once on, and confirm
+        // the two same-kind nodes end up closer together (relative to a
+        // cross-kind node) only when clustering is enabled.
+        fn run(config: LayoutConfig) -> (f64, f64) {
+            let mut nodes = vec![
+                make_node_kind("a1", -50.0, 0.0, NodeKind::Concept),
+                make_node_kind("a2", 50.0, 0.0, NodeKind::Concept),
+                make_node_kind("b1", 0.0, 80.0, NodeKind::Task),
+            ];
+            let layout = ForceLayout::new(config);
+            layout.run(&mut nodes, &[], 100);
+            let same_kind_dist =
+                ((nodes[0].x - nodes[1].x).powi(2) + (nodes[0].y - nodes[1].y).powi(2)).sqrt();
+            let cross_kind_dist =
+                ((nodes[0].x - nodes[2].x).powi(2) + (nodes[0].y - nodes[2].y).powi(2)).sqrt();
+            (same_kind_dist, cross_kind_dist)
+        }
+
+        let (same_before, cross_before) = run(LayoutConfig::default());
+        let (same_after, cross_after) = run(LayoutConfig {
+            kind_affinity: Some(KindAffinityConfig {
+                same_kind_repulsion: 0.6,
+                cross_kind_repulsion: 1.0,
+                same_kind_attraction: 1.2,
+                cross_kind_attraction: 1.0,
+            }),
+            ..LayoutConfig::default()
+        });
+
+        assert!(
+            same_after < same_before,
+            "softened same-kind repulsion should pull same-kind nodes closer \
+             (before={same_before}, after={same_after})"
+        );
+        // Cross-kind spacing is left at neutral multipliers (1.0), so it
+        // should be roughly unchanged — confirms clustering doesn't just
+        // uniformly shrink everything.
+        assert!(
+            (cross_after - cross_before).abs() < cross_before * 0.15,
+            "cross-kind spacing should stay roughly unchanged \
+             (before={cross_before}, after={cross_after})"
+        );
+    }
+
+    #[test]
+    fn raising_spacing_scale_increases_the_equilibrium_distance_between_connected_nodes() {
+        // Comparative, not a hand-picked "unicorn" value: same starting
+        // scene, run once at the default spacing_scale (1.0) and once at a
+        // clearly larger one, confirm the settled distance between two
+        // connected nodes grows.
+        fn settle_dist(spacing_scale: f64) -> f64 {
+            let mut nodes = vec![make_node("a", -10.0, 0.0), make_node("b", 10.0, 0.0)];
+            let layout = ForceLayout::new(LayoutConfig {
+                spacing_scale,
+                ..LayoutConfig::default()
+            });
+            layout.run(&mut nodes, &[make_edge(0, 1)], 100);
+            ((nodes[0].x - nodes[1].x).powi(2) + (nodes[0].y - nodes[1].y).powi(2)).sqrt()
+        }
+
+        let dist_default = settle_dist(1.0);
+        let dist_wide = settle_dist(4.0);
+        assert!(
+            dist_wide > dist_default,
+            "a larger spacing_scale must widen the settled inter-node distance \
+             (default={dist_default}, wide={dist_wide})"
+        );
+    }
+
+    #[test]
+    fn spacing_scale_defaults_to_1_0_and_layout_default_stays_deterministic() {
+        // `spacing_scale`'s default (1.0) is a no-op multiplier — this pins
+        // that invariant explicitly, on top of `layout_deterministic`
+        // already covering `LayoutConfig::default()`'s determinism
+        // unmodified by this field's addition.
+        assert_eq!(LayoutConfig::default().spacing_scale, 1.0);
+    }
+
+    #[test]
+    fn layout_deterministic_with_kind_affinity_and_heterogeneous_kinds() {
+        let config = LayoutConfig {
+            kind_affinity: Some(KindAffinityConfig {
+                same_kind_repulsion: 0.7,
+                cross_kind_repulsion: 1.0,
+                same_kind_attraction: 1.1,
+                cross_kind_attraction: 1.0,
+            }),
+            ..LayoutConfig::default()
+        };
+        let layout = ForceLayout::new(config);
+        let mut nodes1 = vec![
+            make_node_kind("a", 0.0, 0.0, NodeKind::Concept),
+            make_node_kind("b", 100.0, 0.0, NodeKind::Task),
+            make_node_kind("c", 0.0, 100.0, NodeKind::Concept),
+        ];
+        let mut nodes2 = nodes1.clone();
+        let edges = vec![make_edge(0, 1), make_edge(1, 2)];
+        layout.run(&mut nodes1, &edges, 50);
+        layout.run(&mut nodes2, &edges, 50);
+        for (n1, n2) in nodes1.iter().zip(nodes2.iter()) {
+            assert!((n1.x - n2.x).abs() < 1e-10, "x should be deterministic");
+            assert!((n1.y - n2.y).abs() < 1e-10, "y should be deterministic");
+        }
+    }
+
+    #[test]
+    fn lower_weight_edge_settles_at_a_looser_equilibrium_distance() {
+        // Two otherwise-identical two-node scenes, differing only in edge
+        // weight — the lower-weight edge (a weaker authored relationship)
+        // must settle FARTHER apart, since attraction force scales
+        // directly by `edge.weight`.
+        let layout = ForceLayout::new(LayoutConfig::default());
+
+        let mut strong = vec![make_node("a", -200.0, 0.0), make_node("b", 200.0, 0.0)];
+        layout.run(&mut strong, &[make_weighted_edge(0, 1, 1.0)], 100);
+        let strong_dist =
+            ((strong[0].x - strong[1].x).powi(2) + (strong[0].y - strong[1].y).powi(2)).sqrt();
+
+        let mut weak = vec![make_node("a", -200.0, 0.0), make_node("b", 200.0, 0.0)];
+        layout.run(&mut weak, &[make_weighted_edge(0, 1, 0.3)], 100);
+        let weak_dist = ((weak[0].x - weak[1].x).powi(2) + (weak[0].y - weak[1].y).powi(2)).sqrt();
+
+        assert!(
+            weak_dist > strong_dist,
+            "a lower-weight edge should settle at a looser (larger) distance \
+             (strong={strong_dist}, weak={weak_dist})"
+        );
     }
 }

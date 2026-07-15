@@ -12,15 +12,28 @@ pub enum Direction {
 }
 
 /// Test whether a scene-space point hits a node. Returns the node index.
-pub fn hit_test(graph: &SceneGraph, scene_x: f64, scene_y: f64) -> Option<usize> {
+///
+/// `radii` gives each node's hit-circle radius IN SCENE-SPACE UNITS,
+/// PARALLEL to `graph.nodes` (index `i` in `graph.nodes` uses `radii[i]`;
+/// a missing entry fails closed — unclickable, never a spurious nonzero
+/// default) — the KB graph view renders every node as a circle whose
+/// SCREEN-space radius varies by degree and zoom
+/// (`GraphStyleOptions::node_radius`/`node_render_radius`, see that
+/// function's doc comment), so a caller must convert each node's real
+/// screen-space render radius to scene-space (dividing by the current
+/// zoom) before calling this
+/// (`graph_view_ops.rs::graph_scene_hit_radii`) — otherwise the clickable
+/// area drifts away from the visible circle. Deliberately NOT
+/// `node.width`/`node.height` — those are leftover fields from an earlier
+/// rectangular-node model the renderer no longer uses for the KB graph
+/// view; testing against them hit a box that had already diverged from
+/// the circle actually drawn.
+pub fn hit_test(graph: &SceneGraph, scene_x: f64, scene_y: f64, radii: &[f64]) -> Option<usize> {
     for (i, node) in graph.nodes.iter().enumerate().rev() {
-        let half_w = node.width / 2.0;
-        let half_h = node.height / 2.0;
-        if scene_x >= node.x - half_w
-            && scene_x <= node.x + half_w
-            && scene_y >= node.y - half_h
-            && scene_y <= node.y + half_h
-        {
+        let radius = radii.get(i).copied().unwrap_or(0.0);
+        let dx = scene_x - node.x;
+        let dy = scene_y - node.y;
+        if dx * dx + dy * dy <= radius * radius {
             return Some(i);
         }
     }
@@ -54,6 +67,16 @@ pub fn zoom(vp: &mut Viewport, factor: f64, focus_x: f64, focus_y: f64) {
     // Adjust center so the focus point stays fixed
     vp.center_x = scene_x - (focus_x - vp.width / 2.0) / vp.zoom;
     vp.center_y = scene_y - (focus_y - vp.height / 2.0) / vp.zoom;
+}
+
+/// Set the viewport to an explicit absolute zoom level, clamped to the same
+/// [0.1, 10.0] range `zoom()` enforces. Unlike `zoom()`, this takes no pixel
+/// focus point and never touches `center_x`/`center_y` — the pan position
+/// stays put. Meant for callers with no meaningful screen coordinate to
+/// anchor around (e.g. an AI agent's "set the graph zoom to 2x" request),
+/// as opposed to a mouse wheel event's inherently pixel-anchored zoom.
+pub fn set_zoom(vp: &mut Viewport, target: f64) {
+    vp.zoom = target.clamp(0.1, 10.0);
 }
 
 /// Navigate to the nearest node in the given direction from the current selection.
@@ -133,15 +156,56 @@ mod tests {
     fn hit_test_inside_node() {
         let mut sg = SceneGraph::new();
         sg.nodes.push(test_node("a", 100.0, 100.0));
-        assert_eq!(hit_test(&sg, 100.0, 100.0), Some(0));
-        assert_eq!(hit_test(&sg, 140.0, 110.0), Some(0));
+        assert_eq!(hit_test(&sg, 100.0, 100.0, &[50.0]), Some(0));
+        assert_eq!(hit_test(&sg, 140.0, 110.0, &[50.0]), Some(0));
     }
 
     #[test]
     fn hit_test_outside_node() {
         let mut sg = SceneGraph::new();
         sg.nodes.push(test_node("a", 100.0, 100.0));
-        assert_eq!(hit_test(&sg, 300.0, 300.0), None);
+        assert_eq!(hit_test(&sg, 300.0, 300.0, &[50.0]), None);
+    }
+
+    #[test]
+    fn hit_test_respects_the_given_radius() {
+        // A point just inside the boundary hits; the same point just
+        // outside a smaller radius misses — confirms the circular distance
+        // check (not a leftover rectangular width/height check).
+        let mut sg = SceneGraph::new();
+        sg.nodes.push(test_node("a", 0.0, 0.0));
+        assert_eq!(hit_test(&sg, 18.0, 0.0, &[18.0]), Some(0));
+        assert_eq!(hit_test(&sg, 18.0, 0.0, &[10.0]), None);
+    }
+
+    #[test]
+    fn hit_test_uses_per_node_radius() {
+        // A big node's larger radius is honored; a small neighbor's
+        // smaller radius doesn't over-claim territory it shouldn't.
+        let mut sg = SceneGraph::new();
+        sg.nodes.push(test_node("big", 0.0, 0.0));
+        sg.nodes.push(test_node("small", 100.0, 0.0));
+        let radii = [40.0, 5.0];
+        // Well inside the big node's larger radius.
+        assert_eq!(hit_test(&sg, 30.0, 0.0, &radii), Some(0));
+        // Just outside the small node's tiny radius.
+        assert_eq!(hit_test(&sg, 108.0, 0.0, &radii), None);
+        // Inside the small node's tiny radius.
+        assert_eq!(hit_test(&sg, 102.0, 0.0, &radii), Some(1));
+    }
+
+    #[test]
+    fn hit_test_missing_radius_entry_fails_closed() {
+        // A radii slice shorter than graph.nodes must never grant a
+        // spurious hit — missing entries are unclickable (radius 0), not a
+        // default nonzero radius. `radii` has only ONE entry (for "a"), so
+        // "b" (index 1) has no entry. Click 1 unit off "b"'s own center —
+        // with ANY nonzero radius this would hit; a miss here proves the
+        // missing entry really resolved to 0.0.
+        let mut sg = SceneGraph::new();
+        sg.nodes.push(test_node("a", 0.0, 0.0));
+        sg.nodes.push(test_node("b", 200.0, 0.0));
+        assert_eq!(hit_test(&sg, 201.0, 0.0, &[50.0]), None);
     }
 
     #[test]
@@ -150,7 +214,7 @@ mod tests {
         sg.nodes.push(test_node("a", 100.0, 100.0));
         sg.nodes.push(test_node("b", 110.0, 100.0)); // overlapping
                                                      // Later node wins (rendered on top)
-        assert_eq!(hit_test(&sg, 105.0, 100.0), Some(1));
+        assert_eq!(hit_test(&sg, 105.0, 100.0, &[50.0, 50.0]), Some(1));
     }
 
     #[test]
@@ -184,6 +248,28 @@ mod tests {
         let mut vp2 = Viewport::default();
         zoom(&mut vp2, 0.001, 400.0, 300.0); // extreme zoom out
         assert!(vp2.zoom >= 0.1);
+    }
+
+    #[test]
+    fn set_zoom_sets_the_exact_level_and_never_touches_pan() {
+        let mut vp = Viewport {
+            center_x: 42.0,
+            center_y: -17.0,
+            ..Viewport::default()
+        };
+        set_zoom(&mut vp, 2.5);
+        assert_eq!(vp.zoom, 2.5);
+        assert_eq!(vp.center_x, 42.0, "set_zoom must never touch pan");
+        assert_eq!(vp.center_y, -17.0, "set_zoom must never touch pan");
+    }
+
+    #[test]
+    fn set_zoom_clamps_to_the_same_range_as_zoom() {
+        let mut vp = Viewport::default();
+        set_zoom(&mut vp, 999.0);
+        assert_eq!(vp.zoom, 10.0);
+        set_zoom(&mut vp, -5.0);
+        assert_eq!(vp.zoom, 0.1);
     }
 
     #[test]
