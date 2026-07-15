@@ -527,45 +527,12 @@ impl Editor {
     /// — #293) can reuse the same existence check the KB view already uses,
     /// instead of a third, divergent resolver.
     pub(crate) fn kb_contains_any(&self, id: &str) -> bool {
-        // The query layer (when present) is a CozoDB-backed PROJECTION of
-        // the in-memory KB (ADR-029) — it can legitimately lag behind the
-        // in-memory `kb.primary`/`kb.instances`, which are always current.
-        // A query-layer MISS must fall through to the in-memory check
-        // rather than short-circuiting to "doesn't exist" — otherwise a
-        // node that demonstrably exists (findable via search, resolvable
-        // as a graph-view center) can incorrectly report as missing here,
-        // purely because its projection hasn't caught up yet. `kb_owner_of`
-        // already uses this in-memory-first order; this mirrors it instead
-        // of maintaining a second, divergent existence check.
-        if let Some(q) = self.kb.query_layer() {
-            if q.contains(id) {
-                return true;
-            }
-        }
-        if self.kb.primary.contains(id) {
-            return true;
-        }
-        self.kb.instances.values().any(|kb| kb.contains(id))
+        self.kb_get_node_anywhere(id).is_some()
     }
 
-    /// Resolve a node title across local + federated KBs. Same
-    /// query-layer-miss-falls-through-to-in-memory reasoning as
-    /// `kb_contains_any` above.
+    /// Resolve a node title across local + federated KBs.
     fn kb_resolve_title(&self, id: &str) -> Option<String> {
-        if let Some(q) = self.kb.query_layer() {
-            if let Some(n) = q.get(id) {
-                return Some(n.title);
-            }
-        }
-        if let Some(n) = self.kb.primary.get(id) {
-            return Some(n.title.clone());
-        }
-        for kb in self.kb.instances.values() {
-            if let Some(n) = kb.get(id) {
-                return Some(n.title.clone());
-            }
-        }
-        None
+        self.kb_get_node_anywhere(id).map(|n| n.title)
     }
 
     /// Get the KnowledgeBase that contains a given node ID (local first, then federated).

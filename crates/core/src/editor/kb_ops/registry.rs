@@ -602,6 +602,39 @@ impl Editor {
         }
         self.kb_owner_of(id)
     }
+
+    /// Look up a KB node by id, checking the query layer first (when
+    /// present) and falling through to the in-memory KB
+    /// (`kb.primary`/`kb.instances`) when the query layer misses.
+    ///
+    /// The query layer (when CozoDB-backed) is a deterministic PROJECTION
+    /// of the in-memory/CRDT truth (ADR-029), not the truth itself, and
+    /// can legitimately lag behind it. A miss there must never
+    /// short-circuit to "doesn't exist" when the in-memory KB — always
+    /// current — might still have it; `kb_owner_of` already resolves
+    /// existence this way (in-memory-first, no query layer involved at
+    /// all). This is the single source of truth for "does this KB contain
+    /// X, and if so what is it" that every other call site — including
+    /// `crates/ai`'s `help_open` tool implementation, a separate crate —
+    /// should build on, rather than each reimplementing the same
+    /// query-layer-then-in-memory fallback order independently (which is
+    /// exactly how this bug reproduced three times: `kb_contains_any`/
+    /// `kb_resolve_title` in this same crate, and a third, divergent copy
+    /// in `mae-ai`, each had the fallback missing).
+    pub fn kb_get_node_anywhere(&self, id: &str) -> Option<mae_kb::Node> {
+        if let Some(q) = self.kb.query_layer() {
+            if let Some(n) = q.get(id) {
+                return Some(n);
+            }
+        }
+        if let Some(n) = self.kb.primary.get(id) {
+            return Some(n.clone());
+        }
+        self.kb
+            .instances
+            .values()
+            .find_map(|kb| kb.get(id).cloned())
+    }
 }
 
 #[cfg(test)]
