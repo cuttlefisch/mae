@@ -66,6 +66,20 @@ pub use input::{winit_event_to_input, winit_key_to_keypress, winit_mouse_button}
 /// When a window's state is unchanged, the cached image is blitted instead
 /// of re-rendering the full layout/draw pipeline.
 struct WindowRenderCache {
+    /// Which buffer this cached image is of. A window's `buffer_idx` can
+    /// change while the window stays non-focused (e.g. the KB graph
+    /// view's companion-window navigation writes a new `buffer_idx`
+    /// directly into a non-focused window — see
+    /// `Editor::navigate_companion_window_to_node` — without going
+    /// through any focus change). Without this check, a stale cache entry
+    /// from the PREVIOUS buffer that window showed can be wrongly served
+    /// if the new buffer's `generation`/`scroll_offset`/`pixel_rect`
+    /// happen to coincide with the old one's (e.g. two freshly-populated
+    /// KB preview buffers both at generation 0, scroll_offset 0) — the
+    /// window would then silently keep showing the old buffer's content
+    /// until something else (like the user manually focusing it) forces
+    /// a fresh, uncached render.
+    buffer_idx: usize,
     /// Buffer content generation (invalidates on any edit).
     generation: u64,
     /// Viewport scroll position.
@@ -1017,7 +1031,8 @@ fn render_window_area(
                     (r_height as f32 * ch_px) as i32,
                 );
                 if let Some(cached) = window_render_cache.get(win_id) {
-                    if cached.generation == buf.generation
+                    if cached.buffer_idx == win.buffer_idx
+                        && cached.generation == buf.generation
                         && cached.scroll_offset == win.scroll_offset
                         && cached.scroll_pixel_offset_bits == win.scroll_pixel_offset.to_bits()
                         && cached.pixel_rect == pixel_rect
@@ -1115,6 +1130,7 @@ fn render_window_area(
                             window_render_cache.insert(
                                 *win_id,
                                 WindowRenderCache {
+                                    buffer_idx: win.buffer_idx,
                                     generation: buf.generation,
                                     scroll_offset: win.scroll_offset,
                                     scroll_pixel_offset_bits: win.scroll_pixel_offset.to_bits(),
@@ -1271,6 +1287,7 @@ fn render_window_area(
                             window_render_cache.insert(
                                 *win_id,
                                 WindowRenderCache {
+                                    buffer_idx: win.buffer_idx,
                                     generation: buf.generation,
                                     scroll_offset: win.scroll_offset,
                                     scroll_pixel_offset_bits: win.scroll_pixel_offset.to_bits(),
