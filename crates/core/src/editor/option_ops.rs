@@ -240,6 +240,7 @@ impl super::Editor {
             "kb_graph_color_tween_enabled" => self.kb_graph_color_tween_enabled.to_string(),
             "kb_graph_color_tween_duration_ms" => self.kb_graph_color_tween_duration_ms.to_string(),
             "kb_graph_node_border_enabled" => self.kb_graph_node_border_enabled.to_string(),
+            "kb_graph_node_saturation_cap" => self.kb_graph_node_saturation_cap.to_string(),
             "kb_graph_font_size" => self.kb_graph_font_size.to_string(),
             "kb_graph_layout_iterations" => self.kb_graph_layout_iterations.to_string(),
             "kb_graph_layout_kind_clustering" => self.kb_graph_layout_kind_clustering.to_string(),
@@ -1031,6 +1032,12 @@ impl super::Editor {
             }
             "kb_graph_node_border_enabled" => {
                 self.kb_graph_node_border_enabled = parse_option_bool(value)?;
+            }
+            "kb_graph_node_saturation_cap" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_node_saturation_cap = v.clamp(0.0, 1.0);
             }
             "kb_graph_font_size" => {
                 let v: u32 = value
@@ -2376,6 +2383,36 @@ mod graph_view_option_tests {
             .set_option("kb_graph_label_declutter_enabled", "true")
             .unwrap();
         assert!(editor.kb_graph_label_declutter_enabled);
+    }
+
+    #[test]
+    fn kb_graph_node_saturation_cap_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor.get_option("kb_graph_node_saturation_cap").unwrap().0,
+            "0.55"
+        );
+
+        editor
+            .set_option("kb_graph_node_saturation_cap", "0.3")
+            .unwrap();
+        assert_eq!(editor.kb_graph_node_saturation_cap, 0.3);
+
+        // Out-of-range values clamp rather than error.
+        editor
+            .set_option("kb_graph_node_saturation_cap", "-1.0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_node_saturation_cap, 0.0);
+        editor
+            .set_option("kb_graph_node_saturation_cap", "5.0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_node_saturation_cap, 1.0);
+
+        let before = editor.kb_graph_node_saturation_cap;
+        assert!(editor
+            .set_option("kb_graph_node_saturation_cap", "not-a-number")
+            .is_err());
+        assert_eq!(editor.kb_graph_node_saturation_cap, before);
     }
 }
 

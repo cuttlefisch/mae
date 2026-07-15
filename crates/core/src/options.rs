@@ -521,6 +521,16 @@ impl OptionRegistry {
                     "Whether graph-view node circles get a stroke outline (the same flat, muted \
                      color used for edges). Off by default.",
                     OptionKind::Bool, "false", Some("kb-graph.node-border-enabled"), &[]),
+                opt!("kb_graph_node_saturation_cap", &["kb-graph-node-saturation-cap"],
+                    "Caps the HSL saturation (0.0-1.0) of every graph-view node fill color \
+                     (plus selected/hover) resolved from the active theme, preserving hue and \
+                     lightness — a fully-saturated theme color reads as visually harsh when \
+                     many nodes of that kind render at once in a dense graph. Hue (the primary \
+                     categorical differentiator) is untouched, so kind differentiation is \
+                     unaffected. 1.0 disables capping entirely, showing the theme's true, \
+                     unmuted colors. Applies uniformly to every theme, bundled or user-authored \
+                     — not baked into any theme file.",
+                    OptionKind::Float, "0.55", Some("kb-graph.node-saturation-cap"), &[]),
                 opt!("kb_graph_font_size", &["kb-graph-font-size"],
                     "Node label font size in points for the graph view's GUI rendering. \
                      Independent of the base font_size option (same numeric default, no live \

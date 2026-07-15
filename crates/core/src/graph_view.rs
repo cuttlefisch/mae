@@ -191,6 +191,82 @@ fn lerp_hex(from: &str, to: &str, t: f32) -> String {
     }
 }
 
+/// Convert `(r, g, b)` byte components to `(hue, saturation, lightness)` —
+/// hue in `[0, 360)` degrees, saturation/lightness in `[0, 1]`. Standard
+/// HSL colorspace conversion, used by `cap_saturation` to mute an
+/// over-vivid theme color while preserving its hue/lightness.
+fn rgb_to_hsl(r: u8, g: u8, b: u8) -> (f32, f32, f32) {
+    let (r, g, b) = (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0);
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let l = (max + min) / 2.0;
+    let d = max - min;
+    if d < f32::EPSILON {
+        return (0.0, 0.0, l);
+    }
+    let s = if l > 0.5 {
+        d / (2.0 - max - min)
+    } else {
+        d / (max + min)
+    };
+    let h = if max == r {
+        ((g - b) / d).rem_euclid(6.0) * 60.0
+    } else if max == g {
+        ((b - r) / d + 2.0) * 60.0
+    } else {
+        ((r - g) / d + 4.0) * 60.0
+    };
+    (h, s, l)
+}
+
+/// Inverse of `rgb_to_hsl`.
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    if s <= 0.0 {
+        let v = (l * 255.0).round().clamp(0.0, 255.0) as u8;
+        return (v, v, v);
+    }
+    let c = (1.0 - (2.0 * l - 1.0).abs()) * s;
+    let hp = (h / 60.0).rem_euclid(6.0);
+    let x = c * (1.0 - (hp % 2.0 - 1.0).abs());
+    let (r1, g1, b1) = match hp as i32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    let m = l - c / 2.0;
+    let to_byte = |v: f32| ((v + m) * 255.0).round().clamp(0.0, 255.0) as u8;
+    (to_byte(r1), to_byte(g1), to_byte(b1))
+}
+
+/// Cap a `"#rrggbb"` hex color's HSL saturation at `max_saturation` (`[0,
+/// 1]`), preserving hue and lightness. The mechanism behind
+/// `kb_graph_node_saturation_cap`: a fully-saturated ("neon") theme color
+/// reads as visually harsh/fatiguing when many nodes of that kind render
+/// simultaneously in a dense graph. Muting saturation while keeping hue
+/// (the primary categorical differentiator — Okabe-Ito/Wong-style
+/// colorblind-safe qualitative palettes are deliberately moderate, not
+/// fully-saturated) and lightness (so the WCAG text-contrast guarantee
+/// computed downstream, against the ORIGINAL background, stays
+/// meaningful) preserves kind differentiation while reducing fatigue.
+/// A color already at or below the cap passes through byte-for-byte
+/// unchanged (never brightens/re-saturates). Malformed input passes
+/// through unchanged rather than panicking.
+fn cap_saturation(hex: &str, max_saturation: f32) -> String {
+    let Some((r, g, b)) = parse_hex_rgb(hex) else {
+        return hex.to_string();
+    };
+    let max_saturation = max_saturation.clamp(0.0, 1.0);
+    let (h, s, l) = rgb_to_hsl(r, g, b);
+    if s <= max_saturation {
+        return hex.to_string();
+    }
+    let (nr, ng, nb) = hsl_to_rgb(h, max_saturation, l);
+    format!("#{nr:02x}{ng:02x}{nb:02x}")
+}
+
 /// WCAG 2.x relative luminance of a `"#rrggbb"` hex color, `[0, 1]`. `0.0`
 /// for malformed input (reads as pure black, the same as `#000000`).
 fn relative_luminance(hex: &str) -> f64 {
@@ -756,10 +832,17 @@ impl GraphStyleOptions {
     /// live `introspect(frame)` capture (~17ms draw phase on a 1358-node
     /// graph, well over the 16.7ms/60fps budget) before this fix.
     pub fn from_editor(editor: &Editor) -> Self {
+        // Applied to every resolved node/selected/hover fill color below —
+        // see `cap_saturation`'s doc comment. Live-tunable
+        // (`kb_graph_node_saturation_cap`, default 0.55) rather than baked
+        // into theme files, so it applies uniformly to every theme
+        // (bundled or user-authored) and can be turned off entirely
+        // (`1.0`) to see a theme's true, unmuted colors.
+        let sat_cap = editor.kb_graph_node_saturation_cap;
         let mut node_colors: [String; 14] = Default::default();
         for i in 0..14 {
-            node_colors[i] =
-                theme_hex_fg(editor, NODE_KIND_THEME_KEYS[i], NODE_KIND_FALLBACK_HEX[i]);
+            let raw = theme_hex_fg(editor, NODE_KIND_THEME_KEYS[i], NODE_KIND_FALLBACK_HEX[i]);
+            node_colors[i] = cap_saturation(&raw, sat_cap);
         }
         let background_color = theme_hex_bg(editor, "ui.graph.background", "#0d0d0d");
         let mut node_text_colors: [String; 14] = Default::default();
@@ -767,8 +850,14 @@ impl GraphStyleOptions {
             node_text_colors[i] =
                 ensure_min_contrast(&node_colors[i], &background_color, WCAG_AA_TEXT_CONTRAST);
         }
-        let selected_color = theme_hex_fg(editor, "ui.graph.node.selected", "#ff9933");
-        let hover_color = theme_hex_fg(editor, "ui.graph.node.hover", "#66ccff");
+        let selected_color = cap_saturation(
+            &theme_hex_fg(editor, "ui.graph.node.selected", "#ff9933"),
+            sat_cap,
+        );
+        let hover_color = cap_saturation(
+            &theme_hex_fg(editor, "ui.graph.node.hover", "#66ccff"),
+            sat_cap,
+        );
         let boundary_edge_color = theme_hex_fg(editor, "ui.graph.edge.boundary", "#ff6666");
         GraphStyleOptions {
             node_radius: editor.kb_graph_node_radius as f32,
@@ -1755,6 +1844,84 @@ mod tests {
     fn lerp_hex_falls_back_to_to_color_on_malformed_input() {
         assert_eq!(lerp_hex("not-a-color", "#ff0000", 0.5), "#ff0000");
         assert_eq!(lerp_hex("#ff0000", "also-bad", 0.5), "also-bad");
+    }
+
+    #[test]
+    fn rgb_to_hsl_and_back_round_trips_within_rounding_tolerance() {
+        for (r, g, b) in [
+            (255u8, 0u8, 0u8),
+            (0, 255, 0),
+            (0, 0, 255),
+            (255, 255, 255),
+            (0, 0, 0),
+            (128, 128, 128),
+            (204, 36, 29),  // gruvbox-dark red
+            (250, 189, 47), // gruvbox-dark bright_yellow
+        ] {
+            let (h, s, l) = rgb_to_hsl(r, g, b);
+            let (r2, g2, b2) = hsl_to_rgb(h, s, l);
+            let close = |a: u8, b: u8| (a as i16 - b as i16).abs() <= 1;
+            assert!(
+                close(r, r2) && close(g, g2) && close(b, b2),
+                "round-trip mismatch: ({r},{g},{b}) -> hsl({h},{s},{l}) -> ({r2},{g2},{b2})"
+            );
+        }
+    }
+
+    #[test]
+    fn cap_saturation_leaves_a_color_already_at_or_below_the_cap_byte_for_byte_unchanged() {
+        // #689d6a (gruvbox aqua) is ~21% saturated — well under a 55% cap.
+        assert_eq!(cap_saturation("#689d6a", 0.55), "#689d6a");
+    }
+
+    #[test]
+    fn cap_saturation_mutes_a_fully_saturated_color_while_preserving_hue_and_lightness() {
+        let original = "#fb4934"; // gruvbox-dark bright_red, ~96% saturated
+        let capped = cap_saturation(original, 0.55);
+        assert_ne!(capped, original);
+        let (or, og, ob) = parse_hex_rgb(original).unwrap();
+        let (oh, _, ol) = rgb_to_hsl(or, og, ob);
+        let (cr, cg, cb) = parse_hex_rgb(&capped).unwrap();
+        let (ch, cs, cl) = rgb_to_hsl(cr, cg, cb);
+        assert!(
+            (oh - ch).abs() < 1.0,
+            "hue must be preserved (was {oh}, now {ch})"
+        );
+        assert!(
+            (ol - cl).abs() < 0.02,
+            "lightness must be preserved (was {ol}, now {cl})"
+        );
+        assert!(cs <= 0.56, "saturation must be capped at ~0.55, got {cs}");
+    }
+
+    #[test]
+    fn cap_saturation_at_1_0_disables_capping_entirely() {
+        let original = "#fb4934";
+        assert_eq!(cap_saturation(original, 1.0), original);
+    }
+
+    #[test]
+    fn cap_saturation_falls_back_to_input_unchanged_on_malformed_hex() {
+        assert_eq!(cap_saturation("not-a-color", 0.5), "not-a-color");
+    }
+
+    #[test]
+    fn from_editor_applies_the_saturation_cap_to_every_node_selected_and_hover_color() {
+        let mut editor = Editor::new();
+        editor.kb_graph_node_saturation_cap = 0.3;
+        let style = GraphStyleOptions::from_editor(&editor);
+        for hex in style
+            .node_colors
+            .iter()
+            .chain([&style.selected_color, &style.hover_color])
+        {
+            let (r, g, b) = parse_hex_rgb(hex).expect("valid hex");
+            let (_, s, _) = rgb_to_hsl(r, g, b);
+            assert!(
+                s <= 0.31,
+                "{hex} has saturation {s}, exceeding the configured 0.3 cap"
+            );
+        }
     }
 
     #[test]

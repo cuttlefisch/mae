@@ -802,6 +802,10 @@ pub struct Editor {
     /// Whether graph-view node circles get a stroke outline. Mirrors
     /// `kb_graph_node_border_enabled`.
     pub kb_graph_node_border_enabled: bool,
+    /// Caps the HSL saturation of every graph-view node fill color
+    /// resolved from the theme, preserving hue/lightness — see
+    /// `graph_view::cap_saturation`. Mirrors `kb_graph_node_saturation_cap`.
+    pub kb_graph_node_saturation_cap: f32,
     /// Node label font size in points for the graph view's GUI rendering.
     /// Mirrors `kb_graph_font_size` — defaults to the same numeric default
     /// as the base `font_size` option (14), but is a fully independent
@@ -1303,6 +1307,7 @@ impl Editor {
             kb_graph_color_tween_enabled: true,
             kb_graph_color_tween_duration_ms: 150,
             kb_graph_node_border_enabled: false,
+            kb_graph_node_saturation_cap: 0.55,
             kb_graph_font_size: 14,
             kb_graph_layout_iterations: 50,
             kb_graph_layout_kind_clustering: 0.5,
