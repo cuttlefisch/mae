@@ -406,6 +406,21 @@ impl GuiApp {
             &mut self.editor,
             &self.graph_layout_tx,
         );
+        // `tick_graph_color_tweens` only marks `Editor.redraw_level` (via
+        // `graph_view_reflatten_window`'s `mark_full_redraw`) — GuiApp's
+        // OWN `self.dirty` is a separate field that actually gates
+        // `self.renderer.request_redraw()`, and nothing else sets it from
+        // this idle-poll path. Without this, the `graph_color_tweening`
+        // WaitUntil cadence below kept re-scheduling wake-ups and silently
+        // re-flattening fresh interpolated colors every ~16.7ms, but never
+        // actually repainted them — the only frames that ever hit the
+        // screen were whichever OTHER unrelated event happened to also set
+        // `self.dirty` (e.g. the hover-start CursorMoved event itself),
+        // producing the reported "jumps to a midway color, then jumps to
+        // the final color" instead of a smooth fade.
+        if self.editor.has_active_color_tween() {
+            self.dirty = true;
+        }
         self.editor.tick_graph_color_tweens();
 
         crate::shell_lifecycle::drain_agent_setup(&mut self.editor);

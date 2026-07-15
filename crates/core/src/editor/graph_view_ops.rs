@@ -169,6 +169,13 @@ impl Editor {
             let viewport = *viewport;
             let elements = flatten_scene_graph(&gv.scene, &viewport, &style, &gv.node_degrees);
             gv.rendered.insert(win_id, VisualBuffer { elements });
+            // Bump so the GUI's per-window render cache
+            // (`WindowRenderCache::graph_render_epoch`) knows this
+            // window's picture genuinely changed — `buf.generation`
+            // (rope-based) never moves for a Graph buffer, so without
+            // this the cache would have no way to invalidate on
+            // pan/zoom/hover/selection/tween changes.
+            *gv.render_epoch.entry(win_id).or_insert(0) += 1;
         }
         self.mark_full_redraw();
     }
@@ -237,6 +244,7 @@ impl Editor {
             if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
                 gv.viewports.retain(|id, _| live_win_ids.contains(id));
                 gv.rendered.retain(|id, _| live_win_ids.contains(id));
+                gv.render_epoch.retain(|id, _| live_win_ids.contains(id));
             }
 
             for win_id in live_win_ids {

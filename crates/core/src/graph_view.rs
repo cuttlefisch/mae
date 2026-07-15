@@ -111,6 +111,19 @@ pub struct GraphView {
     /// off-thread force-layout settling schedule; a trivial color lerp has
     /// no business going through that IPC-shaped plumbing.
     pub color_tween: Option<GraphColorTween>,
+    /// Per-window monotonic counter, bumped every time
+    /// `Editor::graph_view_reflatten_window` refreshes that window's
+    /// `rendered` entry (pan/zoom/hover/selection/tween tick/layout
+    /// change — anything that actually changes what's drawn). The GUI's
+    /// per-window render cache (`crates/gui/src/lib.rs::WindowRenderCache`)
+    /// keys on this ALONGSIDE the buffer's rope-based `generation` — the
+    /// rope never changes for a Graph buffer (it has no text content), so
+    /// `generation` alone can't tell the cache a pan/zoom/hover genuinely
+    /// changed the picture; this counter is what does. Read-only from the
+    /// GUI crate's perspective (only `graph_view_reflatten_window` writes
+    /// it) — mirrors how `buf.generation` already works for text buffers,
+    /// just for the graph's own state instead of rope edits.
+    pub render_epoch: HashMap<WindowId, u64>,
 }
 
 /// An in-flight color transition for one node — see `GraphView.color_tween`.
@@ -177,6 +190,62 @@ fn lerp_hex(from: &str, to: &str, t: f32) -> String {
         _ => to.to_string(),
     }
 }
+
+/// WCAG 2.x relative luminance of a `"#rrggbb"` hex color, `[0, 1]`. `0.0`
+/// for malformed input (reads as pure black, the same as `#000000`).
+fn relative_luminance(hex: &str) -> f64 {
+    let Some((r, g, b)) = parse_hex_rgb(hex) else {
+        return 0.0;
+    };
+    let channel = |c: u8| -> f64 {
+        let c = c as f64 / 255.0;
+        if c <= 0.03928 {
+            c / 12.92
+        } else {
+            ((c + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+}
+
+/// WCAG 2.x contrast ratio between two `"#rrggbb"` hex colors, `[1, 21]`
+/// (1 = identical luminance, 21 = pure black against pure white).
+fn contrast_ratio(hex_a: &str, hex_b: &str) -> f64 {
+    let (la, lb) = (relative_luminance(hex_a), relative_luminance(hex_b));
+    let (lighter, darker) = if la >= lb { (la, lb) } else { (lb, la) };
+    (lighter + 0.05) / (darker + 0.05)
+}
+
+/// If `fg`'s contrast against `bg` already meets `min_ratio` (WCAG AA for
+/// normal text is `4.5`), return `fg` unchanged — preserving its hue
+/// (e.g. a node's kind color, or the boundary-edge color) is the point,
+/// this is a MINIMUM guarantee, not a forced recolor. Otherwise, push `fg`
+/// toward whichever of pure white/black yields the higher contrast against
+/// `bg` (i.e. the readable direction for that background), stepping in
+/// `0.1` increments and stopping at the first mix that clears the
+/// threshold — the smallest nudge that becomes legible, not a jump
+/// straight to the endpoint. Falls back to the endpoint itself if even a
+/// full mix doesn't clear the threshold (only possible for a `min_ratio`
+/// above what black/white against `bg` can achieve, i.e. `bg` itself is
+/// near-18%-gray and `min_ratio` is set unreasonably high).
+fn ensure_min_contrast(fg: &str, bg: &str, min_ratio: f64) -> String {
+    if contrast_ratio(fg, bg) >= min_ratio {
+        return fg.to_string();
+    }
+    let toward_white = contrast_ratio("#ffffff", bg) >= contrast_ratio("#000000", bg);
+    let endpoint = if toward_white { "#ffffff" } else { "#000000" };
+    for step in 1..=10 {
+        let t = step as f32 / 10.0;
+        let candidate = lerp_hex(fg, endpoint, t);
+        if contrast_ratio(&candidate, bg) >= min_ratio {
+            return candidate;
+        }
+    }
+    endpoint.to_string()
+}
+
+/// WCAG AA minimum contrast ratio for normal-sized text.
+const WCAG_AA_TEXT_CONTRAST: f64 = 4.5;
 
 impl GraphView {
     /// Structured, read-only snapshot of everything a human or the AI
@@ -314,6 +383,7 @@ impl GraphView {
             layout_config: mae_canvas::layout::LayoutConfig::default(),
             node_degrees: Vec::new(),
             color_tween: None,
+            render_epoch: HashMap::new(),
         }
     }
 }
@@ -473,6 +543,18 @@ pub struct GraphStyleOptions {
     /// sub-linear, not full 1:1 geometric, is the established convention).
     /// Mirrors `kb_graph_node_size_scales_with_zoom`.
     pub size_scales_with_zoom: bool,
+    /// Exponent applied to `viewport.zoom` when `size_scales_with_zoom` is
+    /// on: `zoom.powf(node_zoom_scale_exponent)`. `0.5` (the default)
+    /// reproduces the original `sqrt(zoom)` Sigma.js/org-roam-ui behavior.
+    /// `1.0` makes node radius shrink at exactly the same rate as
+    /// inter-node scene distance, so the visual GAP between two nodes'
+    /// edges stays proportionally constant across zoom levels instead of
+    /// shrinking faster than the nodes do — the direct lever for "let me
+    /// see the distance between nodes when zoomed out". `0.0` disables
+    /// zoom scaling entirely (`zoom.powf(0.0) == 1.0` always), equivalent
+    /// to `size_scales_with_zoom = false`. Mirrors
+    /// `kb_graph_node_zoom_scale_exponent`.
+    pub node_zoom_scale_exponent: f32,
     /// Absolute floor (logical px) on the FINAL render radius, applied
     /// after both degree and zoom scaling — guarantees a node never
     /// shrinks below a clickable/visible size even at extreme zoom-out.
@@ -497,15 +579,36 @@ pub struct GraphStyleOptions {
     /// `current_color()`, letting `flatten_scene_graph`'s signature and
     /// existing tests stay untouched by the tween mechanism entirely.
     pub color_override: Option<(usize, String)>,
+    /// Whether node circles get a stroke outline (`edge_color`, the same
+    /// flat/muted color used for regular edges). Off by default — a
+    /// uniform grey ring around EVERY node regardless of its own kind
+    /// color read as visual noise unrelated to the node itself, not a
+    /// meaningful accent. Mirrors `kb_graph_node_border_enabled`.
+    pub node_border_enabled: bool,
     /// Hex fill color per canvas `NodeKind`, indexed via `kind_index`.
     node_colors: [String; 14],
+    /// WCAG-AA-legible text color per `NodeKind`, precomputed ONCE here
+    /// (not per-node, not per-frame) — see `text_color_for_kind`'s doc
+    /// comment for why this exists as a separate array from `node_colors`
+    /// rather than calling `ensure_min_contrast` inline in the node loop.
+    node_text_colors: [String; 14],
     pub selected_color: String,
     /// Color for the node currently under the mouse cursor (real-time
     /// hover — see `mae_canvas::scene::SceneGraph.hovered`). Loses priority
     /// to `selected_color` when a node is both selected and hovered.
     pub hover_color: String,
+    /// WCAG-AA-legible text color for a selected/hovered node's label —
+    /// see `node_text_colors`' doc comment. Kept as one combined field
+    /// (rather than separate selected/hovered variants) since a node's
+    /// label only ever shows ONE of these two colors at a time, following
+    /// the exact same selected-wins-over-hovered priority as the fill.
+    pub selected_text_color: String,
+    pub hover_text_color: String,
     pub edge_color: String,
     pub boundary_edge_color: String,
+    /// WCAG-AA-legible text color for a boundary stub's "..."/"... (+N)"
+    /// label — see `node_text_colors`' doc comment.
+    pub boundary_edge_text_color: String,
     pub background_color: String,
 }
 
@@ -618,34 +721,83 @@ pub fn kind_affinity_from_strength(
 
 impl GraphStyleOptions {
     /// Build from the current `Editor` option values + active theme.
+    ///
+    /// Runs `ensure_min_contrast` exactly `14 + 3 = 17` times total (once
+    /// per `NodeKind`, plus selected/hover/boundary) — NOT once per node.
+    /// This function is called once per (re)populate/reflatten, same as
+    /// before; the WCAG text-color computation used to be re-run inline
+    /// per-node inside `flatten_scene_graph`'s node loop instead, which
+    /// for a real ~1300-node/4000-edge subgraph meant ~1300 extra
+    /// `powf(2.4)`-heavy WCAG evaluations on the main thread EVERY
+    /// re-flatten — including every single animation tick while a
+    /// hover/selection color tween was in flight (`tick_graph_color_
+    /// tweens` re-flattens every tick). Precomputing per-KIND instead of
+    /// per-NODE turns that into a small constant (17), independent of
+    /// graph size — confirmed as a real, measurable contributor via a
+    /// live `introspect(frame)` capture (~17ms draw phase on a 1358-node
+    /// graph, well over the 16.7ms/60fps budget) before this fix.
     pub fn from_editor(editor: &Editor) -> Self {
         let mut node_colors: [String; 14] = Default::default();
         for i in 0..14 {
             node_colors[i] =
                 theme_hex_fg(editor, NODE_KIND_THEME_KEYS[i], NODE_KIND_FALLBACK_HEX[i]);
         }
+        let background_color = theme_hex_bg(editor, "ui.graph.background", "#0d0d0d");
+        let mut node_text_colors: [String; 14] = Default::default();
+        for i in 0..14 {
+            node_text_colors[i] =
+                ensure_min_contrast(&node_colors[i], &background_color, WCAG_AA_TEXT_CONTRAST);
+        }
+        let selected_color = theme_hex_fg(editor, "ui.graph.node.selected", "#ff9933");
+        let hover_color = theme_hex_fg(editor, "ui.graph.node.hover", "#66ccff");
+        let boundary_edge_color = theme_hex_fg(editor, "ui.graph.edge.boundary", "#ff6666");
         GraphStyleOptions {
             node_radius: editor.kb_graph_node_radius as f32,
             font_size: editor.kb_graph_font_size as f32,
             size_by_degree: editor.kb_graph_node_size_by_degree,
             node_degree_scale: editor.kb_graph_node_degree_scale,
             size_scales_with_zoom: editor.kb_graph_node_size_scales_with_zoom,
+            node_zoom_scale_exponent: editor.kb_graph_node_zoom_scale_exponent,
             node_min_radius: editor.kb_graph_node_min_radius as f32,
             node_max_radius: editor.kb_graph_node_max_radius as f32,
             label_zoom_threshold: editor.kb_graph_label_zoom_threshold,
             edge_curvature: editor.kb_graph_edge_curvature,
             color_override: None,
+            node_border_enabled: editor.kb_graph_node_border_enabled,
             node_colors,
-            selected_color: theme_hex_fg(editor, "ui.graph.node.selected", "#ff9933"),
-            hover_color: theme_hex_fg(editor, "ui.graph.node.hover", "#66ccff"),
+            node_text_colors,
+            selected_text_color: ensure_min_contrast(
+                &selected_color,
+                &background_color,
+                WCAG_AA_TEXT_CONTRAST,
+            ),
+            selected_color,
+            hover_text_color: ensure_min_contrast(
+                &hover_color,
+                &background_color,
+                WCAG_AA_TEXT_CONTRAST,
+            ),
+            hover_color,
             edge_color: theme_hex_fg(editor, "ui.graph.edge", "#6a6d7e"),
-            boundary_edge_color: theme_hex_fg(editor, "ui.graph.edge.boundary", "#ff6666"),
-            background_color: theme_hex_bg(editor, "ui.graph.background", "#0d0d0d"),
+            boundary_edge_text_color: ensure_min_contrast(
+                &boundary_edge_color,
+                &background_color,
+                WCAG_AA_TEXT_CONTRAST,
+            ),
+            boundary_edge_color,
+            background_color,
         }
     }
 
     pub(crate) fn color_for_kind(&self, kind: mae_canvas::scene::NodeKind) -> &str {
         &self.node_colors[kind_index(kind)]
+    }
+
+    /// The precomputed WCAG-AA-legible text color for a node's kind — see
+    /// `node_text_colors`' doc comment for why this is a lookup, not a
+    /// per-call `ensure_min_contrast` evaluation.
+    pub(crate) fn text_color_for_kind(&self, kind: mae_canvas::scene::NodeKind) -> &str {
+        &self.node_text_colors[kind_index(kind)]
     }
 }
 
@@ -708,7 +860,15 @@ pub fn node_render_radius(style: &GraphStyleOptions, degree: u32, zoom: f64) -> 
         r += style.node_degree_scale * (degree as f32).sqrt();
     }
     if style.size_scales_with_zoom {
-        r *= (zoom.max(0.0) as f32).sqrt();
+        // Exponent 0.5 (sqrt) is Sigma.js's documented default; 1.0 is
+        // full 1:1 geometric scaling (radius shrinks at the SAME rate as
+        // inter-node distance, so the gap between two node edges stays
+        // proportionally constant regardless of zoom — the lever for
+        // "let me see the actual distance between nodes when zoomed
+        // out"); 0.0 reproduces the old fixed-screen-space behavior
+        // exactly (zoom.powf(0.0) == 1.0 always). See
+        // `kb_graph_node_zoom_scale_exponent`'s doc comment.
+        r *= (zoom.max(0.0) as f32).powf(style.node_zoom_scale_exponent);
     }
     // `f32::clamp` panics if min > max — the two bounds are independently
     // user-configurable options with no cross-validation at `:set` time, so
@@ -808,6 +968,22 @@ pub fn flatten_scene_graph(
     // Node radius is the exception — see `node_render_radius`'s doc comment
     // for why it deliberately DOES scale (sub-linearly) with zoom.
 
+    // Precomputed once so the edge loop (which runs BEFORE the node loop
+    // below) can size a boundary stub off the SAME real per-node radius the
+    // node loop draws — previously the stub used the flat, degree/zoom-
+    // unaware `style.node_radius` base, so once node size started varying
+    // (degree/zoom scaling), a shrunk node's stub stuck out disproportionately
+    // far relative to its own now-smaller circle.
+    let radii: Vec<f32> = scene
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            let degree = degrees.get(i).copied().unwrap_or(0);
+            node_render_radius(style, degree, viewport.zoom)
+        })
+        .collect();
+
     for edge in &scene.edges {
         let Some(src) = scene.nodes.get(edge.source) else {
             continue;
@@ -819,19 +995,19 @@ pub fn flatten_scene_graph(
             style.edge_color.clone()
         };
         let (sx1, sy1) = scene_to_viewport(viewport, src.x, src.y);
+        let src_r = radii.get(edge.source).copied().unwrap_or(style.node_radius);
         // A boundary edge is represented as a self-loop (source == target,
         // see `build_kb_graph`) — draw a short stub off to the side instead
         // of a zero-length line, so it's visually distinguishable. The stub
-        // offset is applied in screen space (after transforming the source
-        // node), so it stays a constant visual size regardless of zoom.
+        // offset is sized off the source node's OWN real render radius
+        // (`src_r`, computed above), so it stays proportionate to the
+        // circle it's attached to regardless of that node's degree/zoom
+        // size — not a flat, unrelated screen-space constant.
         let (sx2, sy2) = if edge.target < scene.nodes.len() && edge.target != edge.source {
             let t = &scene.nodes[edge.target];
             scene_to_viewport(viewport, t.x, t.y)
         } else {
-            (
-                sx1 + (style.node_radius * 2.0) as f64,
-                sy1 - style.node_radius as f64,
-            )
+            (sx1 + (src_r * 2.0) as f64, sy1 - src_r as f64)
         };
         if edge_is_offscreen_same_side(sx1 as f32, sy1 as f32, sx2 as f32, sy2 as f32, viewport) {
             continue;
@@ -877,10 +1053,32 @@ pub fn flatten_scene_graph(
             y1: sy1 as f32,
             x2: sx2 as f32,
             y2: sy2 as f32,
-            color,
+            color: color.clone(),
             thickness: edge.style.width as f32,
             dashed: is_boundary,
         });
+        // A boundary stub's label ("...", or "... (+N)" for a source with
+        // multiple collapsed out-of-subgraph links — see
+        // `build_kb_graph_positions_only`) was previously computed and
+        // exposed through `describe_state()`/introspection but never
+        // actually drawn anywhere in the GUI — the red dashed stub had no
+        // visible explanation of what it meant. Draw it at the stub's far
+        // end, in the same boundary color.
+        if let Some(label) = &edge.label {
+            // `boundary_edge_text_color` is precomputed ONCE by
+            // `GraphStyleOptions::from_editor` (see its doc comment) —
+            // the boundary/edge color is tuned to read well as a thin
+            // stroke, which doesn't guarantee it's legible as small TEXT,
+            // so a WCAG AA minimum is enforced, preserving hue when it
+            // already clears the bar.
+            elements.push(VisualElement::Text {
+                x: sx2 as f32 + 4.0,
+                y: sy2 as f32,
+                text: label.clone(),
+                font_size: style.font_size,
+                color: style.boundary_edge_text_color.clone(),
+            });
+        }
     }
 
     for (i, node) in scene.nodes.iter().enumerate() {
@@ -909,19 +1107,43 @@ pub fn flatten_scene_graph(
             cy: scy as f32,
             r,
             fill: Some(color.clone()),
-            stroke: Some(style.edge_color.clone()),
+            // No flat, kind-unrelated outline by default — see
+            // `node_border_enabled`'s doc comment.
+            stroke: if style.node_border_enabled {
+                Some(style.edge_color.clone())
+            } else {
+                None
+            },
         });
         // Label LOD: below the configured zoom threshold, skip the Text
         // element to reduce clutter/draw calls on dense graphs — the
         // Circle above is ALWAYS pushed, so the node stays visible and
         // clickable regardless.
         if viewport.zoom >= style.label_zoom_threshold as f64 {
+            // Same WCAG AA guarantee as the boundary-stub label above, but
+            // via the PRECOMPUTED per-kind lookup (`text_color_for_kind`/
+            // `selected_text_color`/`hover_text_color` — see
+            // `GraphStyleOptions::from_editor`'s doc comment for why this
+            // must stay O(1) per node, not a fresh `ensure_min_contrast`
+            // call every node every frame). The one exception is an
+            // in-flight color tween's one-off interpolated hex, which
+            // genuinely can't be precomputed — but at most ONE node tweens
+            // at a time (the asymmetric design), so this stays O(1) per
+            // frame regardless of graph size.
+            let text_color = match &style.color_override {
+                Some((idx, hex)) if *idx == i => {
+                    ensure_min_contrast(hex, &style.background_color, WCAG_AA_TEXT_CONTRAST)
+                }
+                _ if is_selected => style.selected_text_color.clone(),
+                _ if is_hovered => style.hover_text_color.clone(),
+                _ => style.text_color_for_kind(node.kind).to_string(),
+            };
             elements.push(VisualElement::Text {
                 x: scx as f32 + r + 4.0,
                 y: scy as f32,
                 text: node.label.clone(),
                 font_size: style.font_size,
-                color,
+                color: text_color,
             });
         }
     }
@@ -947,6 +1169,9 @@ mod tests {
             size_by_degree: true,
             node_degree_scale: 4.0,
             size_scales_with_zoom: true,
+            // 0.5 == sqrt, matches production default — every pre-existing
+            // test's radius assertions stay valid unmodified.
+            node_zoom_scale_exponent: 0.5,
             node_min_radius: 4.0,
             node_max_radius: 36.0,
             // Below Viewport::default()'s zoom (1.0), so every pre-Phase-D
@@ -959,6 +1184,7 @@ mod tests {
             // nonzero curvature explicitly.
             edge_curvature: 0.0,
             color_override: None,
+            node_border_enabled: false,
             node_colors: [
                 "#a1".into(),
                 "#a2".into(),
@@ -975,10 +1201,36 @@ mod tests {
                 "#a13".into(),
                 "#a14".into(),
             ],
+            // None of the placeholder colors above are real hex (deliberately,
+            // for exact-string-equality assertions elsewhere in this test
+            // module), so `ensure_min_contrast` always falls back to
+            // pure white/black here — computed for real (not hand-typed
+            // placeholders) so any test asserting a WCAG contrast ratio
+            // against these values (not just string equality) is exercising
+            // the genuine code path, matching `from_editor`'s own construction.
+            node_text_colors: [
+                "#ffffff".into(),
+                "#ffffff".into(),
+                "#ffffff".into(),
+                "#ffffff".into(),
+                "#ffffff".into(),
+                "#ffffff".into(),
+                "#ffffff".into(),
+                "#ffffff".into(),
+                "#ffffff".into(),
+                "#ffffff".into(),
+                "#ffffff".into(),
+                "#ffffff".into(),
+                "#ffffff".into(),
+                "#ffffff".into(),
+            ],
             selected_color: "#selected".into(),
+            selected_text_color: "#ffffff".into(),
             hover_color: "#hovered".into(),
+            hover_text_color: "#ffffff".into(),
             edge_color: "#edge".into(),
             boundary_edge_color: "#boundary".into(),
+            boundary_edge_text_color: "#ffffff".into(),
             background_color: "#bg".into(),
         }
     }
@@ -1146,6 +1398,67 @@ mod tests {
     }
 
     #[test]
+    fn contrast_ratio_known_wcag_values() {
+        // Black-on-white (and vice versa) is the WCAG-canonical maximum: 21:1.
+        assert!((contrast_ratio("#000000", "#ffffff") - 21.0).abs() < 0.01);
+        assert!((contrast_ratio("#ffffff", "#000000") - 21.0).abs() < 0.01);
+        // Identical colors: minimum possible ratio, 1:1.
+        assert!((contrast_ratio("#808080", "#808080") - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn ensure_min_contrast_leaves_an_already_legible_color_unchanged() {
+        // Preserving hue when it already clears the bar is the whole
+        // point — this must NOT get recolored just because a threshold
+        // exists.
+        let fg = "#000000"; // black on white: 21:1, way above 4.5
+        assert_eq!(
+            ensure_min_contrast(fg, "#ffffff", WCAG_AA_TEXT_CONTRAST),
+            fg
+        );
+    }
+
+    #[test]
+    fn ensure_min_contrast_fixes_a_genuinely_illegible_pairing() {
+        // A real-world illegible case: a moderately saturated red text on
+        // a near-black background — exactly the "red is hard to read"
+        // shape reported live (a color tuned to read fine as a thin
+        // stroke, reused verbatim as small text).
+        let fg = "#8b2020"; // dark red
+        let bg = "#0d0d0d"; // near-black graph background
+        assert!(
+            contrast_ratio(fg, bg) < WCAG_AA_TEXT_CONTRAST,
+            "test setup: fg must start illegible"
+        );
+        let fixed = ensure_min_contrast(fg, bg, WCAG_AA_TEXT_CONTRAST);
+        assert!(
+            contrast_ratio(&fixed, bg) >= WCAG_AA_TEXT_CONTRAST,
+            "{fixed} must meet WCAG AA contrast against {bg}"
+        );
+        assert_ne!(fixed, fg, "an illegible color must actually be adjusted");
+    }
+
+    #[test]
+    fn ensure_min_contrast_pushes_toward_the_readable_endpoint_for_the_background() {
+        // Against a light background, illegible text must be darkened
+        // (toward black), not lightened (toward white, which would make
+        // it WORSE) — and vice versa for a dark background.
+        let light_bg = "#f0f0f0";
+        let fixed_for_light = ensure_min_contrast("#cccccc", light_bg, WCAG_AA_TEXT_CONTRAST);
+        assert!(
+            relative_luminance(&fixed_for_light) < relative_luminance("#cccccc"),
+            "against a light background, an illegible color must be darkened, not lightened"
+        );
+
+        let dark_bg = "#0d0d0d";
+        let fixed_for_dark = ensure_min_contrast("#333333", dark_bg, WCAG_AA_TEXT_CONTRAST);
+        assert!(
+            relative_luminance(&fixed_for_dark) > relative_luminance("#333333"),
+            "against a dark background, an illegible color must be lightened, not darkened"
+        );
+    }
+
+    #[test]
     fn graph_color_tween_current_color_progresses_and_completes() {
         let tween = GraphColorTween {
             node_index: 0,
@@ -1265,6 +1578,81 @@ mod tests {
             assert!(
                 seen.insert(kind_index(kind)),
                 "duplicate index for {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn text_color_for_kind_uses_the_same_index_as_color_for_kind() {
+        // Locks in the array-parity invariant between node_colors and the
+        // PRECOMPUTED node_text_colors (the O(n)->O(kinds) perf fix) —
+        // an off-by-one here would silently show one kind's node label in
+        // a completely unrelated kind's text color.
+        let style = test_style();
+        let all = [
+            NodeKind::Index,
+            NodeKind::Command,
+            NodeKind::Concept,
+            NodeKind::Key,
+            NodeKind::Note,
+            NodeKind::Project,
+            NodeKind::Category,
+            NodeKind::Lesson,
+            NodeKind::Tutorial,
+            NodeKind::Meta,
+            NodeKind::Block,
+            NodeKind::SchemeApi,
+            NodeKind::Task,
+            NodeKind::View,
+        ];
+        for kind in all {
+            let idx = kind_index(kind);
+            assert_eq!(style.text_color_for_kind(kind), style.node_text_colors[idx]);
+        }
+    }
+
+    #[test]
+    fn from_editor_precomputes_wcag_legible_text_colors_for_every_kind_and_state() {
+        // End-to-end guard on the actual `from_editor` construction (not
+        // just the hand-built `test_style()` fixture) — every precomputed
+        // text color must genuinely meet WCAG AA against that same
+        // editor's real graph background, for every node kind plus
+        // selected/hovered/boundary.
+        let editor = Editor::new();
+        let style = GraphStyleOptions::from_editor(&editor);
+        let all = [
+            NodeKind::Index,
+            NodeKind::Command,
+            NodeKind::Concept,
+            NodeKind::Key,
+            NodeKind::Note,
+            NodeKind::Project,
+            NodeKind::Category,
+            NodeKind::Lesson,
+            NodeKind::Tutorial,
+            NodeKind::Meta,
+            NodeKind::Block,
+            NodeKind::SchemeApi,
+            NodeKind::Task,
+            NodeKind::View,
+        ];
+        for kind in all {
+            let text_color = style.text_color_for_kind(kind);
+            assert!(
+                contrast_ratio(text_color, &style.background_color) >= WCAG_AA_TEXT_CONTRAST,
+                "{kind:?}'s precomputed text color {text_color} must meet WCAG AA against {}",
+                style.background_color
+            );
+        }
+        for (name, color) in [
+            ("selected", &style.selected_text_color),
+            ("hover", &style.hover_text_color),
+            ("boundary", &style.boundary_edge_text_color),
+        ] {
+            assert!(
+                contrast_ratio(color, &style.background_color) >= WCAG_AA_TEXT_CONTRAST,
+                "{name}_text_color {color} must meet WCAG AA against {}",
+                style.background_color
             );
         }
     }
@@ -1732,6 +2120,68 @@ mod tests {
             }
             other => panic!("expected Line, got {other:?}"),
         }
+        // Regression: a boundary stub's label ("...", "... (+N)") is real
+        // data (surfaced via describe_state()) that was never actually
+        // drawn anywhere in the GUI — confusing "what are these red lines
+        // for" with no visible explanation. It must now render as Text
+        // right after the stub Line, contrast-adjusted for legibility
+        // (test_style()'s placeholder colors aren't real hex, so
+        // ensure_min_contrast falls back to pure white/black here — the
+        // point of this assertion is that a WCAG-legible color comes out,
+        // not that it equals the raw boundary_edge_color verbatim).
+        match &elements[1] {
+            VisualElement::Text { text, color, .. } => {
+                assert_eq!(text, "...");
+                assert!(
+                    contrast_ratio(color, &style.background_color) >= WCAG_AA_TEXT_CONTRAST,
+                    "boundary stub label color {color} must meet WCAG AA contrast against \
+                     the graph background"
+                );
+            }
+            other => panic!("expected Text (the boundary stub's label), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn flatten_boundary_stub_offset_scales_with_the_source_nodes_real_render_radius() {
+        // Regression: the stub used to be sized off the flat, degree/zoom-
+        // unaware `style.node_radius` base — once node size started
+        // varying (Phase C), a shrunk node's stub stuck out
+        // disproportionately far relative to its own smaller circle. The
+        // stub must scale with the SAME per-node radius the node's own
+        // Circle uses.
+        fn stub_endpoint(style: &GraphStyleOptions, degrees: &[u32]) -> (f32, f32) {
+            let mut scene = SceneGraph::new();
+            scene.nodes.push(test_node("hub", 0.0, 0.0, NodeKind::Note));
+            scene.edges.push(SceneEdge {
+                source: 0,
+                target: 0,
+                label: Some("...".to_string()),
+                style: EdgeStyle {
+                    color: "#unused".to_string(),
+                    width: 1.0,
+                    dashed: true,
+                },
+                weight: 1.0,
+                rel_type: None,
+            });
+            let viewport = mae_canvas::scene::Viewport::default();
+            let elements = flatten_scene_graph(&scene, &viewport, style, degrees);
+            match &elements[0] {
+                VisualElement::Line { x2, y2, .. } => (*x2, *y2),
+                other => panic!("expected Line, got {other:?}"),
+            }
+        }
+
+        let mut style = test_style();
+        style.size_scales_with_zoom = false; // isolate the degree term
+        let (low_degree_x, _) = stub_endpoint(&style, &[0]);
+        let (high_degree_x, _) = stub_endpoint(&style, &[40]);
+        assert!(
+            high_degree_x > low_degree_x,
+            "a bigger (higher-degree) node's stub must reach farther out \
+             (low={low_degree_x}, high={high_degree_x})"
+        );
     }
 
     #[test]

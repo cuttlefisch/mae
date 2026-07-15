@@ -772,6 +772,10 @@ pub struct Editor {
     /// sqrt(zoom)) with viewport zoom. Mirrors
     /// `kb_graph_node_size_scales_with_zoom`.
     pub kb_graph_node_size_scales_with_zoom: bool,
+    /// Exponent applied to viewport zoom when
+    /// `kb_graph_node_size_scales_with_zoom` is on. Mirrors
+    /// `kb_graph_node_zoom_scale_exponent`; see `graph_view::node_render_radius`.
+    pub kb_graph_node_zoom_scale_exponent: f32,
     /// Minimum node circle radius (logical px), applied after degree/zoom
     /// scaling. Mirrors `kb_graph_node_min_radius`.
     pub kb_graph_node_min_radius: u32,
@@ -790,6 +794,9 @@ pub struct Editor {
     /// Duration (ms) of the graph view's hover/selection color tween.
     /// Mirrors `kb_graph_color_tween_duration_ms`.
     pub kb_graph_color_tween_duration_ms: u32,
+    /// Whether graph-view node circles get a stroke outline. Mirrors
+    /// `kb_graph_node_border_enabled`.
+    pub kb_graph_node_border_enabled: bool,
     /// Node label font size in points for the graph view's GUI rendering.
     /// Mirrors `kb_graph_font_size` — defaults to the same numeric default
     /// as the base `font_size` option (14), but is a fully independent
@@ -1277,12 +1284,14 @@ impl Editor {
             kb_graph_node_size_by_degree: true,
             kb_graph_node_degree_scale: 4.0,
             kb_graph_node_size_scales_with_zoom: true,
+            kb_graph_node_zoom_scale_exponent: 0.5,
             kb_graph_node_min_radius: 4,
             kb_graph_node_max_radius: 36,
             kb_graph_label_zoom_threshold: 0.5,
             kb_graph_edge_curvature: 0.12,
             kb_graph_color_tween_enabled: true,
             kb_graph_color_tween_duration_ms: 150,
+            kb_graph_node_border_enabled: false,
             kb_graph_font_size: 14,
             kb_graph_layout_iterations: 50,
             kb_graph_layout_kind_clustering: 0.5,

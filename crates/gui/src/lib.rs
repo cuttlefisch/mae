@@ -81,6 +81,15 @@ struct WindowRenderCache {
     image: skia_safe::Image,
     /// Cached layout for mouse click positioning.
     frame_layout: layout::FrameLayout,
+    /// `GraphView.render_epoch[win_id]` at the time this image was
+    /// captured, for a `BufferKind::Graph` window — `None` for every other
+    /// buffer kind. `generation` (rope-based) never changes for a Graph
+    /// buffer, so it alone can't invalidate the cache when the graph's own
+    /// state (pan/zoom/hover/selection/color-tween) changes what's drawn
+    /// without touching the buffer's text content; this field is what
+    /// does. `None == None` for non-graph windows, so this is a no-op
+    /// addition to the existing cache-hit check for every other kind.
+    graph_render_epoch: Option<u64>,
 }
 
 /// GUI renderer implementing the `Renderer` trait.
@@ -990,6 +999,15 @@ fn render_window_area(
             // unchanged state are blitted from cached pixels (GPU texture blit
             // ~100μs vs full render ~90ms for large files).
             let is_cacheable = !is_focused && !matches!(buf.kind, BufferKind::Shell);
+            // `buf.generation` (rope-based) never changes for a Graph
+            // buffer — this is the additional key that actually captures
+            // "did this window's graph picture change" (pan/zoom/hover/
+            // selection/tween). `None` for every non-Graph buffer kind, so
+            // the cache-hit check below is unaffected for them.
+            let graph_render_epoch = buf
+                .graph_view()
+                .and_then(|gv| gv.render_epoch.get(win_id))
+                .copied();
             if is_cacheable {
                 let (cw_px, ch_px) = canvas.cell_size();
                 let pixel_rect = skia_safe::IRect::from_xywh(
@@ -1003,6 +1021,7 @@ fn render_window_area(
                         && cached.scroll_offset == win.scroll_offset
                         && cached.scroll_pixel_offset_bits == win.scroll_pixel_offset.to_bits()
                         && cached.pixel_rect == pixel_rect
+                        && cached.graph_render_epoch == graph_render_epoch
                     {
                         // Cache hit: blit cached image, reuse cached layout.
                         canvas.draw_cached_image(
@@ -1069,6 +1088,57 @@ fn render_window_area(
                             canvas, vb, r_row, r_col, r_width, r_height, bg,
                         );
                         *draw_time_us += t.elapsed().as_micros() as u64;
+                    }
+                    // Cache the rendered image for non-focused graph
+                    // windows — WITHOUT this, a graph window was
+                    // (previously) never eligible for the per-window
+                    // cache at all (only the generic text-buffer arm ever
+                    // wrote a cache entry), so it fully re-rendered on
+                    // EVERY frame that got redrawn for ANY reason —
+                    // including a keystroke in a completely unrelated
+                    // window — regardless of `is_cacheable`/`redraw_level`.
+                    // For a real ~1300-node/4000-edge subgraph this alone
+                    // accounted for the bulk of a reported typing-lag
+                    // complaint. `frame_layout` is a trivial empty
+                    // placeholder — confirmed unused for Graph windows,
+                    // which resolve mouse clicks via `window_mgr::
+                    // layout_rects` directly, not `window_layouts`.
+                    if is_cacheable {
+                        let (cw_px, ch_px) = canvas.cell_size();
+                        let pixel_rect = skia_safe::IRect::from_xywh(
+                            (r_col as f32 * cw_px) as i32,
+                            (r_row as f32 * ch_px) as i32,
+                            (r_width as f32 * cw_px) as i32,
+                            (r_height as f32 * ch_px) as i32,
+                        );
+                        if let Some(image) = canvas.snapshot_region(pixel_rect) {
+                            window_render_cache.insert(
+                                *win_id,
+                                WindowRenderCache {
+                                    generation: buf.generation,
+                                    scroll_offset: win.scroll_offset,
+                                    scroll_pixel_offset_bits: win.scroll_pixel_offset.to_bits(),
+                                    pixel_rect,
+                                    image,
+                                    frame_layout: layout::FrameLayout {
+                                        lines: Vec::new(),
+                                        gutter_width: 0,
+                                        text_col: 0,
+                                        text_width: 0,
+                                        area_width: 0,
+                                        cell_width: 0.0,
+                                        cell_height: 0.0,
+                                        area_row: 0,
+                                        area_col: 0,
+                                        pixel_y_limit: 0.0,
+                                        scrollbar_col: None,
+                                        total_lines: 0,
+                                        scroll_offset: 0,
+                                    },
+                                    graph_render_epoch,
+                                },
+                            );
+                        }
                     }
                 }
                 BufferKind::FileTree => {
@@ -1207,6 +1277,7 @@ fn render_window_area(
                                     pixel_rect,
                                     image,
                                     frame_layout: fl.clone(),
+                                    graph_render_epoch: None,
                                 },
                             );
                         }

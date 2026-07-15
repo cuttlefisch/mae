@@ -466,6 +466,15 @@ impl OptionRegistry {
                      regardless of zoom, which can make a densely zoomed-out graph read as an \
                      undifferentiated mass of same-size overlapping circles.",
                     OptionKind::Bool, "true", Some("kb-graph.node-size-scales-with-zoom"), &[]),
+                opt!("kb_graph_node_zoom_scale_exponent", &["kb-graph-node-zoom-scale-exponent"],
+                    "Exponent applied to viewport zoom when kb_graph_node_size_scales_with_zoom \
+                     is on: radius *= zoom^exponent. 0.5 (default) is the sub-linear sqrt(zoom) \
+                     Sigma.js/org-roam-ui convention. Raise toward 1.0 to make node radius shrink \
+                     at the SAME rate as inter-node distance when zooming out, so the visual gap \
+                     between nodes stays proportionally constant instead of nodes dominating the \
+                     view at extreme zoom-out. 0.0 disables zoom scaling entirely (equivalent to \
+                     turning kb_graph_node_size_scales_with_zoom off).",
+                    OptionKind::Float, "0.5", Some("kb-graph.node-zoom-scale-exponent"), &[]),
                 opt!("kb_graph_node_min_radius", &["kb-graph-node-min-radius"],
                     "Minimum node circle radius in logical pixels, applied after degree/zoom \
                      scaling — guarantees a node never shrinks below a clickable/visible size \
@@ -496,6 +505,10 @@ impl OptionRegistry {
                     "Duration in milliseconds of the graph view's hover/selection color tween, \
                      when kb_graph_color_tween_enabled is on.",
                     OptionKind::Int, "150", Some("kb-graph.color-tween-duration-ms"), &[]),
+                opt!("kb_graph_node_border_enabled", &["kb-graph-node-border-enabled"],
+                    "Whether graph-view node circles get a stroke outline (the same flat, muted \
+                     color used for edges). Off by default.",
+                    OptionKind::Bool, "false", Some("kb-graph.node-border-enabled"), &[]),
                 opt!("kb_graph_font_size", &["kb-graph-font-size"],
                     "Node label font size in points for the graph view's GUI rendering. \
                      Independent of the base font_size option (same numeric default, no live \
