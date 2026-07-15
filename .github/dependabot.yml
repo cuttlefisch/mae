@@ -19,6 +19,19 @@ updates:
       # Only ignore known-bad ranges — a future ndarray or cozo release may unblock.
       - dependency-name: "ndarray"
         versions: ["0.16.x", "0.17.x"]
+      # The dalek trio is blocked by iroh: the daemon workspace depends on both iroh
+      # and the shared crypto crates (path deps), and iroh/iroh-base hard-pin
+      # ed25519-dalek = "=3.0.0-rc.0" and curve25519-dalek = "=5.0.0-rc.0" (still true
+      # as of iroh 1.0.2). A stable ^3/^5 requirement cannot unify with those
+      # pre-release pins, so bumping breaks daemon/Cargo.lock resolution entirely.
+      # Keep pinned at 2/2/4 (see shared/mcp/Cargo.toml + shared/sync/Cargo.toml).
+      # Revisit once iroh ships a release depending on the stable dalek 3.x/5.x.
+      - dependency-name: "ed25519-dalek"
+        versions: ["3.x"]
+      - dependency-name: "x25519-dalek"
+        versions: ["3.x"]
+      - dependency-name: "curve25519-dalek"
+        versions: ["5.x"]
   - package-ecosystem: github-actions
     directory: /
     schedule:

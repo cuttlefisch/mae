@@ -21,7 +21,7 @@ async-trait = "0.1"
 # a caret range) -- daemon/Cargo.toml depends on both iroh and this crate
 # (path dep), so bumping to 3 here breaks that workspace's resolution entirely.
 # Revisit once iroh ships a release depending on the stable ed25519-dalek 3.x.
-ed25519-dalek = { version = "3", features = ["pkcs8"] }
+ed25519-dalek = { version = "2", features = ["pkcs8"] }
 base64 = "0.22"
 hex = "0.4"
 # TLS transport (collab `key` mode). Use the ring backend uniformly + an explicit
