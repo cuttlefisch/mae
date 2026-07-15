@@ -360,7 +360,22 @@ pub const ANIMATION_COOLING_FACTOR: f64 = 0.92;
 /// signal on their own (see `ForceLayout::step`'s doc comment); a nonzero
 /// floor just avoids the schedule stalling at an unproductively tiny
 /// temperature for many ticks before actually reaching equilibrium.
-pub const ANIMATION_TEMPERATURE_FLOOR: f64 = 1.0;
+///
+/// MUST stay below `ANIMATION_SETTLE_EPSILON / damping` (0.3 / 0.85 ≈
+/// 0.35, `ForceLayout::step`'s fixed 0.85 damping) — `step`'s applied
+/// displacement is `min(temperature, raw_disp) * damping`, so once
+/// temperature has cooled to the floor, applied displacement is capped at
+/// `floor * damping` REGARDLESS of the raw force field. A floor at or
+/// above that bound (this was `1.0`, i.e. `1.0 * 0.85 = 0.85 >
+/// ANIMATION_SETTLE_EPSILON`) makes the settle check permanently
+/// unsatisfiable once temperature reaches the floor — for any graph whose
+/// true equilibrium residual force doesn't fall to exactly zero (large
+/// graphs, or asymmetric kind-clustering forces at a cluster boundary),
+/// the layout jitters at the floor forever instead of ever reporting
+/// settled. `0.1` gives a `0.1 * 0.85 = 0.085` ceiling, comfortably under
+/// the `0.3` threshold, so settling is guaranteed within a bounded number
+/// of cooling ticks once temperature reaches the floor.
+pub const ANIMATION_TEMPERATURE_FLOOR: f64 = 0.1;
 /// Settlement threshold for `ForceLayout::step`'s max-displacement return
 /// value: once a tick's max displacement drops below this, `GraphView.
 /// animating` flips to `false` and animation ticking stops (until the next

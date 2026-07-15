@@ -169,12 +169,13 @@ pub fn build_kb_graph_positions_only(
     for (src, count) in boundary_by_source {
         if let Some(&s) = id_to_idx.get(src) {
             // Boundary target is outside the graph — just show the outgoing edge
-            // pointing to the edge of the source node (no target node rendered)
-            let label = if count > 1 {
-                format!("... (+{count})")
-            } else {
-                "...".to_string()
-            };
+            // pointing to the edge of the source node (no target node rendered).
+            // Always include the count, even at 1 — a bare "..." with no count
+            // reads as an unexplained stray mark (reported live: a user seeing
+            // it had no way to tell it meant "1 more link not shown here" vs.
+            // some rendering glitch); "... (+1)" is unambiguous regardless of
+            // count.
+            let label = format!("... (+{count})");
             scene_edges.push(SceneEdge {
                 source: s,
                 target: s, // self-loop as visual indicator
@@ -335,13 +336,14 @@ mod tests {
         ];
         let graph = build_kb_graph(&nodes, &links, &boundary, &[]);
         // 2 internal + 2 boundary edges (one per distinct source, each
-        // with count 1 so the label stays the plain "...").
+        // with its own count-1 label — always includes the count, even at
+        // 1, so the label is unambiguous rather than a bare "...").
         assert_eq!(graph.edges.len(), 4);
         let boundary_edges: Vec<_> = graph.edges[2..].to_vec();
         assert_eq!(boundary_edges.len(), 2);
         assert!(boundary_edges
             .iter()
-            .all(|e| e.label.as_deref() == Some("...")));
+            .all(|e| e.label.as_deref() == Some("... (+1)")));
         let sources: std::collections::HashSet<_> =
             boundary_edges.iter().map(|e| e.source).collect();
         assert_eq!(sources.len(), 2, "each source keeps its own boundary edge");

@@ -986,13 +986,23 @@ impl Editor {
     /// node via `kb_graph_view_hit_test_and_select`, button still held).
     /// Converts `rel_x`/`rel_y` to scene coordinates via the same
     /// `graph_scene_point` convention hit-testing uses, so the dragged node
-    /// tracks the exact point the cursor is over. Does NOT set `pinned` —
-    /// that only happens once on release, via `kb_graph_view_drag_end` —
-    /// so a layout/animation tick that lands mid-drag still leaves the node
-    /// free to keep tracking the cursor rather than fighting the user's
-    /// grip (it would just get overwritten by the next drag-move call
-    /// anyway, but not pinning early keeps the invariant "pinned means the
-    /// user finished placing it" honest). No-op (never panics) if the
+    /// tracks the exact point the cursor is over.
+    ///
+    /// Sets `pinned = true` on EVERY call (not just at `kb_graph_view_drag_end`
+    /// on release) — this used to be deferred to release only, reasoning
+    /// that a layout/animation tick landing mid-drag "would just get
+    /// overwritten by the next drag-move call anyway." That reasoning
+    /// assumed a tick apply and the next `CursorMoved` always interleave
+    /// tightly; in practice a tick can land while the user is mid-gesture
+    /// but momentarily not moving the mouse (or the tick simply lands
+    /// between two move events), and `apply_graph_layout_result` writes a
+    /// fresh force-computed position for every unpinned node — visibly
+    /// snapping the dragged node back until the next move event corrects
+    /// it. Pinning from the first move closes that race outright:
+    /// `ForceLayout::step` already skips pinned nodes unconditionally, so a
+    /// concurrent tick can never touch this node's position for the
+    /// duration of the drag. End-state (pinned at the drag's final
+    /// position) is unchanged from before. No-op (never panics) if the
     /// window/buffer/node no longer exist — e.g. the graph was closed or
     /// the node's index no longer resolves because of a refresh mid-drag.
     pub fn kb_graph_view_drag_node(
@@ -1019,6 +1029,7 @@ impl Editor {
             if let Some(node) = gv.scene.nodes.get_mut(node_index) {
                 node.x = scene_x;
                 node.y = scene_y;
+                node.pinned = true;
                 true
             } else {
                 false
@@ -1150,6 +1161,20 @@ impl Editor {
     /// touches `hovered`/`selection`, so it's always correct to carry the
     /// CURRENT values forward onto the incoming scene rather than the
     /// snapshot's stale ones.
+    ///
+    /// The same hazard applies to a node's position/`pinned` flag: `scene`
+    /// can be a snapshot taken BEFORE a drag-to-pin gesture started (or
+    /// before `kb_graph_view_drag_node` marked the node pinned), so the
+    /// background pass computed it as a freely-movable node and the
+    /// incoming `scene` carries a stale, force-computed position for it.
+    /// Applying that wholesale would silently teleport the node the user
+    /// is actively dragging back to wherever physics put it seconds ago —
+    /// visible as a periodic snap-back mid-drag, worse the longer a tick
+    /// takes to compute (large graphs) since more drag movement happens
+    /// before the stale result lands. Fixed the same way as
+    /// hovered/selection: for every node currently pinned in the LIVE
+    /// scene, the live position wins over the incoming one, regardless of
+    /// how stale the snapshot that produced `scene` was.
     pub fn apply_graph_layout_result(
         &mut self,
         buf_idx: usize,
@@ -1162,6 +1187,16 @@ impl Editor {
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
             scene.hovered = gv.scene.hovered;
             scene.selection = gv.scene.selection;
+            for (i, live_node) in gv.scene.nodes.iter().enumerate() {
+                if !live_node.pinned {
+                    continue;
+                }
+                if let Some(incoming) = scene.nodes.get_mut(i) {
+                    incoming.x = live_node.x;
+                    incoming.y = live_node.y;
+                    incoming.pinned = true;
+                }
+            }
             gv.scene = scene;
         }
         self.graph_view_reflatten_all_windows(buf_idx);
@@ -2329,8 +2364,12 @@ mod tests {
         let expected_scene_x = scene_x0 as f32 + 200.0;
         let expected_scene_y = scene_y0 as f32 - 150.0;
 
-        // Mid-drag: the node must already track the cursor, but must NOT be
-        // pinned yet, and no navigation should have happened.
+        // Mid-drag: the node must already track the cursor AND already be
+        // pinned (from the very first drag-move call, not deferred to
+        // release) — this is what closes the race against a concurrent
+        // animation tick landing mid-drag and snapping the node back to a
+        // force-computed position; see `kb_graph_view_drag_node`'s doc
+        // comment. No navigation should have happened either way.
         {
             let gv = editor.buffers[graph_idx].graph_view().unwrap();
             let node = &gv.scene.nodes[0];
@@ -2342,7 +2381,10 @@ mod tests {
                 (node.y as f32 - expected_scene_y).abs() < 0.01,
                 "node should track the cursor's scene-y during drag"
             );
-            assert!(!node.pinned, "must not be pinned before release");
+            assert!(
+                node.pinned,
+                "must already be pinned mid-drag so a concurrent layout tick can't snap it back"
+            );
         }
 
         // Release.
@@ -2372,6 +2414,81 @@ mod tests {
             editor.window_mgr.iter_windows().count(),
             window_count_before,
             "a drag-to-pin gesture must never open/close/split any window"
+        );
+    }
+
+    #[test]
+    fn stale_in_flight_layout_result_does_not_snap_back_a_node_pinned_mid_drag() {
+        // Reproduces the reported bug directly: a background layout tick
+        // can be queued from a scene snapshot taken BEFORE a drag starts.
+        // By the time that tick's result comes back and is applied, the
+        // user may have already dragged (and pinned) the node somewhere
+        // else entirely. `apply_graph_layout_result` must not let the
+        // stale incoming scene's un-pinned, force-computed position for
+        // that node win over the live, actively-dragged one.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "[[concept:window]]");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:window",
+            "Window",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), Some(1));
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+
+        // Snapshot the scene as it looked BEFORE the drag — this stands in
+        // for what a background layout tick queued at that moment would
+        // eventually compute from and return.
+        let mut stale_scene = editor.buffers[graph_idx]
+            .graph_view()
+            .unwrap()
+            .scene
+            .clone();
+        assert!(
+            !stale_scene.nodes[0].pinned,
+            "sanity: the pre-drag snapshot must show the node as unpinned"
+        );
+        // The background pass would have moved the (then-unpinned) node
+        // based on forces — simulate that with an arbitrary displaced
+        // position, distinct from both the original and the drag target.
+        stale_scene.nodes[0].x = -999.0;
+        stale_scene.nodes[0].y = -999.0;
+
+        // Meanwhile, on the main thread, the user drags (and thereby pins,
+        // per `kb_graph_view_drag_node`'s fix) the node somewhere else.
+        editor.kb_graph_view_hit_test_and_select(graph_win_id, 0.0, 0.0);
+        editor.kb_graph_view_drag_node(graph_win_id, 0, 12345.0, -6789.0);
+        let (dragged_x, dragged_y) = {
+            let node = &editor.buffers[graph_idx].graph_view().unwrap().scene.nodes[0];
+            assert!(node.pinned, "sanity: drag must pin immediately");
+            (node.x, node.y)
+        };
+
+        // The stale in-flight tick's result now lands.
+        editor.apply_graph_layout_result(graph_idx, stale_scene, Some(1.0));
+
+        let node = &editor.buffers[graph_idx].graph_view().unwrap().scene.nodes[0];
+        assert!(
+            node.pinned,
+            "pinned flag must survive a stale layout-result apply"
+        );
+        assert_eq!(
+            node.x, dragged_x,
+            "a stale in-flight tick must not overwrite the live drag position (x)"
+        );
+        assert_eq!(
+            node.y, dragged_y,
+            "a stale in-flight tick must not overwrite the live drag position (y)"
         );
     }
 
