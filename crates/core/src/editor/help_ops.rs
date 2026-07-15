@@ -446,13 +446,32 @@ impl Editor {
             return "(KB graph view: no center node yet — open with :kb-graph-view-open)\n"
                 .to_string();
         };
-        match self.kb.query_layer() {
-            Some(q) => render_kb_node_for_query(q, &center).0,
-            None => format!(
-                "* KB Graph — {}\n(no KB query layer available; graph data unavailable in this build)\n",
-                center
-            ),
+        // Same query-layer-miss-falls-through-to-in-memory reasoning as
+        // `kb_contains_any`'s doc comment.
+        if self.kb.query_layer().is_some_and(|q| q.contains(&center)) {
+            return render_kb_node_for_query(self.kb.query_layer().unwrap(), &center).0;
         }
+        if let Some(kb) = self.kb_for_node(&center) {
+            let local = &self.kb.primary;
+            let federated = &self.kb.instances;
+            return render_kb_node_with_store(
+                kb,
+                &center,
+                |id| {
+                    local.get(id).map(|n| n.title.clone()).or_else(|| {
+                        federated
+                            .values()
+                            .find_map(|fkb| fkb.get(id).map(|n| n.title.clone()))
+                    })
+                },
+                self.kb.store.as_deref(),
+            )
+            .0;
+        }
+        format!(
+            "* KB Graph — {}\n(no KB query layer available; graph data unavailable in this build)\n",
+            center
+        )
     }
 
     /// Generate live help text for a command, querying current keymaps and hooks.
@@ -508,8 +527,20 @@ impl Editor {
     /// — #293) can reuse the same existence check the KB view already uses,
     /// instead of a third, divergent resolver.
     pub(crate) fn kb_contains_any(&self, id: &str) -> bool {
+        // The query layer (when present) is a CozoDB-backed PROJECTION of
+        // the in-memory KB (ADR-029) — it can legitimately lag behind the
+        // in-memory `kb.primary`/`kb.instances`, which are always current.
+        // A query-layer MISS must fall through to the in-memory check
+        // rather than short-circuiting to "doesn't exist" — otherwise a
+        // node that demonstrably exists (findable via search, resolvable
+        // as a graph-view center) can incorrectly report as missing here,
+        // purely because its projection hasn't caught up yet. `kb_owner_of`
+        // already uses this in-memory-first order; this mirrors it instead
+        // of maintaining a second, divergent existence check.
         if let Some(q) = self.kb.query_layer() {
-            return q.contains(id);
+            if q.contains(id) {
+                return true;
+            }
         }
         if self.kb.primary.contains(id) {
             return true;
@@ -517,10 +548,14 @@ impl Editor {
         self.kb.instances.values().any(|kb| kb.contains(id))
     }
 
-    /// Resolve a node title across local + federated KBs.
+    /// Resolve a node title across local + federated KBs. Same
+    /// query-layer-miss-falls-through-to-in-memory reasoning as
+    /// `kb_contains_any` above.
     fn kb_resolve_title(&self, id: &str) -> Option<String> {
         if let Some(q) = self.kb.query_layer() {
-            return q.get(id).map(|n| n.title);
+            if let Some(n) = q.get(id) {
+                return Some(n.title);
+            }
         }
         if let Some(n) = self.kb.primary.get(id) {
             return Some(n.title.clone());
@@ -747,8 +782,14 @@ impl Editor {
                     "Tab: fold · n/p: links · Enter: follow · e: edit · C-o/C-i: back/fwd · q: close\n",
                 );
                 (out, links)
-            } else if let Some(q) = self.kb.query_layer() {
-                render_kb_node_for_query(q, &node_id)
+            // Query-layer-miss-falls-through-to-in-memory: see
+            // `kb_contains_any`'s doc comment. `render_kb_node_for_query`
+            // does its own `query.get()` internally with no such fallback,
+            // so the caller (here) must pre-check `contains` and route to
+            // the in-memory-backed `render_kb_node_with_store` path when
+            // the query layer's projection hasn't caught up.
+            } else if self.kb.query_layer().is_some_and(|q| q.contains(&node_id)) {
+                render_kb_node_for_query(self.kb.query_layer().unwrap(), &node_id)
             } else {
                 let kb = self.kb_for_node(&node_id).unwrap_or(&self.kb.primary);
                 let local = &self.kb.primary;
@@ -767,8 +808,10 @@ impl Editor {
                     store_ref,
                 )
             }
-        } else if let Some(q) = self.kb.query_layer() {
-            render_kb_node_for_query(q, &node_id)
+        // Same query-layer-miss-falls-through-to-in-memory reasoning as
+        // the `cmd:` branch above.
+        } else if self.kb.query_layer().is_some_and(|q| q.contains(&node_id)) {
+            render_kb_node_for_query(self.kb.query_layer().unwrap(), &node_id)
         } else {
             let kb = self.kb_for_node(&node_id).unwrap_or(&self.kb.primary);
             let local = &self.kb.primary;
@@ -1437,17 +1480,103 @@ mod tests {
     }
 
     #[test]
-    fn render_graph_view_as_text_reports_center_when_no_query_layer() {
+    fn render_graph_view_as_text_falls_back_to_in_memory_when_no_query_layer() {
         // A plain `Editor::new()` test fixture has no `KbQueryLayer` wired
         // (that's assembled by the binary's bootstrap, not the core
-        // constructor) — confirms the graceful-degradation branch rather
-        // than panicking or silently rendering nothing.
+        // constructor) — confirms the in-memory fallback renders the
+        // node's real content (query-layer-miss-falls-through-to-in-memory,
+        // see `kb_contains_any`'s doc comment) rather than a spurious
+        // "unavailable" placeholder when the node genuinely exists.
         let mut e = Editor::new();
         e.kb_graph_view_open(Some("index".to_string()), Some(1));
         assert!(e.kb.query_layer().is_none());
         let text = e.render_graph_view_as_text();
         assert!(text.contains("index"));
+        assert!(
+            !text.contains("no KB query layer"),
+            "the in-memory fallback must render real content, not the unavailable placeholder: {text}"
+        );
+    }
+
+    #[test]
+    fn render_graph_view_as_text_reports_unavailable_when_center_resolves_nowhere() {
+        // Genuine graceful-degradation case: no query layer AND the center
+        // node isn't in any in-memory KB either — must still degrade
+        // gracefully rather than panicking.
+        let mut e = Editor::new();
+        if let Some(idx) = e.buffers.iter().position(|b| b.kind == BufferKind::Graph) {
+            if let Some(gv) = e.buffers[idx].graph_view_mut() {
+                gv.center_node = Some("nonexistent:ghost".to_string());
+            }
+        } else {
+            e.kb_graph_view_open(Some("index".to_string()), Some(1));
+            let idx = e
+                .buffers
+                .iter()
+                .position(|b| b.kind == BufferKind::Graph)
+                .unwrap();
+            e.buffers[idx].graph_view_mut().unwrap().center_node =
+                Some("nonexistent:ghost".to_string());
+        }
+        assert!(e.kb.query_layer().is_none());
+        let text = e.render_graph_view_as_text();
         assert!(text.contains("no KB query layer"));
+    }
+
+    #[test]
+    fn open_help_at_finds_a_node_via_in_memory_fallback_when_the_query_layer_lags_behind() {
+        // Direct regression test for the reported bug: clicking a graph
+        // node showed "(no such KB node: ...)" even though the node
+        // demonstrably existed (findable via search, resolvable as a
+        // graph-view center) — because `kb_contains_any`/`open_help_at`
+        // trusted a `Some` query layer exclusively, with no fallback, and
+        // the query layer (a CozoDB PROJECTION, ADR-029) had not yet
+        // caught up to a node the in-memory KB already had.
+        //
+        // Reproduces that exact shape: an empty (freshly-opened, never
+        // populated) real `CozoQueryLayer` wired as the query layer —
+        // `.contains()` on it is unconditionally false for everything —
+        // while `kb.primary` has the node. Before the fix, `open_help_at`
+        // would report "No help node" and fall back to "index" instead of
+        // opening the real node.
+        use mae_kb::query::CozoQueryLayer;
+        use mae_kb::CozoKbStore;
+        use std::sync::Arc;
+
+        let mut e = ed_with_kb_node_for_help_tests("scheme:gc-collect!", "Scheme: gc-collect!");
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(CozoKbStore::open(tmp.path().join("empty.cozo")).unwrap());
+        let layer: Arc<dyn mae_kb::query::KbQueryLayer> = Arc::new(CozoQueryLayer::new(store));
+        e.kb.set_daemon_query_layer(Some(layer));
+        assert!(
+            !e.kb.query_layer().unwrap().contains("scheme:gc-collect!"),
+            "sanity: the empty query layer must NOT contain the node (simulating a lagging projection)"
+        );
+
+        e.open_help_at("scheme:gc-collect!");
+
+        assert_eq!(
+            e.active_buffer().kb_view().unwrap().current,
+            "scheme:gc-collect!",
+            "must open the real node via the in-memory fallback, not silently redirect to index"
+        );
+        let text = e.active_buffer().rope().to_string();
+        assert!(
+            !text.contains("no such KB node") && !text.contains("No help node"),
+            "buffer content must be the real node's content, not an error placeholder: {text}"
+        );
+        assert!(text.contains("Scheme: gc-collect!"));
+    }
+
+    fn ed_with_kb_node_for_help_tests(id: &str, title: &str) -> Editor {
+        let mut e = Editor::new();
+        e.kb.primary.insert(mae_kb::Node::new(
+            id,
+            title,
+            mae_kb::NodeKind::Concept,
+            "body text",
+        ));
+        e
     }
 
     #[test]
