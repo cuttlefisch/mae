@@ -1,6 +1,6 @@
 [package]
 name = "mae-sync"
-version = "0.14.43"
+version = "0.14.44"
 edition = "2021"
 license = "GPL-3.0-or-later"
 

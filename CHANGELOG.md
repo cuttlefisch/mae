@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### CI
+
+- *(deps)* Bump schneegans/dynamic-badges-action ([ad41d4a](https://github.com/cuttlefisch/mae/commit/ad41d4a861b812acde0a14ce7cfc8b3f3c958f7a))
+
+### Miscellaneous
+
+- *(deps)* Bump the rust-dependencies group across 1 directory with 14 updates ([99dde27](https://github.com/cuttlefisch/mae/commit/99dde27002f3c7d9449640bad112ac942b56afa3))
+- *(deps)* Keep dalek trio pinned at 2/2/4 (iroh blocker), guard in dependabot ([70878c4](https://github.com/cuttlefisch/mae/commit/70878c4cb2e11dd0472884c5d2f8456526a443da))
+
+## [0.14.43] - 2026-07-15
+
 ### Bug Fixes
 
 - *(kb-graph-view)* Per-window viewport isolation (#321) ([74eec5e](https://github.com/cuttlefisch/mae/commit/74eec5eb5465dd2b223c485671070b333e902343))
@@ -37,6 +48,7 @@ All notable changes to this project will be documented in this file.
 - Regenerate manual KB after graph-view spacing/scope option additions ([cb4b07e](https://github.com/cuttlefisch/mae/commit/cb4b07e7159e573a3ba604f440ed31fce9f0e269))
 - Regenerate manual KB after query-layer-fallback fix ([7a3bf4d](https://github.com/cuttlefisch/mae/commit/7a3bf4dc3a6e9f04e5679a5ceb953a0a0270b6bb))
 - Regenerate manual KB after consolidated query-layer-fallback fix ([a94f767](https://github.com/cuttlefisch/mae/commit/a94f767a8d68769160a296194953c3cc6e4fd40e))
+- Bump version to 0.14.43 ([714ab94](https://github.com/cuttlefisch/mae/commit/714ab94f8043317a896e35627afe268b7e3cae8e))
 
 ## [0.14.42] - 2026-07-13
 
