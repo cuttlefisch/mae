@@ -612,7 +612,15 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
             editor.resolve_notification(id, mae_core::notifications::Resolution::Replied);
         }
         MiniDialogContext::KbGraphOpenPrompt => {
-            editor.kb_graph_view_open(None, None);
+            // `resolve_scoped_default_center` resolves within the
+            // newly-scoped instance specifically (its own "index", else a
+            // NodeKind::Index node, else its hub) — falling through to
+            // `kb_graph_view_open`'s generic `None` behavior only when the
+            // scope is a keyword ("all"/etc.), never silently landing on a
+            // DIFFERENT KB's node the way the plain resolve_graph_center
+            // fallback chain would. See that method's doc comment.
+            let center = editor.resolve_scoped_default_center();
+            editor.kb_graph_view_open(center, None);
         }
         MiniDialogContext::RevertBuffer { buf_idx } => {
             let buf_idx = *buf_idx;

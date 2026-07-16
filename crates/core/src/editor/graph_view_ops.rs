@@ -107,6 +107,46 @@ impl Editor {
             .unwrap_or_else(|| "index".to_string())
     }
 
+    /// A default center within the CURRENTLY SCOPED instance specifically —
+    /// `None` when `kb.search_scope` is a keyword (`"all"`/`"local"`/
+    /// `"remote"`) or names an instance that isn't actually registered.
+    ///
+    /// Regression fix: `:kb-set-search-scope`'s "open the graph?" prompt
+    /// used to call `kb_graph_view_open(None, None)`, which resolves via
+    /// `resolve_graph_center`'s `"index"` fallback — but MAE's own
+    /// `"index"`/`NodeKind::Index` convention is specific to its own
+    /// manual KB. An externally authored KB (e.g. an org-roam-style
+    /// proposal KB with raw UUID node ids — verified against a real
+    /// registered instance while chasing this bug) has neither, so
+    /// `kb_owner_of_scoped("index")` correctly found nothing in the scoped
+    /// instance and fell through to PRIMARY's "index" — silently showing
+    /// the wrong KB's content with no indication anything had gone
+    /// sideways. This resolves within the scoped instance ONLY: its own
+    /// `"index"` node if it has one, else a `NodeKind::Index` node if it
+    /// tags one that way, else its highest-degree node (`hub_node_id` —
+    /// the standard org-roam-ui/Obsidian "land on the hub" heuristic) —
+    /// never falling through to a different KB the way the general
+    /// `resolve_graph_center` fallback chain does.
+    pub fn resolve_scoped_default_center(&self) -> Option<String> {
+        let scope = self.kb.search_scope.trim();
+        let is_keyword = matches!(
+            scope.to_ascii_lowercase().as_str(),
+            "" | "all" | "local" | "local-only" | "remote" | "remote-only"
+        );
+        if is_keyword {
+            return None;
+        }
+        let entry = self.kb.registry.find(scope)?;
+        let kb = self.kb.instances.get(&entry.uuid)?;
+        if kb.contains("index") {
+            return Some("index".to_string());
+        }
+        if let Some((id, _)) = kb.iter().find(|(_, n)| n.kind == mae_kb::NodeKind::Index) {
+            return Some(id.clone());
+        }
+        kb.hub_node_id()
+    }
+
     /// Build `GraphStyleOptions` from the current option values + theme.
     /// `pub(crate)` — used by `graph_view_ops.rs` itself and exercised
     /// directly by unit tests in this file.
@@ -1352,6 +1392,151 @@ mod tests {
             body,
         ));
         editor
+    }
+
+    /// Registers `instance_name` with the given nodes and scopes to it —
+    /// mirrors `editor_with_a_registered_instance_sharing_an_id_with_primary`
+    /// in `kb_ops/registry.rs`'s test module, generalized to take arbitrary
+    /// nodes (that helper hardcodes an "index" node the regression this
+    /// tests specifically needs ABSENT).
+    fn ed_scoped_to_a_registered_instance(instance_name: &str, nodes: Vec<mae_kb::Node>) -> Editor {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "index",
+            "Primary Manual Index",
+            mae_kb::NodeKind::Index,
+            "",
+        ));
+        let mut inst = mae_kb::KnowledgeBase::new();
+        for n in nodes {
+            inst.insert(n);
+        }
+        let uuid = format!("uuid-{instance_name}");
+        editor.kb.instances.insert(uuid.clone(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid,
+                name: instance_name.to_string(),
+                org_dir: std::path::PathBuf::from("/tmp/notes"),
+                db_path: std::path::PathBuf::from("/tmp/notes.db"),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+            });
+        editor.kb.search_scope = instance_name.to_string();
+        editor
+    }
+
+    #[test]
+    fn resolve_scoped_default_center_is_none_for_keyword_scopes() {
+        let mut editor = ed_scoped_to_a_registered_instance(
+            "proj",
+            vec![mae_kb::Node::new(
+                "some-uuid",
+                "Some Node",
+                mae_kb::NodeKind::Note,
+                "",
+            )],
+        );
+        for kw in ["all", "local", "remote", ""] {
+            editor.kb.search_scope = kw.to_string();
+            assert_eq!(editor.resolve_scoped_default_center(), None, "scope={kw:?}");
+        }
+    }
+
+    #[test]
+    fn resolve_scoped_default_center_prefers_the_instances_own_index_node() {
+        let editor = ed_scoped_to_a_registered_instance(
+            "proj",
+            vec![mae_kb::Node::new(
+                "index",
+                "Proj Index",
+                mae_kb::NodeKind::Index,
+                "",
+            )],
+        );
+        assert_eq!(
+            editor.resolve_scoped_default_center(),
+            Some("index".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_scoped_default_center_falls_back_to_the_hub_node_when_theres_no_index_convention() {
+        // Regression: an externally authored KB (e.g. org-roam-style, raw
+        // UUID ids) has no "index" node and no NodeKind::Index tagging —
+        // this must resolve to the instance's OWN hub, never silently fall
+        // through to primary's "index" the way kb_owner_of_scoped("index")
+        // alone would (that's exactly the bug this method exists to avoid).
+        let editor = ed_scoped_to_a_registered_instance(
+            "external-proposal",
+            vec![
+                mae_kb::Node::new(
+                    "a1b2c3d4-readme",
+                    "README",
+                    mae_kb::NodeKind::Note,
+                    "[[e5f6a7b8-hub]]",
+                ),
+                mae_kb::Node::new(
+                    "e5f6a7b8-hub",
+                    "Project Proposal Hub",
+                    mae_kb::NodeKind::Note,
+                    "[[a1b2c3d4-readme]] [[c9d0e1f2-adr1]] [[d3e4f5a6-adr2]]",
+                ),
+                mae_kb::Node::new("c9d0e1f2-adr1", "ADR 1", mae_kb::NodeKind::Note, ""),
+                mae_kb::Node::new("d3e4f5a6-adr2", "ADR 2", mae_kb::NodeKind::Note, ""),
+            ],
+        );
+        assert_eq!(
+            editor.resolve_scoped_default_center(),
+            Some("e5f6a7b8-hub".to_string()),
+            "must land on the scoped instance's own hub node, not primary's index"
+        );
+    }
+
+    #[test]
+    fn resolve_scoped_default_center_is_none_when_the_instance_is_empty() {
+        let editor = ed_scoped_to_a_registered_instance("proj", vec![]);
+        assert_eq!(editor.resolve_scoped_default_center(), None);
+    }
+
+    #[test]
+    fn kb_graph_open_prompt_confirm_lands_on_the_scoped_instances_hub_not_primary() {
+        // End-to-end regression for the actual bug report: switch scope to
+        // an instance with no "index" convention, then confirm the "open
+        // the graph?" prompt exactly as the picker's confirm-flow does —
+        // must open on THAT instance's hub, never primary's manual index.
+        let mut editor = ed_scoped_to_a_registered_instance(
+            "external-proposal",
+            vec![
+                mae_kb::Node::new(
+                    "e5f6a7b8-hub",
+                    "Project Proposal Hub",
+                    mae_kb::NodeKind::Note,
+                    "[[leaf]]",
+                ),
+                mae_kb::Node::new("leaf", "Leaf", mae_kb::NodeKind::Note, ""),
+            ],
+        );
+        let center = editor.resolve_scoped_default_center();
+        editor.kb_graph_view_open(center, None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        assert_eq!(
+            editor.buffers[graph_idx].graph_view().unwrap().center_node,
+            Some("e5f6a7b8-hub".to_string())
+        );
     }
 
     #[test]

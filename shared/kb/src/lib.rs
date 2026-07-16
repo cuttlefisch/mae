@@ -1236,6 +1236,24 @@ impl KnowledgeBase {
         out + in_
     }
 
+    /// The highest-degree node in this KB, or `None` if it's empty. Used as
+    /// a last-resort default "entry point" for KBs that don't follow MAE's
+    /// own `"index"`/`NodeKind::Index` convention — e.g. an externally
+    /// authored org-roam-style proposal KB, where node ids are raw UUIDs
+    /// and there's no designated root. A high-degree node is the standard
+    /// org-roam-ui/Obsidian heuristic for "the hub worth landing on."
+    /// Ties break by id, ascending, for determinism.
+    pub fn hub_node_id(&self) -> Option<String> {
+        self.nodes
+            .keys()
+            .max_by(|a, b| {
+                self.node_degree(a)
+                    .cmp(&self.node_degree(b))
+                    .then_with(|| b.cmp(a))
+            })
+            .cloned()
+    }
+
     /// Remove multiple nodes at once. Returns the removed nodes.
     pub fn remove_nodes(&mut self, node_ids: &[String]) -> Vec<Node> {
         node_ids.iter().filter_map(|id| self.remove(id)).collect()
@@ -3433,6 +3451,41 @@ mod tests {
             max_depth,
             include_backlinks,
             node_cap: None,
+        }
+    }
+
+    #[test]
+    fn hub_node_id_is_none_for_an_empty_kb() {
+        let kb = KnowledgeBase::new();
+        assert_eq!(kb.hub_node_id(), None);
+    }
+
+    #[test]
+    fn hub_node_id_picks_the_highest_degree_node() {
+        // "popular" has degree 3 (2 backlinks + 1 outgoing); everything
+        // else has lower degree — regression case for KBs with no
+        // "index"/NodeKind::Index convention (e.g. externally authored
+        // org-roam-style proposal KBs using raw UUID ids).
+        let kb = kb_with(vec![
+            Node::new("ref1", "Ref1", NodeKind::Note, "[[popular]]"),
+            Node::new("ref2", "Ref2", NodeKind::Note, "[[popular]]"),
+            Node::new("popular", "Popular", NodeKind::Note, "[[lonely]]"),
+            Node::new("lonely", "Lonely", NodeKind::Note, ""),
+        ]);
+        assert_eq!(kb.hub_node_id(), Some("popular".to_string()));
+    }
+
+    #[test]
+    fn hub_node_id_breaks_ties_by_id_ascending_deterministically() {
+        let kb = kb_with(vec![
+            Node::new("zeta", "Zeta", NodeKind::Note, ""),
+            Node::new("alpha", "Alpha", NodeKind::Note, ""),
+            Node::new("mu", "Mu", NodeKind::Note, ""),
+        ]);
+        // All degree 0 — must deterministically pick the same one every
+        // time regardless of HashMap iteration order.
+        for _ in 0..20 {
+            assert_eq!(kb.hub_node_id(), Some("alpha".to_string()));
         }
     }
 
