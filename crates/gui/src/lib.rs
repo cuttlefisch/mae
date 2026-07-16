@@ -137,6 +137,9 @@ pub struct GuiRenderer {
     pending_render_draw_us: u64,
     /// Total render time from the previous frame (microseconds).
     pending_total_render_us: u64,
+    /// Per-window render-cache snapshot from the previous frame's immutable
+    /// phase — see `PerfStats::window_cache_snapshot`'s doc comment.
+    pending_window_cache_snapshot: Vec<mae_core::editor::perf::WindowCacheEntry>,
     /// Per-window render cache: non-focused windows with unchanged state
     /// are blitted from cached images instead of re-rendered.
     window_render_cache: HashMap<mae_core::WindowId, WindowRenderCache>,
@@ -163,6 +166,7 @@ impl GuiRenderer {
             pending_render_layout_us: 0,
             pending_render_draw_us: 0,
             pending_total_render_us: 0,
+            pending_window_cache_snapshot: Vec::new(),
             window_render_cache: HashMap::new(),
         }
     }
@@ -315,6 +319,8 @@ impl Renderer for GuiRenderer {
         editor.perf_stats.render_layout_us = self.pending_render_layout_us;
         editor.perf_stats.render_draw_us = self.pending_render_draw_us;
         editor.perf_stats.total_render_us = self.pending_total_render_us;
+        editor.perf_stats.window_cache_snapshot =
+            std::mem::take(&mut self.pending_window_cache_snapshot);
         self.pending_render_layout_us = 0;
         self.pending_render_draw_us = 0;
         self.pending_total_render_us = 0;
@@ -907,6 +913,30 @@ impl Renderer for GuiRenderer {
 
         // Cache all window layouts for mouse click positioning.
         self.window_layouts = all_layouts;
+
+        // Snapshot the render cache's current state against each cached
+        // window's LIVE buffer state, for `introspect(frame)` — see
+        // `PerfStats::window_cache_snapshot`'s doc comment for why this
+        // exists. `editor` is `&Editor` here (immutable phase), so this
+        // goes through the same `pending_*`-then-copy-next-frame pattern as
+        // `pending_render_layout_us` below, applied at the top of `render`.
+        self.pending_window_cache_snapshot = self
+            .window_render_cache
+            .iter()
+            .filter_map(|(win_id, cached)| {
+                let win = editor.window_mgr.window(*win_id)?;
+                let live_generation = editor.buffers.get(win.buffer_idx)?.generation;
+                Some(mae_core::editor::perf::WindowCacheEntry {
+                    window_id: *win_id as usize,
+                    cached_buffer_idx: cached.buffer_idx,
+                    cached_generation: cached.generation,
+                    live_buffer_idx: win.buffer_idx,
+                    live_generation,
+                    matches: cached.buffer_idx == win.buffer_idx
+                        && cached.generation == live_generation,
+                })
+            })
+            .collect();
 
         // Record layout+draw timing from immutable phase.
         self.pending_render_layout_us = layout_time_us;
