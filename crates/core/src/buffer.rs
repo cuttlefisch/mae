@@ -708,6 +708,7 @@ impl Buffer {
         self.rope = Rope::from_str(&content);
         // Rebuild sync doc if enabled — keeps yrs in sync with rope.
         self.sync_rebuild_from_rope();
+        self.bump_generation();
         self.modified = false;
         self.changed_lines.clear();
         self.file_mtime = fs::metadata(&path).and_then(|m| m.modified()).ok();
@@ -731,6 +732,7 @@ impl Buffer {
         self.rope = Rope::from_str(text);
         // Rebuild sync doc and queue broadcast if enabled.
         self.sync_rebuild_from_rope();
+        self.bump_generation();
         self.undo_stack.clear();
         self.redo_stack.clear();
     }
@@ -2917,6 +2919,37 @@ mod tests {
         assert_eq!(
             buf.sync_doc.as_ref().unwrap().content(),
             "after replacement"
+        );
+    }
+
+    #[test]
+    fn replace_contents_bumps_generation() {
+        // Regression: replace_contents used to leave `generation` untouched
+        // while its sibling replace_rope bumped it, so caches keyed on
+        // (buffer_idx, generation) — e.g. WindowRenderCache — could not tell
+        // a freshly-repopulated buffer (like a graph-view companion window
+        // navigating to a new node) from an unchanged one.
+        let mut buf = Buffer::new();
+        let gen_before = buf.generation;
+        buf.replace_contents("new content");
+        assert!(
+            buf.generation > gen_before,
+            "replace_contents must bump generation so render caches invalidate"
+        );
+    }
+
+    #[test]
+    fn reload_from_disk_bumps_generation() {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let file = tmp.path().join("gen_reload.txt");
+        std::fs::write(&file, "original").unwrap();
+        let mut buf = Buffer::from_file(&file).unwrap();
+        let gen_before = buf.generation;
+        std::fs::write(&file, "reloaded content").unwrap();
+        buf.reload_from_disk().unwrap();
+        assert!(
+            buf.generation > gen_before,
+            "reload_from_disk must bump generation so render caches invalidate"
         );
     }
 
