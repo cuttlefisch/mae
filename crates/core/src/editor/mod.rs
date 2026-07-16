@@ -759,6 +759,11 @@ pub struct Editor {
     /// Whether `extract_subgraph` includes backlinks (not just outgoing
     /// links) in the graph view's BFS walk. Mirrors `kb_graph_include_backlinks`.
     pub kb_graph_include_backlinks: bool,
+    /// Safety-net cap on `extract_subgraph`'s node count (`SubgraphSpec::
+    /// node_cap`), independent of `kb_graph_default_depth`/
+    /// `kb_graph_include_backlinks` — a densely cross-referenced KB can make
+    /// even a shallow walk explode. Mirrors `kb_graph_node_count_cap`.
+    pub kb_graph_node_count_cap: usize,
     /// Node circle radius in logical pixels for the graph view's GUI
     /// rendering. Mirrors `kb_graph_node_radius`.
     pub kb_graph_node_radius: u32,
@@ -1292,8 +1297,9 @@ impl Editor {
             which_key_scroll: 0,
             which_key_idle_delay: 0,
             kb_preview_idle_delay: 300,
-            kb_graph_default_depth: 2,
+            kb_graph_default_depth: 1,
             kb_graph_include_backlinks: true,
+            kb_graph_node_count_cap: 300,
             kb_graph_node_radius: 18,
             kb_graph_node_size_by_degree: true,
             kb_graph_node_degree_scale: 4.0,

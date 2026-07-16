@@ -438,12 +438,22 @@ impl OptionRegistry {
                 // --- Native KB graph view (Part C Phase 1) ---
                 opt!("kb_graph_default_depth", &["kb-graph-default-depth"],
                     "Default hop radius (SubgraphSpec::max_depth) for (kb-graph-view-open) when \
-                     no explicit depth is given.",
-                    OptionKind::Int, "2", Some("kb-graph.default-depth"), &[]),
+                     no explicit depth is given. Default 1 (not 2): a densely cross-referenced \
+                     KB's backlinks compound recursively at depth >= 2, pulling in most of the \
+                     KB for almost any well-connected node — matches Obsidian's and org-roam-ui's \
+                     own local-graph defaults, both also depth 1.",
+                    OptionKind::Int, "1", Some("kb-graph.default-depth"), &[]),
                 opt!("kb_graph_include_backlinks", &["kb-graph-include-backlinks"],
                     "Whether the graph view's subgraph extraction walks backlinks as well as \
                      outgoing links.",
                     OptionKind::Bool, "true", Some("kb-graph.include-backlinks"), &[]),
+                opt!("kb_graph_node_count_cap", &["kb-graph-node-count-cap"],
+                    "Safety-net cap on the graph view's total node count (SubgraphSpec::node_cap), \
+                     independent of kb_graph_default_depth/kb_graph_include_backlinks. When a walk \
+                     would exceed this, starter nodes plus the highest-degree remaining nodes are \
+                     kept and the rest surface as boundary-stub \"... (+N)\" links, same as a \
+                     depth cutoff. Mirrors Neo4j Browser's default 300-node initial display cap.",
+                    OptionKind::Int, "300", Some("kb-graph.node-count-cap"), &[]),
                 opt!("kb_graph_node_radius", &["kb-graph-node-radius"],
                     "Base node circle radius in logical pixels for the graph view's GUI \
                      rendering, at viewport zoom 1.0 before degree/zoom adjustments — see \

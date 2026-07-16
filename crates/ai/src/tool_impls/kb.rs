@@ -658,6 +658,7 @@ pub fn execute_kb_graph_view_open(
         "kb_instance": gv.kb_instance,
         "node_count": gv.scene.nodes.len(),
         "edge_count": gv.scene.edges.len(),
+        "hidden_node_count": gv.hidden_node_count,
     }))
     .map_err(|e| e.to_string())
 }

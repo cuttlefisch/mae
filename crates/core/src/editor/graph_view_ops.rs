@@ -276,12 +276,14 @@ impl Editor {
             starter_nodes: vec![center.clone()],
             max_depth: depth,
             include_backlinks: self.kb_graph_include_backlinks,
+            node_cap: Some(self.kb_graph_node_count_cap),
         };
         let owner = self.kb_owner_of_scoped(&center);
         let empty_result = || mae_kb::SubgraphResult {
             nodes: Vec::new(),
             links: Vec::new(),
             boundary_links: Vec::new(),
+            hidden_node_count: 0,
         };
         let result = match &owner {
             Some(None) => self.kb.primary.extract_subgraph(&spec),
@@ -297,6 +299,7 @@ impl Editor {
             Some(Some(uuid)) => Some(uuid),
             _ => None,
         };
+        let hidden_node_count = result.hidden_node_count;
 
         let kb_nodes: Vec<mae_canvas::kb_graph::KbNodeInfo> = result
             .nodes
@@ -375,8 +378,15 @@ impl Editor {
             gv.animating = self.kb_graph_animate;
             gv.anim_temperature = ANIMATION_INITIAL_TEMPERATURE;
             gv.layout_config = layout_config;
+            gv.hidden_node_count = hidden_node_count;
         }
         self.graph_view_reflatten_all_windows(buf_idx);
+        if hidden_node_count > 0 {
+            self.set_status(format!(
+                "KB graph: {hidden_node_count} more node(s) hidden by kb_graph_node_count_cap \
+                 — narrow your view (lower depth, disable backlinks, or raise the cap) to see them."
+            ));
+        }
     }
 
     /// Part C Phase 3: is there an open `BufferKind::Graph` buffer whose
@@ -1368,6 +1378,66 @@ mod tests {
             7.5,
             "the option's value must flow into the cached layout_config"
         );
+    }
+
+    #[test]
+    fn kb_graph_node_count_cap_option_flows_into_hidden_node_count_and_status() {
+        // Proves the option reaches populate_graph_buffer's SubgraphSpec
+        // construction, that the resulting hidden count lands on GraphView
+        // (readable via describe_state/the MCP response), and that a
+        // one-shot status message is emitted so a truncated view is never
+        // silently mistaken for the whole neighborhood.
+        let mut editor = ed_with_kb_node("hub", "Hub", "[[n1]] [[n2]] [[n3]] [[n4]] [[n5]]");
+        for i in 1..=5 {
+            editor.kb.primary.insert(mae_kb::Node::new(
+                format!("n{i}"),
+                format!("N{i}"),
+                mae_kb::NodeKind::Concept,
+                "",
+            ));
+        }
+        editor.kb_graph_node_count_cap = 3;
+        editor.kb_graph_view_open(Some("hub".to_string()), Some(1));
+
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        assert_eq!(gv.scene.nodes.len(), 3, "capped to exactly node_cap nodes");
+        assert_eq!(
+            gv.hidden_node_count, 3,
+            "5 linked nodes - 2 kept = 3 hidden"
+        );
+        assert_eq!(gv.describe_state().hidden_node_count, 3);
+        assert!(
+            editor.status_msg.contains('3')
+                && editor.status_msg.contains("hidden")
+                && editor.status_msg.contains("kb_graph_node_count_cap"),
+            "a truncated view must surface a status message naming the cause: {:?}",
+            editor.status_msg
+        );
+    }
+
+    #[test]
+    fn kb_graph_node_count_cap_below_reachable_set_leaves_hidden_node_count_zero() {
+        let mut editor = ed_with_kb_node("a", "A", "[[b]]");
+        editor
+            .kb
+            .primary
+            .insert(mae_kb::Node::new("b", "B", mae_kb::NodeKind::Concept, ""));
+        editor.kb_graph_node_count_cap = 1000;
+        editor.kb_graph_view_open(Some("a".to_string()), Some(1));
+
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        assert_eq!(gv.scene.nodes.len(), 2);
+        assert_eq!(gv.hidden_node_count, 0);
     }
 
     #[test]

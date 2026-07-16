@@ -223,6 +223,7 @@ impl super::Editor {
             "kb_preview_max_lines" => self.kb_preview_max_lines.to_string(),
             "kb_graph_default_depth" => self.kb_graph_default_depth.to_string(),
             "kb_graph_include_backlinks" => self.kb_graph_include_backlinks.to_string(),
+            "kb_graph_node_count_cap" => self.kb_graph_node_count_cap.to_string(),
             "kb_graph_node_radius" => self.kb_graph_node_radius.to_string(),
             "kb_graph_node_size_by_degree" => self.kb_graph_node_size_by_degree.to_string(),
             "kb_graph_node_degree_scale" => self.kb_graph_node_degree_scale.to_string(),
@@ -969,6 +970,12 @@ impl super::Editor {
             }
             "kb_graph_include_backlinks" => {
                 self.kb_graph_include_backlinks = parse_option_bool(value)?;
+            }
+            "kb_graph_node_count_cap" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_graph_node_count_cap = v.clamp(10, 5000);
             }
             "kb_graph_node_radius" => {
                 let v: u32 = value
@@ -2354,6 +2361,48 @@ mod graph_view_option_tests {
             .set_option("kb_graph_layout_spacing_scale", "not-a-number")
             .is_err());
         assert_eq!(editor.kb_graph_layout_spacing_scale, before);
+    }
+
+    #[test]
+    fn kb_graph_default_depth_defaults_to_1() {
+        // Regression: was 2, which let a densely cross-referenced KB's
+        // backlinks compound into near-whole-KB subgraphs for almost any
+        // well-connected node. See kb_graph_node_count_cap for the
+        // independent safety-net cap.
+        let editor = Editor::new();
+        assert_eq!(editor.kb_graph_default_depth, 1);
+        assert_eq!(editor.get_option("kb_graph_default_depth").unwrap().0, "1");
+    }
+
+    #[test]
+    fn kb_graph_node_count_cap_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor.get_option("kb_graph_node_count_cap").unwrap().0,
+            "300"
+        );
+
+        editor.set_option("kb_graph_node_count_cap", "50").unwrap();
+        assert_eq!(editor.kb_graph_node_count_cap, 50);
+        assert_eq!(
+            editor.get_option("kb_graph_node_count_cap").unwrap().0,
+            "50"
+        );
+
+        // Out-of-range values clamp rather than error.
+        editor.set_option("kb_graph_node_count_cap", "1").unwrap();
+        assert_eq!(editor.kb_graph_node_count_cap, 10);
+        editor
+            .set_option("kb_graph_node_count_cap", "999999")
+            .unwrap();
+        assert_eq!(editor.kb_graph_node_count_cap, 5000);
+
+        // Invalid input is rejected, state unchanged.
+        let before = editor.kb_graph_node_count_cap;
+        assert!(editor
+            .set_option("kb_graph_node_count_cap", "not-a-number")
+            .is_err());
+        assert_eq!(editor.kb_graph_node_count_cap, before);
     }
 
     #[test]
