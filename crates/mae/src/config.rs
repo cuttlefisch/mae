@@ -370,26 +370,48 @@ fn default_init_template() -> &'static str {
 ;; Docs: :help guide:extension-authoring
 
 ;; ── Modules ──────────────────────────────────────────────
-;; Uncomment modules to enable. Run `mae sync` after changes.
+;; Every available module is listed below. Enabled = active line;
+;; disabled = commented out — uncomment to enable, then run `mae sync`.
+;; The `:keyword` group labels are cosmetic (they just organize the list).
+;; Always-on core modules load automatically and aren't listed here:
+;;   notifications (SPC n), kb-sharing (SPC C K m).
 (mae!
-  :editor
-    "surround"          ; vim-surround (ds, cs, ys, S)
-    "search"            ; /, ?, n, N, *, #
-    "registers"         ; named registers (" in normal/visual)
-    "macros"            ; macro recording (q, @)
-    "marks-jumps"       ; marks, jump list, change list
-    ;; (list "multicursor" "+align")  ; multi-cursor editing
+  :keymap                ; pick ONE flavor (keymap-doom is the default if none set)
+    "keymap-doom"        ; Doom-style modal — SPC leader, vi motions
+    ;; "keymap-nonmodal" ; non-modal / CUA — Insert by default, C-; opens the keypad
 
-  :ui
-    "dashboard"         ; splash screen
-    "file-tree"         ; project sidebar
+  :editor
+    "surround"           ; vim-surround (ds, cs, ys, S)
+    "search"             ; /, ?, n, N, *, #, gn/gN
+    "registers"          ; named registers (" in normal/visual)
+    "macros"             ; macro recording (q, @)
+    "marks-jumps"        ; marks, jump list, change list
+    "tables"             ; table editing — align, rows/columns
+    ;; (list "multicursor" "+align")  ; multiple cursors (with the +align flag)
+    ;; "snippets"        ; snippet expansion — tab-stops, mirrors
+    ;; "format"          ; code formatting — external formatters, format-on-save
 
   :lang
-    "org"               ; org-mode keymap + hooks
-    "tables"            ; table manipulation in org/markdown
+    "org"                ; org-mode — headings, TODOs, babel, export
+    ;; "markdown"        ; markdown — headings, promotion/demotion, narrowing
+
+  :ui
+    "dashboard"          ; splash screen
+    "file-tree"          ; project sidebar
 
   :app
-    "dailies"           ; daily notes (SPC n d)
+    "dailies"            ; daily notes (SPC n d)
+    ;; "agenda"          ; org agenda buffer (SPC o a)
+
+  :tools
+    ;; "git-status"      ; magit-style git status (SPC g)
+    ;; "debug"           ; DAP debug panel (SPC d)
+    ;; "make"            ; build runner — compile, jump to errors
+    ;; "lookup"          ; definition lookup + online docs + man pages
+    ;; "kb-graph-view"   ; native org-roam-ui-style KB graph view (SPC h g)
+
+  :checkers
+    ;; "spell"           ; spell checking (aspell/hunspell)
 )
 
 ;; ── Third-party packages ─────────────────────────────────
