@@ -759,11 +759,9 @@ fn handle_key(
                 app.pending_submit = Some(submitted);
             }
         }
-        KeyCode::Backspace => {
-            if app.cursor > 0 {
-                app.cursor -= 1;
-                app.input.remove(app.cursor);
-            }
+        KeyCode::Backspace if app.cursor > 0 => {
+            app.cursor -= 1;
+            app.input.remove(app.cursor);
         }
         KeyCode::Left => app.cursor = app.cursor.saturating_sub(1),
         KeyCode::Right => app.cursor = (app.cursor + 1).min(app.input.len()),
