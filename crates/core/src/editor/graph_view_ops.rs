@@ -650,12 +650,40 @@ impl Editor {
     /// and that new window becomes the companion for next time.
     fn navigate_companion_window_to_node(&mut self, graph_idx: usize, node_id: &str) {
         self.kb.record_visit(node_id);
-        let kb_buf_idx = self.ensure_kb_buffer_idx(node_id);
-        self.kb_populate_buffer(kb_buf_idx);
 
         let companion_valid = self.buffers[graph_idx]
             .graph_view()
             .and_then(|gv| gv.companion_window.get_valid(&self.window_mgr));
+
+        let mut kb_buf_idx = self.ensure_kb_buffer_idx(node_id);
+        // If the buffer we're about to repopulate is ALSO visible in some
+        // window OTHER than the companion window (most commonly: the
+        // shared *Help* buffer builtin nodes reuse, showing in a second,
+        // unrelated split), mutating it in place would silently change
+        // that other window's content too — both windows render the same
+        // buffer object. Fall back to a dedicated, one-off buffer instead,
+        // so only the companion window is affected. See
+        // `fresh_kb_buffer_idx`'s doc comment for the full report.
+        //
+        // No captured companion yet (`companion_valid` is `None`, e.g. the
+        // very first click): a SINGLE pre-existing window already showing
+        // this buffer is exactly the common "*Help* already open, first
+        // click reuses/focuses it" case, not a leak — only TWO OR MORE
+        // pre-existing windows showing it is genuinely ambiguous.
+        let windows_showing_buf: Vec<WindowId> = self
+            .window_mgr
+            .iter_windows()
+            .filter(|w| w.buffer_idx == kb_buf_idx)
+            .map(|w| w.id)
+            .collect();
+        let shown_elsewhere = match companion_valid {
+            Some(win_id) => windows_showing_buf.iter().any(|&id| id != win_id),
+            None => windows_showing_buf.len() > 1,
+        };
+        if shown_elsewhere {
+            kb_buf_idx = self.fresh_kb_buffer_idx(node_id);
+        }
+        self.kb_populate_buffer(kb_buf_idx);
 
         if let Some(win_id) = companion_valid {
             if let Some(win) = self.window_mgr.window_mut(win_id) {
@@ -2220,6 +2248,93 @@ mod tests {
         assert_eq!(
             companion_win.buffer_idx, kb_idx,
             "the captured companion window must now show the selected node's KB buffer"
+        );
+    }
+
+    #[test]
+    fn select_current_does_not_leak_content_into_an_unrelated_window_sharing_the_help_buffer() {
+        // Regression for the reported bug: with multiple windows open, a
+        // graph-node click updated content in BOTH windows, not just the
+        // intended companion — because builtin nodes all share ONE *Help*
+        // buffer, and a second, unrelated window happened to show it too.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "[[concept:window]]");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:window",
+            "Window",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), Some(1));
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+
+        // Split once, capture the new window as the companion, and select
+        // the currently-selected node into it (populates the shared *Help*
+        // buffer with "concept:buffer" or whichever node the layout picked
+        // as index 0 — read it back rather than assuming).
+        let area = editor.default_area();
+        let text_idx = editor.buffers.len();
+        editor.buffers.push(Buffer::new());
+        let companion_win_id = editor
+            .window_mgr
+            .split(SplitDirection::Vertical, text_idx, area)
+            .expect("split should succeed");
+        editor.buffers[graph_idx]
+            .graph_view_mut()
+            .unwrap()
+            .companion_window
+            .set(Some(companion_win_id));
+        editor.kb_graph_view_select_current();
+        let help_buf_idx = editor
+            .window_mgr
+            .window(companion_win_id)
+            .unwrap()
+            .buffer_idx;
+        let first_node_content = editor.buffers[help_buf_idx].text();
+
+        // A THIRD, unrelated window also ends up showing that same shared
+        // *Help* buffer (e.g. the user manually split it, or opened plain
+        // :help earlier) — simulate that directly.
+        let other_win_id = editor
+            .window_mgr
+            .split(SplitDirection::Horizontal, help_buf_idx, area)
+            .expect("split should succeed");
+        assert_eq!(
+            editor.window_mgr.window(other_win_id).unwrap().buffer_idx,
+            help_buf_idx
+        );
+
+        // Navigate the graph selection to a different node and select it —
+        // this must only affect the companion window.
+        editor.kb_graph_view_navigate(crate::graph_view::GraphNavDirection::Down);
+        editor.kb_graph_view_select_current();
+
+        let companion_buf_idx = editor
+            .window_mgr
+            .window(companion_win_id)
+            .unwrap()
+            .buffer_idx;
+        let other_buf_idx_after = editor.window_mgr.window(other_win_id).unwrap().buffer_idx;
+        assert_ne!(
+            companion_buf_idx, other_buf_idx_after,
+            "the companion must move to a fresh buffer, diverging from the unrelated window"
+        );
+        assert_eq!(
+            other_buf_idx_after, help_buf_idx,
+            "the unrelated window must keep pointing at the original shared buffer"
+        );
+        assert_eq!(
+            editor.buffers[other_buf_idx_after].text(),
+            first_node_content,
+            "the unrelated window's content must be UNCHANGED by the companion's navigation"
+        );
+        assert_ne!(
+            editor.buffers[companion_buf_idx].text(),
+            first_node_content,
+            "the companion window's content must reflect the NEW node"
         );
     }
 

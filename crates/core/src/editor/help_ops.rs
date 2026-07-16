@@ -77,6 +77,77 @@ fn render_related_block(
     items.len()
 }
 
+/// One neighborhood link ready to render — already correlated with its
+/// optional typed relationship label (see call sites for how each render
+/// path builds this cheaply, without per-item title resolution).
+struct NeighborLink {
+    id: String,
+    rel_label: Option<String>,
+}
+
+/// Cap on outgoing/incoming links actually rendered (title-resolved) per
+/// direction, regardless of a node's true degree.
+///
+/// Regression fix: this Neighborhood block used to be duplicated three
+/// times (the `cmd:` live-render branch below, `render_kb_node_for_query`,
+/// `render_kb_node_with_store`), each doing an UNCAPPED per-link title
+/// resolution — for a true hub node (`index`: 1300+ edges), that's a
+/// synchronous multi-second stall on every single click, reported live.
+/// `render_kb_node_with_store` additionally did an O(n) linear `.find()`
+/// per link to correlate typed relationship data — O(n^2) on top of the
+/// uncapped O(n). One shared, capped renderer closes both: the duplication
+/// (principle #8 — this is exactly how the cap could exist in one path and
+/// not the others) and the unbounded cost (principle #9).
+const MAX_NEIGHBORHOOD_LINKS: usize = 50;
+
+/// Render one direction (`Outgoing:` or `Backlinks (N):`) of a node's
+/// Neighborhood block. `header` carries the TRUE total count (even when
+/// capped) so degree stays visible; only the first `MAX_NEIGHBORHOOD_LINKS`
+/// entries get title-resolved and rendered, with a "... (N more)" note for
+/// the rest — mirroring `render_related_block`'s cap-with-count-note shape.
+fn render_neighborhood_links(
+    out: &mut String,
+    links: &mut Vec<KbLinkSpan>,
+    header: &str,
+    entries: &[NeighborLink],
+    arrow: &str,
+    resolve_title: impl Fn(&str) -> String,
+) {
+    if entries.is_empty() {
+        return;
+    }
+    out.push_str(header);
+    let total = entries.len();
+    for entry in entries.iter().take(MAX_NEIGHBORHOOD_LINKS) {
+        let title_text = resolve_title(&entry.id);
+        out.push_str("  ");
+        if let Some(rel) = &entry.rel_label {
+            out.push_str(rel);
+            out.push(' ');
+            out.push_str(arrow);
+            out.push(' ');
+        } else {
+            out.push_str(arrow);
+            out.push(' ');
+        }
+        let link_start = out.len();
+        out.push_str(&entry.id);
+        let link_end = out.len();
+        links.push(KbLinkSpan {
+            byte_start: link_start,
+            byte_end: link_end,
+            target: entry.id.clone(),
+        });
+        out.push_str(&format!("  {}\n", title_text));
+    }
+    if total > MAX_NEIGHBORHOOD_LINKS {
+        out.push_str(&format!(
+            "  ... ({} more)\n",
+            total - MAX_NEIGHBORHOOD_LINKS
+        ));
+    }
+}
+
 fn render_kb_node_for_query(
     query: &dyn mae_kb::KbQueryLayer,
     node_id: &str,
@@ -131,62 +202,38 @@ fn render_kb_node_for_query(
         out.push('\n');
         out.push_str("** Neighborhood\n");
     }
-    if !outgoing.is_empty() {
-        out.push_str("Outgoing:\n");
-        for link in &outgoing {
-            let title_text = query
-                .get(&link.dst)
-                .map(|n| n.title)
-                .unwrap_or_else(|| "(missing)".to_string());
-            out.push_str("  ");
-            if link.rel_type != "references" {
-                out.push_str(&link.rel_type);
-                out.push_str(" → ");
-            } else {
-                out.push_str("→ ");
-            }
-            let link_start = out.len();
-            out.push_str(&link.dst);
-            let link_end = out.len();
-            links.push(KbLinkSpan {
-                byte_start: link_start,
-                byte_end: link_end,
-                target: link.dst.clone(),
-            });
-            out.push_str(&format!("  {}\n", title_text));
-        }
-    }
-    if !incoming.is_empty() {
-        out.push_str(&format!("Backlinks ({}):\n", incoming.len()));
-        for link in &incoming {
-            let title_text = query
-                .get(&link.src)
-                .map(|n| n.title)
-                .unwrap_or_else(|| "(missing)".to_string());
-            out.push_str("  ");
-            if link.rel_type != "references" {
-                out.push_str(&link.rel_type);
-                out.push_str(" ← ");
-            } else {
-                out.push_str("← ");
-            }
-            let link_start = out.len();
-            out.push_str(&link.src);
-            let link_end = out.len();
-            links.push(KbLinkSpan {
-                byte_start: link_start,
-                byte_end: link_end,
-                target: link.src.clone(),
-            });
-            out.push_str(&format!("  {}\n", title_text));
-        }
-    }
-    render_related_block(&mut out, &mut links, &related, &shown, |id| {
+    let resolve_title = |id: &str| {
         query
             .get(id)
             .map(|n| n.title)
             .unwrap_or_else(|| "(missing)".to_string())
-    });
+    };
+    let to_entries = |typed: &[mae_kb::store::Link], id_of: fn(&mae_kb::store::Link) -> &str| {
+        typed
+            .iter()
+            .map(|l| NeighborLink {
+                id: id_of(l).to_string(),
+                rel_label: (l.rel_type != "references").then(|| l.rel_type.clone()),
+            })
+            .collect::<Vec<_>>()
+    };
+    render_neighborhood_links(
+        &mut out,
+        &mut links,
+        "Outgoing:\n",
+        &to_entries(&outgoing, |l| &l.dst),
+        "→",
+        resolve_title,
+    );
+    render_neighborhood_links(
+        &mut out,
+        &mut links,
+        &format!("Backlinks ({}):\n", incoming.len()),
+        &to_entries(&incoming, |l| &l.src),
+        "←",
+        resolve_title,
+    );
+    render_related_block(&mut out, &mut links, &related, &shown, resolve_title);
 
     out.push('\n');
     out.push_str(
@@ -257,71 +304,46 @@ fn render_kb_node_with_store(
         out.push('\n');
         out.push_str("** Neighborhood\n");
     }
-    if !outgoing_ids.is_empty() {
-        out.push_str("Outgoing:\n");
-        for target in &outgoing_ids {
-            let title_text = resolve_title(target).unwrap_or_else(|| "(missing)".to_string());
-            let rel_label = outgoing_typed.as_ref().and_then(|typed| {
-                typed.iter().find(|l| l.dst == *target).and_then(|l| {
-                    if l.rel_type != "references" {
-                        Some(l.rel_type.as_str())
-                    } else {
-                        None
-                    }
-                })
-            });
-            out.push_str("  ");
-            if let Some(rel) = rel_label {
-                out.push_str(rel);
-                out.push_str(" → ");
-            } else {
-                out.push_str("→ ");
-            }
-            let link_start = out.len();
-            out.push_str(target);
-            let link_end = out.len();
-            links.push(KbLinkSpan {
-                byte_start: link_start,
-                byte_end: link_end,
-                target: target.clone(),
-            });
-            out.push_str(&format!("  {}\n", title_text));
-        }
-    }
-    if !incoming_ids.is_empty() {
-        out.push_str(&format!("Backlinks ({}):\n", incoming_ids.len()));
-        for src in &incoming_ids {
-            let title_text = resolve_title(src).unwrap_or_else(|| "(missing)".to_string());
-            let rel_label = incoming_typed.as_ref().and_then(|typed| {
-                typed.iter().find(|l| l.src == *src).and_then(|l| {
-                    if l.rel_type != "references" {
-                        Some(l.rel_type.as_str())
-                    } else {
-                        None
-                    }
-                })
-            });
-            out.push_str("  ");
-            if let Some(rel) = rel_label {
-                out.push_str(rel);
-                out.push_str(" ← ");
-            } else {
-                out.push_str("← ");
-            }
-            let link_start = out.len();
-            out.push_str(src);
-            let link_end = out.len();
-            links.push(KbLinkSpan {
-                byte_start: link_start,
-                byte_end: link_end,
-                target: src.clone(),
-            });
-            out.push_str(&format!("  {}\n", title_text));
-        }
-    }
-    render_related_block(&mut out, &mut links, &related, &shown, |id| {
-        resolve_title(id).unwrap_or_else(|| "(missing)".to_string())
-    });
+    // Build id -> rel_label maps ONCE (was a per-link linear `.find()` over
+    // the full typed list — O(n^2) on a hub node's full link set).
+    let rel_map = |typed: &Option<Vec<mae_kb::store::Link>>,
+                   id_of: fn(&mae_kb::store::Link) -> &str|
+     -> std::collections::HashMap<String, String> {
+        typed
+            .iter()
+            .flatten()
+            .filter(|l| l.rel_type != "references")
+            .map(|l| (id_of(l).to_string(), l.rel_type.clone()))
+            .collect()
+    };
+    let outgoing_rel = rel_map(&outgoing_typed, |l| &l.dst);
+    let incoming_rel = rel_map(&incoming_typed, |l| &l.src);
+    let to_entries = |ids: &[String], rel: &std::collections::HashMap<String, String>| {
+        ids.iter()
+            .map(|id| NeighborLink {
+                id: id.clone(),
+                rel_label: rel.get(id).cloned(),
+            })
+            .collect::<Vec<_>>()
+    };
+    let resolve_title_str = |id: &str| resolve_title(id).unwrap_or_else(|| "(missing)".to_string());
+    render_neighborhood_links(
+        &mut out,
+        &mut links,
+        "Outgoing:\n",
+        &to_entries(&outgoing_ids, &outgoing_rel),
+        "→",
+        resolve_title_str,
+    );
+    render_neighborhood_links(
+        &mut out,
+        &mut links,
+        &format!("Backlinks ({}):\n", incoming_ids.len()),
+        &to_entries(&incoming_ids, &incoming_rel),
+        "←",
+        resolve_title_str,
+    );
+    render_related_block(&mut out, &mut links, &related, &shown, resolve_title_str);
 
     out.push('\n');
     out.push_str(
@@ -692,58 +714,37 @@ impl Editor {
                     out.push('\n');
                     out.push_str("** Neighborhood\n");
                 }
-                if !outgoing_links.is_empty() {
-                    out.push_str("Outgoing:\n");
-                    for link in &outgoing_links {
-                        let title_text = self
-                            .kb_resolve_title(&link.dst)
-                            .unwrap_or_else(|| "(missing)".to_string());
-                        out.push_str("  ");
-                        if link.rel_type != "references" {
-                            out.push_str(&link.rel_type);
-                            out.push_str(" → ");
-                        } else {
-                            out.push_str("→ ");
-                        }
-                        let link_start = out.len();
-                        out.push_str(&link.dst);
-                        let link_end = out.len();
-                        links.push(KbLinkSpan {
-                            byte_start: link_start,
-                            byte_end: link_end,
-                            target: link.dst.clone(),
-                        });
-                        out.push_str(&format!("  {}\n", title_text));
-                    }
-                }
-                if !incoming_links.is_empty() {
-                    out.push_str(&format!("Backlinks ({}):\n", incoming_links.len()));
-                    for link in &incoming_links {
-                        let title_text = self
-                            .kb_resolve_title(&link.src)
-                            .unwrap_or_else(|| "(missing)".to_string());
-                        out.push_str("  ");
-                        if link.rel_type != "references" {
-                            out.push_str(&link.rel_type);
-                            out.push_str(" ← ");
-                        } else {
-                            out.push_str("← ");
-                        }
-                        let link_start = out.len();
-                        out.push_str(&link.src);
-                        let link_end = out.len();
-                        links.push(KbLinkSpan {
-                            byte_start: link_start,
-                            byte_end: link_end,
-                            target: link.src.clone(),
-                        });
-                        out.push_str(&format!("  {}\n", title_text));
-                    }
-                }
-                render_related_block(&mut out, &mut links, &related, &shown, |id| {
+                let resolve_title = |id: &str| {
                     self.kb_resolve_title(id)
                         .unwrap_or_else(|| "(missing)".to_string())
-                });
+                };
+                let to_entries =
+                    |typed: &[mae_kb::store::Link], id_of: fn(&mae_kb::store::Link) -> &str| {
+                        typed
+                            .iter()
+                            .map(|l| NeighborLink {
+                                id: id_of(l).to_string(),
+                                rel_label: (l.rel_type != "references").then(|| l.rel_type.clone()),
+                            })
+                            .collect::<Vec<_>>()
+                    };
+                render_neighborhood_links(
+                    &mut out,
+                    &mut links,
+                    "Outgoing:\n",
+                    &to_entries(&outgoing_links, |l| &l.dst),
+                    "→",
+                    resolve_title,
+                );
+                render_neighborhood_links(
+                    &mut out,
+                    &mut links,
+                    &format!("Backlinks ({}):\n", incoming_links.len()),
+                    &to_entries(&incoming_links, |l| &l.src),
+                    "←",
+                    resolve_title,
+                );
+                render_related_block(&mut out, &mut links, &related, &shown, resolve_title);
                 out.push('\n');
                 out.push_str(
                     "Tab: fold · n/p: links · Enter: follow · e: edit · C-o/C-i: back/fwd · q: close\n",
@@ -1762,18 +1763,61 @@ mod tests {
         assert!(!incoming.is_empty(), "index must have incoming links");
 
         let nav = e.kb_navigable_links();
-        // Every outgoing neighbor appears somewhere in nav links.
-        for target in &outgoing {
+        // Every outgoing neighbor up to the cap appears somewhere in nav
+        // links (see MAX_NEIGHBORHOOD_LINKS — "index" is a true hub with
+        // 1000+ edges; rendering/title-resolving every single one was a
+        // confirmed multi-second UI freeze on every click, so only the
+        // first MAX_NEIGHBORHOOD_LINKS per direction are ever navigable).
+        for target in outgoing.iter().take(MAX_NEIGHBORHOOD_LINKS) {
             assert!(
                 nav.contains(target),
                 "missing outgoing link {} in nav list",
                 target
             );
         }
-        // Every backlink is reachable through the combined list.
-        for src in &incoming {
+        for src in incoming.iter().take(MAX_NEIGHBORHOOD_LINKS) {
             assert!(nav.contains(src), "missing backlink {} in nav list", src);
         }
+    }
+
+    #[test]
+    fn kb_populate_buffer_caps_neighborhood_links_for_a_hub_node() {
+        // Direct regression test for the reported freeze: a node with far
+        // more than MAX_NEIGHBORHOOD_LINKS backlinks must still populate
+        // fast (bounded work) and show an overflow note, not silently
+        // truncate with no indication there's more.
+        let mut e = Editor::new();
+        e.kb.primary.insert(mae_kb::Node::new(
+            "hub",
+            "Hub",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        for i in 0..(MAX_NEIGHBORHOOD_LINKS + 10) {
+            e.kb.primary.insert(mae_kb::Node::new(
+                format!("leaf{i}"),
+                format!("Leaf {i}"),
+                mae_kb::NodeKind::Concept,
+                "[[hub]]",
+            ));
+        }
+        e.open_help_at("hub");
+        let text = e.buffers[e.active_buffer_idx()].text();
+        let backlinks_header = format!("Backlinks ({}):", MAX_NEIGHBORHOOD_LINKS + 10);
+        assert!(
+            text.contains(&backlinks_header),
+            "header must show the TRUE total count even when capped: {text}"
+        );
+        assert!(
+            text.contains("... (10 more)"),
+            "must note the overflow count: {text}"
+        );
+        let nav = e.kb_navigable_links();
+        assert_eq!(
+            nav.iter().filter(|id| id.starts_with("leaf")).count(),
+            MAX_NEIGHBORHOOD_LINKS,
+            "only the capped number of backlinks may be individually navigable"
+        );
     }
 
     #[test]
