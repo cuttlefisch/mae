@@ -4,6 +4,20 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- *(agent-cli)* Collapse Backspace guard into the match arm (clippy) ([a6a3eef](https://github.com/cuttlefisch/mae/commit/a6a3eefdf6cde3ac3d394361b09fdba36633fade))
+
+### Features
+
+- *(config)* List every module in the init.scm template, Doom-style ([d8834f5](https://github.com/cuttlefisch/mae/commit/d8834f5dc9c8ab30386bb4fac8564c2c394df06f))
+
+### Miscellaneous
+
+- *(deps)* Bump the rust-dependencies group with 2 updates ([af467d9](https://github.com/cuttlefisch/mae/commit/af467d9debeaef5a8ed461f738eebff917c0a66b))
+
+## [0.14.44] - 2026-07-15
+
 ### CI
 
 - *(deps)* Bump schneegans/dynamic-badges-action ([ad41d4a](https://github.com/cuttlefisch/mae/commit/ad41d4a861b812acde0a14ce7cfc8b3f3c958f7a))
@@ -12,6 +26,7 @@ All notable changes to this project will be documented in this file.
 
 - *(deps)* Bump the rust-dependencies group across 1 directory with 14 updates ([99dde27](https://github.com/cuttlefisch/mae/commit/99dde27002f3c7d9449640bad112ac942b56afa3))
 - *(deps)* Keep dalek trio pinned at 2/2/4 (iroh blocker), guard in dependabot ([70878c4](https://github.com/cuttlefisch/mae/commit/70878c4cb2e11dd0472884c5d2f8456526a443da))
+- Bump version to 0.14.44 ([7c43a76](https://github.com/cuttlefisch/mae/commit/7c43a76c5ca54fbcc56266c71b165d1094664e78))
 
 ## [0.14.43] - 2026-07-15
 
