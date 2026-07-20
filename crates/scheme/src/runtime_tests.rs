@@ -162,6 +162,36 @@ fn define_key_spaced_sequence_from_scheme() {
     );
 }
 
+/// Regression test for the audit finding that an unrecognized
+/// `register-ai-tool!` permission string silently downgraded to `Write`
+/// (crates/ai's `scheme_tools_to_definitions`) instead of failing safe. The
+/// real fix is at the registration boundary itself: an invalid permission
+/// must reject the whole `register-ai-tool!` call, at the point where the
+/// Scheme author will actually see the error, not silently grant more
+/// access than intended much later during tool-definition conversion.
+#[test]
+fn register_ai_tool_rejects_unknown_permission() {
+    let mut rt = new_runtime();
+    let result = rt.eval(r#"(register-ai-tool! "my-tool" "desc" "my-handler" "bogus")"#);
+    assert!(
+        result.is_err(),
+        "an unrecognized permission string must be rejected, not silently downgraded"
+    );
+}
+
+#[test]
+fn register_ai_tool_accepts_each_known_permission() {
+    let mut rt = new_runtime();
+    for (i, perm) in ["read", "readonly", "write", "shell", "privileged"]
+        .iter()
+        .enumerate()
+    {
+        let src = format!(r#"(register-ai-tool! "tool-{i}" "desc" "handler-{i}" "{perm}")"#,);
+        rt.eval(&src)
+            .unwrap_or_else(|e| panic!("permission '{perm}' should be accepted, got: {e}"));
+    }
+}
+
 #[test]
 fn eval_error_returns_scheme_error() {
     let mut rt = new_runtime();

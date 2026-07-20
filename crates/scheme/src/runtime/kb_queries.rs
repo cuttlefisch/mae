@@ -436,6 +436,21 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
             let desc = arg_string(args, 1, "register-ai-tool!")?;
             let handler = arg_string(args, 2, "register-ai-tool!")?;
             let perm = arg_string(args, 3, "register-ai-tool!")?;
+            // Fail loud, at registration time (where the Scheme author will
+            // actually see it), rather than letting an unrecognized value
+            // through to `scheme_tools_to_definitions` (crates/ai), which
+            // used to silently downgrade any unrecognized string to the
+            // Write tier — a typo'd permission would then grant MORE access
+            // than intended instead of failing safe.
+            if !matches!(perm.as_str(), "read" | "readonly" | "write" | "shell" | "privileged") {
+                return Err(LispError::user(
+                    format!(
+                        "register-ai-tool!: invalid permission '{}' (expected: read, readonly, write, shell, privileged)",
+                        perm
+                    ),
+                    vec![],
+                ));
+            }
             let mut st = s.lock();
             let params = st.pending_ai_tool_params.remove(&name).unwrap_or_default();
             let required = st
