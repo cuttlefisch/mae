@@ -143,20 +143,43 @@ pub fn activity_score(
     score
 }
 
-/// Compute a simple body hash (FNV-1a-like) for change detection.
-/// Only hashes content after the PROPERTIES drawer to ignore metadata changes.
+/// Compute a simple body hash (FNV-1a-like) for change detection. Strips the
+/// node's OWN `:PROPERTIES:...:END:` drawer (the volatile part —
+/// `:hash:`/`:last-modified:` live there, and re-hashing them would never
+/// converge) and hashes everything else, so the result reflects the node's
+/// actual descriptive content regardless of whether that text comes before
+/// the drawer (a list item: `"1. Text\n:PROPERTIES:...:END:"`) or after it
+/// (a heading: `"* Heading\n:PROPERTIES:...:END:\nBody text"`) — hashing
+/// only content AFTER the first `:END:` (the original implementation)
+/// silently produced a constant/empty hash for every list item, since nothing
+/// meaningful follows a list item's own drawer.
+///
+/// `content` MUST already be scoped to a single node's own body (e.g.
+/// `org::parse_org_multi(file_content)`'s per-node `Node.body`, or
+/// `parse_org_multi_with_types`'s), never a whole multi-node file's raw
+/// content. A file can hold several nodes sharing one `source_file`
+/// (file-level, per-heading, per-list-item — see #332); hashing the whole
+/// file regardless of which node's properties are being checked silently
+/// attributes one node's content change to another (or vice versa — editing
+/// node B rewrites node A's `:hash:`). Only the FIRST drawer found is
+/// stripped — a heading's own body legitimately includes its nested
+/// children's raw text (drawers included), so a heading's hash can still
+/// shift when a nested child's stamp changes; siblings (the reported bug
+/// shape) are fully independent since their scoped bodies never overlap.
 pub fn body_hash(content: &str) -> String {
-    let body_start = content
-        .find(":END:")
-        .map(|i| {
-            // Skip past :END: and any trailing whitespace/newline
-            let rest = &content[i + 5..];
-            i + 5 + rest.find(|c: char| !c.is_whitespace()).unwrap_or(0)
-        })
-        .unwrap_or(0);
-    let body = &content[body_start..];
+    let stripped = match (content.find(":PROPERTIES:"), content.find(":END:")) {
+        (Some(start), Some(end_marker)) if end_marker > start => {
+            let end = end_marker + ":END:".len();
+            // Skip past :END: and any trailing whitespace/newline before
+            // resuming the hashed content.
+            let rest = &content[end..];
+            let resume = end + rest.find(|c: char| !c.is_whitespace()).unwrap_or(0);
+            format!("{}{}", &content[..start], &content[resume..])
+        }
+        _ => content.to_string(),
+    };
     let mut hash: u64 = 0xcbf29ce484222325;
-    for byte in body.bytes() {
+    for byte in stripped.bytes() {
         hash ^= byte as u64;
         hash = hash.wrapping_mul(0x100000001b3);
     }

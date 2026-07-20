@@ -91,3 +91,78 @@ fn resync_after_external_write_does_not_mask_unrelated_files() {
         "an unrelated file's real external change must still be detected"
     );
 }
+
+/// The unfiled node-scoping bug found while investigating #316:
+/// `kb_record_modification` used to hash the WHOLE file after its first
+/// `:END:` and misattribute the result to whichever node
+/// `kb_find_node_by_path` happened to return first — so editing one
+/// sibling node's body silently rewrote a DIFFERENT sibling's
+/// `:hash:`/`:last-modified:`. This file has two list-item nodes sharing
+/// one `source_file`, mirroring the #332 minimal repro shape.
+#[test]
+fn kb_record_modification_only_updates_the_node_whose_body_actually_changed() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("steps.org");
+    let make_content = |step1: &str, step2: &str| {
+        format!(
+            ":PROPERTIES:\n:ID: file-id\n:END:\n#+title: Repro\n\n* Steps\n\n1. {step1}\n   :PROPERTIES:\n   :ID: step-1\n   :END:\n2. {step2}\n   :PROPERTIES:\n   :ID: step-2\n   :END:\n"
+        )
+    };
+    let initial = make_content("First step.", "Second step.");
+    std::fs::write(&path, &initial).unwrap();
+
+    let mut editor = Editor::new();
+    let mut kb = mae_kb::KnowledgeBase::new();
+    for (id, title, body) in [
+        ("file-id", "Repro", ""),
+        ("step-1", "First step.", "First step."),
+        ("step-2", "Second step.", "Second step."),
+    ] {
+        let mut node = mae_kb::Node::new(id, title, mae_kb::NodeKind::Note, body);
+        node.source_file = Some(path.clone());
+        // Seed each node's :hash: to what it would be for the initial content
+        // (mirroring what a real ingest would compute), so the first
+        // recorded modification only sees whichever node's body actually
+        // moved.
+        let parsed = mae_kb::org::parse_org_multi(&initial);
+        let parsed_node = parsed.iter().find(|n| n.id == id).unwrap();
+        node.properties.insert(
+            "hash".to_string(),
+            mae_kb::activity::body_hash(&parsed_node.body),
+        );
+        kb.insert(node);
+    }
+    editor.kb.instances.insert("test-instance".to_string(), kb);
+
+    // Only step-2's text changes.
+    let changed = make_content("First step.", "Second step, edited.");
+    std::fs::write(&path, &changed).unwrap();
+
+    editor.kb_record_modification(&path);
+
+    let step1_modified = editor
+        .kb_get_node_mut("step-1")
+        .and_then(|n| n.properties.get("last-modified").cloned());
+    let step2_modified = editor
+        .kb_get_node_mut("step-2")
+        .and_then(|n| n.properties.get("last-modified").cloned());
+    assert!(
+        step1_modified.is_none(),
+        "step-1's body didn't change — its :last-modified: must not be touched"
+    );
+    assert!(
+        step2_modified.is_some(),
+        "step-2's body changed — its :last-modified: must be stamped"
+    );
+
+    // The on-disk drawers reflect the same: only step-2 gained the property.
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    let step1_drawer_start = on_disk.find(":ID: step-1").unwrap();
+    let step1_drawer_end =
+        on_disk[step1_drawer_start..].find(":END:").unwrap() + step1_drawer_start;
+    assert!(!on_disk[step1_drawer_start..step1_drawer_end].contains("last-modified"));
+    let step2_drawer_start = on_disk.find(":ID: step-2").unwrap();
+    let step2_drawer_end =
+        on_disk[step2_drawer_start..].find(":END:").unwrap() + step2_drawer_start;
+    assert!(on_disk[step2_drawer_start..step2_drawer_end].contains("last-modified"));
+}

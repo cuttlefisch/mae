@@ -14,8 +14,18 @@ impl Editor {
         self.kb_update_property_on_disk(node_id, "last-accessed", &today);
     }
 
-    /// Record a modification event. Computes body hash, compares to stored
-    /// `:hash:`, and updates `:last-modified:` + `:hash:` if changed.
+    /// Record a modification event for every node parsed from `path`.
+    /// Computes each node's OWN body hash, compares to its stored `:hash:`,
+    /// and updates `:last-modified:` + `:hash:` only for nodes whose body
+    /// actually changed.
+    ///
+    /// A file can hold several nodes sharing one `source_file` — file-level,
+    /// per-heading, per-list-item (see #332) — so this checks every node
+    /// independently instead of guessing "the" node from the path alone
+    /// (the previous approach, via a now-removed `kb_find_node_by_path`
+    /// first-match helper): editing node B's text no longer misattributes a
+    /// stamp to node A, and a save that legitimately changes several nodes
+    /// at once updates each one correctly instead of only the first found.
     pub fn kb_record_modification(&mut self, path: &std::path::Path) {
         if !self.kb.activity_tracking {
             return;
@@ -23,27 +33,27 @@ impl Editor {
         let Ok(content) = std::fs::read_to_string(path) else {
             return;
         };
-        let new_hash = mae_kb::activity::body_hash(&content);
-        // Find the node by source file path
-        let node_id = self.kb_find_node_by_path(path).map(|n| n.id.clone());
-        let Some(node_id) = node_id else {
-            return;
-        };
-        // Check existing hash
-        let old_hash = self
-            .kb_find_node_by_path(path)
-            .and_then(|n| n.properties.get("hash").cloned());
-        if old_hash.as_deref() == Some(&new_hash) {
-            return; // Content unchanged
-        }
         let today = today_str();
-        // Write hash and last-modified to file
-        self.kb_update_property_in_file(path, &node_id, "hash", &new_hash);
-        self.kb_update_property_in_file(path, &node_id, "last-modified", &today);
-        // Update in-memory node properties
-        if let Some(node) = self.kb_get_node_mut(&node_id) {
-            node.properties.insert("hash".to_string(), new_hash);
-            node.properties.insert("last-modified".to_string(), today);
+        for parsed in mae_kb::org::parse_org_multi(&content) {
+            // Only nodes this KB actually already knows about — skip a node
+            // parse_org_multi found that hasn't been ingested (yet).
+            if self.kb_get_node_mut(&parsed.id).is_none() {
+                continue;
+            }
+            let new_hash = mae_kb::activity::body_hash(&parsed.body);
+            let old_hash = self
+                .kb_get_node_mut(&parsed.id)
+                .and_then(|n| n.properties.get("hash").cloned());
+            if old_hash.as_deref() == Some(&new_hash) {
+                continue; // this node's content unchanged
+            }
+            self.kb_update_property_in_file(path, &parsed.id, "hash", &new_hash);
+            self.kb_update_property_in_file(path, &parsed.id, "last-modified", &today);
+            if let Some(node) = self.kb_get_node_mut(&parsed.id) {
+                node.properties.insert("hash".to_string(), new_hash);
+                node.properties
+                    .insert("last-modified".to_string(), today.clone());
+            }
         }
     }
 
@@ -110,20 +120,6 @@ impl Editor {
                 buf.resync_after_external_write(&updated);
             }
         }
-    }
-
-    /// Find a node by its source file path (across all KB instances).
-    pub(super) fn kb_find_node_by_path(&self, path: &std::path::Path) -> Option<&mae_kb::Node> {
-        for kb in self.kb.instances.values() {
-            for id in kb.list_ids(None) {
-                if let Some(node) = kb.get(&id) {
-                    if node.source_file.as_deref() == Some(path) {
-                        return Some(node);
-                    }
-                }
-            }
-        }
-        None
     }
 
     /// Get the source file path for a node by ID.
