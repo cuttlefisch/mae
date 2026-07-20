@@ -5,6 +5,19 @@ on:
     types: [closed]
     branches: [main]
 
+# PRs merging within seconds of each other used to trigger overlapping runs
+# that raced to bump/push/tag `main` concurrently: two would fail fast on a
+# git-push conflict, and the "winner" could still lose its own 35-minute
+# CI-wait poll (its commit's check-suite state gets muddied by the other
+# runs' redundant pushes), skipping the tag entirely — VERSION/Cargo.toml
+# and the changelog commit land on main, but no git tag and no release ever
+# gets published for that version (confirmed: this happened to 0.14.45).
+# `cancel-in-progress: false` queues instead of racing OR killing a run
+# mid-bump/tag, which would leave things in a half-done state.
+concurrency:
+  group: version-bump-main
+  cancel-in-progress: false
+
 env:
   # Harden dependency fetching against transient network flakes (curl HTTP/2
   # framing errors mid-fetch). See ci.yml for the full rationale.
@@ -92,7 +105,13 @@ jobs:
         if: steps.bump-type.outputs.bump != 'none'
         run: |
           cargo install git-cliff
-          git cliff --output CHANGELOG.md
+          # --tag tells git-cliff to label commits since the last real tag
+          # as belonging to this version NOW, even though the actual git
+          # tag isn't created until the later "Tag release" step (after the
+          # CI wait) — without it, git-cliff has nothing to attribute these
+          # commits to and labels them "[Unreleased]" instead, permanently
+          # (nothing ever re-runs git-cliff after tagging to fix it up).
+          git cliff --tag "v${{ steps.version.outputs.version }}" --output CHANGELOG.md
           echo "Generated CHANGELOG.md"
 
       - name: Commit version bump
