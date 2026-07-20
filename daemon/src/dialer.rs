@@ -371,6 +371,13 @@ async fn connect_verify_anchor(
 /// One-shot: dial, verify, anchor, pull the KB, then close. The live path is
 /// [`run_peer`] (persistent + reconnecting); this snapshot-only variant backs the
 /// dial/verify/anchor/pull tests and is available for a future `kb-pull`-style use.
+/// NOT stale despite the mae-audit finding that flagged it: its only current
+/// callers are `#[cfg(test)]`, by design (see doc above) — a non-test build
+/// genuinely has zero callers, so this allow is still required. Verified via
+/// `cargo build` (not `cargo test`): removing it produces a real
+/// `dead_code` warning, unlike the 3 other markers this same audit pass
+/// found actually stale (`KbOp::Read`, `open_memory`, `wal_entries_since` —
+/// all reachable from non-test code too).
 #[allow(dead_code)]
 pub async fn dial_and_join(
     local: &Endpoint,
