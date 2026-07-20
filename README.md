@@ -303,14 +303,14 @@ mae pkg sync            # synchronize module state
 mae pkg create mymod    # scaffold a new module from template
 ```
 
-**25 built-in modules** by category:
+**26 built-in modules** by category:
 
 | Category | Modules |
 |----------|---------|
 | Keymap | `keymap-doom`, `keymap-leader`, `keymap-nonmodal` |
 | UI | `dashboard`, `file-tree`, `notifications` |
 | Editor | `surround`, `marks-jumps`, `search`, `registers`, `macros`, `multicursor`, `tables` |
-| Tools | `snippets`, `format`, `make`, `lookup`, `spell`, `debug` |
+| Tools | `snippets`, `format`, `make`, `lookup`, `spell`, `debug`, `kb-graph-view` |
 | Markup | `org`, `markdown`, `agenda`, `dailies` |
 | Collab | `git-status`, `kb-sharing` |
 

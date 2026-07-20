@@ -23,11 +23,15 @@ babel = { doc = "Code block execution and tangling" }
 ```
 
 ** Enabling flags
-Flags are enabled in `init.scm` via the `mae!` macro (planned):
+Flags are enabled in `init.scm` via the `mae!` macro. Each `:category` marker is
+cosmetic (it just organizes the list); a bare string enables a module with no
+flags, and `(list "module" "+flag" ...)` enables one with flags:
 ```scheme
 (mae!
-  :lang (org +agenda +babel)
-  :editor (multicursor +align))
+  :lang
+    (list "org" "+agenda" "+babel")
+  :editor
+    (list "multicursor" "+align"))
 ```
 
 ** Validation
