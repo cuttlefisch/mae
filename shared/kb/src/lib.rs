@@ -812,11 +812,14 @@ impl KnowledgeBase {
                     // and IGNORING node.title/body (the prior behaviour) meant every
                     // edit after the first re-broadcast stale content — peers never
                     // saw it. Set only when changed to avoid churn ops.
+                    // Per-op update bytes are intentionally discarded here: the return
+                    // value below is `encode_state()` (a full-state snapshot), not the
+                    // incremental per-call deltas from set_title/set_body/set_tags.
                     if doc.title() != node.title {
-                        doc.set_title(&node.title);
+                        let _ = doc.set_title(&node.title);
                     }
                     if doc.body() != node.body {
-                        doc.set_body(&node.body);
+                        let _ = doc.set_body(&node.body);
                     }
                     // B-18: tags are a synced `YArray` too — wire them like
                     // title/body, else a tags-only edit never enters the CRDT and
@@ -2887,7 +2890,7 @@ mod tests {
         );
         crdt_doc.set_meta("author", "alice");
         crdt_doc.set_meta("version", "3");
-        crdt_doc.add_link("concept:other");
+        let _ = crdt_doc.add_link("concept:other");
 
         let node = Node::from_crdt_doc(&crdt_doc, NodeKind::Concept, NodeSource::Federation);
         assert_eq!(node.id, "concept:meta");
@@ -3003,7 +3006,7 @@ mod tests {
 
         let mut crdt_doc =
             mae_sync::kb::KbNodeDoc::new("n1", "New Title", "new body", &["new".to_string()]);
-        crdt_doc.add_link("concept:linked");
+        let _ = crdt_doc.add_link("concept:linked");
 
         node.apply_crdt_doc(&crdt_doc);
         assert_eq!(node.title, "New Title");

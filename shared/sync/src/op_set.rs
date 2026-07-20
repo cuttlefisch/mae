@@ -385,10 +385,10 @@ mod tests {
 
         // A substantial pre-enable history under client 1 (high clock-total in op 0).
         let mut author = KbNodeDoc::new_with_client_id("n1", "", "", &[], 1);
-        author.set_title("t1");
-        author.set_body("body one");
-        author.set_title("t2");
-        author.set_body("body two — longer text to grow the clock and the text lineage");
+        let _ = author.set_title("t1");
+        let _ = author.set_body("body one");
+        let _ = author.set_title("t2");
+        let _ = author.set_body("body two — longer text to grow the clock and the text lineage");
         let pre_enable_state = author.encode_state();
 
         // op 0 = re-seal carrying the WHOLE pre-enable history.

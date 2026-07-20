@@ -161,6 +161,7 @@ impl KbNodeDoc {
     }
 
     /// Set title. Returns encoded update.
+    #[must_use = "dropping this update silently prevents the title change from syncing to peers"]
     pub fn set_title(&mut self, title: &str) -> Vec<u8> {
         let root = self.doc.get_or_insert_map("node");
         let mut txn = self.doc.transact_mut();
@@ -185,6 +186,7 @@ impl KbNodeDoc {
     }
 
     /// Set body. Returns encoded update.
+    #[must_use = "dropping this update silently prevents the body change from syncing to peers"]
     pub fn set_body(&mut self, body: &str) -> Vec<u8> {
         let root = self.doc.get_or_insert_map("node");
         let mut txn = self.doc.transact_mut();
@@ -209,6 +211,7 @@ impl KbNodeDoc {
     }
 
     /// Add a tag. Returns encoded update.
+    #[must_use = "dropping this update silently prevents the added tag from syncing to peers"]
     pub fn add_tag(&mut self, tag: &str) -> Vec<u8> {
         let root = self.doc.get_or_insert_map("node");
         let mut txn = self.doc.transact_mut();
@@ -263,6 +266,7 @@ impl KbNodeDoc {
     }
 
     /// Add a link. Returns encoded update.
+    #[must_use = "dropping this update silently prevents the added link from syncing to peers"]
     pub fn add_link(&mut self, target: &str) -> Vec<u8> {
         let root = self.doc.get_or_insert_map("node");
         let mut txn = self.doc.transact_mut();
