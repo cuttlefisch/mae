@@ -2,24 +2,70 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.47] - 2026-07-20
+
+### Bug Fixes
+
+- *(kb)* Raise CozoDB sqlite busy-retry budget for CI-level contention ([64f4b65](https://github.com/cuttlefisch/mae/commit/64f4b65c152a2456848f3ab2d52164485c01e86d))
+
 ## [0.14.46] - 2026-07-20
 
 ### Bug Fixes
 
 - *(agent-cli)* Collapse Backspace guard into the match arm (clippy) ([a6a3eef](https://github.com/cuttlefisch/mae/commit/a6a3eefdf6cde3ac3d394361b09fdba36633fade))
+- *(core)* Replace_contents/reload_from_disk must bump buffer generation ([962acaa](https://github.com/cuttlefisch/mae/commit/962acaa5a78c517b24050ca87022e6fd8b92b92d))
+- *(kb-graph)* Default to depth 1 + add a node-count safety cap ([98e0c66](https://github.com/cuttlefisch/mae/commit/98e0c66ac228cf402013b6753c59fea8b0814629))
+- *(kb)* The "open graph after switching KB" prompt could land on the wrong KB ([eb38643](https://github.com/cuttlefisch/mae/commit/eb38643cfa5b5b17967aa7e460ccacf05bbf6ed1))
+- *(kb-graph)* Companion-window content leak + hub-node click freeze ([8874eab](https://github.com/cuttlefisch/mae/commit/8874eab9deb5212c82839ea09a9c5c24c420beb2))
+- *(kb-graph)* Node hitboxes misaligned after toggling fullscreen overlay ([cc89f63](https://github.com/cuttlefisch/mae/commit/cc89f63a538a8c9c6e9a57a03d4833c2b36329d7))
+- *(kb)* KB-preview popup reappeared immediately after Escape-dismiss ([ec93e2a](https://github.com/cuttlefisch/mae/commit/ec93e2a65a0370fe0c9b319ce86f1f657123f58d))
+- OOM leak in per-window render caches + audit security/live-bug items 1-5 ([2b3bd23](https://github.com/cuttlefisch/mae/commit/2b3bd23ebab9a96c1db949a0f9189b7839420132))
+- *(which-key)* Wire up which_key_separator/max_desc_length/max_height_pct/sort_order ([0eaac31](https://github.com/cuttlefisch/mae/commit/0eaac310cc1cf2ffc801436bc363a0b07c9cf00f))
+- *(babel)* Run_binary reintroduced the execute_shell pipe-deadlock class ([f8252fb](https://github.com/cuttlefisch/mae/commit/f8252fbfba7fc76f4d4e59ca29a5e4e30a090188))
+- *(ai)* Unrecognized register-ai-tool! permission now fails safe ([064cb1f](https://github.com/cuttlefisch/mae/commit/064cb1fcb5692b7ec8178dd1eaef5f2a09a0b5c0))
+- *(pkg)* Reject unknown module.toml fields; fix agenda/tables' depends ([d5fde9b](https://github.com/cuttlefisch/mae/commit/d5fde9bb4652230f2162f76c1a139c470c3ff07e))
+- *(core)* Add #[must_use] to the 3 genuinely data-loss-risky Result fns ([33d82bf](https://github.com/cuttlefisch/mae/commit/33d82bfb102aeafbb51f8d98f8f6c3c679381bf0))
+- *(kb)* Org list-item :ID: drawers after the first were silently dropped ([434871a](https://github.com/cuttlefisch/mae/commit/434871aff33d89674e62598fcae2b6d821649464))
 
 ### CI
 
 - Fix version-bump concurrency race and changelog mislabeling ([7eabc88](https://github.com/cuttlefisch/mae/commit/7eabc88a200b46de42e7383ca4a06976d78ecde8))
 
+### Documentation
+
+- Fix broken mae! example and stale README module count ([53e0f32](https://github.com/cuttlefisch/mae/commit/53e0f3246d9959b20b8852e1ee686f8e360232e6))
+- *(readme)* Document split-ratio options, window_render cache, KB-preview suppression ([c19bb3a](https://github.com/cuttlefisch/mae/commit/c19bb3a40576827469868be82b018b37d381a3ee))
+
 ### Features
 
 - *(config)* List every module in the init.scm template, Doom-style ([d8834f5](https://github.com/cuttlefisch/mae/commit/d8834f5dc9c8ab30386bb4fac8564c2c394df06f))
+- *(kb)* :kb-set-search-scope offers to open the graph after switching ([9ea958f](https://github.com/cuttlefisch/mae/commit/9ea958f224fae91a3906f1a4ee1bcb1bc6677ae9))
+- *(gui)* Expose the per-window render cache via introspect(frame) ([4a914f8](https://github.com/cuttlefisch/mae/commit/4a914f8a70f3d30cd08d9ac9032acef544ea5786))
+- *(display)* Expose window split ratios as proper OptionRegistry options ([f51b9ec](https://github.com/cuttlefisch/mae/commit/f51b9ec190dfd4dce16af2d9a91a5a9665544349))
 
 ### Miscellaneous
 
 - *(deps)* Bump the rust-dependencies group with 2 updates ([af467d9](https://github.com/cuttlefisch/mae/commit/af467d9debeaef5a8ed461f738eebff917c0a66b))
 - Bump version to 0.14.45 ([55ca140](https://github.com/cuttlefisch/mae/commit/55ca1405eca43adcd69e96c5d689005cf6795679))
+- Regenerate manual KB after scrunching/kb-switch/cache-visibility fixes ([fda9f04](https://github.com/cuttlefisch/mae/commit/fda9f04bb58f67ff14abb3928e13699668c7f328))
+- *(gui)* Delete 8 genuinely dead canvas.rs methods, unmark pixel_size ([db0a262](https://github.com/cuttlefisch/mae/commit/db0a26221b3bac43b661e85ff4000d509c0c0b76))
+- *(daemon)* Remove 3 stale allow(dead_code), correct a 4th's rationale ([c23d598](https://github.com/cuttlefisch/mae/commit/c23d598f79baf3b3d66b51eca69911bb68f86ce6))
+- Bump version to 0.14.46 ([1a55996](https://github.com/cuttlefisch/mae/commit/1a55996645cf35f9a08b16325a8f5fba4dcd2a9e))
+
+### Performance
+
+- *(gui)* Avoid per-glyph heap allocation in canvas.rs's draw paths ([b372951](https://github.com/cuttlefisch/mae/commit/b372951eee7cc8e21d467f28c1c889d1625a52f1))
+
+### Refactor
+
+- *(kb)* Consolidate mae-ai's KB fallback resolution onto a shared helper ([df9f470](https://github.com/cuttlefisch/mae/commit/df9f470b86a105e8be3f5830c1313e87a1f4b681))
+- *(debug)* Migrate DebugView onto the shared foldable_view helpers ([cebbd46](https://github.com/cuttlefisch/mae/commit/cebbd46cb30a8daf7895f02316ab8daeac9989c7))
+- *(dispatch)* Consolidate nav.rs's 4 duplicate BufferKind scroll matches ([d2a0066](https://github.com/cuttlefisch/mae/commit/d2a006654163573bad5348a8244a6707fe6f8d33))
+- *(ai)* Replace 203 near-identical ToolDefinition literals with a builder ([9074975](https://github.com/cuttlefisch/mae/commit/9074975be5ed6607b0a59fb1451f1dd278f6f295))
+
+### Rename
+
+- *(kb)* Kb-set-search-scope -> kb-set-scope ([0932734](https://github.com/cuttlefisch/mae/commit/09327348fb1548fdbe3e040f7a629c93af6b05d2))
 
 ## [0.14.44] - 2026-07-15
 
