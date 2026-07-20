@@ -1203,10 +1203,19 @@ impl Editor {
         }
         let name = self.buffers[idx].name.clone();
         if self.buffers[idx].modified {
-            self.set_status(format!(
-                "Warning: {} changed on disk (buffer has unsaved changes)",
-                name
-            ));
+            // ADR-024's own motivating example (issue #79): a plain
+            // set_status here is a clobberable, easy-to-miss single line —
+            // exactly the failure mode the notification bus exists to
+            // close. Routed onto it instead, mirroring the existing
+            // dispatch/collab.rs precedent.
+            self.notify(
+                crate::notifications::Notification::warning(
+                    "file",
+                    format!("{name} changed on disk"),
+                )
+                .body("This buffer has unsaved changes — the external edit was NOT applied.")
+                .key(format!("file-changed-on-disk:{name}")),
+            );
             self.fire_hook("file-changed-on-disk");
         } else {
             // Prompt user instead of silently reloading
@@ -1852,5 +1861,45 @@ mod tests {
 
         // Idempotent: no further new entries, so calling again is a no-op.
         assert!(!editor.sync_open_messages_buffer());
+    }
+
+    /// #79 (ADR-024's own motivating example): a dirty buffer whose backing
+    /// file changed externally used to only get a clobberable status-line
+    /// warning — easy to miss entirely if the user wasn't looking right when
+    /// it fired. It must now also land as a durable notification.
+    #[test]
+    fn check_and_reload_buffer_notifies_for_a_dirty_buffer_with_external_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.txt");
+        std::fs::write(&path, "original\n").unwrap();
+
+        let mut editor = Editor::new();
+        let idx = editor.open_file_hidden(&path).unwrap();
+        editor.buffers[idx].insert_text_at(0, "unsaved edit\n");
+        assert!(editor.buffers[idx].modified);
+
+        // A real external change, with a real mtime delta.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        std::fs::write(&path, "changed externally\n").unwrap();
+
+        editor.check_and_reload_buffer(idx);
+
+        let notes = editor.notifications.active_sorted();
+        let hit = notes
+            .iter()
+            .find(|n| n.source == "file" && n.title.contains("changed on disk"));
+        assert!(
+            hit.is_some(),
+            "a durable notification must be raised, not just a status-line toast; got: {:?}",
+            notes.iter().map(|n| &n.title).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            hit.unwrap().severity,
+            crate::notifications::Severity::Warning
+        );
+        assert!(
+            editor.status_msg.contains("changed on disk"),
+            "the immediate status-line toast must still fire too"
+        );
     }
 }
