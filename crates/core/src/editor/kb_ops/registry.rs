@@ -558,14 +558,43 @@ impl Editor {
     /// same way reads do — i.e. across `primary` ∪ `instances` — instead of
     /// primary-only (I-9).
     pub(crate) fn kb_owner_of(&self, id: &str) -> Option<Option<String>> {
-        if self.kb.primary.contains(id) {
+        // #76: pre-ADR-019 KB joins dumped nodes straight into `primary`;
+        // the ADR-019 join path (`kb_register_joined_instance`) now creates
+        // a proper federated instance instead, but never migrates those old
+        // copies OUT of `primary` — they're permanently stranded there. A
+        // node id can therefore legitimately exist in both `primary` (the
+        // stale stranded copy) and a `kb.instances` entry (the correct,
+        // actively-synced copy) at once. Checking `primary` unconditionally
+        // first means the stale copy always wins, permanently shadowing the
+        // correct one for every future read/write/CRDT-apply that resolves
+        // through this function — a live correctness bug, not just cosmetic
+        // leftover data. `NodeSource::Federation` is the marker every
+        // federation-derived node carries (stamped by
+        // `apply_remote_update`/`adopt_remote_node` regardless of which
+        // store they were called against, including the old pre-ADR-019
+        // path) — a `primary` node with that marker is exactly the stranded
+        // shape, so prefer an `instances` match over it when one exists.
+        // This doesn't attempt to migrate/remove the stranded copy (that
+        // needs attribution to the node's correct originating instance,
+        // real design work tracked separately) — it just stops the stale
+        // copy from winning once a correct one exists.
+        let primary_hit = self.kb.primary.get(id);
+        let primary_is_stranded_federation_node = matches!(
+            primary_hit.and_then(|n| n.source),
+            Some(mae_kb::NodeSource::Federation)
+        );
+        if primary_hit.is_some() && !primary_is_stranded_federation_node {
             return Some(None);
         }
-        self.kb
-            .instances
-            .iter()
-            .find(|(_, kb)| kb.contains(id))
-            .map(|(uuid, _)| Some(uuid.clone()))
+        if let Some((uuid, _)) = self.kb.instances.iter().find(|(_, kb)| kb.contains(id)) {
+            return Some(Some(uuid.clone()));
+        }
+        // No instance match — fall back to the (possibly stranded) primary
+        // copy if that's all there is, rather than resolving to nothing.
+        if primary_hit.is_some() {
+            return Some(None);
+        }
+        None
     }
 
     /// Same resolution as `kb_owner_of`, but honors `kb.search_scope` when

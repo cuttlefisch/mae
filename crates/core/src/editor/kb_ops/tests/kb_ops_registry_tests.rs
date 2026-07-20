@@ -398,3 +398,78 @@ fn kb_reimport_refreshes_query_layer() {
         triples.iter().map(|(id, _, _)| id).collect::<Vec<_>>()
     );
 }
+
+/// #76: pre-ADR-019 KB joins dumped nodes straight into `primary`; the
+/// ADR-019 join path creates a proper federated instance instead, but never
+/// migrates the old copies out — a node id can end up "stranded" in both
+/// stores at once. `kb_owner_of` used to check `primary` unconditionally
+/// first, so the stale stranded copy permanently shadowed the correct,
+/// actively-synced instance copy for every read/write/CRDT-apply that
+/// resolves through it — a live correctness bug, not just leftover data.
+#[test]
+fn kb_owner_of_prefers_the_instance_over_a_stranded_federation_node_in_primary() {
+    let mut editor = Editor::new();
+
+    // Simulate a stranded node: same id in both primary (marked as having
+    // come from federation, the exact shape ADR-019's stranding leaves
+    // behind) and a properly-registered instance.
+    let mut stranded = mae_kb::Node::new("shared-id", "Stranded", mae_kb::NodeKind::Note, "old");
+    stranded.source = Some(mae_kb::NodeSource::Federation);
+    editor.kb.primary.insert(stranded);
+
+    let mut kb = mae_kb::KnowledgeBase::new();
+    kb.insert(mae_kb::Node::new(
+        "shared-id",
+        "Correct",
+        mae_kb::NodeKind::Note,
+        "new",
+    ));
+    editor.kb.instances.insert("real-instance".to_string(), kb);
+
+    assert_eq!(
+        editor.kb_owner_of("shared-id"),
+        Some(Some("real-instance".to_string())),
+        "a stranded primary copy must not shadow the correctly-owned instance copy"
+    );
+}
+
+/// A `primary` node that is NOT a stranded-federation shape (an ordinary
+/// user/seed node, `source` is `None` or anything other than
+/// `NodeSource::Federation`) must still resolve to primary as before — the
+/// fix is scoped to the specific stranding shape, not a blanket
+/// instance-always-wins change.
+#[test]
+fn kb_owner_of_still_prefers_primary_for_non_stranded_nodes() {
+    let mut editor = Editor::new();
+    editor.kb.primary.insert(mae_kb::Node::new(
+        "user:note",
+        "My Note",
+        mae_kb::NodeKind::Note,
+        "body",
+    ));
+
+    assert_eq!(
+        editor.kb_owner_of("user:note"),
+        Some(None),
+        "an ordinary primary node (not federation-sourced) resolves to primary as always"
+    );
+}
+
+/// When only a stranded primary copy exists (no correctly-owned instance
+/// copy — e.g. before the corresponding KB is ever re-joined), resolution
+/// must still fall back to it rather than becoming unresolvable. The fix
+/// only STOPS the stranded copy from winning once a better one exists — it
+/// must never make an otherwise-resolvable id disappear.
+#[test]
+fn kb_owner_of_falls_back_to_stranded_primary_when_no_instance_match_exists() {
+    let mut editor = Editor::new();
+    let mut stranded = mae_kb::Node::new("orphaned-id", "Orphaned", mae_kb::NodeKind::Note, "x");
+    stranded.source = Some(mae_kb::NodeSource::Federation);
+    editor.kb.primary.insert(stranded);
+
+    assert_eq!(
+        editor.kb_owner_of("orphaned-id"),
+        Some(None),
+        "a stranded node with no live instance match must still resolve, via primary"
+    );
+}
