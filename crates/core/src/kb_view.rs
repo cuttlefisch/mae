@@ -78,6 +78,17 @@ pub struct KbView {
     /// to this buffer's KB view rather than a top-level `Editor` field —
     /// see `KbPreviewPopup`'s doc comment for why.
     pub kb_preview_popup: Option<KbPreviewPopup>,
+    /// `(row, col)` the user just explicitly dismissed a preview popup at
+    /// (Escape, or any other command hitting the auto-dismiss guard),
+    /// suppressing idle-triggered re-show at that EXACT position until the
+    /// cursor moves elsewhere. Distinct from `kb_preview_popup == None`
+    /// (plain Hidden): without this, on_idle_tick's ~100ms cadence
+    /// re-showed the popup the instant it was dismissed, since dismissing
+    /// left no memory that the user had just asked for it to go away —
+    /// reported live. `force`-driven manual shows
+    /// (`kb_preview_show_at_cursor(true)`, `kb_preview_show(id)`) always
+    /// bypass and clear this — a deliberate manual invocation always wins.
+    pub kb_preview_suppressed_at: Option<(usize, usize)>,
 }
 
 impl KbView {
@@ -91,6 +102,7 @@ impl KbView {
             rendered_links: Vec::new(),
             broken_links: std::collections::HashSet::new(),
             kb_preview_popup: None,
+            kb_preview_suppressed_at: None,
         }
     }
 
