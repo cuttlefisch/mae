@@ -758,7 +758,8 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_GIT_STATUS,
         )
-        .with_tags(["git", "workflow"]),
+        .with_tags(["git", "workflow"])
+        .with_aliases(["magit"]),
         Node::new(
             "concept:org-mode",
             "Concept: Org-mode",
@@ -772,7 +773,8 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_MARKDOWN,
         )
-        .with_tags(["markdown", "editing"]),
+        .with_tags(["markdown", "editing"])
+        .with_aliases(["md"]),
         Node::new(
             "concept:ex-commands",
             "Concept: Ex-Command Grammar",
@@ -800,14 +802,16 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_AUTOSAVE,
         )
-        .with_tags(["files", "configuration"]),
+        .with_tags(["files", "configuration"])
+        .with_aliases(["auto-save"]),
         Node::new(
             "concept:file-tree",
             "Concept: File Tree",
             NodeKind::Concept,
             CONCEPT_FILE_TREE,
         )
-        .with_tags(["files", "navigation", "gui"]),
+        .with_tags(["files", "navigation", "gui"])
+        .with_aliases(["sidebar"]),
         Node::new(
             "concept:diff-display",
             "Concept: Diff Display",
@@ -1132,6 +1136,30 @@ mod tests {
                 "query '{}' should surface concept:display-policy or \
                  scheme:set-display-rule! via alias, got: {:?}",
                 query,
+                hits
+            );
+        }
+    }
+
+    /// #67 (4-node bounded slice): each alias below is a term already present
+    /// verbatim in the target node's own body text, mirroring the original
+    /// issue's exact shape — an obvious term a user would search for that was
+    /// simply never registered as an alias. Confirms each now surfaces its node.
+    #[test]
+    fn bounded_alias_slice_nodes_are_discoverable_by_body_term() {
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
+        for (query, target) in [
+            ("magit", "concept:git-status"),
+            ("sidebar", "concept:file-tree"),
+            ("md", "concept:markdown"),
+            ("auto-save", "concept:autosave"),
+        ] {
+            let hits = kb.search(query);
+            assert!(
+                hits.contains(&target.to_string()),
+                "query '{}' should surface {} via alias, got: {:?}",
+                query,
+                target,
                 hits
             );
         }
