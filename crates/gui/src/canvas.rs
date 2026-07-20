@@ -595,7 +595,10 @@ impl SkiaCanvas {
     ) {
         let mut paint = Paint::new(fg, None);
         paint.set_anti_alias(true);
-        let text = ch.to_string();
+        // Stack buffer, not `ch.to_string()` — this runs per glyph, per
+        // frame; a 4-byte array avoids a heap allocation on every call.
+        let mut ch_buf = [0u8; 4];
+        let text = ch.encode_utf8(&mut ch_buf);
         let font = if scale != 1.0 {
             self.get_scaled_font(bold, scale).clone()
         } else if bold {
@@ -608,7 +611,7 @@ impl SkiaCanvas {
         if font.unichar_to_glyph(ch as i32) != 0 {
             self.surface
                 .canvas()
-                .draw_str(&text, (pixel_x, baseline), &font, &paint);
+                .draw_str(&*text, (pixel_x, baseline), &font, &paint);
         }
     }
 
@@ -627,7 +630,10 @@ impl SkiaCanvas {
         let mut paint = Paint::new(fg, None);
         paint.set_anti_alias(true);
 
-        let text = ch.to_string();
+        // Stack buffer, not `ch.to_string()` — this runs per glyph, per
+        // frame; a 4-byte array avoids a heap allocation on every call.
+        let mut ch_buf = [0u8; 4];
+        let text = ch.encode_utf8(&mut ch_buf);
 
         // Use cached scaled font when scale != 1.0 to avoid clone + set_size per char.
         let font = if scale != 1.0 {
@@ -649,14 +655,16 @@ impl SkiaCanvas {
                 }
                 let (_, im) = it.metrics();
                 let ib = pixel_y - im.ascent;
-                self.surface.canvas().draw_str(&text, (x, ib), &it, &paint);
+                self.surface.canvas().draw_str(&*text, (x, ib), &it, &paint);
             } else {
                 self.surface.canvas().save();
                 let mut skew_matrix = skia_safe::Matrix::new_identity();
                 skew_matrix.pre_skew((-0.2, 0.0), None);
                 self.surface.canvas().translate((x, baseline));
                 self.surface.canvas().concat(&skew_matrix);
-                self.surface.canvas().draw_str(&text, (0, 0), &font, &paint);
+                self.surface
+                    .canvas()
+                    .draw_str(&*text, (0, 0), &font, &paint);
                 self.surface.canvas().restore();
             }
             return;
@@ -666,7 +674,7 @@ impl SkiaCanvas {
         if font.unichar_to_glyph(ch as i32) != 0 {
             self.surface
                 .canvas()
-                .draw_str(&text, (x, baseline), &font, &paint);
+                .draw_str(&*text, (x, baseline), &font, &paint);
             return;
         }
 
@@ -680,7 +688,7 @@ impl SkiaCanvas {
             if icon.unichar_to_glyph(ch as i32) != 0 {
                 self.surface
                     .canvas()
-                    .draw_str(&text, (x, baseline), &icon, &paint);
+                    .draw_str(&*text, (x, baseline), &icon, &paint);
                 return;
             }
         }
@@ -703,11 +711,11 @@ impl SkiaCanvas {
             let fb_baseline = pixel_y - fb_metrics.ascent;
             self.surface
                 .canvas()
-                .draw_str(&text, (x, fb_baseline), &fallback_font, &paint);
+                .draw_str(&*text, (x, fb_baseline), &fallback_font, &paint);
         } else {
             self.surface
                 .canvas()
-                .draw_str(&text, (x, baseline), &font, &paint);
+                .draw_str(&*text, (x, baseline), &font, &paint);
         }
     }
 
@@ -1045,7 +1053,10 @@ impl SkiaCanvas {
         let mut paint = Paint::new(fg, None);
         paint.set_anti_alias(true);
 
-        let text = ch.to_string();
+        // Stack buffer, not `ch.to_string()` — this runs per glyph, per
+        // frame; a 4-byte array avoids a heap allocation on every call.
+        let mut ch_buf = [0u8; 4];
+        let text = ch.encode_utf8(&mut ch_buf);
 
         // Use cached scaled font when scale != 1.0 to avoid clone + set_size per char.
         let font = if scale != 1.0 {
@@ -1065,7 +1076,9 @@ impl SkiaCanvas {
             skew_matrix.pre_skew((-0.2, 0.0), None);
             self.surface.canvas().translate((x, baseline));
             self.surface.canvas().concat(&skew_matrix);
-            self.surface.canvas().draw_str(&text, (0, 0), &font, &paint);
+            self.surface
+                .canvas()
+                .draw_str(&*text, (0, 0), &font, &paint);
             self.surface.canvas().restore();
             return;
         }
@@ -1074,7 +1087,7 @@ impl SkiaCanvas {
         if font.unichar_to_glyph(ch as i32) != 0 {
             self.surface
                 .canvas()
-                .draw_str(&text, (x, baseline), &font, &paint);
+                .draw_str(&*text, (x, baseline), &font, &paint);
             return;
         }
 
@@ -1088,7 +1101,7 @@ impl SkiaCanvas {
             if icon.unichar_to_glyph(ch as i32) != 0 {
                 self.surface
                     .canvas()
-                    .draw_str(&text, (x, baseline), &icon, &paint);
+                    .draw_str(&*text, (x, baseline), &icon, &paint);
                 return;
             }
         }
@@ -1111,11 +1124,11 @@ impl SkiaCanvas {
             let fb_baseline = y - fb_metrics.ascent;
             self.surface
                 .canvas()
-                .draw_str(&text, (x, fb_baseline), &fallback_font, &paint);
+                .draw_str(&*text, (x, fb_baseline), &fallback_font, &paint);
         } else {
             self.surface
                 .canvas()
-                .draw_str(&text, (x, baseline), &font, &paint);
+                .draw_str(&*text, (x, baseline), &font, &paint);
         }
     }
 
