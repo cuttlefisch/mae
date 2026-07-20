@@ -1397,18 +1397,10 @@ fn render_window_area_with_graph_overlay(
         window_render_cache,
     );
 
-    if !editor.kb_graph_view_overlay_active {
-        return;
-    }
-    let Some(win) = editor
-        .window_mgr
-        .iter_windows()
-        .find(|w| editor.buffers[w.buffer_idx].kind == BufferKind::Graph)
-    else {
+    let Some(win_id) = editor.kb_graph_view_overlay_window() else {
         return;
     };
-    let (buf_idx, win_id) = (win.buffer_idx, win.id);
-    let Some(gv) = editor.buffers[buf_idx].graph_view() else {
+    let Some(buf_idx) = editor.window_mgr.window(win_id).map(|w| w.buffer_idx) else {
         return;
     };
 
@@ -1421,19 +1413,24 @@ fn render_window_area_with_graph_overlay(
         skia_safe::Color4f::new(0.0, 0.0, 0.0, dim_opacity),
     );
 
-    let mut viewport = gv.viewports.get(&win_id).copied().unwrap_or_default();
-    viewport.width = (area_width as f32 * editor.gui_cell_width) as f64;
-    viewport.height = (area_height as f32 * editor.gui_cell_height) as f64;
-
-    let mut style = mae_core::graph_view::GraphStyleOptions::from_editor(editor);
-    if let Some(tween) = &gv.color_tween {
-        style.color_override = Some((tween.node_index, tween.current_color()));
+    // Read the ALREADY-flattened entry instead of building a second, local
+    // Viewport/flatten pass here — `sync_open_graph_viewports` (runs every
+    // frame, before render, via `kb_graph_view_click_rect`) keeps
+    // `gv.rendered[win_id]` correctly sized to this exact full-screen area
+    // once overlay is active, so this arm can just mirror the non-overlay
+    // `BufferKind::Graph` render arm above instead of duplicating the
+    // flatten computation with its own separately-sized Viewport — the two
+    // used to disagree (this one drew full-screen, everything else
+    // — hit-test, click, the persisted viewport — stayed on the old
+    // windowed-pane size), which was the actual root cause of overlay-mode
+    // click hitboxes not matching drawn node positions.
+    if let Some(vb) = editor.buffers[buf_idx]
+        .graph_view()
+        .and_then(|gv| gv.rendered.get(&win_id))
+    {
+        let bg = theme::ts_bg(editor, "ui.graph.background");
+        render_visual_buffer_with_bg(canvas, vb, area_row, area_col, area_width, area_height, bg);
     }
-    let elements =
-        mae_core::graph_view::flatten_scene_graph(&gv.scene, &viewport, &style, &gv.node_degrees);
-    let vb = mae_core::visual_buffer::VisualBuffer { elements };
-    let bg = theme::ts_bg(editor, "ui.graph.background");
-    render_visual_buffer_with_bg(canvas, &vb, area_row, area_col, area_width, area_height, bg);
 }
 
 fn render_visual_buffer(

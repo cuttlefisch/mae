@@ -19,7 +19,7 @@ use crate::graph_view::{
     ANIMATION_TEMPERATURE_FLOOR,
 };
 use crate::visual_buffer::VisualBuffer;
-use crate::window::WindowId;
+use crate::window::{Rect, WindowId};
 
 use super::Editor;
 
@@ -154,22 +154,60 @@ impl Editor {
         GraphStyleOptions::from_editor(self)
     }
 
+    /// The graph window overlay mode should resolve mouse/wheel events
+    /// against — `None` when overlay isn't active (callers fall back to
+    /// their normal window-at-cell/focused-window resolution). Overlay mode
+    /// is single-graph-window scoped (there's only ever one `BufferKind::
+    /// Graph` window meaningfully "the" overlay at a time), so this doesn't
+    /// need a `win_id` parameter the way `kb_graph_view_click_rect` does.
+    pub fn kb_graph_view_overlay_window(&self) -> Option<WindowId> {
+        if !self.kb_graph_view_overlay_active {
+            return None;
+        }
+        self.window_mgr
+            .iter_windows()
+            .find(|w| self.buffers[w.buffer_idx].kind == BufferKind::Graph)
+            .map(|w| w.id)
+    }
+
+    /// The rect `win_id` is ACTUALLY drawn into this frame: the full
+    /// `last_layout_area` when the fullscreen graph overlay is active for
+    /// it, else its normal tiled `layout_rects` pane rect. THE single
+    /// answer render (`render_window_area_with_graph_overlay`), viewport
+    /// sync (`graph_viewport_pixel_size`), and every GUI mouse-handling
+    /// site must read — so they can never independently diverge the way
+    /// they used to (render drew full-screen while every click/hit-test
+    /// site kept computing against the old windowed-pane rect, reported
+    /// live as node hitboxes only registering to the left of their drawn
+    /// position after toggling into fullscreen).
+    pub fn kb_graph_view_click_rect(&self, win_id: WindowId) -> Option<Rect> {
+        if self.kb_graph_view_overlay_active
+            && self
+                .window_mgr
+                .window(win_id)
+                .is_some_and(|w| self.buffers[w.buffer_idx].kind == BufferKind::Graph)
+        {
+            return Some(self.last_layout_area);
+        }
+        self.window_mgr
+            .layout_rects(self.last_layout_area)
+            .into_iter()
+            .find(|(id, _)| *id == win_id)
+            .map(|(_, r)| r)
+    }
+
     /// Real pixel dimensions of window `win_id`, for centering the graph's
     /// viewport within it (via `Editor::graph_view_reflatten_window`). Falls
     /// back to `mae_canvas::scene::Viewport::default()`'s 800x600 if the
     /// window no longer resolves — e.g. the very first `populate_graph_
     /// buffer` call before `display_buffer` has created its window, or a
-    /// window that closed mid-flight.
+    /// window that closed mid-flight. Overlay-aware via
+    /// `kb_graph_view_click_rect` — see that method's doc comment.
     fn graph_viewport_pixel_size(&self, win_id: WindowId) -> (f32, f32) {
         let default = mae_canvas::scene::Viewport::default();
         let fallback = (default.width as f32, default.height as f32);
 
-        let Some((_, rect)) = self
-            .window_mgr
-            .layout_rects(self.last_layout_area)
-            .into_iter()
-            .find(|(id, _)| *id == win_id)
-        else {
+        let Some(rect) = self.kb_graph_view_click_rect(win_id) else {
             return fallback;
         };
         (
@@ -2116,6 +2154,137 @@ mod tests {
 
         // Calling again with no further size change must be a no-op.
         assert!(!editor.sync_open_graph_viewports());
+    }
+
+    #[test]
+    fn kb_graph_view_overlay_window_is_none_when_inactive() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        assert_eq!(editor.kb_graph_view_overlay_window(), None);
+    }
+
+    #[test]
+    fn kb_graph_view_overlay_window_finds_the_graph_window_regardless_of_focus() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| editor.buffers[w.buffer_idx].kind == BufferKind::Graph)
+            .map(|w| w.id)
+            .unwrap();
+        editor.kb_graph_view_toggle_overlay();
+        assert!(editor.kb_graph_view_overlay_active);
+
+        // Split off and focus a second, unrelated window — overlay
+        // resolution must find the graph window regardless of what's
+        // actually focused.
+        let area = editor.default_area();
+        let text_idx = editor.buffers.len();
+        editor.buffers.push(Buffer::new());
+        let other_win_id = editor
+            .window_mgr
+            .split(crate::window::SplitDirection::Vertical, text_idx, area)
+            .expect("split should succeed");
+        editor.window_mgr.set_focused(other_win_id);
+        assert_eq!(editor.window_mgr.focused_id(), other_win_id);
+
+        assert_eq!(editor.kb_graph_view_overlay_window(), Some(graph_win_id));
+    }
+
+    #[test]
+    fn kb_graph_view_click_rect_uses_the_tiled_pane_rect_when_overlay_is_inactive() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+
+        let tiled_rect = editor
+            .window_mgr
+            .layout_rects(editor.last_layout_area)
+            .into_iter()
+            .find(|(id, _)| *id == graph_win_id)
+            .map(|(_, r)| r)
+            .unwrap();
+        assert_eq!(
+            editor.kb_graph_view_click_rect(graph_win_id),
+            Some(tiled_rect)
+        );
+        // A tiled split pane is narrower than the full editor area.
+        assert!(tiled_rect.width < editor.last_layout_area.width);
+    }
+
+    #[test]
+    fn kb_graph_view_click_rect_is_the_full_screen_once_overlay_is_active() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+
+        editor.kb_graph_view_toggle_overlay();
+        assert_eq!(
+            editor.kb_graph_view_click_rect(graph_win_id),
+            Some(editor.last_layout_area),
+            "overlay-active click rect must exactly match render's full-screen area"
+        );
+    }
+
+    #[test]
+    fn graph_viewport_pixel_size_self_heals_to_full_screen_on_overlay_toggle() {
+        // Regression for the reported hitbox-misalignment bug: toggling
+        // overlay must make sync_open_graph_viewports (already running
+        // every frame) resync the viewport to the full-screen size, not
+        // leave it at the pre-toggle tiled-pane size.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        let tiled_width = {
+            let gv = editor.buffers[graph_idx].graph_view().unwrap();
+            gv.viewports.get(&graph_win_id).unwrap().width
+        };
+
+        editor.kb_graph_view_toggle_overlay();
+        assert!(
+            editor.sync_open_graph_viewports(),
+            "toggling overlay must be detected as a real viewport-size change"
+        );
+
+        let full_screen_width = editor.last_layout_area.width as f64 * editor.gui_cell_width as f64;
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        let vp = gv.viewports.get(&graph_win_id).unwrap();
+        assert_eq!(
+            vp.width, full_screen_width,
+            "viewport must resync to the full-screen width, not stay at the tiled-pane width"
+        );
+        assert_ne!(vp.width, tiled_width);
     }
 
     #[test]

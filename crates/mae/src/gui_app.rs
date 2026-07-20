@@ -716,13 +716,13 @@ impl GuiApp {
                     .and_then(|idx| self.editor.buffers.get(idx))
                     .is_some_and(|b| b.kind == mae_core::BufferKind::Graph);
                 if is_graph_window {
-                    let window_rect = self
-                        .editor
-                        .window_mgr
-                        .layout_rects(self.editor.last_layout_area)
-                        .into_iter()
-                        .find(|(id, _)| *id == focused_id)
-                        .map(|(_, rect)| rect);
+                    // Overlay-aware: `kb_graph_view_click_rect` returns the
+                    // full-screen area once fullscreen overlay is active for
+                    // this window, matching what's actually drawn there —
+                    // see that method's doc comment for the bug this fixes
+                    // (hitboxes only registering left of their drawn
+                    // position after toggling into fullscreen).
+                    let window_rect = self.editor.kb_graph_view_click_rect(focused_id);
                     if let Some(rect) = window_rect {
                         let rel_x = self.cursor_x as f32 - (rect.x as f32 * cell_w);
                         let rel_y = self.cursor_y as f32 - (rect.y as f32 * cell_h);
@@ -818,7 +818,11 @@ impl GuiApp {
         // byte-for-byte unchanged for every other `BufferKind`.
         if v_px.abs() > 0.01 || h_px.abs() > 0.01 {
             let (cell_w, cell_h_dim) = self.renderer.cell_dimensions();
-            let target_win =
+            // Fullscreen overlay covers the whole screen, so `window_at_cell`
+            // (tiled-layout-only) can't be trusted to resolve it — prefer
+            // the overlay window outright when active, matching what's
+            // actually drawn under the cursor.
+            let target_win = self.editor.kb_graph_view_overlay_window().or_else(|| {
                 if self.editor.mouse_wheel_follow_mouse && cell_w > 0.0 && cell_h_dim > 0.0 {
                     let col = (self.cursor_x / cell_w as f64) as u16;
                     let row = (self.cursor_y / cell_h_dim as f64) as u16;
@@ -827,7 +831,8 @@ impl GuiApp {
                         .window_at_cell(col, row, self.editor.last_layout_area)
                 } else {
                     None
-                };
+                }
+            });
             let target_id = target_win.unwrap_or_else(|| self.editor.window_mgr.focused_id());
             let is_graph_window = self
                 .editor
@@ -838,13 +843,7 @@ impl GuiApp {
                 .is_some_and(|b| b.kind == mae_core::BufferKind::Graph);
             if is_graph_window {
                 if v_px.abs() > 0.01 && cell_w > 0.0 && cell_h_dim > 0.0 {
-                    let window_rect = self
-                        .editor
-                        .window_mgr
-                        .layout_rects(self.editor.last_layout_area)
-                        .into_iter()
-                        .find(|(id, _)| *id == target_id)
-                        .map(|(_, rect)| rect);
+                    let window_rect = self.editor.kb_graph_view_click_rect(target_id);
                     if let Some(rect) = window_rect {
                         let rel_x = self.cursor_x as f32 - (rect.x as f32 * cell_w);
                         let rel_y = self.cursor_y as f32 - (rect.y as f32 * cell_h_dim);
@@ -1166,30 +1165,31 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
                     // Skipped entirely while dragging a node (the drag path
                     // above already tracks that node explicitly).
                     if self.graph_drag.is_none() && self.editor.kb_graph_hover_enabled {
-                        let col = (self.cursor_x / cell_w as f64) as u16;
-                        let row = (self.cursor_y / cell_h as f64) as u16;
-                        let win_at_cursor = self.editor.window_mgr.window_at_cell(
-                            col,
-                            row,
-                            self.editor.last_layout_area,
-                        );
-                        let graph_hit = win_at_cursor.and_then(|win_id| {
-                            let buf_idx = self.editor.window_mgr.window(win_id)?.buffer_idx;
-                            let is_graph = self
-                                .editor
-                                .buffers
-                                .get(buf_idx)
-                                .is_some_and(|b| b.kind == mae_core::BufferKind::Graph);
-                            is_graph.then_some(win_id)
+                        // Fullscreen overlay covers the whole screen, so
+                        // `window_at_cell` (tiled-layout-only) can't find it
+                        // once the cursor strays outside the pre-overlay
+                        // tiled pane bounds — prefer the overlay window
+                        // outright when active.
+                        let graph_hit = self.editor.kb_graph_view_overlay_window().or_else(|| {
+                            let col = (self.cursor_x / cell_w as f64) as u16;
+                            let row = (self.cursor_y / cell_h as f64) as u16;
+                            let win_at_cursor = self.editor.window_mgr.window_at_cell(
+                                col,
+                                row,
+                                self.editor.last_layout_area,
+                            );
+                            win_at_cursor.and_then(|win_id| {
+                                let buf_idx = self.editor.window_mgr.window(win_id)?.buffer_idx;
+                                let is_graph = self
+                                    .editor
+                                    .buffers
+                                    .get(buf_idx)
+                                    .is_some_and(|b| b.kind == mae_core::BufferKind::Graph);
+                                is_graph.then_some(win_id)
+                            })
                         });
                         let changed = if let Some(win_id) = graph_hit {
-                            let rect = self
-                                .editor
-                                .window_mgr
-                                .layout_rects(self.editor.last_layout_area)
-                                .into_iter()
-                                .find(|(id, _)| *id == win_id)
-                                .map(|(_, rect)| rect);
+                            let rect = self.editor.kb_graph_view_click_rect(win_id);
                             match rect {
                                 Some(rect) => {
                                     let rel_x = self.cursor_x as f32 - (rect.x as f32 * cell_w);
@@ -1217,13 +1217,7 @@ impl winit::application::ApplicationHandler<crate::gui_event::MaeEvent> for GuiA
                         // path below) — the drag must keep tracking the
                         // SAME graph window even if the cursor strays
                         // outside that window's bounds.
-                        let window_rect = self
-                            .editor
-                            .window_mgr
-                            .layout_rects(self.editor.last_layout_area)
-                            .into_iter()
-                            .find(|(id, _)| *id == drag.window)
-                            .map(|(_, rect)| rect);
+                        let window_rect = self.editor.kb_graph_view_click_rect(drag.window);
                         if let Some(rect) = window_rect {
                             let rel_x = self.cursor_x as f32 - (rect.x as f32 * cell_w);
                             let rel_y = self.cursor_y as f32 - (rect.y as f32 * cell_h);
