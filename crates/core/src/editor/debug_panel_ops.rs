@@ -292,7 +292,7 @@ impl Editor {
         vars: &[crate::debug::Variable],
         scope_name: &str,
         depth: usize,
-        expanded: &std::collections::HashSet<i64>,
+        expanded: &std::collections::HashMap<i64, bool>,
         children: &std::collections::HashMap<i64, Vec<crate::debug::Variable>>,
         text: &mut String,
         line_map: &mut Vec<DebugLineItem>,
@@ -301,7 +301,7 @@ impl Editor {
         for var in vars {
             let expandable = var.variables_reference > 0;
             let marker = if expandable {
-                if expanded.contains(&var.variables_reference) {
+                if crate::foldable_view::is_collapsed(expanded, &var.variables_reference) {
                     "▼ "
                 } else {
                     "▶ "
@@ -326,7 +326,8 @@ impl Editor {
             });
 
             // Recurse into expanded children.
-            if expandable && expanded.contains(&var.variables_reference) {
+            if expandable && crate::foldable_view::is_collapsed(expanded, &var.variables_reference)
+            {
                 if let Some(child_list) = children.get(&var.variables_reference) {
                     self.render_variables(
                         child_list,

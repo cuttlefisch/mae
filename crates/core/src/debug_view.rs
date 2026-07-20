@@ -5,9 +5,10 @@
 //! select/expand, q to close). `DebugView` tracks which line the cursor
 //! is on, which variables are expanded, and lazy-loaded child variables.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use crate::debug::Variable;
+use crate::foldable_view;
 
 /// What semantic item a rendered line in the debug buffer represents.
 /// The renderer and key handler use this to style and interact with lines.
@@ -39,8 +40,13 @@ pub struct DebugView {
     pub cursor_index: usize,
     /// Which stack frame is focused (for source navigation).
     pub selected_frame_id: Option<i64>,
-    /// Set of `variables_reference` values that are expanded in the tree.
-    pub expanded_vars: HashSet<i64>,
+    /// `variables_reference` -> expanded? Uses `foldable_view`'s shared
+    /// collapse-state operations (CLAUDE.md #8 / #12 in the mae-audit
+    /// remediation pass — this was the 4th hand-rolled foldable-buffer
+    /// implementation; `git_status`/`notifications_view`/`kb_sharing` already
+    /// share this pattern). Default `false` ("not expanded") matches the
+    /// original `HashSet`'s "absent = collapsed" semantics exactly.
+    pub expanded_vars: HashMap<i64, bool>,
     /// Lazy-loaded child variables keyed by parent's `variables_reference`.
     pub child_variables: HashMap<i64, Vec<Variable>>,
     /// Maps buffer line index → semantic item. Rebuilt on each populate.
@@ -54,7 +60,7 @@ impl DebugView {
         DebugView {
             cursor_index: 0,
             selected_frame_id: None,
-            expanded_vars: HashSet::new(),
+            expanded_vars: HashMap::new(),
             child_variables: HashMap::new(),
             line_map: Vec::new(),
             show_output: false,
@@ -64,18 +70,16 @@ impl DebugView {
     /// Toggle expansion of a variable by its `variables_reference`.
     /// Returns true if the variable is now expanded (i.e. was collapsed).
     pub fn toggle_expand(&mut self, var_ref: i64) -> bool {
-        if self.expanded_vars.contains(&var_ref) {
-            self.expanded_vars.remove(&var_ref);
-            false
-        } else {
-            self.expanded_vars.insert(var_ref);
-            true
-        }
+        foldable_view::toggle(&mut self.expanded_vars, var_ref);
+        self.is_expanded(var_ref)
     }
 
     /// Whether a variable is currently expanded.
     pub fn is_expanded(&self, var_ref: i64) -> bool {
-        self.expanded_vars.contains(&var_ref)
+        // `foldable_view::is_collapsed` is polarity-agnostic — it just
+        // reads a per-key bool defaulting to `false` — so it doubles as
+        // "is_expanded" here without any semantic mismatch.
+        foldable_view::is_collapsed(&self.expanded_vars, &var_ref)
     }
 
     /// Get the line item under the cursor, if any.
