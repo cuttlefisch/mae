@@ -999,6 +999,10 @@ impl CommandRegistry {
             "Remove orphan user notes with no links (SPC n C)",
         );
         reg.register_builtin(
+            "kb-migrate-stranded",
+            "Remove primary-KB nodes stranded by a pre-ADR-019 join, now superseded by a joined instance",
+        );
+        reg.register_builtin(
             "kb-agenda",
             "Query KB graph: :kb-agenda todo|priority|tag|orphan|stale|custom [args]",
         );
