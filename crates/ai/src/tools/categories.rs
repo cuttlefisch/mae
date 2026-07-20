@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::types::*;
 
 /// Tool tiers for payload optimization — only core tools are sent by default.
@@ -177,33 +175,19 @@ pub fn parse_categories(input: &str) -> Vec<ToolCategory> {
 
 /// Build the `request_tools` meta-tool definition.
 pub fn request_tools_definition() -> ToolDefinition {
-    ToolDefinition {
-        name: "request_tools".into(),
-        description: "Request additional tools by category or specific name. Use search_tools first to discover tool names, then request them here. Categories: lsp, dap, knowledge, shell, commands, git, web, ai, visual, debug, mcp.".into(),
-        parameters: ToolParameters {
-            schema_type: "object".into(),
-            properties: HashMap::from([
-                (
-                    "categories".into(),
-                    ToolProperty {
-                        prop_type: "string".into(),
-                        description: "Comma-separated categories: lsp, dap, knowledge, shell, commands, git, web, ai, visual, debug, mcp".into(),
-                        enum_values: None,
-                    },
-                ),
-                (
-                    "tools".into(),
-                    ToolProperty {
-                        prop_type: "string".into(),
-                        description: "Comma-separated tool names to add (e.g. from search_tools results)".into(),
-                        enum_values: None,
-                    },
-                ),
-            ]),
-            required: vec!["categories".into()],
-        },
-        permission: Some(PermissionTier::ReadOnly),
-    }
+    super::tool_def::ToolDefBuilder::new(
+        "request_tools",
+        "Request additional tools by category or specific name. Use search_tools first to discover tool names, then request them here. Categories: lsp, dap, knowledge, shell, commands, git, web, ai, visual, debug, mcp.",
+    )
+    .prop(
+        "categories",
+        "string",
+        "Comma-separated categories: lsp, dap, knowledge, shell, commands, git, web, ai, visual, debug, mcp",
+    )
+    .prop("tools", "string", "Comma-separated tool names to add (e.g. from search_tools results)")
+    .required(["categories"])
+    .permission(PermissionTier::ReadOnly)
+    .build()
 }
 
 /// Classify a command's permission tier based on its name.

@@ -6,6 +6,7 @@ mod dap_tools;
 mod kb_tools;
 mod lsp_tools;
 mod shell_tools;
+mod tool_def;
 pub mod tool_search;
 mod web_tools;
 
