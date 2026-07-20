@@ -242,6 +242,36 @@ impl super::Editor {
             "kb_graph_color_tween_duration_ms" => self.kb_graph_color_tween_duration_ms.to_string(),
             "kb_graph_node_border_enabled" => self.kb_graph_node_border_enabled.to_string(),
             "kb_graph_node_saturation_cap" => self.kb_graph_node_saturation_cap.to_string(),
+            "kb_split_ratio" => self
+                .display_policy
+                .ratio_for(crate::BufferKind::Kb)
+                .to_string(),
+            "messages_split_ratio" => self
+                .display_policy
+                .ratio_for(crate::BufferKind::Messages)
+                .to_string(),
+            "shell_split_ratio" => self
+                .display_policy
+                .ratio_for(crate::BufferKind::Shell)
+                .to_string(),
+            "debug_panel_split_ratio" => self
+                .display_policy
+                .ratio_for(crate::BufferKind::Debug)
+                .to_string(),
+            "file_tree_split_ratio" => self
+                .display_policy
+                .ratio_for(crate::BufferKind::FileTree)
+                .to_string(),
+            "notifications_split_ratio" => self
+                .display_policy
+                .ratio_for(crate::BufferKind::Notifications)
+                .to_string(),
+            "kb_graph_split_ratio" => self
+                .display_policy
+                .ratio_for(crate::BufferKind::Graph)
+                .to_string(),
+            "agent_display_split_ratio" => self.agent_display_split_ratio.to_string(),
+            "ai_conversation_split_ratio" => self.ai_conversation_split_ratio.to_string(),
             "kb_graph_font_size" => self.kb_graph_font_size.to_string(),
             "kb_graph_layout_iterations" => self.kb_graph_layout_iterations.to_string(),
             "kb_graph_layout_kind_clustering" => self.kb_graph_layout_kind_clustering.to_string(),
@@ -1045,6 +1075,66 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.kb_graph_node_saturation_cap = v.clamp(0.0, 1.0);
+            }
+            "kb_split_ratio" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.display_policy.set_ratio_override(crate::BufferKind::Kb, v);
+            }
+            "messages_split_ratio" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.display_policy
+                    .set_ratio_override(crate::BufferKind::Messages, v);
+            }
+            "shell_split_ratio" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.display_policy
+                    .set_ratio_override(crate::BufferKind::Shell, v);
+            }
+            "debug_panel_split_ratio" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.display_policy
+                    .set_ratio_override(crate::BufferKind::Debug, v);
+            }
+            "file_tree_split_ratio" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.display_policy
+                    .set_ratio_override(crate::BufferKind::FileTree, v);
+            }
+            "notifications_split_ratio" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.display_policy
+                    .set_ratio_override(crate::BufferKind::Notifications, v);
+            }
+            "kb_graph_split_ratio" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.display_policy
+                    .set_ratio_override(crate::BufferKind::Graph, v);
+            }
+            "agent_display_split_ratio" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.agent_display_split_ratio = v.clamp(0.1, 0.9);
+            }
+            "ai_conversation_split_ratio" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.ai_conversation_split_ratio = v.clamp(0.1, 0.9);
             }
             "kb_graph_font_size" => {
                 let v: u32 = value
@@ -2462,6 +2552,182 @@ mod graph_view_option_tests {
             .set_option("kb_graph_node_saturation_cap", "not-a-number")
             .is_err());
         assert_eq!(editor.kb_graph_node_saturation_cap, before);
+    }
+
+    /// Roundtrip + clamp for every DisplayPolicy-backed split-ratio option:
+    /// (option name, BufferKind, default). Table-driven so all 7 share one
+    /// test body instead of 7 near-identical copies.
+    #[test]
+    fn display_policy_split_ratio_options_roundtrip_and_clamp() {
+        let cases: &[(&str, crate::BufferKind, &str)] = &[
+            ("kb_split_ratio", crate::BufferKind::Kb, "0.5"),
+            ("messages_split_ratio", crate::BufferKind::Messages, "0.3"),
+            ("shell_split_ratio", crate::BufferKind::Shell, "0.35"),
+            ("debug_panel_split_ratio", crate::BufferKind::Debug, "0.4"),
+            ("file_tree_split_ratio", crate::BufferKind::FileTree, "0.2"),
+            (
+                "notifications_split_ratio",
+                crate::BufferKind::Notifications,
+                "0.4",
+            ),
+            ("kb_graph_split_ratio", crate::BufferKind::Graph, "0.6"),
+        ];
+        for &(name, kind, default) in cases {
+            let mut editor = Editor::new();
+            assert_eq!(
+                editor.get_option(name).unwrap().0,
+                default,
+                "{name} default"
+            );
+
+            editor.set_option(name, "0.7").unwrap();
+            assert_eq!(
+                editor.display_policy.ratio_for(kind),
+                0.7,
+                "{name} setter must reach DisplayPolicy"
+            );
+            assert_eq!(editor.get_option(name).unwrap().0, "0.7", "{name} getter");
+
+            // Out-of-range clamps to WindowManager::split_with_ratio's own bound.
+            editor.set_option(name, "0.0").unwrap();
+            assert_eq!(
+                editor.display_policy.ratio_for(kind),
+                0.1,
+                "{name} low clamp"
+            );
+            editor.set_option(name, "1.0").unwrap();
+            assert_eq!(
+                editor.display_policy.ratio_for(kind),
+                0.9,
+                "{name} high clamp"
+            );
+
+            assert!(
+                editor.set_option(name, "not-a-number").is_err(),
+                "{name} invalid input"
+            );
+        }
+    }
+
+    #[test]
+    fn kb_graph_split_ratio_option_preserves_direction_set_via_display_rule() {
+        // Interop guard: set-display-rule!-style direct override and the
+        // new option must never diverge on one kind's effective action.
+        let mut editor = Editor::new();
+        editor.display_policy.set_override(
+            crate::BufferKind::Graph,
+            crate::display_policy::DisplayAction::ReuseOrSplit {
+                direction: crate::window::SplitDirection::Horizontal,
+                ratio: 0.3,
+            },
+        );
+        editor.set_option("kb_graph_split_ratio", "0.7").unwrap();
+        assert_eq!(
+            editor.display_policy.action_for(crate::BufferKind::Graph),
+            crate::display_policy::DisplayAction::ReuseOrSplit {
+                direction: crate::window::SplitDirection::Horizontal,
+                ratio: 0.7,
+            },
+            "the option setter must preserve a direction override, not clobber it"
+        );
+    }
+
+    #[test]
+    fn agent_display_split_ratio_option_roundtrips_clamps_and_changes_the_actual_split() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor.get_option("agent_display_split_ratio").unwrap().0,
+            "0.5"
+        );
+
+        editor
+            .set_option("agent_display_split_ratio", "0.75")
+            .unwrap();
+        assert_eq!(editor.agent_display_split_ratio, 0.75);
+
+        editor
+            .set_option("agent_display_split_ratio", "0.0")
+            .unwrap();
+        assert_eq!(editor.agent_display_split_ratio, 0.1);
+        editor
+            .set_option("agent_display_split_ratio", "1.0")
+            .unwrap();
+        assert_eq!(editor.agent_display_split_ratio, 0.9);
+
+        let before = editor.agent_display_split_ratio;
+        assert!(editor
+            .set_option("agent_display_split_ratio", "not-a-number")
+            .is_err());
+        assert_eq!(editor.agent_display_split_ratio, before);
+
+        // Actually changes the produced split: an agent shell placed via
+        // display_buffer_for_agent's fallback split must land at the new ratio.
+        // ratio is the pre-existing window's share (WindowManager::split_root's
+        // own doc comment), so the LARGER pane should be ~75% of the total —
+        // checked without assuming which window stays focused post-split.
+        editor
+            .set_option("agent_display_split_ratio", "0.75")
+            .unwrap();
+        let mut shell_buf = crate::buffer::Buffer::new();
+        shell_buf.agent_shell = true;
+        editor.buffers.push(shell_buf);
+        let shell_idx = editor.buffers.len() - 1;
+        editor.display_buffer_for_agent(shell_idx);
+        let area = editor.default_area();
+        let rects = editor.window_mgr.layout_rects(area);
+        assert_eq!(rects.len(), 2, "must have split into two windows");
+        let total_width: u16 = rects.iter().map(|(_, r)| r.width).sum();
+        let larger_pane_width = rects.iter().map(|(_, r)| r.width).max().unwrap_or(0);
+        // Allow rounding slack — ratio is applied in integer cell space.
+        let expected = (total_width as f32 * 0.75) as i32;
+        assert!(
+            (larger_pane_width as i32 - expected).abs() <= 2,
+            "larger pane width {larger_pane_width} should be ~75% of {total_width}"
+        );
+    }
+
+    #[test]
+    fn ai_conversation_split_ratio_option_roundtrips_clamps_and_changes_the_actual_split() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor.get_option("ai_conversation_split_ratio").unwrap().0,
+            "0.85"
+        );
+
+        editor
+            .set_option("ai_conversation_split_ratio", "0.6")
+            .unwrap();
+        assert_eq!(editor.ai_conversation_split_ratio, 0.6);
+
+        editor
+            .set_option("ai_conversation_split_ratio", "0.0")
+            .unwrap();
+        assert_eq!(editor.ai_conversation_split_ratio, 0.1);
+        editor
+            .set_option("ai_conversation_split_ratio", "1.0")
+            .unwrap();
+        assert_eq!(editor.ai_conversation_split_ratio, 0.9);
+
+        let before = editor.ai_conversation_split_ratio;
+        assert!(editor
+            .set_option("ai_conversation_split_ratio", "not-a-number")
+            .is_err());
+        assert_eq!(editor.ai_conversation_split_ratio, before);
+
+        editor
+            .set_option("ai_conversation_split_ratio", "0.6")
+            .unwrap();
+        editor.open_conversation_buffer();
+        let area = editor.default_area();
+        let rects = editor.window_mgr.layout_rects(area);
+        assert_eq!(rects.len(), 2, "output+input must both be visible");
+        let total_height: u16 = rects.iter().map(|(_, r)| r.height).sum();
+        let output_height = rects.iter().map(|(_, r)| r.height).max().unwrap_or(0);
+        let expected = (total_height as f32 * 0.6) as i32;
+        assert!(
+            (output_height as i32 - expected).abs() <= 2,
+            "output pane height {output_height} should be ~60% of {total_height}"
+        );
     }
 }
 

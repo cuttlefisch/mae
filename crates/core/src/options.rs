@@ -295,6 +295,55 @@ impl OptionRegistry {
                 opt!("dashboard_dismiss_on_split", &["dashboard-dismiss-on-split"],
                     "Close dashboard windows when any buffer is displayed via a split. Default false (Doom parity: dashboard stays).",
                     OptionKind::Bool, "false", Some("editor.dashboard_dismiss_on_split"), &[]),
+                // --- Window split ratios (DisplayPolicy) ---
+                // Friendly, clamped (0.1-0.9) options over DisplayPolicy's existing
+                // ReuseOrSplit ratios — the pre-existing/editor child's share when a
+                // BufferKind first splits open beside it. The Scheme power-user
+                // primitive `(set-display-rule! KIND "reuse-or-split:DIR:RATIO")`
+                // writes into the SAME DisplayPolicy override table these read/write,
+                // so the two can never diverge on one kind's effective ratio; that
+                // primitive remains the only way to change a kind's split DIRECTION
+                // (a rare, structural lever these options deliberately don't expose).
+                opt!("kb_split_ratio", &["kb-split-ratio"],
+                    "Editor-side share of the split when a *Help*/*KB* buffer first opens \
+                     beside the current window (DisplayPolicy's Kb ratio).",
+                    OptionKind::Float, "0.5", Some("editor.kb_split_ratio"), &[]),
+                opt!("messages_split_ratio", &["messages-split-ratio"],
+                    "Editor-side share of the split when the *Messages* buffer first opens \
+                     (DisplayPolicy's Messages ratio).",
+                    OptionKind::Float, "0.3", Some("editor.messages_split_ratio"), &[]),
+                opt!("shell_split_ratio", &["shell-split-ratio"],
+                    "Editor-side share of the split when a shell buffer first opens \
+                     (DisplayPolicy's Shell ratio).",
+                    OptionKind::Float, "0.35", Some("editor.shell_split_ratio"), &[]),
+                opt!("debug_panel_split_ratio", &["debug-panel-split-ratio"],
+                    "Editor-side share of the split when the debug panel first opens \
+                     (DisplayPolicy's Debug ratio).",
+                    OptionKind::Float, "0.4", Some("editor.debug_panel_split_ratio"), &[]),
+                opt!("file_tree_split_ratio", &["file-tree-split-ratio"],
+                    "Editor-side share of the split when the file tree sidebar first opens \
+                     (DisplayPolicy's FileTree ratio).",
+                    OptionKind::Float, "0.2", Some("editor.file_tree_split_ratio"), &[]),
+                opt!("notifications_split_ratio", &["notifications-split-ratio"],
+                    "Editor-side share of the split when the *Notifications* buffer first \
+                     opens (DisplayPolicy's Notifications ratio).",
+                    OptionKind::Float, "0.4", Some("editor.notifications_split_ratio"), &[]),
+                opt!("kb_graph_split_ratio", &["kb-graph-split-ratio"],
+                    "Editor-side share of the split when the KB graph view first opens \
+                     (DisplayPolicy's Graph ratio) — the graph itself gets 1 minus this. \
+                     Default 0.6 gives editor:graph a 3:2 split.",
+                    OptionKind::Float, "0.6", Some("editor.kb_graph_split_ratio"), &[]),
+                // AI conversation buffers are a pair (output+input), managed outside
+                // DisplayPolicy (BufferKind::Conversation is Hidden there) — these two
+                // ratios are the pair's own equivalent lever, same clamp convention.
+                opt!("agent_display_split_ratio", &["agent-display-split-ratio"],
+                    "Editor-side share of the split when the AI agent must place a buffer \
+                     beside the conversation window group (display_buffer_for_agent's \
+                     fallback split).",
+                    OptionKind::Float, "0.5", Some("ai.display_split_ratio"), &[]),
+                opt!("ai_conversation_split_ratio", &["ai-conversation-split-ratio"],
+                    "Output-pane share of the AI conversation buffer's output/input split.",
+                    OptionKind::Float, "0.85", Some("ai.conversation_split_ratio"), &[]),
                 opt!("org_agenda_files", &["org-agenda-files"],
                     "Directories/files to ingest into KB for agenda. Use :agenda-add/:agenda-remove to manage.",
                     OptionKind::String, "", Some("org.agenda_files"), &[]),

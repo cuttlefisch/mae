@@ -1192,6 +1192,16 @@ pub struct Editor {
     /// Display policy: maps BufferKind → DisplayAction for buffer placement.
     /// Governs how buffers become visible (replace, avoid conversation, reuse/split, hidden).
     pub display_policy: crate::display_policy::DisplayPolicy,
+    /// Editor-side share of `display_buffer_for_agent`'s fallback split, when
+    /// it must place a buffer beside the conversation window group. AI
+    /// conversation buffers are a PAIR (output+input) and sit outside
+    /// `DisplayPolicy` (`BufferKind::Conversation` is `Hidden` there), so
+    /// this — and `ai_conversation_split_ratio` below — are the pair's own
+    /// equivalent lever. Mirrors `agent_display_split_ratio`.
+    pub agent_display_split_ratio: f32,
+    /// Output-pane share of the AI conversation buffer's output/input split.
+    /// Mirrors `ai_conversation_split_ratio`.
+    pub ai_conversation_split_ratio: f32,
     /// Tiered redraw level — how much work the renderer needs to do this frame.
     /// Set by event handlers, cleared after render.
     pub redraw_level: crate::redraw::RedrawLevel,
@@ -1463,6 +1473,8 @@ impl Editor {
             swap_directory: String::new(),
             buffer_keys_popup: false,
             display_policy: crate::display_policy::DisplayPolicy::default(),
+            agent_display_split_ratio: 0.5,
+            ai_conversation_split_ratio: 0.85,
             redraw_level: crate::redraw::RedrawLevel::Full,
             dirty_line_range: None,
             last_click: None,
