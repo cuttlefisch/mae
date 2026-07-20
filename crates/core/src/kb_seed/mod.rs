@@ -885,7 +885,20 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_DISPLAY_POLICY,
         )
-        .with_tags(["core", "window", "conversation"]),
+        .with_tags(["core", "window", "conversation"])
+        .with_aliases([
+            "window-placement",
+            "split-vs-replace",
+            "take-over-window",
+            "replace-focused",
+            "fullscreen-buffer",
+            "dont-split",
+            "no-split",
+            "maximize-on-open",
+            "where-buffers-open",
+            "shell-window",
+            "agent-window",
+        ]),
         Node::new(
             "concept:mcp-development",
             "Concept: MCP Development Workflow",
@@ -1094,6 +1107,33 @@ mod tests {
             "key:leader-keys",
         ] {
             assert!(kb.contains(required), "missing concept: {}", required);
+        }
+    }
+
+    /// #67: `set-display-rule!` / `concept:display-policy` were only
+    /// findable by the internal "display policy/rule" jargon, not the
+    /// words a user actually reaches for ("take over window", "don't
+    /// split", "fullscreen buffer"). Search by the exact terms the issue's
+    /// own repro cites and confirm each now surfaces the target node.
+    #[test]
+    fn display_policy_nodes_are_discoverable_by_intent_keywords() {
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
+        for query in [
+            "take over window",
+            "fullscreen buffer",
+            "dont split",
+            "maximize on open",
+            "window placement",
+        ] {
+            let hits = kb.search(query);
+            assert!(
+                hits.contains(&"concept:display-policy".to_string())
+                    || hits.contains(&"scheme:set-display-rule!".to_string()),
+                "query '{}' should surface concept:display-policy or \
+                 scheme:set-display-rule! via alias, got: {:?}",
+                query,
+                hits
+            );
         }
     }
 

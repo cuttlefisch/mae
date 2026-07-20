@@ -1408,6 +1408,28 @@ pub(crate) const SCHEME_API_FUNCTIONS: &[(&str, &str, &str, &str, &str)] = &[
         ),
     ];
 
+/// Discoverability aliases for a handful of `scheme:<name>` nodes whose
+/// canonical name uses jargon a user wouldn't naturally search for (#67) —
+/// deliberately a small side-table, not a 6th `SCHEME_API_FUNCTIONS` tuple
+/// field, so adding an alias never requires touching the other 150+
+/// entries that don't need one.
+const SCHEME_API_ALIASES: &[(&str, &[&str])] = &[(
+    "set-display-rule!",
+    &[
+        "window-placement",
+        "split-vs-replace",
+        "take-over-window",
+        "replace-focused",
+        "fullscreen-buffer",
+        "dont-split",
+        "no-split",
+        "maximize-on-open",
+        "where-buffers-open",
+        "shell-window",
+        "agent-window",
+    ],
+)];
+
 /// Install `scheme:<name>` nodes for all Scheme API functions and variables.
 pub(super) fn install_scheme_nodes(kb: &mut KnowledgeBase) {
     // Each entry: (name, signature, doc, example, category)
@@ -1497,9 +1519,12 @@ pub(super) fn install_scheme_nodes(kb: &mut KnowledgeBase) {
         );
         let id = format!("scheme:{}", name);
         let title = format!("Scheme: {}", name);
-        kb.insert(
-            Node::new(id, title, NodeKind::SchemeApi, body).with_tags(["scheme", "api", category]),
-        );
+        let mut node =
+            Node::new(id, title, NodeKind::SchemeApi, body).with_tags(["scheme", "api", category]);
+        if let Some((_, aliases)) = SCHEME_API_ALIASES.iter().find(|(n, _)| *n == name) {
+            node = node.with_aliases(aliases.iter().copied());
+        }
+        kb.insert(node);
     }
 
     for &(name, typ, doc) in variables {
