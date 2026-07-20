@@ -430,7 +430,7 @@ impl Buffer {
 
     /// Recompute display regions for link concealment and inline images.
     /// Called when buffer generation changes or `link_descriptive` toggles.
-    pub fn recompute_display_regions(&mut self, link_descriptive: bool) {
+    pub fn recompute_display_regions(&mut self, link_descriptive: bool, inline_images: bool) {
         self.display_regions.clear();
         self.display_regions_gen = self.generation;
 
@@ -451,8 +451,15 @@ impl Buffer {
             self.display_regions = crate::display_region::compute_link_regions(&source, true, ext);
         }
 
-        // Append image regions when inline_images is enabled.
-        if self.local_options.inline_images.unwrap_or(false) {
+        // Append image regions when inline_images is enabled. Resolved by
+        // the caller (`Editor::inline_images_for`, global + buffer-local
+        // override) and passed in — mirrors `link_descriptive` above; a
+        // `Buffer` has no reference back to `Editor` to resolve its own
+        // global fallback, so this must never read
+        // `self.local_options.inline_images` directly with a hardcoded
+        // default (that silently ignored the `inline_images` global/
+        // `:set`/`:setl` entirely).
+        if inline_images {
             let base_dir = self.file_path.as_ref().and_then(|p| p.parent());
             let image_regions = crate::display_region::compute_image_regions(
                 &source,
@@ -2591,7 +2598,6 @@ mod tests {
     #[test]
     fn recompute_display_regions_includes_image_regions() {
         let mut buf = Buffer::new();
-        buf.local_options.inline_images = Some(true);
         let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
@@ -2601,7 +2607,7 @@ mod tests {
         buf.file_path = Some(assets.join("test.md"));
         buf.rope = ropey::Rope::from_str("![Test](test-image.png)\n");
         buf.generation = 1;
-        buf.recompute_display_regions(true);
+        buf.recompute_display_regions(true, true);
         let has_image = buf.display_regions.iter().any(|r| r.image.is_some());
         assert!(has_image, "display_regions should include image regions");
     }
@@ -2609,7 +2615,6 @@ mod tests {
     #[test]
     fn recompute_display_regions_no_images_when_disabled() {
         let mut buf = Buffer::new();
-        buf.local_options.inline_images = Some(false);
         let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
@@ -2619,7 +2624,7 @@ mod tests {
         buf.file_path = Some(assets.join("test.md"));
         buf.rope = ropey::Rope::from_str("![Test](test-image.png)\n");
         buf.generation = 1;
-        buf.recompute_display_regions(true);
+        buf.recompute_display_regions(true, false);
         let has_image = buf.display_regions.iter().any(|r| r.image.is_some());
         assert!(!has_image, "no image regions when inline_images disabled");
     }

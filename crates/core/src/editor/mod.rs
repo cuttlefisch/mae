@@ -1152,6 +1152,11 @@ pub struct Editor {
     pub link_descriptive: bool,
     /// Apply inline bold/italic/code styling in conversation and KB buffers. Default true.
     pub render_markup: bool,
+    /// Display images inline in org/markdown buffers (GUI renders image, TUI
+    /// shows placeholder). Default true. Effective value for a specific
+    /// buffer is `Editor::inline_images_for` (buffer-local override via
+    /// `BufferLocalOptions::inline_images` takes precedence).
+    pub inline_images: bool,
     /// Show hover info in a floating popup (true) or status bar (false). Default true.
     pub lsp_hover_popup: bool,
     /// Whether the KB-link hover preview popup (Part D) auto-triggers when
@@ -1474,6 +1479,7 @@ impl Editor {
             heading_scale_h3: 1.15,
             link_descriptive: true,
             render_markup: true,
+            inline_images: true,
             lsp_hover_popup: true,
             kb_preview_on_hover: true,
             kb_preview_max_lines: 15,

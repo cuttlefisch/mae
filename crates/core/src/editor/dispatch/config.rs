@@ -231,10 +231,7 @@ impl Editor {
             }
             "toggle-inline-images" => {
                 let idx = self.active_buffer_idx();
-                let cur = self.buffers[idx]
-                    .local_options
-                    .inline_images
-                    .unwrap_or(false);
+                let cur = self.inline_images_for(idx);
                 let new_val = !cur;
                 self.buffers[idx].local_options.inline_images = Some(new_val);
                 self.buffers[idx].collapsed_images.clear();

@@ -45,6 +45,9 @@ impl super::Editor {
             "render_markup" => {
                 opts.render_markup = Some(crate::options::parse_option_bool(value)?);
             }
+            "inline_images" => {
+                opts.inline_images = Some(crate::options::parse_option_bool(value)?);
+            }
             _ => {
                 return Err(format!(
                     "Option '{}' does not support buffer-local override",
@@ -103,6 +106,7 @@ impl super::Editor {
             "nyan_mode" => self.nyan_mode.to_string(),
             "link_descriptive" => self.link_descriptive.to_string(),
             "render_markup" => self.render_markup.to_string(),
+            "inline_images" => self.inline_images.to_string(),
             "lsp_hover_popup" => self.lsp_hover_popup.to_string(),
             "lsp_diagnostics_inline" => self.lsp_diagnostics_inline.to_string(),
             "lsp_diagnostics_virtual_text" => self.lsp_diagnostics_virtual_text.to_string(),
@@ -512,6 +516,9 @@ impl super::Editor {
             }
             "render_markup" => {
                 self.render_markup = parse_option_bool(value)?;
+            }
+            "inline_images" => {
+                self.inline_images = parse_option_bool(value)?;
             }
             "lsp_hover_popup" => {
                 self.lsp_hover_popup = parse_option_bool(value)?;
@@ -2150,6 +2157,14 @@ impl super::Editor {
             .local_options
             .render_markup
             .unwrap_or(self.render_markup)
+    }
+
+    /// Effective inline_images for a specific buffer index.
+    pub fn inline_images_for(&self, buf_idx: usize) -> bool {
+        self.buffers[buf_idx]
+            .local_options
+            .inline_images
+            .unwrap_or(self.inline_images)
     }
 
     /// Resolve the effective markup flavor for a buffer, respecting the

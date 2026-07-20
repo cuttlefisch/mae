@@ -384,7 +384,7 @@ fn open_link_at_cursor_end_to_end_resolves_kb_link_in_plain_org_buffer() {
         "",
     ));
     editor.buffers[0].insert_text_at(0, "Previous: [[id:daily:2026-07-06][2026-07-06]]\n");
-    editor.buffers[0].recompute_display_regions(true);
+    editor.buffers[0].recompute_display_regions(true, false);
 
     // Cursor on the link's visible display text ("2026-07-06").
     let win = editor.window_mgr.focused_window_mut();
@@ -504,7 +504,7 @@ fn display_regions_recomputed_on_edit() {
     // Set a file path so it picks an extension
     editor.buffers[idx].set_file_path(std::path::PathBuf::from("/tmp/test.md"));
     editor.buffers[idx].insert_text_at(0, "See [docs](https://docs.rs) here\n");
-    editor.buffers[idx].recompute_display_regions(true);
+    editor.buffers[idx].recompute_display_regions(true, false);
     assert_eq!(editor.buffers[idx].display_regions.len(), 1);
     assert_eq!(
         editor.buffers[idx].display_regions[0]
@@ -519,7 +519,7 @@ fn display_regions_recomputed_on_edit() {
     assert_ne!(editor.buffers[idx].generation, gen_before);
 
     // Recompute
-    editor.buffers[idx].recompute_display_regions(true);
+    editor.buffers[idx].recompute_display_regions(true, false);
     assert_eq!(editor.buffers[idx].display_regions.len(), 1);
     // The region byte offsets should have shifted by 1
     assert_eq!(editor.buffers[idx].display_regions[0].byte_start, 5);
@@ -533,7 +533,7 @@ fn cursor_moves_through_revealed_link_region() {
     let idx = editor.active_buffer_idx();
     editor.buffers[idx].set_file_path(std::path::PathBuf::from("/tmp/test.md"));
     editor.buffers[idx].insert_text_at(0, "See [docs](https://docs.rs) here\n");
-    editor.buffers[idx].recompute_display_regions(true);
+    editor.buffers[idx].recompute_display_regions(true, false);
     assert!(!editor.buffers[idx].display_regions.is_empty());
 
     // Place cursor at col 5 (inside the link region [docs](url))
@@ -663,7 +663,7 @@ fn edit_link_opens_mini_dialog() {
     editor.buffers[idx].replace_rope(ropey::Rope::from_str("[Click here](http://mae.invalid)\n"));
     editor.buffers[idx].set_file_path(std::path::PathBuf::from("test.md"));
     editor.buffers[idx].local_options.link_descriptive = Some(true);
-    editor.buffers[idx].recompute_display_regions(true);
+    editor.buffers[idx].recompute_display_regions(true, false);
     // Cursor at col 0 (on the link region)
     editor.dispatch_builtin("edit-link");
     // Should open a mini-dialog in CommandPalette mode
@@ -710,9 +710,8 @@ fn line_visual_rows_accounts_for_image() {
         return;
     }
     editor.buffers[idx].replace_rope(ropey::Rope::from_str("![img](test-image.png)\nline 2\n"));
-    editor.buffers[idx].local_options.inline_images = Some(true);
     editor.buffers[idx].set_file_path(assets.join("test.md"));
-    editor.buffers[idx].recompute_display_regions(true);
+    editor.buffers[idx].recompute_display_regions(true, true);
     editor.text_area_width = 80;
     let rows = editor.line_visual_rows(0, 0);
     assert!(
@@ -1159,4 +1158,39 @@ mod set_save_tests {
             assert!(content.contains("(set-option! \"ai_chat_enabled\" \"true\")"));
         });
     }
+}
+
+// ---------------------------------------------------------------------------
+// Registry-wide invariant: every registered option must actually be wired.
+// ---------------------------------------------------------------------------
+
+/// Closes the bug class this session found two concrete live instances of
+/// (`which_key_separator`/`which_key_max_desc_length`/
+/// `which_key_max_height_pct`/`which_key_sort_order`, then `inline_images`):
+/// an option registered in `OptionRegistry` but missing a `get_option`
+/// match arm silently behaves as if it doesn't exist — `:set` on it fails
+/// with a misleading "Unknown option" even though `:describe-option`
+/// would show it as real. This iterates the WHOLE registry rather than
+/// re-checking the two known-fixed cases, so the next such gap fails CI
+/// instead of needing another manual audit. Options explicitly reserved
+/// for future wiring (doc string starts with `"RESERVED"`, e.g.
+/// `kb_backup_interval`/`kb_backup_retention` per issue #263) are exempt.
+#[test]
+fn every_registered_option_is_reachable_via_get_option() {
+    let editor = Editor::new();
+    let mut unreachable = Vec::new();
+    for def in editor.option_registry.list() {
+        if def.doc.starts_with("RESERVED") {
+            continue;
+        }
+        if editor.get_option(&def.name).is_none() {
+            unreachable.push(def.name.to_string());
+        }
+    }
+    assert!(
+        unreachable.is_empty(),
+        "options registered but unreachable via get_option (missing an \
+         option_ops.rs match arm): {:?}",
+        unreachable
+    );
 }
