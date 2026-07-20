@@ -196,11 +196,21 @@ impl CozoKbStore {
     /// experiment showed ~14% raw write-failure under two-writer contention, and 0%
     /// with this backoff. Multi-instance daemon-less sharing depends on it. On the
     /// sled backend the predicate never matches, so this is a zero-cost pass-through.
+    ///
+    /// MAX_ATTEMPTS was raised from 100 to 400 after
+    /// `sqlite_multi_instance_concurrent_writes_converge` (the adversarial test this
+    /// backoff exists for) flaked on CI with a genuine "database is locked (code 5)"
+    /// after exhausting retries — CI runners contend for disk/CPU more than the dev
+    /// machine the original 14%/0% figures were measured on, so the retry budget
+    /// needs headroom for slower/more-loaded hardware, not just a fast local box.
+    /// Worst-case added latency stays bounded (~8ms/attempt cap × 400 ≈ 3.2s ceiling,
+    /// only ever paid under sustained contention — a successful write still returns
+    /// on the first attempt with zero added latency).
     fn run_with_busy_retry<F>(&self, mut op: F) -> Result<NamedRows, cozo::Error>
     where
         F: FnMut() -> Result<NamedRows, cozo::Error>,
     {
-        const MAX_ATTEMPTS: u32 = 100;
+        const MAX_ATTEMPTS: u32 = 400;
         // Per-instance seed so two competing writers jitter differently. Without
         // jitter, identical backoff keeps them in lockstep and they collide forever.
         let seed = self as *const Self as u64;
