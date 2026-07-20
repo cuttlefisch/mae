@@ -148,19 +148,15 @@ fn render_neighborhood_links(
     }
 }
 
-fn render_kb_node_for_query(
-    query: &dyn mae_kb::KbQueryLayer,
-    node_id: &str,
-) -> (String, Vec<KbLinkSpan>) {
-    let mut out = String::new();
-    let mut links: Vec<KbLinkSpan> = Vec::new();
-
-    let Some(node) = query.get(node_id) else {
-        out.push_str(&format!("(no such KB node: {})\n", node_id));
-        return (out, links);
-    };
-
-    // Header — * prefix gives h1 scale in GUI heading renderer
+/// Render a KB node header: `* title`, then `content_label · kind · id`
+/// (`content_label` is "MAE Manual" for builtin nodes, "Knowledge Base"
+/// otherwise), then an optional `tags:` line, then a blank line. Shared by
+/// every KB-node render path (query-layer, in-memory-store fallback, and the
+/// live `cmd:` describe-command path) so the label can't drift between them
+/// again — see the #4 audit-remediation fix, which found the `cmd:` path had
+/// silently dropped `content_label`.
+fn render_kb_node_header(out: &mut String, node_id: &str, node: &mae_kb::Node) {
+    // * prefix gives h1 scale in GUI heading renderer
     out.push_str(&format!("* {}", node.title));
     out.push('\n');
     let content_label = if is_builtin_node(node_id) {
@@ -178,6 +174,21 @@ fn render_kb_node_for_query(
         out.push_str(&format!("tags: {}\n", node.tags.join(", ")));
     }
     out.push('\n');
+}
+
+fn render_kb_node_for_query(
+    query: &dyn mae_kb::KbQueryLayer,
+    node_id: &str,
+) -> (String, Vec<KbLinkSpan>) {
+    let mut out = String::new();
+    let mut links: Vec<KbLinkSpan> = Vec::new();
+
+    let Some(node) = query.get(node_id) else {
+        out.push_str(&format!("(no such KB node: {})\n", node_id));
+        return (out, links);
+    };
+
+    render_kb_node_header(&mut out, node_id, &node);
 
     // Body — strip property drawers + leading #+keywords, then scan the
     // whole filtered body for [[...]] links (not per already-split line —
@@ -259,23 +270,7 @@ fn render_kb_node_with_store(
         return (out, links);
     };
 
-    out.push_str(&format!("* {}", node.title));
-    out.push('\n');
-    let content_label = if is_builtin_node(node_id) {
-        "MAE Manual"
-    } else {
-        "Knowledge Base"
-    };
-    out.push_str(&format!(
-        "{} · {} · {}\n",
-        content_label,
-        node_kind_label(node.kind),
-        node.id
-    ));
-    if !node.tags.is_empty() {
-        out.push_str(&format!("tags: {}\n", node.tags.join(", ")));
-    }
-    out.push('\n');
+    render_kb_node_header(&mut out, node_id, node);
 
     let filtered_body = strip_kb_body_noise(&node.body);
     render_kb_body(&filtered_body, &mut out, &mut links);
@@ -651,13 +646,7 @@ impl Editor {
                     self.kb.primary.get(&node_id).cloned()
                 };
                 if let Some(node) = header_node {
-                    out.push_str(&format!("* {}", node.title));
-                    out.push('\n');
-                    out.push_str(&format!("{} · {}\n", node_kind_label(node.kind), node.id));
-                    if !node.tags.is_empty() {
-                        out.push_str(&format!("tags: {}\n", node.tags.join(", ")));
-                    }
-                    out.push('\n');
+                    render_kb_node_header(&mut out, &node_id, &node);
                 }
                 // Parse the live text for links (whole-string scan — see
                 // render_kb_body — so a link whose display text spans a

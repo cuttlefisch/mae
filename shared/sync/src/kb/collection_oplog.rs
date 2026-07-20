@@ -89,10 +89,24 @@ impl KbCollectionDoc {
         let txn = self.doc.transact();
         let mut out = Vec::new();
         if let Some(Out::YMap(log)) = root.get(&txn, COLL_OPLOG_KEY) {
-            for (_key, v) in log.iter(&txn) {
-                if let Out::YMap(rec) = v {
-                    if let Some(op) = Self::decode_op_record(&rec, &txn) {
-                        out.push(op);
+            for (key, v) in log.iter(&txn) {
+                match v {
+                    Out::YMap(rec) => match Self::decode_op_record(&rec, &txn) {
+                        Some(op) => out.push(op),
+                        None => {
+                            tracing::warn!(
+                                chain_hash = key,
+                                "dropping undecodable membership op record — \
+                                 possible corruption or cross-peer format skew, \
+                                 investigate before trusting derived membership"
+                            );
+                        }
+                    },
+                    _ => {
+                        tracing::warn!(
+                            chain_hash = key,
+                            "membership oplog record is not a YMap — dropping"
+                        );
                     }
                 }
             }

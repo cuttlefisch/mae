@@ -154,6 +154,7 @@ impl super::Editor {
             "kb_activity_tracking" => self.kb.activity_tracking.to_string(),
             "kb_activity_decay" => self.kb.activity_decay.to_string(),
             "kb_search_sort" => self.kb.search_sort.clone(),
+            "kb_storage_engine" => self.kb.storage_engine.clone(),
             "kb_search_scope" => self.kb.search_scope.clone(),
             "kb_dailies_dir" => self
                 .kb
@@ -736,6 +737,17 @@ impl super::Editor {
                     "Invalid kb_search_sort: '{}' (expected: relevance, activity, alphabetical, recency)",
                     value
                 ))
+                }
+            },
+            "kb_storage_engine" => match value {
+                "sqlite" | "sled" => {
+                    self.kb.storage_engine = value.to_string();
+                }
+                _ => {
+                    return Err(format!(
+                        "Invalid kb_storage_engine: '{}' (expected: sqlite, sled)",
+                        value
+                    ))
                 }
             },
             "kb_search_scope" => {

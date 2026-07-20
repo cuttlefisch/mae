@@ -52,10 +52,7 @@ impl Editor {
         &self,
         path: &Path,
     ) -> Result<mae_kb::CozoKbStore, mae_kb::KbStoreError> {
-        let mut engine = self
-            .get_option("kb_storage_engine")
-            .map(|(v, _)| v)
-            .unwrap_or_else(|| "sqlite".to_string());
+        let mut engine = self.kb.storage_engine.clone();
 
         if engine == "sqlite" {
             if let Err(e) = mae_kb::migrate::migrate_sled_to_sqlite(path) {

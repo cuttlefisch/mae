@@ -3,9 +3,16 @@
 // pair have been split into `crates/scheme/src/runtime/*.rs` submodules by
 // category — this residual file holds `SharedState` + `SchemeRuntime`'s core
 // methods (eval, load_file, accessors) and is still over the 800-line ceiling.
-// Tracked in .claude/commands/mae-audit.md's "Known exceptions" and
-// ROADMAP.md's "Architecture Debt" section; prefer extending an existing
-// `runtime/*.rs` submodule (or adding a new one) over growing this file further.
+// `SharedState` itself is ALSO ~130 fields, far over the 15-field ceiling —
+// a second, independently-tracked dimension of the same debt (mirrors
+// `crates/core/src/editor/mod.rs`'s `Editor` struct having the identical
+// line-count + field-count debt shape); before adding a field, check if it
+// belongs in a sub-struct instead. `runtime_tests.rs` (this file's extracted
+// test module) is also tracked separately and has grown ~32% since it was
+// split out — re-measure both each audit pass. Tracked in
+// .claude/commands/mae-audit.md's "Known exceptions" and ROADMAP.md's
+// "Architecture Debt" section; prefer extending an existing `runtime/*.rs`
+// submodule (or adding a new one) over growing this file further.
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

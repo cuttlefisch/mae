@@ -329,6 +329,18 @@ impl Renderer for GuiRenderer {
             return Ok(());
         };
 
+        // Evict cache entries for windows that no longer exist. Closing a
+        // window (e.g. dismissing a KB graph companion window, an agent
+        // shell split, or toggling the fullscreen graph overlay) removes it
+        // from `WindowManager`, but this cache lives in the renderer — a
+        // separate crate with no close notification. Without this prune,
+        // every `WindowId` ever created keeps its full-resolution
+        // `skia_safe::Image` alive for the rest of the session: unbounded
+        // memory growth under window churn.
+        let live_ids: std::collections::HashSet<mae_core::WindowId> =
+            editor.window_mgr.iter_windows().map(|w| w.id).collect();
+        wrc.retain(|id, _| live_ids.contains(id));
+
         let cols = self.cols as usize;
         let rows = self.rows as usize;
 

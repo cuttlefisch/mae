@@ -1,3 +1,12 @@
+// @ai-caution: [architecture-debt] `runtime.rs`'s extracted `#[cfg(test)]
+// mod tests` — was ~1,526 lines when split out, now ~2,020 (~32% growth
+// since), well over the 500-line test-file ceiling. A further split into
+// focused sibling test files (mirroring `runtime/*.rs`'s category split of
+// the non-test code) is a reasonable future candidate, not attempted here.
+// Tracked in .claude/commands/mae-audit.md's "Known exceptions" and
+// ROADMAP.md's "Architecture Debt" section; re-measure each audit pass
+// rather than trusting this comment's line count to stay current.
+
 use super::*;
 use mae_core::{parse_key_seq, CommandSource, Editor};
 

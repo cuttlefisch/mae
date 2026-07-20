@@ -1169,14 +1169,27 @@ async fn handle_client(
                 "id": id,
                 "result": result,
             }),
-            Err(e) => json!({
-                "jsonrpc": "2.0",
-                "id": id,
-                "error": {
-                    "code": e.code(),
-                    "message": e.to_string(),
-                },
-            }),
+            Err(e) => {
+                // `DaemonError::Internal` wraps raw internal error text (I/O errors,
+                // storage-backend errors, etc.) that may reveal paths or internal
+                // state — log it server-side and send clients a generic message.
+                // Other variants (InvalidParams, NotReady, MethodNotFound) are
+                // already client-safe, actionable messages by construction.
+                let client_message = if let handler::DaemonError::Internal(_) = &e {
+                    error!(error = %e, method, "internal error handling daemon request");
+                    "internal error".to_string()
+                } else {
+                    e.to_string()
+                };
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "error": {
+                        "code": e.code(),
+                        "message": client_message,
+                    },
+                })
+            }
         };
 
         let body = serde_json::to_vec(&response)?;

@@ -458,6 +458,23 @@ impl super::Editor {
         // 7. Cross-process freshness for kb-registry.toml: pick up a KB
         //    registered/unregistered by another mae process.
         self.drain_kb_registry_watch();
+
+        // 8. Evict per-window graph-view render-epoch entries for windows
+        //    that have since closed. `GraphView.render_epoch` is keyed by
+        //    `WindowId` and never reused, so without this it grows for the
+        //    lifetime of the session under normal window churn (companion
+        //    windows, agent shells) — the same stale-cache-key bug class as
+        //    the GUI renderer's `window_render_cache` (see its own prune in
+        //    `crates/gui/src/lib.rs`'s `render()`), just far smaller per
+        //    entry (a `u64`, not a rasterized image) so it's cheap to leave
+        //    to idle housekeeping rather than an every-frame check.
+        let live_ids: std::collections::HashSet<WindowId> =
+            self.window_mgr.iter_windows().map(|w| w.id).collect();
+        for buf in &mut self.buffers {
+            if let Some(gv) = buf.graph_view_mut() {
+                gv.render_epoch.retain(|id, _| live_ids.contains(id));
+            }
+        }
     }
 
     /// Switch focus to whichever window contains the given cell coordinates.

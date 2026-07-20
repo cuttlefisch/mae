@@ -8,12 +8,19 @@
 //! shared editor/renderer. Pure code motion (ADR none needed) — see
 //! `.claude/commands/mae-audit.md` / ROADMAP.md "Architecture Debt".
 //!
-//! @ai-caution: [architecture-debt] New file, ~1,270 lines, surfaced by the
-//! `main.rs` split (2026-07) — over the 800-line ceiling. All state lives in
-//! `self` fields (not raw locals), so a further per-arm/per-phase split of
-//! `window_event`/`about_to_wait` is a real, low-risk future candidate, not
-//! attempted this pass. Tracked in .claude/commands/mae-audit.md's "Known
-//! exceptions" and ROADMAP.md's "Architecture Debt" section.
+//! @ai-caution: [architecture-debt] Surfaced by the `main.rs` split (2026-07)
+//! at ~1,270 lines, over the 800-line ceiling; grown to ~1,655 lines as of
+//! the 2026-07 KB-graph-view mouse-handling work (fullscreen-overlay hitbox
+//! fix added `kb_graph_view_overlay_window`/`kb_graph_view_click_rect` call
+//! sites — net a cleanup, not new bulk, but the file crossed further over
+//! ceiling regardless via the broader graph-view mouse-handling feature).
+//! `struct GuiApp` itself is also ~40 fields, well over the 15-field
+//! ceiling. All state lives in `self` fields (not raw locals), so a further
+//! per-arm/per-phase split of `window_event`/`about_to_wait` is a real,
+//! low-risk future candidate, not attempted this pass. Tracked in
+//! .claude/commands/mae-audit.md's "Known exceptions" and ROADMAP.md's
+//! "Architecture Debt" section — re-verify line/field counts each audit
+//! pass rather than trusting this comment's numbers to stay current.
 
 use std::io;
 
