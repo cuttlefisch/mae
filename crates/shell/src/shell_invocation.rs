@@ -98,9 +98,12 @@ pub fn login_shell_script_argv(shell_path: &str, script_body: &str) -> (String, 
 /// does NOT: `fish -c 'CMD' arg1 arg2` makes ALL trailing args available as
 /// `$argv` (no separate `$0`), so fish needs its own exec tail
 /// (`$argv[1]` / `$argv[2..]`) — implemented per fish's documented `-c`/
-/// `$argv` semantics, but not empirically verified against a live fish in
-/// this environment (none installed, no package-install authorization
-/// available at implementation time) — see tracking issue.
+/// `$argv` semantics. Empirically verified (#291) against a real fish 4.6.0
+/// binary in a rootless-podman container: the exact argv this function
+/// builds for `ShellKind::Fish` correctly execs a target program, adversarial
+/// args (embedded quotes/ticks/`;`/`$(...)`) pass through byte-for-byte with
+/// no reinterpretation or injection, whitespace-containing args are never
+/// word-split, and the child's exit code propagates through `exec`.
 ///
 /// Returns `(shell_path, full_argv)` ready to hand to a process/PTY spawn
 /// API that takes a program + arg list.
