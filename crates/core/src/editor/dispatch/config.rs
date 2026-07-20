@@ -403,7 +403,9 @@ impl Editor {
                     Some(crate::command_palette::CommandPalette::for_keymap_flavor());
                 self.set_mode(Mode::CommandPalette);
             }
-            "kb-set-search-scope" => {
+            // "kb-set-search-scope" kept as a deprecated alias — see its
+            // registration in commands.rs.
+            "kb-set-scope" | "kb-set-search-scope" => {
                 // Guided picker for the default KB search scope; lists keyword
                 // scopes plus each registered instance.
                 let names: Vec<&str> = self

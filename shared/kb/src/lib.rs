@@ -152,6 +152,15 @@ pub struct SubgraphSpec {
     pub max_depth: usize,
     /// Include backlinks in the walk (not just outgoing links).
     pub include_backlinks: bool,
+    /// Safety net independent of `max_depth`/`include_backlinks`: a densely
+    /// cross-referenced KB can make even a shallow walk explode (a hub
+    /// node's backlinks alone can pull in most of the KB). `None` = no cap.
+    /// `Some(n)` keeps starter nodes plus the `n` highest-degree remaining
+    /// nodes; everything past the cap is demoted to a boundary link exactly
+    /// like a depth cutoff (see `extract_subgraph`), so the existing
+    /// "... (+N)" boundary-stub rendering already handles it — no new
+    /// render path needed.
+    pub node_cap: Option<usize>,
 }
 
 /// A typed link within a `SubgraphResult` — carries the ADR-030
@@ -176,6 +185,9 @@ pub struct SubgraphResult {
     pub links: Vec<SubgraphLink>,
     /// Boundary links (source in subgraph, target outside).
     pub boundary_links: Vec<SubgraphLink>,
+    /// How many nodes the BFS walk would have included beyond
+    /// `SubgraphSpec::node_cap`. `0` when the cap wasn't set or wasn't hit.
+    pub hidden_node_count: usize,
 }
 
 /// Provenance of a node — how it was created.
@@ -1151,6 +1163,37 @@ impl KnowledgeBase {
             depth += 1;
         }
 
+        // Node-count safety cap (independent of depth/backlinks): keep
+        // starter nodes plus the highest-degree remaining nodes, demoting
+        // everything past the cap to a boundary link — same treatment a
+        // depth cutoff already gets below, so hidden nodes still surface as
+        // "... (+N)" stubs on whichever included node referenced them.
+        let hidden_node_count = match spec.node_cap {
+            Some(cap) if included.len() > cap => {
+                let starters: HashSet<&str> =
+                    spec.starter_nodes.iter().map(String::as_str).collect();
+                let mut candidates: Vec<&String> = included
+                    .iter()
+                    .filter(|id| !starters.contains(id.as_str()))
+                    .collect();
+                candidates.sort_by(|a, b| {
+                    let deg_a = self.node_degree(a);
+                    let deg_b = self.node_degree(b);
+                    deg_b.cmp(&deg_a).then_with(|| a.cmp(b))
+                });
+                let keep_budget = cap.saturating_sub(starters.len());
+                let kept: HashSet<String> = starters
+                    .iter()
+                    .map(|s| s.to_string())
+                    .chain(candidates.into_iter().take(keep_budget).cloned())
+                    .collect();
+                let hidden = included.len() - kept.len();
+                included = kept;
+                hidden
+            }
+            _ => 0,
+        };
+
         // Collect nodes and categorize links
         let mut nodes = Vec::new();
         let mut internal_links = Vec::new();
@@ -1179,7 +1222,36 @@ impl KnowledgeBase {
             nodes,
             links: internal_links,
             boundary_links,
+            hidden_node_count,
         }
+    }
+
+    /// Total link degree (outgoing + incoming) for a node — used to
+    /// prioritize which nodes survive `extract_subgraph`'s `node_cap`
+    /// truncation (hub nodes are the most useful to keep visible, mirroring
+    /// the graph view's own label-declutter priority order).
+    fn node_degree(&self, id: &str) -> usize {
+        let out = self.nodes.get(id).map(|n| n.links().len()).unwrap_or(0);
+        let in_ = self.links_in.get(id).map(|v| v.len()).unwrap_or(0);
+        out + in_
+    }
+
+    /// The highest-degree node in this KB, or `None` if it's empty. Used as
+    /// a last-resort default "entry point" for KBs that don't follow MAE's
+    /// own `"index"`/`NodeKind::Index` convention — e.g. an externally
+    /// authored org-roam-style proposal KB, where node ids are raw UUIDs
+    /// and there's no designated root. A high-degree node is the standard
+    /// org-roam-ui/Obsidian heuristic for "the hub worth landing on."
+    /// Ties break by id, ascending, for determinism.
+    pub fn hub_node_id(&self) -> Option<String> {
+        self.nodes
+            .keys()
+            .max_by(|a, b| {
+                self.node_degree(a)
+                    .cmp(&self.node_degree(b))
+                    .then_with(|| b.cmp(a))
+            })
+            .cloned()
     }
 
     /// Remove multiple nodes at once. Returns the removed nodes.
@@ -3371,5 +3443,135 @@ mod tests {
             "regression marker: a shared client_id=1 makes concurrent edits collide and \
              diverge — the fix must give each peer a distinct, stable id"
         );
+    }
+
+    fn spec(starter: &str, max_depth: usize, include_backlinks: bool) -> SubgraphSpec {
+        SubgraphSpec {
+            starter_nodes: vec![starter.to_string()],
+            max_depth,
+            include_backlinks,
+            node_cap: None,
+        }
+    }
+
+    #[test]
+    fn hub_node_id_is_none_for_an_empty_kb() {
+        let kb = KnowledgeBase::new();
+        assert_eq!(kb.hub_node_id(), None);
+    }
+
+    #[test]
+    fn hub_node_id_picks_the_highest_degree_node() {
+        // "popular" has degree 3 (2 backlinks + 1 outgoing); everything
+        // else has lower degree — regression case for KBs with no
+        // "index"/NodeKind::Index convention (e.g. externally authored
+        // org-roam-style proposal KBs using raw UUID ids).
+        let kb = kb_with(vec![
+            Node::new("ref1", "Ref1", NodeKind::Note, "[[popular]]"),
+            Node::new("ref2", "Ref2", NodeKind::Note, "[[popular]]"),
+            Node::new("popular", "Popular", NodeKind::Note, "[[lonely]]"),
+            Node::new("lonely", "Lonely", NodeKind::Note, ""),
+        ]);
+        assert_eq!(kb.hub_node_id(), Some("popular".to_string()));
+    }
+
+    #[test]
+    fn hub_node_id_breaks_ties_by_id_ascending_deterministically() {
+        let kb = kb_with(vec![
+            Node::new("zeta", "Zeta", NodeKind::Note, ""),
+            Node::new("alpha", "Alpha", NodeKind::Note, ""),
+            Node::new("mu", "Mu", NodeKind::Note, ""),
+        ]);
+        // All degree 0 — must deterministically pick the same one every
+        // time regardless of HashMap iteration order.
+        for _ in 0..20 {
+            assert_eq!(kb.hub_node_id(), Some("alpha".to_string()));
+        }
+    }
+
+    #[test]
+    fn extract_subgraph_no_cap_includes_every_reachable_node() {
+        let kb = kb_with(vec![
+            Node::new("a", "A", NodeKind::Note, "see [[b]] and [[c]]"),
+            Node::new("b", "B", NodeKind::Note, ""),
+            Node::new("c", "C", NodeKind::Note, ""),
+        ]);
+        let result = kb.extract_subgraph(&spec("a", 1, false));
+        let mut ids: Vec<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+        ids.sort();
+        assert_eq!(ids, vec!["a", "b", "c"]);
+        assert_eq!(result.hidden_node_count, 0);
+    }
+
+    #[test]
+    fn extract_subgraph_node_cap_keeps_starter_and_reports_hidden_count() {
+        // A hub with five out-links, capped to keep only the starter + 2.
+        let kb = kb_with(vec![
+            Node::new(
+                "hub",
+                "Hub",
+                NodeKind::Note,
+                "[[n1]] [[n2]] [[n3]] [[n4]] [[n5]]",
+            ),
+            Node::new("n1", "N1", NodeKind::Note, ""),
+            Node::new("n2", "N2", NodeKind::Note, ""),
+            Node::new("n3", "N3", NodeKind::Note, ""),
+            Node::new("n4", "N4", NodeKind::Note, ""),
+            Node::new("n5", "N5", NodeKind::Note, ""),
+        ]);
+        let mut s = spec("hub", 1, false);
+        s.node_cap = Some(3);
+        let result = kb.extract_subgraph(&s);
+
+        assert_eq!(result.nodes.len(), 3, "capped to exactly node_cap nodes");
+        assert!(
+            result.nodes.iter().any(|n| n.id == "hub"),
+            "starter node is never dropped by the cap"
+        );
+        assert_eq!(
+            result.hidden_node_count, 3,
+            "5 reachable non-starter nodes - 2 kept = 3 hidden"
+        );
+        // Every link from the kept nodes to a now-excluded node must have
+        // been demoted to a boundary link, not silently dropped.
+        assert_eq!(result.boundary_links.len(), 3);
+    }
+
+    #[test]
+    fn extract_subgraph_node_cap_prefers_higher_degree_nodes() {
+        // "popular" is linked from two other nodes (degree 2 via backlinks);
+        // "lonely" has no other connections (degree 0). A cap of 2 (starter
+        // + 1) must keep "popular" over "lonely".
+        let kb = kb_with(vec![
+            Node::new("start", "Start", NodeKind::Note, "[[popular]] [[lonely]]"),
+            Node::new("ref1", "Ref1", NodeKind::Note, "[[popular]]"),
+            Node::new("ref2", "Ref2", NodeKind::Note, "[[popular]]"),
+            Node::new("popular", "Popular", NodeKind::Note, ""),
+            Node::new("lonely", "Lonely", NodeKind::Note, ""),
+        ]);
+        let mut s = spec("start", 1, false);
+        s.node_cap = Some(2);
+        let result = kb.extract_subgraph(&s);
+
+        let ids: Vec<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains(&"start"));
+        assert!(
+            ids.contains(&"popular"),
+            "higher-degree node must survive the cap over a same-tier lower-degree one: {ids:?}"
+        );
+        assert!(!ids.contains(&"lonely"));
+    }
+
+    #[test]
+    fn extract_subgraph_node_cap_larger_than_reachable_set_is_a_no_op() {
+        let kb = kb_with(vec![
+            Node::new("a", "A", NodeKind::Note, "see [[b]]"),
+            Node::new("b", "B", NodeKind::Note, ""),
+        ]);
+        let mut s = spec("a", 1, false);
+        s.node_cap = Some(1000);
+        let result = kb.extract_subgraph(&s);
+        assert_eq!(result.nodes.len(), 2);
+        assert_eq!(result.hidden_node_count, 0);
     }
 }

@@ -124,6 +124,13 @@ pub struct GraphView {
     /// it) — mirrors how `buf.generation` already works for text buffers,
     /// just for the graph's own state instead of rope edits.
     pub render_epoch: HashMap<WindowId, u64>,
+    /// How many nodes `extract_subgraph` hid past `kb_graph_node_count_cap`
+    /// on the last populate — `0` when the cap wasn't hit. Set by
+    /// `Editor::populate_graph_buffer` from `SubgraphResult::hidden_node_count`.
+    /// Surfaced via `describe_state`/the `kb_graph_view_open` MCP response
+    /// and a one-shot status message so a truncated view is never silently
+    /// mistaken for the whole neighborhood.
+    pub hidden_node_count: usize,
 }
 
 /// An in-flight color transition for one node — see `GraphView.color_tween`.
@@ -346,6 +353,7 @@ impl GraphView {
             depth: self.depth,
             kb_instance: self.kb_instance.clone(),
             follow_current: self.follow_current,
+            hidden_node_count: self.hidden_node_count,
             selected_node: self.scene.selection.and_then(node_id),
             hovered_node: self.scene.hovered.and_then(node_id),
             nodes: self
@@ -389,6 +397,7 @@ pub struct GraphViewState {
     pub depth: usize,
     pub kb_instance: Option<String>,
     pub follow_current: bool,
+    pub hidden_node_count: usize,
     pub selected_node: Option<String>,
     pub hovered_node: Option<String>,
     pub nodes: Vec<GraphViewNodeState>,
@@ -475,6 +484,7 @@ impl GraphView {
             node_degrees: Vec::new(),
             color_tween: None,
             render_epoch: HashMap::new(),
+            hidden_node_count: 0,
         }
     }
 }

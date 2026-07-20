@@ -640,6 +640,59 @@ fn idle_work_clears_pending_reparses() {
     assert!(editor.syntax_reparse_pending.is_empty());
 }
 
+/// Regression test for the memory-leak-adjacent bug found investigating a
+/// production OOM crash (13.5G RSS before the process died): `GraphView`'s
+/// `render_epoch` map is keyed by `WindowId` and nothing evicted an entry
+/// when its window closed, so it grew for the entire session under normal
+/// window churn (companion windows, agent shells). `idle_work`'s new step 8
+/// prunes it against the live window set.
+#[test]
+fn idle_work_prunes_graph_render_epoch_for_closed_windows() {
+    let mut editor = Editor::new();
+    editor.buffers.push(crate::buffer::Buffer::new_graph());
+    let graph_buf_idx = editor.buffers.len() - 1;
+
+    let live_id = editor.window_mgr.focused_id();
+    // A second window, then closed — its id must no longer be "live", but a
+    // stale render_epoch entry for it should behave exactly like a real
+    // leak until pruned.
+    let available = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 50,
+    };
+    let closed_id = editor
+        .window_mgr
+        .split(crate::window::SplitDirection::Horizontal, 0, available)
+        .expect("split creates a second window");
+    editor.window_mgr.close(closed_id);
+    assert!(
+        editor.window_mgr.iter_windows().all(|w| w.id != closed_id),
+        "closed_id must not be a live window"
+    );
+
+    let gv = editor.buffers[graph_buf_idx]
+        .graph_view_mut()
+        .expect("graph buffer has a GraphView");
+    gv.render_epoch.insert(live_id, 1);
+    gv.render_epoch.insert(closed_id, 1);
+    assert_eq!(gv.render_epoch.len(), 2);
+
+    editor.idle_work();
+
+    let gv = editor.buffers[graph_buf_idx]
+        .graph_view()
+        .expect("graph buffer has a GraphView");
+    assert_eq!(
+        gv.render_epoch.len(),
+        1,
+        "stale entry for the closed window must be pruned"
+    );
+    assert!(gv.render_epoch.contains_key(&live_id));
+    assert!(!gv.render_epoch.contains_key(&closed_id));
+}
+
 // --- Multi-click tests ---
 
 #[test]

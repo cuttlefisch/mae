@@ -510,16 +510,21 @@ impl Editor {
         }
         let area = self.default_area();
         let is_agent = idx < self.buffers.len() && self.buffers[idx].agent_shell;
+        let ratio = self.agent_display_split_ratio;
 
         // For agent shells, use split_root to guarantee the shell gets a
         // top-level window beside the entire conversation group, regardless
         // of which conversation pane is focused.
         let split_result = if is_agent {
             self.window_mgr
-                .split_root(crate::window::SplitDirection::Vertical, idx, area, 0.5)
+                .split_root(crate::window::SplitDirection::Vertical, idx, area, ratio)
         } else {
-            self.window_mgr
-                .split(crate::window::SplitDirection::Vertical, idx, area)
+            self.window_mgr.split_with_ratio(
+                crate::window::SplitDirection::Vertical,
+                idx,
+                area,
+                ratio,
+            )
         };
 
         match split_result {

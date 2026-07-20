@@ -303,14 +303,14 @@ mae pkg sync            # synchronize module state
 mae pkg create mymod    # scaffold a new module from template
 ```
 
-**25 built-in modules** by category:
+**26 built-in modules** by category:
 
 | Category | Modules |
 |----------|---------|
 | Keymap | `keymap-doom`, `keymap-leader`, `keymap-nonmodal` |
 | UI | `dashboard`, `file-tree`, `notifications` |
 | Editor | `surround`, `marks-jumps`, `search`, `registers`, `macros`, `multicursor`, `tables` |
-| Tools | `snippets`, `format`, `make`, `lookup`, `spell`, `debug` |
+| Tools | `snippets`, `format`, `make`, `lookup`, `spell`, `debug`, `kb-graph-view` |
 | Markup | `org`, `markdown`, `agenda`, `dailies` |
 | Collab | `git-status`, `kb-sharing` |
 
@@ -386,6 +386,43 @@ Full vi modal editing with 450+ commands:
 :messages       View message log
 :describe-configuration  Show config health report
 ```
+
+## Window Layout & Introspection
+
+### Split ratios
+
+New buffer kinds (KB view, messages, shell, debug panel, file tree, notifications, KB graph view,
+agent display, AI conversation) land via a `DisplayPolicy` override table. Nine options feed that
+same table, so `:set`/`:set-save` and the Scheme power-user primitive
+`(set-display-rule! KIND "reuse-or-split:DIR:RATIO")` can never diverge:
+
+| Option | Default | Buffer kind |
+|--------|---------|-------------|
+| `kb_split_ratio` | 0.5 | KB view |
+| `messages_split_ratio` | 0.3 | Messages log |
+| `shell_split_ratio` | 0.35 | Embedded shell |
+| `debug_panel_split_ratio` | 0.4 | DAP debug panel |
+| `file_tree_split_ratio` | 0.2 | File tree sidebar |
+| `notifications_split_ratio` | 0.4 | Notifications |
+| `kb_graph_split_ratio` | 0.6 | KB graph view (3:2 split) |
+| `agent_display_split_ratio` | 0.5 | Agent display window |
+| `ai_conversation_split_ratio` | 0.85 | AI conversation window |
+
+### Render-cache introspection
+
+The `introspect` MCP tool's `frame.caches.window_render` field lists, per open window, the
+renderer's cached paint state versus the live buffer: `window_id`, `cached_buffer_idx`,
+`cached_generation`, `live_buffer_idx`, `live_generation`, and `matches`. A `matches: false` entry
+always indicates a real stale-paint bug — use it to diagnose rendering desync without attaching a
+debugger.
+
+### KB-link hover preview suppression
+
+Dismissing a KB-link hover preview (`Esc`, or the idle-preview auto-dismiss guard) suppresses
+idle-triggered re-show at that exact cursor position until the cursor moves elsewhere — so closing
+a popup doesn't immediately reopen it on the next idle tick. Manually requesting a preview via
+`(kb-preview-show ID)` or the `kb_preview_show` MCP tool always bypasses and clears the
+suppression.
 
 ## Stack
 

@@ -71,10 +71,37 @@ impl Editor {
             let win = self.window_mgr.focused_window();
             (win.cursor_row, win.cursor_col)
         };
+        if !force {
+            // Re-arm BEFORE the link lookup below — a suppression at a
+            // DIFFERENT position no longer applies now that the cursor has
+            // moved, even if the cursor's new position isn't on a link at
+            // all (the common case: most idle ticks land off-link). Doing
+            // this first means the marker still clears on every such tick
+            // instead of only on ticks that happen to land on some link.
+            // See `KbView::kb_preview_suppressed_at`'s doc comment for why
+            // this is the cheapest hook (already reads live cursor
+            // position every idle tick, no separate "cursor moved" event
+            // needed).
+            if let Some(view) = self.buffers[buf_idx].kb_view_mut() {
+                if view
+                    .kb_preview_suppressed_at
+                    .is_some_and(|p| p != (row, col))
+                {
+                    view.kb_preview_suppressed_at = None;
+                }
+            }
+        }
         let Some(link) = self.kb_link_at(row, col) else {
             return false;
         };
         if !force {
+            let suppressed = self.buffers[buf_idx]
+                .kb_view()
+                .and_then(|v| v.kb_preview_suppressed_at)
+                == Some((row, col));
+            if suppressed {
+                return false;
+            }
             let already_showing = self.buffers[buf_idx]
                 .kb_view()
                 .and_then(|v| v.kb_preview_popup.as_ref())
@@ -97,6 +124,9 @@ impl Editor {
                 anchor_col: col,
                 scroll_offset: 0,
             });
+            if force {
+                view.kb_preview_suppressed_at = None;
+            }
         }
         true
     }
@@ -132,14 +162,26 @@ impl Editor {
                 anchor_col: col,
                 scroll_offset: 0,
             });
+            // Manual, id-addressed invocation always wins — clear any
+            // suppression the cursor happens to be sitting on.
+            view.kb_preview_suppressed_at = None;
         }
         self.set_status("[KB] K to scroll, any key to dismiss");
     }
 
-    /// Dismiss the KB preview popup on the active buffer, if any.
+    /// Dismiss the KB preview popup on the active buffer, if any — and
+    /// suppress idle-triggered re-show at that exact position until the
+    /// cursor moves elsewhere. This is the SINGLE funnel for every dismiss
+    /// path (the explicit `dismiss-kb-preview-popup` command AND the
+    /// generic auto-dismiss guard in `dispatch_builtin_inner` that fires on
+    /// any other command while a popup is showing — Escape is just one
+    /// command that hits that guard), so fixing suppression here covers
+    /// all of them. See `KbView::kb_preview_suppressed_at`'s doc comment.
     pub fn kb_preview_dismiss(&mut self) {
         if let Some(view) = self.kb_view_mut() {
-            view.kb_preview_popup = None;
+            if let Some(popup) = view.kb_preview_popup.take() {
+                view.kb_preview_suppressed_at = Some((popup.anchor_row, popup.anchor_col));
+            }
         }
     }
 
@@ -405,5 +447,128 @@ mod tests {
         // Any unrelated command must dismiss it, mirroring the hover popup.
         e.dispatch_builtin("move-right");
         assert!(e.kb_preview_popup().is_none());
+    }
+
+    /// Cursor onto the rendered link's position — shared setup for the
+    /// suppression tests below (mirrors
+    /// `maybe_show_kb_preview_popup_requires_option_kind_and_link`'s pattern).
+    fn place_cursor_on_link(e: &mut Editor, target: &str) -> (usize, usize) {
+        let link = e
+            .kb_view()
+            .unwrap()
+            .rendered_links
+            .iter()
+            .find(|l| l.target == target)
+            .cloned()
+            .unwrap();
+        let buf_idx = e.active_buffer_idx();
+        let rope = e.buffers[buf_idx].rope();
+        let row = rope.byte_to_line(link.byte_start);
+        let col = link.byte_start - rope.line_to_byte(row);
+        let win = e.window_mgr.focused_window_mut();
+        win.cursor_row = row;
+        win.cursor_col = col;
+        (row, col)
+    }
+
+    #[test]
+    fn kb_preview_dismiss_suppresses_reshow_at_same_position() {
+        let (mut e, target) = editor_with_link();
+        e.kb_preview_on_hover = true;
+        let (row, col) = place_cursor_on_link(&mut e, &target);
+
+        assert!(e.on_idle_tick(10_000));
+        assert!(e.kb_preview_popup().is_some());
+
+        e.kb_preview_dismiss();
+        assert!(e.kb_preview_popup().is_none());
+        assert_eq!(
+            e.kb_view().unwrap().kb_preview_suppressed_at,
+            Some((row, col))
+        );
+
+        // Re-firing the idle path at the SAME position must stay hidden —
+        // this is the reported bug: Escape dismissed it, but it reappeared
+        // almost immediately because the idle tick had no memory of the
+        // dismissal.
+        assert!(!e.on_idle_tick(10_000));
+        assert!(e.kb_preview_popup().is_none());
+    }
+
+    #[test]
+    fn kb_preview_suppression_clears_on_cursor_move_and_can_reshow() {
+        let (mut e, target) = editor_with_link();
+        e.kb_preview_on_hover = true;
+        let (row, col) = place_cursor_on_link(&mut e, &target);
+        assert!(e.on_idle_tick(10_000));
+        e.kb_preview_dismiss();
+        assert_eq!(
+            e.kb_view().unwrap().kb_preview_suppressed_at,
+            Some((row, col))
+        );
+
+        // Move the cursor off the link entirely (row 0 col 0 — the header
+        // line, never a link) — idle tick is a no-op (no link under
+        // cursor) but must still clear the suppression marker.
+        {
+            let win = e.window_mgr.focused_window_mut();
+            win.cursor_row = 0;
+            win.cursor_col = 0;
+        }
+        assert!(!e.on_idle_tick(10_000));
+        assert_eq!(e.kb_view().unwrap().kb_preview_suppressed_at, None);
+
+        // Move back onto the link — must show again now that it's re-armed.
+        {
+            let win = e.window_mgr.focused_window_mut();
+            win.cursor_row = row;
+            win.cursor_col = col;
+        }
+        assert!(e.on_idle_tick(10_000));
+        assert!(e.kb_preview_popup().is_some());
+    }
+
+    #[test]
+    fn kb_preview_force_bypasses_and_clears_suppression() {
+        let (mut e, target) = editor_with_link();
+        e.kb_preview_on_hover = true;
+        let (row, col) = place_cursor_on_link(&mut e, &target);
+        assert!(e.on_idle_tick(10_000));
+        e.kb_preview_dismiss();
+        assert_eq!(
+            e.kb_view().unwrap().kb_preview_suppressed_at,
+            Some((row, col))
+        );
+
+        // A deliberate manual invocation at the exact same position always
+        // wins over suppression.
+        assert!(e.kb_preview_show_at_cursor(true));
+        assert!(e.kb_preview_popup().is_some());
+        assert_eq!(e.kb_view().unwrap().kb_preview_suppressed_at, None);
+    }
+
+    #[test]
+    fn kb_preview_show_by_id_clears_suppression() {
+        let (mut e, target) = editor_with_link();
+        e.kb_preview_on_hover = true;
+        let (row, col) = place_cursor_on_link(&mut e, &target);
+        assert!(e.on_idle_tick(10_000));
+        e.kb_preview_dismiss();
+        assert_eq!(
+            e.kb_view().unwrap().kb_preview_suppressed_at,
+            Some((row, col))
+        );
+
+        e.kb_preview_show(&target);
+        assert!(e.kb_preview_popup().is_some());
+        assert_eq!(e.kb_view().unwrap().kb_preview_suppressed_at, None);
+    }
+
+    #[test]
+    fn kb_preview_dismiss_with_no_popup_shown_is_a_true_no_op() {
+        let (mut e, _target) = editor_with_link();
+        assert!(e.kb_preview_popup().is_none());
+        e.kb_preview_dismiss();
+        assert_eq!(e.kb_view().unwrap().kb_preview_suppressed_at, None);
     }
 }

@@ -609,7 +609,6 @@ async fn handle_doc_request(
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum KbOp {
     Join,
-    #[allow(dead_code)]
     Read,
     Edit,
     Manage,

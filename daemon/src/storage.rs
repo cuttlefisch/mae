@@ -266,14 +266,12 @@ impl SqliteBackend {
     }
 
     /// Open an in-memory database (for testing).
-    #[allow(dead_code)]
     pub fn open_memory() -> Result<Self, StorageError> {
         let pool = SqlitePool::open_memory(1)?;
         Ok(SqliteBackend { pool })
     }
 
     /// Query WAL entries with sequence ID > `since_seq` for a document.
-    #[allow(dead_code)]
     pub fn wal_entries_since(
         &self,
         doc_name: &str,

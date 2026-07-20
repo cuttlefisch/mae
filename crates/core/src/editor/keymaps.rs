@@ -651,11 +651,7 @@ impl Editor {
     /// Sort which-key entries: groups first (sorted by key), then leaves
     /// sorted by the chosen field (`key`, `desc`, or `none`).
     fn sort_which_key_entries(&self, entries: &mut [WhichKeyEntry]) {
-        let order = self
-            .get_option("which-key-sort-order")
-            .map(|(v, _)| v)
-            .unwrap_or_else(|| "key".to_string());
-        match order.as_str() {
+        match self.which_key_sort_order.as_str() {
             "desc" => {
                 entries.sort_by(|a, b| {
                     b.is_group

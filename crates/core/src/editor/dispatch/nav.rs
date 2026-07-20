@@ -369,17 +369,10 @@ impl Editor {
                 let amount = if is_half { vh / 2 } else { vh };
                 match kind {
                     crate::BufferKind::Messages => {
-                        let win = self.window_mgr.focused_window_mut();
-                        for _ in 0..n {
-                            win.scroll_offset = win.scroll_offset.saturating_sub(amount);
-                            win.cursor_row = win.cursor_row.saturating_sub(amount);
-                        }
+                        self.scroll_messages_view(idx, true, amount, n, true);
                     }
                     crate::BufferKind::Shell => {
-                        for _ in 0..n {
-                            let prev = self.shell.scroll.unwrap_or(0);
-                            self.shell.scroll = Some(prev + amount as i32);
-                        }
+                        self.scroll_shell_view(true, amount as i32, n);
                     }
                     _ => {
                         if is_half {
@@ -403,20 +396,10 @@ impl Editor {
                 let amount = if is_half { vh / 2 } else { vh };
                 match kind {
                     crate::BufferKind::Messages => {
-                        let total = self.message_log.len();
-                        let line_count = self.buffers[idx].display_line_count().saturating_sub(1);
-                        let win = self.window_mgr.focused_window_mut();
-                        let max = total.saturating_sub(vh);
-                        for _ in 0..n {
-                            win.scroll_offset = (win.scroll_offset + amount).min(max);
-                            win.cursor_row = (win.cursor_row + amount).min(line_count);
-                        }
+                        self.scroll_messages_view(idx, false, amount, n, true);
                     }
                     crate::BufferKind::Shell => {
-                        for _ in 0..n {
-                            let prev = self.shell.scroll.unwrap_or(0);
-                            self.shell.scroll = Some(prev - amount as i32);
-                        }
+                        self.scroll_shell_view(false, amount as i32, n);
                     }
                     _ => {
                         let buf = &self.buffers[idx];
@@ -442,85 +425,14 @@ impl Editor {
                 let kind = self.buffers[idx].kind;
                 match kind {
                     crate::BufferKind::Messages => {
-                        let total = self.message_log.len();
-                        let vh = self.focused_viewport_height();
-                        let win = self.window_mgr.focused_window_mut();
-                        let max = total.saturating_sub(vh);
-                        for _ in 0..n {
-                            win.scroll_offset = (win.scroll_offset + 1).min(max);
-                        }
+                        self.scroll_messages_view(idx, false, 1, n, false);
                     }
                     crate::BufferKind::Shell => {
                         let scroll_speed = self.scroll_speed as i32;
-                        for _ in 0..n {
-                            let prev = self.shell.scroll.unwrap_or(0);
-                            self.shell.scroll = Some(prev - scroll_speed);
-                        }
+                        self.scroll_shell_view(false, scroll_speed, n);
                     }
                     _ => {
-                        let vh = self.focused_viewport_height();
-                        let has_folds = !self.buffers[idx].folded_ranges.is_empty();
-                        let needs_wrapped = (self.effective_word_wrap()
-                            && self.text_area_width > 0)
-                            || has_folds
-                            || self.heading_scale
-                            || self.buffers[idx]
-                                .local_options
-                                .inline_images
-                                .unwrap_or(false);
-                        let cell_h = self.gui_cell_height;
-                        // Pre-allocate a reusable buffer for visual rows cache data
-                        // to avoid cloning the Vec on every scroll iteration.
-                        let mut rows_buf: Vec<u8> = Vec::new();
-                        for _ in 0..n {
-                            if needs_wrapped {
-                                let buf = &self.buffers[idx];
-                                let max_line = buf.display_line_count();
-                                let scroll = self.window_mgr.focused_window().scroll_offset;
-                                let range_start = scroll;
-                                let range_end = (scroll + vh + 2).min(max_line);
-                                self.populate_visual_rows_cache(idx, range_start, range_end);
-                                let cache_line_start = match &self.buffers[idx].visual_rows_cache {
-                                    Some(c) => {
-                                        rows_buf.clear();
-                                        rows_buf.extend_from_slice(&c.rows);
-                                        c.line_start
-                                    }
-                                    None => {
-                                        rows_buf.clear();
-                                        0
-                                    }
-                                };
-                                let buf = &self.buffers[idx];
-                                self.window_mgr.focused_window_mut().scroll_down_line(
-                                    buf,
-                                    vh,
-                                    cell_h,
-                                    |line| {
-                                        if line >= cache_line_start
-                                            && line < cache_line_start + rows_buf.len()
-                                        {
-                                            let v = rows_buf[line - cache_line_start] as usize;
-                                            if v > 0 {
-                                                v
-                                            } else {
-                                                1
-                                            }
-                                        } else {
-                                            1
-                                        }
-                                    },
-                                );
-                            } else {
-                                let buf = &self.buffers[idx];
-                                self.window_mgr.focused_window_mut().scroll_down_line(
-                                    buf,
-                                    vh,
-                                    cell_h,
-                                    |_| 1,
-                                );
-                            }
-                        }
+                        self.scroll_default_line(idx, false, n);
                     }
                 }
                 self.mark_scrolled();
@@ -530,71 +442,14 @@ impl Editor {
                 let kind = self.buffers[idx].kind;
                 match kind {
                     crate::BufferKind::Messages => {
-                        let win = self.window_mgr.focused_window_mut();
-                        for _ in 0..n {
-                            win.scroll_offset = win.scroll_offset.saturating_sub(1);
-                        }
+                        self.scroll_messages_view(idx, true, 1, n, false);
                     }
                     crate::BufferKind::Shell => {
                         let scroll_speed = self.scroll_speed as i32;
-                        for _ in 0..n {
-                            let prev = self.shell.scroll.unwrap_or(0);
-                            self.shell.scroll = Some(prev + scroll_speed);
-                        }
+                        self.scroll_shell_view(true, scroll_speed, n);
                     }
                     _ => {
-                        let vh = self.focused_viewport_height();
-                        let has_folds = !self.buffers[idx].folded_ranges.is_empty();
-                        let needs_wrapped = (self.effective_word_wrap()
-                            && self.text_area_width > 0)
-                            || has_folds
-                            || self.heading_scale;
-                        let cell_h = self.gui_cell_height;
-                        let mut rows_buf: Vec<u8> = Vec::new();
-                        for _ in 0..n {
-                            if needs_wrapped {
-                                let buf = &self.buffers[idx];
-                                let max_line = buf.display_line_count();
-                                let scroll = self.window_mgr.focused_window().scroll_offset;
-                                let range_start = scroll.saturating_sub(1);
-                                let range_end = (scroll + vh + 2).min(max_line);
-                                self.populate_visual_rows_cache(idx, range_start, range_end);
-                                let cache_line_start = match &self.buffers[idx].visual_rows_cache {
-                                    Some(c) => {
-                                        rows_buf.clear();
-                                        rows_buf.extend_from_slice(&c.rows);
-                                        c.line_start
-                                    }
-                                    None => {
-                                        rows_buf.clear();
-                                        0
-                                    }
-                                };
-                                let buf = &self.buffers[idx];
-                                self.window_mgr.focused_window_mut().scroll_up_line_wrapped(
-                                    buf,
-                                    vh,
-                                    cell_h,
-                                    |line| {
-                                        if line >= cache_line_start
-                                            && line < cache_line_start + rows_buf.len()
-                                        {
-                                            let v = rows_buf[line - cache_line_start] as usize;
-                                            if v > 0 {
-                                                v
-                                            } else {
-                                                1
-                                            }
-                                        } else {
-                                            1
-                                        }
-                                    },
-                                );
-                            } else {
-                                let buf = &self.buffers[idx];
-                                self.window_mgr.focused_window_mut().scroll_up_line(buf, vh);
-                            }
-                        }
+                        self.scroll_default_line(idx, true, n);
                     }
                 }
                 self.mark_scrolled();
@@ -738,5 +593,134 @@ impl Editor {
             _ => return None,
         }
         Some(true)
+    }
+
+    /// Apply a scroll delta to a `BufferKind::Messages` window, clamped to
+    /// the message log's valid range. Shared by all 4 scroll commands that
+    /// special-case this buffer kind (`scroll-half/page-up/down`,
+    /// `scroll-down/up-line`) — each previously hand-rolled this identical
+    /// clamped-delta math. `update_cursor` matches each call site's
+    /// original behavior: half/page scroll moves the cursor with the
+    /// viewport, but a single-line scroll only moves the viewport, leaving
+    /// the cursor in place.
+    fn scroll_messages_view(
+        &mut self,
+        idx: usize,
+        up: bool,
+        amount: usize,
+        n: usize,
+        update_cursor: bool,
+    ) {
+        if up {
+            for _ in 0..n {
+                let win = self.window_mgr.focused_window_mut();
+                win.scroll_offset = win.scroll_offset.saturating_sub(amount);
+                if update_cursor {
+                    win.cursor_row = win.cursor_row.saturating_sub(amount);
+                }
+            }
+        } else {
+            let total = self.message_log.len();
+            let vh = self.focused_viewport_height();
+            let max = total.saturating_sub(vh);
+            let line_count = self.buffers[idx].display_line_count().saturating_sub(1);
+            for _ in 0..n {
+                let win = self.window_mgr.focused_window_mut();
+                win.scroll_offset = (win.scroll_offset + amount).min(max);
+                if update_cursor {
+                    win.cursor_row = (win.cursor_row + amount).min(line_count);
+                }
+            }
+        }
+    }
+
+    /// Apply a scroll delta to the shell scrollback view. Shared by all 4
+    /// scroll commands that special-case `BufferKind::Shell` — each
+    /// previously hand-rolled this identical delta-application loop.
+    fn scroll_shell_view(&mut self, up: bool, amount: i32, n: usize) {
+        for _ in 0..n {
+            let prev = self.shell.scroll.unwrap_or(0);
+            self.shell.scroll = Some(if up { prev + amount } else { prev - amount });
+        }
+    }
+
+    /// Wrap-aware single-line scroll — the default (non-Messages/Shell) case
+    /// for `scroll-down-line`/`scroll-up-line`. Keeps the visual-rows cache
+    /// warm so wrapped/folded/scaled-heading/inline-image lines advance by
+    /// their real on-screen row count instead of always 1.
+    ///
+    /// Both directions previously duplicated this dance almost verbatim in
+    /// separate match arms; consolidating here also fixes a real asymmetry
+    /// found in the process: the up-scroll path's `needs_wrapped` check was
+    /// missing the `inline_images` condition the down-scroll path already
+    /// had, so scrolling up through a buffer with inline images could
+    /// under-count wrapped row heights. Both directions now use the same
+    /// (more complete) condition.
+    fn scroll_default_line(&mut self, idx: usize, up: bool, n: usize) {
+        let vh = self.focused_viewport_height();
+        let has_folds = !self.buffers[idx].folded_ranges.is_empty();
+        let needs_wrapped = (self.effective_word_wrap() && self.text_area_width > 0)
+            || has_folds
+            || self.heading_scale
+            || self.buffers[idx]
+                .local_options
+                .inline_images
+                .unwrap_or(false);
+        let cell_h = self.gui_cell_height;
+        // Pre-allocate a reusable buffer for visual rows cache data to
+        // avoid cloning the Vec on every scroll iteration.
+        let mut rows_buf: Vec<u8> = Vec::new();
+        for _ in 0..n {
+            if needs_wrapped {
+                let buf = &self.buffers[idx];
+                let max_line = buf.display_line_count();
+                let scroll = self.window_mgr.focused_window().scroll_offset;
+                let range_start = if up { scroll.saturating_sub(1) } else { scroll };
+                let range_end = (scroll + vh + 2).min(max_line);
+                self.populate_visual_rows_cache(idx, range_start, range_end);
+                let cache_line_start = match &self.buffers[idx].visual_rows_cache {
+                    Some(c) => {
+                        rows_buf.clear();
+                        rows_buf.extend_from_slice(&c.rows);
+                        c.line_start
+                    }
+                    None => {
+                        rows_buf.clear();
+                        0
+                    }
+                };
+                let buf = &self.buffers[idx];
+                let row_height = |line: usize| {
+                    if line >= cache_line_start && line < cache_line_start + rows_buf.len() {
+                        let v = rows_buf[line - cache_line_start] as usize;
+                        if v > 0 {
+                            v
+                        } else {
+                            1
+                        }
+                    } else {
+                        1
+                    }
+                };
+                if up {
+                    self.window_mgr
+                        .focused_window_mut()
+                        .scroll_up_line_wrapped(buf, vh, cell_h, row_height);
+                } else {
+                    self.window_mgr
+                        .focused_window_mut()
+                        .scroll_down_line(buf, vh, cell_h, row_height);
+                }
+            } else {
+                let buf = &self.buffers[idx];
+                if up {
+                    self.window_mgr.focused_window_mut().scroll_up_line(buf, vh);
+                } else {
+                    self.window_mgr
+                        .focused_window_mut()
+                        .scroll_down_line(buf, vh, cell_h, |_| 1);
+                }
+            }
+        }
     }
 }

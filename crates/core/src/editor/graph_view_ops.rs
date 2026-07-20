@@ -19,7 +19,7 @@ use crate::graph_view::{
     ANIMATION_TEMPERATURE_FLOOR,
 };
 use crate::visual_buffer::VisualBuffer;
-use crate::window::WindowId;
+use crate::window::{Rect, WindowId};
 
 use super::Editor;
 
@@ -107,6 +107,46 @@ impl Editor {
             .unwrap_or_else(|| "index".to_string())
     }
 
+    /// A default center within the CURRENTLY SCOPED instance specifically —
+    /// `None` when `kb.search_scope` is a keyword (`"all"`/`"local"`/
+    /// `"remote"`) or names an instance that isn't actually registered.
+    ///
+    /// Regression fix: `:kb-set-scope`'s "open the graph?" prompt
+    /// used to call `kb_graph_view_open(None, None)`, which resolves via
+    /// `resolve_graph_center`'s `"index"` fallback — but MAE's own
+    /// `"index"`/`NodeKind::Index` convention is specific to its own
+    /// manual KB. An externally authored KB (e.g. an org-roam-style
+    /// proposal KB with raw UUID node ids — verified against a real
+    /// registered instance while chasing this bug) has neither, so
+    /// `kb_owner_of_scoped("index")` correctly found nothing in the scoped
+    /// instance and fell through to PRIMARY's "index" — silently showing
+    /// the wrong KB's content with no indication anything had gone
+    /// sideways. This resolves within the scoped instance ONLY: its own
+    /// `"index"` node if it has one, else a `NodeKind::Index` node if it
+    /// tags one that way, else its highest-degree node (`hub_node_id` —
+    /// the standard org-roam-ui/Obsidian "land on the hub" heuristic) —
+    /// never falling through to a different KB the way the general
+    /// `resolve_graph_center` fallback chain does.
+    pub fn resolve_scoped_default_center(&self) -> Option<String> {
+        let scope = self.kb.search_scope.trim();
+        let is_keyword = matches!(
+            scope.to_ascii_lowercase().as_str(),
+            "" | "all" | "local" | "local-only" | "remote" | "remote-only"
+        );
+        if is_keyword {
+            return None;
+        }
+        let entry = self.kb.registry.find(scope)?;
+        let kb = self.kb.instances.get(&entry.uuid)?;
+        if kb.contains("index") {
+            return Some("index".to_string());
+        }
+        if let Some((id, _)) = kb.iter().find(|(_, n)| n.kind == mae_kb::NodeKind::Index) {
+            return Some(id.clone());
+        }
+        kb.hub_node_id()
+    }
+
     /// Build `GraphStyleOptions` from the current option values + theme.
     /// `pub(crate)` — used by `graph_view_ops.rs` itself and exercised
     /// directly by unit tests in this file.
@@ -114,22 +154,60 @@ impl Editor {
         GraphStyleOptions::from_editor(self)
     }
 
+    /// The graph window overlay mode should resolve mouse/wheel events
+    /// against — `None` when overlay isn't active (callers fall back to
+    /// their normal window-at-cell/focused-window resolution). Overlay mode
+    /// is single-graph-window scoped (there's only ever one `BufferKind::
+    /// Graph` window meaningfully "the" overlay at a time), so this doesn't
+    /// need a `win_id` parameter the way `kb_graph_view_click_rect` does.
+    pub fn kb_graph_view_overlay_window(&self) -> Option<WindowId> {
+        if !self.kb_graph_view_overlay_active {
+            return None;
+        }
+        self.window_mgr
+            .iter_windows()
+            .find(|w| self.buffers[w.buffer_idx].kind == BufferKind::Graph)
+            .map(|w| w.id)
+    }
+
+    /// The rect `win_id` is ACTUALLY drawn into this frame: the full
+    /// `last_layout_area` when the fullscreen graph overlay is active for
+    /// it, else its normal tiled `layout_rects` pane rect. THE single
+    /// answer render (`render_window_area_with_graph_overlay`), viewport
+    /// sync (`graph_viewport_pixel_size`), and every GUI mouse-handling
+    /// site must read — so they can never independently diverge the way
+    /// they used to (render drew full-screen while every click/hit-test
+    /// site kept computing against the old windowed-pane rect, reported
+    /// live as node hitboxes only registering to the left of their drawn
+    /// position after toggling into fullscreen).
+    pub fn kb_graph_view_click_rect(&self, win_id: WindowId) -> Option<Rect> {
+        if self.kb_graph_view_overlay_active
+            && self
+                .window_mgr
+                .window(win_id)
+                .is_some_and(|w| self.buffers[w.buffer_idx].kind == BufferKind::Graph)
+        {
+            return Some(self.last_layout_area);
+        }
+        self.window_mgr
+            .layout_rects(self.last_layout_area)
+            .into_iter()
+            .find(|(id, _)| *id == win_id)
+            .map(|(_, r)| r)
+    }
+
     /// Real pixel dimensions of window `win_id`, for centering the graph's
     /// viewport within it (via `Editor::graph_view_reflatten_window`). Falls
     /// back to `mae_canvas::scene::Viewport::default()`'s 800x600 if the
     /// window no longer resolves — e.g. the very first `populate_graph_
     /// buffer` call before `display_buffer` has created its window, or a
-    /// window that closed mid-flight.
+    /// window that closed mid-flight. Overlay-aware via
+    /// `kb_graph_view_click_rect` — see that method's doc comment.
     fn graph_viewport_pixel_size(&self, win_id: WindowId) -> (f32, f32) {
         let default = mae_canvas::scene::Viewport::default();
         let fallback = (default.width as f32, default.height as f32);
 
-        let Some((_, rect)) = self
-            .window_mgr
-            .layout_rects(self.last_layout_area)
-            .into_iter()
-            .find(|(id, _)| *id == win_id)
-        else {
+        let Some(rect) = self.kb_graph_view_click_rect(win_id) else {
             return fallback;
         };
         (
@@ -276,12 +354,14 @@ impl Editor {
             starter_nodes: vec![center.clone()],
             max_depth: depth,
             include_backlinks: self.kb_graph_include_backlinks,
+            node_cap: Some(self.kb_graph_node_count_cap),
         };
         let owner = self.kb_owner_of_scoped(&center);
         let empty_result = || mae_kb::SubgraphResult {
             nodes: Vec::new(),
             links: Vec::new(),
             boundary_links: Vec::new(),
+            hidden_node_count: 0,
         };
         let result = match &owner {
             Some(None) => self.kb.primary.extract_subgraph(&spec),
@@ -297,6 +377,7 @@ impl Editor {
             Some(Some(uuid)) => Some(uuid),
             _ => None,
         };
+        let hidden_node_count = result.hidden_node_count;
 
         let kb_nodes: Vec<mae_canvas::kb_graph::KbNodeInfo> = result
             .nodes
@@ -375,8 +456,15 @@ impl Editor {
             gv.animating = self.kb_graph_animate;
             gv.anim_temperature = ANIMATION_INITIAL_TEMPERATURE;
             gv.layout_config = layout_config;
+            gv.hidden_node_count = hidden_node_count;
         }
         self.graph_view_reflatten_all_windows(buf_idx);
+        if hidden_node_count > 0 {
+            self.set_status(format!(
+                "KB graph: {hidden_node_count} more node(s) hidden by kb_graph_node_count_cap \
+                 — narrow your view (lower depth, disable backlinks, or raise the cap) to see them."
+            ));
+        }
     }
 
     /// Part C Phase 3: is there an open `BufferKind::Graph` buffer whose
@@ -600,12 +688,40 @@ impl Editor {
     /// and that new window becomes the companion for next time.
     fn navigate_companion_window_to_node(&mut self, graph_idx: usize, node_id: &str) {
         self.kb.record_visit(node_id);
-        let kb_buf_idx = self.ensure_kb_buffer_idx(node_id);
-        self.kb_populate_buffer(kb_buf_idx);
 
         let companion_valid = self.buffers[graph_idx]
             .graph_view()
             .and_then(|gv| gv.companion_window.get_valid(&self.window_mgr));
+
+        let mut kb_buf_idx = self.ensure_kb_buffer_idx(node_id);
+        // If the buffer we're about to repopulate is ALSO visible in some
+        // window OTHER than the companion window (most commonly: the
+        // shared *Help* buffer builtin nodes reuse, showing in a second,
+        // unrelated split), mutating it in place would silently change
+        // that other window's content too — both windows render the same
+        // buffer object. Fall back to a dedicated, one-off buffer instead,
+        // so only the companion window is affected. See
+        // `fresh_kb_buffer_idx`'s doc comment for the full report.
+        //
+        // No captured companion yet (`companion_valid` is `None`, e.g. the
+        // very first click): a SINGLE pre-existing window already showing
+        // this buffer is exactly the common "*Help* already open, first
+        // click reuses/focuses it" case, not a leak — only TWO OR MORE
+        // pre-existing windows showing it is genuinely ambiguous.
+        let windows_showing_buf: Vec<WindowId> = self
+            .window_mgr
+            .iter_windows()
+            .filter(|w| w.buffer_idx == kb_buf_idx)
+            .map(|w| w.id)
+            .collect();
+        let shown_elsewhere = match companion_valid {
+            Some(win_id) => windows_showing_buf.iter().any(|&id| id != win_id),
+            None => windows_showing_buf.len() > 1,
+        };
+        if shown_elsewhere {
+            kb_buf_idx = self.fresh_kb_buffer_idx(node_id);
+        }
+        self.kb_populate_buffer(kb_buf_idx);
 
         if let Some(win_id) = companion_valid {
             if let Some(win) = self.window_mgr.window_mut(win_id) {
@@ -1344,6 +1460,151 @@ mod tests {
         editor
     }
 
+    /// Registers `instance_name` with the given nodes and scopes to it —
+    /// mirrors `editor_with_a_registered_instance_sharing_an_id_with_primary`
+    /// in `kb_ops/registry.rs`'s test module, generalized to take arbitrary
+    /// nodes (that helper hardcodes an "index" node the regression this
+    /// tests specifically needs ABSENT).
+    fn ed_scoped_to_a_registered_instance(instance_name: &str, nodes: Vec<mae_kb::Node>) -> Editor {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "index",
+            "Primary Manual Index",
+            mae_kb::NodeKind::Index,
+            "",
+        ));
+        let mut inst = mae_kb::KnowledgeBase::new();
+        for n in nodes {
+            inst.insert(n);
+        }
+        let uuid = format!("uuid-{instance_name}");
+        editor.kb.instances.insert(uuid.clone(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid,
+                name: instance_name.to_string(),
+                org_dir: std::path::PathBuf::from("/tmp/notes"),
+                db_path: std::path::PathBuf::from("/tmp/notes.db"),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+            });
+        editor.kb.search_scope = instance_name.to_string();
+        editor
+    }
+
+    #[test]
+    fn resolve_scoped_default_center_is_none_for_keyword_scopes() {
+        let mut editor = ed_scoped_to_a_registered_instance(
+            "proj",
+            vec![mae_kb::Node::new(
+                "some-uuid",
+                "Some Node",
+                mae_kb::NodeKind::Note,
+                "",
+            )],
+        );
+        for kw in ["all", "local", "remote", ""] {
+            editor.kb.search_scope = kw.to_string();
+            assert_eq!(editor.resolve_scoped_default_center(), None, "scope={kw:?}");
+        }
+    }
+
+    #[test]
+    fn resolve_scoped_default_center_prefers_the_instances_own_index_node() {
+        let editor = ed_scoped_to_a_registered_instance(
+            "proj",
+            vec![mae_kb::Node::new(
+                "index",
+                "Proj Index",
+                mae_kb::NodeKind::Index,
+                "",
+            )],
+        );
+        assert_eq!(
+            editor.resolve_scoped_default_center(),
+            Some("index".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_scoped_default_center_falls_back_to_the_hub_node_when_theres_no_index_convention() {
+        // Regression: an externally authored KB (e.g. org-roam-style, raw
+        // UUID ids) has no "index" node and no NodeKind::Index tagging —
+        // this must resolve to the instance's OWN hub, never silently fall
+        // through to primary's "index" the way kb_owner_of_scoped("index")
+        // alone would (that's exactly the bug this method exists to avoid).
+        let editor = ed_scoped_to_a_registered_instance(
+            "external-proposal",
+            vec![
+                mae_kb::Node::new(
+                    "a1b2c3d4-readme",
+                    "README",
+                    mae_kb::NodeKind::Note,
+                    "[[e5f6a7b8-hub]]",
+                ),
+                mae_kb::Node::new(
+                    "e5f6a7b8-hub",
+                    "Project Proposal Hub",
+                    mae_kb::NodeKind::Note,
+                    "[[a1b2c3d4-readme]] [[c9d0e1f2-adr1]] [[d3e4f5a6-adr2]]",
+                ),
+                mae_kb::Node::new("c9d0e1f2-adr1", "ADR 1", mae_kb::NodeKind::Note, ""),
+                mae_kb::Node::new("d3e4f5a6-adr2", "ADR 2", mae_kb::NodeKind::Note, ""),
+            ],
+        );
+        assert_eq!(
+            editor.resolve_scoped_default_center(),
+            Some("e5f6a7b8-hub".to_string()),
+            "must land on the scoped instance's own hub node, not primary's index"
+        );
+    }
+
+    #[test]
+    fn resolve_scoped_default_center_is_none_when_the_instance_is_empty() {
+        let editor = ed_scoped_to_a_registered_instance("proj", vec![]);
+        assert_eq!(editor.resolve_scoped_default_center(), None);
+    }
+
+    #[test]
+    fn kb_graph_open_prompt_confirm_lands_on_the_scoped_instances_hub_not_primary() {
+        // End-to-end regression for the actual bug report: switch scope to
+        // an instance with no "index" convention, then confirm the "open
+        // the graph?" prompt exactly as the picker's confirm-flow does —
+        // must open on THAT instance's hub, never primary's manual index.
+        let mut editor = ed_scoped_to_a_registered_instance(
+            "external-proposal",
+            vec![
+                mae_kb::Node::new(
+                    "e5f6a7b8-hub",
+                    "Project Proposal Hub",
+                    mae_kb::NodeKind::Note,
+                    "[[leaf]]",
+                ),
+                mae_kb::Node::new("leaf", "Leaf", mae_kb::NodeKind::Note, ""),
+            ],
+        );
+        let center = editor.resolve_scoped_default_center();
+        editor.kb_graph_view_open(center, None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        assert_eq!(
+            editor.buffers[graph_idx].graph_view().unwrap().center_node,
+            Some("e5f6a7b8-hub".to_string())
+        );
+    }
+
     #[test]
     fn kb_graph_layout_spacing_scale_option_flows_into_the_cached_layout_config() {
         // Proves the option reaches `populate_graph_buffer`'s construction
@@ -1368,6 +1629,66 @@ mod tests {
             7.5,
             "the option's value must flow into the cached layout_config"
         );
+    }
+
+    #[test]
+    fn kb_graph_node_count_cap_option_flows_into_hidden_node_count_and_status() {
+        // Proves the option reaches populate_graph_buffer's SubgraphSpec
+        // construction, that the resulting hidden count lands on GraphView
+        // (readable via describe_state/the MCP response), and that a
+        // one-shot status message is emitted so a truncated view is never
+        // silently mistaken for the whole neighborhood.
+        let mut editor = ed_with_kb_node("hub", "Hub", "[[n1]] [[n2]] [[n3]] [[n4]] [[n5]]");
+        for i in 1..=5 {
+            editor.kb.primary.insert(mae_kb::Node::new(
+                format!("n{i}"),
+                format!("N{i}"),
+                mae_kb::NodeKind::Concept,
+                "",
+            ));
+        }
+        editor.kb_graph_node_count_cap = 3;
+        editor.kb_graph_view_open(Some("hub".to_string()), Some(1));
+
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        assert_eq!(gv.scene.nodes.len(), 3, "capped to exactly node_cap nodes");
+        assert_eq!(
+            gv.hidden_node_count, 3,
+            "5 linked nodes - 2 kept = 3 hidden"
+        );
+        assert_eq!(gv.describe_state().hidden_node_count, 3);
+        assert!(
+            editor.status_msg.contains('3')
+                && editor.status_msg.contains("hidden")
+                && editor.status_msg.contains("kb_graph_node_count_cap"),
+            "a truncated view must surface a status message naming the cause: {:?}",
+            editor.status_msg
+        );
+    }
+
+    #[test]
+    fn kb_graph_node_count_cap_below_reachable_set_leaves_hidden_node_count_zero() {
+        let mut editor = ed_with_kb_node("a", "A", "[[b]]");
+        editor
+            .kb
+            .primary
+            .insert(mae_kb::Node::new("b", "B", mae_kb::NodeKind::Concept, ""));
+        editor.kb_graph_node_count_cap = 1000;
+        editor.kb_graph_view_open(Some("a".to_string()), Some(1));
+
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        assert_eq!(gv.scene.nodes.len(), 2);
+        assert_eq!(gv.hidden_node_count, 0);
     }
 
     #[test]
@@ -1836,6 +2157,137 @@ mod tests {
     }
 
     #[test]
+    fn kb_graph_view_overlay_window_is_none_when_inactive() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        assert_eq!(editor.kb_graph_view_overlay_window(), None);
+    }
+
+    #[test]
+    fn kb_graph_view_overlay_window_finds_the_graph_window_regardless_of_focus() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| editor.buffers[w.buffer_idx].kind == BufferKind::Graph)
+            .map(|w| w.id)
+            .unwrap();
+        editor.kb_graph_view_toggle_overlay();
+        assert!(editor.kb_graph_view_overlay_active);
+
+        // Split off and focus a second, unrelated window — overlay
+        // resolution must find the graph window regardless of what's
+        // actually focused.
+        let area = editor.default_area();
+        let text_idx = editor.buffers.len();
+        editor.buffers.push(Buffer::new());
+        let other_win_id = editor
+            .window_mgr
+            .split(crate::window::SplitDirection::Vertical, text_idx, area)
+            .expect("split should succeed");
+        editor.window_mgr.set_focused(other_win_id);
+        assert_eq!(editor.window_mgr.focused_id(), other_win_id);
+
+        assert_eq!(editor.kb_graph_view_overlay_window(), Some(graph_win_id));
+    }
+
+    #[test]
+    fn kb_graph_view_click_rect_uses_the_tiled_pane_rect_when_overlay_is_inactive() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+
+        let tiled_rect = editor
+            .window_mgr
+            .layout_rects(editor.last_layout_area)
+            .into_iter()
+            .find(|(id, _)| *id == graph_win_id)
+            .map(|(_, r)| r)
+            .unwrap();
+        assert_eq!(
+            editor.kb_graph_view_click_rect(graph_win_id),
+            Some(tiled_rect)
+        );
+        // A tiled split pane is narrower than the full editor area.
+        assert!(tiled_rect.width < editor.last_layout_area.width);
+    }
+
+    #[test]
+    fn kb_graph_view_click_rect_is_the_full_screen_once_overlay_is_active() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+
+        editor.kb_graph_view_toggle_overlay();
+        assert_eq!(
+            editor.kb_graph_view_click_rect(graph_win_id),
+            Some(editor.last_layout_area),
+            "overlay-active click rect must exactly match render's full-screen area"
+        );
+    }
+
+    #[test]
+    fn graph_viewport_pixel_size_self_heals_to_full_screen_on_overlay_toggle() {
+        // Regression for the reported hitbox-misalignment bug: toggling
+        // overlay must make sync_open_graph_viewports (already running
+        // every frame) resync the viewport to the full-screen size, not
+        // leave it at the pre-toggle tiled-pane size.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        let tiled_width = {
+            let gv = editor.buffers[graph_idx].graph_view().unwrap();
+            gv.viewports.get(&graph_win_id).unwrap().width
+        };
+
+        editor.kb_graph_view_toggle_overlay();
+        assert!(
+            editor.sync_open_graph_viewports(),
+            "toggling overlay must be detected as a real viewport-size change"
+        );
+
+        let full_screen_width = editor.last_layout_area.width as f64 * editor.gui_cell_width as f64;
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        let vp = gv.viewports.get(&graph_win_id).unwrap();
+        assert_eq!(
+            vp.width, full_screen_width,
+            "viewport must resync to the full-screen width, not stay at the tiled-pane width"
+        );
+        assert_ne!(vp.width, tiled_width);
+    }
+
+    #[test]
     fn set_depth_updates_depth_and_refreshes_in_place() {
         let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
         editor.kb_graph_view_open(Some("concept:buffer".to_string()), Some(1));
@@ -1965,6 +2417,93 @@ mod tests {
         assert_eq!(
             companion_win.buffer_idx, kb_idx,
             "the captured companion window must now show the selected node's KB buffer"
+        );
+    }
+
+    #[test]
+    fn select_current_does_not_leak_content_into_an_unrelated_window_sharing_the_help_buffer() {
+        // Regression for the reported bug: with multiple windows open, a
+        // graph-node click updated content in BOTH windows, not just the
+        // intended companion — because builtin nodes all share ONE *Help*
+        // buffer, and a second, unrelated window happened to show it too.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "[[concept:window]]");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:window",
+            "Window",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), Some(1));
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+
+        // Split once, capture the new window as the companion, and select
+        // the currently-selected node into it (populates the shared *Help*
+        // buffer with "concept:buffer" or whichever node the layout picked
+        // as index 0 — read it back rather than assuming).
+        let area = editor.default_area();
+        let text_idx = editor.buffers.len();
+        editor.buffers.push(Buffer::new());
+        let companion_win_id = editor
+            .window_mgr
+            .split(SplitDirection::Vertical, text_idx, area)
+            .expect("split should succeed");
+        editor.buffers[graph_idx]
+            .graph_view_mut()
+            .unwrap()
+            .companion_window
+            .set(Some(companion_win_id));
+        editor.kb_graph_view_select_current();
+        let help_buf_idx = editor
+            .window_mgr
+            .window(companion_win_id)
+            .unwrap()
+            .buffer_idx;
+        let first_node_content = editor.buffers[help_buf_idx].text();
+
+        // A THIRD, unrelated window also ends up showing that same shared
+        // *Help* buffer (e.g. the user manually split it, or opened plain
+        // :help earlier) — simulate that directly.
+        let other_win_id = editor
+            .window_mgr
+            .split(SplitDirection::Horizontal, help_buf_idx, area)
+            .expect("split should succeed");
+        assert_eq!(
+            editor.window_mgr.window(other_win_id).unwrap().buffer_idx,
+            help_buf_idx
+        );
+
+        // Navigate the graph selection to a different node and select it —
+        // this must only affect the companion window.
+        editor.kb_graph_view_navigate(crate::graph_view::GraphNavDirection::Down);
+        editor.kb_graph_view_select_current();
+
+        let companion_buf_idx = editor
+            .window_mgr
+            .window(companion_win_id)
+            .unwrap()
+            .buffer_idx;
+        let other_buf_idx_after = editor.window_mgr.window(other_win_id).unwrap().buffer_idx;
+        assert_ne!(
+            companion_buf_idx, other_buf_idx_after,
+            "the companion must move to a fresh buffer, diverging from the unrelated window"
+        );
+        assert_eq!(
+            other_buf_idx_after, help_buf_idx,
+            "the unrelated window must keep pointing at the original shared buffer"
+        );
+        assert_eq!(
+            editor.buffers[other_buf_idx_after].text(),
+            first_node_content,
+            "the unrelated window's content must be UNCHANGED by the companion's navigation"
+        );
+        assert_ne!(
+            editor.buffers[companion_buf_idx].text(),
+            first_node_content,
+            "the companion window's content must reflect the NEW node"
         );
     }
 

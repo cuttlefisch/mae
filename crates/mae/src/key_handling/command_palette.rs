@@ -62,9 +62,28 @@ pub(super) fn handle_command_palette_mode(
                 }
                 (Some(scope), PalettePurpose::SetKbSearchScope) => {
                     match editor.set_option("kb_search_scope", &scope) {
-                        Ok(_) => editor.set_status(format!(
-                            "KB search scope: {scope} — add (set-option! \"kb_search_scope\" \"{scope}\") to init.scm to persist"
-                        )),
+                        Ok(_) => {
+                            editor.set_status(format!(
+                                "KB search scope: {scope} — add (set-option! \"kb_search_scope\" \"{scope}\") to init.scm to persist"
+                            ));
+                            // "work in that context and display the graph
+                            // optionally" (the other half of the original
+                            // ask): offer to open the graph for the
+                            // newly-scoped KB right here, rather than
+                            // leaving the switch and the graph view as two
+                            // disconnected steps.
+                            editor.mini_dialog =
+                                Some(mae_core::command_palette::MiniDialogState::confirm(
+                                    format!("Open KB graph for '{scope}'? (y/n)"),
+                                    mae_core::command_palette::MiniDialogContext::KbGraphOpenPrompt,
+                                ));
+                            editor.command_palette =
+                                Some(mae_core::command_palette::CommandPalette::with_name_list(
+                                    &[],
+                                    mae_core::command_palette::PalettePurpose::MiniDialog,
+                                ));
+                            editor.set_mode(Mode::CommandPalette);
+                        }
                         Err(e) => editor.set_status(e),
                     }
                 }
@@ -592,6 +611,17 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
             }
             editor.resolve_notification(id, mae_core::notifications::Resolution::Replied);
         }
+        MiniDialogContext::KbGraphOpenPrompt => {
+            // `resolve_scoped_default_center` resolves within the
+            // newly-scoped instance specifically (its own "index", else a
+            // NodeKind::Index node, else its hub) — falling through to
+            // `kb_graph_view_open`'s generic `None` behavior only when the
+            // scope is a keyword ("all"/etc.), never silently landing on a
+            // DIFFERENT KB's node the way the plain resolve_graph_center
+            // fallback chain would. See that method's doc comment.
+            let center = editor.resolve_scoped_default_center();
+            editor.kb_graph_view_open(center, None);
+        }
         MiniDialogContext::RevertBuffer { buf_idx } => {
             let buf_idx = *buf_idx;
             if buf_idx < editor.buffers.len() {
@@ -764,6 +794,92 @@ fn rewrite_heading_tags(line: &str, tag_input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mae_scheme::SchemeRuntime;
+
+    fn new_scheme() -> SchemeRuntime {
+        SchemeRuntime::new().expect("SchemeRuntime::new() should not fail")
+    }
+
+    fn make_key(code: KeyCode) -> KeyEvent {
+        KeyEvent::new(code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn set_kb_search_scope_confirm_yes_opens_the_graph_view() {
+        // End-to-end: pick a scope from the SetKbSearchScope picker, confirm
+        // the follow-up "open the graph?" prompt with 'y', and the graph
+        // view must actually open — closing the gap between "switch which
+        // KB you're working in" and "see its graph" (previously two
+        // disconnected steps; see MiniDialogContext::KbGraphOpenPrompt).
+        let mut editor = Editor::new();
+        let mut scheme = new_scheme();
+        assert!(editor.dispatch_builtin("kb-set-scope"));
+        assert_eq!(
+            editor.command_palette.as_ref().unwrap().purpose,
+            mae_core::PalettePurpose::SetKbSearchScope
+        );
+
+        handle_command_palette_mode(&mut editor, &mut scheme, make_key(KeyCode::Enter));
+        assert_eq!(
+            editor.kb.search_scope, "all",
+            "first entry ('all') selected"
+        );
+        let dialog = editor
+            .mini_dialog
+            .as_ref()
+            .expect("confirm prompt should open");
+        assert!(matches!(
+            dialog.context,
+            mae_core::command_palette::MiniDialogContext::KbGraphOpenPrompt
+        ));
+        assert_eq!(editor.mode, Mode::CommandPalette);
+
+        handle_command_palette_mode(&mut editor, &mut scheme, make_key(KeyCode::Char('y')));
+        assert!(
+            editor
+                .buffers
+                .iter()
+                .any(|b| b.kind == mae_core::BufferKind::Graph),
+            "confirming must open the KB graph view"
+        );
+        assert!(editor.mini_dialog.is_none());
+    }
+
+    #[test]
+    fn set_kb_search_scope_confirm_no_declines_without_opening_the_graph() {
+        let mut editor = Editor::new();
+        let mut scheme = new_scheme();
+        assert!(editor.dispatch_builtin("kb-set-search-scope"));
+
+        handle_command_palette_mode(&mut editor, &mut scheme, make_key(KeyCode::Enter));
+        assert!(editor.mini_dialog.is_some());
+
+        handle_command_palette_mode(&mut editor, &mut scheme, make_key(KeyCode::Char('n')));
+        assert!(editor.mini_dialog.is_none());
+        assert!(
+            !editor
+                .buffers
+                .iter()
+                .any(|b| b.kind == mae_core::BufferKind::Graph),
+            "declining must not open the KB graph view"
+        );
+        // The scope switch itself is unaffected by declining the graph prompt.
+        assert_eq!(editor.kb.search_scope, "all");
+    }
+
+    #[test]
+    fn apply_mini_dialog_kb_graph_open_prompt_opens_the_graph_view() {
+        let mut editor = Editor::new();
+        let dialog = mae_core::command_palette::MiniDialogState::confirm(
+            "Open KB graph for 'all'? (y/n)",
+            mae_core::command_palette::MiniDialogContext::KbGraphOpenPrompt,
+        );
+        apply_mini_dialog(&mut editor, dialog);
+        assert!(editor
+            .buffers
+            .iter()
+            .any(|b| b.kind == mae_core::BufferKind::Graph));
+    }
 
     #[test]
     fn apply_mini_dialog_babel_confirm_executes_the_deferred_block() {

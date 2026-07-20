@@ -127,25 +127,50 @@ pub fn parse_org_multi(content: &str) -> Vec<Node> {
             .find(|(_, l, _)| *l <= level)
             .map(|(idx, _, _)| *idx)
             .unwrap_or(lines.len());
-        let (heading_id, heading_props) = scan_heading_properties(&lines[start + 1..end]);
-        let Some(id) = heading_id else {
-            continue;
-        };
-        let body_raw = lines[start..end].join("\n");
-        let body = rewrite_links(&body_raw);
-        let mut tags = header.file_tags.clone();
-        tags.extend(headings[hi].2.tags.clone());
-        let kind = heading_props
-            .get("kind")
-            .map(|k| NodeKind::from_str_lossy(k))
-            .unwrap_or(NodeKind::Note);
-        let mut node = Node::new(id, headings[hi].2.title.clone(), kind, body).with_tags(tags);
-        node.todo_state = headings[hi].2.todo_state.clone();
-        node.priority = headings[hi].2.priority;
-        if !heading_props.is_empty() {
-            node.properties = heading_props;
+        let (heading_id, heading_props, nested) = scan_heading_properties(&lines[start + 1..end]);
+        if let Some(id) = heading_id {
+            let body_raw = lines[start..end].join("\n");
+            let body = rewrite_links(&body_raw);
+            let mut tags = header.file_tags.clone();
+            tags.extend(headings[hi].2.tags.clone());
+            let kind = heading_props
+                .get("kind")
+                .map(|k| NodeKind::from_str_lossy(k))
+                .unwrap_or(NodeKind::Note);
+            let mut node = Node::new(id, headings[hi].2.title.clone(), kind, body).with_tags(tags);
+            node.todo_state = headings[hi].2.todo_state.clone();
+            node.priority = headings[hi].2.priority;
+            if !heading_props.is_empty() {
+                node.properties = heading_props;
+            }
+            out.push(node);
         }
-        out.push(node);
+
+        for (ni, item) in nested.iter().enumerate() {
+            let Some(id) = item.id.clone() else {
+                continue;
+            };
+            let item_start = start + 1 + item.owner_line_idx;
+            let item_end = nested
+                .get(ni + 1)
+                .map(|next| start + 1 + next.owner_line_idx)
+                .unwrap_or(end);
+            let body_raw = lines[item_start..item_end].join("\n");
+            let body = rewrite_links(&body_raw);
+            let title = strip_list_marker(&item.owner_line);
+            let title = if title.is_empty() { id.clone() } else { title };
+            let kind = item
+                .props
+                .get("kind")
+                .map(|k| NodeKind::from_str_lossy(k))
+                .unwrap_or(NodeKind::Note);
+            let mut item_node =
+                Node::new(id, title, kind, body).with_tags(header.file_tags.clone());
+            if !item.props.is_empty() {
+                item_node.properties = item.props.clone();
+            }
+            out.push(item_node);
+        }
     }
 
     out
@@ -369,44 +394,152 @@ fn is_org_tag_run(s: &str) -> bool {
     })
 }
 
-/// Scan the lines immediately after a heading for a `:PROPERTIES: :ID: …
-/// :END:` drawer. Returns the ID and all other properties if present.
-/// Only looks at contiguous lines starting right after the heading —
-/// if a blank line precedes the drawer it's still considered valid
-/// (org tolerates that).
-fn scan_heading_properties(lines: &[&str]) -> (Option<String>, HashMap<String, String>) {
-    let mut in_props = false;
+/// A `:PROPERTIES: :ID: … :END:` drawer found inside a heading's body that
+/// is NOT the heading's own immediate drawer — typically a nested list
+/// item's own drawer (org-roam's "numbered step with its own ID" pattern).
+/// `owner_line` is the nearest preceding non-blank line's text (the list
+/// item's marker + text), used to derive the resulting node's title;
+/// `owner_line_idx` is that line's index within the slice passed to
+/// `scan_heading_properties`, used to compute each item's body range
+/// against its next sibling.
+struct NestedDrawer {
+    owner_line: String,
+    owner_line_idx: usize,
+    id: Option<String>,
+    props: HashMap<String, String>,
+}
+
+/// Parse one `:PROPERTIES: … :END:` drawer starting at `lines[start]`
+/// (which must be the `:PROPERTIES:` line itself). Returns the id, other
+/// properties, and the index of the line *after* `:END:` (or `lines.len()`
+/// if the drawer is unterminated).
+fn parse_drawer_at(
+    lines: &[&str],
+    start: usize,
+) -> (Option<String>, HashMap<String, String>, usize) {
     let mut id = None;
     let mut props = HashMap::new();
-    for (i, line) in lines.iter().enumerate() {
-        let trimmed = line.trim_start();
+    let mut i = start + 1;
+    while i < lines.len() {
+        let trimmed = lines[i].trim_start();
         let upper = trimmed.to_ascii_uppercase();
-        if i == 0 && !in_props && !upper.starts_with(":PROPERTIES:") && !trimmed.is_empty() {
-            return (None, props);
+        if upper.starts_with(":END:") {
+            return (id, props, i + 1);
         }
-        if upper.starts_with(":PROPERTIES:") {
-            in_props = true;
-            continue;
-        }
-        if in_props && upper.starts_with(":END:") {
-            return (id, props);
-        }
-        if in_props {
-            if let Some(rest) = trimmed.strip_prefix(':') {
-                if let Some((key, value)) = rest.split_once(':') {
-                    let v = value.trim();
-                    if !v.is_empty() {
-                        if key.eq_ignore_ascii_case("ID") {
-                            id = Some(v.to_string());
-                        } else {
-                            props.insert(key.to_ascii_lowercase(), v.to_string());
-                        }
+        if let Some(rest) = trimmed.strip_prefix(':') {
+            if let Some((key, value)) = rest.split_once(':') {
+                let v = value.trim();
+                if !v.is_empty() {
+                    if key.eq_ignore_ascii_case("ID") {
+                        id = Some(v.to_string());
+                    } else {
+                        props.insert(key.to_ascii_lowercase(), v.to_string());
                     }
                 }
             }
         }
+        i += 1;
     }
-    (id, props)
+    (id, props, i)
+}
+
+/// Scan a heading's body for its own `:PROPERTIES: :ID: … :END:` drawer
+/// (if any — only recognized when it's the first non-blank content, org's
+/// own contiguity rule: a blank line may precede it, but nothing else),
+/// plus every OTHER `:PROPERTIES: :ID: … :END:` drawer found later in the
+/// body. Those later drawers belong to nested content (typically list
+/// items with their own `:ID:`), not the heading itself, and are returned
+/// separately so callers can materialize them as their own child nodes
+/// instead of misattributing the first one found to the heading — the
+/// previous version of this function scanned the WHOLE body for the first
+/// drawer it found, regardless of what intervening content it skipped
+/// past, silently stealing a child's id/properties and returning before
+/// ever seeing subsequent siblings (#332).
+fn scan_heading_properties(
+    lines: &[&str],
+) -> (Option<String>, HashMap<String, String>, Vec<NestedDrawer>) {
+    let mut own_id = None;
+    let mut own_props = HashMap::new();
+    let mut nested = Vec::new();
+
+    let mut i = 0;
+    while i < lines.len() && lines[i].trim().is_empty() {
+        i += 1;
+    }
+    if i < lines.len()
+        && lines[i]
+            .trim_start()
+            .to_ascii_uppercase()
+            .starts_with(":PROPERTIES:")
+    {
+        let (id, props, next) = parse_drawer_at(lines, i);
+        own_id = id;
+        own_props = props;
+        i = next;
+    }
+
+    let mut owner_line_idx = i;
+    while i < lines.len() {
+        let trimmed = lines[i].trim_start();
+        if heading_level(lines[i]).is_some() {
+            // A deeper sub-heading starts here — everything from this line
+            // onward is that sub-heading's own scope (it gets its own
+            // `scan_heading_properties` call from the outer headings loop),
+            // not a nested list item of the CURRENT heading. Stop, or a
+            // sub-heading's drawer would be double-counted: once correctly
+            // as its own heading node, once again here as a bogus "nested
+            // list item" of its parent.
+            break;
+        }
+        if trimmed.to_ascii_uppercase().starts_with(":PROPERTIES:") {
+            let (id, props, next) = parse_drawer_at(lines, i);
+            nested.push(NestedDrawer {
+                owner_line: lines[owner_line_idx].to_string(),
+                owner_line_idx,
+                id,
+                props,
+            });
+            i = next;
+            owner_line_idx = i;
+            continue;
+        }
+        if !trimmed.is_empty() {
+            owner_line_idx = i;
+        }
+        i += 1;
+    }
+
+    (own_id, own_props, nested)
+}
+
+/// Strip a leading org list marker (`-`, `+`, `1.`, `1)`) and an optional
+/// checkbox (`[ ]`, `[X]`, `[x]`, `[-]`) from a line, returning the
+/// remaining text trimmed. Falls back to the trimmed line unchanged if no
+/// list marker matches, so a nested drawer's "owner" line always yields a
+/// usable (if imperfect) title.
+fn strip_list_marker(line: &str) -> String {
+    let trimmed = line.trim_start();
+    let after_marker = trimmed
+        .strip_prefix("- ")
+        .or_else(|| trimmed.strip_prefix("+ "))
+        .or_else(|| {
+            let digits = trimmed.find(|c: char| !c.is_ascii_digit()).unwrap_or(0);
+            if digits == 0 {
+                return None;
+            }
+            trimmed[digits..]
+                .strip_prefix(". ")
+                .or_else(|| trimmed[digits..].strip_prefix(") "))
+        })
+        .unwrap_or(trimmed)
+        .trim_start();
+    let text = after_marker
+        .strip_prefix("[ ] ")
+        .or_else(|| after_marker.strip_prefix("[X] "))
+        .or_else(|| after_marker.strip_prefix("[x] "))
+        .or_else(|| after_marker.strip_prefix("[-] "))
+        .unwrap_or(after_marker);
+    text.trim().to_string()
 }
 
 /// Extract typed links from org content.
@@ -776,14 +909,11 @@ pub fn parse_org_multi_result(content: &str) -> OrgParseResult {
     for (i, line) in lines.iter().enumerate().skip(header.file_header_end) {
         if let Some(level) = heading_level(line) {
             let end_search = &lines[i + 1..];
-            let (heading_id, _) = scan_heading_properties(end_search);
+            let (heading_id, _, _) = scan_heading_properties(end_search);
             headings.push((i, level, heading_id));
         }
     }
     for hi in 0..headings.len() {
-        let Some(ref hid) = headings[hi].2 else {
-            continue;
-        };
         let start = headings[hi].0;
         let level = headings[hi].1;
         let end = headings[(hi + 1)..]
@@ -791,10 +921,32 @@ pub fn parse_org_multi_result(content: &str) -> OrgParseResult {
             .find(|(_, l, _)| *l <= level)
             .map(|(idx, _, _)| *idx)
             .unwrap_or(lines.len());
-        let body_raw = lines[start..end].join("\n");
-        let links = parse_typed_links(&body_raw, hid);
-        for link in links {
-            typed_links.push((hid.clone(), link));
+        if let Some(ref hid) = headings[hi].2 {
+            let body_raw = lines[start..end].join("\n");
+            let links = parse_typed_links(&body_raw, hid);
+            for link in links {
+                typed_links.push((hid.clone(), link));
+            }
+        }
+
+        // Nested list-item node links: same misattribution risk as node
+        // parsing (#332) — a list item's own [[id:...]] links must be
+        // attributed to the item's own id, not folded into the heading's.
+        let (_, _, nested) = scan_heading_properties(&lines[start + 1..end]);
+        for (ni, item) in nested.iter().enumerate() {
+            let Some(ref iid) = item.id else {
+                continue;
+            };
+            let item_start = start + 1 + item.owner_line_idx;
+            let item_end = nested
+                .get(ni + 1)
+                .map(|next| start + 1 + next.owner_line_idx)
+                .unwrap_or(end);
+            let body_raw = lines[item_start..item_end].join("\n");
+            let links = parse_typed_links(&body_raw, iid);
+            for link in links {
+                typed_links.push((iid.clone(), link));
+            }
         }
     }
 
@@ -882,75 +1034,125 @@ fn parse_org_multi_with_types(content: &str) -> Vec<Node> {
             .find(|(_, l, _)| *l <= level)
             .map(|(idx, _, _)| *idx)
             .unwrap_or(lines.len());
-        let (heading_id, heading_props) = scan_heading_properties(&lines[start + 1..end]);
-        let Some(id) = heading_id else {
-            continue;
-        };
-        let body_raw = lines[start..end].join("\n");
-        let body = rewrite_links_with_types(&body_raw);
-        let mut tags = header.file_tags.clone();
-        tags.extend(headings[hi].2.tags.clone());
-        // Extract :KIND: from heading properties if present
-        let kind = heading_props
-            .get("kind")
-            .map(|k| NodeKind::from_str_lossy(k))
-            .unwrap_or(NodeKind::Note);
-        let mut node = Node::new(id, headings[hi].2.title.clone(), kind, body).with_tags(tags);
-        // Extract :ALIASES: from heading properties if present
-        if let Some(aliases_str) = heading_props.get("aliases") {
-            let aliases: Vec<&str> = aliases_str
-                .split(',')
-                .map(|s| s.trim())
-                .filter(|s| !s.is_empty())
-                .collect();
-            if !aliases.is_empty() {
-                node = node.with_aliases(aliases);
+        let (heading_id, heading_props, nested) = scan_heading_properties(&lines[start + 1..end]);
+        if let Some(id) = heading_id {
+            let body_raw = lines[start..end].join("\n");
+            let body = rewrite_links_with_types(&body_raw);
+            let mut tags = header.file_tags.clone();
+            tags.extend(headings[hi].2.tags.clone());
+            // Extract :KIND: from heading properties if present
+            let kind = heading_props
+                .get("kind")
+                .map(|k| NodeKind::from_str_lossy(k))
+                .unwrap_or(NodeKind::Note);
+            let mut node = Node::new(id, headings[hi].2.title.clone(), kind, body).with_tags(tags);
+            // Extract :ALIASES: from heading properties if present
+            if let Some(aliases_str) = heading_props.get("aliases") {
+                let aliases: Vec<&str> = aliases_str
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if !aliases.is_empty() {
+                    node = node.with_aliases(aliases);
+                }
             }
+            node.todo_state = headings[hi].2.todo_state.clone();
+            node.priority = headings[hi].2.priority;
+            if !heading_props.is_empty() {
+                node.properties = heading_props;
+            }
+            out.push(node);
         }
-        node.todo_state = headings[hi].2.todo_state.clone();
-        node.priority = headings[hi].2.priority;
-        if !heading_props.is_empty() {
-            node.properties = heading_props;
+
+        for (ni, item) in nested.iter().enumerate() {
+            let Some(id) = item.id.clone() else {
+                continue;
+            };
+            let item_start = start + 1 + item.owner_line_idx;
+            let item_end = nested
+                .get(ni + 1)
+                .map(|next| start + 1 + next.owner_line_idx)
+                .unwrap_or(end);
+            let body_raw = lines[item_start..item_end].join("\n");
+            let body = rewrite_links_with_types(&body_raw);
+            let title = strip_list_marker(&item.owner_line);
+            let title = if title.is_empty() { id.clone() } else { title };
+            let kind = item
+                .props
+                .get("kind")
+                .map(|k| NodeKind::from_str_lossy(k))
+                .unwrap_or(NodeKind::Note);
+            let mut item_node =
+                Node::new(id, title, kind, body).with_tags(header.file_tags.clone());
+            if let Some(aliases_str) = item.props.get("aliases") {
+                let aliases: Vec<&str> = aliases_str
+                    .split(',')
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                if !aliases.is_empty() {
+                    item_node = item_node.with_aliases(aliases);
+                }
+            }
+            if !item.props.is_empty() {
+                item_node.properties = item.props.clone();
+            }
+            out.push(item_node);
         }
-        out.push(node);
     }
 
     out
 }
 
-/// Rewrite a single property in an org file's PROPERTIES drawer.
-/// If the key exists, update its value. If not, insert before :END:.
-/// Returns the modified content string, or None if no PROPERTIES drawer found.
-pub fn update_property(content: &str, key: &str, value: &str) -> Option<String> {
+/// Rewrite a single property in the `:PROPERTIES:` drawer belonging to
+/// `node_id` specifically — a file can hold several drawers (file-level,
+/// per-heading, per-list-item, see #332), so every drawer in the file is
+/// scanned for its own `:ID:` and only the one matching `node_id` is
+/// touched; every other drawer is left byte-for-byte untouched. If the
+/// key exists in that drawer, its value is replaced; if not, it's
+/// inserted before `:END:`. Returns `None` if no drawer with a matching
+/// `:ID:` is found anywhere in the file.
+pub fn update_property(content: &str, node_id: &str, key: &str, value: &str) -> Option<String> {
     let lines: Vec<&str> = content.lines().collect();
-    let mut in_props = false;
     let key_lower = key.to_ascii_lowercase();
-    let mut found_key_line = None;
-    let mut end_line = None;
 
-    for (i, line) in lines.iter().enumerate() {
-        let trimmed = line.trim_start();
-        let upper = trimmed.to_ascii_uppercase();
-        if upper.starts_with(":PROPERTIES:") {
-            in_props = true;
+    let mut i = 0;
+    let mut drawer: Option<(usize, usize)> = None; // (:PROPERTIES: line, :END: line)
+    while i < lines.len() {
+        if lines[i]
+            .trim_start()
+            .to_ascii_uppercase()
+            .starts_with(":PROPERTIES:")
+        {
+            let (id, _, next) = parse_drawer_at(&lines, i);
+            let terminated = next > i
+                && lines
+                    .get(next - 1)
+                    .is_some_and(|l| l.trim_start().to_ascii_uppercase().starts_with(":END:"));
+            if terminated && id.as_deref() == Some(node_id) {
+                drawer = Some((i, next - 1));
+                break;
+            }
+            i = next;
             continue;
         }
-        if in_props && upper.starts_with(":END:") {
-            end_line = Some(i);
-            break;
-        }
-        if in_props {
-            if let Some(rest) = trimmed.strip_prefix(':') {
-                if let Some((k, _)) = rest.split_once(':') {
-                    if k.eq_ignore_ascii_case(&key_lower) {
-                        found_key_line = Some(i);
-                    }
+        i += 1;
+    }
+    let (start, end_line) = drawer?;
+
+    let mut found_key_line = None;
+    for (i, line) in lines.iter().enumerate().take(end_line).skip(start + 1) {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix(':') {
+            if let Some((k, _)) = rest.split_once(':') {
+                if k.eq_ignore_ascii_case(&key_lower) {
+                    found_key_line = Some(i);
+                    break;
                 }
             }
         }
     }
-
-    let end_line = end_line?; // No valid PROPERTIES drawer → bail
 
     let mut result = Vec::with_capacity(lines.len() + 1);
     for (i, line) in lines.iter().enumerate() {
@@ -1254,6 +1456,162 @@ Just a heading without a drawer.
         assert!(nodes.iter().all(|n| n.id != "No id here"));
     }
 
+    /// #332 minimal repro: a heading with NO own `:ID:` whose body is a
+    /// numbered list where every item carries its own `:PROPERTIES: :ID:`
+    /// drawer. Before the fix, `scan_heading_properties` walked past the
+    /// blank line and item-1 text, found item-1's drawer, and mistakenly
+    /// returned it AS the heading's own id/props — stealing item 1's
+    /// identity and never looking further, so item 2 vanished entirely.
+    const NESTED_LIST_ITEMS: &str = "\
+:PROPERTIES:
+:ID: file-id
+:END:
+#+title: Repro
+
+* Implementation Steps
+
+1. [ ] First step.
+   :PROPERTIES:
+   :ID: item-1
+   :END:
+2. [ ] Second step.
+   :PROPERTIES:
+   :ID: item-2
+   :END:
+";
+
+    #[test]
+    fn nested_list_item_drawers_each_become_their_own_node() {
+        let nodes = parse_org_multi(NESTED_LIST_ITEMS);
+        let ids: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, vec!["file-id", "item-1", "item-2"]);
+        // The heading itself has no own :ID: — it must NOT appear as a node
+        // (that would mean it stole a child's id again).
+        assert!(nodes.iter().all(|n| n.title != "Implementation Steps"));
+
+        let item1 = nodes.iter().find(|n| n.id == "item-1").unwrap();
+        assert_eq!(item1.title, "First step.");
+        let item2 = nodes.iter().find(|n| n.id == "item-2").unwrap();
+        assert_eq!(item2.title, "Second step.");
+        // Each item's own body must not bleed into its sibling's.
+        assert!(!item1.body.contains("Second step"));
+        assert!(!item2.body.contains("First step"));
+    }
+
+    #[test]
+    fn nested_list_item_drawers_three_siblings_all_import() {
+        // The issue's 3-item variant: confirms it's not "item 2 specifically"
+        // that fails, but every sibling after the first, regardless of count.
+        let content = "\
+:PROPERTIES:
+:ID: file-id
+:END:
+#+title: Repro3
+
+* Steps
+
+1. First.
+   :PROPERTIES:
+   :ID: s1
+   :END:
+2. Second.
+   :PROPERTIES:
+   :ID: s2
+   :END:
+3. Third.
+   :PROPERTIES:
+   :ID: s3
+   :END:
+";
+        let nodes = parse_org_multi(content);
+        let ids: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, vec!["file-id", "s1", "s2", "s3"]);
+    }
+
+    #[test]
+    fn heading_with_own_id_and_nested_list_items_keeps_both() {
+        // A heading that DOES carry its own immediate drawer, with sibling
+        // list items that ALSO carry their own drawers — the heading's own
+        // id/props must still resolve correctly (not stolen by the first
+        // list item), and the list items must still import independently.
+        let content = "\
+* Phase 2 :roadmap:
+:PROPERTIES:
+:ID: phase-2
+:END:
+
+1. Step one.
+   :PROPERTIES:
+   :ID: phase-2-step-1
+   :END:
+2. Step two.
+   :PROPERTIES:
+   :ID: phase-2-step-2
+   :END:
+";
+        let nodes = parse_org_multi(content);
+        let ids: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, vec!["phase-2", "phase-2-step-1", "phase-2-step-2"]);
+        let phase = nodes.iter().find(|n| n.id == "phase-2").unwrap();
+        assert_eq!(phase.title, "Phase 2");
+        assert!(phase.tags.contains(&"roadmap".to_string()));
+    }
+
+    #[test]
+    fn nested_list_item_drawers_import_via_typed_variant() {
+        // `kb_register`'s real ingest path goes through
+        // `parse_org_multi_result` -> `parse_org_multi_with_types` when a
+        // CozoDB store is available (the common case), not the plain
+        // `parse_org_multi` used by the in-memory fallback — both must
+        // agree, or the bug reappears depending on which backend is active.
+        let nodes = parse_org_multi_with_types(NESTED_LIST_ITEMS);
+        let ids: Vec<&str> = nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, vec!["file-id", "item-1", "item-2"]);
+    }
+
+    #[test]
+    fn nested_list_item_typed_links_attribute_to_the_item_not_the_heading() {
+        let content = "\
+:PROPERTIES:
+:ID: file-id
+:END:
+#+title: Repro
+
+* Steps
+
+1. First, see [[id:file-id][back]].
+   :PROPERTIES:
+   :ID: item-1
+   :END:
+2. Second.
+   :PROPERTIES:
+   :ID: item-2
+   :END:
+";
+        let result = parse_org_multi_result(content);
+        let ids: Vec<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, vec!["file-id", "item-1", "item-2"]);
+        assert!(result
+            .typed_links
+            .iter()
+            .any(|(src, link)| src == "item-1" && link.target == "file-id"));
+    }
+
+    #[test]
+    fn ingest_dir_imports_every_sibling_list_item() {
+        // End-to-end via the real kb_register-style entry point
+        // (`ingest_org_dir`), matching the issue's own repro steps: register,
+        // then confirm nodes_imported and per-item resolvability.
+        let tmp = TempDir::new().unwrap();
+        std::fs::write(tmp.path().join("repro.org"), NESTED_LIST_ITEMS).unwrap();
+        let mut kb = KnowledgeBase::new();
+        let report = kb.ingest_org_dir(tmp.path());
+        assert_eq!(report.indexed, 3, "file-level + 2 list items");
+        assert!(kb.contains("file-id"));
+        assert!(kb.contains("item-1"));
+        assert!(kb.contains("item-2"));
+    }
+
     #[test]
     fn ingest_dir_indexes_heading_nodes() {
         let tmp = TempDir::new().unwrap();
@@ -1503,7 +1861,7 @@ Body.
 :END:
 #+title: Test
 ";
-        let result = update_property(content, "hash", "deadbeef").unwrap();
+        let result = update_property(content, "abc", "hash", "deadbeef").unwrap();
         assert!(result.contains(":hash: deadbeef"));
         assert!(result.contains(":END:"));
         // hash should appear before :END:
@@ -1521,7 +1879,7 @@ Body.
 :END:
 #+title: Test
 ";
-        let result = update_property(content, "hash", "newhash").unwrap();
+        let result = update_property(content, "abc", "hash", "newhash").unwrap();
         assert!(result.contains(":hash: newhash"));
         assert!(!result.contains("oldhash"));
     }
@@ -1529,7 +1887,48 @@ Body.
     #[test]
     fn update_property_returns_none_for_malformed() {
         let content = "#+title: No drawer\nBody text.\n";
-        assert!(update_property(content, "hash", "value").is_none());
+        assert!(update_property(content, "abc", "hash", "value").is_none());
+    }
+
+    #[test]
+    fn update_property_returns_none_for_unknown_id() {
+        let content = ":PROPERTIES:\n:ID: abc\n:END:\n#+title: Test\n";
+        assert!(update_property(content, "no-such-id", "hash", "value").is_none());
+    }
+
+    #[test]
+    fn update_property_targets_only_the_matching_drawer() {
+        // Real-world shape from #332: a file-level drawer plus a heading with
+        // two sibling list items, each carrying its own :ID:. Updating the
+        // SECOND item's property must not touch the file, heading, or first
+        // item's drawers.
+        let content = "\
+:PROPERTIES:
+:ID: file-id
+:END:
+#+title: Repro
+
+* Implementation Steps
+
+1. [ ] First step.
+   :PROPERTIES:
+   :ID: item-1
+   :END:
+2. [ ] Second step.
+   :PROPERTIES:
+   :ID: item-2
+   :END:
+";
+        let result = update_property(content, "item-2", "last-linked", "2026-07-20").unwrap();
+        // Exactly one new property line, attached to item-2's drawer.
+        let item2_drawer_start = result.find(":ID: item-2").unwrap();
+        let item2_end = result[item2_drawer_start..].find(":END:").unwrap() + item2_drawer_start;
+        assert!(result[item2_drawer_start..item2_end].contains(":last-linked: 2026-07-20"));
+        // Nothing else in the file gained the property.
+        assert_eq!(result.matches(":last-linked:").count(), 1);
+        // The other two drawers are byte-for-byte unchanged.
+        assert!(result.contains(":ID: file-id\n:END:"));
+        assert!(result.contains(":ID: item-1\n   :END:"));
     }
 
     #[test]

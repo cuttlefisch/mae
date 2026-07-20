@@ -238,6 +238,19 @@ fn build_frame_section(editor: &Editor) -> serde_json::Value {
             "syntax": { "hits": ps.syntax_cache_hits, "misses": ps.syntax_cache_misses },
             "markup": { "hits": ps.markup_cache_hits, "misses": ps.markup_cache_misses },
             "visual_rows": { "hits": ps.visual_rows_cache_hits, "misses": ps.visual_rows_cache_misses },
+            // GUI-only (empty in TUI): current state of the per-window
+            // render-image cache, each entry compared against that
+            // window's LIVE buffer state. `matches: false` on any entry
+            // always indicates a real stale-paint bug — see
+            // `PerfStats::window_cache_snapshot`'s doc comment.
+            "window_render": ps.window_cache_snapshot.iter().map(|e| json!({
+                "window_id": e.window_id,
+                "cached_buffer_idx": e.cached_buffer_idx,
+                "cached_generation": e.cached_generation,
+                "live_buffer_idx": e.live_buffer_idx,
+                "live_generation": e.live_generation,
+                "matches": e.matches,
+            })).collect::<Vec<_>>(),
         },
         "last_command": {
             "name": ps.last_command_name,
@@ -468,6 +481,44 @@ mod tests {
         assert_eq!(lsp["any_connected"], false);
         assert_eq!(lsp["any_starting"], false);
         assert!(lsp["servers"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn introspect_frame_section_reports_empty_window_render_cache_by_default() {
+        // TUI has no GuiRenderer, so window_cache_snapshot is always empty
+        // there; a fresh editor (no render() call yet) matches that shape.
+        let editor = Editor::new();
+        let result = execute_introspect(&editor, &json!({"section": "frame"})).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(val["frame"]["caches"]["window_render"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn introspect_frame_section_surfaces_a_stale_window_render_cache_entry() {
+        // Regression guard for the visibility gap this field closes: a
+        // GUI-populated snapshot showing a mismatched cached vs. live
+        // generation must be visible via introspect without reading GUI
+        // source — `matches: false` here is always a real bug signal.
+        let mut editor = Editor::new();
+        editor.perf_stats.window_cache_snapshot = vec![mae_core::editor::perf::WindowCacheEntry {
+            window_id: 7,
+            cached_buffer_idx: 3,
+            cached_generation: 1,
+            live_buffer_idx: 3,
+            live_generation: 2,
+            matches: false,
+        }];
+        let result = execute_introspect(&editor, &json!({"section": "frame"})).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let entries = val["frame"]["caches"]["window_render"].as_array().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0]["window_id"], 7);
+        assert_eq!(entries[0]["cached_generation"], 1);
+        assert_eq!(entries[0]["live_generation"], 2);
+        assert_eq!(entries[0]["matches"], false);
     }
 
     #[test]

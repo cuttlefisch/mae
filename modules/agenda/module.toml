@@ -4,7 +4,9 @@ version = "0.2.0"
 description = "Org agenda buffer keybindings and SPC o a launcher"
 mae_version = ">=0.9.0"
 category = "app"
-depends = ["org"]
+
+[dependencies]
+org = "*"
 
 [entry]
 autoloads = "autoloads.scm"

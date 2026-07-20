@@ -6,6 +6,7 @@ mod dap_tools;
 mod kb_tools;
 mod lsp_tools;
 mod shell_tools;
+mod tool_def;
 pub mod tool_search;
 mod web_tools;
 
@@ -79,7 +80,13 @@ pub fn scheme_tools_to_definitions(
                 "write" => PermissionTier::Write,
                 "shell" => PermissionTier::Shell,
                 "privileged" => PermissionTier::Privileged,
-                _ => PermissionTier::Write,
+                // `register-ai-tool!` (crates/scheme) validates this string
+                // at registration time, so an unrecognized value should
+                // never reach here — but if it ever does (e.g. a future
+                // construction path that bypasses that validation), fail
+                // safe to the LEAST-privileged tier, not silently grant
+                // Write access to a typo'd permission string.
+                _ => PermissionTier::ReadOnly,
             };
             ToolDefinition {
                 name: st.name.clone(),
@@ -472,7 +479,12 @@ mod tests {
     }
 
     #[test]
-    fn scheme_tool_unknown_permission_defaults_write() {
+    fn scheme_tool_unknown_permission_fails_safe_to_read_only() {
+        // `register-ai-tool!` (crates/scheme) now rejects an unrecognized
+        // permission at registration time, so this shouldn't happen in
+        // practice — but this defense-in-depth fallback must fail safe
+        // (least privilege), not silently grant Write access to whatever
+        // reached here with a typo'd/unrecognized permission string.
         let st = mae_core::SchemeToolDef {
             name: "t".into(),
             description: String::new(),
@@ -482,7 +494,7 @@ mod tests {
             permission: "bogus".into(),
         };
         let defs = scheme_tools_to_definitions(&[st]);
-        assert_eq!(defs[0].permission, Some(PermissionTier::Write));
+        assert_eq!(defs[0].permission, Some(PermissionTier::ReadOnly));
     }
 
     #[test]

@@ -1257,11 +1257,15 @@ babel = { doc = \"Code block execution and tangling\" }\n\
   (define-key \"normal\" \"SPC o a\" \"open-agenda\"))\n\
 ```\n\n\
 ** Enabling flags\n\
-Flags are enabled in `init.scm` via the `mae!` macro (planned):\n\
+Flags are enabled in `init.scm` via the `mae!` macro. Each `:category` marker is\n\
+cosmetic (it just organizes the list); a bare string enables a module with no\n\
+flags, and `(list \"module\" \"+flag\" ...)` enables one with flags:\n\
 ```scheme\n\
 (mae!\n\
-  :lang (org +agenda +babel)\n\
-  :editor (multicursor +align))\n\
+  :lang\n\
+    (list \"org\" \"+agenda\" \"+babel\")\n\
+  :editor\n\
+    (list \"multicursor\" \"+align\"))\n\
 ```\n\n\
 ** Validation\n\
 `mae pkg doctor` warns about:\n\

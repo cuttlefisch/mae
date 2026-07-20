@@ -2258,10 +2258,7 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
 
                 // Phase 2b: resolve the storage engine (default sqlite — lets multiple
                 // daemon-less mae processes share the store). Orthogonal to daemon_mode.
-                let mut engine = editor
-                    .get_option("kb_storage_engine")
-                    .map(|(v, _)| v)
-                    .unwrap_or_else(|| "sqlite".to_string());
+                let mut engine = editor.kb.storage_engine.clone();
 
                 // One-time, reversible sled→sqlite migration when sqlite is selected and
                 // a legacy sled store (a directory) is present. On failure the intact

@@ -501,13 +501,13 @@ impl Editor {
         self.window_mgr.focused_window_mut().buffer_idx = output_idx;
         let output_window_id = self.window_mgr.focused_id();
 
-        // 4. Horizontal split: output (top, 85%) + input (bottom, 15%).
+        // 4. Horizontal split: output (top) + input (bottom).
         let area = self.default_area();
         let input_window_id = match self.window_mgr.split_with_ratio(
             crate::window::SplitDirection::Horizontal,
             input_idx,
             area,
-            0.85,
+            self.ai_conversation_split_ratio,
         ) {
             Ok(id) => id,
             Err(_) => {

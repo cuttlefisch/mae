@@ -15,6 +15,13 @@ use tracing::trace;
 
 use crate::protocol::DapMessage;
 
+/// Upper bound on a single Content-Length-framed message body. DAP responses
+/// (large variable dumps, memory reads) can legitimately be large, so this is
+/// a generous defense-in-depth cap against a corrupted or malfunctioning
+/// adapter sending a runaway length — not a tight protocol limit. Mirrors
+/// `shared/mcp`'s `daemon_client.rs` MAX_MESSAGE_SIZE.
+const MAX_MESSAGE_SIZE: usize = 100 * 1024 * 1024;
+
 /// Errors that can occur during transport operations.
 #[derive(Debug)]
 pub enum TransportError {
@@ -95,6 +102,13 @@ impl<R: AsyncRead + Unpin, W: AsyncWrite + Unpin> DapTransport<R, W> {
 
         let length = content_length
             .ok_or_else(|| TransportError::InvalidHeader("missing Content-Length header".into()))?;
+
+        if length > MAX_MESSAGE_SIZE {
+            return Err(TransportError::InvalidHeader(format!(
+                "Content-Length {} exceeds maximum {}",
+                length, MAX_MESSAGE_SIZE
+            )));
+        }
 
         // Read exactly `length` bytes
         let mut body = vec![0u8; length];

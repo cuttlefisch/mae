@@ -75,7 +75,7 @@ pub use diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticStore};
 pub use git_ops::{BlameEntry, BlameOverlay, PendingGitDiff};
 pub use help_ops::is_builtin_node;
 pub use jumps::{JumpEntry, JUMP_LIST_CAP};
-pub use kb_ops::KbWatcherStats;
+pub use kb_ops::{KbResolution, KbWatcherStats};
 pub use kb_state::{DaemonControl, DaemonMode, KbContext};
 pub use lsp_state::{
     CodeActionItem, CodeActionMenu, CompletionItem, HoverPopup, LspContext, LspServerInfo,
@@ -688,9 +688,17 @@ pub struct SchemeStats {
     pub error_count: usize,
 }
 
-// @ai-caution: [dispatch] ~40 fields after ViState (41) + AiState (34) + CollabState (18) + ShellIntents (12) extraction.
-// Before adding fields, check if the state belongs in a sub-struct
-// (LspContext, DapContext, KbContext). See ROADMAP.md architecture debt.
+// @ai-caution: [architecture-debt] [dispatch] Field count has grown well past
+// the "~40 fields after ViState/AiState/CollabState/ShellIntents extraction"
+// note this comment used to make (that snapshot is stale — re-measure with
+// `grep -c 'pub .*:' ` scoped to the struct body rather than trusting this
+// comment's number, which drifts). Before adding a field, check if the state
+// belongs in a sub-struct (LspContext, DapContext, KbContext) instead — this
+// struct is also independently tracked as a source-line exception (see the
+// file-header marker above); the field count is the SAME debt, a second
+// dimension of it, not a separate issue. Tracked in
+// .claude/commands/mae-audit.md's "Known exceptions" and ROADMAP.md's
+// "Architecture Debt" section.
 /// Top-level editor state.
 ///
 /// Designed as a clean, composable state machine that both human keybindings
@@ -746,6 +754,18 @@ pub struct Editor {
     /// immediate, matching the old un-timed behavior). Mirrors the
     /// `which_key_idle_delay` option (ROADMAP #83); see `on_idle_tick`.
     pub which_key_idle_delay: u64,
+    /// Separator string between a key and its label in the which-key popup.
+    /// Mirrors the `which_key_separator` option.
+    pub which_key_separator: String,
+    /// Max characters of a which-key entry's doc string before truncation.
+    /// Mirrors the `which_key_max_desc_length` option.
+    pub which_key_max_desc_length: usize,
+    /// Max height of the which-key popup as a percentage of the window
+    /// height (10-90). Mirrors the `which_key_max_height_pct` option.
+    pub which_key_max_height_pct: usize,
+    /// Sort order for which-key entries: "key", "desc", or "none". Mirrors
+    /// the `which_key_sort_order` option; applied by `sort_which_key_entries`.
+    pub which_key_sort_order: String,
     /// Milliseconds of idle time required before a KB-link hover preview
     /// popup would appear. Mirrors the `kb_preview_idle_delay` option.
     /// TODO(Part D, KB-link hover preview): the popup itself isn't built
@@ -759,6 +779,11 @@ pub struct Editor {
     /// Whether `extract_subgraph` includes backlinks (not just outgoing
     /// links) in the graph view's BFS walk. Mirrors `kb_graph_include_backlinks`.
     pub kb_graph_include_backlinks: bool,
+    /// Safety-net cap on `extract_subgraph`'s node count (`SubgraphSpec::
+    /// node_cap`), independent of `kb_graph_default_depth`/
+    /// `kb_graph_include_backlinks` — a densely cross-referenced KB can make
+    /// even a shallow walk explode. Mirrors `kb_graph_node_count_cap`.
+    pub kb_graph_node_count_cap: usize,
     /// Node circle radius in logical pixels for the graph view's GUI
     /// rendering. Mirrors `kb_graph_node_radius`.
     pub kb_graph_node_radius: u32,
@@ -1187,6 +1212,16 @@ pub struct Editor {
     /// Display policy: maps BufferKind → DisplayAction for buffer placement.
     /// Governs how buffers become visible (replace, avoid conversation, reuse/split, hidden).
     pub display_policy: crate::display_policy::DisplayPolicy,
+    /// Editor-side share of `display_buffer_for_agent`'s fallback split, when
+    /// it must place a buffer beside the conversation window group. AI
+    /// conversation buffers are a PAIR (output+input) and sit outside
+    /// `DisplayPolicy` (`BufferKind::Conversation` is `Hidden` there), so
+    /// this — and `ai_conversation_split_ratio` below — are the pair's own
+    /// equivalent lever. Mirrors `agent_display_split_ratio`.
+    pub agent_display_split_ratio: f32,
+    /// Output-pane share of the AI conversation buffer's output/input split.
+    /// Mirrors `ai_conversation_split_ratio`.
+    pub ai_conversation_split_ratio: f32,
     /// Tiered redraw level — how much work the renderer needs to do this frame.
     /// Set by event handlers, cleared after render.
     pub redraw_level: crate::redraw::RedrawLevel,
@@ -1291,9 +1326,14 @@ impl Editor {
             which_key_prefix: Vec::new(),
             which_key_scroll: 0,
             which_key_idle_delay: 0,
+            which_key_separator: " ".to_string(),
+            which_key_max_desc_length: 40,
+            which_key_max_height_pct: crate::text_utils::WK_MAX_HEIGHT_PCT_DEFAULT,
+            which_key_sort_order: "key".to_string(),
             kb_preview_idle_delay: 300,
-            kb_graph_default_depth: 2,
+            kb_graph_default_depth: 1,
             kb_graph_include_backlinks: true,
+            kb_graph_node_count_cap: 300,
             kb_graph_node_radius: 18,
             kb_graph_node_size_by_degree: true,
             kb_graph_node_degree_scale: 4.0,
@@ -1457,6 +1497,8 @@ impl Editor {
             swap_directory: String::new(),
             buffer_keys_popup: false,
             display_policy: crate::display_policy::DisplayPolicy::default(),
+            agent_display_split_ratio: 0.5,
+            ai_conversation_split_ratio: 0.85,
             redraw_level: crate::redraw::RedrawLevel::Full,
             dirty_line_range: None,
             last_click: None,

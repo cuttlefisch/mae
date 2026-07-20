@@ -72,7 +72,7 @@ impl PalettePurpose {
             Self::SetupAiProvider => "AI Provider",
             Self::SetupCollabMode => "Collaboration Mode",
             Self::SetKeymapFlavor => "Choose Keybindings",
-            Self::SetKbSearchScope => "KB Search Scope",
+            Self::SetKbSearchScope => "KB Scope",
         }
     }
 }
@@ -152,6 +152,14 @@ pub enum MiniDialogContext {
         address: String,
     },
     SetupKbNotesDir,
+    /// Confirm-only, no extra data needed: `kb_search_scope` is already
+    /// applied by the time this resolves (the picker sets it before opening
+    /// this prompt) — on confirm just opens the graph view with no explicit
+    /// center, so `resolve_graph_center`/`kb_owner_of_scoped` (Phase 5) pick
+    /// the newly-scoped instance's own default node. Closes the gap between
+    /// `:kb-set-scope` (switch which KB you're working in) and
+    /// actually seeing that KB's graph — previously two unconnected steps.
+    KbGraphOpenPrompt,
     /// ADR-024: a `BlockingReply` notification routed to a modal — the y/N answer
     /// is sent on the notification's reply channel (`pending_notif_reply`). The
     /// generalized successor to the bespoke TOFU `PeerKeyAccept` prompt (ADR-017):

@@ -12,7 +12,15 @@ use std::collections::HashMap;
 use std::path::Path;
 
 /// A parsed `module.toml` manifest.
+///
+/// `deny_unknown_fields` (here and on the nested structs below) is
+/// deliberate: without it, a misplaced or misspelled key — e.g. `depends`
+/// nested inside `[module]` instead of a sibling `[dependencies]` table, the
+/// exact bug this guards against — is silently dropped by serde rather than
+/// failing manifest parsing, so the intended dependency ordering (or
+/// whatever the field was meant to configure) just silently never applies.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModuleManifest {
     pub module: ModuleIdentity,
     #[serde(default)]
@@ -25,6 +33,7 @@ pub struct ModuleManifest {
 
 /// Module identity section.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModuleIdentity {
     pub name: String,
     #[serde(default = "default_version")]
@@ -63,12 +72,14 @@ fn default_version() -> String {
 
 /// A flag that can be enabled with `+name` syntax in `mae!` declarations.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FlagDef {
     pub doc: String,
 }
 
 /// Entry point file paths (relative to module directory).
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct EntryPoints {
     #[serde(default = "default_init")]
     pub init: String,
@@ -222,6 +233,67 @@ autoloads = "org-autoloads.scm"
         assert!(m.flags.contains_key("agenda"));
         assert_eq!(m.dependencies.len(), 1);
         assert_eq!(m.entry.init, "org-init.scm");
+    }
+
+    /// Adversarial regression test for the audit finding that `agenda`'s and
+    /// `tables`' `module.toml` used a `depends = [...]` array nested inside
+    /// `[module]` — not part of the schema (the real mechanism is a sibling
+    /// `[dependencies]` table) — and serde silently dropped it, leaving
+    /// dependency ordering unenforced with no error anywhere. Confirms
+    /// `deny_unknown_fields` now makes parsing FAIL LOUD on exactly that
+    /// malformed shape, instead of silently ignoring it.
+    #[test]
+    fn misplaced_depends_field_in_module_table_is_rejected() {
+        let toml = r#"
+[module]
+name = "agenda"
+depends = ["org"]
+
+[entry]
+autoloads = "autoloads.scm"
+"#;
+        let err = ModuleManifest::from_str(toml, Path::new("test")).unwrap_err();
+        assert!(
+            err.contains("depends") || err.contains("unknown field"),
+            "error should point at the unrecognized field, got: {err}"
+        );
+    }
+
+    /// The two real modules this bug affected must now parse correctly
+    /// through the fixed `[dependencies]` table form.
+    #[test]
+    fn agenda_and_tables_dependencies_parse_correctly() {
+        let agenda = r#"
+[module]
+name = "agenda"
+category = "app"
+
+[dependencies]
+org = "*"
+
+[entry]
+autoloads = "autoloads.scm"
+"#;
+        let m = ModuleManifest::from_str(agenda, Path::new("test")).unwrap();
+        assert_eq!(m.dependencies.get("org").map(String::as_str), Some("*"));
+
+        let tables = r#"
+[module]
+name = "tables"
+category = "editor"
+
+[dependencies]
+org = "*"
+markdown = "*"
+
+[entry]
+init = "init.scm"
+autoloads = "autoloads.scm"
+"#;
+        let m = ModuleManifest::from_str(tables, Path::new("test")).unwrap();
+        assert_eq!(m.dependencies.len(), 2);
+        assert!(m.dependencies.contains_key("org"));
+        assert!(m.dependencies.contains_key("markdown"));
     }
 
     #[test]

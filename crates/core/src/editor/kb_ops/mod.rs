@@ -7,6 +7,8 @@ use mae_kb::KbStore;
 
 use super::Editor;
 
+pub use registry::KbResolution;
+
 /// The honest, point-of-action advisory shown when a user enables E2E content
 /// encryption on a KB (CF1, `docs/SECURITY_REVIEW.md §6.3`). "E2E" connotes
 /// Signal-like privacy; MAE's model protects node *content* from non-members but

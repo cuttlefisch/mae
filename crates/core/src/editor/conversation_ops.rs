@@ -98,6 +98,32 @@ impl Editor {
         self.buffers.len() - 1
     }
 
+    /// Always create a brand-new, distinctly-named KB buffer for `node_id`,
+    /// bypassing every reuse check `ensure_kb_buffer_idx` applies —
+    /// including the shared `*Help*` buffer builtin nodes normally reuse.
+    ///
+    /// Used by the graph view's companion-window navigation when the
+    /// buffer `ensure_kb_buffer_idx` would hand back is ALSO currently
+    /// visible in some window OTHER than the one being navigated:
+    /// repopulating it in place would silently change that unrelated
+    /// window's content too, since both windows render the same buffer
+    /// object — reported live ("if i have multiple kb buffers open... the
+    /// kb node clicked has its content displayed on both buffers"). This is
+    /// the builtin-node counterpart to the fix `ensure_kb_buffer_idx`'s own
+    /// doc comment already describes for non-builtin nodes; builtin nodes
+    /// still default to sharing `*Help*` in the common single-window case
+    /// (avoiding ~1000-node buffer clutter from ordinary help browsing) —
+    /// this is only reached when that sharing would actually leak.
+    /// Named via `kb_buffer_display_name` (not the shared `*Help*` name),
+    /// so a later, unrelated `ensure_kb_buffer_idx` call never mistakes
+    /// this one-off buffer for the reusable shared one.
+    pub(crate) fn fresh_kb_buffer_idx(&mut self, node_id: &str) -> usize {
+        let mut buf = Buffer::new_kb(node_id);
+        buf.name = self.kb_buffer_display_name(node_id);
+        self.buffers.push(buf);
+        self.buffers.len() - 1
+    }
+
     /// A distinct, title-based buffer name for a KB node buffer — e.g.
     /// `*KB: ADR-0003*` — so multiple simultaneously-open KB buffers (one
     /// per node visited via the graph view's companion-window navigation,

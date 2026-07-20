@@ -58,6 +58,38 @@ impl DisplayPolicy {
         }
     }
 
+    /// The effective split ratio for `kind`'s `ReuseOrSplit` action (override
+    /// or default). Falls back to `0.5` if `kind`'s current action isn't
+    /// `ReuseOrSplit` at all (e.g. a user overrode it to `replace-focused`
+    /// via `set-display-rule!`) — a ratio-typed option must always report
+    /// SOME value, even when it's not currently meaningful.
+    pub fn ratio_for(&self, kind: BufferKind) -> f32 {
+        match self.action_for(kind) {
+            DisplayAction::ReuseOrSplit { ratio, .. } => ratio,
+            _ => 0.5,
+        }
+    }
+
+    /// Set `kind`'s split ratio, clamped to the same `[0.1, 0.9]` bound
+    /// `WindowManager::split_with_ratio` itself enforces (so an
+    /// out-of-range option value can never produce a degenerate pane).
+    /// Preserves `kind`'s current direction (from its active override, or
+    /// its compiled-in default if not currently `ReuseOrSplit`) and
+    /// coerces the action to `ReuseOrSplit` — writes through the SAME
+    /// `overrides` table `set-display-rule!` uses, so the two never
+    /// diverge on a single kind's effective action.
+    pub fn set_ratio_override(&mut self, kind: BufferKind, ratio: f32) {
+        let ratio = ratio.clamp(0.1, 0.9);
+        let direction = match self.action_for(kind) {
+            DisplayAction::ReuseOrSplit { direction, .. } => direction,
+            _ => match Self::default_action(kind) {
+                DisplayAction::ReuseOrSplit { direction, .. } => direction,
+                _ => SplitDirection::Vertical,
+            },
+        };
+        self.set_override(kind, DisplayAction::ReuseOrSplit { direction, ratio });
+    }
+
     /// Default rules — the baseline policy.
     fn default_action(kind: BufferKind) -> DisplayAction {
         match kind {
@@ -116,12 +148,14 @@ impl DisplayPolicy {
             },
             // *KB Sharing* management buffer — full focused window (like git-status).
             BufferKind::KbSharing => DisplayAction::ReplaceFocused,
-            // Native KB graph view (Part C) — right 30% panel, reuse if open.
-            // Vertical (not horizontal, like Debug/Messages) because a graph
-            // benefits from width more than height.
+            // Native KB graph view (Part C) — right 40% panel, reuse if open
+            // (editor keeps 60% — see `kb_graph_split_ratio`, the option
+            // this default mirrors). Vertical (not horizontal, like
+            // Debug/Messages) because a graph benefits from width more
+            // than height.
             BufferKind::Graph => DisplayAction::ReuseOrSplit {
                 direction: SplitDirection::Vertical,
-                ratio: 0.3,
+                ratio: 0.6,
             },
         }
     }
@@ -318,9 +352,66 @@ mod tests {
             policy.action_for(BufferKind::Graph),
             DisplayAction::ReuseOrSplit {
                 direction: SplitDirection::Vertical,
-                ratio: 0.3,
+                ratio: 0.6,
             }
         );
+    }
+
+    #[test]
+    fn ratio_for_reads_the_effective_ratio() {
+        let policy = DisplayPolicy::default();
+        assert_eq!(policy.ratio_for(BufferKind::Kb), 0.5);
+        assert_eq!(policy.ratio_for(BufferKind::Graph), 0.6);
+    }
+
+    #[test]
+    fn ratio_for_falls_back_to_half_when_the_kind_is_not_reuse_or_split() {
+        let policy = DisplayPolicy::default();
+        assert_eq!(policy.ratio_for(BufferKind::GitStatus), 0.5);
+    }
+
+    #[test]
+    fn set_ratio_override_preserves_direction() {
+        let mut policy = DisplayPolicy::default();
+        policy.set_override(
+            BufferKind::Graph,
+            DisplayAction::ReuseOrSplit {
+                direction: SplitDirection::Horizontal,
+                ratio: 0.3,
+            },
+        );
+        policy.set_ratio_override(BufferKind::Graph, 0.7);
+        assert_eq!(
+            policy.action_for(BufferKind::Graph),
+            DisplayAction::ReuseOrSplit {
+                direction: SplitDirection::Horizontal,
+                ratio: 0.7,
+            },
+            "changing the ratio must not clobber a direction override set via set-display-rule!"
+        );
+    }
+
+    #[test]
+    fn set_ratio_override_coerces_a_non_reuse_or_split_kind_using_its_default_direction() {
+        let mut policy = DisplayPolicy::default();
+        // GitStatus defaults to ReplaceFocused — has no direction of its own.
+        policy.set_ratio_override(BufferKind::GitStatus, 0.4);
+        assert_eq!(
+            policy.action_for(BufferKind::GitStatus),
+            DisplayAction::ReuseOrSplit {
+                direction: SplitDirection::Vertical,
+                ratio: 0.4,
+            }
+        );
+    }
+
+    #[test]
+    fn set_ratio_override_clamps_to_the_split_with_ratio_bound() {
+        let mut policy = DisplayPolicy::default();
+        policy.set_ratio_override(BufferKind::Graph, 0.0);
+        assert_eq!(policy.ratio_for(BufferKind::Graph), 0.1);
+        policy.set_ratio_override(BufferKind::Graph, 1.0);
+        assert_eq!(policy.ratio_for(BufferKind::Graph), 0.9);
     }
 
     #[test]

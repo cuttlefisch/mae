@@ -251,6 +251,10 @@ pub struct KbContext {
     pub dailies_dir: Option<PathBuf>,
     /// KB option: max days to walk backwards when chain-filling dailies (default 90).
     pub daily_chain_gap_max: usize,
+    /// KB option: durable store backend ("sqlite" or "sled") — see `kb_storage_engine`'s
+    /// doc comment in `options.rs` for the tradeoffs. Read by bootstrap's sled→sqlite
+    /// migration + store-open logic at startup.
+    pub storage_engine: String,
 }
 
 impl KbContext {
@@ -483,6 +487,7 @@ impl KbContext {
             search_scope: "all".to_string(),
             dailies_dir: None,
             daily_chain_gap_max: 90,
+            storage_engine: "sqlite".to_string(),
         }
     }
 }

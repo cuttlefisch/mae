@@ -24,6 +24,28 @@ pub enum AnomalyKind {
     Stall,
 }
 
+/// One entry in `PerfStats::window_cache_snapshot` — the GUI's per-window
+/// render-image cache's stored metadata for a window, compared against that
+/// same window's LIVE buffer state at the moment the snapshot was taken. See
+/// `PerfStats::window_cache_snapshot`'s doc comment for why this exists.
+#[derive(Debug, Clone)]
+pub struct WindowCacheEntry {
+    pub window_id: usize,
+    pub cached_buffer_idx: usize,
+    pub cached_generation: u64,
+    /// The SAME window's buffer/generation read fresh from `editor.buffers`/
+    /// `editor.window_mgr` at snapshot time — not from the cache.
+    pub live_buffer_idx: usize,
+    pub live_generation: u64,
+    /// `false` here always indicates a real bug: it means the cache holds
+    /// stale metadata for a window it did NOT just render fresh this frame
+    /// (a rendered-but-uncached window, or a fresh write, would always
+    /// match by construction) — i.e. a cache entry that survived from an
+    /// earlier frame without being invalidated despite the window's buffer
+    /// having since changed.
+    pub matches: bool,
+}
+
 /// Rolling performance statistics, updated each frame.
 #[derive(Debug)]
 pub struct PerfStats {
@@ -61,6 +83,22 @@ pub struct PerfStats {
     pub markup_cache_misses: u64,
     pub visual_rows_cache_hits: u64,
     pub visual_rows_cache_misses: u64,
+    /// GUI-only: the current state of `mae-gui`'s per-window render image
+    /// cache (`WindowRenderCache`), one entry per non-focused window that
+    /// currently has a cached image — written directly by `GuiRenderer::
+    /// render` at the end of every frame (not the `pending_*`-then-copy
+    /// pattern the timing fields above use, since this is already known by
+    /// the time `render` finishes rather than deep inside it). `mae-core`
+    /// has no cache of its own to compare against here; this exists purely
+    /// so `introspect(frame)` can answer "what does the render cache
+    /// currently think each window shows" without reading GUI source —
+    /// closing a real gap where a stale-paint bug (a cache entry whose
+    /// `generation` doesn't reflect a genuinely different-content buffer)
+    /// was invisible to every existing introspection tool, including
+    /// `render_inspect`, which only reads logical buffer state, never the
+    /// actual cached/blitted image. Always empty in the TUI backend (no
+    /// such cache exists there).
+    pub window_cache_snapshot: Vec<WindowCacheEntry>,
     // --- KB performance ---
     /// Last KB search latency in microseconds.
     pub kb_search_latency_us: u64,
@@ -107,6 +145,7 @@ impl Default for PerfStats {
             markup_cache_misses: 0,
             visual_rows_cache_hits: 0,
             visual_rows_cache_misses: 0,
+            window_cache_snapshot: Vec::new(),
             kb_search_latency_us: 0,
             kb_watcher_drain_us: 0,
             kb_watcher_events: 0,
