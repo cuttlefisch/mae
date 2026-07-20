@@ -471,9 +471,18 @@ impl Editor {
     }
 
     /// Handle `SessionStartFailed` — clear state and surface the error.
+    ///
+    /// #79: this fires asynchronously from a background task-event handler
+    /// (`dap_bridge.rs`), not in direct response to a keypress — ADR-024's
+    /// actual motivating scenario for the notification bus (a clobberable
+    /// status-line message can vanish before the user is even looking at it).
     pub fn apply_dap_session_start_failed(&mut self, error: String) {
         self.dap.state = None;
-        self.set_status(format!("[DAP] session start failed: {}", error));
+        self.notify(
+            crate::notifications::Notification::error("dap", "Debug session failed to start")
+                .body(error)
+                .key("dap-session-start-failed"),
+        );
     }
 
     /// Handle a `Stopped` event — record the location and trigger a
@@ -1634,5 +1643,33 @@ mod tests {
                 key
             );
         }
+    }
+
+    /// #79 second slice: `SessionStartFailed` fires asynchronously from a
+    /// background task-event handler (dap_bridge.rs), not a direct keypress
+    /// response — ADR-024's actual motivating scenario. Must land as a durable
+    /// notification, not just a clobberable status-line message.
+    #[test]
+    fn apply_dap_session_start_failed_notifies() {
+        let mut editor = Editor::new();
+        editor.apply_dap_session_start_failed("adapter exited with code 1".to_string());
+
+        assert!(editor.dap.state.is_none(), "state must be cleared");
+
+        let notes = editor.notifications.active_sorted();
+        let hit = notes
+            .iter()
+            .find(|n| n.source == "dap" && n.title.contains("failed to start"));
+        assert!(
+            hit.is_some(),
+            "a durable notification must be raised for a DAP session-start failure, \
+             not just a status-line toast; got: {:?}",
+            notes.iter().map(|n| &n.title).collect::<Vec<_>>()
+        );
+        assert_eq!(hit.unwrap().severity, crate::notifications::Severity::Error);
+        assert!(
+            editor.status_msg.contains("failed to start"),
+            "the immediate status-line toast must still fire too"
+        );
     }
 }

@@ -296,7 +296,19 @@ impl Editor {
                 {
                     self.set_status("No local path set — use :saveas <path> to save".to_string());
                 } else {
-                    self.set_status(format!("Error saving: {}", e));
+                    let name = self.buffers[idx].name.clone();
+                    // #79: a save failure is a data-loss risk — a clobberable
+                    // status-line message is easy to miss entirely, the exact
+                    // failure mode ADR-024 exists to close. Direct sibling of
+                    // the already-migrated external-file-change warning.
+                    self.notify(
+                        crate::notifications::Notification::error(
+                            "file",
+                            format!("Failed to save \"{name}\""),
+                        )
+                        .body(format!("{e}"))
+                        .key(format!("file-save-failed:{name}")),
+                    );
                 }
             }
         }
@@ -1899,6 +1911,44 @@ mod tests {
         );
         assert!(
             editor.status_msg.contains("changed on disk"),
+            "the immediate status-line toast must still fire too"
+        );
+    }
+
+    /// #79 second slice: a save failure is a data-loss risk — the direct sibling
+    /// of the already-migrated external-file-change warning, in the same
+    /// subsystem. Must land as a durable notification, not just a clobberable
+    /// status-line message.
+    #[test]
+    fn save_current_buffer_notifies_on_a_real_save_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("note.txt");
+        std::fs::write(&path, "content\n").unwrap();
+
+        let mut editor = Editor::new();
+        let idx = editor.open_file_hidden(&path).unwrap();
+        editor.buffers[idx].insert_text_at(0, "unsaved edit\n");
+
+        // The parent directory vanishes out from under the buffer between open
+        // and save — a real, deterministic save failure (ErrorKind::NotFound),
+        // not a synthetic error injected for the test.
+        std::fs::remove_dir_all(dir.path()).unwrap();
+
+        editor.save_current_buffer();
+
+        let notes = editor.notifications.active_sorted();
+        let hit = notes
+            .iter()
+            .find(|n| n.source == "file" && n.title.contains("Failed to save"));
+        assert!(
+            hit.is_some(),
+            "a durable notification must be raised for a save failure, not just a \
+             status-line toast; got: {:?}",
+            notes.iter().map(|n| &n.title).collect::<Vec<_>>()
+        );
+        assert_eq!(hit.unwrap().severity, crate::notifications::Severity::Error);
+        assert!(
+            editor.status_msg.contains("Failed to save"),
             "the immediate status-line toast must still fire too"
         );
     }
