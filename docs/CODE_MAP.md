@@ -439,7 +439,7 @@ Source: `shared/sync/src/lib.rs`
 | `compare_state_vectors` | fn |
 | `compute_project_identity` | fn |
 
-## Commands (553 built-in)
+## Commands (554 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -848,7 +848,9 @@ Source: `shared/sync/src/lib.rs`
 | `leader-dispatch` | Open the transient leader keypad (which-key dispatch); resolves one command then returns |
 | `keymap-set-flavor` | Switch keymap flavor live (:keymap-set-flavor <name>; no arg toggles doom/nonmodal) |
 | `choose-keymap-flavor` | Open the guided keybindings picker (modal vs non-modal, with descriptions) |
-| `kb-set-search-scope` | Choose the default KB search scope (all / local / remote / instance) |
+| `kb-set-scope` | Choose the default KB scope (all / local / remote / instance) — governs \
+             search and the graph view's center resolution |
+| `kb-set-search-scope` | Deprecated alias for kb-set-scope (kept for existing init.scm bindings) |
 | `set-save` | Set an option and persist to init.scm (:set-save <key> [value]) |
 | `kill-other-buffers` | Close all buffers except current (SPC b o) |
 | `save-all-buffers` | Save all modified buffers (SPC b S) |

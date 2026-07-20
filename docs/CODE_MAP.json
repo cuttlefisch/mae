@@ -2741,8 +2741,12 @@
       "doc": "Open the guided keybindings picker (modal vs non-modal, with descriptions)"
     },
     {
+      "name": "kb-set-scope",
+      "doc": "Choose the default KB scope (all / local / remote / instance) — governs \\\n             search and the graph view's center resolution"
+    },
+    {
       "name": "kb-set-search-scope",
-      "doc": "Choose the default KB search scope (all / local / remote / instance)"
+      "doc": "Deprecated alias for kb-set-scope (kept for existing init.scm bindings)"
     },
     {
       "name": "set-save",

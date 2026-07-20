@@ -72,7 +72,7 @@ impl PalettePurpose {
             Self::SetupAiProvider => "AI Provider",
             Self::SetupCollabMode => "Collaboration Mode",
             Self::SetKeymapFlavor => "Choose Keybindings",
-            Self::SetKbSearchScope => "KB Search Scope",
+            Self::SetKbSearchScope => "KB Scope",
         }
     }
 }
@@ -157,7 +157,7 @@ pub enum MiniDialogContext {
     /// this prompt) — on confirm just opens the graph view with no explicit
     /// center, so `resolve_graph_center`/`kb_owner_of_scoped` (Phase 5) pick
     /// the newly-scoped instance's own default node. Closes the gap between
-    /// `:kb-set-search-scope` (switch which KB you're working in) and
+    /// `:kb-set-scope` (switch which KB you're working in) and
     /// actually seeing that KB's graph — previously two unconnected steps.
     KbGraphOpenPrompt,
     /// ADR-024: a `BlockingReply` notification routed to a modal — the y/N answer

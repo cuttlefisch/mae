@@ -111,7 +111,7 @@ impl Editor {
     /// `None` when `kb.search_scope` is a keyword (`"all"`/`"local"`/
     /// `"remote"`) or names an instance that isn't actually registered.
     ///
-    /// Regression fix: `:kb-set-search-scope`'s "open the graph?" prompt
+    /// Regression fix: `:kb-set-scope`'s "open the graph?" prompt
     /// used to call `kb_graph_view_open(None, None)`, which resolves via
     /// `resolve_graph_center`'s `"index"` fallback — but MAE's own
     /// `"index"`/`NodeKind::Index` convention is specific to its own

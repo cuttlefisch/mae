@@ -813,7 +813,7 @@ mod tests {
         // disconnected steps; see MiniDialogContext::KbGraphOpenPrompt).
         let mut editor = Editor::new();
         let mut scheme = new_scheme();
-        assert!(editor.dispatch_builtin("kb-set-search-scope"));
+        assert!(editor.dispatch_builtin("kb-set-scope"));
         assert_eq!(
             editor.command_palette.as_ref().unwrap().purpose,
             mae_core::PalettePurpose::SetKbSearchScope

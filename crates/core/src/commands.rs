@@ -1059,8 +1059,13 @@ impl CommandRegistry {
             "Open the guided keybindings picker (modal vs non-modal, with descriptions)",
         );
         reg.register_builtin(
+            "kb-set-scope",
+            "Choose the default KB scope (all / local / remote / instance) — governs \
+             search and the graph view's center resolution",
+        );
+        reg.register_builtin(
             "kb-set-search-scope",
-            "Choose the default KB search scope (all / local / remote / instance)",
+            "Deprecated alias for kb-set-scope (kept for existing init.scm bindings)",
         );
         reg.register_builtin(
             "set-save",

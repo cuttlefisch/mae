@@ -573,7 +573,7 @@ impl Editor {
 
     /// Same resolution as `kb_owner_of`, but honors `kb.search_scope` when
     /// it names a specific registered instance (set via
-    /// `:kb-set-search-scope` / `(set-option! "kb_search_scope" ...)`):
+    /// `:kb-set-scope` / `(set-option! "kb_search_scope" ...)`):
     /// if that instance ALSO contains `id`, it wins over the default
     /// primary-first order. This is what lets the graph view (or anything
     /// else resolving a generic id like "index") target a specific
