@@ -38,8 +38,8 @@ impl Editor {
         }
         let today = today_str();
         // Write hash and last-modified to file
-        self.kb_update_property_in_file(path, "hash", &new_hash);
-        self.kb_update_property_in_file(path, "last-modified", &today);
+        self.kb_update_property_in_file(path, &node_id, "hash", &new_hash);
+        self.kb_update_property_in_file(path, &node_id, "last-modified", &today);
         // Update in-memory node properties
         if let Some(node) = self.kb_get_node_mut(&node_id) {
             node.properties.insert("hash".to_string(), new_hash);
@@ -64,7 +64,7 @@ impl Editor {
         let Some(path) = source_path else {
             return;
         };
-        self.kb_update_property_in_file(&path, key, value);
+        self.kb_update_property_in_file(&path, node_id, key, value);
         // Update in-memory node properties
         if let Some(node) = self.kb_get_node_mut(node_id) {
             node.properties.insert(key.to_string(), value.to_string());
@@ -72,16 +72,20 @@ impl Editor {
     }
 
     /// Write a property to a .org file and reimport. Uses write-guard.
+    /// `node_id` selects which of the file's `:PROPERTIES:` drawers to
+    /// touch — a file can hold several (file-level, per-heading,
+    /// per-list-item, see #332) — every other drawer is left untouched.
     pub(super) fn kb_update_property_in_file(
         &mut self,
         path: &std::path::Path,
+        node_id: &str,
         key: &str,
         value: &str,
     ) {
         let Ok(content) = std::fs::read_to_string(path) else {
             return;
         };
-        let Some(updated) = mae_kb::org::update_property(&content, key, value) else {
+        let Some(updated) = mae_kb::org::update_property(&content, node_id, key, value) else {
             return;
         };
         // Guard the path to prevent watcher cascade
