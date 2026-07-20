@@ -754,6 +754,18 @@ pub struct Editor {
     /// immediate, matching the old un-timed behavior). Mirrors the
     /// `which_key_idle_delay` option (ROADMAP #83); see `on_idle_tick`.
     pub which_key_idle_delay: u64,
+    /// Separator string between a key and its label in the which-key popup.
+    /// Mirrors the `which_key_separator` option.
+    pub which_key_separator: String,
+    /// Max characters of a which-key entry's doc string before truncation.
+    /// Mirrors the `which_key_max_desc_length` option.
+    pub which_key_max_desc_length: usize,
+    /// Max height of the which-key popup as a percentage of the window
+    /// height (10-90). Mirrors the `which_key_max_height_pct` option.
+    pub which_key_max_height_pct: usize,
+    /// Sort order for which-key entries: "key", "desc", or "none". Mirrors
+    /// the `which_key_sort_order` option; applied by `sort_which_key_entries`.
+    pub which_key_sort_order: String,
     /// Milliseconds of idle time required before a KB-link hover preview
     /// popup would appear. Mirrors the `kb_preview_idle_delay` option.
     /// TODO(Part D, KB-link hover preview): the popup itself isn't built
@@ -1314,6 +1326,10 @@ impl Editor {
             which_key_prefix: Vec::new(),
             which_key_scroll: 0,
             which_key_idle_delay: 0,
+            which_key_separator: " ".to_string(),
+            which_key_max_desc_length: 40,
+            which_key_max_height_pct: crate::text_utils::WK_MAX_HEIGHT_PCT_DEFAULT,
+            which_key_sort_order: "key".to_string(),
             kb_preview_idle_delay: 300,
             kb_graph_default_depth: 1,
             kb_graph_include_backlinks: true,

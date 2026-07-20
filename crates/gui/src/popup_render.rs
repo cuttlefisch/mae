@@ -502,14 +502,8 @@ pub fn render_which_key_popup(
     };
     let bg = theme::ts_bg(editor, "ui.background").unwrap_or(theme::DEFAULT_BG);
 
-    let separator = editor
-        .get_option("which-key-separator")
-        .map(|(v, _)| v)
-        .unwrap_or_else(|| " ".to_string());
-    let max_desc: usize = editor
-        .get_option("which-key-max-desc-length")
-        .and_then(|(v, _)| v.parse().ok())
-        .unwrap_or(40);
+    let separator = editor.which_key_separator.clone();
+    let max_desc: usize = editor.which_key_max_desc_length;
 
     canvas.draw_rect_fill(row_start, 0, cols, height, bg);
     let title = if let Some(t) = title_override {

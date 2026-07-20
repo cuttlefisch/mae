@@ -299,14 +299,10 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
             max_desc,
         );
         let entry_rows = entries.len().div_ceil(num_cols);
-        let max_pct: usize = editor
-            .get_option("which-key-max-height-pct")
-            .and_then(|(v, _)| v.parse().ok())
-            .unwrap_or(mae_core::text_utils::WK_MAX_HEIGHT_PCT_DEFAULT)
-            .clamp(
-                mae_core::text_utils::WK_MAX_HEIGHT_PCT_MIN,
-                mae_core::text_utils::WK_MAX_HEIGHT_PCT_MAX,
-            );
+        // `editor.which_key_max_height_pct` is already clamped to
+        // [WK_MAX_HEIGHT_PCT_MIN, WK_MAX_HEIGHT_PCT_MAX] on every write by
+        // `Editor::set_option`, so no re-validation is needed here.
+        let max_pct = editor.which_key_max_height_pct;
         let max_h = (area.height as usize) * max_pct / 100;
         let popup_height = ((entry_rows + 2) as u16)
             .min(max_h as u16)

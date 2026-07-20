@@ -293,6 +293,56 @@ fn kb_link_follow_mode_option_round_trip() {
     assert!(err.is_err(), "an unrecognized mode must be rejected");
 }
 
+/// Regression test for the audit finding that all 4 `which_key_*` options
+/// had no get/set arm: `get_option`/`set_option` silently no-op'd for each
+/// (registered + read at their call sites via `get_option`, but with no
+/// match arm to actually resolve), so `:set which-key-sort-order desc` (etc.)
+/// had zero effect regardless of what the render code appeared to support.
+#[test]
+fn which_key_options_round_trip() {
+    let mut editor = Editor::new();
+
+    assert_eq!(editor.which_key_separator, " ");
+    editor.set_option("which_key_separator", " -> ").unwrap();
+    assert_eq!(editor.which_key_separator, " -> ");
+    assert_eq!(editor.get_option("which_key_separator").unwrap().0, " -> ");
+
+    assert_eq!(editor.which_key_max_desc_length, 40);
+    editor
+        .set_option("which_key_max_desc_length", "20")
+        .unwrap();
+    assert_eq!(editor.which_key_max_desc_length, 20);
+    assert_eq!(
+        editor.get_option("which_key_max_desc_length").unwrap().0,
+        "20"
+    );
+
+    assert_eq!(
+        editor.which_key_max_height_pct,
+        crate::text_utils::WK_MAX_HEIGHT_PCT_DEFAULT
+    );
+    editor.set_option("which_key_max_height_pct", "70").unwrap();
+    assert_eq!(editor.which_key_max_height_pct, 70);
+    // Out-of-range values are clamped, not rejected.
+    editor
+        .set_option("which_key_max_height_pct", "999")
+        .unwrap();
+    assert_eq!(
+        editor.which_key_max_height_pct,
+        crate::text_utils::WK_MAX_HEIGHT_PCT_MAX
+    );
+
+    assert_eq!(editor.which_key_sort_order, "key");
+    editor.set_option("which_key_sort_order", "desc").unwrap();
+    assert_eq!(editor.which_key_sort_order, "desc");
+    let err = editor.set_option("which_key_sort_order", "bogus");
+    assert!(err.is_err(), "an unrecognized sort order must be rejected");
+
+    // Alias lookup (hyphenated form, as used by `:set` at the command line).
+    editor.set_option("which-key-sort-order", "none").unwrap();
+    assert_eq!(editor.which_key_sort_order, "none");
+}
+
 /// Regression test for the audit finding that `kb_storage_engine` had no
 /// get/set arm: `get_option("kb_storage_engine")` always returned `None`,
 /// silently hardcoding `"sqlite"` at every call site (`kb_ops/registry.rs`,

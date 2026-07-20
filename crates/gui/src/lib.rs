@@ -641,14 +641,8 @@ impl Renderer for GuiRenderer {
                 (editor.which_key_entries_for_current_keymap(), None)
             };
 
-            let separator = editor
-                .get_option("which-key-separator")
-                .map(|(v, _)| v)
-                .unwrap_or_else(|| " ".to_string());
-            let max_desc: usize = editor
-                .get_option("which-key-max-desc-length")
-                .and_then(|(v, _)| v.parse().ok())
-                .unwrap_or(40);
+            let separator = editor.which_key_separator.clone();
+            let max_desc: usize = editor.which_key_max_desc_length;
             let sep_width = mae_core::text_utils::display_width(&separator);
             let inner_width = cols.saturating_sub(2);
             let (_col_w, num_cols) = mae_core::text_utils::which_key_column_layout(
@@ -658,14 +652,10 @@ impl Renderer for GuiRenderer {
                 max_desc,
             );
             let entry_rows = entries.len().div_ceil(num_cols);
-            let max_pct: usize = editor
-                .get_option("which-key-max-height-pct")
-                .and_then(|(v, _)| v.parse().ok())
-                .unwrap_or(mae_core::text_utils::WK_MAX_HEIGHT_PCT_DEFAULT)
-                .clamp(
-                    mae_core::text_utils::WK_MAX_HEIGHT_PCT_MIN,
-                    mae_core::text_utils::WK_MAX_HEIGHT_PCT_MAX,
-                );
+            // `editor.which_key_max_height_pct` is already clamped to
+            // [WK_MAX_HEIGHT_PCT_MIN, WK_MAX_HEIGHT_PCT_MAX] on every write
+            // by `Editor::set_option`, so no re-validation is needed here.
+            let max_pct = editor.which_key_max_height_pct;
             let max_h = rows * max_pct / 100;
             let popup_height = (entry_rows + 2)
                 .min(max_h)

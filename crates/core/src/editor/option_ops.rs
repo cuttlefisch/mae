@@ -116,6 +116,10 @@ impl super::Editor {
             "hover_max_lines" => self.hover_max_lines.to_string(),
             "popup_width_pct" => self.popup_width_pct.to_string(),
             "popup_height_pct" => self.popup_height_pct.to_string(),
+            "which_key_separator" => self.which_key_separator.clone(),
+            "which_key_max_desc_length" => self.which_key_max_desc_length.to_string(),
+            "which_key_max_height_pct" => self.which_key_max_height_pct.to_string(),
+            "which_key_sort_order" => self.which_key_sort_order.clone(),
             "scrollbar_width" => self.scrollbar_width.to_string(),
             "file_picker_max_depth" => self.file_picker_max_depth.to_string(),
             "file_picker_max_candidates" => self.file_picker_max_candidates.to_string(),
@@ -563,6 +567,35 @@ impl super::Editor {
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.popup_height_pct = v.clamp(10, 100);
             }
+            "which_key_separator" => {
+                self.which_key_separator = value.to_string();
+            }
+            "which_key_max_desc_length" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.which_key_max_desc_length = v.clamp(1, 200);
+            }
+            "which_key_max_height_pct" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.which_key_max_height_pct = v.clamp(
+                    crate::text_utils::WK_MAX_HEIGHT_PCT_MIN,
+                    crate::text_utils::WK_MAX_HEIGHT_PCT_MAX,
+                );
+            }
+            "which_key_sort_order" => match value {
+                "key" | "desc" | "none" => {
+                    self.which_key_sort_order = value.to_string();
+                }
+                _ => {
+                    return Err(format!(
+                        "Invalid which_key_sort_order: '{}' (expected: key, desc, none)",
+                        value
+                    ))
+                }
+            },
             "scrollbar_width" => {
                 let v: f32 = value
                     .parse()

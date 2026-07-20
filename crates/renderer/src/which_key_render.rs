@@ -50,14 +50,8 @@ pub(crate) fn render_which_key_popup(
         ts(editor, "ui.popup.separator").patch(Style::default().add_modifier(Modifier::DIM));
     let doc_style = ts(editor, "ui.popup.doc").patch(Style::default().add_modifier(Modifier::DIM));
 
-    let separator = editor
-        .get_option("which-key-separator")
-        .map(|(v, _)| v)
-        .unwrap_or_else(|| " ".to_string());
-    let max_desc: usize = editor
-        .get_option("which-key-max-desc-length")
-        .and_then(|(v, _)| v.parse().ok())
-        .unwrap_or(40);
+    let separator = editor.which_key_separator.clone();
+    let max_desc: usize = editor.which_key_max_desc_length;
 
     let sep_width = display_width(&separator);
     let (col_width, num_cols) =
