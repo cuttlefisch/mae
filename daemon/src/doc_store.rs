@@ -118,6 +118,11 @@ pub struct DocStore {
     /// (`expires_at`) is bounded by `valid_until`. The cache must NEVER serve a stale set that
     /// admits a removed member or misses a rotation.
     derive_cache: RwLock<HashMap<String, CachedDerive>>,
+    /// The daemon's `authorized_keys` path (ADR-018, #73), set in key-auth mode. Present ⇒
+    /// `load_collection` resolves legacy v1 (label-based) collections to fingerprint-anchored
+    /// v2 automatically on load via `migrate_if_legacy`, instead of only on owner re-share.
+    /// Re-read fresh from disk on every use (I-10: authorize/revoke take effect live).
+    authorized_keys_path: std::sync::OnceLock<std::path::PathBuf>,
 }
 
 /// A derived membership snapshot (ADR-042): the governance + valid-member set for a KB at a
@@ -198,6 +203,7 @@ impl DocStore {
             change_tx: std::sync::OnceLock::new(),
             kb_blocklists: RwLock::new(HashMap::new()),
             derive_cache: RwLock::new(HashMap::new()),
+            authorized_keys_path: std::sync::OnceLock::new(),
         }
     }
 
@@ -292,6 +298,17 @@ impl DocStore {
     /// The daemon's signing identity, if running in key-auth mode.
     pub fn signer(&self) -> Option<&Arc<mae_mcp::identity::Identity>> {
         self.signer.get()
+    }
+
+    /// Install the daemon's `authorized_keys` path (ADR-018, #73). Called once at
+    /// startup in key-auth mode; idempotent (a second call is ignored).
+    pub fn set_authorized_keys_path(&self, path: std::path::PathBuf) {
+        let _ = self.authorized_keys_path.set(path);
+    }
+
+    /// The daemon's `authorized_keys` path, if running in key-auth mode.
+    pub fn authorized_keys_path(&self) -> Option<&std::path::PathBuf> {
+        self.authorized_keys_path.get()
     }
 
     /// Register the external trust anchor (owner pubkey) for a KB joined from a

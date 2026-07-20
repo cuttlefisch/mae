@@ -30,7 +30,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 
 use mae_mcp::broadcast::{EditorEvent, SharedBroadcaster};
-use mae_mcp::identity::PeerIdentity;
+use mae_mcp::identity::{AuthorizedKeys, PeerIdentity};
 use mae_mcp::protocol::{JsonRpcRequest, JsonRpcResponse, McpError, ToolInfo};
 use mae_mcp::session::ClientSession;
 use mae_mcp::{McpToolRequest, McpToolResult};
@@ -626,13 +626,39 @@ enum AccessDecision {
 }
 
 /// Load the collection doc for `kb_id` (`kbc:{kb_id}`).
+///
+/// ADR-018 (#73): a legacy v1 (label-based) collection is migrated to the v2
+/// fingerprint-anchored schema right here, via `authorized_keys` label resolution —
+/// not only on owner re-share (`set_owner`) as before. `migrate_if_legacy` is a
+/// no-op once the collection is already v2, so this is safe to run on every load.
 async fn load_collection(doc_store: &DocStore, kb_id: &str) -> Result<KbCollectionDoc, String> {
     let collection_doc = format!("kbc:{kb_id}");
     let (state, _sv) = doc_store
         .encode_state_and_sv(&collection_doc)
         .await
         .map_err(|e| format!("KB '{kb_id}' not found: {e}"))?;
-    KbCollectionDoc::from_bytes(&state).map_err(|e| format!("bad collection: {e}"))
+    let mut coll =
+        KbCollectionDoc::from_bytes(&state).map_err(|e| format!("bad collection: {e}"))?;
+    if let Some(ak_path) = doc_store.authorized_keys_path() {
+        // I-10: re-read fresh so a since-authorized label resolves to its key.
+        let authorized = AuthorizedKeys::load(ak_path);
+        let resolver = |label: &str| {
+            authorized
+                .lookup_by_label(label)
+                .map(|pk| (pk.fingerprint(), label.to_string()))
+        };
+        if let Some(update) = coll.migrate_if_legacy(resolver) {
+            if let Err(e) = doc_store.apply_update(&collection_doc, &update, None).await {
+                warn!(kb_id, error = %e, "failed to persist legacy-collection migration (ADR-018 #73)");
+            } else {
+                info!(
+                    kb_id,
+                    "migrated legacy v1 collection to v2 identity-anchored schema (ADR-018 #73)"
+                );
+            }
+        }
+    }
+    Ok(coll)
 }
 
 /// ADR-036 §D3: verify a signed content op against this peer's **derived, anchored**
