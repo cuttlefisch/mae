@@ -2,11 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.14.46] - 2026-07-20
 
 ### Bug Fixes
 
 - *(agent-cli)* Collapse Backspace guard into the match arm (clippy) ([a6a3eef](https://github.com/cuttlefisch/mae/commit/a6a3eefdf6cde3ac3d394361b09fdba36633fade))
+
+### CI
+
+- Fix version-bump concurrency race and changelog mislabeling ([7eabc88](https://github.com/cuttlefisch/mae/commit/7eabc88a200b46de42e7383ca4a06976d78ecde8))
 
 ### Features
 
@@ -15,6 +19,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - *(deps)* Bump the rust-dependencies group with 2 updates ([af467d9](https://github.com/cuttlefisch/mae/commit/af467d9debeaef5a8ed461f738eebff917c0a66b))
+- Bump version to 0.14.45 ([55ca140](https://github.com/cuttlefisch/mae/commit/55ca1405eca43adcd69e96c5d689005cf6795679))
 
 ## [0.14.44] - 2026-07-15
 
