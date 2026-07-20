@@ -55,6 +55,8 @@ pub fn swap_path_for(file_path: &Path, custom_dir: Option<&Path>) -> PathBuf {
 }
 
 /// Write a swap file atomically (temp + rename). No fsync (Emacs lesson #2).
+#[must_use = "ignoring a failed swap write silently loses the crash-recovery \
+              safety net for this buffer's unsaved changes"]
 pub fn write_swap(file_path: &Path, rope: &Rope, custom_dir: Option<&Path>) -> io::Result<PathBuf> {
     let swap = swap_path_for(file_path, custom_dir);
     if let Some(parent) = swap.parent() {

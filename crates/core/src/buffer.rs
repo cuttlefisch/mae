@@ -586,6 +586,9 @@ impl Buffer {
         })
     }
 
+    /// `#[must_use]`: silently ignoring a failed save loses the user's
+    /// changes without any indication they weren't written to disk.
+    #[must_use = "a failed save silently loses the user's changes if ignored"]
     pub fn save(&mut self) -> std::io::Result<()> {
         if let Some(ref path) = self.file_path {
             // Atomic save: write to a temp file in the same directory, then
@@ -697,6 +700,8 @@ impl Buffer {
     /// Reload buffer contents from its backing file. Returns Ok(()) on
     /// success, Err if file_path is None or the read fails. Clears the
     /// modified flag and undo/redo history.
+    #[must_use = "ignoring a failed reload silently leaves the buffer's on-screen \
+                  content out of sync with what the caller believes is on disk"]
     pub fn reload_from_disk(&mut self) -> std::io::Result<()> {
         let path = self
             .file_path
