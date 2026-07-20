@@ -16,7 +16,6 @@ use skia_safe::{surfaces, Color4f, Font, FontMgr, FontStyle, Paint, Surface, Typ
 use tracing::warn;
 use winit::window::Window;
 
-use crate::text::StyledLine;
 use crate::theme::{self, fill_paint, DEFAULT_BG};
 
 /// A cached image: either a raster bitmap or an SVG DOM for vector rendering.
@@ -326,7 +325,6 @@ impl SkiaCanvas {
     }
 
     /// Return the surface dimensions in pixels.
-    #[allow(dead_code)]
     pub fn pixel_size(&self) -> (u32, u32) {
         (self.width, self.height)
     }
@@ -460,68 +458,6 @@ impl SkiaCanvas {
     // -----------------------------------------------------------------------
     // Cell-level drawing methods
     // -----------------------------------------------------------------------
-
-    /// Draw a single character at (row, col) with optional bg rect.
-    #[allow(dead_code)]
-    pub fn draw_cell(
-        &mut self,
-        row: usize,
-        col: usize,
-        ch: char,
-        fg: Color4f,
-        bg: Option<Color4f>,
-    ) {
-        let x = col as f32 * self.cell_width;
-        let y = row as f32 * self.cell_height;
-        let canvas = self.surface.canvas();
-
-        // Background rect if specified.
-        if let Some(bg_color) = bg {
-            let bg_paint = fill_paint(bg_color);
-            canvas.draw_rect(
-                skia_safe::Rect::from_xywh(x, y, self.cell_width, self.cell_height),
-                &bg_paint,
-            );
-        }
-
-        if ch != ' ' {
-            let mut fg_paint = Paint::new(fg, None);
-            fg_paint.set_anti_alias(true);
-            self.draw_char(row, col, ch, fg, false, false, 1.0);
-        }
-    }
-
-    /// Draw a line of individually-styled cells at the given row.
-    #[allow(dead_code)]
-    pub fn draw_styled_line(&mut self, row: usize, cells: &StyledLine) {
-        for (col, cell) in cells.iter().enumerate() {
-            // Background rect if specified.
-            if let Some(bg_color) = cell.bg {
-                self.draw_rect_fill(row, col, 1, 1, bg_color);
-            }
-
-            if cell.ch == ' ' && !cell.underline {
-                continue;
-            }
-
-            self.draw_char(row, col, cell.ch, cell.fg, cell.bold, cell.italic, 1.0);
-
-            if cell.underline {
-                let x = col as f32 * self.cell_width;
-                let y = row as f32 * self.cell_height;
-                let baseline = y + self.ascent;
-                let underline_y = baseline + 1.0;
-                let mut paint = Paint::new(cell.fg, None);
-                paint.set_style(skia_safe::PaintStyle::Stroke);
-                paint.set_stroke_width(1.0);
-                self.surface.canvas().draw_line(
-                    (x, underline_y),
-                    (x + self.cell_width, underline_y),
-                    &paint,
-                );
-            }
-        }
-    }
 
     /// Fill a rectangular cell region with a solid color.
     pub fn draw_rect_fill(&mut self, row: usize, col: usize, w: usize, h: usize, color: Color4f) {
@@ -933,21 +869,6 @@ impl SkiaCanvas {
         );
     }
 
-    /// Draw a wavy underline (diagnostic indicator) at cell-based coordinates.
-    /// Sine-wave pattern: 3px amplitude, 6px wavelength.
-    #[allow(dead_code)]
-    pub fn draw_wavy_underline_at_y(
-        &mut self,
-        pixel_y: f32,
-        col: usize,
-        count: usize,
-        color: Color4f,
-    ) {
-        let x = col as f32 * self.cell_width;
-        let width = count as f32 * self.cell_width;
-        self.draw_wavy_underline_at_pixel(x, pixel_y, width, color);
-    }
-
     /// Draw a wavy underline at exact pixel coordinates.
     pub fn draw_wavy_underline_at_pixel(
         &mut self,
@@ -1162,18 +1083,6 @@ impl SkiaCanvas {
         }
     }
 
-    /// Draw a horizontal line across a full row (cell-based).
-    #[allow(dead_code)]
-    pub fn draw_hline(&mut self, row: usize, col_start: usize, col_end: usize, color: Color4f) {
-        let y = row as f32 * self.cell_height + self.cell_height / 2.0;
-        let x1 = col_start as f32 * self.cell_width;
-        let x2 = col_end as f32 * self.cell_width;
-        let mut paint = Paint::new(color, None);
-        paint.set_stroke_width(1.0);
-        paint.set_style(skia_safe::PaintStyle::Stroke);
-        self.surface.canvas().draw_line((x1, y), (x2, y), &paint);
-    }
-
     /// Draw a vertical line across rows (cell-based).
     pub fn draw_vline(&mut self, col: usize, row_start: usize, row_end: usize, color: Color4f) {
         let x = col as f32 * self.cell_width;
@@ -1183,30 +1092,6 @@ impl SkiaCanvas {
         paint.set_stroke_width(1.0);
         paint.set_style(skia_safe::PaintStyle::Stroke);
         self.surface.canvas().draw_line((x, y1), (x, y2), &paint);
-    }
-
-    // -----------------------------------------------------------------------
-    // Legacy draw methods (kept for compatibility during transition)
-    // -----------------------------------------------------------------------
-
-    /// Draw a single line of text at the given visual row.
-    #[allow(dead_code)]
-    pub fn draw_text_line(&mut self, row: usize, text: &str, theme: &Theme) {
-        let fg_style = theme.style("ui.text");
-        let fg = theme::color_or(fg_style.fg, theme::DEFAULT_FG);
-        self.draw_text_at(row, 0, text, fg);
-    }
-
-    /// Draw the status line at the given visual row.
-    #[allow(dead_code)]
-    pub fn draw_status_line(&mut self, row: usize, text: &str, theme: &Theme) {
-        let status_style = theme.style("ui.statusline");
-        let status_bg = theme::color_or(status_style.bg, theme::STATUS_BG);
-        let status_fg = theme::color_or(status_style.fg, theme::DEFAULT_FG);
-
-        let cols = (self.width as f32 / self.cell_width) as usize;
-        self.draw_rect_fill(row, 0, cols, 1, status_bg);
-        self.draw_text_at(row, 0, text, status_fg);
     }
 
     /// Return the precomputed ASCII glyph coverage table.
@@ -1281,38 +1166,6 @@ impl SkiaCanvas {
                 .canvas()
                 .draw_str(text, (x, baseline), font, &paint);
         }
-    }
-
-    /// Draw a horizontal underline spanning `count` cells.
-    #[allow(dead_code)]
-    pub fn draw_underline_span(&mut self, row: usize, col: usize, count: usize, color: Color4f) {
-        let x = col as f32 * self.cell_width;
-        let y = row as f32 * self.cell_height;
-        let underline_y = y + self.ascent + 1.0;
-        let width = count as f32 * self.cell_width;
-        let mut paint = Paint::new(color, None);
-        paint.set_style(skia_safe::PaintStyle::Stroke);
-        paint.set_stroke_width(1.0);
-        self.surface
-            .canvas()
-            .draw_line((x, underline_y), (x + width, underline_y), &paint);
-    }
-
-    /// Draw a horizontal line exactly under a cell (for underlining).
-    #[allow(dead_code)]
-    pub fn draw_hline_exact(&mut self, row: usize, col: usize, color: Color4f) {
-        let x = col as f32 * self.cell_width;
-        let y = row as f32 * self.cell_height;
-        let baseline = y + self.ascent;
-        let underline_y = baseline + 1.0;
-        let mut paint = Paint::new(color, None);
-        paint.set_style(skia_safe::PaintStyle::Stroke);
-        paint.set_stroke_width(1.0);
-        self.surface.canvas().draw_line(
-            (x, underline_y),
-            (x + self.cell_width, underline_y),
-            &paint,
-        );
     }
 
     // -----------------------------------------------------------------------
