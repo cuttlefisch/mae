@@ -16,60 +16,57 @@ use mae_core::Editor;
 /// `#[serde(rename_all = "lowercase")]` so the wire shape matches
 /// what `kb_search` / `kb_list` would produce on the same node.
 fn node_json(editor: &Editor, id: &str) -> Option<serde_json::Value> {
-    // Use query layer (CozoDB-first) when available. A *miss* here must fall
-    // through to the in-memory KB — a node joined over collab lives in
-    // `primary` but may not be in the CozoDB query layer yet, so short-
-    // circuiting on a query-layer miss made `kb_get` fail for joined nodes
-    // even though `kb_update` could resolve them (I-9 read/write asymmetry).
-    if let Some(q) = editor.kb.query_layer() {
-        if let Some(node) = q.get(id) {
-            let links_from: Vec<String> = q.links_from(id).into_iter().map(|l| l.dst).collect();
-            let links_to: Vec<String> = q.links_to(id).into_iter().map(|l| l.src).collect();
-            return Some(serde_json::json!({
-                "id": node.id,
-                "title": node.title,
-                "kind": node.kind,
-                "body": node.body,
-                "tags": node.tags,
-                "links_from": links_from,
-                "links_to": links_to,
-            }));
-        }
-    }
-    // Fallback: in-memory KB
-    if let Some(node) = editor.kb.primary.get(id) {
-        return Some(serde_json::json!({
-            "id": node.id,
-            "title": node.title,
-            "kind": node.kind,
-            "body": node.body,
-            "tags": node.tags,
-            "links_from": editor.kb.primary.links_from(id),
-            "links_to": editor.kb.primary.links_to(id),
-        }));
-    }
-    // Try federated instances
-    for (uuid, kb) in &editor.kb.instances {
-        if let Some(node) = kb.get(id) {
-            let inst_name = editor
+    // `kb_resolve_anywhere` is the single source of truth for the
+    // query-layer-then-in-memory(-then-federated-instance) fallback order —
+    // see its doc comment for why this must not be reimplemented locally
+    // (it already had been, three times, before that consolidation, and a
+    // fourth divergent copy lived right here until this fix).
+    let (node, resolution) = editor.kb_resolve_anywhere(id)?;
+
+    let (links_from, links_to): (Vec<String>, Vec<String>) = match &resolution {
+        mae_core::KbResolution::Query => {
+            let q = editor
                 .kb
-                .registry
-                .find_by_uuid(uuid)
-                .map(|i| i.name.as_str())
-                .unwrap_or("unknown");
-            return Some(serde_json::json!({
-                "id": node.id,
-                "title": node.title,
-                "kind": node.kind,
-                "body": node.body,
-                "tags": node.tags,
-                "links_from": kb.links_from(id),
-                "links_to": kb.links_to(id),
-                "instance": inst_name,
-            }));
+                .query_layer()
+                .expect("KbResolution::Query implies a query layer is available");
+            (
+                q.links_from(id).into_iter().map(|l| l.dst).collect(),
+                q.links_to(id).into_iter().map(|l| l.src).collect(),
+            )
         }
+        mae_core::KbResolution::Primary => (
+            editor.kb.primary.links_from(id),
+            editor.kb.primary.links_to(id),
+        ),
+        mae_core::KbResolution::Instance(uuid) => {
+            let kb = editor
+                .kb
+                .instances
+                .get(uuid)
+                .expect("KbResolution::Instance implies that instance is loaded");
+            (kb.links_from(id), kb.links_to(id))
+        }
+    };
+
+    let mut val = serde_json::json!({
+        "id": node.id,
+        "title": node.title,
+        "kind": node.kind,
+        "body": node.body,
+        "tags": node.tags,
+        "links_from": links_from,
+        "links_to": links_to,
+    });
+    if let mae_core::KbResolution::Instance(uuid) = &resolution {
+        let inst_name = editor
+            .kb
+            .registry
+            .find_by_uuid(uuid)
+            .map(|i| i.name.as_str())
+            .unwrap_or("unknown");
+        val["instance"] = serde_json::json!(inst_name);
     }
-    None
+    Some(val)
 }
 
 pub fn execute_kb_get(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
@@ -162,29 +159,37 @@ pub fn execute_kb_links_from(editor: &Editor, args: &serde_json::Value) -> Resul
         .get("id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required argument: id".to_string())?;
-    if let Some(q) = editor.kb.query_layer() {
-        if !q.contains(id) {
-            return Err(format!("No KB node: {}", id));
+    // Outgoing links are a property of the node's OWN tier (its body is what
+    // defines them), so — unlike links_to below — this is exactly the
+    // `kb_resolve_anywhere`-shaped single-tier fallback.
+    let (_, resolution) = editor
+        .kb_resolve_anywhere(id)
+        .ok_or_else(|| format!("No KB node: {}", id))?;
+    let links = match resolution {
+        mae_core::KbResolution::Query => {
+            let q = editor
+                .kb
+                .query_layer()
+                .expect("KbResolution::Query implies a query layer is available");
+            serde_json::to_value(
+                q.links_from(id)
+                    .into_iter()
+                    .map(|l| serde_json::json!({ "dst": l.dst, "rel_type": l.rel_type }))
+                    .collect::<Vec<_>>(),
+            )
         }
-        let links: Vec<serde_json::Value> = q
-            .links_from(id)
-            .into_iter()
-            .map(|l| serde_json::json!({ "dst": l.dst, "rel_type": l.rel_type }))
-            .collect();
-        return serde_json::to_string_pretty(&links).map_err(|e| e.to_string());
-    }
-    // Fallback: in-memory KB
-    if editor.kb.primary.contains(id) {
-        let links = editor.kb.primary.links_from(id);
-        return serde_json::to_string_pretty(&links).map_err(|e| e.to_string());
-    }
-    for kb in editor.kb.instances.values() {
-        if kb.contains(id) {
-            let links = kb.links_from(id);
-            return serde_json::to_string_pretty(&links).map_err(|e| e.to_string());
+        mae_core::KbResolution::Primary => serde_json::to_value(editor.kb.primary.links_from(id)),
+        mae_core::KbResolution::Instance(uuid) => {
+            let kb = editor
+                .kb
+                .instances
+                .get(&uuid)
+                .expect("KbResolution::Instance implies that instance is loaded");
+            serde_json::to_value(kb.links_from(id))
         }
     }
-    Err(format!("No KB node: {}", id))
+    .map_err(|e| e.to_string())?;
+    serde_json::to_string_pretty(&links).map_err(|e| e.to_string())
 }
 
 pub fn execute_kb_links_to(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
@@ -192,6 +197,17 @@ pub fn execute_kb_links_to(editor: &Editor, args: &serde_json::Value) -> Result<
         .get("id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required argument: id".to_string())?;
+    // Incoming links are NOT a single-tier property — any federated instance
+    // (or the primary KB) could link into this node, so — unlike links_from
+    // above — this deliberately aggregates across every tier rather than
+    // routing through `kb_resolve_anywhere`'s single-tier resolution. What
+    // WAS missing (and is the actual duplication/drift this fixes) is an
+    // existence check: the id itself must resolve somewhere, or this
+    // silently returned `[]` for a typo'd id instead of erroring like
+    // `execute_kb_links_from` already did.
+    if editor.kb_get_node_anywhere(id).is_none() {
+        return Err(format!("No KB node: {}", id));
+    }
     if let Some(q) = editor.kb.query_layer() {
         let links: Vec<serde_json::Value> = q
             .links_to(id)
@@ -200,7 +216,8 @@ pub fn execute_kb_links_to(editor: &Editor, args: &serde_json::Value) -> Result<
             .collect();
         return serde_json::to_string_pretty(&links).map_err(|e| e.to_string());
     }
-    // Fallback: in-memory KB
+    // Fallback: in-memory KB, aggregated across the primary + every
+    // federated instance (an incoming link can originate from any of them).
     let mut links = editor.kb.primary.links_to(id);
     for kb in editor.kb.instances.values() {
         for l in kb.links_to(id) {
@@ -2409,6 +2426,19 @@ mod tests {
             execute_kb_links_from(&editor, &serde_json::json!({"id": "fed-node"})).unwrap();
         let links: Vec<String> = serde_json::from_str(&result).unwrap();
         assert!(links.contains(&"index".to_string()));
+    }
+
+    /// Regression test for the audit finding that `execute_kb_links_to`
+    /// silently returned `[]` for an id that didn't exist anywhere, instead
+    /// of erroring like `execute_kb_links_from` already did for the same
+    /// case — a real behavioral gap surfaced while consolidating both onto
+    /// the shared existence-resolution helper.
+    #[test]
+    fn kb_links_to_unknown_id_is_error() {
+        let editor = Editor::new();
+        let err =
+            execute_kb_links_to(&editor, &serde_json::json!({"id": "no:such:node"})).unwrap_err();
+        assert!(err.contains("No KB node"));
     }
 
     #[test]

@@ -619,19 +619,46 @@ impl Editor {
     /// `kb_resolve_title` in this same crate, and a third, divergent copy
     /// in `mae-ai`, each had the fallback missing).
     pub fn kb_get_node_anywhere(&self, id: &str) -> Option<mae_kb::Node> {
+        self.kb_resolve_anywhere(id).map(|(node, _)| node)
+    }
+
+    /// Like [`Self::kb_get_node_anywhere`], but also reports WHICH tier the
+    /// node resolved through (query layer / in-memory primary / a specific
+    /// federated instance by uuid). Callers that need more than just the
+    /// node — e.g. its links, fetched from that SAME tier — use this instead
+    /// of re-deriving the query-layer-then-in-memory fallback order a third
+    /// time (see `kb_get_node_anywhere`'s doc comment for the history: this
+    /// exact fallback order had already been reimplemented independently
+    /// three times before that consolidation; a fourth divergent copy, in
+    /// `mae-ai`'s `node_json`/`execute_kb_links_from`/`execute_kb_links_to`,
+    /// surfaced later — see the mae-audit remediation pass that added this).
+    pub fn kb_resolve_anywhere(&self, id: &str) -> Option<(mae_kb::Node, KbResolution)> {
         if let Some(q) = self.kb.query_layer() {
             if let Some(n) = q.get(id) {
-                return Some(n);
+                return Some((n, KbResolution::Query));
             }
         }
         if let Some(n) = self.kb.primary.get(id) {
-            return Some(n.clone());
+            return Some((n.clone(), KbResolution::Primary));
         }
-        self.kb
-            .instances
-            .values()
-            .find_map(|kb| kb.get(id).cloned())
+        self.kb.instances.iter().find_map(|(uuid, kb)| {
+            kb.get(id)
+                .map(|n| (n.clone(), KbResolution::Instance(uuid.clone())))
+        })
     }
+}
+
+/// Which KB tier a [`Editor::kb_resolve_anywhere`] lookup resolved through.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum KbResolution {
+    /// Resolved via the CozoDB query layer (the common case when a daemon or
+    /// local query layer is available).
+    Query,
+    /// Resolved via the in-memory primary `KnowledgeBase` (query-layer miss,
+    /// or no query layer configured at all).
+    Primary,
+    /// Resolved via a federated instance, identified by its uuid.
+    Instance(String),
 }
 
 #[cfg(test)]
