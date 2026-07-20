@@ -271,6 +271,16 @@ fn compile_cpp(compiler: &str, std_flag: &str, source: &str, output: &Path) -> R
 /// Run a compiled binary with the same timeout + truncation discipline as the
 /// shell path (`execute_shell`). A binary that never exits is killed at
 /// `timeout_secs`, so a runaway compiled block can't hang the editor.
+///
+/// Drains stdout/stderr on background threads CONCURRENTLY with waiting, not
+/// after — mirrors `execute_shell`'s fix for the same bug class:
+/// `wait_timeout` only polls `try_wait`, never touching stdout/stderr, so a
+/// binary that writes more than the OS pipe buffer (~64KB) before exiting
+/// would otherwise block on `write()` forever (nothing drains the pipe until
+/// after `wait_timeout` returns, which never happens until the blocked child
+/// exits). Each drain thread is bounded to `max_output_bytes` so it can't
+/// buffer unbounded output into memory even for a process that legitimately
+/// produces a lot of output before exiting quickly.
 fn run_binary(path: &Path, dir: &Path, timeout_secs: u64, max_output_bytes: usize) -> ExecResult {
     let mut child = match Command::new(path)
         .current_dir(dir)
@@ -282,19 +292,40 @@ fn run_binary(path: &Path, dir: &Path, timeout_secs: u64, max_output_bytes: usiz
         Err(e) => return ExecResult::Error(format!("Failed to run binary: {}", e)),
     };
 
-    match child.wait_timeout(Duration::from_secs(timeout_secs)) {
-        Ok(Some(status)) => {
-            let mut stdout = String::new();
-            let mut stderr = String::new();
-            if let Some(ref mut out) = child.stdout {
-                let _ = out.read_to_string(&mut stdout);
-            }
-            if let Some(ref mut err) = child.stderr {
-                let _ = err.read_to_string(&mut stderr);
-            }
+    let limit = max_output_bytes as u64;
+    let stdout_handle = child.stdout.take().map(|out| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = out.take(limit).read_to_end(&mut buf);
+            buf
+        })
+    });
+    let stderr_handle = child.stderr.take().map(|err| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = err.take(limit).read_to_end(&mut buf);
+            buf
+        })
+    });
 
-            if stdout.len() > max_output_bytes {
-                stdout.truncate(max_output_bytes);
+    let wait_result = child.wait_timeout(Duration::from_secs(timeout_secs));
+    if matches!(wait_result, Ok(None)) {
+        let _ = child.kill();
+    }
+    let stdout_bytes = stdout_handle
+        .map(|h| h.join().unwrap_or_default())
+        .unwrap_or_default();
+    let stderr_bytes = stderr_handle
+        .map(|h| h.join().unwrap_or_default())
+        .unwrap_or_default();
+
+    match wait_result {
+        Ok(Some(status)) => {
+            let truncated = stdout_bytes.len() as u64 >= limit;
+            let mut stdout = String::from_utf8_lossy(&stdout_bytes).into_owned();
+            let stderr = String::from_utf8_lossy(&stderr_bytes).into_owned();
+
+            if truncated {
                 stdout.push_str("\n... (output truncated)");
             }
 
@@ -307,10 +338,7 @@ fn run_binary(path: &Path, dir: &Path, timeout_secs: u64, max_output_bytes: usiz
                 ExecResult::Output(stdout)
             }
         }
-        Ok(None) => {
-            let _ = child.kill();
-            ExecResult::Error(format!("Execution timed out after {}s", timeout_secs))
-        }
+        Ok(None) => ExecResult::Error(format!("Execution timed out after {}s", timeout_secs)),
         Err(e) => ExecResult::Error(format!("Failed to wait for process: {}", e)),
     }
 }
@@ -355,5 +383,80 @@ mod tests {
         assert_eq!(b.cxx, "c++");
         assert_eq!(b.cc, "cc");
         assert_eq!(b.cxx_std, "c++17");
+    }
+
+    /// Regression test for the pipe-deadlock class `execute_shell` already
+    /// fixed (`execute.rs`): a child that writes more than the OS pipe
+    /// buffer (~64KB) before exiting must not hang forever, since nothing
+    /// drained stdout until after `wait_timeout` returned — which itself
+    /// never returns while the child is blocked on `write()`. Uses a real
+    /// subprocess (a temp shell script), not a mock: the bug is fundamentally
+    /// about pipe buffer backpressure and isn't reproducible any other way.
+    #[test]
+    fn run_binary_does_not_deadlock_on_large_stdout() {
+        let dir =
+            std::env::temp_dir().join(format!("mae_babel_run_binary_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("big_output.sh");
+        // ~200KB of stdout — well over the ~64KB pipe buffer that triggers
+        // the deadlock without concurrent draining.
+        std::fs::write(&script, "#!/bin/sh\nyes | head -c 200000\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&script).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script, perms).unwrap();
+        }
+
+        // A generous but finite timeout: this test must FAIL (not hang the
+        // suite) if the deadlock regresses.
+        let result = run_binary(&script, &dir, 10, 1_000_000);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        match result {
+            ExecResult::Output(out) => {
+                assert!(
+                    out.len() > 60_000,
+                    "expected large output past the pipe-buffer threshold, got {} bytes",
+                    out.len()
+                );
+            }
+            other => panic!("expected ExecResult::Output, got {:?}", other),
+        }
+    }
+
+    /// The per-thread `max_output_bytes` cap must actually bound what's
+    /// read, not just truncate a string after an unbounded read (the
+    /// original bug's second half — see `run_binary`'s doc comment).
+    #[test]
+    fn run_binary_truncates_output_past_the_configured_limit() {
+        let dir = std::env::temp_dir().join(format!(
+            "mae_babel_run_binary_trunc_test_{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("big_output.sh");
+        std::fs::write(&script, "#!/bin/sh\nyes | head -c 200000\n").unwrap();
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&script).unwrap().permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&script, perms).unwrap();
+        }
+
+        let result = run_binary(&script, &dir, 10, 1_000);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        match result {
+            ExecResult::Output(out) => {
+                assert!(
+                    out.len() < 2_000,
+                    "expected output bounded near the 1000-byte limit, got {} bytes",
+                    out.len()
+                );
+                assert!(out.contains("truncated"));
+            }
+            other => panic!("expected ExecResult::Output, got {:?}", other),
+        }
     }
 }
