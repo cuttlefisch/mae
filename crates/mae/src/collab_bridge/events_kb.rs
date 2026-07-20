@@ -203,6 +203,32 @@ pub(super) fn handle_kb_node_update_event(
     }
 }
 
+/// #206: `open_new_ops` found one or more op-set entries it could not decrypt for
+/// this node — surface it as a durable, non-fatal warning instead of the silence
+/// that made "wrong/rotated key" indistinguishable from "not yet received". Keyed
+/// per (kb, node) so repeated occurrences update one notification, not spam N.
+pub(super) fn handle_kb_ops_undecryptable_event(
+    editor: &mut Editor,
+    kb_id: String,
+    node_id: String,
+    count: usize,
+) {
+    warn!(kb = %kb_id, node = %node_id, count, "op-set entries present but undecryptable — wrong/rotated key?");
+    editor.notify(
+        mae_core::notifications::Notification::warning(
+            "collab",
+            format!("KB '{kb_id}': {count} update(s) to {node_id} could not be decrypted"),
+        )
+        .body(
+            "This usually means the content key was rotated and this copy hasn't picked \
+             up the new one yet, or (rarely) a tampered/corrupt update. It is NOT the \
+             same as content simply not having arrived — decrypt failures are skipped \
+             by design and never surface plaintext.",
+        )
+        .key(format!("collab:undecryptable:{kb_id}:{node_id}")),
+    );
+}
+
 pub(super) fn handle_kb_update_requeue_event(
     editor: &mut Editor,
     kb_id: String,

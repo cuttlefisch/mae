@@ -484,6 +484,16 @@ pub enum CollabEvent {
         node_id: String,
         update_bytes: Vec<u8>,
     },
+    /// #206: `open_new_ops` found one or more op-set entries for this node it could
+    /// NOT decrypt (wrong/rotated key, or a tampered/corrupt blob) — a non-fatal but
+    /// user-visible signal, since this is indistinguishable from "not yet received"
+    /// without it. Fail-closed on confidentiality is unaffected; this only surfaces
+    /// the count.
+    KbOpsUndecryptable {
+        kb_id: String,
+        node_id: String,
+        count: usize,
+    },
     /// ADR-020 emit durability: the background task could not put a `kb/node_update`
     /// on the wire (write failed, or no writer / disconnected). For a store-backed
     /// update the durable row still exists — just release the in-flight mark so the
@@ -948,6 +958,11 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             node_id,
             update_bytes,
         } => events_kb::handle_kb_node_update_event(editor, kb_id, node_id, update_bytes),
+        CollabEvent::KbOpsUndecryptable {
+            kb_id,
+            node_id,
+            count,
+        } => events_kb::handle_kb_ops_undecryptable_event(editor, kb_id, node_id, count),
         CollabEvent::KbUpdateRequeue {
             kb_id,
             node_id,
@@ -1693,7 +1708,7 @@ fn route_kb_node_update(
     .unwrap_or_else(|_| bytes.clone());
     let seen = seen_ops.entry(node_id.to_string()).or_default();
     let opened = mae_sync::op_set::open_new_ops(&merged, key, seen);
-    for (op_id, plaintext) in opened {
+    for (op_id, plaintext) in opened.ops {
         seen.insert(op_id);
         try_send_evt(
             evt_tx,
@@ -1701,6 +1716,18 @@ fn route_kb_node_update(
                 kb_id: kb_id.clone(),
                 node_id: node_id.to_string(),
                 update_bytes: plaintext,
+            },
+        );
+    }
+    // #206: a wrong/rotated key (or tamper) must be distinguishable from "not yet
+    // received" — surface the count instead of letting it vanish silently.
+    if opened.undecryptable > 0 {
+        try_send_evt(
+            evt_tx,
+            CollabEvent::KbOpsUndecryptable {
+                kb_id,
+                node_id: node_id.to_string(),
+                count: opened.undecryptable,
             },
         );
     }
@@ -4613,25 +4640,37 @@ fn handle_response(
                             let full_seen = std::collections::BTreeSet::new();
                             let opened =
                                 mae_sync::op_set::open_new_ops(&merged, &content_key, &full_seen);
-                            if !opened.is_empty() {
+                            if !opened.ops.is_empty() {
                                 // Reconstruct the node CRDT: op 0 is the base doc, the rest
                                 // are incremental updates (mirror of the seal round-trip).
                                 if let Ok(mut reader) =
-                                    mae_sync::kb::KbNodeDoc::from_bytes(&opened[0].1)
+                                    mae_sync::kb::KbNodeDoc::from_bytes(&opened.ops[0].1)
                                 {
-                                    for (_oid, pt) in &opened[1..] {
+                                    for (_oid, pt) in &opened.ops[1..] {
                                         let _ = reader.apply_update(pt);
                                     }
                                     debug!(target: "kb_sync", node = %n.id, "JOIN-DECRYPT: materialized plaintext from sealed snapshot on join");
                                     n.bytes = reader.encode_state();
                                 }
                                 let seen = kb.seen_ops.entry(n.id.clone()).or_default();
-                                for (op_id, _) in &opened {
+                                for (op_id, _) in &opened.ops {
                                     seen.insert(op_id.clone());
                                 }
                                 kb.op_sets.insert(n.id.clone(), merged);
                             }
                             // opened empty ⇒ unencrypted node / not-our-key ⇒ leave raw.
+                            // #206: distinguish "wrong/rotated key" from "not yet received"
+                            // on the join-snapshot path too.
+                            if opened.undecryptable > 0 {
+                                try_send_evt(
+                                    evt_tx,
+                                    CollabEvent::KbOpsUndecryptable {
+                                        kb_id: kb_id.clone(),
+                                        node_id: n.id.clone(),
+                                        count: opened.undecryptable,
+                                    },
+                                );
+                            }
                         }
                         kb.content_keys.insert(kb_id.clone(), content_key);
                         debug!(kb = %kb_id, nodes = nodes.len(), "ADR-037: derived content key + opened sealed snapshots on join");
