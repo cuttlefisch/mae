@@ -94,6 +94,21 @@ impl Editor {
             // Reimport synchronously to keep in-memory KB in sync
             self.kb_reimport_file(path);
             self.kb.watcher_stats.reimports_total += 1;
+            // #316: this write bumps the file's real disk mtime — if the
+            // user has this same path open in a buffer, its independent
+            // freshness tracking (Buffer::file_mtime/content_hash) must be
+            // told the change is self-inflicted and already accounted for,
+            // or the next focus-regain/switch fires a spurious "changed on
+            // disk, reload?" prompt mid-edit. `write_guard` only suppresses
+            // the KB watcher's own reaction — it has no reach into the
+            // buffer layer, which is a completely separate mechanism.
+            if let Some(buf) = self
+                .buffers
+                .iter_mut()
+                .find(|b| b.file_path() == Some(path))
+            {
+                buf.resync_after_external_write(&updated);
+            }
         }
     }
 

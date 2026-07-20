@@ -704,6 +704,27 @@ impl Buffer {
         &disk_hash != stored_hash
     }
 
+    /// Record disk state after a WRITE this buffer already knows about and
+    /// endorses — a self-inflicted change, not an external one. Updates
+    /// `file_mtime` (re-stat the path) and `content_hash` (from `content`,
+    /// the string that was actually written — no extra disk read) so
+    /// `check_disk_changed`/`check_disk_changed_by_hash` don't independently
+    /// re-derive "changed externally" on the next freshness check and fire a
+    /// spurious reload prompt (#316: a KB activity-tracking write to this
+    /// buffer's own `:PROPERTIES:` drawer was indistinguishable from a real
+    /// external edit).
+    ///
+    /// Deliberately does NOT touch `rope`, `modified`, or undo history — the
+    /// buffer's own in-progress edits (if any) are unrelated to a drawer-only
+    /// rewrite of whatever was last saved to disk, unlike `reload_from_disk`
+    /// which replaces the buffer's visible content wholesale.
+    pub fn resync_after_external_write(&mut self, content: &str) {
+        self.content_hash = Some(compute_content_hash(content));
+        if let Some(ref path) = self.file_path {
+            self.file_mtime = fs::metadata(path).and_then(|m| m.modified()).ok();
+        }
+    }
+
     /// Reload buffer contents from its backing file. Returns Ok(()) on
     /// success, Err if file_path is None or the read fails. Clears the
     /// modified flag and undo/redo history.

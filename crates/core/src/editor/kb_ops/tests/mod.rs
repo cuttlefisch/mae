@@ -3,6 +3,7 @@
 pub(crate) use super::*;
 pub(crate) use tempfile::TempDir;
 
+mod kb_ops_activity_tests;
 mod kb_ops_collab_sync_tests;
 mod kb_ops_concurrency_tests;
 mod kb_ops_crud_tests;
