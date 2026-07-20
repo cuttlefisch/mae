@@ -108,27 +108,23 @@ fn login_shell_path() -> Option<&'static str> {
 }
 
 fn probe_login_shell_path() -> Option<String> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| {
-        if cfg!(target_os = "macos") {
-            "/bin/zsh".to_string()
-        } else {
-            "/bin/sh".to_string()
-        }
-    });
+    let shell = crate::shell_invocation::resolve_user_shell();
     // Sentinels let us extract PATH cleanly even when the shell rc prints a
     // banner/MOTD or warnings to stdout.
     const START: &str = "__MAE_PATH_START__";
     const END: &str = "__MAE_PATH_END__";
     let script = format!("printf '%s%s%s' '{START}' \"$PATH\" '{END}'");
+    // Routed through the crate's single rc-sourcing implementation (#291) —
+    // this used to invoke the shell directly with no startup-file guard at
+    // all, unlike shell_invocation.rs's login_wrapped_argv.
+    let (shell, args) = crate::shell_invocation::login_shell_script_argv(&shell, &script);
 
     // Run on a worker thread with a timeout: a login+interactive shell sources
     // both profile (.zprofile/.profile — Homebrew) and rc (.zshrc — nvm/asdf),
     // but a pathological rc shouldn't block us for more than a few seconds.
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let out = std::process::Command::new(&shell)
-            .args(["-l", "-i", "-c", &script])
-            .output();
+        let out = std::process::Command::new(&shell).args(&args).output();
         let _ = tx.send(out);
     });
     let output = match rx.recv_timeout(std::time::Duration::from_secs(3)) {
