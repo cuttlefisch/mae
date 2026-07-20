@@ -644,8 +644,11 @@ fn idle_work_clears_pending_reparses() {
 /// production OOM crash (13.5G RSS before the process died): `GraphView`'s
 /// `render_epoch` map is keyed by `WindowId` and nothing evicted an entry
 /// when its window closed, so it grew for the entire session under normal
-/// window churn (companion windows, agent shells). `idle_work`'s new step 8
-/// prunes it against the live window set.
+/// window churn (companion windows, agent shells). `idle_work` delegates to
+/// `Editor::prune_closed_window_graph_state` (shared with the GUI's
+/// `sync_open_graph_viewports`), which prunes per-buffer, so both windows
+/// here must actually show the graph buffer for the "still live" one to
+/// count as such.
 #[test]
 fn idle_work_prunes_graph_render_epoch_for_closed_windows() {
     let mut editor = Editor::new();
@@ -653,9 +656,14 @@ fn idle_work_prunes_graph_render_epoch_for_closed_windows() {
     let graph_buf_idx = editor.buffers.len() - 1;
 
     let live_id = editor.window_mgr.focused_id();
-    // A second window, then closed — its id must no longer be "live", but a
-    // stale render_epoch entry for it should behave exactly like a real
-    // leak until pruned.
+    editor
+        .window_mgr
+        .window_mut(live_id)
+        .expect("focused window exists")
+        .buffer_idx = graph_buf_idx;
+    // A second window showing the same graph buffer, then closed — its id
+    // must no longer be "live", but a stale render_epoch entry for it
+    // should behave exactly like a real leak until pruned.
     let available = crate::window::Rect {
         x: 0,
         y: 0,
@@ -664,7 +672,11 @@ fn idle_work_prunes_graph_render_epoch_for_closed_windows() {
     };
     let closed_id = editor
         .window_mgr
-        .split(crate::window::SplitDirection::Horizontal, 0, available)
+        .split(
+            crate::window::SplitDirection::Horizontal,
+            graph_buf_idx,
+            available,
+        )
         .expect("split creates a second window");
     editor.window_mgr.close(closed_id);
     assert!(
@@ -691,6 +703,65 @@ fn idle_work_prunes_graph_render_epoch_for_closed_windows() {
     );
     assert!(gv.render_epoch.contains_key(&live_id));
     assert!(!gv.render_epoch.contains_key(&closed_id));
+}
+
+/// `idle_work` and the GUI's `sync_open_graph_viewports` now share one prune
+/// helper (`Editor::prune_closed_window_graph_state`) — this proves
+/// `idle_work`'s call covers `viewports`/`rendered` too, not just
+/// `render_epoch`, since `kb_graph_view_open` has no TUI/GUI gate and a
+/// headless session can populate all three without the GUI's per-frame
+/// sync ever running.
+#[test]
+fn idle_work_prunes_graph_viewports_and_rendered_for_closed_windows() {
+    let mut editor = Editor::new();
+    editor.buffers.push(crate::buffer::Buffer::new_graph());
+    let graph_buf_idx = editor.buffers.len() - 1;
+
+    let live_id = editor.window_mgr.focused_id();
+    editor
+        .window_mgr
+        .window_mut(live_id)
+        .expect("focused window exists")
+        .buffer_idx = graph_buf_idx;
+    let available = crate::window::Rect {
+        x: 0,
+        y: 0,
+        width: 100,
+        height: 50,
+    };
+    let closed_id = editor
+        .window_mgr
+        .split(
+            crate::window::SplitDirection::Horizontal,
+            graph_buf_idx,
+            available,
+        )
+        .expect("split creates a second window");
+    editor.window_mgr.close(closed_id);
+
+    let gv = editor.buffers[graph_buf_idx]
+        .graph_view_mut()
+        .expect("graph buffer has a GraphView");
+    gv.viewports
+        .insert(live_id, mae_canvas::scene::Viewport::default());
+    gv.viewports
+        .insert(closed_id, mae_canvas::scene::Viewport::default());
+    gv.rendered
+        .insert(live_id, crate::visual_buffer::VisualBuffer::default());
+    gv.rendered
+        .insert(closed_id, crate::visual_buffer::VisualBuffer::default());
+    assert_eq!(gv.viewports.len(), 2);
+    assert_eq!(gv.rendered.len(), 2);
+
+    editor.idle_work();
+
+    let gv = editor.buffers[graph_buf_idx]
+        .graph_view()
+        .expect("graph buffer has a GraphView");
+    assert_eq!(gv.viewports.len(), 1, "stale viewport must be pruned");
+    assert!(gv.viewports.contains_key(&live_id));
+    assert_eq!(gv.rendered.len(), 1, "stale rendered entry must be pruned");
+    assert!(gv.rendered.contains_key(&live_id));
 }
 
 // --- Multi-click tests ---

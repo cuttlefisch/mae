@@ -302,6 +302,7 @@ impl Editor {
     /// tracking, not `GuiApp.dirty`, which is a separate field the GUI
     /// event loop manages itself).
     pub fn sync_open_graph_viewports(&mut self) -> bool {
+        self.prune_closed_window_graph_state();
         let mut changed = false;
         let graph_buf_indices: Vec<usize> = self
             .buffers
@@ -319,12 +320,6 @@ impl Editor {
                 .map(|w| w.id)
                 .collect();
 
-            if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
-                gv.viewports.retain(|id, _| live_win_ids.contains(id));
-                gv.rendered.retain(|id, _| live_win_ids.contains(id));
-                gv.render_epoch.retain(|id, _| live_win_ids.contains(id));
-            }
-
             for win_id in live_win_ids {
                 let (w, h) = self.graph_viewport_pixel_size(win_id);
                 let stale = match self.buffers[buf_idx]
@@ -341,6 +336,40 @@ impl Editor {
             }
         }
         changed
+    }
+
+    /// Prune every per-`WindowId` map on every open `GraphView` (`viewports`,
+    /// `rendered`, `render_epoch`) against windows that have since closed.
+    /// Backend-agnostic: `kb_graph_view_open` has no TUI/GUI gate (it's a
+    /// plain `Editor` method reachable from any frontend, including a
+    /// headless/MCP-only session), so this state can be populated even
+    /// where `sync_open_graph_viewports` (the GUI's own per-frame caller of
+    /// this, below) never runs. `Editor::idle_work` calls this directly too,
+    /// so every backend gets coverage from exactly one canonical prune site
+    /// — see the invariant note on `GraphView`'s `HashMap<WindowId, _>`
+    /// fields (`crates/core/src/graph_view.rs`) for why this must stay the
+    /// single place any new per-window graph-view map gets pruned.
+    pub(crate) fn prune_closed_window_graph_state(&mut self) {
+        let graph_buf_indices: Vec<usize> = self
+            .buffers
+            .iter()
+            .enumerate()
+            .filter(|(_, b)| b.kind == BufferKind::Graph)
+            .map(|(i, _)| i)
+            .collect();
+        for buf_idx in graph_buf_indices {
+            let live_win_ids: std::collections::HashSet<WindowId> = self
+                .window_mgr
+                .iter_windows()
+                .filter(|w| w.buffer_idx == buf_idx)
+                .map(|w| w.id)
+                .collect();
+            if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+                gv.viewports.retain(|id, _| live_win_ids.contains(id));
+                gv.rendered.retain(|id, _| live_win_ids.contains(id));
+                gv.render_epoch.retain(|id, _| live_win_ids.contains(id));
+            }
+        }
     }
 
     /// Rebuild `GraphView.scene`/`rendered` for `buf_idx` from a fresh
