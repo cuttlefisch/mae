@@ -64,13 +64,19 @@ pub(super) fn handle_connected_event(editor: &mut Editor, address: String, peer_
     }
     if !offline_docs.is_empty() {
         editor.collab.synced_docs = editor.collab.synced_buffers.len();
-        // Queue re-share for each offline doc. The first one goes via
-        // pending_collab_intent; additional ones would need the command channel.
-        // For now, queue the first and set a status message.
-        if let Some((doc_id, _state)) = offline_docs.first() {
-            editor.collab.pending_intent = Some(CollabIntent::ForceSync {
-                buffer_name: doc_id.clone(),
-            });
+        // #341: fan ALL offline docs out through the same one-per-tick
+        // `reconnect_intents` queue the KB-resubscribe logic below already uses
+        // (`kb_ops/nodes.rs`'s overflow path does the same for bulk KB updates) —
+        // previously only the FIRST offline doc was queued (via the single
+        // `pending_intent` slot directly) despite the status message below
+        // claiming all N would resync.
+        for (doc_id, _state) in &offline_docs {
+            editor
+                .collab
+                .reconnect_intents
+                .push_back(CollabIntent::ForceSync {
+                    buffer_name: doc_id.clone(),
+                });
         }
         editor.set_status(format!(
             "Connected to {} — resyncing {} offline buffer(s)",

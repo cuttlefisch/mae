@@ -129,9 +129,61 @@ fn reconnect_triggers_resync_for_offline_buffers() {
         },
     );
 
-    // Should queue a ForceSync intent for the offline buffer.
-    assert!(editor.collab.pending_intent.is_some());
+    // #341: queued via the one-per-tick `reconnect_intents` queue (not the
+    // single `pending_intent` slot directly) — see the multi-buffer test below
+    // for why this matters once there's more than one offline buffer.
+    assert_eq!(editor.collab.reconnect_intents.len(), 1);
+    assert!(matches!(
+        editor.collab.reconnect_intents.front(),
+        Some(CollabIntent::ForceSync { buffer_name }) if buffer_name == "test-doc"
+    ));
     assert!(editor.collab.synced_buffers.contains("test-doc"));
+}
+
+#[test]
+fn reconnect_resyncs_all_offline_buffers_not_just_the_first() {
+    // #341 regression: previously only the FIRST offline-edited buffer was
+    // queued for resync on reconnect (via the single `pending_intent` slot),
+    // despite the status message claiming all N would resync. Edit 2+ buffers
+    // while offline — all of them must end up queued.
+    let mut editor = Editor::new();
+    for (name, doc_id) in [("a.txt", "doc-a"), ("b.txt", "doc-b"), ("c.txt", "doc-c")] {
+        let mut buf = mae_core::Buffer::new();
+        buf.name = name.to_string();
+        buf.collab_doc_id = Some(doc_id.to_string());
+        buf.enable_sync(1);
+        buf.collab_offline = true;
+        editor.buffers.push(buf);
+    }
+
+    handle_collab_event(
+        &mut editor,
+        CollabEvent::Connected {
+            address: "127.0.0.1:9473".to_string(),
+            peer_count: 1,
+        },
+    );
+
+    assert_eq!(
+        editor.collab.reconnect_intents.len(),
+        3,
+        "all 3 offline buffers must be queued for resync, not just the first"
+    );
+    let queued: std::collections::HashSet<String> = editor
+        .collab
+        .reconnect_intents
+        .iter()
+        .filter_map(|intent| match intent {
+            CollabIntent::ForceSync { buffer_name } => Some(buffer_name.clone()),
+            _ => None,
+        })
+        .collect();
+    for doc_id in ["doc-a", "doc-b", "doc-c"] {
+        assert!(
+            queued.contains(doc_id),
+            "expected {doc_id} to be queued for resync, got {queued:?}"
+        );
+    }
 }
 #[test]
 fn remote_update_clears_offline_flag() {
