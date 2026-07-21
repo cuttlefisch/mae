@@ -2597,7 +2597,21 @@ pub(crate) fn init_daemon_connection(editor: &mut Editor) {
                 let status = client.call("daemon/status", serde_json::json!({})).ok();
                 if let Some(ref s) = status {
                     if let Some(msg) = crate::daemon_version_skew(env!("CARGO_PKG_VERSION"), s) {
+                        // #323: this check already runs on EVERY daemon connect
+                        // (proactive, not just when the user thinks to run
+                        // :collab-doctor) — but a bare tracing::warn! only reaches
+                        // a log file, invisible during normal use. That's the
+                        // exact "silently serving stale data" gap #323 reports:
+                        // route it onto the notification bus too.
                         warn!("{}", msg);
+                        editor.notify(
+                            mae_core::notifications::Notification::warning(
+                                "daemon",
+                                "mae-daemon version differs from this editor",
+                            )
+                            .body(msg)
+                            .key("daemon-version-skew"),
+                        );
                     }
                 }
                 let primary_exists = status
@@ -2819,6 +2833,90 @@ mod tests {
         assert_eq!(
             hit.unwrap().severity,
             mae_core::notifications::Severity::Warning
+        );
+    }
+
+    /// #323: `daemon_version_skew` (main.rs) was already implemented, unit-tested,
+    /// and — this is the load-bearing part — already CALLED here on every daemon
+    /// connect (not just when the user thinks to run `:collab-doctor`). But the
+    /// call site only reached `tracing::warn!`, a log line invisible during normal
+    /// use — exactly the "daemon silently serves stale data with nothing surfacing
+    /// it" gap #323 reports. Real fake daemon socket (not a synthetic call to
+    /// daemon_version_skew in isolation) speaking real Content-Length JSON-RPC,
+    /// responding to `daemon/status` with a version that differs from this
+    /// editor's own — asserts the mismatch reaches the durable notification bus.
+    #[test]
+    #[cfg(unix)]
+    fn init_daemon_connection_notifies_on_a_real_version_mismatch() {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::os::unix::net::UnixListener;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let socket_path = tmp.path().join("mae-daemon-fake.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = stream;
+
+            // Read one Content-Length-framed JSON-RPC request (real framing, the
+            // same the daemon's own server side speaks).
+            let mut content_length = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                if let Some(v) = line.strip_prefix("Content-Length: ") {
+                    content_length = v.trim().parse().unwrap();
+                }
+            }
+            let mut body = vec![0u8; content_length];
+            reader.read_exact(&mut body).unwrap();
+            let req: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(req["method"], "daemon/status");
+
+            // Respond with a version that DIFFERS from this editor's own build.
+            let resp = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": req["id"],
+                "result": { "version": "0.0.1-fake-old-daemon", "primary_exists": false },
+            });
+            let resp_body = serde_json::to_vec(&resp).unwrap();
+            write!(writer, "Content-Length: {}\r\n\r\n", resp_body.len()).unwrap();
+            writer.write_all(&resp_body).unwrap();
+            writer.flush().unwrap();
+        });
+
+        let mut editor = mae_core::Editor::new();
+        editor.kb.daemon_enabled = true;
+        editor.kb.daemon_socket = socket_path;
+
+        init_daemon_connection(&mut editor);
+        server.join().unwrap();
+
+        let notes = editor.notifications.active_sorted();
+        let hit = notes
+            .iter()
+            .find(|n| n.source == "daemon" && n.title.contains("version differs"));
+        assert!(
+            hit.is_some(),
+            "a durable notification must be raised for a real daemon version \
+             mismatch, not just a tracing log line; got: {:?}",
+            notes.iter().map(|n| &n.title).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            hit.unwrap().severity,
+            mae_core::notifications::Severity::Warning
+        );
+        assert!(
+            hit.unwrap()
+                .body
+                .as_ref()
+                .is_some_and(|b| b.contains("0.0.1-fake-old-daemon")),
+            "the notification body must name the mismatched daemon version"
         );
     }
 
