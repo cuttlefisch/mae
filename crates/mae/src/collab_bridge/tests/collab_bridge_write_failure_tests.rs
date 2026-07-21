@@ -77,11 +77,13 @@ async fn spawn_fake_daemon(
         let (r, mut w) = stream.into_split();
         let mut sr = BufReader::new(r);
 
-        let authorized_path = std::env::temp_dir().join(format!(
-            "mae-write-fail-test-authorized-{}-{}",
-            std::process::id(),
-            rand_suffix(),
-        ));
+        // `tempfile::tempdir()` auto-removes the directory (and everything written
+        // into it) when this guard drops — unlike a manually-`std::env::temp_dir()`
+        // -joined path, which leaks on every test run (a real bug this replaced:
+        // hundreds of orphaned `/tmp/mae-write-fail-test-*` entries accumulated
+        // across repeated adversarial-test runs during this file's development).
+        let authorized_tmp = tempfile::tempdir().unwrap();
+        let authorized_path = authorized_tmp.path().join("authorized_keys");
         let mut authorized = AuthorizedKeys::load(&authorized_path);
         authorized.add(client_pubkey).unwrap();
         let auth = KeyAuth::server(Arc::new(server_identity), Arc::new(authorized));
@@ -157,17 +159,10 @@ async fn connect_client(
     let (cmd_tx, cmd_rx) = mpsc::channel(16);
     let (evt_tx, mut evt_rx) = mpsc::channel(16);
 
-    let tmp = std::env::temp_dir().join(format!(
-        "mae-write-fail-test-{}-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos(),
-        rand_suffix(),
-    ));
-    std::fs::create_dir_all(&tmp).unwrap();
-    let known_hosts_path = tmp.join("known_hosts");
+    // See `spawn_fake_daemon`'s matching comment: `tempfile::tempdir()` auto-cleans
+    // on drop, unlike the manually-joined `std::env::temp_dir()` path this replaced.
+    let tmp = tempfile::tempdir().unwrap();
+    let known_hosts_path = tmp.path().join("known_hosts");
     let mut known_hosts = KnownHosts::load(&known_hosts_path);
     known_hosts.pin(&addr.to_string(), &server_pubkey).unwrap();
     drop(known_hosts);
@@ -222,13 +217,6 @@ impl HostKeyVerifier for FixedTrustVerifier {
     fn verify(&self, addr: &str, server_pub: &mae_mcp::identity::PublicKey) -> bool {
         addr == self.expect_addr && server_pub.to_bytes() == self.expect_pubkey.to_bytes()
     }
-}
-
-fn rand_suffix() -> u32 {
-    // No RNG dependency needed for test-dir uniqueness beyond pid+time; a static
-    // counter is enough to avoid collisions between tests in the same process.
-    static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-    COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Build an owned, E2E-genesis'd `KbCollectionDoc` for `owner` — the same fixture
