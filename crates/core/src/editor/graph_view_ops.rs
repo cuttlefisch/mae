@@ -10,6 +10,14 @@
 //! only ever produces the CHEAP initial circular layout inline
 //! (`build_kb_graph_positions_only`) and queues the force-directed refine
 //! pass via `Editor::pending_graph_layout`.
+//!
+//! @ai-caution: [architecture-debt] At 4,464 lines, well over the 800-line
+//! ceiling — the KB graph view's Scheme/MCP-facing ops (navigation, zoom/pin,
+//! click handling) grew as one file across the feature's build-out. Not
+//! split (design work, not attempted this pass; round-5 tech-debt pass,
+//! 2026-07). Tracked in `.claude/commands/mae-audit.md`'s "Known exceptions"
+//! and `ROADMAP.md`'s "Architecture Debt" section — re-verify the line count
+//! each audit pass rather than trusting this comment's number to stay current.
 
 use crate::buffer::{Buffer, BufferKind};
 use crate::graph_view::{

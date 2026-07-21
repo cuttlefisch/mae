@@ -1,3 +1,12 @@
+//! @ai-caution: [architecture-debt] At 3,648 lines, ~4.6x the 800-line
+//! ceiling. A CRDT-offset *drift* bug was root-caused and fixed here in an
+//! earlier round (`fix/backlog-review-root-cause-patterns`), but the file's
+//! *size* was never addressed — not split (design work, not attempted this
+//! pass; round-5 tech-debt pass, 2026-07). Tracked in
+//! `.claude/commands/mae-audit.md`'s "Known exceptions" and `ROADMAP.md`'s
+//! "Architecture Debt" section — re-verify the line count each audit pass
+//! rather than trusting this comment's number to stay current.
+
 use ropey::Rope;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};

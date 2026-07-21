@@ -1,3 +1,10 @@
+//! @ai-caution: [architecture-debt] At 3,437 lines, well over the 800-line
+//! ceiling. Not split (design work, not attempted this pass; round-5
+//! tech-debt pass, 2026-07). Tracked in `.claude/commands/mae-audit.md`'s
+//! "Known exceptions" and `ROADMAP.md`'s "Architecture Debt" section —
+//! re-verify the line count each audit pass rather than trusting this
+//! comment's number to stay current.
+
 use std::collections::HashMap;
 
 /// Unique window identifier.

@@ -10,6 +10,14 @@
 //! `graph_layout_bridge` and applied back via
 //! `Editor::apply_graph_layout_result` — this module never runs the O(n^2)
 //! force-layout pass itself.
+//!
+//! @ai-caution: [architecture-debt] At 2,848 lines, well over the 800-line
+//! ceiling — `GraphView`'s scene graph, viewport, and flattening logic grew
+//! as one file across the KB graph view feature's build-out. Not split
+//! (design work, not attempted this pass; round-5 tech-debt pass, 2026-07).
+//! Tracked in `.claude/commands/mae-audit.md`'s "Known exceptions" and
+//! `ROADMAP.md`'s "Architecture Debt" section — re-verify the line count
+//! each audit pass rather than trusting this comment's number to stay current.
 
 use crate::driven_window::DrivenWindow;
 use crate::editor::Editor;
