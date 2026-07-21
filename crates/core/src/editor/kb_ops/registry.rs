@@ -11,22 +11,6 @@ impl Editor {
     /// Size of the lazy ranked window fetched per query for large KBs.
     pub const KB_FIND_LAZY_LIMIT: usize = 200;
 
-    /// Resolve the MAE config directory (~/.config/mae).
-    /// Checks `config_dir_override` first (for test isolation).
-    #[allow(dead_code)]
-    pub(super) fn mae_config_dir(&self) -> Option<PathBuf> {
-        if let Some(ref dir) = self.config_dir_override {
-            return Some(dir.clone());
-        }
-        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-            Some(PathBuf::from(xdg).join("mae"))
-        } else if let Ok(home) = std::env::var("HOME") {
-            Some(PathBuf::from(home).join(".config").join("mae"))
-        } else {
-            None
-        }
-    }
-
     /// Resolve the MAE data directory (~/.local/share/mae).
     /// Checks `data_dir_override` first (for test isolation).
     pub fn mae_data_dir(&self) -> Option<PathBuf> {
