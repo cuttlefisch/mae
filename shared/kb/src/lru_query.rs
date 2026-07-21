@@ -73,9 +73,15 @@ impl LruQueryLayer {
     /// Acquires all three locks atomically to prevent races where another
     /// thread repopulates caches between individual evictions.
     pub fn invalidate(&self, node_id: &str) {
-        let mut nc = self.node_cache.lock().unwrap();
-        let mut lfc = self.links_from_cache.lock().unwrap();
-        let mut ltc = self.links_to_cache.lock().unwrap();
+        let mut nc = self.node_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut lfc = self
+            .links_from_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let mut ltc = self
+            .links_to_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         nc.pop(node_id);
         lfc.pop(node_id);
         ltc.pop(node_id);
@@ -83,31 +89,49 @@ impl LruQueryLayer {
 
     /// Evict all cached entries.
     pub fn invalidate_all(&self) {
-        self.node_cache.lock().unwrap().clear();
-        self.links_from_cache.lock().unwrap().clear();
-        self.links_to_cache.lock().unwrap().clear();
+        self.node_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.links_from_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
+        self.links_to_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 
     /// Current number of cached nodes.
     pub fn cached_node_count(&self) -> usize {
-        self.node_cache.lock().unwrap().len()
+        self.node_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
     }
 
     /// Whether the daemon client is connected.
     pub fn is_connected(&self) -> bool {
-        self.client.lock().unwrap().is_connected()
+        self.client
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_connected()
     }
 
     /// Attempt to reconnect the daemon client.
     pub fn reconnect(&self) -> Result<(), DaemonClientError> {
-        self.client.lock().unwrap().connect()
+        self.client
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .connect()
     }
 
     /// Fetch a node from cache or daemon.
     fn fetch_node(&self, id: &str) -> Option<Node> {
         // Check cache first
         {
-            let mut cache = self.node_cache.lock().unwrap();
+            let mut cache = self.node_cache.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(CacheEntry::Found(node)) = cache.get(id) {
                 return Some((**node).clone());
             }
@@ -115,7 +139,7 @@ impl LruQueryLayer {
 
         // Cache miss → RPC to daemon
         let result = {
-            let mut client = self.client.lock().unwrap();
+            let mut client = self.client.lock().unwrap_or_else(|e| e.into_inner());
             client.call("kb/get", json!({"id": id}))
         };
 
@@ -130,7 +154,7 @@ impl LruQueryLayer {
             Ok(val) => {
                 let node = parse_node_from_json(&val);
                 if let Some(ref n) = node {
-                    let mut cache = self.node_cache.lock().unwrap();
+                    let mut cache = self.node_cache.lock().unwrap_or_else(|e| e.into_inner());
                     cache.put(id.to_string(), CacheEntry::Found(Box::new(n.clone())));
                 }
                 node
@@ -151,7 +175,7 @@ impl KbQueryLayer for LruQueryLayer {
     fn contains(&self, id: &str) -> bool {
         // Check node cache first
         {
-            let mut cache = self.node_cache.lock().unwrap();
+            let mut cache = self.node_cache.lock().unwrap_or_else(|e| e.into_inner());
             if cache.get(id).is_some() {
                 return true; // Only Found entries are cached
             }
@@ -163,7 +187,7 @@ impl KbQueryLayer for LruQueryLayer {
     fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
         // Search is not cacheable — always goes to daemon
         let result = {
-            let mut client = self.client.lock().unwrap();
+            let mut client = self.client.lock().unwrap_or_else(|e| e.into_inner());
             client.call("kb/search", json!({"query": query, "limit": limit}))
         };
         match result {
@@ -178,20 +202,26 @@ impl KbQueryLayer for LruQueryLayer {
     fn links_from(&self, id: &str) -> Vec<Link> {
         // Check cache
         {
-            let mut cache = self.links_from_cache.lock().unwrap();
+            let mut cache = self
+                .links_from_cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if let Some(links) = cache.get(id) {
                 return links.clone();
             }
         }
         // RPC
         let result = {
-            let mut client = self.client.lock().unwrap();
+            let mut client = self.client.lock().unwrap_or_else(|e| e.into_inner());
             client.call("kb/links_from", json!({"id": id}))
         };
         match result {
             Ok(val) => {
                 let links = parse_links(&val);
-                let mut cache = self.links_from_cache.lock().unwrap();
+                let mut cache = self
+                    .links_from_cache
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 cache.put(id.to_string(), links.clone());
                 links
             }
@@ -205,20 +235,26 @@ impl KbQueryLayer for LruQueryLayer {
     fn links_to(&self, id: &str) -> Vec<Link> {
         // Check cache
         {
-            let mut cache = self.links_to_cache.lock().unwrap();
+            let mut cache = self
+                .links_to_cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             if let Some(links) = cache.get(id) {
                 return links.clone();
             }
         }
         // RPC
         let result = {
-            let mut client = self.client.lock().unwrap();
+            let mut client = self.client.lock().unwrap_or_else(|e| e.into_inner());
             client.call("kb/links_to", json!({"id": id}))
         };
         match result {
             Ok(val) => {
                 let links = parse_links(&val);
-                let mut cache = self.links_to_cache.lock().unwrap();
+                let mut cache = self
+                    .links_to_cache
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
                 cache.put(id.to_string(), links.clone());
                 links
             }
@@ -236,7 +272,7 @@ impl KbQueryLayer for LruQueryLayer {
             None => json!({}),
         };
         let result = {
-            let mut client = self.client.lock().unwrap();
+            let mut client = self.client.lock().unwrap_or_else(|e| e.into_inner());
             client.call("kb/list_ids", params)
         };
         match result {
@@ -262,7 +298,7 @@ impl KbQueryLayer for LruQueryLayer {
             None => json!({}),
         };
         let result = {
-            let mut client = self.client.lock().unwrap();
+            let mut client = self.client.lock().unwrap_or_else(|e| e.into_inner());
             client.call("kb/id_title_pairs", params)
         };
         match result {
@@ -295,7 +331,7 @@ impl KbQueryLayer for LruQueryLayer {
             params["prefix"] = json!(p);
         }
         let result = {
-            let mut client = self.client.lock().unwrap();
+            let mut client = self.client.lock().unwrap_or_else(|e| e.into_inner());
             client.call("kb/id_title_body_triples", params)
         };
         match result {
@@ -321,7 +357,7 @@ impl KbQueryLayer for LruQueryLayer {
 
     fn health_report(&self) -> Option<HealthReport> {
         let result = {
-            let mut client = self.client.lock().unwrap();
+            let mut client = self.client.lock().unwrap_or_else(|e| e.into_inner());
             client.call("kb/health", json!({}))
         };
         match result {
@@ -348,7 +384,7 @@ impl KbQueryLayer for LruQueryLayer {
     fn neighborhood(&self, id: &str, depth: u32) -> Option<SubGraph> {
         // Not cached — graph views are infrequent + the result is large.
         let result = {
-            let mut client = self.client.lock().unwrap();
+            let mut client = self.client.lock().unwrap_or_else(|e| e.into_inner());
             client.call("kb/neighborhood", json!({"id": id, "depth": depth}))
         };
         match result {
@@ -362,7 +398,7 @@ impl KbQueryLayer for LruQueryLayer {
 
     fn related(&self, id: &str, limit: usize) -> Vec<(String, f64)> {
         let result = {
-            let mut client = self.client.lock().unwrap();
+            let mut client = self.client.lock().unwrap_or_else(|e| e.into_inner());
             client.call("kb/related", json!({"id": id, "limit": limit}))
         };
         match result {
@@ -382,7 +418,7 @@ impl KbQueryLayer for LruQueryLayer {
 
     fn node_crdt_state(&self, id: &str) -> Option<Vec<u8>> {
         let result = {
-            let mut client = self.client.lock().unwrap();
+            let mut client = self.client.lock().unwrap_or_else(|e| e.into_inner());
             client.call("kb/node_crdt", json!({"id": id}))
         };
         match result {
@@ -399,7 +435,7 @@ impl KbQueryLayer for LruQueryLayer {
 
     fn todo_nodes(&self) -> Vec<Node> {
         let result = {
-            let mut client = self.client.lock().unwrap();
+            let mut client = self.client.lock().unwrap_or_else(|e| e.into_inner());
             client.call("kb/todo_nodes", json!({}))
         };
         match result {
@@ -647,5 +683,35 @@ mod tests {
             crate::NodeKind::SchemeApi
         ));
         assert!(matches!(parse_node_kind("unknown"), crate::NodeKind::Note));
+    }
+
+    #[test]
+    fn poisoned_node_cache_lock_does_not_cascade() {
+        // Adversarial (principle #14): a real panic while a cache lock is held must
+        // not poison the mutex into permanently failing every SUBSEQUENT cache
+        // access — this is a hot path (every daemon-connected KB read touches it),
+        // and nothing about the poisoning caller's failure has anything to do with
+        // the next one. `DaemonClient::new` doesn't connect, so this needs no live
+        // daemon.
+        use std::sync::Arc;
+        let client = DaemonClient::new("/nonexistent/mae-lru-query-poison-test.sock");
+        let layer = Arc::new(LruQueryLayer::new(client, 10));
+
+        let l2 = Arc::clone(&layer);
+        let handle = std::thread::spawn(move || {
+            let _guard = l2.node_cache.lock().unwrap();
+            panic!("simulated failure while holding the node_cache lock");
+        });
+        assert!(
+            handle.join().is_err(),
+            "the poisoning thread should have panicked"
+        );
+
+        // A subsequent access through the now-poisoned lock must succeed, not
+        // cascade-panic — this is what `unwrap_or_else(|e| e.into_inner())` buys
+        // over a bare `.lock().unwrap()`.
+        assert_eq!(layer.cached_node_count(), 0);
+        layer.invalidate_all();
+        layer.invalidate("concept:whatever");
     }
 }
