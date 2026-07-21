@@ -3241,6 +3241,14 @@ async fn run_collab_task(
                             // (it only stores the owner-signed delta via kb/collection_op).
                             if mode != "e2e" {
                                 warn!(kb = %kb_id, %mode, "kb/set_encryption: only 'e2e' is supported (one-way)");
+                                try_send_evt(
+                                    &evt_tx,
+                                    CollabEvent::Error {
+                                        message: format!(
+                                            "KB '{kb_id}': encryption mode '{mode}' is not supported — only 'e2e' can be set"
+                                        ),
+                                    },
+                                );
                             } else if let Some(id) = signing_identity.as_ref() {
                                 let owner_fp = id.fingerprint();
                                 let owner_pubkey = id.public().to_bytes();
@@ -3254,6 +3262,14 @@ async fn run_collab_task(
                                         );
                                         if gov != mae_sync::membership::Governance::SingleOwner {
                                             warn!(kb = %kb_id, "kb/set_encryption: E2e requires SingleOwner governance — refused");
+                                            try_send_evt(
+                                                &evt_tx,
+                                                CollabEvent::Error {
+                                                    message: format!(
+                                                        "KB '{kb_id}': E2E encryption requires SingleOwner governance — refused (a quorum-removable owner would freeze the content key)"
+                                                    ),
+                                                },
+                                            );
                                         } else {
                                             // Generate-or-load + persist the content key.
                                             let dir = mae_mcp::content_key_store::content_keys_dir();
@@ -3390,15 +3406,53 @@ async fn run_collab_task(
                                                         .insert(kb_id.clone(), coll.encode_state());
                                                     info!(kb = %kb_id, resealed_nodes = node_states.len(), "ADR-037: E2E enabled — content key generated + self-wrapped, signed genesis authored, nodes re-sealed");
                                                 }
-                                                Err(e) => warn!(kb = %kb_id, error = ?e, "kb/set_encryption: self-wrap failed"),
+                                                Err(e) => {
+                                                    warn!(kb = %kb_id, error = ?e, "kb/set_encryption: self-wrap failed");
+                                                    try_send_evt(
+                                                        &evt_tx,
+                                                        CollabEvent::Error {
+                                                            message: format!(
+                                                                "KB '{kb_id}': failed to self-wrap the content key: {e:?}"
+                                                            ),
+                                                        },
+                                                    );
+                                                }
                                             }
                                         }
                                     }
-                                    Ok(_) => warn!(kb = %kb_id, "kb/set_encryption: not the KB owner — skipped"),
-                                    Err(e) => warn!(kb = %kb_id, error = %e, "kb/set_encryption: collection decode failed"),
+                                    Ok(_) => {
+                                        warn!(kb = %kb_id, "kb/set_encryption: not the KB owner — skipped");
+                                        try_send_evt(
+                                            &evt_tx,
+                                            CollabEvent::Error {
+                                                message: format!(
+                                                    "KB '{kb_id}': only the owner can enable encryption"
+                                                ),
+                                            },
+                                        );
+                                    }
+                                    Err(e) => {
+                                        warn!(kb = %kb_id, error = %e, "kb/set_encryption: collection decode failed");
+                                        try_send_evt(
+                                            &evt_tx,
+                                            CollabEvent::Error {
+                                                message: format!(
+                                                    "KB '{kb_id}': failed to decode the collection state: {e}"
+                                                ),
+                                            },
+                                        );
+                                    }
                                 }
                             } else {
                                 warn!(kb = %kb_id, "kb/set_encryption: E2E requires key mode (no signing identity)");
+                                try_send_evt(
+                                    &evt_tx,
+                                    CollabEvent::Error {
+                                        message: format!(
+                                            "KB '{kb_id}': E2E encryption requires key-mode auth (no signing identity available)"
+                                        ),
+                                    },
+                                );
                             }
                         }
                         CollabCommand::KbCollectionOp { kb_id, update } => {
