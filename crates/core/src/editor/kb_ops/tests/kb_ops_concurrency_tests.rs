@@ -41,6 +41,37 @@ fn drain_kb_preload_is_noop_while_still_loading() {
     drop(tx);
 }
 
+/// #79 third slice: a background preload failure used to be a clobberable
+/// status-line message only, drained on an idle tick well after startup —
+/// easy to miss entirely since it has nothing to do with what the user is
+/// doing when it finally surfaces. Must land as a durable notification too.
+#[test]
+fn drain_kb_preload_notifies_on_a_background_load_failure() {
+    let mut editor = Editor::new();
+    let (tx, rx) = std::sync::mpsc::channel::<Result<Vec<mae_kb::Node>, String>>();
+    tx.send(Err("store corrupt: bad page checksum".to_string()))
+        .unwrap();
+    editor.kb.pending_preload = Some(rx);
+
+    editor.drain_kb_preload();
+
+    assert!(
+        editor.kb.pending_preload.is_none(),
+        "channel cleared even on failure"
+    );
+    let notes = editor.notifications.active_sorted();
+    let hit = notes
+        .iter()
+        .find(|n| n.source == "kb" && n.title.contains("background load failed"));
+    assert!(
+        hit.is_some(),
+        "a durable notification must be raised for a background preload failure, \
+         not just a status-line toast; got: {:?}",
+        notes.iter().map(|n| &n.title).collect::<Vec<_>>()
+    );
+    assert_eq!(hit.unwrap().severity, crate::notifications::Severity::Error);
+}
+
 #[test]
 fn sqlite_multi_instance_concurrent_writes_converge() {
     // Phase 2 hard gate (adversarial, #14): two CozoKbStore handles on the SAME
