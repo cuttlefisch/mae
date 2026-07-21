@@ -436,7 +436,7 @@ fn resolve_transport_reads_credentials_live_no_cache() {
 #[test]
 fn epoch_fence_rejection_classified_from_daemon_message() {
     // Editor↔daemon contract (B-19 regression guard): the daemon embeds
-    // "rebase required" in an epoch-fence rejection (collab_handler.rs:1780,
+    // "rebase required" in an epoch-fence rejection (collab_handler/mod.rs:1041,
     // node-specific detail appended). The editor MUST still classify such a
     // message as a fence so it raises the actionable ADR-024 notification
     // rather than a generic status line. If the daemon reword breaks this,

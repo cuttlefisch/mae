@@ -5,7 +5,9 @@
 //!
 //! @ai-caution: Sync methods (`sync/state_vector`, `sync/update`,
 //! `sync/full_state`, `sync/enable`) are implemented in `sync_exec.rs`.
-//! Awareness/presence (`sync/awareness`) is a future phase (not yet started).
+//! Awareness/presence (`sync/awareness`) is implemented too
+//! (`daemon/src/collab_handler/sync_methods.rs::handle_sync_awareness`,
+//! `shared/sync/src/awareness.rs`).
 //! Do not remove `handle_request` match arms or session fields without
 //! checking the sync roadmap (ADR-006).
 
