@@ -113,6 +113,8 @@ impl super::Editor {
             "mouse_wheel_follow_mouse" => self.mouse_wheel_follow_mouse.to_string(),
             "scroll_speed" => self.scroll_speed.to_string(),
             "completion_max_items" => self.completion_max_items.to_string(),
+            "code_action_max_items" => self.code_action_max_items.to_string(),
+            "symbol_outline_max_items" => self.symbol_outline_max_items.to_string(),
             "hover_max_lines" => self.hover_max_lines.to_string(),
             "popup_width_pct" => self.popup_width_pct.to_string(),
             "popup_height_pct" => self.popup_height_pct.to_string(),
@@ -548,6 +550,18 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.completion_max_items = v.clamp(1, 50);
+            }
+            "code_action_max_items" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.code_action_max_items = v.clamp(1, 50);
+            }
+            "symbol_outline_max_items" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.symbol_outline_max_items = v.clamp(1, 100);
             }
             "hover_max_lines" => {
                 let v: usize = value

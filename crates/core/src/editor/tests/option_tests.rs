@@ -647,11 +647,36 @@ fn get_new_options() {
     let editor = Editor::new();
     assert_eq!(editor.get_option("scroll_speed").unwrap().0, "3");
     assert_eq!(editor.get_option("completion_max_items").unwrap().0, "10");
+    assert_eq!(editor.get_option("code_action_max_items").unwrap().0, "12");
+    assert_eq!(
+        editor.get_option("symbol_outline_max_items").unwrap().0,
+        "20"
+    );
     assert_eq!(
         editor.get_option("window_title").unwrap().0,
         "MAE \u{2014} Modern AI Editor"
     );
     assert_eq!(editor.get_option("heading_scale_h1").unwrap().0, "1.5");
+}
+
+#[test]
+fn set_popup_max_items_clamped() {
+    let mut editor = Editor::new();
+    editor.set_option("code_action_max_items", "3").unwrap();
+    assert_eq!(editor.code_action_max_items, 3);
+    editor.set_option("code_action_max_items", "0").unwrap();
+    assert_eq!(editor.code_action_max_items, 1); // clamped
+    editor.set_option("code_action_max_items", "999").unwrap();
+    assert_eq!(editor.code_action_max_items, 50); // clamped
+
+    editor.set_option("symbol_outline_max_items", "5").unwrap();
+    assert_eq!(editor.symbol_outline_max_items, 5);
+    editor.set_option("symbol_outline_max_items", "0").unwrap();
+    assert_eq!(editor.symbol_outline_max_items, 1); // clamped
+    editor
+        .set_option("symbol_outline_max_items", "999")
+        .unwrap();
+    assert_eq!(editor.symbol_outline_max_items, 100); // clamped
 }
 
 // --- Edit-link command ---
