@@ -218,10 +218,10 @@ peers maintain shared KBs with **no central server**. Design = **ADR-025** (iroh
 node IDs reuse trusted-peer fingerprints, + config/install/activation), **ADR-026** (peer-verifiable
 signed, hash-chained membership + signed ops + peer-enforced epoch fence), **ADR-027** (observability built
 alongside). **Tracker: issue #96**; ADR PR **#95**; phased epics #88–#94. Pre-work (crypto-deps #87/#51,
-epoch hardening #72, TOFU deadlock #66) is **done**, as are Phases 1/3/4 (#88/#90/#91). **Current
-bottleneck: Phase 2 / #89** (daemon-as-peer mesh transport — dial + gossip + anti-entropy), with **#70**
-(split oversized collab files) and **#73** (authorized_keys resolver) as its remaining open prerequisites.
-E2E content encryption + leaderless auth-DAG are deferred. Also still pending: hosted-edit (ADR-020 D1).
+epoch hardening #72, TOFU deadlock #66, split oversized collab files #70, authorized_keys resolver #73)
+is **done**, as are Phases 1/3/4 (#88/#90/#91). **Current bottleneck: Phase 2 / #89** (daemon-as-peer
+mesh transport — dial + gossip + anti-entropy), with no other open prerequisites. E2E content encryption
++ leaderless auth-DAG are deferred. Also still pending: hosted-edit (ADR-020 D1).
 
 **Also next — Ollama/local-model parity** (AI-integration initiative): bring self-hosted models to parity
 with hosted providers for agentic MAE work — tool-calling reliability harness, KB-enrichment lifecycle for
