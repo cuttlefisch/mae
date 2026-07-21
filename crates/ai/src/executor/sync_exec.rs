@@ -84,15 +84,44 @@ fn execute_sync_update(editor: &mut Editor, args: &Value) -> Result<String, Stri
     let update_bytes =
         mae_sync::encoding::base64_to_update(update_b64).map_err(|e| e.to_string())?;
 
-    let buf = &mut editor.buffers[idx];
-    if buf.sync_doc.is_none() {
-        return Err(format!("Buffer '{}' has no sync enabled", buf.name));
+    if editor.buffers[idx].sync_doc.is_none() {
+        return Err(format!(
+            "Buffer '{}' has no sync enabled",
+            editor.buffers[idx].name
+        ));
     }
 
-    buf.apply_sync_update(&update_bytes)
+    // Adjust cursor positions for every window viewing this buffer, exactly
+    // like the collab-bridge remote-update path — this AI-driven apply path
+    // used to do no cursor adjustment at all (buffer.rs's shared method makes
+    // that correctness free instead of a separate reimplementation).
+    let window_cursors: Vec<(mae_core::WindowId, usize)> = editor
+        .window_mgr
+        .iter_windows()
+        .filter(|w| w.buffer_idx == idx)
+        .map(|w| {
+            (
+                w.id,
+                editor.buffers[idx].char_offset_at(w.cursor_row, w.cursor_col),
+            )
+        })
+        .collect();
+    let old_offsets: Vec<usize> = window_cursors.iter().map(|(_, o)| *o).collect();
+
+    let adjusted_offsets = editor.buffers[idx]
+        .apply_sync_update_with_cursors(&update_bytes, &old_offsets)
         .map_err(|e| e.to_string())?;
 
-    let content_length = buf.rope().len_chars();
+    for ((win_id, _), adjusted) in window_cursors.iter().zip(adjusted_offsets) {
+        if let Some(win) = editor.window_mgr.window_mut(*win_id) {
+            let (row, col) = editor.buffers[idx].row_col_from_offset(adjusted);
+            win.cursor_row = row;
+            win.cursor_col = col;
+            win.clamp_cursor(&editor.buffers[idx]);
+        }
+    }
+
+    let content_length = editor.buffers[idx].rope().len_chars();
     Ok(serde_json::json!({
         "applied": true,
         "content_length": content_length,

@@ -569,8 +569,37 @@ impl SchemeRuntime {
         let sync_applies: Vec<(String, Vec<u8>)> = std::mem::take(&mut state.pending_sync_applies);
         for (buf_name, update_bytes) in sync_applies {
             if let Some(idx) = editor.buffers.iter().position(|b| b.name == buf_name) {
-                match editor.buffers[idx].apply_sync_update(&update_bytes) {
-                    Ok(()) => debug!(buffer = %buf_name, "sync update applied"),
+                // Adjust cursor positions for every window viewing this
+                // buffer, matching the collab-bridge remote-update path — this
+                // test-harness apply path used to do no cursor adjustment at
+                // all (buffer.rs's shared method makes that correctness free).
+                let window_cursors: Vec<(mae_core::WindowId, usize)> = editor
+                    .window_mgr
+                    .iter_windows()
+                    .filter(|w| w.buffer_idx == idx)
+                    .map(|w| {
+                        (
+                            w.id,
+                            editor.buffers[idx].char_offset_at(w.cursor_row, w.cursor_col),
+                        )
+                    })
+                    .collect();
+                let old_offsets: Vec<usize> = window_cursors.iter().map(|(_, o)| *o).collect();
+
+                match editor.buffers[idx]
+                    .apply_sync_update_with_cursors(&update_bytes, &old_offsets)
+                {
+                    Ok(adjusted_offsets) => {
+                        for ((win_id, _), adjusted) in window_cursors.iter().zip(adjusted_offsets) {
+                            if let Some(win) = editor.window_mgr.window_mut(*win_id) {
+                                let (row, col) = editor.buffers[idx].row_col_from_offset(adjusted);
+                                win.cursor_row = row;
+                                win.cursor_col = col;
+                                win.clamp_cursor(&editor.buffers[idx]);
+                            }
+                        }
+                        debug!(buffer = %buf_name, "sync update applied");
+                    }
                     Err(e) => warn!(buffer = %buf_name, error = %e, "failed to apply sync update"),
                 }
             } else {

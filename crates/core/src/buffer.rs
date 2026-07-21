@@ -1086,6 +1086,54 @@ impl Buffer {
         Ok(())
     }
 
+    /// Apply a remote sync update, ALSO adjusting `cursors` (char offsets) to
+    /// account for the edit. The single home for cursor-adjustment-after-
+    /// remote-apply — every caller that needs this used to reimplement its
+    /// own (each independently buggy: two callers did no adjustment at all,
+    /// and the one that did inferred the edit position by diffing ropes,
+    /// which silently skipped same-length replacements). Sources the edit's
+    /// exact position + char-length delta from `TextSync::apply_update_with_edit`
+    /// (yrs's own transaction delta), not a diff.
+    ///
+    /// Cursors at or before the edit start are unaffected; cursors after shift
+    /// by the edit's char delta, clamped to never land before the edit start
+    /// (handles a cursor that was inside a deleted range). Returns the
+    /// adjusted offsets in the same order as `cursors`. `Err` if sync is not
+    /// enabled on this buffer.
+    pub fn apply_sync_update_with_cursors(
+        &mut self,
+        update: &[u8],
+        cursors: &[usize],
+    ) -> Result<Vec<usize>, mae_sync::SyncError> {
+        let Some(sync) = &mut self.sync_doc else {
+            return Err(mae_sync::SyncError::Schema(
+                "sync not enabled on this buffer".to_string(),
+            ));
+        };
+        let edit = sync.apply_update_with_edit(update)?;
+        self.rope = sync.rope().clone();
+        self.bump_generation();
+        let new_len = self.rope.len_chars();
+        let adjusted = cursors
+            .iter()
+            .map(|&old_offset| match edit {
+                None => old_offset.min(new_len),
+                Some(e) => {
+                    let shifted = if old_offset <= e.edit_start {
+                        old_offset
+                    } else {
+                        // Shift by delta, but never before edit_start (handles
+                        // a cursor that was inside a deleted range).
+                        let s = (old_offset as isize + e.char_delta).max(0) as usize;
+                        s.max(e.edit_start)
+                    };
+                    shifted.min(new_len.saturating_sub(1))
+                }
+            })
+            .collect();
+        Ok(adjusted)
+    }
+
     /// Notify sync_doc of a local insert. Queues update bytes for broadcast.
     fn sync_insert(&mut self, char_offset: usize, text: &str) {
         if let Some(sync) = &mut self.sync_doc {

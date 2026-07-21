@@ -3,11 +3,26 @@
 use ropey::Rope;
 use std::sync::{Arc, Mutex};
 use yrs::{
-    block::ClientID, doc::OffsetKind, undo::UndoManager, updates::decoder::Decode,
-    updates::encoder::Encode, Doc, GetString, ReadTxn, Subscription, Text, Transact,
+    block::ClientID, doc::OffsetKind, types::Delta, types::Observable, undo::UndoManager,
+    updates::decoder::Decode, updates::encoder::Encode, Doc, GetString, ReadTxn, Subscription,
+    Text, Transact,
 };
 
 use crate::SyncError;
+
+/// The exact shape of an applied remote edit, sourced from yrs's own
+/// transaction delta rather than inferred by diffing before/after ropes (see
+/// [`TextSync::apply_update_with_edit`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AppliedEdit {
+    /// Char offset in the OLD document (before this update was applied) where
+    /// the edit begins — the first position touched by an Insert or Delete op.
+    pub edit_start: usize,
+    /// Net change in char length (inserted chars minus deleted chars). Can be
+    /// negative. Cursors at or before `edit_start` are unaffected; cursors
+    /// after shift by this amount, clamped to never land before `edit_start`.
+    pub char_delta: isize,
+}
 
 /// The yrs text field name used in all documents.
 const TEXT_NAME: &str = "content";
@@ -318,6 +333,79 @@ impl TextSync {
         }
 
         Ok(())
+    }
+
+    /// Apply a remote update, ALSO returning the edit's exact shape (position +
+    /// char-length delta) sourced from yrs's own transaction delta — not
+    /// inferred by diffing the before/after ropes, which callers used to do
+    /// independently (each with its own bugs; one silently skipped same-length
+    /// replacements entirely, since a diff keyed on "did total length change?"
+    /// can't see an edit that happens to preserve length). Every caller that
+    /// needs to adjust cursor positions after a remote update should use this
+    /// instead of `apply_update` + its own diff.
+    ///
+    /// Returns `Ok(None)` for an edit shape when the update was a genuine no-op
+    /// (e.g. already-seen ops) — nothing to adjust cursors for.
+    pub fn apply_update_with_edit(
+        &mut self,
+        update: &[u8],
+    ) -> Result<Option<AppliedEdit>, SyncError> {
+        let update_decoded =
+            yrs::Update::decode_v1(update).map_err(|e| SyncError::Encoding(e.to_string()))?;
+
+        let old_rope = self.rope.clone();
+        let ytext = self.doc.get_or_insert_text(TEXT_NAME);
+        // (edit_start_utf16, ANY edit observed) — captured during the
+        // transaction's commit phase via yrs's own delta, not derived by us.
+        let captured: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));
+        let captured_for_observer = Arc::clone(&captured);
+        let _sub = ytext.observe(move |txn, event| {
+            let mut pos: u32 = 0;
+            let mut edit_start: Option<u32> = None;
+            for d in event.delta(txn) {
+                match d {
+                    Delta::Retain(len, _) => {
+                        if edit_start.is_none() {
+                            pos += len;
+                        }
+                    }
+                    Delta::Inserted(..) | Delta::Deleted(_) => {
+                        if edit_start.is_none() {
+                            edit_start = Some(pos);
+                        }
+                    }
+                }
+            }
+            if let Some(start) = edit_start {
+                if let Ok(mut c) = captured_for_observer.lock() {
+                    *c = Some(start);
+                }
+            }
+        });
+
+        {
+            let mut txn = self.doc.transact_mut();
+            txn.apply_update(update_decoded)
+                .map_err(|e| SyncError::Encoding(e.to_string()))?;
+        }
+        drop(_sub);
+        self.rebuild_rope();
+
+        let edit = captured.lock().ok().and_then(|c| *c).map(|start_utf16| {
+            let edit_start =
+                old_rope.utf16_cu_to_char((start_utf16 as usize).min(old_rope.len_utf16_cu()));
+            // Total char-length delta is exact and trivial from the two ropes —
+            // only the START position needed yrs's delta (the diff-scan this
+            // replaces got that part wrong for same-length edits, not the
+            // overall length change).
+            let char_delta = self.rope.len_chars() as isize - old_rope.len_chars() as isize;
+            AppliedEdit {
+                edit_start,
+                char_delta,
+            }
+        });
+
+        Ok(edit)
     }
 
     /// Get the current state vector (for sync protocol).
@@ -1230,6 +1318,104 @@ mod tests {
         // No-op reconcile should produce no meaningful diff.
         assert_eq!(ts.content(), "same text");
         // Update may still contain bytes (yrs transaction overhead) but content unchanged.
+    }
+
+    // --- apply_update_with_edit: yrs-delta-sourced edit shape ---
+
+    #[test]
+    fn apply_update_with_edit_reports_insert_position_and_delta() {
+        let mut a = TextSync::with_client_id("hello world", sharer_id());
+        let mut b = TextSync::with_client_id("", joiner_id());
+        b.apply_update(&a.encode_state()).unwrap();
+
+        let update = a.insert(6, "XYZ ");
+        let edit = b
+            .apply_update_with_edit(&update)
+            .unwrap()
+            .expect("a real insert must report an edit");
+        assert_eq!(edit.edit_start, 6);
+        assert_eq!(edit.char_delta, 4);
+        assert_eq!(b.content(), "hello XYZ world");
+    }
+
+    #[test]
+    fn apply_update_with_edit_reports_delete_position_and_negative_delta() {
+        let mut a = TextSync::with_client_id("hello world", sharer_id());
+        let mut b = TextSync::with_client_id("", joiner_id());
+        b.apply_update(&a.encode_state()).unwrap();
+
+        let update = a.delete(5, 6); // remove " world"
+        let edit = b
+            .apply_update_with_edit(&update)
+            .unwrap()
+            .expect("a real delete must report an edit");
+        assert_eq!(edit.edit_start, 5);
+        assert_eq!(edit.char_delta, -6);
+        assert_eq!(b.content(), "hello");
+    }
+
+    /// The adversarial case this method exists to fix (#79/churn-hotspot pass):
+    /// a same-length replacement AT a position must still report edit_start —
+    /// a naive "did total length change?" diff (char_delta == 0 => skip) used
+    /// to silently treat this as "no edit," leaving a cursor sitting inside the
+    /// replaced text unmoved even though its content genuinely changed under it.
+    #[test]
+    fn apply_update_with_edit_reports_position_for_a_same_length_replacement() {
+        let mut a = TextSync::with_client_id("hello world", sharer_id());
+        let mut b = TextSync::with_client_id("", joiner_id());
+        b.apply_update(&a.encode_state()).unwrap();
+
+        // Replace "world" (5 chars) with "rusty" (5 chars) as ONE transaction
+        // (reconcile_to batches delete+insert into a single update, exactly
+        // like a real same-length in-place edit would be received as one
+        // combined remote update) — net char_delta == 0, the exact shape the
+        // old diff-scan heuristic missed.
+        let update = a.reconcile_to("hello rusty");
+        let edit = b
+            .apply_update_with_edit(&update)
+            .unwrap()
+            .expect("a same-length replacement must still report an edit");
+        assert_eq!(
+            edit.edit_start, 6,
+            "must locate the edit even though char_delta is 0"
+        );
+        assert_eq!(edit.char_delta, 0);
+        assert_eq!(b.content(), "hello rusty");
+    }
+
+    #[test]
+    fn apply_update_with_edit_is_none_for_an_already_seen_update() {
+        let mut a = TextSync::with_client_id("hello", sharer_id());
+        let mut b = TextSync::with_client_id("", joiner_id());
+        b.apply_update(&a.encode_state()).unwrap();
+
+        let update = a.insert(5, " world");
+        b.apply_update(&update).unwrap(); // b already has it
+                                          // Re-applying the SAME update a second time is a no-op — nothing new.
+        let edit = b.apply_update_with_edit(&update).unwrap();
+        assert!(
+            edit.is_none(),
+            "re-applying an already-seen update must report no edit, got {edit:?}"
+        );
+    }
+
+    #[test]
+    fn apply_update_with_edit_handles_multibyte_content_correctly() {
+        // café (é is 1 UTF-16 unit, 2 UTF-8 bytes) + emoji (2 UTF-16 units, 1 char).
+        let mut a = TextSync::with_client_id("café 🔥 world", sharer_id());
+        let mut b = TextSync::with_client_id("", joiner_id());
+        b.apply_update(&a.encode_state()).unwrap();
+
+        // Insert right after the emoji (char offset 6 = the space after 🔥).
+        let update = a.insert(6, "!!!");
+        let edit = b.apply_update_with_edit(&update).unwrap().unwrap();
+        assert_eq!(
+            edit.edit_start, 6,
+            "edit_start must be a CHAR offset, not a UTF-16 offset, even across \
+             multi-byte/supplementary-plane content"
+        );
+        assert_eq!(edit.char_delta, 3);
+        assert_eq!(b.content(), "café 🔥!!! world");
     }
 
     // --- Delete boundary cases ---
