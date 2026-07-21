@@ -629,31 +629,14 @@ impl super::Editor {
                 let bottom = {
                     let buf = &self.buffers[buf_idx];
                     let max_row = buf_line_count.saturating_sub(1);
-                    let mut visual = 0;
-                    let mut last_fit = scroll_off;
-                    let mut line = scroll_off;
-                    let mut first = true;
-                    while line <= max_row {
-                        let rows = self.line_visual_rows(buf_idx, line);
-                        if rows > 0 {
-                            let effective = if first {
-                                rows.saturating_sub(skip)
-                            } else {
-                                rows
-                            };
-                            first = false;
-                            if visual + effective > viewport_height {
-                                break;
-                            }
-                            visual += effective;
-                            last_fit = line;
-                        }
-                        line = buf.next_visible_line(line);
-                        if line <= last_fit {
-                            break;
-                        }
-                    }
-                    last_fit
+                    crate::wrap::last_visible_wrapped_line(
+                        scroll_off,
+                        viewport_height,
+                        skip,
+                        max_row,
+                        |line| self.line_visual_rows(buf_idx, line),
+                        |line| buf.next_visible_line(line),
+                    )
                 };
 
                 // Phase 3: Clamp cursor.

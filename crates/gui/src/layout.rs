@@ -298,9 +298,18 @@ pub fn compute_layout(
     };
 
     // Sub-line scroll: offset pixel_y upward to hide top rows of scroll_offset line.
-    let skip_px = win.scroll_pixel_offset;
-    let mut pixel_y = area_row as f32 * cell_height - skip_px;
-    let pixel_y_limit = (area_row + area_height) as f32 * cell_height;
+    //
+    // pixel_y accumulates via += per emitted row below (segment heights vary:
+    // heading scale, wrapped-row count, inline images — not a uniform
+    // row_index * cell_height, so it can't be recomputed by direct
+    // multiplication each iteration). Accumulating in f64 rather than f32
+    // keeps rounding error negligible (~1e-13 vs f32's ~1e-3 over a full
+    // screen of lines) so PIXEL_Y_EPSILON below is a boundary-comparison
+    // safety margin, not a drift-tolerance workaround.
+    let skip_px = win.scroll_pixel_offset as f64;
+    let mut pixel_y = area_row as f64 * cell_height as f64 - skip_px;
+    let pixel_y_limit = (area_row + area_height) as f64 * cell_height as f64;
+    const PIXEL_Y_EPSILON: f64 = 1e-6;
 
     // Pre-compute effective display regions (org-appear: cursor reveals its region).
     let effective_regions = mae_core::display_region::regions_with_cursor_reveal(
@@ -325,7 +334,7 @@ pub fn compute_layout(
 
     // Use 0.5px tolerance for FP drift: accumulated pixel_y via repeated += cell_height
     // can drift ~0.002px over 40 lines vs the single-multiply pixel_y_limit.
-    while pixel_y < pixel_y_limit + 0.5 && line_idx < total_lines {
+    while pixel_y < pixel_y_limit + PIXEL_Y_EPSILON && line_idx < total_lines {
         // Skip lines outside narrowed range.
         if let Some((_, ne)) = narrow {
             if line_idx >= ne {
@@ -541,14 +550,14 @@ pub fn compute_layout(
             let mut pos = 0;
             let mut is_first = true;
             loop {
-                if pixel_y >= pixel_y_limit + 0.5 {
+                if pixel_y >= pixel_y_limit + PIXEL_Y_EPSILON {
                     break;
                 }
                 let seg_scale = if is_first { org_heading_scale } else { 1.0 };
                 let seg_height = seg_scale * cell_height;
 
                 // Don't emit lines whose bottom overflows the viewport (0.5px FP tolerance).
-                if pixel_y + seg_height > pixel_y_limit + 0.5 {
+                if pixel_y + seg_height as f64 > pixel_y_limit + PIXEL_Y_EPSILON {
                     break;
                 }
 
@@ -569,7 +578,7 @@ pub fn compute_layout(
                 };
                 lines.push(LineLayout {
                     buf_row: line_idx,
-                    pixel_y,
+                    pixel_y: pixel_y as f32,
                     line_height: seg_height,
                     scale: seg_scale,
                     glyph_advance: seg_glyph_advance,
@@ -584,7 +593,7 @@ pub fn compute_layout(
                     image: if is_first { image_layout.clone() } else { None },
                 });
 
-                pixel_y += seg_height;
+                pixel_y += seg_height as f64;
                 is_first = false;
                 pos = end;
                 if pos >= full_count {
@@ -593,14 +602,14 @@ pub fn compute_layout(
             }
             // Reserve vertical space for inline image below the text line.
             if let Some(ref img) = image_layout {
-                pixel_y += img.display_height;
+                pixel_y += img.display_height as f64;
             }
         } else {
             // No wrap — single entry per line.
             let line_height = org_heading_scale * cell_height;
 
             // Don't emit lines whose bottom overflows the viewport (0.5px FP tolerance).
-            if pixel_y + line_height > pixel_y_limit + 0.5 {
+            if pixel_y + line_height as f64 > pixel_y_limit + PIXEL_Y_EPSILON {
                 break;
             }
 
@@ -633,7 +642,7 @@ pub fn compute_layout(
             };
             lines.push(LineLayout {
                 buf_row: line_idx,
-                pixel_y,
+                pixel_y: pixel_y as f32,
                 line_height,
                 scale: org_heading_scale,
                 glyph_advance: line_glyph_advance,
@@ -648,10 +657,10 @@ pub fn compute_layout(
                 image: image_layout.clone(),
             });
 
-            pixel_y += line_height;
+            pixel_y += line_height as f64;
             // Reserve vertical space for inline image below the text line.
             if let Some(ref img) = image_layout {
-                pixel_y += img.display_height;
+                pixel_y += img.display_height as f64;
             }
         }
 
@@ -668,7 +677,7 @@ pub fn compute_layout(
         cell_height,
         area_row,
         area_col,
-        pixel_y_limit,
+        pixel_y_limit: pixel_y_limit as f32,
         scrollbar_col,
         total_lines: buf.display_line_count(),
         scroll_offset: win.scroll_offset,
@@ -888,6 +897,97 @@ mod tests {
                 ll.pixel_y,
                 ll.line_height
             );
+        }
+    }
+
+    /// Churn-hotspot property test (git-history root-cause pass): the `+0.5`
+    /// tolerance this file used to carry was a symptom patch for f32
+    /// accumulation drift, not a genuine boundary-case need — it hid the
+    /// real invariant (`pixel_y` strictly increases; no row's bottom edge
+    /// legitimately overflows the viewport) instead of enforcing it. Builds
+    /// buffers with a mix of fold ranges + wrapped long lines across a range
+    /// of scroll_offsets and a fractional cell_height (the actual drift
+    /// trigger — see `layout_renders_all_viewport_lines`), and checks the
+    /// invariant holds with an epsilon far tighter than the old 0.5px.
+    ///
+    /// The buffer/viewport are deliberately large (2000 lines, 900-row
+    /// viewport): verified empirically that this is the scale where f32
+    /// accumulation drift actually becomes measurable — reverting the fix
+    /// (f64 accumulator -> plain f32) makes this exact test fail with a real
+    /// ~0.02px overflow at this scale, confirming the old `+0.5` was masking
+    /// a genuine (if usually sub-visible) numerical bug, not a phantom one.
+    #[test]
+    fn compute_layout_pixel_y_is_monotonic_and_never_overflows_with_tight_epsilon() {
+        const EPS: f32 = 1e-4; // far tighter than the old 0.5px fudge
+
+        // A mix of short/long lines so word-wrap actually produces multiple
+        // segments per buffer line for the "wrap" variant below.
+        let long_line = "the quick brown fox jumps over the lazy dog ".repeat(4);
+        let text: String = (0..2000)
+            .map(|i| {
+                if i % 7 == 0 {
+                    format!("{long_line} {i}")
+                } else {
+                    format!("line {i}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for wrap in [false, true] {
+            let mut e = make_editor(&text);
+            e.word_wrap = wrap;
+            let idx = e.active_buffer_idx();
+            // A handful of non-overlapping fold ranges, spread through the
+            // buffer, so folded regions interact with scroll + wrap.
+            e.buffers[idx].folded_ranges.push((10, 15));
+            e.buffers[idx].folded_ranges.push((40, 44));
+            e.buffers[idx].folded_ranges.push((90, 100));
+
+            let total_lines = e.buffers[idx].display_line_count();
+            let area_height = 900; // large enough to accumulate measurable f32 drift
+            let cell_height = 17.7; // fractional — the actual FP-drift trigger
+
+            for scroll_offset in (0..total_lines).step_by(3) {
+                e.window_mgr.focused_window_mut().scroll_offset = scroll_offset;
+                let buf = &e.buffers[idx];
+                let win = e.window_mgr.focused_window();
+                let layout = compute_layout(
+                    &e,
+                    buf,
+                    win,
+                    0,
+                    0,
+                    80,
+                    area_height,
+                    cell_height,
+                    8.0,
+                    None,
+                    None,
+                );
+
+                let pixel_y_limit = area_height as f32 * cell_height;
+                let mut prev_pixel_y: Option<f32> = None;
+                for ll in &layout.lines {
+                    if let Some(prev) = prev_pixel_y {
+                        assert!(
+                            ll.pixel_y >= prev - EPS,
+                            "wrap={wrap} scroll_offset={scroll_offset}: pixel_y went \
+                             backward ({prev} -> {}), not monotonic",
+                            ll.pixel_y
+                        );
+                    }
+                    assert!(
+                        ll.pixel_y + ll.line_height <= pixel_y_limit + EPS,
+                        "wrap={wrap} scroll_offset={scroll_offset}: line at \
+                         pixel_y={} height={} overflows limit {pixel_y_limit} \
+                         by more than {EPS}px",
+                        ll.pixel_y,
+                        ll.line_height
+                    );
+                    prev_pixel_y = Some(ll.pixel_y);
+                }
+            }
         }
     }
 }
