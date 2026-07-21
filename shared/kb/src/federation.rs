@@ -237,7 +237,9 @@ impl KbRegistry {
         };
 
         // Write sentinel file (idempotent)
-        let _ = write_sentinel(&org_dir, &uuid, &name);
+        if let Err(e) = write_sentinel(&org_dir, &uuid, &name) {
+            tracing::warn!(error = %e, uuid, "failed to write KB instance sentinel file");
+        }
 
         let instance = KbInstance {
             uuid: uuid.clone(),

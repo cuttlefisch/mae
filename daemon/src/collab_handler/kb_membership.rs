@@ -152,15 +152,22 @@ pub(super) async fn handle_kb_join(
                 let pk = hex32(&pm["pubkey"]);
                 let label = pm["label"].as_str().unwrap_or(fp);
                 let update = coll.add_pending(fp, label, &now_stamp(), pk.as_ref(), wrap.as_ref());
-                let _ = persist_and_broadcast_collection(
+                match persist_and_broadcast_collection(
                     doc_store,
                     broadcaster,
                     session_id,
                     &kb_id,
                     &update,
                 )
-                .await;
-                info!(session = session_id, kb_id = %kb_id, member = %fp, "kb/join: recorded a forwarded pending member (#255 mesh key delivery)");
+                .await
+                {
+                    Ok(_) => {
+                        info!(session = session_id, kb_id = %kb_id, member = %fp, "kb/join: recorded a forwarded pending member (#255 mesh key delivery)");
+                    }
+                    Err(e) => {
+                        warn!(session = session_id, kb_id = %kb_id, member = %fp, error = %e, "kb/join: failed to persist a forwarded pending member (#255 mesh key delivery) — not recorded");
+                    }
+                }
             }
         }
     }
@@ -179,14 +186,17 @@ pub(super) async fn handle_kb_join(
                     auth_label.unwrap_or(principal),
                     SyncRole::Viewer,
                 );
-                let _ = persist_and_broadcast_collection(
+                if let Err(e) = persist_and_broadcast_collection(
                     doc_store,
                     broadcaster,
                     session_id,
                     &kb_id,
                     &update,
                 )
-                .await;
+                .await
+                {
+                    warn!(session = session_id, kb_id = %kb_id, principal = %principal, error = %e, "kb/join: failed to persist the auto-join membership — the join response below still proceeds against the pre-upsert collection state");
+                }
             }
         }
         Ok(AccessDecision::Pending) => {
@@ -200,14 +210,28 @@ pub(super) async fn handle_kb_join(
                     auth_pubkey,
                     join_wrap_pubkey.as_ref(),
                 );
-                let _ = persist_and_broadcast_collection(
+                // A client told "status: pending" believes their join request is durably
+                // recorded and will show up for the owner to approve. If the persist
+                // fails, that belief is false — the request only lived in this
+                // in-memory `coll` and is gone the moment this session ends. Report the
+                // failure instead of a false pending success.
+                if let Err(e) = persist_and_broadcast_collection(
                     doc_store,
                     broadcaster,
                     session_id,
                     &kb_id,
                     &update,
                 )
-                .await;
+                .await
+                {
+                    warn!(session = session_id, kb_id = %kb_id, principal = %principal, error = %e, "kb/join: failed to persist the pending join request");
+                    return JsonRpcResponse::error(
+                        id,
+                        McpError::internal_error(format!(
+                            "failed to record the pending join request: {e}"
+                        )),
+                    );
+                }
             }
             info!(session = session_id, kb_id = %kb_id, principal = ?auth_principal, "kb/join: pending");
             return JsonRpcResponse::success(
