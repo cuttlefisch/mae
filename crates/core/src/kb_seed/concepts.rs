@@ -358,7 +358,7 @@ See also: [[concept:buffer]], [[concept:window]], [[concept:buffer-mode]]\n";
 
 pub(super) const CONCEPT_MCP_DEVELOPMENT: &str = "\
 ** MCP Development Workflow\n\n\
-All 130+ MAE tools are exposed via MCP with full parity. When developing MAE \
+All 700+ MAE tools are exposed via MCP with full parity. When developing MAE \
 inside MAE (e.g. with Claude Code via `mae-mcp-shim`), these tools provide \
 structured access to LSP, DAP, KB, and editor state.\n\n\
 *** Tool Categories\n\

@@ -47,7 +47,7 @@ Near-term, code-grounded work extracted from this roadmap + the ADR backlog (fil
 | 2. Scheme Runtime | ✅ Complete | R7RS-small (mae-scheme), `init.scm`, `define-key`, `set-option!`, REPL |
 | 3. AI Integration | ✅ Complete | Claude/OpenAI/Gemini/DeepSeek, 450+ tool-calling, conversation UI, permissions |
 | 4. LSP + DAP + Syntax | ✅ Complete | Full LSP (rename, format, outline, breadcrumbs, peek), DAP (watches, exceptions), 13-language tree-sitter |
-| 5. Knowledge Base | ✅ Complete | CozoDB graph store, 862 nodes, typed relationships, pre-built manual, ingestion pipeline |
+| 5. Knowledge Base | ✅ Complete | CozoDB graph store, 1,300+ nodes, typed relationships, pre-built manual, ingestion pipeline |
 | 6. Embedded Shell | ✅ Complete | alacritty_terminal, MCP bridge, file auto-reload, send-to-shell |
 | 7. Documentation | ✅ Complete | Tutor (13 lessons), `:describe-configuration`, `--check-config`, `--init-config` |
 | 8. GUI Backend | ✅ Complete | winit + Skia 2D, inline images (PNG/JPG/SVG), variable-height, inertial scroll |
@@ -228,7 +228,7 @@ The KB had a dual source of truth problem: org files re-parsed on startup, SQLit
 
 #### Persistent Graph KB (v0.12.0 — ADR-012)
 - [x] **Phase 0**: rusqlite removed (~2,500 lines), SqliteKbStore deleted, sled engine string fixed, `kb_backend` option removed.
-- [x] **Phase 1**: Pre-built manual KB — `build-manual-kb` binary (862 nodes), `manual_kb.rs` locate+validate, SHA-256 checksums, `Editor::with_kb()`, multi-DB startup (manual → user → imported).
+- [x] **Phase 1**: Pre-built manual KB — `build-manual-kb` binary (1,300+ nodes), `manual_kb.rs` locate+validate, SHA-256 checksums, `Editor::with_kb()`, multi-DB startup (manual → user → imported).
 - [x] **Phase 2**: CozoDB-direct ingestion — `import_org_dir_to_store()`, `IngestMode` (Full/Incremental), content hash change detection, `source_files` relation, enhanced `ImportReport`.
 - [x] **Phase 3**: Scale validation — 2,500 nodes + 15,000 links integration test (`cozo_scale_test.rs`).
 - [x] **Phase 3.5**: CozoDB-first query layer — `KbQueryLayer` trait + `CozoQueryLayer` + `FederatedQuery` (multi-store fan-out). 46 read sites migrated from in-memory `KnowledgeBase` to query-layer-first. ADR-013.
