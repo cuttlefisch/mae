@@ -996,46 +996,15 @@ struct CharStyle {
 // -----------------------------------------------------------------------
 
 fn apply_hex_color_preview(chars: &[char], styles: &mut [CharStyle]) {
-    let len = chars.len();
-    let mut i = 0;
-    while i < len {
-        if chars[i] == '#' {
-            // Try #rrggbb (7 chars total)
-            if i + 7 <= len && chars[i + 1..i + 7].iter().all(|c| c.is_ascii_hexdigit()) {
-                let hex: String = chars[i + 1..i + 7].iter().collect();
-                if let Some((r, g, b)) = parse_hex6(&hex) {
-                    let fg = theme::contrast_fg(r, g, b);
-                    let bg =
-                        Color4f::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0);
-                    for s in styles[i..i + 7].iter_mut() {
-                        s.fg = fg;
-                        s.bg = Some(bg);
-                    }
-                    i += 7;
-                    continue;
-                }
-            }
-            // Try #rgb (4 chars total)
-            if i + 4 <= len && chars[i + 1..i + 4].iter().all(|c| c.is_ascii_hexdigit()) {
-                let hex: String = chars[i + 1..i + 4].iter().collect();
-                if let Some((r, g, b)) = parse_hex3(&hex) {
-                    let fg = theme::contrast_fg(r, g, b);
-                    let bg =
-                        Color4f::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0);
-                    for s in styles[i..i + 4].iter_mut() {
-                        s.fg = fg;
-                        s.bg = Some(bg);
-                    }
-                    i += 4;
-                    continue;
-                }
-            }
+    for (range, (r, g, b)) in mae_core::render_common::color::find_hex_color_runs(chars) {
+        let fg = theme::contrast_fg(r, g, b);
+        let bg = Color4f::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0);
+        for s in styles[range].iter_mut() {
+            s.fg = fg;
+            s.bg = Some(bg);
         }
-        i += 1;
     }
 }
-
-use mae_core::render_common::color::{parse_hex3, parse_hex6};
 
 #[cfg(test)]
 mod tests {

@@ -134,8 +134,7 @@ pub fn color_or(tc: Option<ThemeColor>, fallback: Color4f) -> Color4f {
 
 /// Pick black or white foreground for readability on the given bg color.
 pub fn contrast_fg(r: u8, g: u8, b: u8) -> Color4f {
-    let lum = 0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64;
-    if lum > 128.0 {
+    if mae_core::render_common::color::prefers_dark_fg(r, g, b) {
         Color4f::new(0.0, 0.0, 0.0, 1.0) // black
     } else {
         Color4f::new(1.0, 1.0, 1.0, 1.0) // white
