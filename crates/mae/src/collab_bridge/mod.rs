@@ -1273,6 +1273,32 @@ pub(crate) enum PendingResponseKind {
         node_id: String,
         pending_rowid: Option<i64>,
     },
+    /// #339: response to the legacy (non-E2e) `kb/approve_member` — previously
+    /// unregistered, so a daemon-side rejection (wrong role, bad fingerprint) was
+    /// completely invisible. The E2e branch of the same command already registers
+    /// separately (see `e2e_write_failed`'s `CollabEvent::Error` above).
+    KbApproveMember {
+        kb_id: String,
+        principal: String,
+    },
+    /// #339: response to `kb/list_pending` — previously unregistered, dropping any
+    /// daemon-side error silently (no UI consumer of the success payload exists
+    /// yet; this only closes the error-visibility gap).
+    KbListPendingResult {
+        kb_id: String,
+    },
+    /// #339: response to `kb/set_policy` — previously unregistered.
+    KbSetPolicyResult {
+        kb_id: String,
+        policy: String,
+    },
+    /// #339: response to `kb/block_principal`/`unblock_principal` — previously
+    /// unregistered.
+    KbBlockPrincipalResult {
+        kb_id: String,
+        principal: String,
+        block: bool,
+    },
 }
 
 /// Spawn a dedicated reader task that feeds complete messages into an mpsc channel.
@@ -3114,7 +3140,18 @@ async fn run_collab_task(
                                         "params": { "kb_id": kb_id, "principal": principal, "role": role }
                                     });
                                     if let Ok(body) = serde_json::to_vec(&req) {
-                                        let _ = write_framed(w, &body, write_timeout).await;
+                                        // #339: register so a daemon-side rejection (wrong
+                                        // role, bad fingerprint) is no longer swallowed by
+                                        // the generic "unknown request id" fallback.
+                                        if write_framed(w, &body, write_timeout).await.is_ok() {
+                                            pending_responses.insert(
+                                                req_id,
+                                                PendingResponseKind::KbApproveMember {
+                                                    kb_id: kb_id.clone(),
+                                                    principal: principal.clone(),
+                                                },
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -3128,7 +3165,16 @@ async fn run_collab_task(
                                     "params": { "kb_id": kb_id }
                                 });
                                 if let Ok(body) = serde_json::to_vec(&req) {
-                                    let _ = write_framed(w, &body, write_timeout).await;
+                                    // #339: register so a daemon-side error is surfaced
+                                    // instead of silently dropped.
+                                    if write_framed(w, &body, write_timeout).await.is_ok() {
+                                        pending_responses.insert(
+                                            req_id,
+                                            PendingResponseKind::KbListPendingResult {
+                                                kb_id: kb_id.clone(),
+                                            },
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -3141,7 +3187,17 @@ async fn run_collab_task(
                                     "params": { "kb_id": kb_id, "policy": policy }
                                 });
                                 if let Ok(body) = serde_json::to_vec(&req) {
-                                    let _ = write_framed(w, &body, write_timeout).await;
+                                    // #339: register so a daemon-side rejection (e.g. a
+                                    // non-owner) is no longer swallowed silently.
+                                    if write_framed(w, &body, write_timeout).await.is_ok() {
+                                        pending_responses.insert(
+                                            req_id,
+                                            PendingResponseKind::KbSetPolicyResult {
+                                                kb_id: kb_id.clone(),
+                                                policy: policy.clone(),
+                                            },
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -3162,7 +3218,17 @@ async fn run_collab_task(
                                     "params": { "kb_id": kb_id, "fingerprint": principal }
                                 });
                                 if let Ok(body) = serde_json::to_vec(&req) {
-                                    let _ = write_framed(w, &body, write_timeout).await;
+                                    // #339: register so a daemon-side rejection is surfaced.
+                                    if write_framed(w, &body, write_timeout).await.is_ok() {
+                                        pending_responses.insert(
+                                            req_id,
+                                            PendingResponseKind::KbBlockPrincipalResult {
+                                                kb_id: kb_id.clone(),
+                                                principal: principal.clone(),
+                                                block,
+                                            },
+                                        );
+                                    }
                                 }
                                 // Re-pull the blocklist so the *KB Sharing* Blocked view
                                 // reflects this change (the daemon is authoritative).
@@ -4858,6 +4924,102 @@ fn handle_response(
                             "{} '{member}' {} KB '{kb_id}'",
                             if add { "Added" } else { "Removed" },
                             if add { "to" } else { "from" }
+                        )],
+                    },
+                );
+            }
+        }
+        // #339: the 4 arms below were previously unregistered entirely — their
+        // responses fell into the generic "unknown/expired request id" debug-log
+        // fallback, so a daemon-side rejection was completely invisible. Same
+        // error/success shape as `KbMember` above.
+        PendingResponseKind::KbApproveMember { kb_id, principal } => {
+            if let Some(err) = val.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("approve failed");
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::Error {
+                        message: format!("Failed to approve '{principal}' for KB '{kb_id}': {msg}"),
+                    },
+                );
+            } else {
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::StatusReport {
+                        lines: vec![format!("Approved '{principal}' for KB '{kb_id}'")],
+                    },
+                );
+            }
+        }
+        PendingResponseKind::KbListPendingResult { kb_id } => {
+            if let Some(err) = val.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("list pending failed");
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::Error {
+                        message: format!("Failed to list pending requests for KB '{kb_id}': {msg}"),
+                    },
+                );
+            }
+            // No UI consumer of the success payload exists yet (#339 only closes
+            // the error-visibility gap; wiring the pending list itself is a
+            // separate, larger change — see the *KB Sharing* buffer's own
+            // pending-request source).
+        }
+        PendingResponseKind::KbSetPolicyResult { kb_id, policy } => {
+            if let Some(err) = val.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("set policy failed");
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::Error {
+                        message: format!("Failed to set policy '{policy}' on KB '{kb_id}': {msg}"),
+                    },
+                );
+            } else {
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::StatusReport {
+                        lines: vec![format!("KB '{kb_id}' policy set to '{policy}'")],
+                    },
+                );
+            }
+        }
+        PendingResponseKind::KbBlockPrincipalResult {
+            kb_id,
+            principal,
+            block,
+        } => {
+            if let Some(err) = val.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("block/unblock failed");
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::Error {
+                        message: format!(
+                            "Failed to {} '{principal}' on KB '{kb_id}': {msg}",
+                            if block { "block" } else { "unblock" }
+                        ),
+                    },
+                );
+            } else {
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::StatusReport {
+                        lines: vec![format!(
+                            "{} '{principal}' {} KB '{kb_id}'",
+                            if block { "Blocked" } else { "Unblocked" },
+                            if block { "on" } else { "from" }
                         )],
                     },
                 );

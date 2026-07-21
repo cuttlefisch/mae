@@ -12,6 +12,7 @@ mod collab_bridge_force_resync_tests;
 mod collab_bridge_identity_tofu_tests;
 mod collab_bridge_join_save_tests;
 mod collab_bridge_kb_crypto_tests;
+mod collab_bridge_kb_sharing_rpc_errors_tests;
 mod collab_bridge_kb_sync_tests;
 mod collab_bridge_message_handling_tests;
 mod collab_bridge_psk_tests;
