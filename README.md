@@ -23,8 +23,8 @@ Rust core with an embedded R7RS-small runtime. GUI + terminal.
   WAL persistence, per-user undo, awareness protocol, PSK authentication, and
   mDNS peer discovery. Collaborative KB sharing enables real-time knowledge base
   sync across instances with offline edit + reconnect support.
-- **Org-mode babel** — Execute code blocks in 14 languages (Python, Ruby, Perl,
-  Bash, JS, Lua, R, Rust, Go, C, C++, Scheme, …), noweb expansion, `:tangle`
+- **Org-mode babel** — Execute code blocks in 12 languages (Python, Ruby, Perl,
+  Bash, JS, Lua, R, Rust, Go, C, C++, Scheme), noweb expansion, `:tangle`
   directive, `:var` cross-references, configurable compilers, safety policies.
   Export to HTML and Markdown with TOC, syntax highlighting, tag filtering.
 - **Runtime redefinability** — Embedded R7RS Scheme (mae-scheme). Redefine any
@@ -91,29 +91,39 @@ user's keybinding and the AI's tool palette.
 
 ### Crate Layout
 
+Three separate compilation units, not one flat tree (ADR-014): the **editor
+workspace** (own `Cargo.lock`), **shared crates** (workspace members also
+compiled into the daemon), and the **daemon workspace** (own `Cargo.lock`,
+cozo+sqlite instead of cozo+sled — avoids a rusqlite linker conflict).
+
 ```
-mae (binary)
- ├── mae-core        Buffer (rope), editor state, commands, keymap, syntax
- ├── mae-renderer    Terminal rendering (ratatui), status bar, popups, shell viewport
- ├── mae-gui         GUI rendering (winit + Skia 2D), mouse input, font config, inline images
- ├── mae-scheme      R7RS-small Scheme runtime, init.scm loading, hook dispatch
- ├── mae-ai          Claude + OpenAI + Gemini + DeepSeek providers, tool execution, conversation
- ├── mae-agent       Terminal AI-agent harness (ADR-046) — the default `SPC a a`/`SPC a p` surface
- ├── mae-lsp         LSP client — connection, navigation, diagnostics, completion, formatting
- ├── mae-dap         DAP client — protocol types, transport, breakpoints, stepping, watches
- ├── mae-shell       Terminal emulator (alacritty_terminal), PTY management
- ├── mae-kb          Knowledge base — CozoDB graph store, typed relationships, org parser, federation
- ├── mae-mcp         MCP server — Unix socket, JSON-RPC, stdio shim
- ├── mae-sync        Collaborative sync — yrs CRDT, ropey bridge, encoding helpers
- ├── mae-daemon        Background daemon — KB persistence, collab sync, WAL persistence
- ├── mae-babel       Org-babel executor — 14 languages, persistent sessions, language backends
- ├── mae-export      Org/Markdown export — HTML, Markdown, TOC, syntax highlighting
- ├── mae-canvas      Visual buffer (diagrams, drawings)
- ├── mae-snippets    YASnippet-style templates — tab-stops, mirrors, transforms
- ├── mae-format      Formatter bridge — prettier, black, rustfmt (complements LSP format)
- ├── mae-make        Build runner — Makefile/Cargo.toml/package.json detection
- ├── mae-lookup      Unified lookup — LSP def + docs URL + man pages
- └── mae-spell       Spellcheck — hunspell/aspell integration, inline markers
+Editor workspace (Cargo.toml, crates/)
+ ├── mae               Binary crate — CLI entry point, config loading, event loops
+ ├── mae-core          Buffer (rope), editor state, commands, keymap, syntax
+ ├── mae-renderer      Terminal rendering (ratatui), status bar, popups, shell viewport
+ ├── mae-gui           GUI rendering (winit + Skia 2D), mouse input, font config, inline images
+ ├── mae-scheme        R7RS-small Scheme runtime, init.scm loading, hook dispatch
+ ├── mae-ai            Claude + OpenAI + Gemini + DeepSeek + Ollama providers, tool execution, conversation
+ ├── mae-agent-cli     Terminal AI-agent harness (ADR-046) — binary `mae-agent`, the default `SPC a a`/`SPC a p` surface
+ ├── mae-lsp           LSP client — connection, navigation, diagnostics, completion, formatting
+ ├── mae-dap           DAP client — protocol types, transport, breakpoints, stepping, watches
+ ├── mae-shell         Terminal emulator (alacritty_terminal), PTY management
+ ├── mae-babel         Org-babel executor — 12 languages, persistent sessions, language backends
+ ├── mae-export        Org/Markdown export — HTML, Markdown, TOC, syntax highlighting
+ ├── mae-canvas        Visual buffer (diagrams, drawings)
+ ├── mae-snippets      YASnippet-style templates — tab-stops, mirrors, transforms
+ ├── mae-format        Formatter bridge — prettier, black, rustfmt (complements LSP format)
+ ├── mae-make          Build runner — Makefile/Cargo.toml/package.json detection
+ ├── mae-lookup        Unified lookup — LSP def + docs URL + man pages
+ └── mae-spell         Spellcheck — hunspell/aspell integration, inline markers
+
+Shared crates (shared/, editor-workspace members also used by the daemon)
+ ├── mae-kb            Knowledge base — CozoDB graph store, typed relationships, org parser, federation
+ ├── mae-sync          Collaborative sync — yrs CRDT, ropey bridge, encoding helpers
+ └── mae-mcp           MCP server — Unix socket, JSON-RPC, stdio shim
+
+Daemon workspace (daemon/Cargo.toml — separate Cargo.lock)
+ └── mae-daemon        Background daemon — KB persistence, collab sync, WAL persistence
 ```
 
 ## Getting Started
@@ -223,8 +233,9 @@ If anything in this list doesn't work as written, that's a bug — please file i
 
 MAE's core thesis is that the AI is a *peer actor*, not a plugin — your external
 coding agent (Claude Code, etc.) can drive the editor through the **same** tools the
-built-in agent uses, over MCP. A running MAE exposes 135+ tools on a per-process Unix
-socket; the `mae-mcp-shim` binary bridges MCP-over-stdio to that socket:
+built-in agent uses, over MCP. A running MAE exposes 700+ tools (most are 1:1 command
+mirrors — see [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md) for how that scale is validated)
+on a per-process Unix socket; the `mae-mcp-shim` binary bridges MCP-over-stdio to that socket:
 
 ```sh
 # Point your agent's MCP config at the shim; it auto-discovers /tmp/mae-{PID}.sock
@@ -437,7 +448,7 @@ suppression.
 | Protocols | LSP + DAP | First-class — exposed to Scheme and AI |
 | Knowledge base | CozoDB (Datalog) + SQLite | Graph store, typed relationships, versioning, HNSW vector index |
 | Syntax | tree-sitter | 16 languages, structural parse trees |
-| Literate programming | Org-babel | 14 execution languages, tangle, noweb, export |
+| Literate programming | Org-babel | 12 execution languages, tangle, noweb, export |
 
 ## Roadmap
 
