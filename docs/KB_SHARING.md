@@ -4,7 +4,7 @@
 > and **encryption** compose into a local-first system where peers share a KB — over a hub or a peer-to-peer
 > mesh — and a host that relays it cannot read it. This ties together the deep-dive docs and ADRs:
 > `E2E_ENCRYPTION.md` (crypto), `SECURITY_REVIEW.md` (identity + authz audit), ADR-017/018/023/025/026/036/
-> 037/038/039. For setup commands see `COLLABORATION.md` + `kb-sharing.md`.
+> 037/038/039. For setup commands see `COLLABORATION.md` + `kb-sharing-setup.md`.
 
 ## 1. The shape of it
 
@@ -149,7 +149,7 @@ op-log fence (#157).
 
 - **Crypto design + prior art:** `docs/E2E_ENCRYPTION.md`
 - **Identity + authorization audit:** `docs/SECURITY_REVIEW.md`
-- **Setup / commands:** `docs/COLLABORATION.md`, `docs/kb-sharing.md`
+- **Setup / commands:** `docs/COLLABORATION.md`, `docs/kb-sharing-setup.md`
 - **ADRs:** 017 (peer auth) · 018 (access control) · 023 (epoch fence) · 025 (mesh transport) · 026
   (peer-verifiable membership) · 036 (signed content ops) · 037 (E2E encryption) · 038 (editor-authored
   membership) · 039 (identity + authz hardening)
