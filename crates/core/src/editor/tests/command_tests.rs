@@ -1296,4 +1296,22 @@ fn kb_leave_with_id_targets_that_kb() {
     );
 }
 
+#[test]
+fn setup_daemon_status_points_at_collab_start() {
+    // #347: :setup-daemon only flips config — it never starts a process itself.
+    // Its status message must point at :collab-start (the command that actually
+    // launches it) so a first-time user doesn't read "enabled" and assume the
+    // daemon is now running.
+    let mut editor = Editor::new();
+    let starting_enabled = editor.kb.daemon_enabled;
+    editor.execute_command("setup-daemon");
+    if !starting_enabled {
+        assert!(
+            editor.status_msg.contains(":collab-start"),
+            "expected the enable-path status message to mention :collab-start, got: {}",
+            editor.status_msg
+        );
+    }
+}
+
 // ===== Operator-pending mode tests (WU0) =====

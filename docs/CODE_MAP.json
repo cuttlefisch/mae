@@ -2646,7 +2646,7 @@
     },
     {
       "name": "setup-daemon",
-      "doc": "Toggle background daemon"
+      "doc": "Toggle background daemon config (see :collab-start to actually launch it)"
     },
     {
       "name": "setup-all",
@@ -3198,7 +3198,7 @@
     },
     {
       "name": "collab-start",
-      "doc": "Start local daemon"
+      "doc": "Actually launch the local daemon process (:setup-daemon only configures it)"
     },
     {
       "name": "collab-connect",

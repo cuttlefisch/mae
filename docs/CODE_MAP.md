@@ -824,7 +824,7 @@ Source: `shared/sync/src/lib.rs`
 | `setup-ai` | Configure AI provider, model, and API key |
 | `setup-collab` | Configure collaboration mode and authentication |
 | `setup-kb` | Set knowledge base notes directory |
-| `setup-daemon` | Toggle background daemon |
+| `setup-daemon` | Toggle background daemon config (see :collab-start to actually launch it) |
 | `setup-all` | Run all unconfigured setup sections |
 | `toggle-fps` | Toggle FPS overlay in status bar (SPC t F) |
 | `debug-mode` | Toggle debug mode: RSS/CPU/frame time in status bar (SPC t D) |
@@ -963,7 +963,7 @@ Source: `shared/sync/src/lib.rs`
 | `record-start` | Start event recording for debugging |
 | `record-stop` | Stop event recording |
 | `record-save` | Save recorded events to JSON file (:record-save <path>) |
-| `collab-start` | Start local daemon |
+| `collab-start` | Actually launch the local daemon process (:setup-daemon only configures it) |
 | `collab-connect` | Connect to collaborative daemon |
 | `collab-disconnect` | Disconnect from daemon |
 | `collab-rotate-identity` | Rotate your collab identity key across every KB you own (ADR-040) |
