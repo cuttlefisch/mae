@@ -557,3 +557,103 @@ async fn tcp_debug_endpoint() {
         "expected version field, got: {result}"
     );
 }
+
+/// Same as `spawn_server`, but writes a `daemon.toml` setting `collab.max_connections`
+/// before spawning — #342's connection-cap needs a non-default (small) value to test
+/// deterministically without opening hundreds of sockets.
+async fn spawn_server_with_max_connections(max_connections: usize) -> Option<ServerGuard> {
+    if std::env::var("MAE_TCP_E2E").is_err() {
+        eprintln!("skipping: MAE_TCP_E2E not set");
+        return None;
+    }
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr: SocketAddr = listener.local_addr().unwrap();
+    drop(listener);
+    let tmp = tempfile::tempdir().unwrap();
+    let config_dir = tmp.path().join("config").join("mae");
+    std::fs::create_dir_all(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("daemon.toml"),
+        format!("[collab]\nmax_connections = {max_connections}\n"),
+    )
+    .unwrap();
+    let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"))
+        .args([
+            "--bind",
+            &addr.to_string(),
+            "--data-dir",
+            tmp.path().to_str().unwrap(),
+        ])
+        .env("XDG_RUNTIME_DIR", tmp.path())
+        .env("XDG_CONFIG_HOME", tmp.path().join("config"))
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("failed to spawn mae-daemon");
+    for _ in 0..50 {
+        if tokio::net::TcpStream::connect(addr).await.is_ok() {
+            return Some(ServerGuard {
+                _child: child,
+                _tmp: tmp,
+                addr,
+            });
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    panic!("mae-daemon did not start within 5s on {addr}");
+}
+
+#[tokio::test]
+async fn connection_cap_rejects_the_nplus1th_client() {
+    let Some(server) = spawn_server_with_max_connections(2).await else {
+        return;
+    };
+    let addr = server.addr;
+
+    // Open 2 connections and keep them alive (matches max_connections=2) — each
+    // must complete `initialize` successfully.
+    let mut kept = Vec::new();
+    for i in 0..2 {
+        let mut c = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let resp = send_recv(
+            &mut c,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": format!("cap-test-{i}")}}
+            }),
+        )
+        .await;
+        assert!(
+            resp.error.is_none(),
+            "connection {i} (within the cap) should succeed: {:?}",
+            resp.error
+        );
+        kept.push(c);
+    }
+
+    // The 3rd connection exceeds the cap — the daemon closes the socket
+    // immediately (before any handshake/JSON-RPC), so the read side hits EOF
+    // rather than yielding a normal response.
+    let mut over_cap = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let _ = over_cap
+        .write_all(
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {"clientInfo": {"name": "over-cap"}}
+                })
+            )
+            .as_bytes(),
+        )
+        .await;
+    let framed = read_framed(&mut over_cap, 2000).await;
+    assert!(
+        framed.is_none(),
+        "the (max_connections+1)th client should be rejected (connection closed \
+         before any response), got a response instead: {framed:?}"
+    );
+
+    drop(kept); // keep the 2 in-cap connections alive until this point
+}

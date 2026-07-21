@@ -38,6 +38,11 @@
 # Pre-shared key for mutual authentication (required for untrusted networks)
 # psk = ""
 
+# Hard cap on concurrent TCP connections (0 = unlimited). Bounds an
+# unauthenticated client parking a connection forever if it never completes
+# its handshake — raise for a larger deployment.
+# max_connections = 256
+
 # [collab.storage]
 # Collab WAL data directory (default: data_dir/collab)
 # data_dir = ""

@@ -610,23 +610,75 @@ async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState
     }
 
     // Spawn TCP accept loop
+    // #342: bound the count of concurrently accepted sockets (authenticated or
+    // not) — before this, nothing capped how many stalled/never-authenticating
+    // connections could accumulate, each parking a task+socket forever.
+    let max_connections = collab.max_connections;
+    let active_connections = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     tokio::spawn(async move {
         loop {
             match tcp_listener.accept().await {
                 Ok((stream, addr)) => {
+                    if max_connections > 0
+                        && active_connections.load(std::sync::atomic::Ordering::Relaxed)
+                            >= max_connections
+                    {
+                        warn!(
+                            %addr,
+                            max_connections,
+                            "collab TCP: connection cap reached, rejecting new connection"
+                        );
+                        drop(stream); // closes the socket immediately
+                        continue;
+                    }
                     info!(addr = %addr, "collab TCP client connected");
                     let store = Arc::clone(&doc_store);
                     let bc = Arc::clone(&broadcaster);
                     let auth = collab_auth.clone();
+                    let active = Arc::clone(&active_connections);
+                    active.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     tokio::spawn(async move {
+                        // RAII: decrements on every exit path (normal return,
+                        // early `return`, or a panic unwinding through here) so
+                        // the count never leaks regardless of how the handler ends.
+                        struct DecrementOnDrop(Arc<std::sync::atomic::AtomicUsize>);
+                        impl Drop for DecrementOnDrop {
+                            fn drop(&mut self) {
+                                self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                        }
+                        let _guard = DecrementOnDrop(active);
                         // mTLS path needs the whole stream (cannot pre-split).
                         if let CollabAuth::KeyTls {
                             acceptor,
                             authorized,
                         } = auth
                         {
-                            match acceptor.accept(stream).await {
-                                Ok(tls) => {
+                            // #342: same deadline as the plaintext auth paths'
+                            // handshake (collab_handler::HANDSHAKE_TIMEOUT_SECS) —
+                            // an accepted-but-silent TLS handshake would otherwise
+                            // park a task+socket forever.
+                            let tls_accept = tokio::time::timeout(
+                                std::time::Duration::from_secs(
+                                    collab_handler::HANDSHAKE_TIMEOUT_SECS,
+                                ),
+                                acceptor.accept(stream),
+                            )
+                            .await;
+                            match tls_accept {
+                                Err(_elapsed) => {
+                                    warn!(
+                                        %addr,
+                                        timeout_secs = collab_handler::HANDSHAKE_TIMEOUT_SECS,
+                                        "TLS handshake timed out, dropping connection"
+                                    );
+                                    return;
+                                }
+                                Ok(Err(e)) => {
+                                    warn!(%addr, error = %e, "TLS handshake failed");
+                                    return;
+                                }
+                                Ok(Ok(tls)) => {
                                     let peer = {
                                         let (_, conn) = tls.get_ref();
                                         // I-10: re-read authorized_keys fresh so the resolved
@@ -657,7 +709,6 @@ async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState
                                     )
                                     .await;
                                 }
-                                Err(e) => warn!(%addr, error = %e, "TLS handshake failed"),
                             }
                             return;
                         }
