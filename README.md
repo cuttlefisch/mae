@@ -16,9 +16,9 @@ Rust core with an embedded R7RS-small runtime. GUI + terminal.
 
 ## Features
 
-- **AI as peer actor** — 450+ editor commands exposed as AI tools. The AI calls
-  the same `dispatch_builtin()` as your keybindings. No shadow API, no simulated
-  keystrokes.
+- **AI as peer actor** — every editor command is exposed as an AI tool, and the AI
+  calls the exact same `dispatch_builtin()` your keybindings do. No shadow API,
+  no simulated keystrokes, no "AI mode" with a narrower feature set than yours.
 - **Collaborative editing** — CRDT sync engine (yrs/YATA) with daemon,
   WAL persistence, per-user undo, awareness protocol, PSK authentication, and
   mDNS peer discovery. Collaborative KB sharing enables real-time knowledge base
@@ -28,8 +28,8 @@ Rust core with an embedded R7RS-small runtime. GUI + terminal.
   directive, `:var` cross-references, configurable compilers, safety policies.
   Export to HTML and Markdown with TOC, syntax highlighting, tag filtering.
 - **Runtime redefinability** — Embedded R7RS Scheme (mae-scheme). Redefine any
-  function while running. 45+ primitives, 18 hook points, `init.scm` is a
-  real program.
+  function while running, live in the REPL, no restart. `init.scm` is a real
+  program, not a settings file.
 - **Full vi modal editing** — Motions, operators, text objects, count prefix,
   dot repeat, macros, registers, marks, surround, visual block mode, multi-cursor.
 - **LSP first-class** — Go-to-definition, references, hover, completion, rename,
@@ -38,12 +38,17 @@ Rust core with an embedded R7RS-small runtime. GUI + terminal.
 - **DAP first-class** — Multi-language debugging (Python, Rust, C/C++).
   Breakpoints (conditional, logpoint), watch expressions, exception breakpoints.
   AI can set breakpoints and inspect variables.
-- **Multi-provider AI** — Claude, OpenAI, Gemini, and DeepSeek. Provider-aware
-  prompt tuning. Tiered prompt system (Full/Compact) with per-model guardrails.
-- **Graph knowledge base** — CozoDB (Datalog) primary backend with SQLite fallback.
-  400+ typed nodes, 20 relationship types, agenda queries, node versioning, meta-node
-  composition, block-level addressing, HNSW vector index (GraphRAG-ready). Federated
-  instances, org-mode parser. Same docs the AI reads.
+- **Multi-provider AI** — Claude, OpenAI, Gemini, DeepSeek, and Ollama.
+  Provider-aware prompt tuning. Tiered prompt system (Full/Compact) with
+  per-model guardrails.
+- **Curated context, not context-window roulette** — architecture decisions, past
+  bug fixes, and documented invariants live in a queryable knowledge graph the
+  AI fetches narrow, relevant excerpts from (`kb_search`, block-level `kb_get`
+  down to a single paragraph) instead of re-grepping your whole codebase or
+  re-explaining decisions every session. The same graph backs `:help` for the
+  human — CozoDB (Datalog), agenda queries, node versioning, federated
+  instances, HNSW vector index. Bugs get checked against existing ADRs before
+  being patched, so fixes land at the root cause instead of accumulating drift.
 - **Tree-sitter** — 16 languages (incl. C, C++, Ruby) with structural parse
   trees. AI can query syntax trees for code reasoning.
 - **GUI + Terminal** — winit + Skia 2D hardware-accelerated GUI, ratatui
@@ -468,7 +473,7 @@ See [ROADMAP.md](ROADMAP.md) for detailed milestone tracking.
 | 10. AI Agent Efficiency | ✅ Complete | Tiered prompts, provider-aware hints, target dispatch, frame profiling |
 | 11. Module System | ✅ Complete | 19 modules (Doom model), `mae pkg` CLI, flags, live reload |
 | 12. Collaborative Editing | ✅ Complete | CRDT daemon sync, multi-peer sync, WAL persistence, awareness, per-user undo, PSK auth, KB sharing E2E |
-| 13. Scheme Runtime | ✅ Complete | mae-scheme R7RS-small VM, Steel fully removed, 2,200+ Scheme tests |
+| 13. Scheme Runtime | ✅ Complete | mae-scheme R7RS-small VM, Steel fully removed, R7RS-compliant |
 | 14. Graph KB | ✅ Complete | CozoDB default, 20 typed rel types, agenda queries, versioning, HNSW index, views |
 | **Next** | 🔧 In progress | AI hygiene, task management, live GraphRAG, GUI views. See [ROADMAP.md](ROADMAP.md) |
 
