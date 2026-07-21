@@ -38,12 +38,7 @@ pub fn derive_kb_client_id(fingerprint: &str, epoch: u64) -> u64 {
         h ^= b as u64;
         h = h.wrapping_mul(0x0000_0100_0000_01b3);
     }
-    let folded = (h ^ (h >> 53)) & ((1u64 << 53) - 1);
-    if folded == 0 || folded == 1 {
-        2
-    } else {
-        folded
-    }
+    crate::text::fold_hash_to_yrs_client_id(h)
 }
 
 /// A fresh, **unpredictable** authorization-epoch token (#72). Issued by the

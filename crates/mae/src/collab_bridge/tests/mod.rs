@@ -8,6 +8,7 @@ mod collab_bridge_e2e_flags_offline_tests;
 mod collab_bridge_e2e_recovery_tests;
 mod collab_bridge_e2e_rotation_tests;
 mod collab_bridge_fence_conflict_tests;
+mod collab_bridge_force_resync_tests;
 mod collab_bridge_identity_tofu_tests;
 mod collab_bridge_join_save_tests;
 mod collab_bridge_kb_crypto_tests;

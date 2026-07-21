@@ -54,6 +54,22 @@ pub fn clamp_client_id_to_yrs(raw: u64) -> u64 {
     raw & ((1u64 << 53) - 1)
 }
 
+/// Fold an arbitrary 64-bit hash into yrs's legal 53-bit `ClientID` range,
+/// preserving entropy from the high bits (XOR-fold) rather than discarding them
+/// via a plain mask like [`clamp_client_id_to_yrs`] — for callers computing a
+/// fresh/derived id from a hash, where losing the top 11 bits outright would
+/// needlessly shrink the collision-avoidance space. Never returns `0` or `1`
+/// (both used as sentinels in some paths). Shared by [`crate::kb::derive_kb_client_id`]
+/// and the collab-bridge's buffer client-id derivation (#338).
+pub fn fold_hash_to_yrs_client_id(h: u64) -> u64 {
+    let folded = (h ^ (h >> 53)) & ((1u64 << 53) - 1);
+    if folded == 0 || folded == 1 {
+        2
+    } else {
+        folded
+    }
+}
+
 /// Create a yrs Doc with a specific client ID and UTF-16 offset kind.
 pub(crate) fn new_doc_with_client_id(client_id: u64) -> Doc {
     Doc::with_options(yrs::Options {
