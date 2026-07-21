@@ -1128,6 +1128,11 @@ pub struct Editor {
     pub scroll_speed: usize,
     /// Max items in LSP completion popup. Default 10.
     pub completion_max_items: usize,
+    /// Max items in LSP code-action popup. Default 12.
+    pub code_action_max_items: usize,
+    /// Max items shown at once in the symbol-outline popup (TUI only — GUI's
+    /// outline popup is a fixed-size box with scrolling). Default 20.
+    pub symbol_outline_max_items: usize,
     /// Max lines in LSP hover popup. Default 15.
     pub hover_max_lines: usize,
     /// Popup width as percentage of screen. Default 70.
@@ -1467,6 +1472,8 @@ impl Editor {
             mouse_wheel_follow_mouse: true,
             scroll_speed: 3,
             completion_max_items: 10,
+            code_action_max_items: 12,
+            symbol_outline_max_items: 20,
             hover_max_lines: 15,
             popup_width_pct: 70,
             popup_height_pct: 60,

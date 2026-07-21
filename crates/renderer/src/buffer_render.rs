@@ -649,46 +649,18 @@ fn emit_styled_spans(chars: &[char], styles: &[Style], out: &mut Vec<Span<'stati
 /// their background to the parsed color. Foreground auto-adjusts to
 /// black or white for readability (relative luminance threshold).
 pub(crate) fn apply_hex_color_preview(chars: &[char], styles: &mut [Style]) {
-    let len = chars.len();
-    let mut i = 0;
-    while i < len {
-        if chars[i] == '#' {
-            // Try #rrggbb (7 chars total)
-            if i + 7 <= len && chars[i + 1..i + 7].iter().all(|c| c.is_ascii_hexdigit()) {
-                let hex: String = chars[i + 1..i + 7].iter().collect();
-                if let Some((r, g, b)) = parse_hex6(&hex) {
-                    let fg = contrast_fg(r, g, b);
-                    let bg = Color::Rgb(r, g, b);
-                    for s in styles[i..i + 7].iter_mut() {
-                        *s = Style::default().fg(fg).bg(bg);
-                    }
-                    i += 7;
-                    continue;
-                }
-            }
-            // Try #rgb (4 chars total)
-            if i + 4 <= len && chars[i + 1..i + 4].iter().all(|c| c.is_ascii_hexdigit()) {
-                let hex: String = chars[i + 1..i + 4].iter().collect();
-                if let Some((r, g, b)) = parse_hex3(&hex) {
-                    let fg = contrast_fg(r, g, b);
-                    let bg = Color::Rgb(r, g, b);
-                    for s in styles[i..i + 4].iter_mut() {
-                        *s = Style::default().fg(fg).bg(bg);
-                    }
-                    i += 4;
-                    continue;
-                }
-            }
+    for (range, (r, g, b)) in mae_core::render_common::color::find_hex_color_runs(chars) {
+        let fg = contrast_fg(r, g, b);
+        let bg = Color::Rgb(r, g, b);
+        for s in styles[range].iter_mut() {
+            *s = Style::default().fg(fg).bg(bg);
         }
-        i += 1;
     }
 }
 
-use mae_core::render_common::color::{luminance, parse_hex3, parse_hex6};
-
 /// Pick black or white foreground for readability on the given bg color.
 fn contrast_fg(r: u8, g: u8, b: u8) -> Color {
-    if luminance(r, g, b) > 128.0 {
+    if mae_core::render_common::color::prefers_dark_fg(r, g, b) {
         Color::Black
     } else {
         Color::White

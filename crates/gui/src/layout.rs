@@ -81,7 +81,6 @@ pub struct LineLayout {
 }
 
 /// Complete layout for one window's visible content area.
-#[allow(dead_code)]
 #[derive(Clone)]
 pub struct FrameLayout {
     /// One entry per visible display row (including wrap continuations).
@@ -112,7 +111,6 @@ pub struct FrameLayout {
     pub scroll_offset: usize,
 }
 
-#[allow(dead_code)]
 impl FrameLayout {
     /// Find the first LineLayout entry for a buffer row, if visible.
     pub fn layout_for_row(&self, buf_row: usize) -> Option<&LineLayout> {

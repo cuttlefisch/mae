@@ -64,27 +64,29 @@ section — when you add a new exception, add the marker + both cross-references
 and `shared/sync/src/kb.rs` are now fully resolved (every resulting file under ceiling) and dropped
 from this list entirely; the rest were substantially reduced but their residual/dispatcher file is
 still over the source ceiling, so they stay listed with updated numbers:
-- `crates/mae/src/main.rs` — 945 lines (was 3,329). CLI dispatch moved to `cli.rs`, `GuiApp` +
+- `crates/mae/src/main.rs` — 951 lines (was 3,329). CLI dispatch moved to `cli.rs`, `GuiApp` +
   its `ApplicationHandler` impl moved to `gui_app.rs`, config-application/KB-federation-init/
   daemon-connect moved to `bootstrap.rs`. Residual is genuinely sequential entry-point glue
   (panic/logging setup, editor construction, Scheme init, final channel-wiring handoff) with no
   further obvious seam — still ~18% over the 800-line ceiling, accepted as-is rather than forced.
-- `crates/mae/src/bootstrap.rs` (NEW, surfaced by the `main.rs` split above) — 3,062 lines (was
-  already 2,397 before this pass, pre-existing untracked debt). Holds app bootstrapping: config
-  application, KB federation init, daemon connect, collab user-name resolution. Not split further
-  this pass — needs its own dedicated look.
-- `crates/mae/src/gui_app.rs` (NEW, surfaced by the `main.rs` split above) — 1,270 lines. `GuiApp`
-  struct + `ApplicationHandler` impl (`window_event`'s 3 largest arms were already extracted to
-  private methods during the move). All state lives in `self` fields — a real candidate for a
-  future per-arm/per-phase split, not attempted this pass.
-- `crates/mae/src/collab_bridge/mod.rs` (was flat `collab_bridge.rs`) — 5,299 lines (was 6,546).
+- `crates/mae/src/bootstrap.rs` (NEW, surfaced by the `main.rs` split above) — 3,068 lines (2026-07:
+  3,062, growing further; was already 2,397 before the original split, pre-existing untracked debt).
+  Holds app bootstrapping: config application, KB federation init, daemon connect, collab user-name
+  resolution. Not split further this pass — needs its own dedicated look.
+- `crates/mae/src/gui_app.rs` (NEW, surfaced by the `main.rs` split above) — 1,662 lines (2026-07:
+  1,270 lines, +392/+31% since — drifting fast). `GuiApp` struct + `ApplicationHandler` impl
+  (`window_event`'s 3 largest arms were already extracted to private methods during the move). All
+  state lives in `self` fields — a real candidate for a future per-arm/per-phase split, not
+  attempted this pass.
+- `crates/mae/src/collab_bridge/mod.rs` (was flat `collab_bridge.rs`) — 5,302 lines (was 6,546).
   `handle_collab_event` (28-arm match) and `drain_collab_intents` (~10 drain sections) split into
   sibling `events_kb.rs`/`events_connection.rs`/`events_doc.rs` (all under 800). The remaining debt
   is narrower and more precise now: `run_collab_task` (1,695 lines) is a `tokio::select!` loop with
   ~19 raw locals threaded across 29 `CollabCommand` match arms and no state struct to group them —
   see its own in-code `@ai-caution` marker for why it's deliberately NOT split mechanically.
   `handle_response`/`handle_disconnected_cmd` also remain unmoved (reasonably sized on their own).
-- `crates/core/src/editor/mod.rs` — 1,382 lines (was 3,457). A dozen orphaned value-structs moved
+- `crates/core/src/editor/mod.rs` — 1,626 lines (2026-07: 1,382 lines, +244/+18% since — drifting
+  fast). A dozen orphaned value-structs moved
   into the sibling files that already imported them (`lsp_state.rs`, `git_ops.rs`, `ai_state.rs`);
   ~90 `impl Editor` methods regrouped into `window_ops.rs`/`render_ops.rs`/`session_ops.rs`/
   `conversation_ops.rs` (new) plus extended `keymaps.rs`/`option_ops.rs`/`project_ops.rs`. Residual
@@ -93,11 +95,13 @@ still over the source ceiling, so they stay listed with updated numbers:
 - `crates/scheme/src/runtime.rs` — Scheme VM runtime; `SchemeRuntime::new()`'s ~186 `register_fn` calls and
   `inject_editor_state`/`apply_to_editor` were split into `crates/scheme/src/runtime/*.rs` submodules by
   category (keybindings/editor-ops/kb-primitives/kb-queries/io-packages/misc-primitives/test-primitives/
-  state-sync). The residual `runtime.rs` (SharedState, SchemeRuntime's core methods) is still ~950 lines;
-  its `#[cfg(test)] mod tests` was extracted to a sibling `runtime_tests.rs` (~1,526 lines, ~3x the
-  test-file ceiling) — both still over ceiling but no longer sprawling
+  state-sync). The residual `runtime.rs` (SharedState, SchemeRuntime's core methods) is 990 lines (2026-07:
+  ~950); its `#[cfg(test)] mod tests` was extracted to a sibling `runtime_tests.rs` — now **2,059 lines**
+  (2026-07: ~1,526, +533/+35% since — now ~4x the 500-line test-file ceiling, the worst-drifted file in
+  this list, a strong candidate for its own splitting pass) — both still over ceiling but no longer
+  sprawling
 - `crates/scheme/tests/r7rs_compliance.rs` — R7RS spec compliance tests (large by nature)
-- `daemon/src/collab_handler/mod.rs` (was flat `collab_handler.rs`) — 1,934 lines (was 3,821).
+- `daemon/src/collab_handler/mod.rs` (was flat `collab_handler.rs`) — 1,936 lines (was 3,821).
   `handle_doc_request_inner`'s 31-arm match split into sibling `sync_methods.rs`/`docs_methods.rs`/
   `kb_membership.rs`/`kb_content.rs`/`kb_governance.rs` (all under 800; `kb_content.rs` lands 2 lines
   over) — it's now a thin ~340-line dispatcher. The residual is ~30 individually-reasonable
@@ -108,6 +112,22 @@ still over the source ceiling, so they stay listed with updated numbers:
 Both `collab_bridge_tests.rs` and `collab_handler_tests.rs` (and `crates/core/src/editor/kb_ops/kb_ops_tests.rs`)
 were split into `tests/` submodule directories in the same pass — all resulting test files are under
 the 500-line ceiling; see git history for the exact per-feature breakdown.
+
+**2026-07 (round 5) additions** — confirmed over ceiling, not previously tracked here (all post-date
+the 2026-07 splitting pass above — the KB graph view feature and ongoing membership/window work):
+- `crates/core/src/editor/graph_view_ops.rs` — 4,464 lines. KB graph view Scheme/MCP-facing ops
+  (navigation, zoom/pin, click handling). Candidate split: layout-drive / navigation / physics /
+  overlay concerns.
+- `crates/core/src/graph_view.rs` — 2,848 lines. `GraphView` core (scene graph, viewport, flattening).
+- `crates/core/src/buffer.rs` — 3,648 lines. Rounds 1-4 (branch `fix/backlog-review-root-cause-patterns`)
+  fixed a CRDT-offset *drift* bug here but never addressed *size* — still ~4.6x the 800-line ceiling.
+- `shared/sync/src/membership.rs` — 3,455 lines. Signed-membership derivation (ADR-026); growing with
+  the P2P mesh initiative's ongoing work.
+- `crates/core/src/window.rs` — 3,437 lines.
+- `shared/kb/src/lib.rs` — 3,577 lines.
+
+None split this pass — that's design work, appropriately deferred; this entry exists so the debt is
+discoverable (per this file's own cross-reference discipline above) instead of silently untracked.
 
 Flag these if they've grown since last audit, but don't remediate without explicit request.
 

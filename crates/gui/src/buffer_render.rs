@@ -13,13 +13,6 @@ use crate::gutter;
 use crate::theme;
 use crate::theme::color4f_eq;
 
-/// Compute the font scale for an org heading level using default scale values.
-/// `*` = 1.5x, `**` = 1.3x, `***` = 1.15x, deeper = 1.0x.
-#[allow(dead_code)]
-pub fn org_heading_scale_for_level(level: u8) -> f32 {
-    mae_core::heading::heading_scale_for_level(level)
-}
-
 /// Compute the font scale for an org heading level using editor-configured values.
 pub fn org_heading_scale_for_level_with(level: u8, h1: f32, h2: f32, h3: f32) -> f32 {
     mae_core::heading::heading_scale_for_level_with(level, h1, h2, h3)
@@ -70,17 +63,6 @@ pub fn line_heading_scale_with(
     } else {
         1.0
     }
-}
-
-/// Get the heading scale for a single line. Returns 1.0 if not a heading
-/// or if heading scaling is disabled. Uses default scale values.
-#[allow(dead_code)]
-pub fn line_heading_scale(
-    buf: &mae_core::Buffer,
-    syntax_spans: Option<&[HighlightSpan]>,
-    line_idx: usize,
-) -> f32 {
-    line_heading_scale_with(buf, syntax_spans, line_idx, 1.5, 1.3, 1.15)
 }
 
 /// Render a text buffer's content using a pre-computed `FrameLayout`.
@@ -996,46 +978,15 @@ struct CharStyle {
 // -----------------------------------------------------------------------
 
 fn apply_hex_color_preview(chars: &[char], styles: &mut [CharStyle]) {
-    let len = chars.len();
-    let mut i = 0;
-    while i < len {
-        if chars[i] == '#' {
-            // Try #rrggbb (7 chars total)
-            if i + 7 <= len && chars[i + 1..i + 7].iter().all(|c| c.is_ascii_hexdigit()) {
-                let hex: String = chars[i + 1..i + 7].iter().collect();
-                if let Some((r, g, b)) = parse_hex6(&hex) {
-                    let fg = theme::contrast_fg(r, g, b);
-                    let bg =
-                        Color4f::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0);
-                    for s in styles[i..i + 7].iter_mut() {
-                        s.fg = fg;
-                        s.bg = Some(bg);
-                    }
-                    i += 7;
-                    continue;
-                }
-            }
-            // Try #rgb (4 chars total)
-            if i + 4 <= len && chars[i + 1..i + 4].iter().all(|c| c.is_ascii_hexdigit()) {
-                let hex: String = chars[i + 1..i + 4].iter().collect();
-                if let Some((r, g, b)) = parse_hex3(&hex) {
-                    let fg = theme::contrast_fg(r, g, b);
-                    let bg =
-                        Color4f::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0);
-                    for s in styles[i..i + 4].iter_mut() {
-                        s.fg = fg;
-                        s.bg = Some(bg);
-                    }
-                    i += 4;
-                    continue;
-                }
-            }
+    for (range, (r, g, b)) in mae_core::render_common::color::find_hex_color_runs(chars) {
+        let fg = theme::contrast_fg(r, g, b);
+        let bg = Color4f::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0);
+        for s in styles[range].iter_mut() {
+            s.fg = fg;
+            s.bg = Some(bg);
         }
-        i += 1;
     }
 }
-
-use mae_core::render_common::color::{parse_hex3, parse_hex6};
 
 #[cfg(test)]
 mod tests {
@@ -1120,12 +1071,13 @@ mod tests {
 
     #[test]
     fn org_heading_scale_levels() {
-        assert_eq!(org_heading_scale_for_level(1), 1.5);
-        assert_eq!(org_heading_scale_for_level(2), 1.3);
-        assert_eq!(org_heading_scale_for_level(3), 1.15);
-        assert_eq!(org_heading_scale_for_level(4), 1.0);
-        assert_eq!(org_heading_scale_for_level(0), 1.0);
-        assert_eq!(org_heading_scale_for_level(255), 1.0);
+        let scale = |level| org_heading_scale_for_level_with(level, 1.5, 1.3, 1.15);
+        assert_eq!(scale(1), 1.5);
+        assert_eq!(scale(2), 1.3);
+        assert_eq!(scale(3), 1.15);
+        assert_eq!(scale(4), 1.0);
+        assert_eq!(scale(0), 1.0);
+        assert_eq!(scale(255), 1.0);
     }
 
     #[test]
@@ -1159,15 +1111,15 @@ mod tests {
         }
 
         // `* Welcome` (level 1) should scale to 1.5
-        let scale0 = line_heading_scale(&buf, Some(&spans), 0);
+        let scale0 = line_heading_scale_with(&buf, Some(&spans), 0, 1.5, 1.3, 1.15);
         assert_eq!(scale0, 1.5);
 
         // `Some text` should not scale
-        let scale1 = line_heading_scale(&buf, Some(&spans), 1);
+        let scale1 = line_heading_scale_with(&buf, Some(&spans), 1, 1.5, 1.3, 1.15);
         assert_eq!(scale1, 1.0);
 
         // `** Details` (level 2) should scale to 1.3
-        let scale2 = line_heading_scale(&buf, Some(&spans), 2);
+        let scale2 = line_heading_scale_with(&buf, Some(&spans), 2, 1.5, 1.3, 1.15);
         assert_eq!(scale2, 1.3);
     }
 

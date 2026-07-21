@@ -14,9 +14,6 @@ use crate::theme;
 use mae_core::Editor;
 use skia_safe::Color4f;
 
-/// Default thin bar width in pixels.
-#[allow(dead_code)]
-const DEFAULT_SCROLLBAR_WIDTH: f32 = 6.0;
 /// Corner radius for the thumb pill shape.
 const THUMB_RADIUS: f32 = 3.0;
 /// Minimum thumb height in pixels (so it's always grabbable).

@@ -16,6 +16,14 @@
 //! (what is signed + hashed), and sign/verify/chain. Validity *derivation*
 //! (timebox, revocation, capability, the resolver) and the `KbCollectionDoc`
 //! wiring build on top of this in later slices.
+//!
+//! @ai-caution: [architecture-debt] At 3,455 lines, well over the 800-line
+//! ceiling — growing with the P2P mesh initiative's ongoing signed-membership
+//! work (ADR-026). Not split (design work, not attempted this pass; round-5
+//! tech-debt pass, 2026-07). Tracked in `.claude/commands/mae-audit.md`'s
+//! "Known exceptions" and `ROADMAP.md`'s "Architecture Debt" section —
+//! re-verify the line count each audit pass rather than trusting this
+//! comment's number to stay current.
 
 use crate::kb::Role;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};

@@ -71,7 +71,7 @@ impl Projector {
     /// will project it (and register the routing).
     async fn project_node_change(&self, node_id: &str) -> Result<(), String> {
         let kbs: Vec<String> = {
-            let idx = self.index.lock().unwrap();
+            let idx = self.index.lock().unwrap_or_else(|e| e.into_inner());
             idx.node_to_kbs
                 .get(node_id)
                 .map(|s| s.iter().cloned().collect())
@@ -105,7 +105,7 @@ impl Projector {
         let current: HashSet<String> = coll.list_nodes().into_iter().map(|(id, _)| id).collect();
 
         let prev = {
-            let idx = self.index.lock().unwrap();
+            let idx = self.index.lock().unwrap_or_else(|e| e.into_inner());
             idx.manifests.get(kb_id).cloned().unwrap_or_default()
         };
         let removed: Vec<String> = prev.difference(&current).cloned().collect();
@@ -132,7 +132,7 @@ impl Projector {
         }
 
         // Update routing: drop removed from node_to_kbs, add current; store the manifest.
-        let mut idx = self.index.lock().unwrap();
+        let mut idx = self.index.lock().unwrap_or_else(|e| e.into_inner());
         for node_id in &removed {
             if let Some(set) = idx.node_to_kbs.get_mut(node_id) {
                 set.remove(kb_id);
@@ -158,7 +158,7 @@ impl Projector {
     /// deleted cozo store heals by replaying the CRDT. Returns the projected node count.
     pub async fn rebuild_kb(&self, kb_id: &str) -> Result<usize, String> {
         {
-            let mut idx = self.index.lock().unwrap();
+            let mut idx = self.index.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(nodes) = idx.manifests.remove(kb_id) {
                 for node_id in nodes {
                     if let Some(set) = idx.node_to_kbs.get_mut(&node_id) {
@@ -446,5 +446,40 @@ mod tests {
         assert_eq!(n, 1, "one node projected");
         let store = stores.store_for("kb1").unwrap();
         assert_eq!(store.get_node("concept:a").unwrap().unwrap().title, "A");
+    }
+
+    #[tokio::test]
+    async fn poisoned_index_lock_does_not_cascade_into_the_next_call() {
+        // Adversarial (principle #14): a real panic while the index lock is held
+        // must not poison the mutex into permanently failing every SUBSEQUENT
+        // project_doc call — nothing about the panicking caller's failure has
+        // anything to do with the next one.
+        use crate::storage::SqliteBackend;
+        let doc_store = Arc::new(DocStore::new(
+            Arc::new(SqliteBackend::open_memory().unwrap()),
+            500,
+        ));
+        let stores = MemStores::new();
+        let projector = Arc::new(Projector::new(Arc::clone(&doc_store), stores));
+
+        // Poison the index mutex: a thread panics while holding the lock (the
+        // standard Rust poisoning trigger).
+        let p2 = Arc::clone(&projector);
+        let handle = std::thread::spawn(move || {
+            let _guard = p2.index.lock().unwrap();
+            panic!("simulated failure while holding the index lock");
+        });
+        assert!(
+            handle.join().is_err(),
+            "the poisoning thread should have panicked"
+        );
+
+        // A real production call through the now-poisoned lock must succeed, not
+        // cascade-panic.
+        let result = projector.project_doc("kb:concept:a").await;
+        assert!(
+            result.is_ok(),
+            "a poisoned index lock must not cascade into a panic on the next call: {result:?}"
+        );
     }
 }

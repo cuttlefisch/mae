@@ -629,12 +629,12 @@ pub(crate) fn render_code_action_popup(frame: &mut Frame, editor_area: Rect, edi
     let win = editor.window_mgr.focused_window();
     let cursor_screen_row = win.cursor_row.saturating_sub(win.scroll_offset) as u16;
 
-    const MAX_ITEMS: usize = 12;
-    let visible_count = menu.items.len().min(MAX_ITEMS) as u16;
+    let max_items = editor.code_action_max_items;
+    let visible_count = menu.items.len().min(max_items) as u16;
     let popup_width = menu
         .items
         .iter()
-        .take(MAX_ITEMS)
+        .take(max_items)
         .map(|item| item.title.len() + 4)
         .max()
         .unwrap_or(20)
@@ -675,7 +675,7 @@ pub(crate) fn render_code_action_popup(frame: &mut Frame, editor_area: Rect, edi
     let content_lines: Vec<Line> = menu
         .items
         .iter()
-        .take(MAX_ITEMS)
+        .take(max_items)
         .enumerate()
         .map(|(i, item)| {
             let style = if i == menu.selected {
@@ -887,9 +887,9 @@ pub(crate) fn render_symbol_outline_popup(frame: &mut Frame, editor_area: Rect, 
         return;
     }
 
-    const MAX_ITEMS: usize = 20;
+    let max_items = editor.symbol_outline_max_items;
     let filtered_count = state.filtered_indices.len();
-    let visible_count = filtered_count.min(MAX_ITEMS) as u16;
+    let visible_count = filtered_count.min(max_items) as u16;
     // +2 for border, +1 for filter line
     let popup_height = visible_count + 3;
     let popup_width = (editor_area.width * 3 / 4).clamp(30, 60);
