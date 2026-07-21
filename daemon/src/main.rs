@@ -474,6 +474,11 @@ async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState
             // owns. Only key mode signs; psk/none keep the legacy unsigned path.
             doc_store.set_signer(Arc::clone(&identity));
 
+            // ADR-018 (#73): install the authorized_keys path so `load_collection`
+            // can resolve legacy v1 (label-based) collections to fingerprint-anchored
+            // v2 automatically on load, preserving v1 access without a re-share.
+            doc_store.set_authorized_keys_path(ak_path.clone());
+
             // ADR-025 §"Driving surfaces": expose the collab doc_store + broadcaster
             // + owner identity to the local control socket, so `p2p/share_kb` can
             // ESTABLISH a mesh share (create/widen the collection doc to P2p) without

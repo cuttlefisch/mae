@@ -106,7 +106,7 @@ fn compute_client_id(buffer_idx: usize) -> u64 {
 }
 
 /// Marker the daemon embeds in an epoch-fence rejection's error message
-/// (daemon/src/collab_handler.rs:1780). This is the editor↔daemon contract: a
+/// (daemon/src/collab_handler/mod.rs:1041). This is the editor↔daemon contract: a
 /// `kb/node_update` rejected with this text was authored under a stale,
 /// pre-grant authorization epoch (ADR-023) and can never be accepted as-is.
 /// Matched as a substring because the daemon appends node-specific detail.
@@ -483,6 +483,16 @@ pub enum CollabEvent {
         kb_id: String,
         node_id: String,
         update_bytes: Vec<u8>,
+    },
+    /// #206: `open_new_ops` found one or more op-set entries for this node it could
+    /// NOT decrypt (wrong/rotated key, or a tampered/corrupt blob) — a non-fatal but
+    /// user-visible signal, since this is indistinguishable from "not yet received"
+    /// without it. Fail-closed on confidentiality is unaffected; this only surfaces
+    /// the count.
+    KbOpsUndecryptable {
+        kb_id: String,
+        node_id: String,
+        count: usize,
     },
     /// ADR-020 emit durability: the background task could not put a `kb/node_update`
     /// on the wire (write failed, or no writer / disconnected). For a store-backed
@@ -948,6 +958,11 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             node_id,
             update_bytes,
         } => events_kb::handle_kb_node_update_event(editor, kb_id, node_id, update_bytes),
+        CollabEvent::KbOpsUndecryptable {
+            kb_id,
+            node_id,
+            count,
+        } => events_kb::handle_kb_ops_undecryptable_event(editor, kb_id, node_id, count),
         CollabEvent::KbUpdateRequeue {
             kb_id,
             node_id,
@@ -1693,7 +1708,7 @@ fn route_kb_node_update(
     .unwrap_or_else(|_| bytes.clone());
     let seen = seen_ops.entry(node_id.to_string()).or_default();
     let opened = mae_sync::op_set::open_new_ops(&merged, key, seen);
-    for (op_id, plaintext) in opened {
+    for (op_id, plaintext) in opened.ops {
         seen.insert(op_id);
         try_send_evt(
             evt_tx,
@@ -1701,6 +1716,18 @@ fn route_kb_node_update(
                 kb_id: kb_id.clone(),
                 node_id: node_id.to_string(),
                 update_bytes: plaintext,
+            },
+        );
+    }
+    // #206: a wrong/rotated key (or tamper) must be distinguishable from "not yet
+    // received" — surface the count instead of letting it vanish silently.
+    if opened.undecryptable > 0 {
+        try_send_evt(
+            evt_tx,
+            CollabEvent::KbOpsUndecryptable {
+                kb_id,
+                node_id: node_id.to_string(),
+                count: opened.undecryptable,
             },
         );
     }
@@ -1900,8 +1927,19 @@ async fn run_collab_task(
                                     let member_count = member_plans.len();
                                     let plans: Vec<RotationPlan> =
                                         owner_plans.into_iter().chain(member_plans).collect();
+                                    let total_plans = plans.len();
                                     let mut rotated = 0usize;
+                                    // #round-4: a wire-write failure used to be silently discarded
+                                    // (`let _ = write_framed(...)`) while local state advanced
+                                    // unconditionally — a dropped delta left the daemon's roster on
+                                    // the OLD key while `signing_identity` swapped to the new one
+                                    // below, so the very next signed op would be rejected by the
+                                    // daemon: a self-inflicted lockout reported as "rotation
+                                    // shipped". Only advance local state for a KB whose delta(s)
+                                    // actually reached the daemon; track the rest to report honestly.
+                                    let mut failed_kb_ids: Vec<String> = Vec::new();
                                     for plan in &plans {
+                                        let mut plan_shipped = true;
                                         for delta in &plan.deltas {
                                             let req_id = next_request_id;
                                             next_request_id += 1;
@@ -1910,32 +1948,50 @@ async fn run_collab_task(
                                                 &plan.kb_id,
                                                 &mae_sync::encoding::update_to_base64(delta),
                                             );
-                                            if let Ok(body) = serde_json::to_vec(&req) {
-                                                let _ = write_framed(w, &body, write_timeout).await;
+                                            let sent = match serde_json::to_vec(&req) {
+                                                Ok(body) => {
+                                                    write_framed(w, &body, write_timeout).await.is_ok()
+                                                }
+                                                Err(_) => false,
+                                            };
+                                            if !sent {
+                                                plan_shipped = false;
+                                                break;
                                             }
                                         }
-                                        // Advance the local replica so later ops chain on the
-                                        // rotated state (and the new key derives its own content key).
-                                        kb_collections
-                                            .insert(plan.kb_id.clone(), plan.new_replica.clone());
-                                        // B2: persist so the rotated/recovered op-log survives a restart.
-                                        persist_collection(&plan.kb_id, &plan.new_replica);
-                                        rotated += 1;
-                                    }
-                                    // Persist the successor key (the old key already signed the
-                                    // Rebinds, so it is safe to replace on disk now).
-                                    if let Some(dir) = mae_mcp::identity::default_collab_dir() {
-                                        if let Err(e) = new_id.save(&dir) {
-                                            warn!(error = %e, "rotate-identity: failed to persist the new key");
+                                        if plan_shipped {
+                                            // Advance the local replica so later ops chain on the
+                                            // rotated state (and the new key derives its own content key).
+                                            kb_collections
+                                                .insert(plan.kb_id.clone(), plan.new_replica.clone());
+                                            // B2: persist so the rotated/recovered op-log survives a restart.
+                                            persist_collection(&plan.kb_id, &plan.new_replica);
+                                            rotated += 1;
+                                        } else {
+                                            failed_kb_ids.push(plan.kb_id.clone());
                                         }
                                     }
-                                    let new_fp = new_id.fingerprint();
-                                    // Swap the live signing identity — future content ops sign with
-                                    // the new key (which the rotated membership recognises as owner).
-                                    signing_identity = Some(new_id);
-                                    info!(rotated, owned_count, member_count, new_fp = %new_fp, "rotate-identity: rotation shipped");
-                                    try_send_evt(&evt_tx, CollabEvent::StatusReport {
-                                        lines: vec![
+                                    if rotated == 0 && total_plans > 0 {
+                                        warn!(owned_count, member_count, "rotate-identity: failed to ship ANY rotation delta — identity NOT rotated");
+                                        try_send_evt(&evt_tx, CollabEvent::Error {
+                                            message: format!(
+                                                "Identity rotation failed — could not reach the daemon for any of {total_plans} KB(s). Your identity was NOT changed; try again once reconnected."
+                                            ),
+                                        });
+                                    } else {
+                                        // Persist the successor key (the old key already signed the
+                                        // Rebinds, so it is safe to replace on disk now).
+                                        if let Some(dir) = mae_mcp::identity::default_collab_dir() {
+                                            if let Err(e) = new_id.save(&dir) {
+                                                warn!(error = %e, "rotate-identity: failed to persist the new key");
+                                            }
+                                        }
+                                        let new_fp = new_id.fingerprint();
+                                        // Swap the live signing identity — future content ops sign with
+                                        // the new key (which the rotated membership recognises as owner).
+                                        signing_identity = Some(new_id);
+                                        info!(rotated, owned_count, member_count, failed = failed_kb_ids.len(), new_fp = %new_fp, "rotate-identity: rotation shipped");
+                                        let mut lines = vec![
                                             format!("Identity rotated across {rotated} KB(s) ({owned_count} owned, {member_count} as member)."),
                                             format!("New fingerprint: {new_fp}"),
                                             "Next: authorize the new key on the daemon (`mae-daemon authorize`), then reconnect — this connection still uses the old key.".to_string(),
@@ -1943,8 +1999,16 @@ async fn run_collab_task(
                                             // existing node after rotation trips the epoch fence once and must
                                             // rebase; `collab-fence-resolution = auto` re-authors it silently.
                                             "Your first edit to an existing node may rebase once (the rotated key has a new write lineage) — set `collab-fence-resolution` to `auto` to handle it silently.".to_string(),
-                                        ],
-                                    });
+                                        ];
+                                        if !failed_kb_ids.is_empty() {
+                                            lines.push(format!(
+                                                "WARNING: rotation FAILED to ship for {} KB(s) — still on the OLD key there, re-run rotate-identity once reconnected: {}",
+                                                failed_kb_ids.len(),
+                                                failed_kb_ids.join(", ")
+                                            ));
+                                        }
+                                        try_send_evt(&evt_tx, CollabEvent::StatusReport { lines });
+                                    }
                                 }
                                 (None, _) => {
                                     try_send_evt(&evt_tx, CollabEvent::Error {
@@ -1977,7 +2041,12 @@ async fn run_collab_task(
                                         &kb_collections, &id, &recovery_pubkey, now,
                                     );
                                     let mut registered = 0usize;
+                                    // #round-4: same fix shape as RotateIdentity above — a wire
+                                    // write can silently fail; only advance local state for a KB
+                                    // whose delta actually reached the daemon.
+                                    let mut failed_kb_ids: Vec<String> = Vec::new();
                                     for plan in &plans {
+                                        let mut plan_shipped = true;
                                         for delta in &plan.deltas {
                                             let req_id = next_request_id;
                                             next_request_id += 1;
@@ -1986,15 +2055,26 @@ async fn run_collab_task(
                                                 &plan.kb_id,
                                                 &mae_sync::encoding::update_to_base64(delta),
                                             );
-                                            if let Ok(body) = serde_json::to_vec(&req) {
-                                                let _ = write_framed(w, &body, write_timeout).await;
+                                            let sent = match serde_json::to_vec(&req) {
+                                                Ok(body) => {
+                                                    write_framed(w, &body, write_timeout).await.is_ok()
+                                                }
+                                                Err(_) => false,
+                                            };
+                                            if !sent {
+                                                plan_shipped = false;
+                                                break;
                                             }
                                         }
-                                        kb_collections
-                                            .insert(plan.kb_id.clone(), plan.new_replica.clone());
-                                        // B2: persist so the rotated/recovered op-log survives a restart.
-                                        persist_collection(&plan.kb_id, &plan.new_replica);
-                                        registered += 1;
+                                        if plan_shipped {
+                                            kb_collections
+                                                .insert(plan.kb_id.clone(), plan.new_replica.clone());
+                                            // B2: persist so the rotated/recovered op-log survives a restart.
+                                            persist_collection(&plan.kb_id, &plan.new_replica);
+                                            registered += 1;
+                                        } else {
+                                            failed_kb_ids.push(plan.kb_id.clone());
+                                        }
                                     }
                                     // Save the recovery secret to `<collab_dir>/recovery` (a
                                     // SEPARATE path from the primary `id_ed25519`, so it is not
@@ -2013,7 +2093,7 @@ async fn run_collab_task(
                                         }
                                         None => None,
                                     };
-                                    info!(registered, rec_fp = %rec_fp, "register-recovery-key: recovery key registered");
+                                    info!(registered, failed = failed_kb_ids.len(), rec_fp = %rec_fp, "register-recovery-key: recovery key registered");
                                     let mut lines = vec![
                                         format!("Recovery key registered across {registered} KB(s)."),
                                         format!("Recovery fingerprint: {rec_fp}"),
@@ -2024,6 +2104,13 @@ async fn run_collab_task(
                                             lines.push("BACK THIS UP OFFLINE and remove it from this machine — anyone holding it can rotate your identity. To recover later: `:collab-recover-identity <path> <old-fingerprint>`.".to_string());
                                         }
                                         None => lines.push("WARNING: the recovery key was registered but could NOT be saved to disk — it is lost. Re-run after fixing the collab directory.".to_string()),
+                                    }
+                                    if !failed_kb_ids.is_empty() {
+                                        lines.push(format!(
+                                            "WARNING: registration FAILED to ship for {} KB(s) — re-run register-recovery-key once reconnected: {}",
+                                            failed_kb_ids.len(),
+                                            failed_kb_ids.join(", ")
+                                        ));
                                     }
                                     try_send_evt(&evt_tx, CollabEvent::StatusReport { lines });
                                 }
@@ -2657,6 +2744,14 @@ async fn run_collab_task(
                             // removed member receives no new wrap → it keeps only the old key and
                             // can't read post-rotation content. Adds + legacy removes fall through.
                             let mut shipped_e2e = false;
+                            // #round-4: distinct from `shipped_e2e == false` (E2E not applicable —
+                            // falls through to the generic add/remove below). If we DID enter the
+                            // E2E revoke+rekey path but the wire write failed, falling through to
+                            // the generic (non-rekeying) remove would silently DOWNGRADE the
+                            // security semantics — the removed member would be dropped from the
+                            // roster without their key access ever being revoked. Track it
+                            // separately so that case gets a loud, honest error instead.
+                            let mut e2e_write_failed = false;
                             if !add {
                                 if let (Some(_old_key), Some(id)) =
                                     (content_keys.get(&kb_id).cloned(), signing_identity.as_ref())
@@ -2741,7 +2836,7 @@ async fn run_collab_task(
                                                 &owner_pubkey,
                                                 now,
                                             );
-                                            if let Some(ref mut w) = writer {
+                                            let sent = if let Some(ref mut w) = writer {
                                                 let req_id = next_request_id;
                                                 next_request_id += 1;
                                                 let req = mae_sync::wire::kb_collection_op_request(
@@ -2749,44 +2844,63 @@ async fn run_collab_task(
                                                     &kb_id,
                                                     &mae_sync::encoding::update_to_base64(&delta),
                                                 );
-                                                if let Ok(body) = serde_json::to_vec(&req) {
-                                                    let _ = write_framed(w, &body, write_timeout).await;
+                                                match serde_json::to_vec(&req) {
+                                                    Ok(body) => write_framed(w, &body, write_timeout)
+                                                        .await
+                                                        .is_ok(),
+                                                    Err(_) => false,
                                                 }
-                                            }
-                                            // #169 M2 + #173: register the key
-                                            // `find_wrapped_content_key` resolves from the
-                                            // post-rotation collection (the causal-order
-                                            // winner), NOT the locally-generated k2 — so the
-                                            // owner's seal key matches what every receiver
-                                            // derives. Seed the collection replica with the
-                                            // post-rotation state so subsequent membership
-                                            // deltas re-derive correctly (#173).
-                                            kb_collections
-                                                .insert(kb_id.clone(), coll.encode_state());
-                                            let winner = derive_kb_content_key(
-                                                &coll.encode_state(),
-                                                id,
-                                            )
-                                            .unwrap_or_else(|| k2.clone());
-                                            if let Some(d) =
-                                                mae_mcp::content_key_store::content_keys_dir().as_ref()
-                                            {
-                                                if let Err(e) = mae_mcp::content_key_store::save(
-                                                    d,
-                                                    &kb_id,
-                                                    winner.as_bytes(),
-                                                ) {
-                                                    warn!(kb = %kb_id, error = %e, "kb/remove (E2e): failed to persist rotated content key");
+                                            } else {
+                                                false
+                                            };
+                                            if sent {
+                                                // #169 M2 + #173: register the key
+                                                // `find_wrapped_content_key` resolves from the
+                                                // post-rotation collection (the causal-order
+                                                // winner), NOT the locally-generated k2 — so the
+                                                // owner's seal key matches what every receiver
+                                                // derives. Seed the collection replica with the
+                                                // post-rotation state so subsequent membership
+                                                // deltas re-derive correctly (#173).
+                                                kb_collections
+                                                    .insert(kb_id.clone(), coll.encode_state());
+                                                let winner = derive_kb_content_key(
+                                                    &coll.encode_state(),
+                                                    id,
+                                                )
+                                                .unwrap_or_else(|| k2.clone());
+                                                if let Some(d) = mae_mcp::content_key_store::content_keys_dir()
+                                                    .as_ref()
+                                                {
+                                                    if let Err(e) = mae_mcp::content_key_store::save(
+                                                        d,
+                                                        &kb_id,
+                                                        winner.as_bytes(),
+                                                    ) {
+                                                        warn!(kb = %kb_id, error = %e, "kb/remove (E2e): failed to persist rotated content key");
+                                                    }
                                                 }
+                                                content_keys.insert(kb_id.clone(), winner);
+                                                shipped_e2e = true;
+                                                info!(kb = %kb_id, member = %member, remaining = rewraps.len(), "ADR-037 §D3: removed member + rotated content key to remaining members");
+                                            } else {
+                                                e2e_write_failed = true;
+                                                warn!(kb = %kb_id, member = %member, "kb/remove (E2e): failed to ship the revoke+rekey delta — member NOT removed, content key NOT rotated");
                                             }
-                                            content_keys.insert(kb_id.clone(), winner);
-                                            shipped_e2e = true;
-                                            info!(kb = %kb_id, member = %member, remaining = rewraps.len(), "ADR-037 §D3: removed member + rotated content key to remaining members");
                                         }
                                     }
                                 }
                             }
-                            if !shipped_e2e {
+                            if e2e_write_failed {
+                                try_send_evt(
+                                    &evt_tx,
+                                    CollabEvent::Error {
+                                        message: format!(
+                                            "Failed to remove '{member}' from encrypted KB '{kb_id}' — the revoke+rekey op could not reach the daemon. The member was NOT removed and the content key was NOT rotated; try again once reconnected."
+                                        ),
+                                    },
+                                );
+                            } else if !shipped_e2e {
                                 // #265: adding a member by FINGERPRINT to an E2e KB cannot wrap
                                 // the content key (we don't hold their published X25519 wrap key),
                                 // so they'd be admitted KEYLESS — in the roster but unable to
@@ -2858,6 +2972,13 @@ async fn run_collab_task(
                             // pubkey rode the pending request), shipped via the key-blind
                             // kb/collection_op. Else: the legacy daemon-authored approve.
                             let mut shipped_e2e = false;
+                            // #round-4: same "don't fall through on write failure" concern as
+                            // kb/remove's E2E rekey path — falling through to the generic
+                            // kb/approve_member below would admit the member WITHOUT their
+                            // content key ever being wrapped/shipped (a keyless admit, exactly
+                            // the #265 bug class), so a write failure here must not silently
+                            // downgrade to that instead of being reported.
+                            let mut e2e_write_failed = false;
                             if let (Some(key), Some(id)) =
                                 (content_keys.get(&kb_id).cloned(), signing_identity.as_ref())
                             {
@@ -2910,30 +3031,49 @@ async fn run_collab_task(
                                                 role_enum, &principal, wrapped, &id.fingerprint(),
                                                 &id.secret_bytes(), &id.public().to_bytes(), now,
                                             );
-                                            if let Some(ref mut w) = writer {
+                                            let sent = if let Some(ref mut w) = writer {
                                                 let req_id = next_request_id;
                                                 next_request_id += 1;
                                                 let req = mae_sync::wire::kb_collection_op_request(
                                                     req_id, &kb_id,
                                                     &mae_sync::encoding::update_to_base64(&delta),
                                                 );
-                                                if let Ok(body) = serde_json::to_vec(&req) {
-                                                    let _ = write_framed(w, &body, write_timeout).await;
+                                                match serde_json::to_vec(&req) {
+                                                    Ok(body) => write_framed(w, &body, write_timeout)
+                                                        .await
+                                                        .is_ok(),
+                                                    Err(_) => false,
                                                 }
+                                            } else {
+                                                false
+                                            };
+                                            if sent {
+                                                // Advance our replica so a later admit/rotation
+                                                // chains onto admit-bob (same single-authority lineage).
+                                                kb_collections
+                                                    .insert(kb_id.clone(), coll.encode_state());
+                                                shipped_e2e = true;
+                                                info!(kb = %kb_id, member = %principal, "ADR-037: approved member with wrapped content key");
+                                            } else {
+                                                e2e_write_failed = true;
+                                                warn!(kb = %kb_id, member = %principal, "kb/approve (E2e): failed to ship the member-admit delta — member NOT approved");
                                             }
-                                            // Advance our replica so a later admit/rotation
-                                            // chains onto admit-bob (same single-authority lineage).
-                                            kb_collections
-                                                .insert(kb_id.clone(), coll.encode_state());
-                                            shipped_e2e = true;
-                                            info!(kb = %kb_id, member = %principal, "ADR-037: approved member with wrapped content key");
                                         }
                                     } else {
                                         warn!(kb = %kb_id, member = %principal, "kb/approve: E2e KB but the pending request carries no pubkey — falling back to legacy (member keyless until re-wrap)");
                                     }
                                 }
                             }
-                            if !shipped_e2e {
+                            if e2e_write_failed {
+                                try_send_evt(
+                                    &evt_tx,
+                                    CollabEvent::Error {
+                                        message: format!(
+                                            "Failed to approve '{principal}' for encrypted KB '{kb_id}' — the member-admit op could not reach the daemon. The member was NOT approved; try again once reconnected."
+                                        ),
+                                    },
+                                );
+                            } else if !shipped_e2e {
                                 if let Some(ref mut w) = writer {
                                     let req_id = next_request_id;
                                     next_request_id += 1;
@@ -4613,25 +4753,37 @@ fn handle_response(
                             let full_seen = std::collections::BTreeSet::new();
                             let opened =
                                 mae_sync::op_set::open_new_ops(&merged, &content_key, &full_seen);
-                            if !opened.is_empty() {
+                            if !opened.ops.is_empty() {
                                 // Reconstruct the node CRDT: op 0 is the base doc, the rest
                                 // are incremental updates (mirror of the seal round-trip).
                                 if let Ok(mut reader) =
-                                    mae_sync::kb::KbNodeDoc::from_bytes(&opened[0].1)
+                                    mae_sync::kb::KbNodeDoc::from_bytes(&opened.ops[0].1)
                                 {
-                                    for (_oid, pt) in &opened[1..] {
+                                    for (_oid, pt) in &opened.ops[1..] {
                                         let _ = reader.apply_update(pt);
                                     }
                                     debug!(target: "kb_sync", node = %n.id, "JOIN-DECRYPT: materialized plaintext from sealed snapshot on join");
                                     n.bytes = reader.encode_state();
                                 }
                                 let seen = kb.seen_ops.entry(n.id.clone()).or_default();
-                                for (op_id, _) in &opened {
+                                for (op_id, _) in &opened.ops {
                                     seen.insert(op_id.clone());
                                 }
                                 kb.op_sets.insert(n.id.clone(), merged);
                             }
                             // opened empty ⇒ unencrypted node / not-our-key ⇒ leave raw.
+                            // #206: distinguish "wrong/rotated key" from "not yet received"
+                            // on the join-snapshot path too.
+                            if opened.undecryptable > 0 {
+                                try_send_evt(
+                                    evt_tx,
+                                    CollabEvent::KbOpsUndecryptable {
+                                        kb_id: kb_id.clone(),
+                                        node_id: n.id.clone(),
+                                        count: opened.undecryptable,
+                                    },
+                                );
+                            }
                         }
                         kb.content_keys.insert(kb_id.clone(), content_key);
                         debug!(kb = %kb_id, nodes = nodes.len(), "ADR-037: derived content key + opened sealed snapshots on join");

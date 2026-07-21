@@ -7,7 +7,7 @@
 
 ** MCP Development Workflow
 
-All 130+ MAE tools are exposed via MCP with full parity. When developing MAE inside MAE (e.g. with Claude Code via `mae-mcp-shim`), these tools provide structured access to LSP, DAP, KB, and editor state.
+All 700+ MAE tools are exposed via MCP with full parity. When developing MAE inside MAE (e.g. with Claude Code via `mae-mcp-shim`), these tools provide structured access to LSP, DAP, KB, and editor state.
 
 *** Tool Categories
 - **Code Navigation (LSP):** `lsp_definition`, `lsp_references`, `lsp_hover`, `lsp_workspace_symbol`, `lsp_document_symbols`, `lsp_diagnostics`

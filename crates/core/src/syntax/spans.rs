@@ -145,7 +145,8 @@ pub fn compute_visible_syntax_spans(editor: &mut crate::editor::Editor) -> Synta
         }
         editor.buffers[idx].display_regions_dirty_since = None;
         let link_descriptive = editor.link_descriptive_for(idx);
-        editor.buffers[idx].recompute_display_regions(link_descriptive);
+        let inline_images = editor.inline_images_for(idx);
+        editor.buffers[idx].recompute_display_regions(link_descriptive, inline_images);
     }
 
     // Set display_reveal_cursor per-frame for the focused window's buffer.

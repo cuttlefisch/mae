@@ -59,7 +59,8 @@ mae/                              (repo root)
 | `mae-scheme` | Embedded Scheme runtime for configuration and packages | purpose-built R7RS-small |
 | `mae-lsp` | LSP client — types, references, diagnostics exposed to Scheme + AI | `tower-lsp` or `lsp-types` |
 | `mae-dap` | DAP client — breakpoints, call stacks, variables exposed to Scheme + AI | `dap-types` |
-| `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek) | `reqwest`, `serde_json` |
+| `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek/Ollama) | `reqwest`, `serde_json` |
+| `mae-agent-cli` | Terminal AI-agent harness (ADR-046) — the default `SPC a a`/`SPC a p` surface, binary `mae-agent` | `mae-ai`, `mae-mcp`, `ratatui` |
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) | `alacritty_terminal` |
 | `mae-babel` | Org-mode code block execution (12 languages) | `mae-shell` |
 | `mae-export` | Org/Markdown → HTML/Markdown export | `mae-kb` |
@@ -187,10 +188,10 @@ All phases below are COMPLETE. See ROADMAP.md for granular milestone details.
 | 4. LSP + DAP + Syntax | LSP nav/completion, DAP debugging, tree-sitter (13 langs), KB | — |
 | 5. Knowledge Base | CozoDB graph (Datalog), federated queries, org parser, HNSW vectors | — |
 | 6. Embedded Shell | alacritty_terminal, MCP server, file auto-reload | — |
-| 7. Documentation | Help system (862 KB nodes), tutorials, `:describe-configuration` | — |
+| 7. Documentation | Help system (1,300+ KB nodes), tutorials, `:describe-configuration` | — |
 | 8. GUI Backend | winit + Skia, inline images, multi-cursor, magit-style git | 2,629 |
 
-**Current:** v0.14.0 released — collaborative **KB sharing** is user-ready: trusted-peer mTLS auth, per-KB
+**Current:** actively released on the 0.14.x line — collaborative **KB sharing** is user-ready: trusted-peer mTLS auth, per-KB
 membership/roles/policy (Owner/Editor/Viewer, ADR-018), epoch-fenced write access (ADR-023), the ADR-024
 attention bus, a magit-style `*KB Sharing*` management buffer (`SPC C K m`), and full introspection +
 lifecycle parity across the human (buffer + Scheme `(kb-…)` primitives) and the AI peer (`kb_sharing_status`
@@ -218,10 +219,10 @@ peers maintain shared KBs with **no central server**. Design = **ADR-025** (iroh
 node IDs reuse trusted-peer fingerprints, + config/install/activation), **ADR-026** (peer-verifiable
 signed, hash-chained membership + signed ops + peer-enforced epoch fence), **ADR-027** (observability built
 alongside). **Tracker: issue #96**; ADR PR **#95**; phased epics #88–#94. Pre-work (crypto-deps #87/#51,
-epoch hardening #72, TOFU deadlock #66) is **done**, as are Phases 1/3/4 (#88/#90/#91). **Current
-bottleneck: Phase 2 / #89** (daemon-as-peer mesh transport — dial + gossip + anti-entropy), with **#70**
-(split oversized collab files) and **#73** (authorized_keys resolver) as its remaining open prerequisites.
-E2E content encryption + leaderless auth-DAG are deferred. Also still pending: hosted-edit (ADR-020 D1).
+epoch hardening #72, TOFU deadlock #66, split oversized collab files #70, authorized_keys resolver #73)
+is **done**, as are Phases 1/3/4 (#88/#90/#91). **Current bottleneck: Phase 2 / #89** (daemon-as-peer
+mesh transport — dial + gossip + anti-entropy), with no other open prerequisites. E2E content encryption
++ leaderless auth-DAG are deferred. Also still pending: hosted-edit (ADR-020 D1).
 
 **Also next — Ollama/local-model parity** (AI-integration initiative): bring self-hosted models to parity
 with hosted providers for agentic MAE work — tool-calling reliability harness, KB-enrichment lifecycle for
@@ -532,10 +533,12 @@ mae-daemon doctor                   # run diagnostics
 
 These APIs are intended to remain stable through v1.0:
 
-- **Scheme API:** 186 registered functions + ~25 variables (see `:help concept:scheme-api`)
-- **Hooks:** 25 hook points (see `:help concept:hooks`)
-- **MCP tools:** 135+ tools, categorized (core/lsp/dap/kb/shell/ai/commands/git/web/visual/debug/collab)
-- **Config options:** 138+ registered, persistable via `:set-save`
+- **Scheme API:** 190+ registered functions + ~18 variables (see `:help concept:scheme-api`)
+- **Hooks:** 26 hook points (see `:help concept:hooks`)
+- **MCP tools:** 700+ tools, categorized (core/lsp/dap/kb/shell/ai/commands/git/web/visual/debug/collab)
+  — most are 1:1 command mirrors; see `docs/MODEL_SUPPORT.md` for the exam methodology
+  this scale is validated against
+- **Config options:** 175+ registered, persistable via `:set-save`
 
 ## Related Resources
 

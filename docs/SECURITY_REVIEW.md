@@ -7,8 +7,9 @@
 
 ## 1. Scope & verdict
 
-Reviewed: `shared/mcp/src/{identity,tls,auth,keystore}.rs`, `shared/sync/src/{membership,kb,content_ops,
-content_crypto}.rs`, `daemon/src/{collab_handler,dialer,ticket,main}.rs`. Adversary model: a network MITM, a
+Reviewed: `shared/mcp/src/{identity,tls,auth,keystore}.rs`, `shared/sync/src/{membership,content_ops,
+content_crypto}.rs` + `shared/sync/src/kb/*.rs`, `daemon/src/{dialer,ticket,main}.rs` +
+`daemon/src/collab_handler/*.rs`. Adversary model: a network MITM, a
 malicious/compromised **key-blind relay/host daemon**, an unauthorized peer attempting to join/write, a
 **removed** member, and concurrent-op races.
 
@@ -122,7 +123,7 @@ whose genesis is not signed by the registered anchor yields **zero** members —
 collection into existence.
 
 ### Enforcement points
-1. **`kb_access`** (the RBAC chokepoint, `collab_handler.rs:898`): resolves the caller's role from its
+1. **`kb_access`** (the RBAC chokepoint, `daemon/src/collab_handler/mod.rs:1054`): resolves the caller's role from its
    cryptographic principal (key fingerprint, never a label; ADR-018 strict binding) via the op-log for
    anchored KBs or `member_roles` for owned KBs, then applies hierarchical RBAC × join policy × transport
    policy (owner-bypass). Every lifecycle handler routes through it at `Manage`.

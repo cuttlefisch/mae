@@ -439,7 +439,7 @@ Source: `shared/sync/src/lib.rs`
 | `compare_state_vectors` | fn |
 | `compute_project_identity` | fn |
 
-## Commands (554 built-in)
+## Commands (555 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -833,6 +833,7 @@ Source: `shared/sync/src/lib.rs`
 | `describe-configuration` | Show a configuration health report (AI, LSP, DAP status) |
 | `kb-health` | Show KB health report (orphans, broken links, namespace counts) |
 | `kb-cleanup-orphans` | Remove orphan user notes with no links (SPC n C) |
+| `kb-migrate-stranded` | Remove primary-KB nodes stranded by a pre-ADR-019 join, now superseded by a joined instance |
 | `kb-agenda` | Query KB graph: :kb-agenda todo|priority|tag|orphan|stale|custom [args] |
 | `kb-history` | Show version history for a KB node: :kb-history <node-id> |
 | `kb-restore` | Restore a KB node to a previous version: :kb-restore <node-id> <version> |

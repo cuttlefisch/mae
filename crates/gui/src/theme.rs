@@ -134,8 +134,7 @@ pub fn color_or(tc: Option<ThemeColor>, fallback: Color4f) -> Color4f {
 
 /// Pick black or white foreground for readability on the given bg color.
 pub fn contrast_fg(r: u8, g: u8, b: u8) -> Color4f {
-    let lum = 0.299 * r as f64 + 0.587 * g as f64 + 0.114 * b as f64;
-    if lum > 128.0 {
+    if mae_core::render_common::color::prefers_dark_fg(r, g, b) {
         Color4f::new(0.0, 0.0, 0.0, 1.0) // black
     } else {
         Color4f::new(1.0, 1.0, 1.0, 1.0) // white
@@ -145,16 +144,6 @@ pub fn contrast_fg(r: u8, g: u8, b: u8) -> Color4f {
 /// Fast equality check for Color4f (avoids per-field comparison noise at call sites).
 pub(crate) fn color4f_eq(a: Color4f, b: Color4f) -> bool {
     a.r == b.r && a.g == b.g && a.b == b.b && a.a == b.a
-}
-
-/// Fast equality check for Option<Color4f>.
-#[allow(dead_code)]
-pub(crate) fn option_color4f_eq(a: Option<Color4f>, b: Option<Color4f>) -> bool {
-    match (a, b) {
-        (None, None) => true,
-        (Some(a), Some(b)) => color4f_eq(a, b),
-        _ => false,
-    }
 }
 
 // Default fallback colors.

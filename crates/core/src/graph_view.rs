@@ -10,6 +10,14 @@
 //! `graph_layout_bridge` and applied back via
 //! `Editor::apply_graph_layout_result` — this module never runs the O(n^2)
 //! force-layout pass itself.
+//!
+//! @ai-caution: [architecture-debt] At 2,848 lines, well over the 800-line
+//! ceiling — `GraphView`'s scene graph, viewport, and flattening logic grew
+//! as one file across the KB graph view feature's build-out. Not split
+//! (design work, not attempted this pass; round-5 tech-debt pass, 2026-07).
+//! Tracked in `.claude/commands/mae-audit.md`'s "Known exceptions" and
+//! `ROADMAP.md`'s "Architecture Debt" section — re-verify the line count
+//! each audit pass rather than trusting this comment's number to stay current.
 
 use crate::driven_window::DrivenWindow;
 use crate::editor::Editor;
@@ -18,6 +26,18 @@ use crate::window::WindowId;
 use std::collections::HashMap;
 
 /// View state for a `BufferKind::Graph` buffer.
+///
+/// @ai-caution: [window-lifecycle] Every `HashMap<WindowId, _>` field below
+/// (`viewports`, `rendered`, `render_epoch`) MUST be pruned in
+/// `Editor::prune_closed_window_graph_state` (`crates/core/src/editor/
+/// graph_view_ops.rs`) when a window closes, or it leaks for the session's
+/// lifetime. This has already gone wrong twice: `render_epoch`'s prune was
+/// omitted from the commit that introduced per-window isolation (#321,
+/// `74eec5eb`) and had to be added the next day (`985ee53f`); a later,
+/// unrelated OOM-crash fix then re-added a second, independent copy of the
+/// same prune elsewhere before the two were unified into the one canonical
+/// call site referenced above. Add a new per-window map here → add it to
+/// that one function's retain block. Don't add a second prune site.
 #[derive(Debug)]
 pub struct GraphView {
     /// KB node id the graph is currently centered on (the BFS/subgraph

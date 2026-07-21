@@ -256,6 +256,12 @@ impl OptionRegistry {
                 opt!("completion_max_items", &["completion-max-items"],
                     "Maximum items shown in the LSP completion popup",
                     OptionKind::Int, "10", Some("editor.completion_max_items"), &[]),
+                opt!("code_action_max_items", &["code-action-max-items"],
+                    "Maximum items shown in the LSP code-action popup",
+                    OptionKind::Int, "12", Some("editor.code_action_max_items"), &[]),
+                opt!("symbol_outline_max_items", &["symbol-outline-max-items"],
+                    "Maximum items shown at once in the symbol-outline popup (TUI only — GUI's outline uses a fixed-size popup with scrolling)",
+                    OptionKind::Int, "20", Some("editor.symbol_outline_max_items"), &[]),
                 opt!("hover_max_lines", &["hover-max-lines"],
                     "Maximum lines shown in the LSP hover popup",
                     OptionKind::Int, "15", Some("editor.hover_max_lines"), &[]),
@@ -945,6 +951,8 @@ mod tests {
         let reg = OptionRegistry::new();
         assert!(reg.find("scroll_speed").is_some());
         assert!(reg.find("completion_max_items").is_some());
+        assert!(reg.find("code_action_max_items").is_some());
+        assert!(reg.find("symbol_outline_max_items").is_some());
         assert!(reg.find("hover_max_lines").is_some());
         assert!(reg.find("popup_width_pct").is_some());
         assert!(reg.find("popup_height_pct").is_some());

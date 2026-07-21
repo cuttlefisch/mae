@@ -30,7 +30,15 @@ impl Editor {
             }
             Some(Ok(Err(e))) => {
                 self.kb.pending_preload = None;
-                self.set_status(format!("KB load failed: {}", e));
+                // #79 third slice: genuinely async — drained on an idle tick well after
+                // startup, the closest match to ADR-024's own motivating scenario (the
+                // failure has nothing to do with whatever the user is doing when it
+                // finally surfaces, so a status-line toast is easy to miss entirely).
+                self.notify(
+                    crate::notifications::Notification::error("kb", "KB background load failed")
+                        .body(e.to_string())
+                        .key("kb-background-preload-failed"),
+                );
                 tracing::warn!(error = %e, "background KB preload failed");
             }
             Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {

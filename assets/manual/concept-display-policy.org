@@ -14,7 +14,7 @@ Five direct `focused_window_mut().buffer_idx` calls (help, messages, debug, git-
 
 *** The 4 Actions (vs Emacs's 29)
 - **ReplaceFocused** -- replace the focused window, but fall through to AvoidConversation if focused on a conversation buffer (git-status, dashboard)
-- **AvoidConversation** -- route via `switch_to_buffer_non_conversation` which has a 3-step strategy protecting conversation pairs (text, diff)
+- **AvoidConversation** -- route via `display_buffer_for_agent` which has a 3-step strategy protecting conversation pairs (text, diff)
 - **ReuseOrSplit** -- reuse an existing window of the same BufferKind, or create a split with the given direction and ratio (help -> 50% vsplit, messages -> 30% hsplit)
 - **Hidden** -- buffer exists for programmatic access only, never shown (conversation -- managed by `open_conversation_buffer`)
 

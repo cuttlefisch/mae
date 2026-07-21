@@ -78,7 +78,6 @@ impl KbCollectionDoc {
     /// (the dual-write). `subject_pubkey` is also stored for later re-wrap on rotation.
     /// Returns the delta to ship via `kb/collection_op`.
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     pub fn author_member_admit(
         &mut self,
         kb_id: &str,

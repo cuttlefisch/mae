@@ -16,8 +16,27 @@ impl CozoKbStore {
     /// The caller must ensure the appropriate CozoDB storage feature is enabled.
     pub fn open_with_engine(path: impl Into<PathBuf>, engine: &str) -> Result<Self, KbStoreError> {
         let path = path.into();
-        let db = DbInstance::new(engine, path.to_str().unwrap_or(""), "")
-            .map_err(|e| KbStoreError::Storage(format!("CozoDB open ({engine}) failed: {e}")))?;
+        let path_str = path.to_str().unwrap_or("").to_string();
+        let engine_owned = engine.to_string();
+        // @ai-caution: [architecture-debt] sled 0.34's PageCache::start can panic
+        // (not just Err) — "tried to serialize Uninitialized" in
+        // sled::pagecache::snapshot — when opening a directory it can't use as a
+        // valid store (permission-denied, corrupt/partial). Caught here so a broken
+        // on-disk KB store degrades to a normal open failure instead of crashing the
+        // editor at startup. Reproduced via `cargo test --release` under full-suite
+        // load; see the two adversarial tests in crates/mae/src/bootstrap.rs that hit
+        // this path (`init_kb_federation_notifies_on_a_real_store_open_failure`,
+        // `init_kb_federation_notifies_on_a_real_migration_failure`).
+        let db = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            DbInstance::new(&engine_owned, &path_str, "")
+        }))
+        .map_err(|_| {
+            KbStoreError::Storage(format!(
+                "CozoDB open ({engine}) panicked internally (store directory likely \
+                 inaccessible or corrupt)"
+            ))
+        })?
+        .map_err(|e| KbStoreError::Storage(format!("CozoDB open ({engine}) failed: {e}")))?;
 
         let store = Self { db, path };
         store.ensure_schema()?;

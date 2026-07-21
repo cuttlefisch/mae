@@ -15,6 +15,7 @@ mod collab_bridge_kb_sync_tests;
 mod collab_bridge_message_handling_tests;
 mod collab_bridge_psk_tests;
 mod collab_bridge_sync_recovery_backoff_tests;
+mod collab_bridge_write_failure_tests;
 
 // Shared test helpers/macros used across multiple test modules
 

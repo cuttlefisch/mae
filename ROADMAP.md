@@ -47,7 +47,7 @@ Near-term, code-grounded work extracted from this roadmap + the ADR backlog (fil
 | 2. Scheme Runtime | ✅ Complete | R7RS-small (mae-scheme), `init.scm`, `define-key`, `set-option!`, REPL |
 | 3. AI Integration | ✅ Complete | Claude/OpenAI/Gemini/DeepSeek, 450+ tool-calling, conversation UI, permissions |
 | 4. LSP + DAP + Syntax | ✅ Complete | Full LSP (rename, format, outline, breadcrumbs, peek), DAP (watches, exceptions), 13-language tree-sitter |
-| 5. Knowledge Base | ✅ Complete | CozoDB graph store, 862 nodes, typed relationships, pre-built manual, ingestion pipeline |
+| 5. Knowledge Base | ✅ Complete | CozoDB graph store, 1,300+ nodes, typed relationships, pre-built manual, ingestion pipeline |
 | 6. Embedded Shell | ✅ Complete | alacritty_terminal, MCP bridge, file auto-reload, send-to-shell |
 | 7. Documentation | ✅ Complete | Tutor (13 lessons), `:describe-configuration`, `--check-config`, `--init-config` |
 | 8. GUI Backend | ✅ Complete | winit + Skia 2D, inline images (PNG/JPG/SVG), variable-height, inertial scroll |
@@ -228,7 +228,7 @@ The KB had a dual source of truth problem: org files re-parsed on startup, SQLit
 
 #### Persistent Graph KB (v0.12.0 — ADR-012)
 - [x] **Phase 0**: rusqlite removed (~2,500 lines), SqliteKbStore deleted, sled engine string fixed, `kb_backend` option removed.
-- [x] **Phase 1**: Pre-built manual KB — `build-manual-kb` binary (862 nodes), `manual_kb.rs` locate+validate, SHA-256 checksums, `Editor::with_kb()`, multi-DB startup (manual → user → imported).
+- [x] **Phase 1**: Pre-built manual KB — `build-manual-kb` binary (1,300+ nodes), `manual_kb.rs` locate+validate, SHA-256 checksums, `Editor::with_kb()`, multi-DB startup (manual → user → imported).
 - [x] **Phase 2**: CozoDB-direct ingestion — `import_org_dir_to_store()`, `IngestMode` (Full/Incremental), content hash change detection, `source_files` relation, enhanced `ImportReport`.
 - [x] **Phase 3**: Scale validation — 2,500 nodes + 15,000 links integration test (`cozo_scale_test.rs`).
 - [x] **Phase 3.5**: CozoDB-first query layer — `KbQueryLayer` trait + `CozoQueryLayer` + `FederatedQuery` (multi-store fan-out). 46 read sites migrated from in-memory `KnowledgeBase` to query-layer-first. ADR-013.
@@ -517,6 +517,14 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   yet individually tracked, and the summary predates the splitting pass above so it may itself be
   stale in the other direction (some of its worst-offender examples were among the files just
   resolved). Needs a fresh full-codebase re-audit before a dedicated splitting pass, not ad-hoc fixes.
+- [ ] **6 more files newly over ceiling, tracked but not split** (found during round-5 tech-debt pass,
+  2026-07): `crates/core/src/editor/graph_view_ops.rs` (4,464 lines) + `crates/core/src/graph_view.rs`
+  (2,848) — the native KB graph view feature, post-dates the splitting pass above entirely;
+  `crates/core/src/buffer.rs` (3,648) — CRDT-offset *drift* was fixed here in an earlier pass but
+  *size* never addressed; `shared/sync/src/membership.rs` (3,455) — signed-membership derivation,
+  growing with the P2P mesh initiative; `crates/core/src/window.rs` (3,437); `shared/kb/src/lib.rs`
+  (3,577). All 6 added to `.claude/commands/mae-audit.md`'s "Known exceptions" list with
+  `@ai-caution: [architecture-debt]` file-header markers — not split this pass, design work.
 - [x] **Scheme API KB-doc coverage gap** (found via `/mae-audit`, 2026-07; closed 2026-07): the
   original "186 vs 18" figure was stale — the audit's grep only found the 18-entry *variables*
   table, missing that `crates/core/src/kb_seed/scheme_api.rs`'s `SCHEME_API_FUNCTIONS` table already
@@ -545,12 +553,13 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   single process-wide `Editor`, with no session id threaded through `McpToolRequest` →
   `handle_mcp_request` → `execute_tool`. A narrow gap against principle #10 ("no operation assumes
   single-client"); needs a session id threaded end-to-end before it can close.
-- [ ] **KB graph view wheel-zoom has no visible effect yet**: mouse-wheel input correctly updates
-  `GraphView.scene.viewport.zoom`/`center` (Phase 4, `ab3bc7ef`), but `flatten_scene_graph`
-  (`crates/core/src/graph_view.rs`) doesn't yet apply a camera transform when drawing nodes — a
-  pre-existing gap from the graph view's first rendering pass (Phase 1), not a Phase 4 regression.
-  Needs a rendering-pipeline follow-up threading window pixel dimensions into the flattener before
-  zoom is visible on screen.
+- [x] **KB graph view wheel-zoom has no visible effect yet** — stale, already fixed (found during
+  the 2026-07 git-history churn root-cause pass; this item and the code had drifted apart).
+  `flatten_scene_graph` (`crates/core/src/graph_view.rs`) routes every node/edge position through
+  `scene_to_viewport` (`crates/canvas/src/interaction.rs`), which applies both pan (`center_x`/
+  `center_y`) AND zoom (`* vp.zoom`) — the camera transform is fully wired, per an in-code comment
+  confirming this is deliberate ("drawing and interaction always agree on where a node actually
+  is"). No further action needed.
 - [ ] **`kb_graph_view_mode` option for non-ego-network views**: the native KB graph view
   (`crates/core/src/graph_view.rs`) only renders an ego-network centered on the current node
   (`kb_graph_default_depth`). A `local`/`related`/`global` mode option was scoped out of the initial
@@ -565,28 +574,27 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   (`crates/core/src/editor/kb_preview_ops.rs`) is a deliberately swappable seam left for a future
   AI-summarization primitive; only the raw node-body fetch (noise-stripped, truncated) is
   implemented today.
-- [ ] **KB graph view: per-window viewport isolation** **→ #321**: `GraphView.scene` (one
-  `Viewport`/`SceneGraph` per buffer, not per-window) means a second window opened onto the same
-  `*KB Graph*` buffer (e.g. `:split-vertical` while it's focused) silently hit-tests/renders
-  against whichever window `graph_viewport_pixel_size` finds first. Not introduced/worsened by the
-  2026-07 resize-adaptivity + hover/selection introspection pass; flagged there as a pre-existing
-  limitation.
-- [ ] **KB graph view: expose zoom/pin/click-equivalent actions to Scheme + MCP** **→ #322**:
-  `kb_graph_view_click_at`/`zoom`/`drag_node`/`drag_end` (`crates/core/src/editor/
-  graph_view_ops.rs`) are deliberately GUI-mouse-only — raw pixel coordinates/wheel deltas have no
-  meaningful AI-driven equivalent as-is. If AI-driven zoom/pin is ever needed, it needs an
-  AI-appropriate (non-pixel) API shape, not a direct exposure of these methods.
-- [ ] **mae-daemon: surface version/staleness drift instead of silently serving it** **→ #323**:
-  the daemon (`daemon_mode = "shared"`) is a persistent background service with no mechanism to
-  report its own version/build identity on connect, or to flag that a KB instance's *persisted*
-  data was ingested by an older, possibly behaviorally-different `mae-kb`. A 2026-07 debugging
-  session hit exactly this: an editor-side `mae-kb` ingestion fix (`source_file` stamping) appeared
-  not to work across several rebuild+relaunch cycles because the long-running daemon process (and
-  its already-persisted, stale rows) was never restarted/re-ingested — nothing surfaced that it
-  needed to be. Proposed: version/build reporting in the connection handshake + a visible warning
-  on mismatch (`collab_doctor`/`daemon_status`), NOT auto-restart (the daemon is explicitly
-  multi-client — principle #10 — so silently restarting it out from under other sessions would be
-  actively harmful; this is about detection/surfacing only).
+- [x] **KB graph view: per-window viewport isolation** **→ #321** (closed `74eec5eb`):
+  `GraphView.scene` (one `Viewport`/`SceneGraph` per buffer, not per-window) meant a second window
+  opened onto the same `*KB Graph*` buffer (e.g. `:split-vertical` while it's focused) silently
+  hit-tested/rendered against whichever window `graph_viewport_pixel_size` found first. Fixed with
+  per-window viewport isolation.
+- [x] **KB graph view: expose zoom/pin/click-equivalent actions to Scheme + MCP** **→ #322**
+  (closed `c0666d07`): `kb_graph_view_click_at`/`zoom`/`drag_node`/`drag_end`
+  (`crates/core/src/editor/graph_view_ops.rs`) were deliberately GUI-mouse-only — raw pixel
+  coordinates/wheel deltas have no meaningful AI-driven equivalent as-is. Fixed with an
+  AI-appropriate (non-pixel) API shape (zoom-to-level, pin/unpin) exposed to both Scheme and MCP,
+  not a direct exposure of the mouse-driven methods.
+- [x] **mae-daemon: surface version/staleness drift instead of silently serving it** **→ #323**
+  (closed `32b30da3`): the daemon (`daemon_mode = "shared"`) had no mechanism to report its own
+  version/build identity on connect, or to flag that a KB instance's *persisted* data was ingested
+  by an older, possibly behaviorally-different `mae-kb`. A 2026-07 debugging session hit exactly
+  this: an editor-side `mae-kb` ingestion fix (`source_file` stamping) appeared not to work across
+  several rebuild+relaunch cycles because the long-running daemon process (and its already-persisted,
+  stale rows) was never restarted/re-ingested. Fixed: the connection handshake now surfaces a
+  version-skew warning onto the notification bus (detection/surfacing only, not auto-restart, per
+  principle #10). The narrower per-KB-instance last-ingested-vs-build signal in `kb_health` remains
+  a separate follow-up (needs a new persisted field).
 
 ---
 

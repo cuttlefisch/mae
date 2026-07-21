@@ -1,3 +1,10 @@
+//! @ai-caution: [architecture-debt] At 3,437 lines, well over the 800-line
+//! ceiling. Not split (design work, not attempted this pass; round-5
+//! tech-debt pass, 2026-07). Tracked in `.claude/commands/mae-audit.md`'s
+//! "Known exceptions" and `ROADMAP.md`'s "Architecture Debt" section —
+//! re-verify the line count each audit pass rather than trusting this
+//! comment's number to stay current.
+
 use std::collections::HashMap;
 
 /// Unique window identifier.
@@ -475,31 +482,15 @@ impl Window {
 
         // Clamp cursor to visible viewport.
         let max_row = buf.display_line_count().saturating_sub(1);
-        let mut visual = 0;
-        let mut bottom = self.scroll_offset;
-        let mut line = self.scroll_offset;
         let skip = self.scroll_skip_rows(cell_height);
-        let mut first = true;
-        while line <= max_row {
-            let rows = line_visual_rows(line);
-            if rows > 0 {
-                let effective = if first {
-                    rows.saturating_sub(skip)
-                } else {
-                    rows
-                };
-                first = false;
-                if visual + effective > viewport_height {
-                    break;
-                }
-                visual += effective;
-                bottom = line;
-            }
-            line = buf.next_visible_line(line);
-            if line <= bottom {
-                break;
-            }
-        }
+        let bottom = crate::wrap::last_visible_wrapped_line(
+            self.scroll_offset,
+            viewport_height,
+            skip,
+            max_row,
+            &line_visual_rows,
+            |line| buf.next_visible_line(line),
+        );
         if self.cursor_row > bottom {
             self.cursor_row = bottom;
             self.clamp_cursor(buf);

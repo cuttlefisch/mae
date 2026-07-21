@@ -100,6 +100,17 @@ impl Editor {
                     self.set_status(format!("Removed {} orphan note(s)", count));
                 }
             }
+            "kb-migrate-stranded" => {
+                let (removed, diverged) = self.kb_migrate_stranded_federation_nodes();
+                self.set_status(match (removed, diverged) {
+                    (0, 0) => "No stranded primary-KB nodes found".to_string(),
+                    (r, 0) => format!("Removed {r} stranded node(s) superseded by their joined instance"),
+                    (0, d) => format!("{d} stranded node(s) diverge from their instance — see notifications"),
+                    (r, d) => format!(
+                        "Removed {r} stranded node(s); {d} diverge from their instance — see notifications"
+                    ),
+                });
+            }
             "kb-agenda" => {
                 self.set_mode(Mode::Command);
                 self.vi.command_line = "kb-agenda ".to_string();

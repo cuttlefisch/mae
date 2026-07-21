@@ -2681,6 +2681,10 @@
       "doc": "Remove orphan user notes with no links (SPC n C)"
     },
     {
+      "name": "kb-migrate-stranded",
+      "doc": "Remove primary-KB nodes stranded by a pre-ADR-019 join, now superseded by a joined instance"
+    },
+    {
       "name": "kb-agenda",
       "doc": "Query KB graph: :kb-agenda todo|priority|tag|orphan|stale|custom [args]"
     },

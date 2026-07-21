@@ -685,7 +685,7 @@ impl Editor {
         if ok {
             self.set_status("Push complete");
         } else {
-            self.set_status(format!("Push failed: {}", stderr));
+            self.notify_git_op_failed("push", "Push failed", &stderr);
         }
     }
 
@@ -696,7 +696,7 @@ impl Editor {
             self.set_status("Pull complete");
             self.git_status();
         } else {
-            self.set_status(format!("Pull failed: {}", stderr));
+            self.notify_git_op_failed("pull", "Pull failed", &stderr);
         }
     }
 
@@ -707,8 +707,19 @@ impl Editor {
             self.set_status("Fetch complete");
             self.refresh_git_branch();
         } else {
-            self.set_status(format!("Fetch failed: {}", stderr));
+            self.notify_git_op_failed("fetch", "Fetch failed", &stderr);
         }
+    }
+
+    /// #79: a push/pull/fetch failure used to be a clobberable status-line
+    /// message only — easy to miss for a real network-op failure. Routed onto
+    /// the ADR-024 notification bus, mirroring the file-save-failure sibling.
+    fn notify_git_op_failed(&mut self, op: &'static str, title: &'static str, stderr: &str) {
+        self.notify(
+            crate::notifications::Notification::error("git", title)
+                .body(stderr.to_string())
+                .key(format!("git-{op}-failed")),
+        );
     }
 
     // ── Branch Operations ───────────────────────────────────────────
@@ -1320,5 +1331,47 @@ filename src/main.rs\n\
         assert_eq!(entries[1].timestamp, 1700100000);
         assert_eq!(entries[1].summary, "Second commit");
         assert_eq!(entries[1].final_line, 1);
+    }
+
+    /// #79 second slice: a push/pull/fetch failure is a real network-op
+    /// failure, easy to miss if surfaced only as a clobberable status-line
+    /// message. Must land as a durable notification too. Uses a REAL `git`
+    /// repo with no remote configured — `git push` fails instantly and
+    /// deterministically (no network access attempted), not a synthetic error.
+    #[test]
+    fn git_push_notifies_on_a_real_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let init_ok = std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false);
+        assert!(
+            init_ok,
+            "git init must succeed for this test to be meaningful"
+        );
+
+        let mut editor = Editor::new();
+        let idx = editor.active_buffer_idx();
+        editor.buffers[idx].project_root = Some(dir.path().to_path_buf());
+
+        editor.git_push();
+
+        let notes = editor.notifications.active_sorted();
+        let hit = notes
+            .iter()
+            .find(|n| n.source == "git" && n.title.contains("Push failed"));
+        assert!(
+            hit.is_some(),
+            "a durable notification must be raised for a push failure, not just a \
+             status-line toast; got: {:?}",
+            notes.iter().map(|n| &n.title).collect::<Vec<_>>()
+        );
+        assert_eq!(hit.unwrap().severity, crate::notifications::Severity::Error);
+        assert!(
+            editor.status_msg.contains("Push failed"),
+            "the immediate status-line toast must still fire too"
+        );
     }
 }

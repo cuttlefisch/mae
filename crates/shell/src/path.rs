@@ -8,23 +8,17 @@ use tracing::{debug, warn};
 /// or nvm/pyenv shims. This function spawns the user's shell and asks it to
 /// echo its PATH, then returns the result.
 ///
-/// Supported shells: bash, zsh, fish.
+/// Routed through the crate's single rc-sourcing implementation
+/// (`shell_invocation::login_shell_script_argv`, #291) — this used to
+/// hand-roll its own `-i -l -c` invocation with no startup-file guard for
+/// any shell, and a bash/zsh-vs-fish branch that ran byte-identical code in
+/// both arms despite the doc comment implying real per-shell handling.
 pub fn pull_path_from_shell() -> Option<String> {
     let shell = std::env::var("SHELL").ok()?;
     debug!(shell, "attempting to pull PATH from shell");
 
-    // We want an interactive, login shell to ensure all profile/rc files are sourced.
-    // -i (interactive) and -l (login) usually do the trick.
-    let output = if shell.ends_with("fish") {
-        Command::new(&shell)
-            .args(["-i", "-l", "-c", "echo $PATH"])
-            .output()
-    } else {
-        // bash/zsh
-        Command::new(&shell)
-            .args(["-i", "-l", "-c", "echo $PATH"])
-            .output()
-    };
+    let (shell, args) = crate::shell_invocation::login_shell_script_argv(&shell, "echo $PATH");
+    let output = Command::new(&shell).args(&args).output();
 
     match output {
         Ok(out) if out.status.success() => {

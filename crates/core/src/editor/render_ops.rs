@@ -103,8 +103,11 @@ impl Editor {
 
         let text_rows = text_rows.unwrap_or_else(|| self.line_text_visual_rows(buf_idx, line));
 
-        // Account for inline image display height.
-        let image_rows = if buf.local_options.inline_images.unwrap_or(false) {
+        // Account for inline image display height. Resolved via
+        // `inline_images_for` (global + buffer-local override), not a
+        // hardcoded `false` fallback that silently ignored the
+        // `inline_images` global/`:set`/`:setl` entirely.
+        let image_rows = if self.inline_images_for(buf_idx) {
             self.image_extra_rows(buf, line)
         } else {
             0

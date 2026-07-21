@@ -53,7 +53,7 @@ mae binary
 +-- Pre-built Manual KB (versioned .cozo file, read-only)
 |   Built from seed content at release time
 |   SHA-256 checksum validated at startup
-|   862 nodes (commands, concepts, lessons, tutorials, scheme API)
+|   1,300+ nodes (commands, concepts, lessons, tutorials, scheme API)
 |
 +-- User KB (read-write, XDG data dir)
 |   ~/.local/share/mae/kb/local/primary.cozo

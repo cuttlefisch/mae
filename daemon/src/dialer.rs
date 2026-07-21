@@ -851,7 +851,7 @@ mod tests {
         let mut a_node = {
             let (st, _) = a_store.encode_state_and_sv("kb:concept:n").await.unwrap();
             // A real editor authors KB node ops under derive_kb_client_id(fp, epoch)
-            // (kb_ops.rs:1161). The mesh epoch fence (#157 N1) binds the relayed
+            // (crates/core/src/editor/kb_ops/nodes.rs:240). The mesh epoch fence (#157 N1) binds the relayed
             // payload's yrs client_id to the author's CURRENT epoch, so the test
             // must stamp the edit the way the editor would — a plain daemon-store
             // client_id would (correctly) be fenced as stale-lineage.
@@ -982,7 +982,8 @@ mod tests {
         // assert-absence test would mask).
         let valid_edit = {
             let (st, _) = a_store.encode_state_and_sv("kb:concept:n").await.unwrap();
-            // Stamp the way a real editor does (derive_kb_client_id, kb_ops.rs:1161)
+            // Stamp the way a real editor does (derive_kb_client_id,
+            // crates/core/src/editor/kb_ops/nodes.rs:240)
             // so the valid owner edit clears the #157 N1 mesh epoch fence — the
             // SELECTIVE half of the oracle (the three rejects above never reach the
             // fence; they're stopped earlier by verify_relayed_content_op).
@@ -1041,7 +1042,7 @@ mod tests {
         let mut b_node = {
             let (st, _) = b_store.encode_state_and_sv("kb:concept:n").await.unwrap();
             // A real editor authors KB node ops under derive_kb_client_id(fp, epoch)
-            // (kb_ops.rs:1161). The B→A forward now clears the epoch fence on the owner's
+            // (crates/core/src/editor/kb_ops/nodes.rs:240). The B→A forward now clears the epoch fence on the owner's
             // sync/update path too (#169 M1), so B's edit must be stamped the way the editor
             // would — a plain client_id is (correctly) fenced as stale-lineage.
             TextSync::from_state_with_client_id(

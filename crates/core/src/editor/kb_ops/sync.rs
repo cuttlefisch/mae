@@ -356,6 +356,89 @@ impl Editor {
         }
     }
 
+    /// #76 bounded slice: relocate `primary`-stranded federation nodes (ADR-019
+    /// §Consequences — pre-ADR-019 joins dumped nodes straight into `primary`; the
+    /// current join path creates a proper federated instance but never migrated the
+    /// old copies out). `kb_owner_of`'s doc comment already identifies this exact
+    /// shape and prefers the instance's copy on READ; this closes the gap by
+    /// actually removing the stale `primary` duplicate once it's confirmed safe to.
+    ///
+    /// Scope: only nodes whose origin instance is CURRENTLY joined (i.e. exactly the
+    /// case `kb_owner_of` already shadows). A node whose origin instance isn't
+    /// currently joined is left alone — attributing it needs a persisted origin
+    /// marker, which is real design work tracked separately in the issue, not
+    /// something this bounded pass invents. Mirrors `kb_cleanup_orphans`'s
+    /// sweep/filter/remove/fire-hook shape and `reconstruct_kb_sync_gate`'s
+    /// walk-every-joined-instance scan.
+    ///
+    /// For each candidate: if content is byte-identical to the instance's copy, it's
+    /// a harmless stale duplicate — remove it silently. If content DIFFERS (the
+    /// primary copy carries edits the instance copy lacks), don't blindly delete —
+    /// surface it via the same ADR-024 action-required pattern
+    /// `kb_register_joined_instance` uses for a divergent join-time conflict, so nothing
+    /// is lost without the user seeing it. Returns `(removed, diverged)`.
+    pub fn kb_migrate_stranded_federation_nodes(&mut self) -> (usize, usize) {
+        let mut to_remove: Vec<String> = Vec::new();
+        let mut diverged: Vec<(String, String)> = Vec::new(); // (node_id, instance uuid)
+
+        for id in self.kb.primary.list_ids(None) {
+            let Some(primary_node) = self.kb.primary.get(&id) else {
+                continue;
+            };
+            if !matches!(primary_node.source, Some(mae_kb::NodeSource::Federation)) {
+                continue;
+            }
+            // Origin instance not currently joined — stays stranded (safe, already
+            // shadowed by kb_owner_of on read; out of scope for this bounded pass).
+            let Some((uuid, instance_node)) = self
+                .kb
+                .instances
+                .iter()
+                .find_map(|(uuid, kb)| kb.get(&id).map(|n| (uuid.clone(), n.clone())))
+            else {
+                continue;
+            };
+            if primary_node.title == instance_node.title
+                && primary_node.body == instance_node.body
+                && primary_node.tags == instance_node.tags
+            {
+                to_remove.push(id.clone());
+            } else {
+                diverged.push((id.clone(), uuid));
+            }
+        }
+
+        let removed = to_remove.len();
+        for id in &to_remove {
+            self.kb.primary.remove(id);
+        }
+        if removed > 0 {
+            self.fire_hook("after-kb-change");
+        }
+
+        for (node_id, uuid) in &diverged {
+            tracing::warn!(target: "kb_sync", node_id = %node_id, instance = %uuid, "stranded primary copy diverges from its joined instance — preserved, surfacing for review (ADR-024)");
+            self.notify(
+                crate::notifications::Notification::action_required(
+                    "kb",
+                    format!(
+                        "KB '{node_id}': a stale primary copy diverges from its joined instance"
+                    ),
+                )
+                .key(format!("kb:stranded-diverge:{node_id}"))
+                .body(
+                    "A pre-ADR-019 copy of this node in your primary KB differs from the \
+                     content in the federated instance it actually belongs to. It was NOT \
+                     removed automatically — review both copies and delete the stale one \
+                     manually (`:kb-find` or the KB graph view) once you've confirmed which \
+                     is correct.",
+                ),
+            );
+        }
+
+        (removed, diverged.len())
+    }
+
     /// The collaborative id a node's owning KB is shared under, derived from
     /// **durable** registry markers (ADR-019) — not the transient `shared_kbs`
     /// cache. This is the broadcast-gate authority, so a shared KB keeps

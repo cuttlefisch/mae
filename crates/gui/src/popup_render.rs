@@ -892,12 +892,12 @@ pub fn render_code_action_popup(
         return;
     }
 
-    const MAX_ITEMS: usize = 12;
-    let visible_count = menu.items.len().min(MAX_ITEMS);
+    let max_items = editor.code_action_max_items;
+    let visible_count = menu.items.len().min(max_items);
     let popup_width = menu
         .items
         .iter()
-        .take(MAX_ITEMS)
+        .take(max_items)
         .map(|item| {
             let kind_w = item.kind.as_deref().map(|k| k.len() + 3).unwrap_or(2);
             kind_w + item.title.len()
@@ -950,7 +950,7 @@ pub fn render_code_action_popup(
     let inner_left = popup_left + 1;
     let inner_width = popup_width.saturating_sub(2);
 
-    for (i, item) in menu.items.iter().take(MAX_ITEMS).enumerate() {
+    for (i, item) in menu.items.iter().take(max_items).enumerate() {
         let is_selected = i == menu.selected;
         let fg = if is_selected { selected_fg } else { normal_fg };
         let item_bg = if is_selected { selected_bg } else { normal_bg };
@@ -1302,6 +1302,11 @@ pub fn render_peek_definition_popup(
 // Symbol outline popup (SPC c o)
 // ---------------------------------------------------------------------------
 
+/// Unlike the TUI outline popup, this one uses a fixed-size box
+/// (`centered_popup_rect_from`, 60%/60% of screen) with scrolling, rather than
+/// growing/shrinking with the item count — so `editor.symbol_outline_max_items`
+/// (which caps the TUI popup's height) has no equivalent role here; both
+/// backends already handle arbitrarily long lists correctly via scrolling.
 pub fn render_symbol_outline_popup(
     canvas: &mut SkiaCanvas,
     editor: &Editor,

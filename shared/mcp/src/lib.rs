@@ -5,7 +5,8 @@
 //!
 //! Exposes the editor's tools via JSON-RPC over a Unix domain socket.
 //! Claude Code (or any MCP client) connects via the mae-mcp-shim binary
-//! which bridges stdio <-> the socket.
+//! which bridges stdio <-> the socket. The Unix socket uses filesystem
+//! permissions only — no per-client authentication; see `SECURITY.md`.
 //!
 //! ## Transport framing
 //!

@@ -459,22 +459,14 @@ impl super::Editor {
         //    registered/unregistered by another mae process.
         self.drain_kb_registry_watch();
 
-        // 8. Evict per-window graph-view render-epoch entries for windows
-        //    that have since closed. `GraphView.render_epoch` is keyed by
-        //    `WindowId` and never reused, so without this it grows for the
-        //    lifetime of the session under normal window churn (companion
-        //    windows, agent shells) — the same stale-cache-key bug class as
-        //    the GUI renderer's `window_render_cache` (see its own prune in
-        //    `crates/gui/src/lib.rs`'s `render()`), just far smaller per
-        //    entry (a `u64`, not a rasterized image) so it's cheap to leave
-        //    to idle housekeeping rather than an every-frame check.
-        let live_ids: std::collections::HashSet<WindowId> =
-            self.window_mgr.iter_windows().map(|w| w.id).collect();
-        for buf in &mut self.buffers {
-            if let Some(gv) = buf.graph_view_mut() {
-                gv.render_epoch.retain(|id, _| live_ids.contains(id));
-            }
-        }
+        // 8. Evict per-window graph-view state (`viewports`/`rendered`/
+        //    `render_epoch`) for windows that have since closed. Delegates
+        //    to the same canonical prune `sync_open_graph_viewports` (the
+        //    GUI's per-frame caller) uses — this is the backend-agnostic
+        //    entry point, since `kb_graph_view_open` has no TUI/GUI gate and
+        //    a headless/MCP-only session can populate this state without
+        //    ever running the GUI's per-frame sync.
+        self.prune_closed_window_graph_state();
     }
 
     /// Switch focus to whichever window contains the given cell coordinates.
@@ -637,31 +629,14 @@ impl super::Editor {
                 let bottom = {
                     let buf = &self.buffers[buf_idx];
                     let max_row = buf_line_count.saturating_sub(1);
-                    let mut visual = 0;
-                    let mut last_fit = scroll_off;
-                    let mut line = scroll_off;
-                    let mut first = true;
-                    while line <= max_row {
-                        let rows = self.line_visual_rows(buf_idx, line);
-                        if rows > 0 {
-                            let effective = if first {
-                                rows.saturating_sub(skip)
-                            } else {
-                                rows
-                            };
-                            first = false;
-                            if visual + effective > viewport_height {
-                                break;
-                            }
-                            visual += effective;
-                            last_fit = line;
-                        }
-                        line = buf.next_visible_line(line);
-                        if line <= last_fit {
-                            break;
-                        }
-                    }
-                    last_fit
+                    crate::wrap::last_visible_wrapped_line(
+                        scroll_off,
+                        viewport_height,
+                        skip,
+                        max_row,
+                        |line| self.line_visual_rows(buf_idx, line),
+                        |line| buf.next_visible_line(line),
+                    )
                 };
 
                 // Phase 3: Clamp cursor.

@@ -1,3 +1,12 @@
+//! @ai-caution: [architecture-debt] At 3,648 lines, ~4.6x the 800-line
+//! ceiling. A CRDT-offset *drift* bug was root-caused and fixed here in an
+//! earlier round (`fix/backlog-review-root-cause-patterns`), but the file's
+//! *size* was never addressed — not split (design work, not attempted this
+//! pass; round-5 tech-debt pass, 2026-07). Tracked in
+//! `.claude/commands/mae-audit.md`'s "Known exceptions" and `ROADMAP.md`'s
+//! "Architecture Debt" section — re-verify the line count each audit pass
+//! rather than trusting this comment's number to stay current.
+
 use ropey::Rope;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -430,7 +439,7 @@ impl Buffer {
 
     /// Recompute display regions for link concealment and inline images.
     /// Called when buffer generation changes or `link_descriptive` toggles.
-    pub fn recompute_display_regions(&mut self, link_descriptive: bool) {
+    pub fn recompute_display_regions(&mut self, link_descriptive: bool, inline_images: bool) {
         self.display_regions.clear();
         self.display_regions_gen = self.generation;
 
@@ -451,8 +460,15 @@ impl Buffer {
             self.display_regions = crate::display_region::compute_link_regions(&source, true, ext);
         }
 
-        // Append image regions when inline_images is enabled.
-        if self.local_options.inline_images.unwrap_or(false) {
+        // Append image regions when inline_images is enabled. Resolved by
+        // the caller (`Editor::inline_images_for`, global + buffer-local
+        // override) and passed in — mirrors `link_descriptive` above; a
+        // `Buffer` has no reference back to `Editor` to resolve its own
+        // global fallback, so this must never read
+        // `self.local_options.inline_images` directly with a hardcoded
+        // default (that silently ignored the `inline_images` global/
+        // `:set`/`:setl` entirely).
+        if inline_images {
             let base_dir = self.file_path.as_ref().and_then(|p| p.parent());
             let image_regions = crate::display_region::compute_image_regions(
                 &source,
@@ -695,6 +711,27 @@ impl Buffer {
         };
         let disk_hash = compute_content_hash(&content);
         &disk_hash != stored_hash
+    }
+
+    /// Record disk state after a WRITE this buffer already knows about and
+    /// endorses — a self-inflicted change, not an external one. Updates
+    /// `file_mtime` (re-stat the path) and `content_hash` (from `content`,
+    /// the string that was actually written — no extra disk read) so
+    /// `check_disk_changed`/`check_disk_changed_by_hash` don't independently
+    /// re-derive "changed externally" on the next freshness check and fire a
+    /// spurious reload prompt (#316: a KB activity-tracking write to this
+    /// buffer's own `:PROPERTIES:` drawer was indistinguishable from a real
+    /// external edit).
+    ///
+    /// Deliberately does NOT touch `rope`, `modified`, or undo history — the
+    /// buffer's own in-progress edits (if any) are unrelated to a drawer-only
+    /// rewrite of whatever was last saved to disk, unlike `reload_from_disk`
+    /// which replaces the buffer's visible content wholesale.
+    pub fn resync_after_external_write(&mut self, content: &str) {
+        self.content_hash = Some(compute_content_hash(content));
+        if let Some(ref path) = self.file_path {
+            self.file_mtime = fs::metadata(path).and_then(|m| m.modified()).ok();
+        }
     }
 
     /// Reload buffer contents from its backing file. Returns Ok(()) on
@@ -1056,6 +1093,54 @@ impl Buffer {
         self.rope = sync.rope().clone();
         self.bump_generation();
         Ok(())
+    }
+
+    /// Apply a remote sync update, ALSO adjusting `cursors` (char offsets) to
+    /// account for the edit. The single home for cursor-adjustment-after-
+    /// remote-apply — every caller that needs this used to reimplement its
+    /// own (each independently buggy: two callers did no adjustment at all,
+    /// and the one that did inferred the edit position by diffing ropes,
+    /// which silently skipped same-length replacements). Sources the edit's
+    /// exact position + char-length delta from `TextSync::apply_update_with_edit`
+    /// (yrs's own transaction delta), not a diff.
+    ///
+    /// Cursors at or before the edit start are unaffected; cursors after shift
+    /// by the edit's char delta, clamped to never land before the edit start
+    /// (handles a cursor that was inside a deleted range). Returns the
+    /// adjusted offsets in the same order as `cursors`. `Err` if sync is not
+    /// enabled on this buffer.
+    pub fn apply_sync_update_with_cursors(
+        &mut self,
+        update: &[u8],
+        cursors: &[usize],
+    ) -> Result<Vec<usize>, mae_sync::SyncError> {
+        let Some(sync) = &mut self.sync_doc else {
+            return Err(mae_sync::SyncError::Schema(
+                "sync not enabled on this buffer".to_string(),
+            ));
+        };
+        let edit = sync.apply_update_with_edit(update)?;
+        self.rope = sync.rope().clone();
+        self.bump_generation();
+        let new_len = self.rope.len_chars();
+        let adjusted = cursors
+            .iter()
+            .map(|&old_offset| match edit {
+                None => old_offset.min(new_len),
+                Some(e) => {
+                    let shifted = if old_offset <= e.edit_start {
+                        old_offset
+                    } else {
+                        // Shift by delta, but never before edit_start (handles
+                        // a cursor that was inside a deleted range).
+                        let s = (old_offset as isize + e.char_delta).max(0) as usize;
+                        s.max(e.edit_start)
+                    };
+                    shifted.min(new_len.saturating_sub(1))
+                }
+            })
+            .collect();
+        Ok(adjusted)
     }
 
     /// Notify sync_doc of a local insert. Queues update bytes for broadcast.
@@ -2591,7 +2676,6 @@ mod tests {
     #[test]
     fn recompute_display_regions_includes_image_regions() {
         let mut buf = Buffer::new();
-        buf.local_options.inline_images = Some(true);
         let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
@@ -2601,7 +2685,7 @@ mod tests {
         buf.file_path = Some(assets.join("test.md"));
         buf.rope = ropey::Rope::from_str("![Test](test-image.png)\n");
         buf.generation = 1;
-        buf.recompute_display_regions(true);
+        buf.recompute_display_regions(true, true);
         let has_image = buf.display_regions.iter().any(|r| r.image.is_some());
         assert!(has_image, "display_regions should include image regions");
     }
@@ -2609,7 +2693,6 @@ mod tests {
     #[test]
     fn recompute_display_regions_no_images_when_disabled() {
         let mut buf = Buffer::new();
-        buf.local_options.inline_images = Some(false);
         let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
@@ -2619,7 +2702,7 @@ mod tests {
         buf.file_path = Some(assets.join("test.md"));
         buf.rope = ropey::Rope::from_str("![Test](test-image.png)\n");
         buf.generation = 1;
-        buf.recompute_display_regions(true);
+        buf.recompute_display_regions(true, false);
         let has_image = buf.display_regions.iter().any(|r| r.image.is_some());
         assert!(!has_image, "no image regions when inline_images disabled");
     }

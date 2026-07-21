@@ -2278,9 +2278,18 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
                         Ok(mae_kb::migrate::SledToSqliteOutcome::NotNeeded) => {}
                         Err(e) => {
                             error!(error = %e, "sled→sqlite migration failed; opening the existing store");
-                            editor.set_status(format!(
-                                "KB migration failed ({e}); opened existing store"
-                            ));
+                            // #79 third slice: a startup migration failure fired once and
+                            // easily overwritten by the next status message in the same
+                            // startup burst — routed onto the notification bus so it's
+                            // still visible after boot completes.
+                            editor.notify(
+                                mae_core::notifications::Notification::warning(
+                                    "kb",
+                                    "KB migration failed — opened existing store",
+                                )
+                                .body(format!("{e}"))
+                                .key("kb-sled-to-sqlite-migration-failed"),
+                            );
                             // The sled store is intact (a directory) — open it as sled so
                             // the KB still works; the user can retry the migration later.
                             if cozo_path.is_dir() {
@@ -2350,9 +2359,20 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
                         // persist.
                         error!(error = %e, path = %cozo_path.display(), "failed to open primary KB store");
                         editor.kb.store_unavailable = true;
-                        editor.set_status(format!(
-                            "KB store unavailable: {e} — another mae instance may hold it, or it is corrupt. KB changes cannot be saved."
-                        ));
+                        // #79 third slice: the highest-value site in this pass — every
+                        // subsequent KB edit is silently discarded until the user notices
+                        // this, so a clobberable startup status line is a real data-loss
+                        // risk, not just an inconvenience.
+                        editor.notify(
+                            mae_core::notifications::Notification::error(
+                                "kb",
+                                "KB store unavailable — KB changes cannot be saved",
+                            )
+                            .body(format!(
+                                "{e} — another mae instance may hold it, or it is corrupt."
+                            ))
+                            .key("kb-store-unavailable"),
+                        );
                     }
                 }
                 editor.kb.data_dir = Some(kb_data_dir);
@@ -2577,7 +2597,21 @@ pub(crate) fn init_daemon_connection(editor: &mut Editor) {
                 let status = client.call("daemon/status", serde_json::json!({})).ok();
                 if let Some(ref s) = status {
                     if let Some(msg) = crate::daemon_version_skew(env!("CARGO_PKG_VERSION"), s) {
+                        // #323: this check already runs on EVERY daemon connect
+                        // (proactive, not just when the user thinks to run
+                        // :collab-doctor) — but a bare tracing::warn! only reaches
+                        // a log file, invisible during normal use. That's the
+                        // exact "silently serving stale data" gap #323 reports:
+                        // route it onto the notification bus too.
                         warn!("{}", msg);
+                        editor.notify(
+                            mae_core::notifications::Notification::warning(
+                                "daemon",
+                                "mae-daemon version differs from this editor",
+                            )
+                            .body(msg)
+                            .key("daemon-version-skew"),
+                        );
                     }
                 }
                 let primary_exists = status
@@ -2702,6 +2736,187 @@ mod tests {
                 PathBuf::from("/old2"),
             ],
             "session recency wins for touched entries; disk-only entries survive as older, not dropped"
+        );
+    }
+
+    /// #79 third slice: a primary-KB-store-open failure used to be a clobberable
+    /// status-line message fired once during the startup burst — easy to miss, yet
+    /// every subsequent KB edit is silently discarded until the user notices. Must
+    /// land as a durable notification. Uses a REAL failure (a garbage regular file
+    /// where a valid CozoDB store is expected), not a synthetic one.
+    #[test]
+    #[cfg(unix)]
+    fn init_kb_federation_notifies_on_a_real_store_open_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let kb_dir = tmp.path().join("kb");
+        std::fs::create_dir_all(&kb_dir).unwrap();
+        // primary.cozo as an unreadable regular file: not a directory (so the
+        // sled->sqlite migration check short-circuits to NotNeeded) and permission
+        // denied at the OS level — CozoKbStore::open_with_engine must fail on it for
+        // real, without going through cozo's own file-format parsing (which panics
+        // internally on garbage content rather than returning a clean Err).
+        let cozo_path = kb_dir.join("primary.cozo");
+        std::fs::write(&cozo_path, b"").unwrap();
+        std::fs::set_permissions(&cozo_path, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let mut editor = mae_core::Editor::new();
+        editor.data_dir_override = Some(tmp.path().to_path_buf());
+
+        init_kb_federation(&mut editor, false);
+
+        // Restore permissions so tempdir cleanup can remove the file.
+        std::fs::set_permissions(&cozo_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert!(
+            editor.kb.store_unavailable,
+            "a real store-open failure must flag store_unavailable"
+        );
+        let notes = editor.notifications.active_sorted();
+        let hit = notes
+            .iter()
+            .find(|n| n.source == "kb" && n.title.contains("KB store unavailable"));
+        assert!(
+            hit.is_some(),
+            "a durable notification must be raised for a real store-open failure, \
+             not just a status-line toast; got: {:?}",
+            notes.iter().map(|n| &n.title).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            hit.unwrap().severity,
+            mae_core::notifications::Severity::Error
+        );
+    }
+
+    /// #79 third slice: a sled->sqlite migration failure used to be a clobberable
+    /// status-line message only. Uses a REAL failure — a `primary.cozo` directory
+    /// that LOOKS like a legacy sled store (triggers the migration attempt) but
+    /// contains no valid sled database, so the migration's own open genuinely fails.
+    #[test]
+    #[cfg(unix)]
+    fn init_kb_federation_notifies_on_a_real_migration_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let kb_dir = tmp.path().join("kb");
+        // primary.cozo as a DIRECTORY (looks like a legacy sled store, so
+        // migrate_sled_to_sqlite attempts the migration) but permission-denied —
+        // the migration's own sled open must fail for real, without relying on
+        // sabotaging sled's on-disk format (undocumented, fragile to depend on).
+        let cozo_dir = kb_dir.join("primary.cozo");
+        std::fs::create_dir_all(&cozo_dir).unwrap();
+        std::fs::set_permissions(&cozo_dir, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let mut editor = mae_core::Editor::new();
+        editor.data_dir_override = Some(tmp.path().to_path_buf());
+        assert_eq!(
+            editor.kb.storage_engine, "sqlite",
+            "default engine must be sqlite for the migration path to even attempt"
+        );
+
+        init_kb_federation(&mut editor, false);
+
+        // Restore permissions so tempdir cleanup can remove the directory.
+        std::fs::set_permissions(&cozo_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        let notes = editor.notifications.active_sorted();
+        let hit = notes
+            .iter()
+            .find(|n| n.source == "kb" && n.title.contains("KB migration failed"));
+        assert!(
+            hit.is_some(),
+            "a durable notification must be raised for a real migration failure, \
+             not just a status-line toast; got: {:?}",
+            notes.iter().map(|n| &n.title).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            hit.unwrap().severity,
+            mae_core::notifications::Severity::Warning
+        );
+    }
+
+    /// #323: `daemon_version_skew` (main.rs) was already implemented, unit-tested,
+    /// and — this is the load-bearing part — already CALLED here on every daemon
+    /// connect (not just when the user thinks to run `:collab-doctor`). But the
+    /// call site only reached `tracing::warn!`, a log line invisible during normal
+    /// use — exactly the "daemon silently serves stale data with nothing surfacing
+    /// it" gap #323 reports. Real fake daemon socket (not a synthetic call to
+    /// daemon_version_skew in isolation) speaking real Content-Length JSON-RPC,
+    /// responding to `daemon/status` with a version that differs from this
+    /// editor's own — asserts the mismatch reaches the durable notification bus.
+    #[test]
+    #[cfg(unix)]
+    fn init_daemon_connection_notifies_on_a_real_version_mismatch() {
+        use std::io::{BufRead, BufReader, Read, Write};
+        use std::os::unix::net::UnixListener;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let socket_path = tmp.path().join("mae-daemon-fake.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut writer = stream;
+
+            // Read one Content-Length-framed JSON-RPC request (real framing, the
+            // same the daemon's own server side speaks).
+            let mut content_length = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                if let Some(v) = line.strip_prefix("Content-Length: ") {
+                    content_length = v.trim().parse().unwrap();
+                }
+            }
+            let mut body = vec![0u8; content_length];
+            reader.read_exact(&mut body).unwrap();
+            let req: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(req["method"], "daemon/status");
+
+            // Respond with a version that DIFFERS from this editor's own build.
+            let resp = serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": req["id"],
+                "result": { "version": "0.0.1-fake-old-daemon", "primary_exists": false },
+            });
+            let resp_body = serde_json::to_vec(&resp).unwrap();
+            write!(writer, "Content-Length: {}\r\n\r\n", resp_body.len()).unwrap();
+            writer.write_all(&resp_body).unwrap();
+            writer.flush().unwrap();
+        });
+
+        let mut editor = mae_core::Editor::new();
+        editor.kb.daemon_enabled = true;
+        editor.kb.daemon_socket = socket_path;
+
+        init_daemon_connection(&mut editor);
+        server.join().unwrap();
+
+        let notes = editor.notifications.active_sorted();
+        let hit = notes
+            .iter()
+            .find(|n| n.source == "daemon" && n.title.contains("version differs"));
+        assert!(
+            hit.is_some(),
+            "a durable notification must be raised for a real daemon version \
+             mismatch, not just a tracing log line; got: {:?}",
+            notes.iter().map(|n| &n.title).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            hit.unwrap().severity,
+            mae_core::notifications::Severity::Warning
+        );
+        assert!(
+            hit.unwrap()
+                .body
+                .as_ref()
+                .is_some_and(|b| b.contains("0.0.1-fake-old-daemon")),
+            "the notification body must name the mismatched daemon version"
         );
     }
 

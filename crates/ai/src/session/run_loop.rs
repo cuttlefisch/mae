@@ -30,7 +30,8 @@ impl AgentSession {
             };
         }
 
-        // Reject obviously dangerous commands
+        // Reject obviously dangerous commands. Defense in depth, not a
+        // sandbox — substring-based and bypassable; see SECURITY.md.
         let blocked_patterns = [
             "rm -rf /", "rm -fr /", "mkfs.", "dd if=", ":(){", // fork bomb
             ">(){ :",

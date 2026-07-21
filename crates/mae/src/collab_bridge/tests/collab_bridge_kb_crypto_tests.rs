@@ -268,8 +268,12 @@ fn build_kb_node_update_request_seals_on_encrypted_kb() {
 
     // A member opens the op-set (causal order) + materializes the title.
     let opened = mae_sync::op_set::open_new_ops(&op_set, &key, &std::collections::BTreeSet::new());
-    let mut reader = KbNodeDoc::from_bytes(&opened[0].1).unwrap();
-    for (_oid, pt) in &opened[1..] {
+    assert_eq!(
+        opened.undecryptable, 0,
+        "a member with the right key decrypts every op"
+    );
+    let mut reader = KbNodeDoc::from_bytes(&opened.ops[0].1).unwrap();
+    for (_oid, pt) in &opened.ops[1..] {
         reader.apply_update(pt).unwrap();
     }
     assert_eq!(

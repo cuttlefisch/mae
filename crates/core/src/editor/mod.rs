@@ -1128,6 +1128,11 @@ pub struct Editor {
     pub scroll_speed: usize,
     /// Max items in LSP completion popup. Default 10.
     pub completion_max_items: usize,
+    /// Max items in LSP code-action popup. Default 12.
+    pub code_action_max_items: usize,
+    /// Max items shown at once in the symbol-outline popup (TUI only — GUI's
+    /// outline popup is a fixed-size box with scrolling). Default 20.
+    pub symbol_outline_max_items: usize,
     /// Max lines in LSP hover popup. Default 15.
     pub hover_max_lines: usize,
     /// Popup width as percentage of screen. Default 70.
@@ -1152,6 +1157,11 @@ pub struct Editor {
     pub link_descriptive: bool,
     /// Apply inline bold/italic/code styling in conversation and KB buffers. Default true.
     pub render_markup: bool,
+    /// Display images inline in org/markdown buffers (GUI renders image, TUI
+    /// shows placeholder). Default true. Effective value for a specific
+    /// buffer is `Editor::inline_images_for` (buffer-local override via
+    /// `BufferLocalOptions::inline_images` takes precedence).
+    pub inline_images: bool,
     /// Show hover info in a floating popup (true) or status bar (false). Default true.
     pub lsp_hover_popup: bool,
     /// Whether the KB-link hover preview popup (Part D) auto-triggers when
@@ -1462,6 +1472,8 @@ impl Editor {
             mouse_wheel_follow_mouse: true,
             scroll_speed: 3,
             completion_max_items: 10,
+            code_action_max_items: 12,
+            symbol_outline_max_items: 20,
             hover_max_lines: 15,
             popup_width_pct: 70,
             popup_height_pct: 60,
@@ -1474,6 +1486,7 @@ impl Editor {
             heading_scale_h3: 1.15,
             link_descriptive: true,
             render_markup: true,
+            inline_images: true,
             lsp_hover_popup: true,
             kb_preview_on_hover: true,
             kb_preview_max_lines: 15,

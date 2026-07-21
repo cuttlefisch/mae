@@ -61,7 +61,7 @@ fn tag_operations() {
     let mut node = KbNodeDoc::new("n1", "T", "", &["a".to_string()]);
     assert_eq!(node.tags(), vec!["a"]);
 
-    node.add_tag("b");
+    let _ = node.add_tag("b");
     assert_eq!(node.tags(), vec!["a", "b"]);
 
     node.remove_tag("a");
@@ -111,7 +111,7 @@ fn utf16_offset_cjk_roundtrip() {
     let node = KbNodeDoc::new("n1", "CJK", "", &[]);
     // CJK characters are multi-byte in UTF-8 but single code unit in UTF-16 (BMP)
     let mut n = KbNodeDoc::from_bytes(&node.encode()).unwrap();
-    n.set_body("Hello 世界 and more text after");
+    let _ = n.set_body("Hello 世界 and more text after");
     let bytes = n.encode();
     let restored = KbNodeDoc::from_bytes(&bytes).unwrap();
     assert_eq!(restored.body(), "Hello 世界 and more text after");
@@ -121,7 +121,7 @@ fn utf16_offset_cjk_roundtrip() {
 fn utf16_offset_emoji_roundtrip() {
     // Emoji above BMP (U+1F600) are 2 UTF-16 code units (surrogate pairs)
     let mut node = KbNodeDoc::new("n1", "Emoji Test 😀", "Body with 🎉 emoji", &[]);
-    node.set_title("Updated 🌍 title");
+    let _ = node.set_title("Updated 🌍 title");
     let bytes = node.encode();
     let restored = KbNodeDoc::from_bytes(&bytes).unwrap();
     assert_eq!(restored.title(), "Updated 🌍 title");
@@ -169,7 +169,7 @@ fn from_bytes_with_client_id_preserves_identity() {
 fn encode_diff_produces_valid_update() {
     let mut node = KbNodeDoc::new("n1", "T", "hello", &[]);
     let sv_before = node.state_vector();
-    node.set_body("hello world");
+    let _ = node.set_body("hello world");
     let diff = node.encode_diff(&sv_before).unwrap();
     assert!(!diff.is_empty());
 
@@ -195,7 +195,7 @@ fn materialize_extracts_all_fields() {
         "Body",
         &["tag1".to_string(), "tag2".to_string()],
     );
-    node.add_link("concept:other");
+    let _ = node.add_link("concept:other");
     let mat = node.materialize();
     assert_eq!(mat.id, "concept:test");
     assert_eq!(mat.title, "Test");
@@ -210,7 +210,7 @@ fn materialize_extracts_all_fields() {
 fn content_hash_changes_on_edit() {
     let mut node = KbNodeDoc::new("n1", "T", "hello", &[]);
     let hash1 = node.content_hash();
-    node.set_body("world");
+    let _ = node.set_body("world");
     let hash2 = node.content_hash();
     assert_ne!(hash1, hash2);
 }
@@ -301,8 +301,8 @@ fn concurrent_title_and_body_edits() {
 #[test]
 fn link_operations() {
     let mut node = KbNodeDoc::new("n1", "T", "", &[]);
-    node.add_link("target1");
-    node.add_link("target2");
+    let _ = node.add_link("target1");
+    let _ = node.add_link("target2");
     assert_eq!(node.links(), vec!["target1", "target2"]);
 
     node.remove_link("target1");

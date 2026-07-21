@@ -1,5 +1,11 @@
 # P2P Decentralized KB Sync — Status
 
+> **This is a point-in-time status snapshot, not a maintained reference — several
+> items below have shipped since it was last updated (see the strikethrough notes
+> in the "Deferred / next" table). For current, actively-reconciled state see
+> `docs/E2E_ENCRYPTION.md`, `docs/KB_SHARING.md`, and `CLAUDE.md`'s "Next — P2P
+> decentralized KB sync" section.**
+>
 > Status of the **P2P daemon-mesh** initiative on branch `feat/p2p-setup-and-mesh`.
 > Design: ADR-025 (transport) / ADR-026 (peer-verifiable integrity) / ADR-027
 > (observability) / ADR-028 (data lifecycle). Tracker: issue #96.
@@ -31,14 +37,14 @@ blocklist, quorum) and is fully tested.
 | Capability | State | Where |
 |---|---|---|
 | iroh QUIC transport, node-id = trusted-peer Ed25519 key | ✅ | `daemon/src/p2p.rs` |
-| Per-KB transport policy (Hub / P2p / Both), owner-bypass | ✅ | `shared/sync/src/kb.rs`, `daemon/src/collab_handler.rs` |
+| Per-KB transport policy (Hub / P2p / Both), owner-bypass | ✅ | `shared/sync/src/kb/`, `daemon/src/collab_handler/mod.rs` |
 | Live-reload mesh access gate + `connection_gate` (open / authorized_keys) | ✅ | `daemon/src/p2p.rs` |
 | Join "magnet link" ticket (`mae://join/…`), mint + parse | ✅ | `daemon/src/ticket.rs` |
-| **Signed membership op-log** (append-only CRDT set, derived validity) | ✅ | `shared/sync/src/membership.rs`, `kb.rs` |
+| **Signed membership op-log** (append-only CRDT set, derived validity) | ✅ | `shared/sync/src/membership.rs`, `shared/sync/src/kb/` |
 | **p2panda strong-removal resolver** (concurrent, mutual, re-add, cascade) | ✅ | `shared/sync/src/membership.rs` |
 | **Local blocklist** (block even the owner) + **quorum governance** (m-of-n) | ✅ | `shared/sync/src/membership.rs` |
-| Daemon signs membership ops on mutate (owned KBs) | ✅ | `daemon/src/collab_handler.rs` |
-| `kb_access` peer-verifies derived membership for anchored (joined) KBs | ✅ | `daemon/src/collab_handler.rs` |
+| Daemon signs membership ops on mutate (owned KBs) | ✅ | `daemon/src/collab_handler/mod.rs` |
+| `kb_access` peer-verifies derived membership for anchored (joined) KBs | ✅ | `daemon/src/collab_handler/mod.rs` |
 | **Dialer**: dial by node-id, anti-spoof verify, anchor, pull | ✅ | `daemon/src/dialer.rs` |
 | **Live bidirectional sync** (inbound apply + outbound forward, echo-safe) | ✅ | `daemon/src/dialer.rs` |
 | Reconnect + bounded exponential backoff (mobility) | ✅ | `daemon/src/dialer.rs` |
@@ -74,8 +80,8 @@ node doc (`dialer.rs` `kb_node_docs`). Those node docs reach the daemon two ways
 | Item | Notes |
 |---|---|
 | Quorum governance in the **daemon gate** | mae-sync layer ready; `kb_access` uses single-owner `derive_valid_members`. Switch to `derive_valid_members_governed` once governance is stored owner-signed; add `kb/admin`/`kb/revoke` handlers. |
-| Signed **content** ops | ADR-026 part 2. Today content is epoch-fenced (ADR-023); membership is peer-verified, content authorship is not yet. |
-| E2E content encryption | A relay still sees plaintext CRDT. BeeKEM/Noise, own ADR. |
+| ~~Signed **content** ops~~ | **Shipped since this doc was last updated** — ADR-036 (`SignedContentOp`, content authorship verification). See `docs/SECURITY_REVIEW.md`. |
+| ~~E2E content encryption~~ | **Shipped since this doc was last updated** — ADR-037. See `docs/E2E_ENCRYPTION.md` for the full design + threat model. |
 | Key/identity rotation propagation | #92. |
 | Dedicated mesh **e2e shell script** | The in-process daemon tests already run a real two-endpoint loopback mesh; a full-process `scripts/collab-p2p-mesh-e2e.sh` is the follow-up (the two-machine manual run covers it now). |
 | **Headless daemon KB ingest** | The cozo-seeding path (flow 2 above) is reachable only once a KB is a *registered instance* in the daemon's KB store. There is no headless `mae-daemon ingest <org>` to populate that store without an editor — so a fully-headless content share needs this. The editor flow (flow 1) covers content for the common case today. |

@@ -758,7 +758,8 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_GIT_STATUS,
         )
-        .with_tags(["git", "workflow"]),
+        .with_tags(["git", "workflow"])
+        .with_aliases(["magit"]),
         Node::new(
             "concept:org-mode",
             "Concept: Org-mode",
@@ -772,7 +773,8 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_MARKDOWN,
         )
-        .with_tags(["markdown", "editing"]),
+        .with_tags(["markdown", "editing"])
+        .with_aliases(["md"]),
         Node::new(
             "concept:ex-commands",
             "Concept: Ex-Command Grammar",
@@ -800,14 +802,16 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_AUTOSAVE,
         )
-        .with_tags(["files", "configuration"]),
+        .with_tags(["files", "configuration"])
+        .with_aliases(["auto-save"]),
         Node::new(
             "concept:file-tree",
             "Concept: File Tree",
             NodeKind::Concept,
             CONCEPT_FILE_TREE,
         )
-        .with_tags(["files", "navigation", "gui"]),
+        .with_tags(["files", "navigation", "gui"])
+        .with_aliases(["sidebar"]),
         Node::new(
             "concept:diff-display",
             "Concept: Diff Display",
@@ -885,7 +889,20 @@ fn static_nodes() -> Vec<Node> {
             NodeKind::Concept,
             CONCEPT_DISPLAY_POLICY,
         )
-        .with_tags(["core", "window", "conversation"]),
+        .with_tags(["core", "window", "conversation"])
+        .with_aliases([
+            "window-placement",
+            "split-vs-replace",
+            "take-over-window",
+            "replace-focused",
+            "fullscreen-buffer",
+            "dont-split",
+            "no-split",
+            "maximize-on-open",
+            "where-buffers-open",
+            "shell-window",
+            "agent-window",
+        ]),
         Node::new(
             "concept:mcp-development",
             "Concept: MCP Development Workflow",
@@ -1094,6 +1111,57 @@ mod tests {
             "key:leader-keys",
         ] {
             assert!(kb.contains(required), "missing concept: {}", required);
+        }
+    }
+
+    /// #67: `set-display-rule!` / `concept:display-policy` were only
+    /// findable by the internal "display policy/rule" jargon, not the
+    /// words a user actually reaches for ("take over window", "don't
+    /// split", "fullscreen buffer"). Search by the exact terms the issue's
+    /// own repro cites and confirm each now surfaces the target node.
+    #[test]
+    fn display_policy_nodes_are_discoverable_by_intent_keywords() {
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
+        for query in [
+            "take over window",
+            "fullscreen buffer",
+            "dont split",
+            "maximize on open",
+            "window placement",
+        ] {
+            let hits = kb.search(query);
+            assert!(
+                hits.contains(&"concept:display-policy".to_string())
+                    || hits.contains(&"scheme:set-display-rule!".to_string()),
+                "query '{}' should surface concept:display-policy or \
+                 scheme:set-display-rule! via alias, got: {:?}",
+                query,
+                hits
+            );
+        }
+    }
+
+    /// #67 (4-node bounded slice): each alias below is a term already present
+    /// verbatim in the target node's own body text, mirroring the original
+    /// issue's exact shape — an obvious term a user would search for that was
+    /// simply never registered as an alias. Confirms each now surfaces its node.
+    #[test]
+    fn bounded_alias_slice_nodes_are_discoverable_by_body_term() {
+        let kb = seed_kb_default(&CommandRegistry::with_builtins());
+        for (query, target) in [
+            ("magit", "concept:git-status"),
+            ("sidebar", "concept:file-tree"),
+            ("md", "concept:markdown"),
+            ("auto-save", "concept:autosave"),
+        ] {
+            let hits = kb.search(query);
+            assert!(
+                hits.contains(&target.to_string()),
+                "query '{}' should surface {} via alias, got: {:?}",
+                query,
+                target,
+                hits
+            );
         }
     }
 
@@ -1586,5 +1654,62 @@ mod tests {
         ];
         let found = candidates.iter().find(|id| kb.contains(id));
         assert_eq!(found, Some(&"option:line_numbers".to_string()));
+    }
+
+    /// `assets/manual/*.org` files are the deliberately richer, authoritative
+    /// content source for the shipped manual — `crates/mae/src/bin/build_manual_kb.rs`
+    /// seeds code-generated nodes first, then INTENTIONALLY upserts `.org` content
+    /// over almost every one of them (this is by design, not a bug: every
+    /// `concept:*`/`scheme:*`/`term:*`/`tutorial:*`/`lesson:*` node in
+    /// `assets/manual/` exists precisely to override its terser `seed_kb()`
+    /// counterpart with hand-curated prose). That means a renamed/removed
+    /// identifier that only gets updated in the Rust source (`concepts.rs` etc.)
+    /// and NOT in the corresponding `.org` file goes stale silently — exactly
+    /// what happened to `assets/manual/concept-display-policy.org`, which kept
+    /// citing `switch_to_buffer_non_conversation` for months after it was renamed
+    /// to `display_buffer_for_agent` in `concepts.rs`, so `:help
+    /// concept:display-policy` / `kb_get concept:display-policy` served the wrong
+    /// function name (round-6 housekeeping fix).
+    ///
+    /// Guard: a small, curated list of renamed/removed identifiers that must
+    /// never reappear in any hand-authored manual file. Extend this list
+    /// whenever a public function/type referenced by the manual gets renamed —
+    /// the panic message below is the reminder.
+    #[test]
+    fn manual_org_files_do_not_cite_renamed_identifiers() {
+        const RENAMED: &[(&str, &str)] = &[(
+            "switch_to_buffer_non_conversation",
+            "display_buffer_for_agent",
+        )];
+
+        let manual_dir =
+            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/manual"));
+        let entries = std::fs::read_dir(manual_dir)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", manual_dir.display()));
+
+        let mut stale: Vec<String> = Vec::new();
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.extension().is_none_or(|ext| ext != "org") {
+                continue;
+            }
+            let content = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+            for (old, new) in RENAMED {
+                if content.contains(old) {
+                    stale.push(format!(
+                        "{}: still cites '{old}' (renamed to '{new}')",
+                        path.display()
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            stale.is_empty(),
+            "manual file(s) cite a renamed identifier — when you rename something the \
+             manual documents, grep assets/manual/*.org for the OLD name too, not just \
+             the Rust source: {stale:?}"
+        );
     }
 }

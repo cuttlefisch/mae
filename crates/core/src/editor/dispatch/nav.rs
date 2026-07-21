@@ -662,10 +662,7 @@ impl Editor {
         let needs_wrapped = (self.effective_word_wrap() && self.text_area_width > 0)
             || has_folds
             || self.heading_scale
-            || self.buffers[idx]
-                .local_options
-                .inline_images
-                .unwrap_or(false);
+            || self.inline_images_for(idx);
         let cell_h = self.gui_cell_height;
         // Pre-allocate a reusable buffer for visual rows cache data to
         // avoid cloning the Vec on every scroll iteration.

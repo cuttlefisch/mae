@@ -126,13 +126,23 @@ pub fn op_ids(op_set_state: &[u8]) -> BTreeSet<String> {
 /// each decrypted update: an op that builds on more history covers a larger clock
 /// total, so ascending clock-total puts the node-creation first and each edit after
 /// the ops it depends on. (`op_id` breaks ties deterministically.) A blob that does
-/// NOT open (wrong key / tampered ciphertext) is **skipped**, so a non-member / relay
-/// materializes nothing.
+/// NOT open (wrong key / tampered ciphertext / corrupt base64) is **skipped** — a
+/// non-member / relay materializes nothing — but IS counted in the returned
+/// `undecryptable` total (#206), so a caller can distinguish "wrong/rotated key" from
+/// "not yet received" instead of both looking identically like silence.
+pub struct OpenedOps {
+    /// Decrypted ops, in causal order.
+    pub ops: Vec<(String, Vec<u8>)>,
+    /// Count of present-but-undecryptable op-set entries (wrong/rotated key, tamper,
+    /// or corrupt encoding) among the entries NOT in `seen`.
+    pub undecryptable: usize,
+}
+
 pub fn open_new_ops(
     op_set_state: &[u8],
     content_key: &ContentKey,
     seen: &BTreeSet<String>,
-) -> Vec<(String, Vec<u8>)> {
+) -> OpenedOps {
     let doc = new_doc_with_client_id(1);
     if !op_set_state.is_empty() {
         if let Ok(upd) = Update::decode_v1(op_set_state) {
@@ -143,23 +153,31 @@ pub fn open_new_ops(
     let map = doc.get_or_insert_map(OPS_MAP);
     let txn = doc.transact();
     let mut out: Vec<(String, Vec<u8>, u64)> = Vec::new();
+    let mut undecryptable = 0usize;
     for (op_id, val) in map.iter(&txn) {
         if seen.contains(op_id) {
             continue;
         }
         let Ok(blob) = b64().decode(val.to_string(&txn)) else {
+            undecryptable += 1;
             continue;
         };
-        if let Ok(plaintext) = decrypt(content_key, &blob) {
-            // Causal rank = total of the update's covered clocks (history depth).
-            let rank = Update::decode_v1(&plaintext)
-                .map(|u| u.state_vector().iter().map(|(_, &c)| c as u64).sum())
-                .unwrap_or(0);
-            out.push((op_id.to_string(), plaintext, rank));
+        match decrypt(content_key, &blob) {
+            Ok(plaintext) => {
+                // Causal rank = total of the update's covered clocks (history depth).
+                let rank = Update::decode_v1(&plaintext)
+                    .map(|u| u.state_vector().iter().map(|(_, &c)| c as u64).sum())
+                    .unwrap_or(0);
+                out.push((op_id.to_string(), plaintext, rank));
+            }
+            Err(_) => undecryptable += 1,
         }
     }
     out.sort_by(|a, b| a.2.cmp(&b.2).then_with(|| a.0.cmp(&b.0)));
-    out.into_iter().map(|(id, pt, _)| (id, pt)).collect()
+    OpenedOps {
+        ops: out.into_iter().map(|(id, pt, _)| (id, pt)).collect(),
+        undecryptable,
+    }
 }
 
 #[cfg(test)]
@@ -192,12 +210,12 @@ mod tests {
     /// is no pre-created structure to conflict with). A non-member (empty open) gets
     /// an empty node.
     fn materialize(op_set_state: &[u8], key: &ContentKey) -> KbNodeDoc {
-        let ops = open_new_ops(op_set_state, key, &BTreeSet::new());
-        if ops.is_empty() {
+        let opened = open_new_ops(op_set_state, key, &BTreeSet::new());
+        if opened.ops.is_empty() {
             return KbNodeDoc::new_with_client_id("n1", "", "", &[], 99);
         }
-        let mut node = KbNodeDoc::from_bytes(&ops[0].1).unwrap();
-        for (_id, plaintext) in &ops[1..] {
+        let mut node = KbNodeDoc::from_bytes(&opened.ops[0].1).unwrap();
+        for (_id, plaintext) in &opened.ops[1..] {
             node.apply_update(plaintext).unwrap();
         }
         node
@@ -278,15 +296,22 @@ mod tests {
             "Sealed Title v2",
             "joiner converges to the latest sealed title (op 0 base + edits, ordered)"
         );
-        // A wrong key still opens nothing from the merged daemon state.
+        // A wrong key still opens nothing from the merged daemon state — but #206:
+        // the failures must be COUNTED (a wrong/rotated key), not indistinguishable
+        // from "no ops present yet".
+        let wrong_key_open = open_new_ops(
+            &daemon.encode_state(),
+            &ContentKey::generate(),
+            &BTreeSet::new(),
+        );
         assert!(
-            open_new_ops(
-                &daemon.encode_state(),
-                &ContentKey::generate(),
-                &BTreeSet::new()
-            )
-            .is_empty(),
+            wrong_key_open.ops.is_empty(),
             "a non-member key opens no ops even after re-seal"
+        );
+        assert_eq!(
+            wrong_key_open.undecryptable, 4,
+            "#206: every present op (op0 reseal + 3 edits) fails to decrypt and is counted, \
+             not silently dropped"
         );
     }
 
@@ -296,9 +321,16 @@ mod tests {
         let (state, _t, _b) = author_session(&key, 7);
         // A non-member holds the op-set (ciphertext) but a different key.
         let wrong = ContentKey::generate();
-        assert!(
-            open_new_ops(&state, &wrong, &BTreeSet::new()).is_empty(),
-            "wrong key opens no ops"
+        let wrong_key_open = open_new_ops(&state, &wrong, &BTreeSet::new());
+        assert!(wrong_key_open.ops.is_empty(), "wrong key opens no ops");
+        // #206 adversarial case: the whole point of this issue is that "wrong key"
+        // and "nothing received yet" must NOT look identical. 4 ops were authored
+        // (op 0 structure + 3 edits — see author_session); all 4 must be counted as
+        // undecryptable, not silently swallowed into an empty, indistinguishable result.
+        assert_eq!(
+            wrong_key_open.undecryptable, 4,
+            "a wrong key must surface a nonzero undecryptable count, distinguishing \
+             'wrong/rotated key' from 'not yet received'"
         );
         let blind = materialize(&state, &wrong);
         assert_eq!(blind.title(), "", "non-member materializes no title");
@@ -385,10 +417,10 @@ mod tests {
 
         // A substantial pre-enable history under client 1 (high clock-total in op 0).
         let mut author = KbNodeDoc::new_with_client_id("n1", "", "", &[], 1);
-        author.set_title("t1");
-        author.set_body("body one");
-        author.set_title("t2");
-        author.set_body("body two — longer text to grow the clock and the text lineage");
+        let _ = author.set_title("t1");
+        let _ = author.set_body("body one");
+        let _ = author.set_title("t2");
+        let _ = author.set_body("body two — longer text to grow the clock and the text lineage");
         let pre_enable_state = author.encode_state();
 
         // op 0 = re-seal carrying the WHOLE pre-enable history.
