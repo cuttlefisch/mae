@@ -79,7 +79,8 @@ pub(super) fn execute_shell_exec_sync(args: &serde_json::Value) -> Result<String
         return Err("Missing 'command' argument".into());
     }
 
-    // Same blocklist as session's async version.
+    // Same blocklist as session's async version. Defense in depth, not a
+    // sandbox — substring-based and bypassable; see SECURITY.md.
     let blocked_patterns = ["rm -rf /", "rm -fr /", "mkfs.", "dd if=", ":(){", ">(){ :"];
     for pattern in &blocked_patterns {
         if command.contains(pattern) {

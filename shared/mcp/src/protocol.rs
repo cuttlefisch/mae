@@ -1,7 +1,8 @@
 //! MCP (Model Context Protocol) JSON-RPC types.
 //!
 //! @ai-caution: Sync message types are handled by `sync_exec.rs`.
-//! Awareness types (`AwarenessState`) are planned for a future phase.
+//! Awareness types (`AwarenessState`) are implemented in `shared/sync/src/awareness.rs`,
+//! wired through `daemon/src/collab_handler/sync_methods.rs::handle_sync_awareness`.
 //! The existing message types remain stable — sync methods are additive.
 
 use serde::{Deserialize, Serialize};

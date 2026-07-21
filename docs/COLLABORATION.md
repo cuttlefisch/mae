@@ -34,7 +34,7 @@ the authoritative CRDT state; the server merges and redistributes. On restart it
 recovers by loading the latest snapshot then replaying the WAL tail.
 
 See also: [ADR-002](adr/002-text-sync-model.md) (text sync decision),
-[ADR-006](adr/006-collaborative-state.md) (state engine).
+[ADR-006](adr/006-collaborative-state-engine.md) (state engine).
 
 ---
 
@@ -936,12 +936,11 @@ stack with real daemon + editors.
 
 ## Known Limitations
 
-- **Large undo produces heavy sync updates.** `reconcile_to()` uses a single yrs
-  transaction with an LCS diff — the update is minimal and correct, not a
-  full-buffer replacement. However, undoing deletion of N lines means N lines of
-  insert ops in a single update, which can be heavy for large undos. Full fix
-  requires yrs `UndoManager` integration (Phase F) for CRDT-native inverse
-  operations. Fixed in v0.10.4: yrs `UndoManager` with per-user undo stacks
+- **Large undo previously produced heavy sync updates.** `reconcile_to()` used a
+  single yrs transaction with an LCS diff — minimal and correct, not a
+  full-buffer replacement — but undoing deletion of N lines meant N lines of
+  insert ops in a single update, heavy for large undos. **Fixed in v0.10.4:**
+  yrs `UndoManager` (CRDT-native inverse operations) with per-user undo stacks
   and cursor position restoration via `CursorMeta`.
 
 ---
@@ -949,7 +948,7 @@ stack with real daemon + editors.
 ## See Also
 
 - `docs/adr/002-text-sync-model.md` — text sync decision (ADR-002)
-- `docs/adr/006-collaborative-state.md` — state engine architecture (ADR-006)
+- `docs/adr/006-collaborative-state-engine.md` — state engine architecture (ADR-006)
 - `:help concept:collab-architecture` — KB node with data-flow diagram
 - `:help concept:collab-workflows` — KB node with per-workflow recipes
 - `:help lesson:collab-setup` — step-by-step setup tutorial

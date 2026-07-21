@@ -106,7 +106,7 @@ fn compute_client_id(buffer_idx: usize) -> u64 {
 }
 
 /// Marker the daemon embeds in an epoch-fence rejection's error message
-/// (daemon/src/collab_handler.rs:1780). This is the editor↔daemon contract: a
+/// (daemon/src/collab_handler/mod.rs:1041). This is the editor↔daemon contract: a
 /// `kb/node_update` rejected with this text was authored under a stale,
 /// pre-grant authorization epoch (ADR-023) and can never be accepted as-is.
 /// Matched as a substring because the daemon appends node-specific detail.

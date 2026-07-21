@@ -1655,4 +1655,61 @@ mod tests {
         let found = candidates.iter().find(|id| kb.contains(id));
         assert_eq!(found, Some(&"option:line_numbers".to_string()));
     }
+
+    /// `assets/manual/*.org` files are the deliberately richer, authoritative
+    /// content source for the shipped manual — `crates/mae/src/bin/build_manual_kb.rs`
+    /// seeds code-generated nodes first, then INTENTIONALLY upserts `.org` content
+    /// over almost every one of them (this is by design, not a bug: every
+    /// `concept:*`/`scheme:*`/`term:*`/`tutorial:*`/`lesson:*` node in
+    /// `assets/manual/` exists precisely to override its terser `seed_kb()`
+    /// counterpart with hand-curated prose). That means a renamed/removed
+    /// identifier that only gets updated in the Rust source (`concepts.rs` etc.)
+    /// and NOT in the corresponding `.org` file goes stale silently — exactly
+    /// what happened to `assets/manual/concept-display-policy.org`, which kept
+    /// citing `switch_to_buffer_non_conversation` for months after it was renamed
+    /// to `display_buffer_for_agent` in `concepts.rs`, so `:help
+    /// concept:display-policy` / `kb_get concept:display-policy` served the wrong
+    /// function name (round-6 housekeeping fix).
+    ///
+    /// Guard: a small, curated list of renamed/removed identifiers that must
+    /// never reappear in any hand-authored manual file. Extend this list
+    /// whenever a public function/type referenced by the manual gets renamed —
+    /// the panic message below is the reminder.
+    #[test]
+    fn manual_org_files_do_not_cite_renamed_identifiers() {
+        const RENAMED: &[(&str, &str)] = &[(
+            "switch_to_buffer_non_conversation",
+            "display_buffer_for_agent",
+        )];
+
+        let manual_dir =
+            std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/manual"));
+        let entries = std::fs::read_dir(manual_dir)
+            .unwrap_or_else(|e| panic!("failed to read {}: {e}", manual_dir.display()));
+
+        let mut stale: Vec<String> = Vec::new();
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.extension().is_none_or(|ext| ext != "org") {
+                continue;
+            }
+            let content = std::fs::read_to_string(&path)
+                .unwrap_or_else(|e| panic!("failed to read {}: {e}", path.display()));
+            for (old, new) in RENAMED {
+                if content.contains(old) {
+                    stale.push(format!(
+                        "{}: still cites '{old}' (renamed to '{new}')",
+                        path.display()
+                    ));
+                }
+            }
+        }
+
+        assert!(
+            stale.is_empty(),
+            "manual file(s) cite a renamed identifier — when you rename something the \
+             manual documents, grep assets/manual/*.org for the OLD name too, not just \
+             the Rust source: {stale:?}"
+        );
+    }
 }

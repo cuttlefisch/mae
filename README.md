@@ -16,20 +16,20 @@ Rust core with an embedded R7RS-small runtime. GUI + terminal.
 
 ## Features
 
-- **AI as peer actor** — 450+ editor commands exposed as AI tools. The AI calls
-  the same `dispatch_builtin()` as your keybindings. No shadow API, no simulated
-  keystrokes.
+- **AI as peer actor** — every editor command is exposed as an AI tool, and the AI
+  calls the exact same `dispatch_builtin()` your keybindings do. No shadow API,
+  no simulated keystrokes, no "AI mode" with a narrower feature set than yours.
 - **Collaborative editing** — CRDT sync engine (yrs/YATA) with daemon,
   WAL persistence, per-user undo, awareness protocol, PSK authentication, and
   mDNS peer discovery. Collaborative KB sharing enables real-time knowledge base
   sync across instances with offline edit + reconnect support.
-- **Org-mode babel** — Execute code blocks in 14 languages (Python, Ruby, Perl,
-  Bash, JS, Lua, R, Rust, Go, C, C++, Scheme, …), noweb expansion, `:tangle`
+- **Org-mode babel** — Execute code blocks in 12 languages (Python, Ruby, Perl,
+  Bash, JS, Lua, R, Rust, Go, C, C++, Scheme), noweb expansion, `:tangle`
   directive, `:var` cross-references, configurable compilers, safety policies.
   Export to HTML and Markdown with TOC, syntax highlighting, tag filtering.
 - **Runtime redefinability** — Embedded R7RS Scheme (mae-scheme). Redefine any
-  function while running. 45+ primitives, 18 hook points, `init.scm` is a
-  real program.
+  function while running, live in the REPL, no restart. `init.scm` is a real
+  program, not a settings file.
 - **Full vi modal editing** — Motions, operators, text objects, count prefix,
   dot repeat, macros, registers, marks, surround, visual block mode, multi-cursor.
 - **LSP first-class** — Go-to-definition, references, hover, completion, rename,
@@ -38,12 +38,17 @@ Rust core with an embedded R7RS-small runtime. GUI + terminal.
 - **DAP first-class** — Multi-language debugging (Python, Rust, C/C++).
   Breakpoints (conditional, logpoint), watch expressions, exception breakpoints.
   AI can set breakpoints and inspect variables.
-- **Multi-provider AI** — Claude, OpenAI, Gemini, and DeepSeek. Provider-aware
-  prompt tuning. Tiered prompt system (Full/Compact) with per-model guardrails.
-- **Graph knowledge base** — CozoDB (Datalog) primary backend with SQLite fallback.
-  400+ typed nodes, 20 relationship types, agenda queries, node versioning, meta-node
-  composition, block-level addressing, HNSW vector index (GraphRAG-ready). Federated
-  instances, org-mode parser. Same docs the AI reads.
+- **Multi-provider AI** — Claude, OpenAI, Gemini, DeepSeek, and Ollama.
+  Provider-aware prompt tuning. Tiered prompt system (Full/Compact) with
+  per-model guardrails.
+- **Curated context, not context-window roulette** — architecture decisions, past
+  bug fixes, and documented invariants live in a queryable knowledge graph the
+  AI fetches narrow, relevant excerpts from (`kb_search`, block-level `kb_get`
+  down to a single paragraph) instead of re-grepping your whole codebase or
+  re-explaining decisions every session. The same graph backs `:help` for the
+  human — CozoDB (Datalog), agenda queries, node versioning, federated
+  instances, HNSW vector index. Bugs get checked against existing ADRs before
+  being patched, so fixes land at the root cause instead of accumulating drift.
 - **Tree-sitter** — 16 languages (incl. C, C++, Ruby) with structural parse
   trees. AI can query syntax trees for code reasoning.
 - **GUI + Terminal** — winit + Skia 2D hardware-accelerated GUI, ratatui
@@ -91,29 +96,39 @@ user's keybinding and the AI's tool palette.
 
 ### Crate Layout
 
+Three separate compilation units, not one flat tree (ADR-014): the **editor
+workspace** (own `Cargo.lock`), **shared crates** (workspace members also
+compiled into the daemon), and the **daemon workspace** (own `Cargo.lock`,
+cozo+sqlite instead of cozo+sled — avoids a rusqlite linker conflict).
+
 ```
-mae (binary)
- ├── mae-core        Buffer (rope), editor state, commands, keymap, syntax
- ├── mae-renderer    Terminal rendering (ratatui), status bar, popups, shell viewport
- ├── mae-gui         GUI rendering (winit + Skia 2D), mouse input, font config, inline images
- ├── mae-scheme      R7RS-small Scheme runtime, init.scm loading, hook dispatch
- ├── mae-ai          Claude + OpenAI + Gemini + DeepSeek providers, tool execution, conversation
- ├── mae-agent       Terminal AI-agent harness (ADR-046) — the default `SPC a a`/`SPC a p` surface
- ├── mae-lsp         LSP client — connection, navigation, diagnostics, completion, formatting
- ├── mae-dap         DAP client — protocol types, transport, breakpoints, stepping, watches
- ├── mae-shell       Terminal emulator (alacritty_terminal), PTY management
- ├── mae-kb          Knowledge base — CozoDB graph store, typed relationships, org parser, federation
- ├── mae-mcp         MCP server — Unix socket, JSON-RPC, stdio shim
- ├── mae-sync        Collaborative sync — yrs CRDT, ropey bridge, encoding helpers
- ├── mae-daemon        Background daemon — KB persistence, collab sync, WAL persistence
- ├── mae-babel       Org-babel executor — 14 languages, persistent sessions, language backends
- ├── mae-export      Org/Markdown export — HTML, Markdown, TOC, syntax highlighting
- ├── mae-canvas      Visual buffer (diagrams, drawings)
- ├── mae-snippets    YASnippet-style templates — tab-stops, mirrors, transforms
- ├── mae-format      Formatter bridge — prettier, black, rustfmt (complements LSP format)
- ├── mae-make        Build runner — Makefile/Cargo.toml/package.json detection
- ├── mae-lookup      Unified lookup — LSP def + docs URL + man pages
- └── mae-spell       Spellcheck — hunspell/aspell integration, inline markers
+Editor workspace (Cargo.toml, crates/)
+ ├── mae               Binary crate — CLI entry point, config loading, event loops
+ ├── mae-core          Buffer (rope), editor state, commands, keymap, syntax
+ ├── mae-renderer      Terminal rendering (ratatui), status bar, popups, shell viewport
+ ├── mae-gui           GUI rendering (winit + Skia 2D), mouse input, font config, inline images
+ ├── mae-scheme        R7RS-small Scheme runtime, init.scm loading, hook dispatch
+ ├── mae-ai            Claude + OpenAI + Gemini + DeepSeek + Ollama providers, tool execution, conversation
+ ├── mae-agent-cli     Terminal AI-agent harness (ADR-046) — binary `mae-agent`, the default `SPC a a`/`SPC a p` surface
+ ├── mae-lsp           LSP client — connection, navigation, diagnostics, completion, formatting
+ ├── mae-dap           DAP client — protocol types, transport, breakpoints, stepping, watches
+ ├── mae-shell         Terminal emulator (alacritty_terminal), PTY management
+ ├── mae-babel         Org-babel executor — 12 languages, persistent sessions, language backends
+ ├── mae-export        Org/Markdown export — HTML, Markdown, TOC, syntax highlighting
+ ├── mae-canvas        Visual buffer (diagrams, drawings)
+ ├── mae-snippets      YASnippet-style templates — tab-stops, mirrors, transforms
+ ├── mae-format        Formatter bridge — prettier, black, rustfmt (complements LSP format)
+ ├── mae-make          Build runner — Makefile/Cargo.toml/package.json detection
+ ├── mae-lookup        Unified lookup — LSP def + docs URL + man pages
+ └── mae-spell         Spellcheck — hunspell/aspell integration, inline markers
+
+Shared crates (shared/, editor-workspace members also used by the daemon)
+ ├── mae-kb            Knowledge base — CozoDB graph store, typed relationships, org parser, federation
+ ├── mae-sync          Collaborative sync — yrs CRDT, ropey bridge, encoding helpers
+ └── mae-mcp           MCP server — Unix socket, JSON-RPC, stdio shim
+
+Daemon workspace (daemon/Cargo.toml — separate Cargo.lock)
+ └── mae-daemon        Background daemon — KB persistence, collab sync, WAL persistence
 ```
 
 ## Getting Started
@@ -223,8 +238,9 @@ If anything in this list doesn't work as written, that's a bug — please file i
 
 MAE's core thesis is that the AI is a *peer actor*, not a plugin — your external
 coding agent (Claude Code, etc.) can drive the editor through the **same** tools the
-built-in agent uses, over MCP. A running MAE exposes 135+ tools on a per-process Unix
-socket; the `mae-mcp-shim` binary bridges MCP-over-stdio to that socket:
+built-in agent uses, over MCP. A running MAE exposes 700+ tools (most are 1:1 command
+mirrors — see [MODEL_SUPPORT.md](docs/MODEL_SUPPORT.md) for how that scale is validated)
+on a per-process Unix socket; the `mae-mcp-shim` binary bridges MCP-over-stdio to that socket:
 
 ```sh
 # Point your agent's MCP config at the shim; it auto-discovers /tmp/mae-{PID}.sock
@@ -437,7 +453,7 @@ suppression.
 | Protocols | LSP + DAP | First-class — exposed to Scheme and AI |
 | Knowledge base | CozoDB (Datalog) + SQLite | Graph store, typed relationships, versioning, HNSW vector index |
 | Syntax | tree-sitter | 16 languages, structural parse trees |
-| Literate programming | Org-babel | 14 execution languages, tangle, noweb, export |
+| Literate programming | Org-babel | 12 execution languages, tangle, noweb, export |
 
 ## Roadmap
 
@@ -457,7 +473,7 @@ See [ROADMAP.md](ROADMAP.md) for detailed milestone tracking.
 | 10. AI Agent Efficiency | ✅ Complete | Tiered prompts, provider-aware hints, target dispatch, frame profiling |
 | 11. Module System | ✅ Complete | 19 modules (Doom model), `mae pkg` CLI, flags, live reload |
 | 12. Collaborative Editing | ✅ Complete | CRDT daemon sync, multi-peer sync, WAL persistence, awareness, per-user undo, PSK auth, KB sharing E2E |
-| 13. Scheme Runtime | ✅ Complete | mae-scheme R7RS-small VM, Steel fully removed, 2,200+ Scheme tests |
+| 13. Scheme Runtime | ✅ Complete | mae-scheme R7RS-small VM, Steel fully removed, R7RS-compliant |
 | 14. Graph KB | ✅ Complete | CozoDB default, 20 typed rel types, agenda queries, versioning, HNSW index, views |
 | **Next** | 🔧 In progress | AI hygiene, task management, live GraphRAG, GUI views. See [ROADMAP.md](ROADMAP.md) |
 

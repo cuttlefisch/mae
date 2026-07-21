@@ -1,8 +1,9 @@
 # End-to-End Content Encryption (ADR-037)
 
-> **Status:** v1 design + in-progress implementation (issue #131). This document is the security
-> design-of-record and the honest statement of what E2E encryption in MAE does — and does **not** —
-> protect. It incorporates a prior-art-grounded cryptographic review (issue #155).
+> **Status:** v1 shipped (issue #131, closed — §9 Roadmap below for the phase-by-phase
+> breakdown). This document is the security design-of-record and the honest statement of
+> what E2E encryption in MAE does — and does **not** — protect. It incorporates a
+> prior-art-grounded cryptographic review (issue #155).
 
 ## 1. What this protects
 
@@ -163,7 +164,7 @@ The core primitives are sound (no must-fix break inside the crypto). Actionable 
 |---|---|---|---|
 | F1 | **Anchor TOFU** — `derive_kb_content_key` re-derives the anchor from the relay-supplied collection instead of pinning to the OOB-verified owner identity (mTLS `COLL_OWNER_KEY` / ticket node-id) → genesis-substitution / key-injection by a malicious relay | WEAKNESS→BUG | **Fix in 3b** (cross-check genesis author == authenticated owner) + mesh node-id pinning follow-up |
 | F2 | **Encryption mode is an unsigned collection-map flag** → a relay can flip `e2e→none` → victim emits plaintext (downgrade attack) | WEAKNESS→BUG | **Fix in 3b**: assert E2e in the **signed** owner op-log; seal path **fail-closed** (never author plaintext once the signed log asserts E2e) |
-| F3 | Owner-side key-gen / wrap-on-admit / **rotate-on-remove not wired** (design + tests only) | BUG (gap) | **This is 3b (#151) + 3c (#152)** — the work in progress |
+| F3 | Owner-side key-gen / wrap-on-admit / **rotate-on-remove not wired** (design + tests only) | BUG (gap) | **FIXED — 3b (#151) + 3c (#152), both shipped** (§9 Roadmap) |
 | F4 | Content-key authority **undefined under `Governance::Quorum`** (frozen key if the genesis owner is quorum-removed) | WEAKNESS | **Fix in 3b**: restrict E2e to `SingleOwner` (reject `SetGovernance(Quorum)` on an E2e KB) for v1 |
 | F5 | **Node titles cleartext** in the collection manifest even on an E2e KB (redundant — titles are also encrypted inside the node op-set) | WEAKNESS | **FIXED at the CRDT-state level (#156):** (a) *forward* — the editor blanks the manifest title for an E2e KB (downgrade-resistant `kb_collection_is_e2e`), so a node added on an E2e KB never writes a cleartext title; (b) *enable-time* — enabling E2e on an existing KB ships a `blank_node_titles_delta` (alongside the genesis + #171 node reseal) that scrubs the titles already in the manifest. The blanked title does **not** survive in the `kbc:` doc's compacted **snapshot** state (verified at-rest: `blank_node_titles_delta_purges_old_title_from_state_bytes`). (c) *at-rest WAL* — the enable-time blank is shipped with `scrub:true`, so the daemon **force-compacts** the `kbc:` doc after applying: re-snapshot the title-blanked state, trim + TRUNCATE-checkpoint the WAL, `secure_delete` zeroing the freed pages — so the superseded cleartext title cannot linger in the `kbc:` WAL at rest either (verified: `compact_scrubs_superseded_wal_content_from_the_db_file_at_rest`). The key-blind daemon keeps only `node_id`s, at rest and in memory |
 | F6 | No **all-zero / low-order DH** rejection in wrap/unwrap → attacker-chosen ephemeral could force a known wrap key (caught only because wraps are signature-covered) | WEAKNESS | **Fix in 3b** (cheap: reject all-zero shared secret) |

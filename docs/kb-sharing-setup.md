@@ -402,7 +402,7 @@ KB sharing uses yrs (Yjs Rust port) CRDTs for conflict-free merging:
 - Authentication: `key` mode (Ed25519 trusted-peer mTLS, recommended) or `psk` mode (mutual HMAC-SHA256 handshake); both optional, before JSON-RPC
 - Discovery: mDNS `_mae-sync._tcp.local` service type
 
-See [ADR-005](adr/adr-005-kb-crdt.md) and [ADR-006](adr/adr-006-collaborative-state-engine.md) for design rationale.
+See [ADR-005](adr/005-kb-crdt.md) and [ADR-006](adr/006-collaborative-state-engine.md) for design rationale.
 
 ---
 

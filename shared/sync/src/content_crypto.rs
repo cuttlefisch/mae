@@ -22,6 +22,8 @@
 //! [`crate::content_ops`], so a peer verifies authorship + authorization *before*
 //! decrypting, and a relay verifies integrity without the key. `SignedContentOp`'s
 //! `payload` is opaque bytes — it transparently holds ciphertext, no struct change.
+//!
+//! See `docs/E2E_ENCRYPTION.md` for the full threat model and design narrative.
 
 use chacha20poly1305::aead::Aead;
 use chacha20poly1305::{KeyInit, XChaCha20Poly1305, XNonce};
