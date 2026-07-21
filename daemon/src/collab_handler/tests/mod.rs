@@ -12,6 +12,7 @@ mod collab_handler_kb_lifecycle_tests;
 mod collab_handler_legacy_migration_tests;
 mod collab_handler_member_access_tests;
 mod collab_handler_membership_join_tests;
+mod collab_handler_n_way_convergence_tests;
 mod collab_handler_persist_failure_tests;
 mod collab_handler_protocol_dispatch_tests;
 mod collab_handler_rebind_gate_tests;
