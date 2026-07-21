@@ -2,11 +2,74 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.48] - 2026-07-21
+
+### Bug Fixes
+
+- *(core)* Wire inline_images option + add all-options-reachable test ([5e8ca22](https://github.com/cuttlefisch/mae/commit/5e8ca22456bcfbdaf14c4132f8b33ef37f6c016c))
+- *(kb)* Reconcile buffer freshness after a self-inflicted KB write (#316) ([d9ca689](https://github.com/cuttlefisch/mae/commit/d9ca6896838d10e9a33257cd5901842906be884b))
+- *(kb)* Body_hash/kb_record_modification misattributed changes across sibling nodes ([c79ffa7](https://github.com/cuttlefisch/mae/commit/c79ffa7b5cf48d6e95056f5d82ec65c6f3094cca))
+- *(kb)* Kb_owner_of no longer lets a stranded primary node shadow its instance (#76) ([7410a82](https://github.com/cuttlefisch/mae/commit/7410a82b0fbba066cac825c5a559597c3cc36c83))
+- *(editor)* Route the external-file-change warning onto the notification bus (#79) ([5195105](https://github.com/cuttlefisch/mae/commit/51951059cd9a4a4030b531d46effc90531ebc60a))
+- *(collab)* Wire authorized_keys resolver into daemon collection load (#73) ([79d84d3](https://github.com/cuttlefisch/mae/commit/79d84d33fcadc3e2e4e2fdeb45ec9c8e0f58932f))
+- *(sync)* Add #[must_use] to KbNodeDoc's 4 remaining CRDT setters (#273) ([3ee5cb6](https://github.com/cuttlefisch/mae/commit/3ee5cb60391a5a63a95ba1dbf8b0a4a371a45709))
+- *(sync)* Surface the undecryptable op-set count instead of dropping it (#206) ([ffc6096](https://github.com/cuttlefisch/mae/commit/ffc6096eae84c2c250a4ac0fc940270a0489282f))
+- *(kb)* Bounded startup-migration slice for primary-stranded federation nodes (#76) ([dacae22](https://github.com/cuttlefisch/mae/commit/dacae2252299531b7f56052c57d981b7562b7204))
+- *(kb)* Add 4 uncontroversial discoverability aliases (#67) ([0dd20f2](https://github.com/cuttlefisch/mae/commit/0dd20f2b2cee56a43bb146d87a175ad9cda13483))
+- *(editor)* Second notification-bus slice — save/git/DAP failures (#79) ([dc8e27d](https://github.com/cuttlefisch/mae/commit/dc8e27db290bdf871c3124655844204e8b16feef))
+- *(editor)* Third notification-bus slice — KB startup/preload failures (#79) ([3b49351](https://github.com/cuttlefisch/mae/commit/3b493515147ad660245b96a42283ecba38a7df3b))
+- *(daemon)* Route the version-skew warning onto the notification bus (#323) ([32b30da](https://github.com/cuttlefisch/mae/commit/32b30da3e7f19155926f96091a68b4a62044460d))
+- *(sync)* Consolidate cursor-adjustment-after-remote-edit (churn hotspot) ([e951bf0](https://github.com/cuttlefisch/mae/commit/e951bf01c163a1ce4a1873d93352b8857e2b9981))
+- *(gui)* Eliminate scroll pixel-precision drift + dedupe clamp math (churn hotspot) ([7bff9bf](https://github.com/cuttlefisch/mae/commit/7bff9bfa8f0de9f0f827eef1924f1eef4e7e4da5))
+- *(collab)* Stop silently discarding write_framed failures on 4 security-critical ops ([26d5b25](https://github.com/cuttlefisch/mae/commit/26d5b25f61cee6c0fbb9586602d90f001dc3220e))
+- *(daemon)* Stop discarding persist failures and lying about "pending" join status ([7ddbd40](https://github.com/cuttlefisch/mae/commit/7ddbd407fe513a626f31f0fd770af0b23db5a342))
+- *(tests)* Stop leaking temp dirs/files from the write-failure test harness ([b245302](https://github.com/cuttlefisch/mae/commit/b2453025dd1ac661ecba88df9aa6715c1c1ff150))
+- *(kb,daemon)* Harden mutex-poison-cascade risk in daemon-facing KB hot paths ([ebf1d1e](https://github.com/cuttlefisch/mae/commit/ebf1d1e0cc5fa7dba514ccb7c534d0a39bde243b))
+- *(kb-manual)* Stop serving a renamed function name from the display-policy doc ([74c2d17](https://github.com/cuttlefisch/mae/commit/74c2d176c43f01ab1d76a0260637689ea3673814))
+- *(kb)* Recover from sled's internal open panic instead of crashing ([9255b23](https://github.com/cuttlefisch/mae/commit/9255b23a601381e950f250542fbc1dbd9f180742))
+
+### Documentation
+
+- *(kb)* Add discoverability aliases for the display-placement setting (#67) ([cfb04a3](https://github.com/cuttlefisch/mae/commit/cfb04a3a87a7dfc1653457464d35b15ec9d5a50e))
+- *(shell)* Empirically verify the fish exec-tail syntax (#291) ([3779a10](https://github.com/cuttlefisch/mae/commit/3779a10419a936f916b2f33371e83f83d5a15922))
+- *(roadmap)* Correct stale KB graph view wheel-zoom item ([ffd7928](https://github.com/cuttlefisch/mae/commit/ffd7928b7a79982eafa1f6ac2cf7e118e647b16b))
+- *(claude-md)* Reconcile #70/#73 status in the P2P mesh initiative summary ([e50943e](https://github.com/cuttlefisch/mae/commit/e50943ea7210e1fc5c7b104eca267608350dbb3e))
+- Reconcile ROADMAP.md architecture debt + tag 6 newly-oversized files ([2f3a2af](https://github.com/cuttlefisch/mae/commit/2f3a2af23ef4c7106bae6a031bc967bbd8980a29))
+- Fix stale code-comment file:line refs + add missing doc cross-links ([959f48f](https://github.com/cuttlefisch/mae/commit/959f48f032df87ac58f6a6c344d8b0f547647c19))
+- Fix CLAUDE.md's stale numeric claims + add missing crate row ([c5dcf1f](https://github.com/cuttlefisch/mae/commit/c5dcf1f3a841459192916394677c1928ddcfe97b))
+- *(readme)* Fix stale babel/tool-count claims, restructure crate layout ([50910c7](https://github.com/cuttlefisch/mae/commit/50910c7e543f1c00ba106a739722b07e5a9a9a7f))
+- *(readme)* Rebalance value communication — trim vanity counts, surface the KB+ADR story ([30650f5](https://github.com/cuttlefisch/mae/commit/30650f5c23eba776217cf7963964c616e4c0805b))
+- Fix broken ADR links + a self-contradictory resolved-limitation note ([4d5566d](https://github.com/cuttlefisch/mae/commit/4d5566d27382809c7cf140626072d5e657187f96))
+- Fix stale status headers + file paths in security/status docs ([836a1ea](https://github.com/cuttlefisch/mae/commit/836a1ea0b57021f58f7d79f5f050937c4793c4e7))
+- Rename kb-sharing.md -> kb-sharing-setup.md to avoid a near-duplicate filename ([130f0a3](https://github.com/cuttlefisch/mae/commit/130f0a39c946fd7fbb3eac2ad6e64742c4624e26))
+
+### Features
+
+- *(options)* Make code-action/symbol-outline popup item caps configurable ([0ff526a](https://github.com/cuttlefisch/mae/commit/0ff526ac201fbc8d32c06c8cf842b073564559ca))
+
+### Miscellaneous
+
+- *(gui,core)* Remove verified-dead code, narrow FrameLayout's dead_code allow ([af7c796](https://github.com/cuttlefisch/mae/commit/af7c7963d29b4f46a2cbe7a6dfd05c72d4f2ebf2))
+
+### Refactor
+
+- *(kb-graph)* Unify per-window graph-view state pruning into one site ([25c9f2d](https://github.com/cuttlefisch/mae/commit/25c9f2d50d35b769652c306efedb531d5d1b8552))
+- *(shell)* Unify the 3 duplicated rc-sourcing implementations (#291) ([54d289b](https://github.com/cuttlefisch/mae/commit/54d289b23e1df3759cbafe943b936b871467ab10))
+- *(render)* Extract duplicated hex-color-preview + contrast_fg into render_common ([8610a55](https://github.com/cuttlefisch/mae/commit/8610a5509d1b1d5fde1e0cb1d2e5fb41b0ee5609))
+
+### Testing
+
+- *(daemon)* Add real 3-member content-sync convergence test through the daemon protocol ([39954c8](https://github.com/cuttlefisch/mae/commit/39954c8a8621463251ffc080929cbb1a541d78dd))
+
 ## [0.14.47] - 2026-07-20
 
 ### Bug Fixes
 
 - *(kb)* Raise CozoDB sqlite busy-retry budget for CI-level contention ([64f4b65](https://github.com/cuttlefisch/mae/commit/64f4b65c152a2456848f3ab2d52164485c01e86d))
+
+### Miscellaneous
+
+- Bump version to 0.14.47 ([afa6fef](https://github.com/cuttlefisch/mae/commit/afa6fefb140b76474c0e573aeb5e293151ccea0e))
 
 ## [0.14.46] - 2026-07-20
 
