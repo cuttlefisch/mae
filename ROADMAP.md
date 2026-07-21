@@ -545,12 +545,13 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   single process-wide `Editor`, with no session id threaded through `McpToolRequest` →
   `handle_mcp_request` → `execute_tool`. A narrow gap against principle #10 ("no operation assumes
   single-client"); needs a session id threaded end-to-end before it can close.
-- [ ] **KB graph view wheel-zoom has no visible effect yet**: mouse-wheel input correctly updates
-  `GraphView.scene.viewport.zoom`/`center` (Phase 4, `ab3bc7ef`), but `flatten_scene_graph`
-  (`crates/core/src/graph_view.rs`) doesn't yet apply a camera transform when drawing nodes — a
-  pre-existing gap from the graph view's first rendering pass (Phase 1), not a Phase 4 regression.
-  Needs a rendering-pipeline follow-up threading window pixel dimensions into the flattener before
-  zoom is visible on screen.
+- [x] **KB graph view wheel-zoom has no visible effect yet** — stale, already fixed (found during
+  the 2026-07 git-history churn root-cause pass; this item and the code had drifted apart).
+  `flatten_scene_graph` (`crates/core/src/graph_view.rs`) routes every node/edge position through
+  `scene_to_viewport` (`crates/canvas/src/interaction.rs`), which applies both pan (`center_x`/
+  `center_y`) AND zoom (`* vp.zoom`) — the camera transform is fully wired, per an in-code comment
+  confirming this is deliberate ("drawing and interaction always agree on where a node actually
+  is"). No further action needed.
 - [ ] **`kb_graph_view_mode` option for non-ego-network views**: the native KB graph view
   (`crates/core/src/graph_view.rs`) only renders an ego-network centered on the current node
   (`kb_graph_default_depth`). A `local`/`related`/`global` mode option was scoped out of the initial
