@@ -47,6 +47,12 @@ pub(super) fn handle_connected_event(editor: &mut Editor, address: String, peer_
     editor.set_status(format!("Connected to {} ({} peers)", address, peer_count));
     // Proactively surface the daemon state (ADR-035 PR C-b).
     editor.notify_daemon_connected(peer_count);
+    // #346: the `*Collab Status*` / `*KB Sharing*` buffers previously only
+    // repainted on KB-lifecycle events (share/join/leave/membership broadcast) —
+    // never on the connection state itself changing. A buffer left open across a
+    // disconnect could keep showing "Connected" well after the daemon died, or
+    // stay stale after a reconnect until an unrelated KB event happened to fire.
+    super::refresh_collab_status_if_open(editor);
     // WU3: On reconnect, re-share buffers that still have CRDT state (offline recovery).
     let offline_docs: Vec<(String, Vec<u8>)> = editor
         .buffers
@@ -144,6 +150,13 @@ pub(super) fn handle_disconnected_event(editor: &mut Editor, reason: String) {
     // below, so `has_active_shares()` still sees that we were syncing and
     // raises the sticky "deferred, not lost" badge (ADR-035 PR C-b).
     editor.notify_daemon_disconnected(&reason);
+    // #346: repaint `*KB Sharing*`'s connection-status line immediately — status
+    // is already set above, so this reflects "Disconnected" right away instead of
+    // only on the next unrelated KB-membership event (which may never come
+    // before the user looks at the buffer). `*Collab Status*`'s ShowStatus
+    // refresh is a network round-trip so it's a no-op until reconnect, but
+    // harmless to queue now.
+    super::refresh_collab_status_if_open(editor);
     // Phase D3b: snapshot the mirror back to the local store BEFORE dropping
     // the host flag, so this session's edits (whose per-edit write-through was
     // retired) land in the daemon-less fallback. Cheap (only touched nodes).
