@@ -111,10 +111,7 @@ pub fn build_kb_graph_positions_only(
     // having barely moved off their initial ring" failure mode
     // `IDEAL_AREA_PER_NODE`'s own doc comment says was already fixed once.
     let n = nodes.len();
-    let disk_radius = ((n as f64 * crate::layout::IDEAL_AREA_PER_NODE * spacing_scale)
-        / std::f64::consts::PI)
-        .sqrt()
-        .max(100.0);
+    let disk_radius = sqrt_area_radius(n, spacing_scale);
     let golden_angle = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
     let positions: Vec<(f64, f64)> = (0..n)
         .map(|i| {
@@ -138,13 +135,20 @@ pub fn build_kb_graph_positions_only(
 /// circumference — a chord-diagram / Circos-style layout (#367). Unlike
 /// [`build_kb_graph_positions_only`]'s sunflower seed, this placement is
 /// the FINAL layout: no force-directed refinement follows it (see
-/// `Editor::populate_graph_buffer`'s branch on `kb_graph_layout_algorithm`),
-/// so there's no "must stay small enough for a bounded cooling schedule to
-/// converge from" constraint the sunflower's disk radius has to satisfy —
-/// a ring whose circumference grows linearly with `n` (keeping adjacent-
-/// node ARC spacing constant, mirroring `IDEAL_AREA_PER_NODE`'s role for
-/// the sunflower disk) is the geometrically correct, not merely
-/// acceptable, shape here.
+/// `Editor::populate_graph_buffer`'s branch on `kb_graph_layout_algorithm`).
+///
+/// The ring's radius deliberately matches the sunflower disk's SUB-LINEAR
+/// (sqrt-of-n) growth rather than growing linearly with `n` to hold
+/// adjacent-node arc spacing constant. A constant-spacing ring was tried
+/// first and reproduced, in the field, on a ~1300-node KB subgraph: the
+/// resulting radius (tens of thousands of scene units) vastly exceeded what
+/// the shared `[0.1, 10.0]` zoom range (`crates/canvas/src/interaction.rs`)
+/// can zoom out to fit, leaving the diagram permanently too large to see in
+/// full. Matching the sunflower's growth rate instead keeps both layout
+/// algorithms visually comparable in scale — switching between them via
+/// `:set kb_graph_layout_algorithm` doesn't require re-zooming — at the
+/// (accepted) cost of per-node arc spacing shrinking as n grows, same as
+/// any real chord/Circos diagram rendered at a fixed canvas size.
 pub fn build_kb_graph_chord_positions(
     nodes: &[KbNodeInfo],
     links: &[KbLinkInfo],
@@ -159,13 +163,7 @@ pub fn build_kb_graph_chord_positions(
         .collect();
 
     let n = nodes.len();
-    // Adjacent-node arc spacing = 2*pi*r / n; solving for r so that spacing
-    // equals sqrt(IDEAL_AREA_PER_NODE * spacing_scale) (the same per-node
-    // "personal space" constant the sunflower disk targets) gives a radius
-    // that grows LINEARLY in n -- correct for a 1-D ring, unlike the
-    // sunflower's deliberately sub-linear (sqrt) 2-D disk growth.
-    let spacing = (crate::layout::IDEAL_AREA_PER_NODE * spacing_scale).sqrt();
-    let radius = (n as f64 * spacing / (2.0 * std::f64::consts::PI)).max(100.0);
+    let radius = sqrt_area_radius(n, spacing_scale);
     let positions: Vec<(f64, f64)> = (0..n)
         .map(|i| {
             let angle = (i as f64) * 2.0 * std::f64::consts::PI / (n.max(1) as f64);
@@ -181,6 +179,19 @@ pub fn build_kb_graph_chord_positions(
         &id_to_idx,
         &positions,
     )
+}
+
+/// Radius of a circle/disk whose AREA is `n * IDEAL_AREA_PER_NODE *
+/// spacing_scale` — shared by the sunflower disk (`build_kb_graph_positions_only`)
+/// and the chord ring (`build_kb_graph_chord_positions`, CLAUDE.md #8) so
+/// both layouts grow at the same sub-linear (sqrt-of-n) rate and stay
+/// visually comparable in scale, within the same `[0.1, 10.0]` zoom range
+/// (`crates/canvas/src/interaction.rs`) regardless of which algorithm is
+/// active. `.max(100.0)` keeps tiny graphs from collapsing to a point.
+fn sqrt_area_radius(n: usize, spacing_scale: f64) -> f64 {
+    ((n as f64 * crate::layout::IDEAL_AREA_PER_NODE * spacing_scale) / std::f64::consts::PI)
+        .sqrt()
+        .max(100.0)
 }
 
 /// Shared node/edge assembly for every `build_kb_graph*` variant (CLAUDE.md
@@ -737,11 +748,15 @@ mod tests {
     }
 
     #[test]
-    fn chord_positions_radius_grows_with_node_count() {
-        // A ring's circumference must grow with n to keep adjacent-node
-        // arc spacing from collapsing toward zero — unlike the sunflower
-        // disk's deliberately sub-linear growth, linear growth is CORRECT
-        // here (see the function's doc comment).
+    fn chord_positions_radius_grows_sub_linearly_with_node_count() {
+        // Regression guard for the field bug this ratio was rewritten to
+        // fix: a ring radius growing LINEARLY with n (to hold adjacent-node
+        // arc spacing constant) blew up to tens of thousands of scene units
+        // on a real ~1300-node subgraph — far past what the shared
+        // [0.1, 10.0] zoom range can ever zoom out far enough to fit. The
+        // radius must instead grow at the same sub-linear (sqrt-of-n) rate
+        // as the sunflower disk, matching `build_kb_graph_positions_only`'s
+        // scale.
         fn radius_for(n: usize) -> f64 {
             let nodes: Vec<KbNodeInfo> = (0..n)
                 .map(|i| KbNodeInfo {
@@ -754,11 +769,19 @@ mod tests {
             let graph = build_kb_graph_chord_positions(&nodes, &[], &[], &[], 1.0);
             (graph.nodes[0].x.powi(2) + graph.nodes[0].y.powi(2)).sqrt()
         }
+        // 25x the node count (8 -> 200) should grow radius by sqrt(25) = 5x,
+        // not by 25x (linear) — assert it lands close to the sqrt
+        // prediction and nowhere near the linear one.
         let small = radius_for(8);
         let large = radius_for(200);
+        let ratio = large / small;
         assert!(
-            large > small * 5.0,
-            "radius for n=200 ({large}) should grow substantially past n=8 ({small})"
+            (ratio - 5.0).abs() < 0.5,
+            "radius ratio for n=8->200 was {ratio}, expected ~5.0 (sqrt(25)) for sub-linear growth"
+        );
+        assert!(
+            ratio < 25.0 * 0.5,
+            "radius ratio {ratio} is too close to linear (25x) growth — the field-bug regression"
         );
     }
 
