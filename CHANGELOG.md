@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.50] - 2026-07-22
+
+### Miscellaneous
+
+- *(deps)* Bump the rust-dependencies group with 19 updates ([e1e8c5e](https://github.com/cuttlefisch/mae/commit/e1e8c5e3ebffd1b42427cc4957a246cdc8e3d31f))
+
 ## [0.14.49] - 2026-07-22
 
 ### Bug Fixes
@@ -17,6 +23,10 @@ All notable changes to this project will be documented in this file.
 ### Documentation
 
 - Fix ROADMAP.md/KB_SHARING.md citing closed #78/#157 as still open (#348) ([925fe29](https://github.com/cuttlefisch/mae/commit/925fe29e285efb9f5cac6a8dc1b9b14fa3db2963))
+
+### Miscellaneous
+
+- Bump version to 0.14.49 ([165b2ba](https://github.com/cuttlefisch/mae/commit/165b2ba55f3a9e747f2206209c124cac1732bf4a))
 
 ## [0.14.48] - 2026-07-21
 
