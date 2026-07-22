@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.53] - 2026-07-22
+
+### Features
+
+- *(graph-view)* Chord-diagram theming polish — edge alpha, muted default color, radial labels, quieter boundary badges ([2c8b01b](https://github.com/cuttlefisch/mae/commit/2c8b01b59caa0916e326c13d99bb6d0b92b08dca))
+
 ## [0.14.52] - 2026-07-22
 
 ### Bug Fixes
@@ -11,6 +17,16 @@ All notable changes to this project will be documented in this file.
 - *(ai)* Extend AI-residency seed-content exemption to graph/list/health/neighborhood/graph-view tools (#361) ([4af100f](https://github.com/cuttlefisch/mae/commit/4af100f1f23651eb1ec66a065a6ea18bba667ab6))
 - *(scheme)* Run-command and execute_command now dispatch Scheme-defined commands (#363) ([48a6958](https://github.com/cuttlefisch/mae/commit/48a6958c5c7f2a2d615ae7c8ec85e6aced9dd8a2))
 - *(editor)* Visual-mode bulk operators now affect every cursor's own selection (#364) ([717cfdd](https://github.com/cuttlefisch/mae/commit/717cfdd2ba16a9f04eb537859e23333021cfe899))
+- Satisfy is_seed field after backmerging main into chord-diagram branch ([448d62a](https://github.com/cuttlefisch/mae/commit/448d62af8cf193b6887d80217910f2dc4847856a))
+- *(graph-view)* Chord layout radius grows sub-linearly, matching force mode's scale ([1aa18dc](https://github.com/cuttlefisch/mae/commit/1aa18dc2fcb7901c6e250f3f67dbc640cf9c834a))
+
+### Features
+
+- *(graph-view)* Add a chord-diagram (circular) layout mode, make it the default (#367) ([4ff44bf](https://github.com/cuttlefisch/mae/commit/4ff44bfaa3068072ffac0691446658d7a12fead3))
+
+### Miscellaneous
+
+- Bump version to 0.14.52 ([0d1da88](https://github.com/cuttlefisch/mae/commit/0d1da88cff73972836d8da1936057299d9893d1c))
 
 ## [0.14.51] - 2026-07-22
 
