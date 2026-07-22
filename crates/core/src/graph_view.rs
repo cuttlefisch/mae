@@ -595,6 +595,44 @@ pub enum GraphViewIntent {
     ToggleOverlay,
 }
 
+/// WHICH algorithm computes a KB graph's node positions — orthogonal to
+/// [`GraphLayoutMode`] below, which is a SCHEDULING concept (one-shot vs.
+/// animated-tick) for whichever algorithm is chosen, not an algorithm
+/// choice itself. Configured via the `kb_graph_layout_algorithm` option;
+/// see `Editor::populate_graph_buffer`'s branch on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GraphLayoutAlgorithm {
+    /// Force-directed physics simulation (Fruchterman-Reingold,
+    /// `mae_canvas::layout::ForceLayout`) — nodes seeded on a sunflower
+    /// disk, then iteratively refined on a background thread.
+    Force,
+    /// Nodes evenly spaced around a circle's circumference, relationships
+    /// drawn as curved chords through the interior (Circos/D3-chord
+    /// style). Computed once, synchronously, with no background
+    /// refinement pass — the initial placement IS the final layout.
+    #[default]
+    Chord,
+}
+
+impl GraphLayoutAlgorithm {
+    /// Stable wire/config string (matches the option's accepted values).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GraphLayoutAlgorithm::Force => "force",
+            GraphLayoutAlgorithm::Chord => "chord",
+        }
+    }
+
+    /// Parse a configured value.
+    pub fn parse(s: &str) -> Option<GraphLayoutAlgorithm> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "force" => Some(GraphLayoutAlgorithm::Force),
+            "chord" => Some(GraphLayoutAlgorithm::Chord),
+            _ => None,
+        }
+    }
+}
+
 /// Which background layout pass a `GraphLayoutIntent` requests.
 ///
 /// - `OneShot`: Phase 1/2 behavior (`kb_graph_animate = false`, the
@@ -609,6 +647,9 @@ pub enum GraphViewIntent {
 ///   open/refresh/set-depth/follow-current); the chain is self-sustaining
 ///   after that, reusing this exact same intent/channel/apply machinery
 ///   rather than a second scheduler.
+///
+/// Only meaningful for [`GraphLayoutAlgorithm::Force`] — `Chord` never
+/// queues a `GraphLayoutIntent` at all (see `populate_graph_buffer`).
 #[derive(Debug, Clone, Copy)]
 pub enum GraphLayoutMode {
     OneShot { iterations: usize },
@@ -697,6 +738,12 @@ pub struct GraphStyleOptions {
     /// see the curved-edge control-point computation in
     /// `flatten_scene_graph`'s edge loop and `MAX_CURVE_OFFSET_PX`'s cap.
     pub edge_curvature: f32,
+    /// Which algorithm computed the scene's node positions — the
+    /// edge-curve control-point formula in `flatten_scene_graph` branches
+    /// on this (#367): `Chord` pulls toward the circle's center instead of
+    /// `Force`'s perpendicular-offset-from-midpoint. Mirrors
+    /// `kb_graph_layout_algorithm`.
+    pub layout_algorithm: GraphLayoutAlgorithm,
     /// `(node_index, hex_color)` — when set, that node's color is FORCED
     /// to this value, checked before the selected/hovered/kind-color
     /// chain below. Set by the call site (not `from_editor`, which has no
@@ -901,6 +948,7 @@ impl GraphStyleOptions {
             label_zoom_threshold: editor.kb_graph_label_zoom_threshold,
             label_declutter_enabled: editor.kb_graph_label_declutter_enabled,
             edge_curvature: editor.kb_graph_edge_curvature,
+            layout_algorithm: editor.kb_graph_layout_algorithm,
             color_override: None,
             node_border_enabled: editor.kb_graph_node_border_enabled,
             node_colors,
@@ -1234,6 +1282,14 @@ pub fn flatten_scene_graph(
         })
         .unzip();
 
+    // Scene-origin's viewport-space position — only used by the Chord
+    // edge-curve formula below, but panning/zooming shifts where scene
+    // `(0,0)` lands on screen, so it must go through the same transform as
+    // every node position (never a raw `(0,0)` in viewport space).
+    // Precomputed once, outside the edge loop, since it's identical for
+    // every edge.
+    let (center_x, center_y) = scene_to_viewport(viewport, 0.0, 0.0);
+
     for edge in &scene.edges {
         let Some(src) = scene.nodes.get(edge.source) else {
             continue;
@@ -1262,34 +1318,56 @@ pub fn flatten_scene_graph(
         if edge_is_offscreen_same_side(sx1 as f32, sy1 as f32, sx2 as f32, sy2 as f32, viewport) {
             continue;
         }
-        // Curved internal edges: a quadratic control point offset
-        // perpendicular to the edge's midpoint, alternating direction by
-        // (source_index + target_index) parity so adjacent/parallel edges
-        // bow apart instead of all curving identically (a uniform
-        // direction wouldn't reduce overlap at all). Boundary/self-loop
-        // stub edges stay straight — dashing here only ever applies to
-        // those short stubs, never a distinct-node-to-node edge, so the
-        // dash segmenter never needs to learn to dash a curve.
+        // Curved internal edges. Boundary/self-loop stub edges stay
+        // straight regardless of algorithm — dashing here only ever
+        // applies to those short stubs, never a distinct-node-to-node
+        // edge, so the dash segmenter never needs to learn to dash a curve.
         if !is_boundary && style.edge_curvature > 0.0 {
             let dx = sx2 - sx1;
             let dy = sy2 - sy1;
             let len = (dx * dx + dy * dy).sqrt();
             if len > 0.0 {
-                let (perp_x, perp_y) = (-dy / len, dx / len);
-                let sign = if (edge.source + edge.target) % 2 == 0 {
-                    1.0
-                } else {
-                    -1.0
+                let mid_x = (sx1 + sx2) / 2.0;
+                let mid_y = (sy1 + sy2) / 2.0;
+                let (ctrl_x, ctrl_y) = match style.layout_algorithm {
+                    GraphLayoutAlgorithm::Chord => {
+                        // Chord-diagram style: pull the control point
+                        // toward the circle's center instead of bowing
+                        // perpendicular to the edge — the visually
+                        // essential trait of a chord diagram, not just a
+                        // cosmetic variant of the Force curve. Capped at
+                        // `edge_curvature <= 1.0`'s natural meaning (never
+                        // overshoots PAST the center itself).
+                        let t = (style.edge_curvature as f64).min(1.0);
+                        (
+                            mid_x + (center_x - mid_x) * t,
+                            mid_y + (center_y - mid_y) * t,
+                        )
+                    }
+                    GraphLayoutAlgorithm::Force => {
+                        // A quadratic control point offset perpendicular to
+                        // the edge's midpoint, alternating direction by
+                        // (source_index + target_index) parity so
+                        // adjacent/parallel edges bow apart instead of all
+                        // curving identically (a uniform direction
+                        // wouldn't reduce overlap at all).
+                        let (perp_x, perp_y) = (-dy / len, dx / len);
+                        let sign = if (edge.source + edge.target) % 2 == 0 {
+                            1.0
+                        } else {
+                            -1.0
+                        };
+                        let offset = ((style.edge_curvature as f64) * len)
+                            .min(MAX_CURVE_OFFSET_PX as f64)
+                            * sign;
+                        (mid_x + perp_x * offset, mid_y + perp_y * offset)
+                    }
                 };
-                let offset =
-                    ((style.edge_curvature as f64) * len).min(MAX_CURVE_OFFSET_PX as f64) * sign;
-                let mid_x = (sx1 + sx2) / 2.0 + perp_x * offset;
-                let mid_y = (sy1 + sy2) / 2.0 + perp_y * offset;
                 elements.push(VisualElement::Curve {
                     x1: sx1 as f32,
                     y1: sy1 as f32,
-                    ctrl_x: mid_x as f32,
-                    ctrl_y: mid_y as f32,
+                    ctrl_x: ctrl_x as f32,
+                    ctrl_y: ctrl_y as f32,
                     x2: sx2 as f32,
                     y2: sy2 as f32,
                     color,
@@ -1466,6 +1544,11 @@ mod tests {
             // — new curved-edge tests build their own style with a
             // nonzero curvature explicitly.
             edge_curvature: 0.0,
+            // Force, matching `edge_curvature: 0.0` above — every existing
+            // edge-curve test here asserts the Force perpendicular-offset
+            // formula (or a straight line); new chord-mode tests build
+            // their own style with `Chord` explicitly, same pattern.
+            layout_algorithm: GraphLayoutAlgorithm::Force,
             color_override: None,
             node_border_enabled: false,
             node_colors: [
@@ -2593,6 +2676,122 @@ mod tests {
             (odd_a - 300.0).signum(),
             (even - 300.0).signum(),
             "opposite-parity edges should curve to opposite sides"
+        );
+    }
+
+    /// #367: a Chord-mode edge's control point must be pulled toward the
+    /// circle's (viewport-transformed) center, meaningfully DIFFERENT from
+    /// the Force-mode perpendicular-offset formula the tests above cover —
+    /// not just "some offset exists" (already proven for Force), but the
+    /// actual geometric direction differs between the two modes.
+    #[test]
+    fn flatten_chord_mode_pulls_control_point_toward_viewport_space_scene_origin() {
+        let mut scene = SceneGraph::new();
+        // Two nodes NOT diametrically opposite (so their straight-line
+        // midpoint is offset from the scene origin) — as if placed on a
+        // circle of radius 100 at 0 and 90 degrees.
+        scene.nodes.push(test_node("a", 100.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("b", 0.0, 100.0, NodeKind::Note));
+        scene.edges.push(test_edge(0, 1));
+        let viewport = mae_canvas::scene::Viewport::default();
+        let (origin_x, origin_y) = mae_canvas::interaction::scene_to_viewport(&viewport, 0.0, 0.0);
+
+        let mut chord_style = test_style();
+        chord_style.edge_curvature = 0.5;
+        chord_style.layout_algorithm = GraphLayoutAlgorithm::Chord;
+        let chord_elements = flatten_scene_graph(&scene, &viewport, &chord_style, &[]);
+
+        let mut force_style = test_style();
+        force_style.edge_curvature = 0.5;
+        force_style.layout_algorithm = GraphLayoutAlgorithm::Force;
+        let force_elements = flatten_scene_graph(&scene, &viewport, &force_style, &[]);
+
+        let (chord_ctrl, chord_mid) = match &chord_elements[0] {
+            VisualElement::Curve {
+                ctrl_x,
+                ctrl_y,
+                x1,
+                y1,
+                x2,
+                y2,
+                ..
+            } => (
+                (*ctrl_x as f64, *ctrl_y as f64),
+                ((x1 + x2) as f64 / 2.0, (y1 + y2) as f64 / 2.0),
+            ),
+            other => panic!("expected Curve, got {other:?}"),
+        };
+        let force_ctrl = match &force_elements[0] {
+            VisualElement::Curve { ctrl_x, ctrl_y, .. } => (*ctrl_x as f64, *ctrl_y as f64),
+            other => panic!("expected Curve, got {other:?}"),
+        };
+
+        let dist =
+            |a: (f64, f64), b: (f64, f64)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+
+        // Chord's control point must be measurably CLOSER to the scene
+        // origin than the plain straight-line midpoint is.
+        let mid_to_origin = dist(chord_mid, (origin_x, origin_y));
+        let chord_ctrl_to_origin = dist(chord_ctrl, (origin_x, origin_y));
+        assert!(
+            chord_ctrl_to_origin < mid_to_origin - 1.0,
+            "chord control point ({chord_ctrl:?}) must be closer to origin ({origin_x}, \
+             {origin_y}) than the midpoint ({chord_mid:?}) is (mid dist {mid_to_origin}, \
+             ctrl dist {chord_ctrl_to_origin})"
+        );
+
+        // The two algorithms must produce genuinely different control
+        // points for the identical edge geometry — not the same formula
+        // wearing a different enum tag.
+        assert!(
+            dist(chord_ctrl, force_ctrl) > 1.0,
+            "chord ({chord_ctrl:?}) and force ({force_ctrl:?}) control points must differ"
+        );
+    }
+
+    /// Same as above, but with a PANNED viewport (`center_x`/`center_y` !=
+    /// 0) — proves the center-pull goes through `scene_to_viewport` like
+    /// every node position does, rather than pulling toward a raw `(0,0)`
+    /// in screen space (which would be wrong once the view has been panned).
+    #[test]
+    fn flatten_chord_mode_center_pull_accounts_for_a_panned_viewport() {
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("a", 100.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("b", 0.0, 100.0, NodeKind::Note));
+        scene.edges.push(test_edge(0, 1));
+        let viewport = mae_canvas::scene::Viewport {
+            center_x: 500.0,
+            center_y: -300.0,
+            ..mae_canvas::scene::Viewport::default()
+        };
+        let (origin_x, origin_y) = mae_canvas::interaction::scene_to_viewport(&viewport, 0.0, 0.0);
+        // Sanity: a real pan actually moves where scene-origin lands.
+        assert_ne!((origin_x, origin_y), (400.0, 300.0));
+
+        let mut style = test_style();
+        style.edge_curvature = 0.5;
+        style.layout_algorithm = GraphLayoutAlgorithm::Chord;
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        let (ctrl, mid) = match &elements[0] {
+            VisualElement::Curve {
+                ctrl_x,
+                ctrl_y,
+                x1,
+                y1,
+                x2,
+                y2,
+                ..
+            } => (
+                (*ctrl_x as f64, *ctrl_y as f64),
+                ((x1 + x2) as f64 / 2.0, (y1 + y2) as f64 / 2.0),
+            ),
+            other => panic!("expected Curve, got {other:?}"),
+        };
+        let dist =
+            |a: (f64, f64), b: (f64, f64)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+        assert!(
+            dist(ctrl, (origin_x, origin_y)) < dist(mid, (origin_x, origin_y)) - 1.0,
+            "must still pull toward the PANNED viewport-space origin, not the unpanned one"
         );
     }
 

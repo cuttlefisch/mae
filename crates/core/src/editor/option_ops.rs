@@ -288,6 +288,7 @@ impl super::Editor {
             "kb_graph_layout_iterations" => self.kb_graph_layout_iterations.to_string(),
             "kb_graph_layout_kind_clustering" => self.kb_graph_layout_kind_clustering.to_string(),
             "kb_graph_layout_spacing_scale" => self.kb_graph_layout_spacing_scale.to_string(),
+            "kb_graph_layout_algorithm" => self.kb_graph_layout_algorithm.as_str().to_string(),
             "kb_graph_follow_current_node" => self.kb_graph_follow_current_node.to_string(),
             "kb_graph_animate" => self.kb_graph_animate.to_string(),
             "kb_graph_hover_enabled" => self.kb_graph_hover_enabled.to_string(),
@@ -1242,6 +1243,12 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.kb_graph_layout_spacing_scale = v.clamp(0.1, 25.0);
+            }
+            "kb_graph_layout_algorithm" => {
+                let algo = crate::graph_view::GraphLayoutAlgorithm::parse(value).ok_or_else(
+                    || format!("Invalid kb_graph_layout_algorithm '{value}' (expected force|chord)"),
+                )?;
+                self.kb_graph_layout_algorithm = algo;
             }
             "kb_graph_follow_current_node" => {
                 self.kb_graph_follow_current_node = parse_option_bool(value)?;
@@ -2818,6 +2825,52 @@ mod graph_view_option_tests {
         assert!(
             (output_height as i32 - expected).abs() <= 2,
             "output pane height {output_height} should be ~60% of {total_height}"
+        );
+    }
+
+    #[test]
+    fn kb_graph_layout_algorithm_option_roundtrips_and_rejects_invalid_values() {
+        use crate::graph_view::GraphLayoutAlgorithm;
+
+        let mut editor = Editor::new();
+        // Default is chord (#367).
+        assert_eq!(
+            editor.get_option("kb_graph_layout_algorithm").unwrap().0,
+            "chord"
+        );
+        assert_eq!(
+            editor.kb_graph_layout_algorithm,
+            GraphLayoutAlgorithm::Chord
+        );
+
+        editor
+            .set_option("kb_graph_layout_algorithm", "force")
+            .unwrap();
+        assert_eq!(
+            editor.get_option("kb_graph_layout_algorithm").unwrap().0,
+            "force"
+        );
+        assert_eq!(
+            editor.kb_graph_layout_algorithm,
+            GraphLayoutAlgorithm::Force
+        );
+
+        editor
+            .set_option("kb_graph_layout_algorithm", "chord")
+            .unwrap();
+        assert_eq!(
+            editor.kb_graph_layout_algorithm,
+            GraphLayoutAlgorithm::Chord
+        );
+
+        // Invalid value is rejected, state unchanged -- mirrors
+        // daemon_mode_option_set_get_and_gate_sync's shape exactly.
+        assert!(editor
+            .set_option("kb_graph_layout_algorithm", "nonsense")
+            .is_err());
+        assert_eq!(
+            editor.kb_graph_layout_algorithm,
+            GraphLayoutAlgorithm::Chord
         );
     }
 }

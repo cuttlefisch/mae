@@ -22,8 +22,8 @@
 use crate::buffer::{Buffer, BufferKind};
 use crate::graph_view::{
     flatten_scene_graph, kind_affinity_from_strength, node_render_radius, GraphColorTween,
-    GraphLayoutIntent, GraphLayoutMode, GraphNavDirection, GraphStyleOptions, GraphView,
-    ANIMATION_COOLING_FACTOR, ANIMATION_INITIAL_TEMPERATURE, ANIMATION_SETTLE_EPSILON,
+    GraphLayoutAlgorithm, GraphLayoutIntent, GraphLayoutMode, GraphNavDirection, GraphStyleOptions,
+    GraphView, ANIMATION_COOLING_FACTOR, ANIMATION_INITIAL_TEMPERATURE, ANIMATION_SETTLE_EPSILON,
     ANIMATION_TEMPERATURE_FLOOR,
 };
 use crate::visual_buffer::VisualBuffer;
@@ -441,13 +441,26 @@ impl Editor {
         let kb_boundary_links: Vec<mae_canvas::kb_graph::KbLinkInfo> =
             result.boundary_links.iter().map(to_link_info).collect();
 
-        let scene = mae_canvas::kb_graph::build_kb_graph_positions_only(
-            &kb_nodes,
-            &kb_links,
-            &kb_boundary_links,
-            std::slice::from_ref(&center),
-            self.kb_graph_layout_spacing_scale as f64,
-        );
+        // #367: which algorithm computes node positions. Chord is
+        // immediately final (no iterative refinement needed or wanted) —
+        // only Force queues a background layout pass at all.
+        let algorithm = self.kb_graph_layout_algorithm;
+        let scene = match algorithm {
+            GraphLayoutAlgorithm::Force => mae_canvas::kb_graph::build_kb_graph_positions_only(
+                &kb_nodes,
+                &kb_links,
+                &kb_boundary_links,
+                std::slice::from_ref(&center),
+                self.kb_graph_layout_spacing_scale as f64,
+            ),
+            GraphLayoutAlgorithm::Chord => mae_canvas::kb_graph::build_kb_graph_chord_positions(
+                &kb_nodes,
+                &kb_links,
+                &kb_boundary_links,
+                std::slice::from_ref(&center),
+                self.kb_graph_layout_spacing_scale as f64,
+            ),
+        };
 
         // Queue the background layout pass with a snapshot of the fresh
         // circular-layout scene BEFORE moving `scene` into the view below,
@@ -477,12 +490,14 @@ impl Editor {
             spacing_scale: self.kb_graph_layout_spacing_scale as f64,
             ..mae_canvas::layout::LayoutConfig::default()
         };
-        self.pending_graph_layout = Some(GraphLayoutIntent {
-            buf_idx,
-            scene: scene.clone(),
-            mode,
-            layout_config: layout_config.clone(),
-        });
+        if matches!(algorithm, GraphLayoutAlgorithm::Force) {
+            self.pending_graph_layout = Some(GraphLayoutIntent {
+                buf_idx,
+                scene: scene.clone(),
+                mode,
+                layout_config: layout_config.clone(),
+            });
+        }
 
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
             gv.center_node = Some(center);
@@ -490,7 +505,13 @@ impl Editor {
             gv.kb_instance = kb_instance;
             gv.scene = scene;
             gv.node_degrees = crate::graph_view::node_degrees(&gv.scene);
-            gv.animating = self.kb_graph_animate;
+            // Chord mode never queues a layout intent, so nothing will ever
+            // arrive to settle it -- forcing `animating` false regardless
+            // of `kb_graph_animate` avoids permanently pinning the 60fps
+            // animation wake-up cadence (`has_active_graph_animation`) for
+            // a buffer that will never receive a `GraphLayoutResult`.
+            gv.animating =
+                matches!(algorithm, GraphLayoutAlgorithm::Force) && self.kb_graph_animate;
             gv.anim_temperature = ANIMATION_INITIAL_TEMPERATURE;
             gv.layout_config = layout_config;
             gv.hidden_node_count = hidden_node_count;
@@ -4211,6 +4232,10 @@ mod tests {
     #[test]
     fn follow_is_a_noop_when_the_node_has_not_changed() {
         let mut editor = ed_with_kb_node("concept:a", "A", "[[concept:b]]");
+        // #367: this test's assertions are all in terms of pending_graph_layout
+        // being queued (or not) by a populate pass, which is Force-mode-only
+        // behavior now that Chord is the default.
+        editor.kb_graph_layout_algorithm = GraphLayoutAlgorithm::Force;
         editor.kb.primary.insert(mae_kb::Node::new(
             "concept:b",
             "B",
@@ -4345,6 +4370,10 @@ mod tests {
     #[test]
     fn open_queues_a_background_layout_request() {
         let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        // #367: background layout queuing is Force-mode-only; Chord is now
+        // the default and never queues one (see the chord-mode-specific
+        // test for that behavior).
+        editor.kb_graph_layout_algorithm = GraphLayoutAlgorithm::Force;
         assert!(editor.pending_graph_layout.is_none());
         editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
         let pending = editor
@@ -4359,6 +4388,55 @@ mod tests {
                 panic!("kb_graph_animate defaults to false — open() must queue OneShot, not Tick")
             }
         }
+    }
+
+    // --- #367: chord-diagram (circular) layout algorithm ---
+
+    #[test]
+    fn chord_mode_open_never_queues_a_background_layout_request() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        assert_eq!(
+            editor.kb_graph_layout_algorithm,
+            GraphLayoutAlgorithm::Chord,
+            "sanity: chord is the default"
+        );
+        assert!(editor.pending_graph_layout.is_none());
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        assert!(
+            editor.pending_graph_layout.is_none(),
+            "chord mode's layout is immediately final — it must never queue a background pass"
+        );
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let gv = editor.buffers[idx].graph_view().unwrap();
+        assert!(
+            !gv.scene.nodes.is_empty(),
+            "the scene must still be populated"
+        );
+        assert!(
+            !gv.animating,
+            "chord mode must never report animating — nothing will ever settle it"
+        );
+    }
+
+    #[test]
+    fn chord_mode_ignores_kb_graph_animate() {
+        // Even with kb_graph_animate on, chord mode must not start
+        // "animating" (there's no queued layout pass for it to track).
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_animate = true;
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        assert!(editor.pending_graph_layout.is_none());
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        assert!(!editor.buffers[idx].graph_view().unwrap().animating);
+        assert!(!editor.has_active_graph_animation());
     }
 
     // --- Part C Phase 3: `kb_graph_animate` physics-animation ticking ---
@@ -4393,6 +4471,9 @@ mod tests {
     #[test]
     fn animate_enabled_open_queues_a_tick_not_a_one_shot() {
         let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        // #367: animation ticking is Force-mode-only (Chord never queues a
+        // layout pass to animate through).
+        editor.kb_graph_layout_algorithm = GraphLayoutAlgorithm::Force;
         editor.kb_graph_animate = true;
         editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
 

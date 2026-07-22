@@ -628,6 +628,13 @@ impl OptionRegistry {
                      Also scales the initial (pre-layout) node placement identically, so the \
                      two never fall out of sync.",
                     OptionKind::Float, "2.25", Some("kb-graph.layout-spacing-scale"), &[]),
+                opt!("kb_graph_layout_algorithm", &["kb-graph-layout-algorithm"],
+                    "Graph-view layout algorithm: chord (default — nodes evenly spaced on a \
+                     circle's circumference, curved chord edges through the interior, computed \
+                     once with no background refinement) or force (force-directed physics \
+                     simulation, iteratively refined on a background thread).",
+                    OptionKind::String, "chord", Some("kb-graph.layout-algorithm"),
+                    &["force", "chord"]),
                 opt!("kb_graph_follow_current_node", &["kb-graph-follow-current-node"],
                     "Whether the graph view re-centers on the human/AI's current KB node \
                      automatically. Registered ahead of the Phase 2 command-post wiring that \

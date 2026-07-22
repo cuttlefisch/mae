@@ -114,14 +114,91 @@ pub fn build_kb_graph_positions_only(
         .sqrt()
         .max(100.0);
     let golden_angle = std::f64::consts::PI * (3.0 - 5.0_f64.sqrt());
-    let scene_nodes: Vec<SceneNode> = nodes
-        .iter()
-        .enumerate()
-        .map(|(i, node)| {
+    let positions: Vec<(f64, f64)> = (0..n)
+        .map(|i| {
             let r = disk_radius * (((i as f64) + 0.5) / (n.max(1) as f64)).sqrt();
             let angle = (i as f64) * golden_angle;
-            let x = r * angle.cos();
-            let y = r * angle.sin();
+            (r * angle.cos(), r * angle.sin())
+        })
+        .collect();
+
+    positions_to_scene(
+        nodes,
+        links,
+        boundary_links,
+        starter_ids,
+        &id_to_idx,
+        &positions,
+    )
+}
+
+/// Build a scene graph with nodes evenly spaced around a circle's
+/// circumference — a chord-diagram / Circos-style layout (#367). Unlike
+/// [`build_kb_graph_positions_only`]'s sunflower seed, this placement is
+/// the FINAL layout: no force-directed refinement follows it (see
+/// `Editor::populate_graph_buffer`'s branch on `kb_graph_layout_algorithm`),
+/// so there's no "must stay small enough for a bounded cooling schedule to
+/// converge from" constraint the sunflower's disk radius has to satisfy —
+/// a ring whose circumference grows linearly with `n` (keeping adjacent-
+/// node ARC spacing constant, mirroring `IDEAL_AREA_PER_NODE`'s role for
+/// the sunflower disk) is the geometrically correct, not merely
+/// acceptable, shape here.
+pub fn build_kb_graph_chord_positions(
+    nodes: &[KbNodeInfo],
+    links: &[KbLinkInfo],
+    boundary_links: &[KbLinkInfo],
+    starter_ids: &[String],
+    spacing_scale: f64,
+) -> SceneGraph {
+    let id_to_idx: std::collections::HashMap<&str, usize> = nodes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (n.id.as_str(), i))
+        .collect();
+
+    let n = nodes.len();
+    // Adjacent-node arc spacing = 2*pi*r / n; solving for r so that spacing
+    // equals sqrt(IDEAL_AREA_PER_NODE * spacing_scale) (the same per-node
+    // "personal space" constant the sunflower disk targets) gives a radius
+    // that grows LINEARLY in n -- correct for a 1-D ring, unlike the
+    // sunflower's deliberately sub-linear (sqrt) 2-D disk growth.
+    let spacing = (crate::layout::IDEAL_AREA_PER_NODE * spacing_scale).sqrt();
+    let radius = (n as f64 * spacing / (2.0 * std::f64::consts::PI)).max(100.0);
+    let positions: Vec<(f64, f64)> = (0..n)
+        .map(|i| {
+            let angle = (i as f64) * 2.0 * std::f64::consts::PI / (n.max(1) as f64);
+            (radius * angle.cos(), radius * angle.sin())
+        })
+        .collect();
+
+    positions_to_scene(
+        nodes,
+        links,
+        boundary_links,
+        starter_ids,
+        &id_to_idx,
+        &positions,
+    )
+}
+
+/// Shared node/edge assembly for every `build_kb_graph*` variant (CLAUDE.md
+/// #8) — the only thing that differs between them is HOW `positions` was
+/// computed (sunflower disk, circular ring, ...); node styling and the
+/// internal/boundary edge-building logic (including the boundary-link
+/// dedup-by-source stub collapsing) is identical regardless.
+fn positions_to_scene(
+    nodes: &[KbNodeInfo],
+    links: &[KbLinkInfo],
+    boundary_links: &[KbLinkInfo],
+    starter_ids: &[String],
+    id_to_idx: &std::collections::HashMap<&str, usize>,
+    positions: &[(f64, f64)],
+) -> SceneGraph {
+    let n = nodes.len();
+    let scene_nodes: Vec<SceneNode> = nodes
+        .iter()
+        .zip(positions.iter())
+        .map(|(node, &(x, y))| {
             let kind = node.kind;
             let is_starter = starter_ids.contains(&node.id);
             let style = kind_to_style(&kind, is_starter);
@@ -574,5 +651,120 @@ mod tests {
                 assert!(dist > 1.0, "nodes {} and {} too close: dist={}", i, j, dist);
             }
         }
+    }
+
+    // --- #367: chord-diagram (circular) layout ---
+
+    #[test]
+    fn chord_positions_preserves_node_count() {
+        let (nodes, links) = nodes_and_links();
+        let graph = build_kb_graph_chord_positions(&nodes, &links, &[], &[], 1.0);
+        assert_eq!(graph.nodes.len(), 3);
+    }
+
+    #[test]
+    fn chord_positions_every_node_is_equidistant_from_the_origin() {
+        let nodes: Vec<KbNodeInfo> = (0..8)
+            .map(|i| KbNodeInfo {
+                id: format!("n{i}"),
+                title: "x".to_string(),
+                kind: NodeKind::Concept,
+            })
+            .collect();
+        let graph = build_kb_graph_chord_positions(&nodes, &[], &[], &[], 1.0);
+        let radii: Vec<f64> = graph
+            .nodes
+            .iter()
+            .map(|n| (n.x * n.x + n.y * n.y).sqrt())
+            .collect();
+        let first = radii[0];
+        for (i, r) in radii.iter().enumerate() {
+            assert!(
+                (r - first).abs() < 1e-6,
+                "node {i} radius {r} differs from node 0's radius {first} — not on a circle"
+            );
+        }
+    }
+
+    #[test]
+    fn chord_positions_are_evenly_angularly_spaced() {
+        // Adversarial (#14): assert the ACTUAL angular spacing between
+        // adjacent nodes is uniform, not just that positions differ — a
+        // plausible-but-wrong bunched-up placement (e.g. all nodes crammed
+        // into one arc) would still produce "different" positions but
+        // would fail this specific check.
+        let n = 6;
+        let nodes: Vec<KbNodeInfo> = (0..n)
+            .map(|i| KbNodeInfo {
+                id: format!("n{i}"),
+                title: "x".to_string(),
+                kind: NodeKind::Concept,
+            })
+            .collect();
+        let graph = build_kb_graph_chord_positions(&nodes, &[], &[], &[], 1.0);
+        let angles: Vec<f64> = graph.nodes.iter().map(|n| n.y.atan2(n.x)).collect();
+        let mut sorted = angles.clone();
+        sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        let expected_gap = 2.0 * std::f64::consts::PI / n as f64;
+        for i in 0..sorted.len() {
+            let next = sorted[(i + 1) % sorted.len()];
+            let gap = if i + 1 < sorted.len() {
+                next - sorted[i]
+            } else {
+                (next + 2.0 * std::f64::consts::PI) - sorted[i]
+            };
+            assert!(
+                (gap - expected_gap).abs() < 1e-6,
+                "angular gap {gap} at index {i} differs from expected {expected_gap} — nodes not evenly spaced"
+            );
+        }
+    }
+
+    #[test]
+    fn chord_positions_radius_grows_with_node_count() {
+        // A ring's circumference must grow with n to keep adjacent-node
+        // arc spacing from collapsing toward zero — unlike the sunflower
+        // disk's deliberately sub-linear growth, linear growth is CORRECT
+        // here (see the function's doc comment).
+        fn radius_for(n: usize) -> f64 {
+            let nodes: Vec<KbNodeInfo> = (0..n)
+                .map(|i| KbNodeInfo {
+                    id: format!("n{i}"),
+                    title: "x".to_string(),
+                    kind: NodeKind::Concept,
+                })
+                .collect();
+            let graph = build_kb_graph_chord_positions(&nodes, &[], &[], &[], 1.0);
+            (graph.nodes[0].x.powi(2) + graph.nodes[0].y.powi(2)).sqrt()
+        }
+        let small = radius_for(8);
+        let large = radius_for(200);
+        assert!(
+            large > small * 5.0,
+            "radius for n=200 ({large}) should grow substantially past n=8 ({small})"
+        );
+    }
+
+    #[test]
+    fn chord_positions_edges_match_positions_only_edge_building() {
+        // Same shared edge-building logic as build_kb_graph_positions_only
+        // (only node placement differs) — internal + boundary link counts
+        // must match exactly.
+        let (nodes, links) = nodes_and_links();
+        let boundary = vec![
+            link("concept:buffer", "external:a"),
+            link("concept:buffer", "external:b"),
+        ];
+        let chord = build_kb_graph_chord_positions(&nodes, &links, &boundary, &[], 1.0);
+        let positions_only = build_kb_graph_positions_only(&nodes, &links, &boundary, &[], 1.0);
+        assert_eq!(chord.edges.len(), positions_only.edges.len());
+        assert_eq!(chord.edges.len(), 3); // 2 internal + 1 collapsed boundary stub
+    }
+
+    #[test]
+    fn chord_positions_empty_graph() {
+        let graph = build_kb_graph_chord_positions(&[], &[], &[], &[], 1.0);
+        assert!(graph.nodes.is_empty());
+        assert!(graph.edges.is_empty());
     }
 }

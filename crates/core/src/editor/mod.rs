@@ -852,6 +852,10 @@ pub struct Editor {
     /// the `k = sqrt(area/n) ~ sqrt(spacing_scale)` relationship. Mirrors
     /// `kb_graph_layout_spacing_scale`.
     pub kb_graph_layout_spacing_scale: f32,
+    /// Which algorithm computes graph-view node positions — see
+    /// `GraphLayoutAlgorithm`'s doc comment. Mirrors
+    /// `kb_graph_layout_algorithm`.
+    pub kb_graph_layout_algorithm: crate::graph_view::GraphLayoutAlgorithm,
     /// TODO(Part C Phase 2, not wired yet): whether the graph view
     /// re-centers on the human/AI's current KB node automatically. Mirrors
     /// `kb_graph_follow_current_node` — registered now so the OptionRegistry
@@ -1371,6 +1375,7 @@ impl Editor {
             kb_graph_layout_iterations: 50,
             kb_graph_layout_kind_clustering: 0.5,
             kb_graph_layout_spacing_scale: 2.25,
+            kb_graph_layout_algorithm: crate::graph_view::GraphLayoutAlgorithm::Chord,
             kb_graph_follow_current_node: true,
             kb_graph_animate: false,
             kb_graph_hover_enabled: true,
