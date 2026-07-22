@@ -75,25 +75,48 @@ MAE already has two mechanisms that look superficially applicable and are both t
    (`["ollama"]` today) before forwarding to `execute_tool()` — otherwise it returns a denial
    result, same shape as the existing permission-denied branch.
 
-5. **Single-instance tools deny outright; federated-scan tools deny the whole call (v1
-   simplification — see below).** `kb_get`/`kb_update`/`kb_add_link`/`kb_delete`/`kb_restore`/
-   `kb_links_from`/`kb_links_to`/`kb_related`/`kb_shortest_path`/`kb_neighborhood` resolve one
-   (or two, for `kb_add_link`'s `src`/`dst`) owning instance from their arguments and allow/deny
-   precisely. `kb_search`/`kb_agenda`/`kb_vector_search`/`kb_search_context` scan across
-   `editor.kb.instances` — the original design here was to post-filter restricted hits out of
-   the result (with a `residency_filtered` marker so the model knows evidence was incomplete,
-   never silent truncation). **Implementation found this isn't safely generalizable in v1**:
-   the four tools' result shapes don't consistently carry per-result instance attribution —
-   `kb_search` tags each hit `"instance": <name>`, but `kb_agenda` doesn't tag results by
-   instance at all today (a separate, pre-existing gap in how it's federated). Rather than ship
-   a filter that silently no-ops on the tools where the shape doesn't match — false confidence
-   in coverage — v1 conservatively **denies the entire federated-scan call outright** whenever
-   any registered KB (or the primary) is `LocalModelsOnly` and the requester isn't local,
-   naming the restricted KB and suggesting `kb_get`/an explicit `scope` argument instead. This
-   is coarser than originally designed but categorically safe (never leaks restricted content)
-   and honest about the tradeoff (a denial, not a silently-incomplete success). Fine-grained
-   per-tool filtering is real, separate follow-up work once these tools carry consistent
-   instance attribution.
+5. **Every `kb_*`/`help_open` tool is explicitly classified into one of five residency shapes
+   (`crates/mae/src/ai_residency.rs`) — not a hand-maintained allowlist.** An earlier
+   implementation used two flat arrays (single-instance tools checked precisely; a fixed set of
+   "federated-scan" tools denied outright); any tool not listed in either silently fell through
+   to *allow*. This was found, during #350/#351's investigation, to have let nine tools
+   (including `kb_raw_query` — arbitrary Datalog against the primary store — and `kb_graph` — an
+   explicitly federated BFS walk) go completely ungated. The classification is now exhaustive and
+   fails **closed**: a `kb_*`/`help_open` tool with no explicit classification is denied, not
+   allowed, and a CI test (`every_kb_tool_and_help_open_is_explicitly_classified`) fails loudly if
+   a new tool is ever added without one.
+   - **`SingleTarget`** (`kb_get`/`kb_update`/`kb_add_link`/`kb_delete`/`kb_restore`/
+     `kb_links_from`/`kb_related`/`kb_shortest_path`/`kb_neighborhood`/`kb_history`/
+     `kb_preview_show`/`kb_create`/`kb_set_role`/`kb_reimport`/`help_open`) resolve one (or two,
+     for `kb_add_link`'s `src`/`dst`) owning instance from their arguments and allow/deny
+     precisely.
+   - **`PrimaryOnly`** (`kb_agenda`/`kb_raw_query`/`kb_view_query`) only ever read the primary
+     store — checked against the primary's residency alone. (`kb_agenda` was originally grouped
+     with the federated-scan tools below; that was inaccurate — its implementation never reads
+     `editor.kb.instances` at all, so grouping it there over-blocked it whenever an *unrelated*
+     registered instance was restricted.)
+   - **`ScopedFederatedScan`** (`kb_search`/`kb_search_context`/`kb_vector_search`) scan across
+     `editor.kb.instances` but accept a `scope` argument (falling back to the `kb_search_scope`
+     option) that names exactly which KB(s) participate — residency is checked only against KBs
+     **within the resolved scope**, not every registered KB. This is the `scope`-based escape
+     hatch this ADR's error text and the Verification section below always intended (a call
+     explicitly scoped away from a restricted KB must not be blocked by that KB's policy) — an
+     earlier implementation checked *every* registered KB regardless of `scope`, which is the
+     literal bug reported as #351.
+   - **`UnscopedFederatedContent`** (`kb_graph`/`kb_graph_view_open`/`kb_graph_view_refresh`/
+     `kb_graph_view_state`/`kb_list`/`kb_health`/`kb_id_audit`/`kb_links_to`) scan across multiple
+     KB instances with **no** `scope` argument to narrow them, and their result shapes don't
+     consistently carry per-result instance attribution — `kb_search` tags each hit
+     `"instance": <name>`, but these tools mostly don't. Rather than ship a filter that silently
+     no-ops on the tools where the shape doesn't match — false confidence in coverage — these are
+     **denied outright** whenever any registered KB (or the primary) is `LocalModelsOnly` and the
+     requester isn't local, naming the restricted KB and suggesting a `ScopedFederatedScan` tool
+     (e.g. `kb_search` with an explicit `scope`) instead. Coarser than fine-grained per-result
+     filtering but categorically safe (never leaks restricted content) and honest about the
+     tradeoff (a denial, not a silently-incomplete success). Fine-grained per-tool filtering
+     remains real, separate follow-up work once these tools carry consistent instance attribution.
+   - **`NonContent`** (`kb_instances`/`kb_sync_status`/membership+policy+sharing-lifecycle tools/
+     pure graph-view camera-state tools/etc.) never return node titles/bodies/links — never gated.
 
 6. **New tool + human parity.** `kb_set_ai_residency` (Write tier), with a matching editor command
    and Scheme primitive, following the existing `kb_set_policy`/`command_kb_set_policy` precedent
@@ -143,10 +166,16 @@ embedded path later is additive, not a redesign, if this trade-off is ever revis
   regardless of the v1/fine-grained question below — the model must be able to tell its evidence
   was incomplete, never confidently under-perform on a partial result it can't see was partial.
 - **Ship a best-effort per-tool result filter now, accepting it silently no-ops on tools whose
-  shape doesn't match (`kb_agenda`).** Rejected after implementation surfaced the shape
-  inconsistency — a filter that appears to work but silently doesn't cover every tool is worse
-  than an honest, coarser deny; v1 denies the whole federated-scan call instead (see Decision
-  §5) until the fine-grained version can be built correctly across all four tools.
+  shape doesn't match.** Rejected after implementation surfaced the shape inconsistency — a
+  filter that appears to work but silently doesn't cover every tool is worse than an honest,
+  coarser deny; `UnscopedFederatedContent` tools deny the whole call instead (see Decision §5)
+  until the fine-grained version can be built correctly across all of them.
+- **Keep the two-array (single-instance / federated-scan) classification instead of an
+  exhaustive, fail-closed match.** Rejected after #350/#351's investigation found nine tools
+  silently ungated because they were never added to either array — an allowlist that fails
+  *open* for anything unlisted cannot be trusted to stay correct as tools are added over time.
+  The exhaustive `classify_kb_tool` match plus a CI test enforcing every tool has an explicit
+  arm (Decision §5) makes the same drift a loud build failure instead of a silent gap.
 - **Deferring the PSK-handshake half to a later fast-follow, shipping only the embedded-path
   check now.** Considered and rejected after review — the deferred half is exactly the motivating
   example (an external Claude Code CLI session), the actual new plumbing is small (one field on
@@ -161,9 +190,21 @@ embedded path later is additive, not a redesign, if this trade-off is ever revis
 - External MCP client with no PSK (today's Claude Code CLI, unmodified) → denied regardless of any
   self-declared provider field it might send; the declaration is logged, never trusted.
 - External MCP client presenting a valid PSK and `declaredProvider: "ollama"` → allowed.
-- A federated `kb_search`/`kb_agenda`/`kb_vector_search`/`kb_search_context` call, when any
-  registered KB (or the primary) is `LocalModelsOnly` and the requester isn't local, is denied
-  outright with a message naming the restricted KB (v1's conservative simplification — see
-  Decision §5) — never a silently-incomplete success.
+- A `ScopedFederatedScan` call (`kb_search`/`kb_search_context`/`kb_vector_search`) whose
+  resolved `scope` excludes every `LocalModelsOnly` KB is **allowed**, even when some other,
+  out-of-scope registered KB is restricted — the `scope`-based escape hatch this ADR's error
+  text always promised (#351's fix).
+- The same call with an unscoped (or `scope="all"`) request, when any registered KB (or the
+  primary) is `LocalModelsOnly` and the requester isn't local, is denied outright with a message
+  naming the restricted KB — never a silently-incomplete success.
+- An `UnscopedFederatedContent` call (`kb_graph`/`kb_list`/`kb_health`/`kb_id_audit`/
+  `kb_links_to`/the content-bearing graph-view tools), which has no `scope` to narrow it, is
+  denied outright under the same condition (v1's conservative simplification — see Decision §5).
+- A `PrimaryOnly` call (`kb_agenda`/`kb_raw_query`/`kb_view_query`) is denied only when the
+  *primary* KB itself is restricted — an unrelated restricted federated instance never blocks it.
+- Every real `kb_*`/`help_open` tool name resolves to an explicit classification
+  (`every_kb_tool_and_help_open_is_explicitly_classified`); an unrecognized `kb_*`/`help_open`
+  name is denied conservatively rather than silently allowed
+  (`unclassified_kb_prefixed_tool_denied_conservatively`).
 - `kb_set_ai_residency` is reachable identically via the AI tool, the editor command, and the
   Scheme primitive (human/AI parity check).

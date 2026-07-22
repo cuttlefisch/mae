@@ -1026,11 +1026,25 @@ fn excerpt_body(body: &str, max_bytes: usize) -> String {
     format!("{}…", &body[..body.floor_char_boundary(max_bytes)])
 }
 
-/// Simple relevance score for RAG ranking.
+/// Simple relevance score for RAG ranking. Field-weighted over
+/// titles/aliases/ids/tags/body, matching this tool's own advertised
+/// ranking contract and `KnowledgeBase::search_ranked`'s equivalent
+/// alias/id handling (`shared/kb/src/lib.rs`) -- an alias is an alternate
+/// name, so it scores at the same tier as title (#350).
 fn score_node(query_lower: &str, node: &mae_core::KbNode) -> u32 {
     let mut score = 0u32;
     if node.title.to_lowercase().contains(query_lower) {
         score += 3;
+    }
+    if node
+        .aliases
+        .iter()
+        .any(|a| a.to_lowercase().contains(query_lower))
+    {
+        score += 3;
+    }
+    if node.id.to_lowercase().contains(query_lower) {
+        score += 2;
     }
     for tag in &node.tags {
         if tag.to_lowercase().contains(query_lower) {
@@ -1043,10 +1057,23 @@ fn score_node(query_lower: &str, node: &mae_core::KbNode) -> u32 {
     score
 }
 
+/// Byte offset of the first case-insensitive occurrence of `query_lower` in
+/// `body`, or `usize::MAX` if absent -- an earlier/denser match is a
+/// stronger relevance signal than a later one, used as the tie-break ahead
+/// of alphabetical-by-ID (#350).
+fn body_match_position(query_lower: &str, body: &str) -> usize {
+    body.to_lowercase().find(query_lower).unwrap_or(usize::MAX)
+}
+
 /// RAG-optimized KB search: returns top-K nodes with body excerpts for AI
-/// reasoning context. Searches local KB and all federated instances.
-/// Deduplicated by node ID (local wins), ranked by relevance, with
-/// paragraph-aware excerpts and low-result guidance.
+/// reasoning context. Searches within `scope` (default: all local +
+/// federated instances, or the `kb_search_scope` option) via
+/// `kb_federated_search_scoped` -- the same scope-aware, already-deduped
+/// (local wins), already-`search_sort`-ordered mechanism `kb_search`
+/// itself uses (CLAUDE.md #8). This used to be a second, independently
+/// hand-rolled federated scan with no `scope` parameter at all, which is
+/// how it ended up unscopeable (#350). Ranked by relevance on top of that,
+/// with paragraph-aware excerpts and low-result guidance.
 pub fn execute_kb_search_context(
     editor: &Editor,
     args: &serde_json::Value,
@@ -1055,6 +1082,11 @@ pub fn execute_kb_search_context(
         .get("query")
         .and_then(|v| v.as_str())
         .ok_or("Missing required parameter: query")?;
+    let scope = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .map(mae_kb::KbScope::parse)
+        .unwrap_or_else(|| mae_kb::KbScope::parse(&editor.kb.search_scope));
     let configured_limit = editor.kb.search_max_results;
     let limit = args
         .get("limit")
@@ -1062,52 +1094,25 @@ pub fn execute_kb_search_context(
         .unwrap_or(5)
         .min(configured_limit as u64) as usize;
     let excerpt_len = editor.kb.search_excerpt_length;
-
-    // Deduplicated collection
-    let mut seen = std::collections::HashSet::new();
-    let mut results: Vec<(Option<String>, mae_core::KbNode, u32)> = Vec::new();
     let query_lower = query.to_lowercase();
 
-    // Search using query layer (CozoDB-first) when available
-    if let Some(q) = editor.kb.query_layer() {
-        for hit in q.search(query, limit * 3) {
-            if let Some(node) = q.get(&hit.id) {
-                if seen.insert(node.id.clone()) {
-                    let score = score_node(&query_lower, &node);
-                    results.push((None, node, score));
-                }
-            }
-        }
-    } else {
-        // Fallback: search local KB first (wins on duplicates)
-        for id in editor.kb.primary.search(query) {
-            if let Some(node) = editor.kb.primary.get(&id) {
-                if seen.insert(node.id.clone()) {
-                    let score = score_node(&query_lower, node);
-                    results.push((None, node.clone(), score));
-                }
-            }
-        }
-        // Search federated instances
-        for (uuid, kb) in &editor.kb.instances {
-            let inst_name = editor
-                .kb
-                .registry
-                .find_by_uuid(uuid)
-                .map(|i| i.name.clone());
-            for id in kb.search(query) {
-                if let Some(node) = kb.get(&id) {
-                    if seen.insert(node.id.clone()) {
-                        let score = score_node(&query_lower, node);
-                        results.push((inst_name.clone(), node.clone(), score));
-                    }
-                }
-            }
-        }
-    }
+    let mut results: Vec<(Option<String>, mae_core::KbNode, u32, usize)> = editor
+        .kb_federated_search_scoped(query, &scope)
+        .into_iter()
+        .map(|(inst_name, node)| {
+            let score = score_node(&query_lower, &node);
+            let position = body_match_position(&query_lower, &node.body);
+            (inst_name, node, score, position)
+        })
+        .collect();
 
-    // Sort by score desc, then ID for deterministic tie-breaking
-    results.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.1.id.cmp(&b.1.id)));
+    // Sort by score desc, then body-match position asc (denser/earlier
+    // match wins), then id asc as the final deterministic tiebreak (#350).
+    results.sort_by(|a, b| {
+        b.2.cmp(&a.2)
+            .then_with(|| a.3.cmp(&b.3))
+            .then_with(|| a.1.id.cmp(&b.1.id))
+    });
 
     // Context-budget-aware scaling
     let context_budget_pct = args
@@ -1126,7 +1131,7 @@ pub fn execute_kb_search_context(
     let items: Vec<serde_json::Value> = results
         .into_iter()
         .take(effective_limit)
-        .map(|(inst_name, node, score)| {
+        .map(|(inst_name, node, score, _position)| {
             let mut val = serde_json::json!({
                 "id": node.id,
                 "title": node.title,
@@ -2718,6 +2723,137 @@ mod tests {
         assert!(
             items.iter().any(|i| i["id"] == "fed-rag-test"),
             "should include federated results"
+        );
+    }
+
+    // --- #350: scope param, alias-aware ranking, body-position tie-break ---
+
+    #[test]
+    fn score_node_checks_aliases() {
+        let node = mae_core::KbNode::new(
+            "user:alias-test",
+            "Unrelated Title",
+            mae_core::KbNodeKind::Note,
+            "unrelated body",
+        )
+        .with_aliases(["orderless retrieval"]);
+        // Matches only via alias -- must score at the same tier as a title
+        // match (3), not fall through to the flat body-match default (1).
+        assert_eq!(score_node("orderless retrieval", &node), 3);
+    }
+
+    #[test]
+    fn score_node_checks_id() {
+        let node = mae_core::KbNode::new(
+            "concept:special-id-term",
+            "Unrelated Title",
+            mae_core::KbNodeKind::Note,
+            "unrelated body",
+        );
+        assert_eq!(score_node("special-id-term", &node), 2);
+    }
+
+    #[test]
+    fn score_node_falls_back_to_body_match_score() {
+        let node = mae_core::KbNode::new(
+            "user:plain",
+            "Unrelated Title",
+            mae_core::KbNodeKind::Note,
+            "the term appears only here",
+        );
+        assert_eq!(score_node("the term appears", &node), 1);
+    }
+
+    #[test]
+    fn kb_search_context_ties_break_by_body_match_position_not_alphabetical() {
+        let mut editor = Editor::new();
+        // Both tie at score 1 (body-only match, no title/alias/id/tag hit).
+        // "user:z-early" has a later alphabetical id but an earlier body
+        // match -- it must rank FIRST, proving the tiebreak isn't
+        // alphabetical-by-id anymore (#350).
+        editor
+            .kb_create_node(
+                "user:a-late",
+                "Unrelated",
+                "padding padding padding padding tiebreaktermxyz",
+                mae_core::KbNodeKind::Note,
+            )
+            .unwrap();
+        editor
+            .kb_create_node(
+                "user:z-early",
+                "Unrelated",
+                "tiebreaktermxyz padding padding padding padding",
+                mae_core::KbNodeKind::Note,
+            )
+            .unwrap();
+
+        let result =
+            execute_kb_search_context(&editor, &serde_json::json!({"query": "tiebreaktermxyz"}))
+                .unwrap();
+        let items: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        let ids: Vec<&str> = items.iter().map(|i| i["id"].as_str().unwrap()).collect();
+        let pos_early = ids.iter().position(|&id| id == "user:z-early").unwrap();
+        let pos_late = ids.iter().position(|&id| id == "user:a-late").unwrap();
+        assert!(
+            pos_early < pos_late,
+            "earlier body match must rank first despite losing alphabetically: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn kb_search_context_scope_filters_out_other_instances() {
+        let mut editor = Editor::new();
+        let mut inst = mae_core::KnowledgeBase::new();
+        inst.insert(mae_core::KbNode::new(
+            "other-inst-node",
+            "Scope Filter Target",
+            mae_core::KbNodeKind::Note,
+            "a distinctive scopefiltertermxyz body",
+        ));
+        editor.kb.instances.insert("uuid-other".to_string(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-other".into(),
+                name: "OtherInstance".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+            });
+
+        // Unscoped: the federated node is included.
+        let all_result =
+            execute_kb_search_context(&editor, &serde_json::json!({"query": "scopefiltertermxyz"}))
+                .unwrap();
+        let all_items: Vec<serde_json::Value> = serde_json::from_str(&all_result).unwrap();
+        assert!(
+            all_items.iter().any(|i| i["id"] == "other-inst-node"),
+            "unscoped search must include the federated instance's node"
+        );
+
+        // Scoped to "local": the federated node must be excluded.
+        let local_result = execute_kb_search_context(
+            &editor,
+            &serde_json::json!({"query": "scopefiltertermxyz", "scope": "local"}),
+        )
+        .unwrap();
+        let local_json: serde_json::Value = serde_json::from_str(&local_result).unwrap();
+        // Either an empty-results guidance object, or an array with no
+        // match from the excluded instance -- both are correct.
+        let local_items = local_json.as_array().cloned().unwrap_or_default();
+        assert!(
+            !local_items.iter().any(|i| i["id"] == "other-inst-node"),
+            "scope=local must exclude the federated instance's node: {local_json}"
         );
     }
 

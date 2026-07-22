@@ -299,9 +299,14 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .build(),
         ToolDefBuilder::new(
             "kb_search_context",
-            "RAG-optimized KB search: returns top-K nodes with excerpts for AI reasoning context. Searches local + federated KBs. Use this instead of kb_search + kb_get loops.",
+            "RAG-optimized KB search: returns top-K nodes with excerpts and relevance scores for AI reasoning context. Field-weighted ranking over titles, ids, bodies, tags, and aliases (same ranking kb_search uses), with ties broken by body-match position rather than node id. Searches local + federated KBs by default. Use this instead of kb_search + kb_get loops.",
         )
         .prop("query", "string", "Search query (case-insensitive substring, fuzzy fallback)")
+        .prop(
+            "scope",
+            "string",
+            "Which KBs to search: 'all' (default), 'local' (primary only), 'remote' (shared/collaborative instances only), or a specific instance name.",
+        )
         .prop("limit", "integer", "Max results (default 5, max 20)")
         .required(["query"])
         .permission(PermissionTier::ReadOnly)
