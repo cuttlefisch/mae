@@ -145,6 +145,7 @@ Source: `crates/core/src/lib.rs`
 | Item | Kind |
 |------|------|
 | `agenda_view` | mod |
+| `ai_residency` | mod |
 | `buffer` | mod |
 | `buffer_mode` | mod |
 | `buffer_view` | mod |

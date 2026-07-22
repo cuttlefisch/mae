@@ -75,7 +75,7 @@ MAE already has two mechanisms that look superficially applicable and are both t
    (`["ollama"]` today) before forwarding to `execute_tool()` — otherwise it returns a denial
    result, same shape as the existing permission-denied branch.
 
-5. **Every `kb_*`/`help_open` tool is explicitly classified into one of five residency shapes
+5. **Every `kb_*`/`help_open` tool is explicitly classified into one of several residency shapes
    (`crates/mae/src/ai_residency.rs`) — not a hand-maintained allowlist.** An earlier
    implementation used two flat arrays (single-instance tools checked precisely; a fixed set of
    "federated-scan" tools denied outright); any tool not listed in either silently fell through
@@ -90,19 +90,29 @@ MAE already has two mechanisms that look superficially applicable and are both t
      `kb_preview_show`/`kb_create`/`kb_set_role`/`kb_reimport`/`help_open`) resolve one (or two,
      for `kb_add_link`'s `src`/`dst`) owning instance from their arguments and allow/deny
      precisely.
-   - **`PrimaryOnly`** (`kb_agenda`/`kb_raw_query`/`kb_view_query`) only ever read the primary
-     store — checked against the primary's residency alone. (`kb_agenda` was originally grouped
-     with the federated-scan tools below; that was inaccurate — its implementation never reads
-     `editor.kb.instances` at all, so grouping it there over-blocked it whenever an *unrelated*
-     registered instance was restricted.)
-   - **`ScopedFederatedScan`** (`kb_search`/`kb_search_context`/`kb_vector_search`) scan across
-     `editor.kb.instances` but accept a `scope` argument (falling back to the `kb_search_scope`
-     option) that names exactly which KB(s) participate — residency is checked only against KBs
-     **within the resolved scope**, not every registered KB. This is the `scope`-based escape
-     hatch this ADR's error text and the Verification section below always intended (a call
-     explicitly scoped away from a restricted KB must not be blocked by that KB's policy) — an
-     earlier implementation checked *every* registered KB regardless of `scope`, which is the
-     literal bug reported as #351.
+   - **`PrimaryOnly`** (`kb_raw_query`/`kb_view_query`) only ever read the primary store —
+     checked against the primary's residency alone. Both run arbitrary Datalog with no
+     schema-level per-row node-identity, so they're hard-denied outright rather than filtered
+     (see Decision §7).
+   - **`PrimaryOnlyFilterable`** (`kb_agenda`) also only ever reads the primary store — checked
+     against the primary's residency alone — but its `store.agenda_query` results ARE real
+     `Node`s, so the gate allows the call through and `execute_kb_agenda` post-filters its own
+     materialized results instead of denying outright (#358, Decision §7). (`kb_agenda` was
+     originally grouped with the federated-scan tools below; that was inaccurate — its
+     implementation never reads `editor.kb.instances` at all, so grouping it there over-blocked
+     it whenever an *unrelated* registered instance was restricted.)
+   - **`ScopedFederatedScan`** (`kb_vector_search`, a permanent stub today with no real results
+     to filter yet) scans across `editor.kb.instances` but accepts a `scope` argument (falling
+     back to the `kb_search_scope` option) that names exactly which KB(s) participate — residency
+     is checked only against KBs **within the resolved scope**, not every registered KB, and
+     denied outright if that check fails. This is the `scope`-based escape hatch this ADR's error
+     text and the Verification section below always intended (a call explicitly scoped away from
+     a restricted KB must not be blocked by that KB's policy) — an earlier implementation checked
+     *every* registered KB regardless of `scope`, which is the literal bug reported as #351.
+   - **`ScopedFederatedScanFilterable`** (`kb_search`/`kb_search_context`) resolves `scope` the
+     same way, but their results ARE real `(Option<String>, Node)` pairs — the gate allows the
+     call through unconditionally and the tool impl post-filters its own materialized results
+     instead of denying outright (#358, Decision §7).
    - **`UnscopedFederatedContent`** (`kb_graph`/`kb_graph_view_open`/`kb_graph_view_refresh`/
      `kb_graph_view_state`/`kb_list`/`kb_health`/`kb_id_audit`/`kb_links_to`) scan across multiple
      KB instances with **no** `scope` argument to narrow them, and their result shapes don't
@@ -121,6 +131,30 @@ MAE already has two mechanisms that look superficially applicable and are both t
 6. **New tool + human parity.** `kb_set_ai_residency` (Write tier), with a matching editor command
    and Scheme primitive, following the existing `kb_set_policy`/`command_kb_set_policy` precedent
    (CLAUDE.md principle #7 — every AI-facing capability gets a human-facing equivalent).
+
+7. **Seeded/built-in content is exempt from `LocalModelsOnly` gating (#358).** MAE's own
+   compiled-in manual content (help docs, commands, concepts) is identical on every install and
+   never sensitive — a user restricting `primary` to protect their own notes must not also lose
+   the built-in help system as an unintended side effect. Exemption keys on `Node::source ==
+   Some(NodeSource::Seed)` (already stamped once at startup by `KnowledgeBase::stamp_source`, no
+   new tagging infrastructure), checked by `mae_core::ai_residency::is_residency_exempt`/
+   `filter_residency_exempt`/`filter_residency_exempt_primary` — living in `crates/core`, not
+   `crates/mae`, purely because the `mae` package has no `[lib]` target and is therefore
+   unreachable from `mae-ai`'s tool implementations (a Rust crate-graph constraint, not a
+   conceptual split; `mae-core` is the closest crate both `mae` and `mae-ai` already depend on).
+   Applied wherever a real `Node` is already in hand before a decision is made: `SingleTarget`'s
+   `resolve_restricted_label` checks it directly on the node it already resolves; the new
+   `PrimaryOnlyFilterable`/`ScopedFederatedScanFilterable` shapes (Decision §5) allow the call
+   through unconditionally and the tool impl (`execute_kb_agenda`/`execute_kb_search`/
+   `execute_kb_search_context`) post-filters its own materialized results instead of denying the
+   whole call. Tools whose result shape has no per-row node-identity to filter (`kb_raw_query`/
+   `kb_view_query` — arbitrary Datalog) or that are structurally incapable of ever surfacing seed
+   content (`kb_id_audit` — only ever considers nodes with `source_file.is_some()`, which seed
+   nodes never have) stay unchanged, documented in `ai_residency.rs`'s module doc rather than
+   silently left as a gap. Remaining tools that are real, feasible candidates for the same
+   exemption but need deeper plumbing (`kb_related`, `kb_graph`, `kb_graph_view_state`, `kb_list`,
+   `kb_links_to`, `kb_shortest_path`, `kb_neighborhood`, `kb_links_from`, `kb_health`,
+   `kb_history`/`kb_restore`) are a tracked follow-up, not silently deferred.
 
 ## Consequences
 
@@ -208,3 +242,11 @@ embedded path later is additive, not a redesign, if this trade-off is ever revis
   (`unclassified_kb_prefixed_tool_denied_conservatively`).
 - `kb_set_ai_residency` is reachable identically via the AI tool, the editor command, and the
   Scheme primitive (human/AI parity check).
+- A seeded node stays reachable via `kb_get`/`help_open`/`kb_search`/`kb_search_context`/
+  `kb_agenda` even when `primary` is `LocalModelsOnly` and the requester isn't local (#358). A
+  genuinely user-authored (non-seed) node in that same restricted `primary` is still denied for
+  `kb_get`/`help_open`, and still filtered out of `kb_search`/`kb_search_context`/`kb_agenda`
+  results — the exemption does not broaden past seed content.
+- `kb_raw_query`/`kb_view_query` remain denied outright when `primary` is restricted, regardless
+  of whether the queried content would otherwise be seed-only — confirms they did not silently
+  get the filterable treatment (#358).

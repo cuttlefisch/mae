@@ -24,6 +24,24 @@ pub fn execute_tool(
     all_tools: &[ToolDefinition],
     policy: &PermissionPolicy,
 ) -> ExecuteResult {
+    execute_tool_with_requester(editor, call, all_tools, policy, None)
+}
+
+/// Real logic behind [`execute_tool`]. `requester_provider` -- the caller's
+/// AI provider, when known -- is threaded down to `kb_exec::dispatch` for
+/// the AI-residency seed-content exemption's post-filter tools
+/// (ADR-048/#358: kb_search, kb_search_context, kb_agenda). `None` is a
+/// safe default: it's treated the same as any other non-local provider, and
+/// filtering only ever removes results, and only when a KB is actually
+/// `LocalModelsOnly` -- callers that don't care about residency (tests,
+/// most existing call sites) are unaffected either way.
+pub fn execute_tool_with_requester(
+    editor: &mut Editor,
+    call: &ToolCall,
+    all_tools: &[ToolDefinition],
+    policy: &PermissionPolicy,
+    requester_provider: Option<&str>,
+) -> ExecuteResult {
     // 1. Find the tool definition
     let tool_def = all_tools.iter().find(|t| t.name == call.name);
     let permission = tool_def
@@ -432,7 +450,7 @@ pub fn execute_tool(
     }
 
     // 5. Dispatch synchronous tools via submodules
-    let result = dispatch_tool(editor, call);
+    let result = dispatch_tool(editor, call, requester_provider);
 
     ExecuteResult::Immediate(ToolResult {
         tool_call_id: call.id.clone(),
@@ -443,7 +461,14 @@ pub fn execute_tool(
 }
 
 /// Dispatch a synchronous tool call to the appropriate submodule.
-fn dispatch_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, String> {
+/// `requester_provider` is threaded only to `kb_exec::dispatch` (the only
+/// category with AI-residency post-filter tools, #358) -- every other
+/// category dispatcher keeps its plain 2-arg signature.
+fn dispatch_tool(
+    editor: &mut Editor,
+    call: &ToolCall,
+    requester_provider: Option<&str>,
+) -> Result<String, String> {
     // Try each category dispatcher in turn
     if let Some(result) = super::core_exec::dispatch(editor, call) {
         return result;
@@ -457,7 +482,7 @@ fn dispatch_tool(editor: &mut Editor, call: &ToolCall) -> Result<String, String>
     if let Some(result) = super::dap_exec::dispatch(editor, call) {
         return result;
     }
-    if let Some(result) = super::kb_exec::dispatch(editor, call) {
+    if let Some(result) = super::kb_exec::dispatch(editor, call, requester_provider) {
         return result;
     }
     if let Some(result) = super::shell_exec::dispatch(editor, call) {
@@ -731,7 +756,7 @@ mod tests {
             name: "my_tool".into(),
             arguments: serde_json::json!({"key": "val"}),
         };
-        let result = dispatch_tool(&mut editor, &call);
+        let result = dispatch_tool(&mut editor, &call, None);
         assert!(result.is_ok());
         assert_eq!(editor.pending_scheme_eval.len(), 1);
         assert!(editor.pending_scheme_eval[0].contains("my-handler"));

@@ -254,6 +254,10 @@
           "kind": "mod"
         },
         {
+          "name": "ai_residency",
+          "kind": "mod"
+        },
+        {
           "name": "buffer",
           "kind": "mod"
         },

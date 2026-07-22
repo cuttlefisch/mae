@@ -21,7 +21,7 @@ use mae_core::Editor;
 use crate::tools::PermissionPolicy;
 use crate::types::*;
 
-pub use tool_dispatch::execute_tool;
+pub use tool_dispatch::{execute_tool, execute_tool_with_requester};
 
 /// What kind of deferred tool call is pending (LSP or DAP).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

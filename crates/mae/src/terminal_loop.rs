@@ -4,7 +4,7 @@ use std::io;
 
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use futures::StreamExt;
-use mae_ai::{execute_tool, AiCommand, AiEvent, ExecuteResult, ToolResult};
+use mae_ai::{execute_tool_with_requester, AiCommand, AiEvent, ExecuteResult, ToolResult};
 use mae_core::{Editor, KeyPress, Mode};
 use mae_dap::DapCommand;
 use mae_lsp::{LspCommand, LspTaskEvent};
@@ -798,7 +798,19 @@ pub(crate) async fn run_headless_self_test(
                     conv.push_tool_call(&call.name);
                 }
 
-                let exec_result = execute_tool(editor, &call, all_tools, permission_policy);
+                // Note (#358): this self-test path does not call
+                // check_kb_residency at all -- a separate, pre-existing gap
+                // outside this fix's scope. Threading the provider through
+                // still correctly seed-preserves/non-seed-filters results
+                // for kb_search/kb_search_context/kb_agenda on this path.
+                let provider = editor.ai.provider.clone();
+                let exec_result = execute_tool_with_requester(
+                    editor,
+                    &call,
+                    all_tools,
+                    permission_policy,
+                    Some(provider.as_str()),
+                );
 
                 match exec_result {
                     ExecuteResult::Immediate(result) => {

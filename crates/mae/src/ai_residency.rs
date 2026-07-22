@@ -33,18 +33,58 @@
 //! registered KB (or the primary) is `LocalModelsOnly` and the requester isn't
 //! local. This is coarser than ADR-048's original "post-filter, don't fail the
 //! whole call" design — a documented, honest simplification, not a silent gap.
-//! [`ToolResidencyShape::ScopedFederatedScan`] tools (`kb_search`,
-//! `kb_search_context`, `kb_vector_search`) are the escape hatch from that
-//! coarseness: they accept a `scope` argument (or fall back to the
-//! `kb_search_scope` option) that names exactly which KB(s) participate, so the
-//! residency check can — and now does — restrict itself to that resolved scope
-//! instead of every registered KB (this is the actual #351 fix; see
-//! `any_restricted_kb_label_in_scope`).
+//! [`ToolResidencyShape::ScopedFederatedScan`]/[`ToolResidencyShape::ScopedFederatedScanFilterable`]
+//! tools (`kb_vector_search`; `kb_search`/`kb_search_context`, respectively)
+//! are the escape hatch from that coarseness: they accept a `scope` argument
+//! (or fall back to the `kb_search_scope` option) that names exactly which
+//! KB(s) participate, so the residency check can — and now does — restrict
+//! itself to that resolved scope instead of every registered KB (this is the
+//! actual #351 fix; see `any_restricted_kb_label_in_scope`).
+//!
+//! ## Seed-content exemption (#358)
+//!
+//! `SingleTarget`, `PrimaryOnlyFilterable`, and `ScopedFederatedScanFilterable`
+//! tools exempt MAE's own seeded/built-in content (`Node::source ==
+//! Some(NodeSource::Seed)`, stamped once at startup, identical on every
+//! install, never sensitive) from `LocalModelsOnly` gating even when it lives
+//! in a restricted KB — restricting `primary` to protect a user's own notes
+//! must not also lock an AI agent out of MAE's own built-in help system. The
+//! filter primitives (`is_residency_exempt`, `filter_residency_exempt`,
+//! `filter_residency_exempt_primary`) live in `mae_core::ai_residency`
+//! rather than here — a Rust crate-graph constraint (the `mae` package has
+//! no `[lib]` target, so nothing in `mae-ai`'s tool implementations can
+//! reach this file), not a conceptual split. `SingleTarget` applies the
+//! exemption directly in `resolve_restricted_label` (the node is already
+//! resolved there); the two `*Filterable` shapes allow the call through
+//! unconditionally and rely on the tool implementation
+//! (`execute_kb_agenda`/`execute_kb_search`/`execute_kb_search_context` in
+//! `crates/ai/src/tool_impls/kb.rs`) to post-filter its own materialized
+//! results — see each shape's doc comment.
+//!
+//! Three tool shapes stay structurally unable to apply this exemption, and
+//! stay hard-denied on purpose, not as an unfinished TODO:
+//! - `kb_raw_query`/`kb_view_query` (`PrimaryOnly`): arbitrary Datalog
+//!   against the Cozo store has no schema-level per-row node-identity to
+//!   inject a `source != 'seed'` predicate into.
+//! - `kb_id_audit` (`UnscopedFederatedContent`): `detect_ghost_ids`/
+//!   `detect_stale_nodes` only ever consider nodes with
+//!   `source_file.is_some()`; seed nodes never get `source_file` set, so
+//!   this tool can never surface seed content regardless of residency
+//!   policy.
+//! - `kb_graph_view_open`/`kb_graph_view_refresh` (`UnscopedFederatedContent`):
+//!   their own responses are counts only (no per-node content at these two
+//!   entry points).
+//!
+//! `kb_related`, `kb_graph`, `kb_graph_view_state`, `kb_list`, `kb_links_to`,
+//! `kb_shortest_path`, `kb_neighborhood`, `kb_links_from`, `kb_health`,
+//! `kb_history`/`kb_restore` are real, structurally feasible candidates for
+//! the same exemption but need deeper plumbing (shared trait extensions,
+//! new per-id lookups, or report-level provenance splits) — tracked as a
+//! follow-up rather than silently left as a gap, see the issue cross-linked
+//! from #358.
 
+use mae_core::ai_residency::{is_local_provider, is_residency_exempt};
 use mae_core::Editor;
-
-/// AI provider names MAE classifies as "local" for residency purposes.
-const LOCAL_AI_PROVIDERS: &[&str] = &["ollama"];
 
 /// Argument keys, across [`ToolResidencyShape::SingleTarget`] tools, that hold
 /// a node id or an explicit KB instance name/uuid worth resolving.
@@ -56,16 +96,36 @@ const TARGET_ARG_KEYS: &[&str] = &["id", "src", "dst", "from", "to", "kb", "name
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ToolResidencyShape {
     /// Resolves to exactly one (or two) specific node id(s)/KB name(s) in
-    /// `arguments` — checked precisely via [`TARGET_ARG_KEYS`].
+    /// `arguments` — checked precisely via [`TARGET_ARG_KEYS`], with the
+    /// seed-content exemption (#358) applied by `resolve_restricted_label`.
     SingleTarget,
     /// Only ever touches the primary store (`editor.kb.store`), never a
-    /// federated instance — checked against `primary_ai_residency` only.
+    /// federated instance, AND its result shape has no per-node identity to
+    /// filter (arbitrary Datalog / a stored view's raw query) — checked
+    /// against `primary_ai_residency` only, hard-denied outright. Distinct
+    /// from [`Self::PrimaryOnlyFilterable`] below.
     PrimaryOnly,
+    /// Only ever touches the primary store, but its results ARE real
+    /// `Node`s the tool impl can post-filter — the gate allows the call
+    /// through; `execute_kb_agenda` calls
+    /// `mae_core::ai_residency::filter_residency_exempt_primary` on its own
+    /// materialized results (#358).
+    PrimaryOnlyFilterable,
     /// Scans across multiple KB instances AND accepts a `scope` argument (or
     /// falls back to the `kb_search_scope` option) that can exclude a
     /// specific instance — scope is resolved FIRST, then residency is
-    /// checked only for KBs within that resolved scope (the #351 fix).
+    /// checked only for KBs within that resolved scope (the #351 fix). Has
+    /// no per-result filtering today — hard-denied when scope includes a
+    /// restricted KB. Distinct from [`Self::ScopedFederatedScanFilterable`]
+    /// below; currently only `kb_vector_search` (a permanent stub with no
+    /// real results to filter yet).
     ScopedFederatedScan,
+    /// Scans across multiple KB instances via a `scope` arg AND its results
+    /// ARE real `(Option<String>, Node)` pairs — the gate allows the call
+    /// through; `kb_search`/`kb_search_context` call
+    /// `mae_core::ai_residency::filter_residency_exempt` on their own
+    /// materialized results (#358).
+    ScopedFederatedScanFilterable,
     /// Scans across multiple KB instances with no way to exclude one —
     /// denied outright whenever ANY registered KB (or primary) is
     /// restricted (see the module doc's "Scope note").
@@ -90,12 +150,28 @@ fn classify_kb_tool(tool_name: &str) -> Option<ToolResidencyShape> {
         | "kb_history" | "kb_preview_show" | "kb_create" | "kb_set_role" | "kb_reimport"
         | "help_open" => SingleTarget,
 
-        // --- PrimaryOnly: implementation only ever reads editor.kb.store ---
-        "kb_agenda" | "kb_raw_query" | "kb_view_query" => PrimaryOnly,
+        // --- PrimaryOnly: implementation only ever reads editor.kb.store,
+        // AND runs arbitrary Datalog with no per-row node-identity to
+        // filter -- structurally incapable of the seed exemption (#358) ---
+        "kb_raw_query" | "kb_view_query" => PrimaryOnly,
 
-        // --- ScopedFederatedScan: has (or, for kb_vector_search, will have)
-        // a `scope` argument that names exactly which KB(s) participate ---
-        "kb_search" | "kb_search_context" | "kb_vector_search" => ScopedFederatedScan,
+        // --- PrimaryOnlyFilterable: implementation only ever reads
+        // editor.kb.store, and returns real Node results the tool impl
+        // post-filters for the seed exemption (#358) ---
+        "kb_agenda" => PrimaryOnlyFilterable,
+
+        // --- ScopedFederatedScan: has a `scope` argument that names
+        // exactly which KB(s) participate, but no real results to filter
+        // yet -- kb_vector_search is a permanent stub today (no embedding
+        // provider wired). Move it to ScopedFederatedScanFilterable
+        // alongside whatever work actually implements ranked vector
+        // search, not before. ---
+        "kb_vector_search" => ScopedFederatedScan,
+
+        // --- ScopedFederatedScanFilterable: same scope-narrowing as above,
+        // AND the tool impl post-filters its real (Option<String>, Node)
+        // results for the seed exemption (#358) ---
+        "kb_search" | "kb_search_context" => ScopedFederatedScanFilterable,
 
         // --- UnscopedFederatedContent: genuinely scans multiple instances,
         // no scope argument to narrow it ---
@@ -147,11 +223,6 @@ pub enum ResidencyDecision {
     Deny(String),
 }
 
-/// Is `provider` one MAE classifies as local (self-hosted)?
-pub fn is_local_provider(provider: &str) -> bool {
-    LOCAL_AI_PROVIDERS.contains(&provider)
-}
-
 /// Check whether `requester_provider` may run `tool_name` with `arguments`,
 /// given the KBs' current AI-residency policies. `requester_provider` is
 /// `None` when the requester has no trusted provider identity at all (an
@@ -200,6 +271,12 @@ pub fn check_kb_residency(
             ResidencyDecision::Allow
         }
 
+        // The gate allows the call through unconditionally; the tool impl
+        // (execute_kb_agenda) post-filters its own materialized Node
+        // results via mae_core::ai_residency::filter_residency_exempt_primary,
+        // dropping non-seed-exempt hits from a restricted primary (#358).
+        ToolResidencyShape::PrimaryOnlyFilterable => ResidencyDecision::Allow,
+
         ToolResidencyShape::ScopedFederatedScan => {
             let scope_arg = arguments.get("scope").and_then(|v| v.as_str());
             if let Some(label) = any_restricted_kb_label_in_scope(editor, scope_arg) {
@@ -212,6 +289,13 @@ pub fn check_kb_residency(
             }
             ResidencyDecision::Allow
         }
+
+        // Same scope-narrowing intent as ScopedFederatedScan, but the gate
+        // allows the call through unconditionally; execute_kb_search/
+        // execute_kb_search_context post-filter their own materialized
+        // (Option<String>, Node) results via
+        // mae_core::ai_residency::filter_residency_exempt (#358).
+        ToolResidencyShape::ScopedFederatedScanFilterable => ResidencyDecision::Allow,
 
         ToolResidencyShape::UnscopedFederatedContent => {
             if let Some(label) = any_restricted_kb_label(editor) {
@@ -272,19 +356,24 @@ fn resolve_restricted_label(editor: &Editor, value: &str) -> Option<String> {
     }
 
     // Fall through to node-id resolution: which KB (primary or a registered
-    // instance) actually contains this id?
-    if editor.kb.primary.get(value).is_some() {
+    // instance) actually contains this id? MAE's own seeded/built-in
+    // content is exempt from gating regardless of the owning KB's policy
+    // (#358) -- checked here since the node is already in hand.
+    if let Some(node) = editor.kb.primary.get(value) {
         if editor.kb.registry.primary_ai_residency
             == mae_kb::federation::AiResidency::LocalModelsOnly
+            && !is_residency_exempt(node)
         {
             return Some("primary".to_string());
         }
         return None;
     }
     for (uuid, kb) in editor.kb.instances.iter() {
-        if kb.get(value).is_some() {
+        if let Some(node) = kb.get(value) {
             if let Some(inst) = editor.kb.registry.find_by_uuid(uuid) {
-                if inst.ai_residency == mae_kb::federation::AiResidency::LocalModelsOnly {
+                if inst.ai_residency == mae_kb::federation::AiResidency::LocalModelsOnly
+                    && !is_residency_exempt(node)
+                {
                     return Some(inst.name.clone());
                 }
             }
@@ -413,12 +502,23 @@ mod tests {
 
     #[test]
     fn non_local_provider_denied_single_target_tool_on_restricted_primary() {
-        let editor = editor_with_restricted_primary();
-        // "index" is seeded into the primary KB by default (seed_kb).
+        let mut editor = editor_with_restricted_primary();
+        // A genuinely user-authored (non-seed) node -- "index" itself is
+        // seed content and is now correctly exempt (#358), so this test
+        // uses real user content to keep testing the general "non-local
+        // denied" behavior.
+        editor
+            .kb_create_node(
+                "user:private-note",
+                "Private",
+                "body",
+                mae_kb::NodeKind::Note,
+            )
+            .unwrap();
         let decision = check_kb_residency(
             &editor,
             "kb_get",
-            &serde_json::json!({"id": "index"}),
+            &serde_json::json!({"id": "user:private-note"}),
             Some("claude"),
         );
         assert!(matches!(decision, ResidencyDecision::Deny(_)));
@@ -426,9 +526,21 @@ mod tests {
 
     #[test]
     fn unauthenticated_requester_treated_as_non_local() {
-        let editor = editor_with_restricted_primary();
-        let decision =
-            check_kb_residency(&editor, "kb_get", &serde_json::json!({"id": "index"}), None);
+        let mut editor = editor_with_restricted_primary();
+        editor
+            .kb_create_node(
+                "user:private-note",
+                "Private",
+                "body",
+                mae_kb::NodeKind::Note,
+            )
+            .unwrap();
+        let decision = check_kb_residency(
+            &editor,
+            "kb_get",
+            &serde_json::json!({"id": "user:private-note"}),
+            None,
+        );
         assert!(matches!(decision, ResidencyDecision::Deny(_)));
     }
 
@@ -445,10 +557,30 @@ mod tests {
     }
 
     #[test]
-    fn federated_scan_tool_denied_outright_when_scope_not_given_and_any_kb_restricted() {
+    fn federated_scan_filterable_tool_gate_allows_defers_to_tool_filter() {
+        // kb_search is now ScopedFederatedScanFilterable (#358) -- the gate
+        // no longer denies the whole call when a KB in scope is restricted;
+        // execute_kb_search post-filters its own materialized results
+        // instead (see crates/ai/src/tool_impls/kb.rs's behavioral tests
+        // for the actual filtering coverage). kb_vector_search (still plain
+        // ScopedFederatedScan, no real results to filter yet) keeps the
+        // old hard-deny behavior -- see
+        // `plain_scoped_federated_scan_tool_still_denied_outright`.
         let editor = editor_with_restricted_primary();
         let decision =
             check_kb_residency(&editor, "kb_search", &serde_json::json!({}), Some("claude"));
+        assert_eq!(decision, ResidencyDecision::Allow);
+    }
+
+    #[test]
+    fn plain_scoped_federated_scan_tool_still_denied_outright() {
+        let editor = editor_with_restricted_primary();
+        let decision = check_kb_residency(
+            &editor,
+            "kb_vector_search",
+            &serde_json::json!({}),
+            Some("claude"),
+        );
         assert!(matches!(decision, ResidencyDecision::Deny(_)));
     }
 
@@ -556,7 +688,12 @@ mod tests {
     #[test]
     fn kb_search_scope_excludes_restricted_kb_when_scope_names_an_open_instance() {
         // The actual #351 repro, inverted to must-pass: primary is
-        // restricted, but scope explicitly names a different, open instance.
+        // restricted, but scope explicitly names a different, open
+        // instance. Retargeted onto kb_vector_search (#358) -- kb_search
+        // itself no longer uses this gate path (see
+        // `federated_scan_filterable_tool_gate_allows_defers_to_tool_filter`),
+        // so real any_restricted_kb_label_in_scope coverage moves to the
+        // one remaining plain ScopedFederatedScan tool.
         let mut editor = editor_with_restricted_primary();
         editor
             .kb
@@ -566,7 +703,7 @@ mod tests {
 
         let decision = check_kb_residency(
             &editor,
-            "kb_search",
+            "kb_vector_search",
             &serde_json::json!({"query": "x", "scope": "OpenInstance"}),
             Some("claude"),
         );
@@ -579,6 +716,11 @@ mod tests {
 
     #[test]
     fn kb_search_scope_named_restricted_instance_is_still_denied() {
+        // Retargeted onto kb_vector_search (#358) -- kb_search itself is now
+        // ScopedFederatedScanFilterable and no longer denies at the gate
+        // (see `federated_scan_filterable_tool_gate_allows_defers_to_tool_filter`),
+        // but any_restricted_kb_label_in_scope still needs real coverage
+        // via the one remaining plain ScopedFederatedScan tool.
         let mut editor = Editor::new(); // open primary
         editor
             .kb
@@ -588,7 +730,7 @@ mod tests {
 
         let decision = check_kb_residency(
             &editor,
-            "kb_search",
+            "kb_vector_search",
             &serde_json::json!({"query": "x", "scope": "RestrictedInstance"}),
             Some("claude"),
         );
@@ -597,8 +739,9 @@ mod tests {
 
     #[test]
     fn kb_search_scope_all_still_denied_when_any_kb_restricted() {
-        // Regression guard: unscoped ("all") behavior is unchanged — still
-        // the conservative deny-outright per the module doc's "Scope note".
+        // Regression guard: unscoped ("all") behavior is unchanged for the
+        // still-hard-denied kb_vector_search -- still the conservative
+        // deny-outright per the module doc's "Scope note".
         let mut editor = Editor::new();
         editor
             .kb
@@ -608,7 +751,7 @@ mod tests {
 
         let decision = check_kb_residency(
             &editor,
-            "kb_search",
+            "kb_vector_search",
             &serde_json::json!({"query": "x", "scope": "all"}),
             Some("claude"),
         );
@@ -617,6 +760,7 @@ mod tests {
 
     #[test]
     fn kb_search_scope_local_only_ignores_a_restricted_remote_instance() {
+        // Retargeted onto kb_vector_search (#358), same reasoning as above.
         let mut editor = Editor::new(); // open primary
         let mut remote = restricted_instance("RemoteRestricted", "uuid-remote");
         remote.shared = true; // is_remote() == true
@@ -624,26 +768,8 @@ mod tests {
 
         let decision = check_kb_residency(
             &editor,
-            "kb_search",
+            "kb_vector_search",
             &serde_json::json!({"query": "x", "scope": "local"}),
-            Some("claude"),
-        );
-        assert_eq!(decision, ResidencyDecision::Allow);
-    }
-
-    #[test]
-    fn kb_search_context_scope_excludes_restricted_kb() {
-        let mut editor = editor_with_restricted_primary();
-        editor
-            .kb
-            .registry
-            .instances
-            .push(open_instance("OpenInstance", "uuid-open"));
-
-        let decision = check_kb_residency(
-            &editor,
-            "kb_search_context",
-            &serde_json::json!({"query": "x", "scope": "OpenInstance"}),
             Some("claude"),
         );
         assert_eq!(decision, ResidencyDecision::Allow);
@@ -653,6 +779,7 @@ mod tests {
     fn kb_search_missing_scope_falls_back_to_the_search_scope_option() {
         // No `scope` arg given at all -- must resolve via kb.search_scope,
         // exactly like execute_kb_search's own default resolution.
+        // Retargeted onto kb_vector_search (#358), same reasoning as above.
         let mut editor = editor_with_restricted_primary();
         editor
             .kb
@@ -663,7 +790,7 @@ mod tests {
 
         let decision = check_kb_residency(
             &editor,
-            "kb_search",
+            "kb_vector_search",
             &serde_json::json!({"query": "x"}),
             Some("claude"),
         );
@@ -689,11 +816,15 @@ mod tests {
     }
 
     #[test]
-    fn kb_agenda_denied_when_primary_itself_restricted() {
+    fn kb_agenda_gate_allows_when_primary_restricted_defers_to_tool_filter() {
+        // kb_agenda is now PrimaryOnlyFilterable (#358) -- the gate no
+        // longer denies the whole call when primary is restricted;
+        // execute_kb_agenda post-filters its own materialized Node results
+        // instead (see crates/ai/src/tool_impls/kb.rs's behavioral tests).
         let editor = editor_with_restricted_primary();
         let decision =
             check_kb_residency(&editor, "kb_agenda", &serde_json::json!({}), Some("claude"));
-        assert!(matches!(decision, ResidencyDecision::Deny(_)));
+        assert_eq!(decision, ResidencyDecision::Allow);
     }
 
     // --- New: PrimaryOnly bucket (kb_raw_query/kb_view_query) ---
@@ -809,11 +940,22 @@ mod tests {
 
     #[test]
     fn kb_history_denied_like_kb_restore() {
-        let editor = editor_with_restricted_primary();
+        // "index" itself is seed content and is now correctly exempt
+        // (#358) -- use a real user node to keep testing the general
+        // SingleTarget deny behavior.
+        let mut editor = editor_with_restricted_primary();
+        editor
+            .kb_create_node(
+                "user:private-note",
+                "Private",
+                "body",
+                mae_kb::NodeKind::Note,
+            )
+            .unwrap();
         let decision = check_kb_residency(
             &editor,
             "kb_history",
-            &serde_json::json!({"id": "index"}),
+            &serde_json::json!({"id": "user:private-note"}),
             Some("claude"),
         );
         assert!(matches!(decision, ResidencyDecision::Deny(_)));
@@ -821,11 +963,19 @@ mod tests {
 
     #[test]
     fn kb_preview_show_denied_like_kb_get() {
-        let editor = editor_with_restricted_primary();
+        let mut editor = editor_with_restricted_primary();
+        editor
+            .kb_create_node(
+                "user:private-note",
+                "Private",
+                "body",
+                mae_kb::NodeKind::Note,
+            )
+            .unwrap();
         let decision = check_kb_residency(
             &editor,
             "kb_preview_show",
-            &serde_json::json!({"id": "index"}),
+            &serde_json::json!({"id": "user:private-note"}),
             Some("claude"),
         );
         assert!(matches!(decision, ResidencyDecision::Deny(_)));
@@ -853,12 +1003,89 @@ mod tests {
     #[test]
     fn help_open_denied_when_target_kb_restricted() {
         // help_open used to be structurally excluded from ever being gated
-        // (the old arrays only ever held "kb_*" strings).
+        // (the old arrays only ever held "kb_*" strings). Uses a real user
+        // node -- "index" itself is seed content and is now correctly
+        // exempt (#358), see `help_open_seed_content_allowed_when_primary_restricted`.
+        let mut editor = editor_with_restricted_primary();
+        editor
+            .kb_create_node(
+                "user:private-note",
+                "Private",
+                "body",
+                mae_kb::NodeKind::Note,
+            )
+            .unwrap();
+        let decision = check_kb_residency(
+            &editor,
+            "help_open",
+            &serde_json::json!({"id": "user:private-note"}),
+            Some("claude"),
+        );
+        assert!(matches!(decision, ResidencyDecision::Deny(_)));
+    }
+
+    // --- New: seed-content exemption (#358) ---
+
+    #[test]
+    fn help_open_seed_content_allowed_when_primary_restricted() {
+        // The literal #358 repro: an AI agent must still be able to reach
+        // MAE's own built-in help system even when primary is restricted
+        // to protect a user's own notes.
         let editor = editor_with_restricted_primary();
         let decision = check_kb_residency(
             &editor,
             "help_open",
             &serde_json::json!({"id": "index"}),
+            Some("claude"),
+        );
+        assert_eq!(
+            decision,
+            ResidencyDecision::Allow,
+            "seeded built-in content must stay reachable even when primary is restricted"
+        );
+    }
+
+    #[test]
+    fn kb_get_seed_content_allowed_when_primary_restricted() {
+        let editor = editor_with_restricted_primary();
+        let decision = check_kb_residency(
+            &editor,
+            "kb_get",
+            &serde_json::json!({"id": "index"}),
+            Some("claude"),
+        );
+        assert_eq!(decision, ResidencyDecision::Allow);
+    }
+
+    #[test]
+    fn single_target_node_id_resolves_to_restricted_kb_regardless_of_source() {
+        // The critical negative case: a genuinely user-authored node in a
+        // restricted primary must still be denied -- the seed exemption
+        // must not over-broaden to "everything in primary."
+        let mut editor = editor_with_restricted_primary();
+        editor
+            .kb_create_node(
+                "user:private-note",
+                "Private",
+                "body",
+                mae_kb::NodeKind::Note,
+            )
+            .unwrap();
+        // Sanity: seed content in the SAME restricted primary is allowed...
+        assert_eq!(
+            check_kb_residency(
+                &editor,
+                "kb_get",
+                &serde_json::json!({"id": "index"}),
+                Some("claude")
+            ),
+            ResidencyDecision::Allow
+        );
+        // ...but the non-seed node is not.
+        let decision = check_kb_residency(
+            &editor,
+            "kb_get",
+            &serde_json::json!({"id": "user:private-note"}),
             Some("claude"),
         );
         assert!(matches!(decision, ResidencyDecision::Deny(_)));
