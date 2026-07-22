@@ -4,9 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## [0.14.50] - 2026-07-22
 
+### Bug Fixes
+
+- *(ai)* Exempt seeded/built-in KB content from AI-residency gating (#358) ([cb2f5dd](https://github.com/cuttlefisch/mae/commit/cb2f5dd3cb639e8d58a3106aa3fd8b1b275fbe1e))
+
 ### Miscellaneous
 
 - *(deps)* Bump the rust-dependencies group with 19 updates ([e1e8c5e](https://github.com/cuttlefisch/mae/commit/e1e8c5e3ebffd1b42427cc4957a246cdc8e3d31f))
+- Bump version to 0.14.50 ([2b2cea1](https://github.com/cuttlefisch/mae/commit/2b2cea14be730491702fb09ce49f60df52b43bab))
 
 ## [0.14.49] - 2026-07-22
 
@@ -19,10 +24,18 @@ All notable changes to this project will be documented in this file.
 - *(daemon)* Bound unauthenticated connections with a handshake timeout + max_connections cap (#342) ([26df4a9](https://github.com/cuttlefisch/mae/commit/26df4a9213d8212068e3a60355e10978146d1087))
 - *(collab)* Repaint *KB Sharing*/*Collab Status* on connect/disconnect (#346) ([b820c45](https://github.com/cuttlefisch/mae/commit/b820c4547e754ebef3f9f3576285b0ed5cb08879))
 - *(ui)* Cross-reference setup-daemon and collab-start command text (#347) ([b2c8cbf](https://github.com/cuttlefisch/mae/commit/b2c8cbf61b538ebe3c3d4dfd5cdb9b096475d288))
+- *(ai)* Kb_search scope-aware residency check + kb_search_context scope/ranking (#350, #351) ([eb0ffcd](https://github.com/cuttlefisch/mae/commit/eb0ffcda22ee4f0c15507f6765c6680e8fd21f7b))
+- *(kb)* Stop kb_search_context's hub/meta nodes from outranking specific notes (#357) ([12e6885](https://github.com/cuttlefisch/mae/commit/12e68856f587486789127d18028dfc00adf4921b))
+- *(ui)* Default fuzzy finders to recently-used items on empty query (#359) ([f3efd2f](https://github.com/cuttlefisch/mae/commit/f3efd2f226b416a07f3beda42d2e355cbc5967d0))
+- *(keys)* Add missing Ctrl-U (CommandPalette/Search) and fix shadowed Ctrl-J (Insert+LSP popup) (#360) ([3fef908](https://github.com/cuttlefisch/mae/commit/3fef908b719878000ba3152945bd5bee899c2e73))
 
 ### Documentation
 
 - Fix ROADMAP.md/KB_SHARING.md citing closed #78/#157 as still open (#348) ([925fe29](https://github.com/cuttlefisch/mae/commit/925fe29e285efb9f5cac6a8dc1b9b14fa3db2963))
+
+### Features
+
+- *(kb)* Finish kb-promote AI/MCP surface + always-on AI guidance mechanism ([ac3a736](https://github.com/cuttlefisch/mae/commit/ac3a7360bc52e2d3061d5571b4dac437212e2dae))
 
 ### Miscellaneous
 
