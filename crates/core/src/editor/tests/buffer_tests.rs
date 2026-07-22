@@ -154,6 +154,75 @@ fn switch_buffer_opens_palette() {
     assert!(palette.entries.iter().any(|e| e.name == "[scratch]"));
 }
 
+#[test]
+fn switch_buffer_orders_by_last_focused_descending() {
+    let mut editor = Editor::new();
+    let mut a = Buffer::new();
+    a.name = "a-buf".to_string();
+    let a_idx = editor.buffers.len();
+    editor.buffers.push(a);
+    let mut b = Buffer::new();
+    b.name = "b-buf".to_string();
+    let b_idx = editor.buffers.len();
+    editor.buffers.push(b);
+    let mut c = Buffer::new();
+    c.name = "c-buf".to_string();
+    let c_idx = editor.buffers.len();
+    editor.buffers.push(c);
+
+    // Focus in a specific, non-alphabetical-by-name order: b, then a, then
+    // c -- switch-buffer's candidate order should be the reverse-focus
+    // order (most-recent first), not name order.
+    editor.display_buffer_and_focus(b_idx);
+    editor.display_buffer_and_focus(a_idx);
+    editor.display_buffer_and_focus(c_idx);
+
+    editor.dispatch_builtin("switch-buffer");
+    let palette = editor.command_palette.as_ref().unwrap();
+    let names: Vec<&str> = palette.entries.iter().map(|e| e.name.as_str()).collect();
+    let pos_a = names.iter().position(|&n| n == "a-buf").unwrap();
+    let pos_b = names.iter().position(|&n| n == "b-buf").unwrap();
+    let pos_c = names.iter().position(|&n| n == "c-buf").unwrap();
+    assert!(
+        pos_c < pos_a && pos_a < pos_b,
+        "expected focus order c, a, b (most-recent first), got {names:?}"
+    );
+}
+
+#[test]
+fn switch_buffer_never_focused_buffers_keep_stable_order_after_recent_ones() {
+    let mut editor = Editor::new();
+    // Two brand-new buffers, never explicitly focused (last_focused == 0
+    // for both) -- must not panic on the tie and must retain their prior
+    // relative (push) order.
+    let mut never1 = Buffer::new();
+    never1.name = "never-1".to_string();
+    editor.buffers.push(never1);
+    let mut never2 = Buffer::new();
+    never2.name = "never-2".to_string();
+    editor.buffers.push(never2);
+    let recent_idx = editor.buffers.len();
+    let mut recent = Buffer::new();
+    recent.name = "recent-buf".to_string();
+    editor.buffers.push(recent);
+    editor.display_buffer_and_focus(recent_idx);
+
+    editor.dispatch_builtin("switch-buffer");
+    let palette = editor.command_palette.as_ref().unwrap();
+    let names: Vec<&str> = palette.entries.iter().map(|e| e.name.as_str()).collect();
+    let pos_recent = names.iter().position(|&n| n == "recent-buf").unwrap();
+    let pos_never1 = names.iter().position(|&n| n == "never-1").unwrap();
+    let pos_never2 = names.iter().position(|&n| n == "never-2").unwrap();
+    assert!(
+        pos_recent < pos_never1,
+        "explicitly-focused buffer should rank above never-focused ones, got {names:?}"
+    );
+    assert!(
+        pos_never1 < pos_never2,
+        "never-focused buffers (tied last_focused == 0) should keep stable relative order, got {names:?}"
+    );
+}
+
 // --- New command registrations ---
 
 #[test]

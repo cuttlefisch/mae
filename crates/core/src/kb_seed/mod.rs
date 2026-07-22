@@ -605,7 +605,13 @@ fn static_nodes() -> Vec<Node> {
             CONCEPT_KB_FEDERATION,
         )
         .with_tags(["kb", "federation", "org-roam"])
-        .with_aliases(["federation", "kb-register", "org-roam import"]),
+        .with_aliases([
+            "federation",
+            "kb-register",
+            "org-roam import",
+            "kb-promote",
+            "promote",
+        ]),
         Node::new(
             "concept:kb-workflows",
             "Concept: KB Workflows",

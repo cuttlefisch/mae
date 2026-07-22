@@ -80,6 +80,19 @@ pub struct KbPromoteResult {
     pub node_id: String,
     pub promoted_from_uuid: String,
     pub promoted_from_org_dir: PathBuf,
+    pub dedup: PromoteDedup,
+}
+
+/// Outcome of deduplicating the origin instance's now-redundant copy of a
+/// just-promoted node (`Editor::kb_dedup_promoted_instance_copy`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromoteDedup {
+    /// The instance's copy was identical (expected immediately post-promote)
+    /// and has been removed — exactly one copy remains, in `primary`.
+    Removed,
+    /// The instance's copy has diverged from what was promoted; both copies
+    /// were preserved and an `action_required` notification was fired.
+    KeptDiverged,
 }
 
 impl KbImportResult {

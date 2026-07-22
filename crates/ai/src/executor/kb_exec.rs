@@ -10,10 +10,11 @@ use crate::tool_impls::{
     execute_kb_graph_view_toggle_overlay, execute_kb_graph_view_zoom_to, execute_kb_health,
     execute_kb_history, execute_kb_id_audit, execute_kb_links_from, execute_kb_links_to,
     execute_kb_list, execute_kb_neighborhood, execute_kb_preview_dismiss, execute_kb_preview_show,
-    execute_kb_raw_query, execute_kb_register, execute_kb_reimport, execute_kb_related,
-    execute_kb_restore, execute_kb_search, execute_kb_search_context, execute_kb_set_ai_residency,
-    execute_kb_set_role, execute_kb_shortest_path, execute_kb_sync_status, execute_kb_unregister,
-    execute_kb_update, execute_kb_vector_search, execute_kb_view_query,
+    execute_kb_promote, execute_kb_raw_query, execute_kb_register, execute_kb_reimport,
+    execute_kb_related, execute_kb_restore, execute_kb_search, execute_kb_search_context,
+    execute_kb_set_ai_residency, execute_kb_set_role, execute_kb_shortest_path,
+    execute_kb_sync_status, execute_kb_unregister, execute_kb_update, execute_kb_vector_search,
+    execute_kb_view_query,
 };
 use crate::types::ToolCall;
 
@@ -21,7 +22,16 @@ use crate::types::ToolCall;
 /// Returns `Some(result)` if the tool was handled, `None` otherwise.
 /// Records visited IDs for kb_get/links_from/links_to to detect manual
 /// graph traversal loops and steer the AI toward kb_graph.
-pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<String, String>> {
+/// `requester_provider` -- the caller's AI provider, when known -- is
+/// threaded to the ScopedFederatedScanFilterable/PrimaryOnlyFilterable
+/// tools (kb_search, kb_search_context, kb_agenda) so they can post-filter
+/// their own results for the AI-residency seed-content exemption
+/// (ADR-048/#358); every other arm is unaffected.
+pub(super) fn dispatch(
+    editor: &mut Editor,
+    call: &ToolCall,
+    requester_provider: Option<&str>,
+) -> Option<Result<String, String>> {
     let result = match call.name.as_str() {
         "kb_get" => {
             let r = execute_kb_get(editor, &call.arguments);
@@ -30,7 +40,7 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
             }
             r
         }
-        "kb_search" => execute_kb_search(editor, &call.arguments),
+        "kb_search" => execute_kb_search(editor, &call.arguments, requester_provider),
         "kb_list" => execute_kb_list(editor, &call.arguments),
         "kb_links_from" => {
             let r = execute_kb_links_from(editor, &call.arguments);
@@ -65,14 +75,17 @@ pub(super) fn dispatch(editor: &mut Editor, call: &ToolCall) -> Option<Result<St
         "kb_set_ai_residency" => execute_kb_set_ai_residency(editor, &call.arguments),
         "kb_set_role" => execute_kb_set_role(editor, &call.arguments),
         "kb_reimport" => execute_kb_reimport(editor, &call.arguments),
-        "kb_search_context" => execute_kb_search_context(editor, &call.arguments),
+        "kb_search_context" => {
+            execute_kb_search_context(editor, &call.arguments, requester_provider)
+        }
         "kb_shortest_path" => execute_kb_shortest_path(editor, &call.arguments),
         "kb_neighborhood" => execute_kb_neighborhood(editor, &call.arguments),
         "kb_add_link" => execute_kb_add_link(editor, &call.arguments),
         "kb_raw_query" => execute_kb_raw_query(editor, &call.arguments),
-        "kb_agenda" => execute_kb_agenda(editor, &call.arguments),
+        "kb_agenda" => execute_kb_agenda(editor, &call.arguments, requester_provider),
         "kb_history" => execute_kb_history(editor, &call.arguments),
         "kb_restore" => execute_kb_restore(editor, &call.arguments),
+        "kb_promote" => execute_kb_promote(editor, &call.arguments),
         "kb_view_query" => execute_kb_view_query(editor, &call.arguments),
         "kb_vector_search" => execute_kb_vector_search(editor, &call.arguments),
         "kb_graph_view_open" => execute_kb_graph_view_open(editor, &call.arguments),

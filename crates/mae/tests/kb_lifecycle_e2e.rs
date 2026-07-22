@@ -173,6 +173,10 @@ fn test_delete_removes_fts_and_links() {
 #[test]
 #[ignore]
 fn test_crdt_doc_column_round_trip() {
+    // get_crdt_doc/update_crdt_doc (narrow point-read/point-write trait
+    // methods) were removed as dead code (#303 follow-up) -- crdt_doc is an
+    // ordinary field on the ordinary node-row path (insert_node/get_node),
+    // which this now exercises directly.
     if !should_run() {
         return;
     }
@@ -183,19 +187,22 @@ fn test_crdt_doc_column_round_trip() {
     store.insert_node(&node).unwrap();
 
     // Read back
-    let doc = store.get_crdt_doc("crdt:rt").unwrap();
-    assert_eq!(doc, Some(crdt_bytes.clone()));
+    let loaded = store.get_node("crdt:rt").unwrap();
+    assert_eq!(loaded.and_then(|n| n.crdt_doc), Some(crdt_bytes.clone()));
 
     // Survive restart
     drop(store);
     let store2 = CozoKbStore::open(tmp.path().join("test_kb.cozo")).unwrap();
-    let doc = store2.get_crdt_doc("crdt:rt").unwrap();
-    assert_eq!(doc, Some(crdt_bytes));
+    let loaded2 = store2.get_node("crdt:rt").unwrap();
+    assert_eq!(loaded2.and_then(|n| n.crdt_doc), Some(crdt_bytes));
 }
 
 #[test]
 #[ignore]
 fn test_update_crdt_doc_preserves_node() {
+    // Equivalent of the removed update_crdt_doc: read, mutate just
+    // crdt_doc, write back via the ordinary update_node path -- and
+    // confirm the other fields survive untouched.
     if !should_run() {
         return;
     }
@@ -203,8 +210,9 @@ fn test_update_crdt_doc_preserves_node() {
     let node = Node::new("crdt:upd", "CRDT Update", NodeKind::Note, "original body");
     store.insert_node(&node).unwrap();
 
-    // Update just CRDT doc
-    store.update_crdt_doc("crdt:upd", &[10, 20, 30]).unwrap();
+    let mut updated = store.get_node("crdt:upd").unwrap().unwrap();
+    updated.crdt_doc = Some(vec![10, 20, 30]);
+    store.update_node(&updated).unwrap();
 
     // Node text columns should be unchanged
     let loaded = store.get_node("crdt:upd").unwrap().unwrap();
@@ -439,7 +447,6 @@ fn test_empty_store_operations() {
     assert!(store.links_from("x").unwrap().is_empty());
     assert!(store.links_to("x").unwrap().is_empty());
     assert!(store.drain_pending_updates().unwrap().is_empty());
-    assert!(store.get_crdt_doc("x").unwrap().is_none());
 }
 
 #[test]

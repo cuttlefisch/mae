@@ -219,7 +219,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .build(),
         ToolDefBuilder::new(
             "kb_id_audit",
-            "Detect ghost/stale node ids that no longer match reality: either an id no longer produced by its (still-existing) source file's current content (an in-place :ID: edit/rename), or a node whose source_file has been deleted/renamed entirely. Re-parses/stats each distinct source file on demand — more expensive than kb_health, call when investigating id-rename or duplicate-node symptoms, not routinely.",
+            "Detect ghost/stale node ids that no longer match reality: either an id no longer produced by its (still-existing) source file's current content (an in-place :ID: edit/rename), or a node whose source_file has been deleted/renamed entirely. Also flags reimport_stale_files: still file-tethered nodes whose org file's on-disk mtime/content has drifted from what was recorded at last import (a candidate for :kb-reimport) — promoted nodes never appear here. Re-parses/stats each distinct source file on demand — more expensive than kb_health, call when investigating id-rename, duplicate-node, or stale-content symptoms, not routinely.",
         )
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -299,9 +299,14 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .build(),
         ToolDefBuilder::new(
             "kb_search_context",
-            "RAG-optimized KB search: returns top-K nodes with excerpts for AI reasoning context. Searches local + federated KBs. Use this instead of kb_search + kb_get loops.",
+            "RAG-optimized KB search: returns top-K nodes with excerpts and relevance scores for AI reasoning context. Tokenized, field-weighted relevance (same field tiers as kb_search's underlying ranking) over titles, ids, bodies, tags, and aliases, with hub/meta navigational nodes down-weighted below the specific note they merely index; ties preserve kb_search's underlying order rather than falling back to node id. Searches local + federated KBs by default. Use this instead of kb_search + kb_get loops.",
         )
         .prop("query", "string", "Search query (case-insensitive substring, fuzzy fallback)")
+        .prop(
+            "scope",
+            "string",
+            "Which KBs to search: 'all' (default), 'local' (primary only), 'remote' (shared/collaborative instances only), or a specific instance name.",
+        )
         .prop("limit", "integer", "Max results (default 5, max 20)")
         .required(["query"])
         .permission(PermissionTier::ReadOnly)
@@ -565,6 +570,14 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .prop("id", "string", "Node ID to restore")
         .prop("version", "integer", "Version number to restore to")
         .required(["id", "version"])
+        .permission(PermissionTier::Write)
+        .build(),
+        ToolDefBuilder::new(
+            "kb_promote",
+            "Promote a federated/imported KB node into the primary CozoDB-backed KB by id (#303) — severs its dependency on the origin org file/instance, so it becomes a fully graph-native node. The origin instance's now-redundant copy is deduplicated automatically when content still matches (or preserved + flagged for manual review if it has since diverged).",
+        )
+        .prop("id", "string", "Node ID to promote")
+        .required(["id"])
         .permission(PermissionTier::Write)
         .build(),
         ToolDefBuilder::new(

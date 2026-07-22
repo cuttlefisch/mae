@@ -83,7 +83,7 @@ impl Editor {
                 self.kill_buffer_at(idx);
             }
             "switch-buffer" => {
-                let mut names: Vec<String> = self
+                let mut entries: Vec<(u64, String)> = self
                     .buffers
                     .iter()
                     .filter(|b| {
@@ -92,8 +92,16 @@ impl Editor {
                             crate::BufferKind::ShellSelect | crate::BufferKind::Demo
                         )
                     })
-                    .map(|b| b.name.clone())
+                    .map(|b| (b.last_focused, b.name.clone()))
                     .collect();
+                // Most-recently-focused first (usability gap fix, no tracked
+                // issue -- users mostly cycle between a handful of recent
+                // buffers, not an arbitrary creation-order list). Stable
+                // sort: buffers never explicitly focused (last_focused == 0,
+                // e.g. several brand-new buffers) keep their prior relative
+                // order among themselves.
+                entries.sort_by_key(|(seq, _)| std::cmp::Reverse(*seq));
+                let mut names: Vec<String> = entries.into_iter().map(|(_, name)| name).collect();
                 if !names.iter().any(|n| n == "*Messages*") {
                     names.push("*Messages*".to_string());
                 }
@@ -109,11 +117,13 @@ impl Editor {
                     .map(|p| p.to_path_buf())
                     .or_else(|| std::env::current_dir().ok())
                     .unwrap_or_default();
-                self.file_picker = Some(FilePicker::scan(
+                let mut picker = FilePicker::scan(
                     &root,
                     self.file_picker_max_depth,
                     self.file_picker_max_candidates,
-                ));
+                );
+                picker.reorder_by_recency(self.recent_files.list());
+                self.file_picker = Some(picker);
                 self.set_mode(Mode::FilePicker);
             }
             "file-browser" => {

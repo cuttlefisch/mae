@@ -351,6 +351,69 @@ fn share_join_bidirectional_5_peers() {
 }
 
 // ---------------------------------------------------------------------------
+// #303 follow-up — a promoted node shares/joins like any other primary node
+// ---------------------------------------------------------------------------
+
+#[test]
+fn promoted_node_shares_and_joins_peer_materializes_as_federation() {
+    // A promoted primary node (source=Promoted, crdt_doc=None per
+    // kb_promote_node, provenance stamped in properties) must share and be
+    // joined by a peer exactly like any other primary node -- no special
+    // casing needed, since the CRDT wire payload (KbNodeDoc) only carries
+    // id/title/body/tags/links/meta. This locks in, explicitly rather than
+    // as an implicit surprise: NodeSource/kind/properties are NOT part of
+    // that payload, so the joining peer's materialized copy always comes
+    // back as NodeSource::Federation with none of the promoted_from_*
+    // properties -- pre-existing, uniform-across-all-nodes CRDT-schema
+    // behavior, not Promoted-specific, but never explicitly tested before.
+    let mut mesh = Mesh::new(&["owner", "peer1"]);
+    let node_id = "test:promoted-share";
+
+    let mut node = Node::new(node_id, "Promoted Note", NodeKind::Note, "promoted body");
+    node.source = Some(mae_kb::NodeSource::Promoted);
+    node.properties
+        .insert("promoted_from_uuid".to_string(), "origin-uuid".to_string());
+    node.properties.insert(
+        "promoted_from_org_dir".to_string(),
+        "/home/user/notes".to_string(),
+    );
+    node.properties.insert(
+        "promoted_at".to_string(),
+        "2026-07-20T14:03:00Z".to_string(),
+    );
+    let owner_client_id = mesh.peers[0].client_id;
+    mesh.peers[0].kb.upsert_with_crdt(node, owner_client_id);
+
+    mesh.share("owner", node_id);
+    let action = mesh.join_reconcile("peer1", node_id);
+    assert_eq!(
+        action,
+        ReconcileAction::Created,
+        "first join for this id should create the node on peer1"
+    );
+    mesh.assert_all_converged_to(node_id, "Promoted Note", "promoted body");
+
+    let peer_node = mesh.peer("peer1").kb.get(node_id).unwrap();
+    assert_eq!(
+        peer_node.source,
+        Some(mae_kb::NodeSource::Federation),
+        "the joining peer's materialized copy is always Federation-sourced -- \
+         NodeSource is not part of the CRDT wire payload"
+    );
+    assert!(
+        !peer_node.properties.contains_key("promoted_from_uuid"),
+        "promoted_from_* properties are not part of the CRDT wire payload either"
+    );
+
+    // The owner's own copy, unaffected by the peer's materialization,
+    // still carries its original provenance.
+    assert_eq!(
+        mesh.peer("owner").kb.get(node_id).unwrap().source,
+        Some(mae_kb::NodeSource::Promoted)
+    );
+}
+
+// ---------------------------------------------------------------------------
 // T4 — concurrent same-node edits converge (distinct client_ids — the B-16 guard)
 // ---------------------------------------------------------------------------
 

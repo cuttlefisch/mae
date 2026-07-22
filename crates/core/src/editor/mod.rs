@@ -75,7 +75,7 @@ pub use diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticStore};
 pub use git_ops::{BlameEntry, BlameOverlay, PendingGitDiff};
 pub use help_ops::is_builtin_node;
 pub use jumps::{JumpEntry, JUMP_LIST_CAP};
-pub use kb_ops::{KbResolution, KbWatcherStats};
+pub use kb_ops::{KbPromoteResult, KbResolution, KbWatcherStats, PromoteDedup};
 pub use kb_state::{DaemonControl, DaemonMode, KbContext};
 pub use lsp_state::{
     CodeActionItem, CodeActionMenu, CompletionItem, HoverPopup, LspContext, LspServerInfo,
@@ -1004,6 +1004,11 @@ pub struct Editor {
     /// Enable the legacy embedded AI chat window (deprecated in favor of
     /// the mae-agent TUI harness). Default false; see ADR-049.
     pub ai_chat_enabled: bool,
+    /// Name of a registered KB instance (or "primary") whose content is
+    /// actively surfaced to AI agents at session start as standing
+    /// practices/guidance. Empty (default) disables this. See
+    /// `mae_ai::guidance`.
+    pub ai_guidance_kb: String,
     /// Saved help view state from the last `help_close`. `help-reopen`
     /// restores this to resume exactly where the user left off.
     pub last_kb_state: Option<crate::kb_view::KbView>,
@@ -1034,6 +1039,10 @@ pub struct Editor {
     pub git_branch: Option<String>,
     /// Recently opened files (bounded, deduplicated).
     pub recent_files: crate::project::RecentFiles,
+    /// Monotonic counter bumped in `sync_mode_to_buffer()` on every
+    /// focus/buffer change; assigned into `Buffer::last_focused` to drive
+    /// `switch-buffer`'s empty-query MRU ordering.
+    pub buffer_focus_seq: u64,
     /// Recently used project roots (bounded, deduplicated).
     pub recent_projects: crate::project::RecentProjects,
     /// Persistent project list (saved to `projects.toml`).
@@ -1427,11 +1436,13 @@ impl Editor {
             format_on_save: false,
             spell_enabled: false,
             ai_chat_enabled: false,
+            ai_guidance_kb: String::new(),
             ai: AiState::new(),
             bell_until: None,
             project: None,
             git_branch: None,
             recent_files: crate::project::RecentFiles::default(),
+            buffer_focus_seq: 0,
             recent_projects: crate::project::RecentProjects::default(),
             project_list: crate::project::ProjectList::default(),
             show_line_numbers: true,

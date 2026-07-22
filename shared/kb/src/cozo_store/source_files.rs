@@ -5,6 +5,7 @@
 
 use super::util::{btree_params, cozo_err, dv_str};
 use super::*;
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 impl CozoKbStore {
@@ -151,5 +152,48 @@ impl CozoKbStore {
             files.push((fp, hash, mtime));
         }
         Ok(files)
+    }
+
+    /// Detect tracked source files whose on-disk mtime no longer matches
+    /// what was recorded at last import (`kb-reimport`/`kb-register`) — a
+    /// still file-tethered node's org file may have been edited since, and
+    /// nothing else surfaces this proactively. Intentionally lazy — call
+    /// on-demand (e.g. `kb_id_audit`), not on every drain tick, mirroring
+    /// `KnowledgeBase::detect_ghost_ids`'s "group by file, stat/read once
+    /// per distinct file" shape (that method compares in-memory
+    /// `Node.source_file` against re-parsed content; this one compares the
+    /// **persisted** `source_files` mtime/hash instead, which is what a
+    /// `CozoKbStore`-only signal needs). A deleted file is `federation.rs`'s
+    /// `Full`-reimport-mode concern, not this one's — skipped here, not
+    /// flagged as changed.
+    pub fn detect_reimport_stale_files(&self) -> Result<Vec<ReimportStaleFile>, KbStoreError> {
+        let mut out = Vec::new();
+        for (file_path, stored_hash, stored_mtime) in self.list_source_files()? {
+            let path = PathBuf::from(&file_path);
+            let Ok(meta) = std::fs::metadata(&path) else {
+                continue;
+            };
+            let current_mtime = meta
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_secs() as i64)
+                .unwrap_or(0);
+            if current_mtime == stored_mtime {
+                continue;
+            }
+            let content_changed = std::fs::read_to_string(&path)
+                .map(|c| hex::encode(Sha256::digest(c.as_bytes())) != stored_hash)
+                .unwrap_or(true);
+            let node_ids = self.get_source_file_node_ids(&file_path)?;
+            out.push(ReimportStaleFile {
+                file_path: path,
+                node_ids,
+                stored_mtime,
+                current_mtime,
+                content_changed,
+            });
+        }
+        Ok(out)
     }
 }

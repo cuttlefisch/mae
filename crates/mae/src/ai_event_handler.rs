@@ -6,8 +6,8 @@
 //! that historically plagues editor event loops (see: Emacs xdisp.c).
 
 use mae_ai::{
-    execute_tool, AgentProvider, AgentSession, AiCommand, AiEvent, DeferredKind, ExecuteResult,
-    ToolResult,
+    execute_tool_with_requester, AgentProvider, AgentSession, AiCommand, AiEvent, DeferredKind,
+    ExecuteResult, ToolResult,
 };
 use mae_core::{Editor, InputLock};
 use mae_lsp::LspCommand;
@@ -168,11 +168,12 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             let tool_start = std::time::Instant::now();
             // ADR-048: the embedded/delegate path's provider is authoritative —
             // MAE constructed it itself — so the check keys on it directly.
+            let provider = editor.ai.provider.clone();
             let exec_result = match crate::ai_residency::check_kb_residency(
                 editor,
                 &call.name,
                 &call.arguments,
-                Some(editor.ai.provider.as_str()),
+                Some(provider.as_str()),
             ) {
                 crate::ai_residency::ResidencyDecision::Deny(reason) => {
                     ExecuteResult::Immediate(ToolResult {
@@ -182,9 +183,13 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                         output: reason,
                     })
                 }
-                crate::ai_residency::ResidencyDecision::Allow => {
-                    execute_tool(editor, &call, ctx.all_tools, ctx.permission_policy)
-                }
+                crate::ai_residency::ResidencyDecision::Allow => execute_tool_with_requester(
+                    editor,
+                    &call,
+                    ctx.all_tools,
+                    ctx.permission_policy,
+                    Some(provider.as_str()),
+                ),
             };
             // Drain any pending Scheme evals queued by the tool (e.g. eval_scheme).
             let scheme_output = drain_pending_scheme_evals(editor, ctx.scheme);
@@ -834,9 +839,13 @@ pub fn handle_mcp_request(
                 output: reason,
             })
         }
-        crate::ai_residency::ResidencyDecision::Allow => {
-            execute_tool(editor, &fake_call, all_tools, permission_policy)
-        }
+        crate::ai_residency::ResidencyDecision::Allow => execute_tool_with_requester(
+            editor,
+            &fake_call,
+            all_tools,
+            permission_policy,
+            requester_provider,
+        ),
     };
     // Drain any pending Scheme evals queued by the tool (e.g. eval_scheme).
     let scheme_output = drain_pending_scheme_evals(editor, scheme);

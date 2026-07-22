@@ -417,3 +417,152 @@ fn splash_intercept_works_when_no_pending_keys() {
         "splash j should still work normally"
     );
 }
+
+// --- Task 3: readline-style Ctrl-U/Ctrl-J prompt keybinding gaps ---
+
+#[test]
+fn command_palette_ctrl_u_clears_query() {
+    let mut scheme = require_scheme!();
+    let mut editor = Editor::new();
+    let mut palette = mae_core::CommandPalette::for_buffers(&["[scratch]", "other-buf"]);
+    palette.query = "sc".to_string();
+    palette.update_filter();
+    editor.command_palette = Some(palette);
+    editor.set_mode(Mode::CommandPalette);
+
+    dispatch(&mut editor, &mut scheme, make_ctrl('u'));
+
+    let palette = editor.command_palette.as_ref().unwrap();
+    assert!(palette.query.is_empty(), "Ctrl-U should clear the query");
+    assert_eq!(
+        palette.filtered.len(),
+        palette.entries.len(),
+        "cleared query should re-show every entry, got {:?}",
+        palette.filtered
+    );
+}
+
+#[test]
+fn command_palette_ctrl_u_on_kb_find_large_kb_triggers_requery() {
+    let mut scheme = require_scheme!();
+    let mut editor = Editor::new();
+    // Push past the lazy threshold so kb_find_palette_query_changed() takes
+    // the lazy re-search branch instead of a plain client-side filter.
+    for i in 0..(Editor::KB_FIND_LAZY_THRESHOLD + 500) {
+        editor.kb.primary.insert(mae_core::KbNode::new(
+            format!("note:bulk{i}"),
+            format!("Bulk Note {i}"),
+            mae_core::KbNodeKind::Note,
+            "filler body",
+        ));
+    }
+    editor.kb.primary.insert(mae_core::KbNode::new(
+        "note:zebra-marker",
+        "Zebra Marker",
+        mae_core::KbNodeKind::Note,
+        "uniquely findable",
+    ));
+    assert!(editor.kb_loaded_node_count() > Editor::KB_FIND_LAZY_THRESHOLD);
+
+    let mut palette =
+        mae_core::CommandPalette::for_kb_find_or_create(&editor.kb_find_candidates("zebra"));
+    palette.query = "zebra".to_string();
+    editor.command_palette = Some(palette);
+    editor.set_mode(Mode::CommandPalette);
+    assert!(
+        editor
+            .command_palette
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .any(|e| e.name == "note:zebra-marker"),
+        "sanity: initial query should surface the zebra node"
+    );
+
+    dispatch(&mut editor, &mut scheme, make_ctrl('u'));
+
+    let palette = editor.command_palette.as_ref().unwrap();
+    assert!(palette.query.is_empty(), "Ctrl-U should clear the query");
+    // Lazy re-search path: entries reflect the fresh bounded empty-query
+    // window rather than the stale "zebra"-filtered set left over from
+    // before Ctrl-U -- proving the fix used kb_find_palette_query_changed()
+    // and not a bare local clear.
+    assert!(
+        palette.entries.len() <= Editor::KB_FIND_LAZY_LIMIT,
+        "expected the lazy re-search's bounded window, got {} entries",
+        palette.entries.len()
+    );
+}
+
+#[test]
+fn search_mode_ctrl_u_clears_search_input() {
+    let mut scheme = require_scheme!();
+    let mut editor = Editor::new();
+    editor.set_mode(Mode::Search);
+    editor.search_input = "some query".to_string();
+
+    dispatch(&mut editor, &mut scheme, make_ctrl('u'));
+
+    assert!(
+        editor.search_input.is_empty(),
+        "Ctrl-U should clear search_input"
+    );
+}
+
+#[test]
+fn insert_mode_ctrl_j_moves_completion_selection_when_popup_open() {
+    let mut scheme = require_scheme!();
+    let mut editor = Editor::new();
+    editor.set_mode(Mode::Insert);
+    editor.apply_completion_result(vec![
+        mae_core::editor::lsp_state::CompletionItem {
+            label: "alpha".to_string(),
+            insert_text: "alpha".to_string(),
+            detail: None,
+            kind_sigil: 'f',
+        },
+        mae_core::editor::lsp_state::CompletionItem {
+            label: "beta".to_string(),
+            insert_text: "beta".to_string(),
+            detail: None,
+            kind_sigil: 'f',
+        },
+    ]);
+    assert_eq!(editor.lsp.completion_selected, 0);
+    let text_before = editor.buffers[editor.active_buffer_idx()]
+        .rope()
+        .to_string();
+
+    dispatch(&mut editor, &mut scheme, make_ctrl('j'));
+
+    assert_eq!(
+        editor.lsp.completion_selected, 1,
+        "Ctrl-J should advance the completion selection when the popup is open"
+    );
+    let text_after = editor.buffers[editor.active_buffer_idx()]
+        .rope()
+        .to_string();
+    assert_eq!(
+        text_before, text_after,
+        "Ctrl-J must not insert a newline when it moved the completion selection instead"
+    );
+}
+
+#[test]
+fn insert_mode_ctrl_j_inserts_newline_when_popup_closed() {
+    let mut scheme = require_scheme!();
+    let mut editor = Editor::new();
+    editor.set_mode(Mode::Insert);
+    assert!(editor.lsp.completion_items.is_empty(), "sanity: no popup");
+
+    dispatch(&mut editor, &mut scheme, make_ctrl('j'));
+
+    let text_after = editor.buffers[editor.active_buffer_idx()]
+        .rope()
+        .to_string();
+    assert!(
+        text_after.contains('\n'),
+        "Ctrl-J should still insert a newline when no completion popup is open, got {text_after:?}"
+    );
+}

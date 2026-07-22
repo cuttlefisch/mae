@@ -271,12 +271,21 @@ fn execute_kb_share(editor: &mut Editor, args: &Value) -> Result<String, String>
 
     // Collect node IDs from the named KB. `instances` is keyed by UUID, so
     // resolve name→uuid via the registry first (a bare name lookup missed).
+    //
+    // #303 follow-up: the primary case must read `editor.kb.primary`
+    // directly, NOT `editor.kb.query_layer()` -- `rebuild_query_layer()`
+    // always builds a `FederatedQuery` (primary + every registered
+    // instance's store, `kb_state.rs`), so the query layer's `list_ids`
+    // silently bundles every OTHER federated instance's node ids into a
+    // "primary" share payload. An instance has its own separate share path
+    // (the `else` branch below, `kb_name == instance name`) -- its nodes
+    // must never leak into a primary share. This also matches
+    // `kb_prepare_share_lineage`'s existing sibling approach (it already
+    // reads `kb.list_ids(None)` off the in-memory primary KB directly, not
+    // a query layer), so the `node_ids` this function hands off downstream
+    // stays consistent with what that function would derive on its own.
     let node_ids: Vec<String> = if kb_name == mae_core::KB_DEFAULT_NAME || kb_name == "primary" {
-        if let Some(q) = editor.kb.query_layer() {
-            q.list_ids(None)
-        } else {
-            editor.kb.primary.list_ids(None)
-        }
+        editor.kb.primary.list_ids(None)
     } else {
         let uuid = editor.kb.registry.find(&kb_name).map(|i| i.uuid.clone());
         match uuid
@@ -581,6 +590,7 @@ fn execute_kb_set_encryption(editor: &mut Editor, args: &Value) -> Result<String
 mod tests {
     use super::*;
     use crate::types::ToolCall;
+    use mae_kb::KbStore;
     use serde_json::json;
 
     fn make_call(name: &str, args: Value) -> ToolCall {
@@ -751,6 +761,99 @@ mod tests {
         let result = dispatch(&mut editor, &call).unwrap().unwrap();
         let parsed: Value = serde_json::from_str(&result).unwrap();
         assert_eq!(parsed["kb_name"], "primary");
+    }
+
+    #[test]
+    fn kb_share_primary_node_ids_exclude_federated_instance_nodes() {
+        // #303 follow-up "watch item": execute_kb_share derives node_ids for
+        // the primary KB from editor.kb.query_layer() when one is wired --
+        // but rebuild_query_layer() always builds a FederatedQuery (primary
+        // + every registered instance's store, kb_state.rs:397-427), so a
+        // naive query_layer().list_ids(None) call would bundle a completely
+        // separate federated instance's node ids into the PRIMARY share
+        // payload. Assert node_count reflects primary's own nodes only,
+        // matching editor.kb.primary.list_ids(None) exactly -- an instance's
+        // nodes have their own separate share path (kb_name == instance
+        // name), they must never leak into a "primary" share.
+        let mut editor = Editor::new();
+
+        let primary_store = mae_kb::CozoKbStore::open_mem().unwrap();
+        primary_store.seed_type_system().unwrap();
+        let primary_arc = std::sync::Arc::new(primary_store);
+        primary_arc
+            .insert_node(&mae_kb::Node::new(
+                "user:primary-only",
+                "Primary Only",
+                mae_kb::NodeKind::Note,
+                "b",
+            ))
+            .unwrap();
+        editor.kb.primary_cozo = Some(primary_arc.clone());
+        editor.kb.store = Some(primary_arc.clone());
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "user:primary-only",
+            "Primary Only",
+            mae_kb::NodeKind::Note,
+            "b",
+        ));
+
+        let inst_store = mae_kb::CozoKbStore::open_mem().unwrap();
+        inst_store.seed_type_system().unwrap();
+        inst_store
+            .insert_node(&mae_kb::Node::new(
+                "otherkb:instance-only",
+                "Instance Only",
+                mae_kb::NodeKind::Note,
+                "b",
+            ))
+            .unwrap();
+        editor
+            .kb
+            .instance_stores
+            .insert("uuid-other".to_string(), std::sync::Arc::new(inst_store));
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-other".into(),
+                name: "OtherKb".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+            });
+        editor.kb.rebuild_query_layer();
+        assert!(
+            editor.kb.query_layer().is_some(),
+            "test setup must actually exercise the federated query-layer branch"
+        );
+        // Editor::new() seeds ~870+ built-in manual/help nodes into
+        // editor.kb.primary directly -- assert containment/absence, not an
+        // exact count, since the seeded baseline isn't this test's concern.
+        let expected_primary_count = editor.kb.primary.list_ids(None).len();
+
+        let call = make_call("kb_share", json!({"kb_name": "primary"}));
+        let result = dispatch(&mut editor, &call).unwrap().unwrap();
+        let parsed: Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            parsed["node_count"], expected_primary_count,
+            "sharing primary must count exactly primary's own nodes, not the federated instance's: {parsed}"
+        );
+        let Some(CollabIntent::ShareKb { node_ids, .. }) = &editor.collab.pending_intent else {
+            panic!("expected a ShareKb intent");
+        };
+        assert!(node_ids.contains(&"user:primary-only".to_string()));
+        assert!(
+            !node_ids.contains(&"otherkb:instance-only".to_string()),
+            "a federated instance's node must never leak into a primary share: {node_ids:?}"
+        );
     }
 
     #[test]

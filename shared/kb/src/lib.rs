@@ -69,7 +69,7 @@ pub use org::{IngestReport, OrgParseResult, ParsedLink};
 pub use query::{CozoQueryLayer, FederatedQuery, InMemoryQueryLayer, KbQueryLayer};
 pub use store::{
     AgendaFilter, Block, BrokenLinkInfo, BrokenLinkReason, HealthReport, IntegrityError, KbStore,
-    KbStoreError, Link, MetaMember, NodeVersion, SubGraph, VectorHit,
+    KbStoreError, Link, MetaMember, NodeVersion, ReimportStaleFile, SubGraph, VectorHit,
 };
 
 /// Kind of a node. Controls how the node is surfaced to the user
@@ -209,6 +209,13 @@ pub enum NodeSource {
     Manual,
     /// Received via federation from another MAE instance.
     Federation,
+    /// Promoted into the primary KB from a federated/org-dir-imported
+    /// instance (#303) — deliberately distinct from `Federation` so
+    /// `kb_owner_of`'s stranded-node guard (issue #76) never mistakes a
+    /// freshly-promoted primary copy for pre-ADR-019 leftover cruft, and
+    /// distinct from `Manual` so promotion provenance isn't conflated with
+    /// hand-authored nodes. See `Editor::kb_promote_node`.
+    Promoted,
 }
 
 /// A single node in the knowledge base.
@@ -615,6 +622,23 @@ fn namespace_prior(id: &str) -> f64 {
             0.9
         }
         _ => 1.0,
+    }
+}
+
+/// Relevance prior by node kind/role, composed with `namespace_prior`
+/// (#357): a `Category`/`Meta` node, or one explicitly marked `:role: hub`
+/// (the molecular-notes `source|atom|molecule|hub` vocabulary — see
+/// `Editor::kb_set_role`), is navigational rather than the answer itself, so
+/// it shouldn't outrank a specific atom/note with real but modest term
+/// coverage. Mild (0.85, same magnitude class as `namespace_prior`'s 0.9) —
+/// only tips near-ties, never buries a strong exact match.
+fn kind_role_prior(kind: NodeKind, properties: &HashMap<String, String>) -> f64 {
+    let is_hub = matches!(kind, NodeKind::Category | NodeKind::Meta)
+        || properties.get("role").map(String::as_str) == Some("hub");
+    if is_hub {
+        0.85
+    } else {
+        1.0
     }
 }
 
@@ -1345,6 +1369,18 @@ impl KnowledgeBase {
     /// Scores are normalized so they're comparable across instances/backends
     /// for federated merge (see `query::FederatedQuery`). `search` is retained
     /// for ordering-insensitive callers.
+    ///
+    /// **Soft-AND fallback (#357):** a natural-language query commonly
+    /// contains one word (filler, synonym, typo) absent from an otherwise
+    /// relevant node, which strict AND would drop entirely. If the strict
+    /// pass (every term must match) returns nothing and the query has more
+    /// than one term, a second, relaxed pass allows exactly one term to miss
+    /// (`terms.len() - 1` required hits) and applies a fixed penalty so
+    /// fallback-tier results always score below any strict match. This is a
+    /// bounded down payment on #357's immediate symptom, not a replacement
+    /// for real fuzzy/FTS body search (tracked separately as #81) — it only
+    /// ever converts a zero-result query into a low-confidence one; every
+    /// currently-non-empty query's results and order are unaffected.
     pub fn search_ranked(&self, query: &str, limit: usize) -> Vec<(String, f64)> {
         let q = query.trim().to_lowercase();
         if q.is_empty() {
@@ -1356,6 +1392,36 @@ impl KnowledgeBase {
                 .collect();
         }
 
+        let terms: Vec<Vec<char>> = q.split_whitespace().map(|t| t.chars().collect()).collect();
+
+        const FALLBACK_PENALTY: f64 = 0.5;
+        let mut scored = self.search_ranked_pass(&q, &terms, terms.len());
+        if scored.is_empty() && terms.len() > 1 {
+            scored = self.search_ranked_pass(&q, &terms, terms.len() - 1);
+            for (_, score) in scored.iter_mut() {
+                *score *= FALLBACK_PENALTY;
+            }
+        }
+        scored.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        scored.truncate(limit);
+        scored
+    }
+
+    /// One scoring pass over every node for [`search_ranked`](Self::search_ranked),
+    /// requiring at least `min_hits` of `terms` to match somewhere on the node
+    /// (strict AND when `min_hits == terms.len()`; the soft-AND fallback pass
+    /// otherwise). Factored out so `search_ranked` can call it twice without
+    /// duplicating the field-weighting logic.
+    fn search_ranked_pass(
+        &self,
+        q: &str,
+        terms: &[Vec<char>],
+        min_hits: usize,
+    ) -> Vec<(String, f64)> {
         // Field weights (tuned against the grading harness): title/id/alias
         // dominate, tags mid, body lowest. A body substring hit (`BODY_HIT`)
         // sits below a title substring (~50k from fuzzy::score_match) so
@@ -1367,11 +1433,11 @@ impl KnowledgeBase {
         // Normalization ceiling: best possible per-term score (exact title).
         const MAX_TERM: f64 = 1_000_000.0 * W_TITLE;
 
-        let terms: Vec<Vec<char>> = q.split_whitespace().map(|t| t.chars().collect()).collect();
         let num_terms = terms.len().max(1) as f64;
+        let whole: Vec<char> = q.chars().collect();
 
         let mut scored: Vec<(String, f64)> = Vec::new();
-        'nodes: for (id, cache) in self.lower.iter() {
+        for (id, cache) in self.lower.iter() {
             // The id's LOCAL part (after the last ':') is the node's canonical
             // "name" — e.g. `concept:buffer` -> `buffer`. Matching it lets a
             // query exact-match the node name even when the title is prefixed
@@ -1387,7 +1453,6 @@ impl KnowledgeBase {
             // "buffer mode" exact-matches local-id `buffer-mode` and "ai as
             // peer" matches `ai-as-peer` — lifting the canonical multi-word node
             // above one that merely exact-matches a single term.
-            let whole: Vec<char> = q.chars().collect();
             let whole_bonus = [cache.lowered_id.as_str(), local_id, cache.title.as_str()]
                 .into_iter()
                 .chain(cache.aliases.iter().map(|s| s.as_str()))
@@ -1397,7 +1462,8 @@ impl KnowledgeBase {
                 .unwrap_or(0.0);
 
             let mut total = whole_bonus;
-            for term in &terms {
+            let mut hits = 0usize;
+            for term in terms {
                 let title_alias = [cache.lowered_id.as_str(), local_id, cache.title.as_str()]
                     .into_iter()
                     .chain(cache.aliases.iter().map(|s| s.as_str()))
@@ -1413,32 +1479,39 @@ impl KnowledgeBase {
                 let term_str: String = term.iter().collect();
                 let body = cache.body.contains(&term_str).then_some(BODY_HIT * W_BODY);
 
-                // Best field for this term; AND semantics — a term with no
-                // match anywhere drops the node entirely.
+                // Best field for this term. A term with no match anywhere
+                // contributes no score (and no hit) — whether that drops the
+                // node entirely depends on `min_hits` (strict AND vs. the
+                // soft-AND fallback pass in `search_ranked`).
                 let best = [title_alias, tag, body]
                     .into_iter()
                     .flatten()
                     .fold(None::<f64>, |acc, v| Some(acc.map_or(v, |a| a.max(v))));
-                match best {
-                    Some(s) => total += s,
-                    None => continue 'nodes,
+                if let Some(s) = best {
+                    total += s;
+                    hits += 1;
                 }
             }
-            // Namespace prior: primary content (concept/cmd/scheme/option/
-            // category) outranks navigational/glossary nodes (term/lesson/…) on
-            // a tie — matches the org-roam intuition that the concept page, not
-            // its one-line glossary term, is the canonical destination.
-            // Denominator includes the whole-query bonus slot (+1) so scores
-            // stay in 0..=1 without excessive clamping.
-            let norm = (total * namespace_prior(id) / ((num_terms + 1.0) * MAX_TERM)).min(1.0);
+            if hits < min_hits {
+                continue;
+            }
+            // Namespace + kind/role priors: primary content (concept/cmd/
+            // scheme/option/category) outranks navigational/glossary nodes
+            // (term/lesson/…) on a tie, and hub/meta/category nodes are
+            // down-weighted below the specific note they merely index (#357)
+            // — matches the org-roam intuition that the concept/atom page,
+            // not its glossary term or index hub, is the canonical
+            // destination. Denominator includes the whole-query bonus slot
+            // (+1) so scores stay in 0..=1 without excessive clamping.
+            let prior = namespace_prior(id)
+                * self
+                    .nodes
+                    .get(id)
+                    .map(|n| kind_role_prior(n.kind, &n.properties))
+                    .unwrap_or(1.0);
+            let norm = (total * prior / ((num_terms + 1.0) * MAX_TERM)).min(1.0);
             scored.push((id.clone(), norm));
         }
-        scored.sort_by(|a, b| {
-            b.1.partial_cmp(&a.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-                .then_with(|| a.0.cmp(&b.0))
-        });
-        scored.truncate(limit);
         scored
     }
 
@@ -2222,16 +2295,188 @@ mod tests {
     }
 
     #[test]
-    fn search_ranked_and_excludes_unmatched_term() {
+    fn search_ranked_soft_and_fallback_returns_partial_match_below_full_match() {
         let kb = kb_with(vec![Node::new(
             "a",
             "Buffer management",
             NodeKind::Note,
             "ropey rope",
         )]);
-        // "buffer" matches, "zzz" matches nothing → AND drops the node.
-        assert!(kb.search_ranked("buffer zzz", 10).is_empty());
-        assert!(!kb.search_ranked("buffer rope", 10).is_empty());
+        // "buffer" matches, "zzz" matches nothing anywhere -> strict AND alone
+        // would drop the node, but the soft-AND fallback (#357) relaxes by
+        // exactly one term (2 terms, 1 hit >= min_hits=1) and surfaces it at
+        // a penalized score.
+        let fallback = kb.search_ranked("buffer zzz", 10);
+        assert_eq!(
+            fallback.first().map(|(id, _)| id.as_str()),
+            Some("a"),
+            "fallback pass should surface the partially-matching node, got {fallback:?}"
+        );
+        let full = kb.search_ranked("buffer rope", 10);
+        assert!(
+            fallback[0].1 < full[0].1,
+            "fallback-tier score ({}) must be strictly below a fully-matching \
+             query's score ({}) for the same node",
+            fallback[0].1,
+            full[0].1
+        );
+
+        // Adversarial: a genuinely nonsense multi-term query where NO term
+        // matches anything must still return empty -- the relaxation has a
+        // floor, it doesn't manufacture matches from nothing.
+        assert!(
+            kb.search_ranked("zzz qqq xyz", 10).is_empty(),
+            "a query where every term is unmatched must stay empty even under the fallback"
+        );
+    }
+
+    #[test]
+    fn search_ranked_soft_and_fallback_only_engages_on_zero_strict_results() {
+        let solo = kb_with(vec![Node::new(
+            "a",
+            "Buffer management",
+            NodeKind::Note,
+            "ropey rope",
+        )]);
+        let with_distractor = kb_with(vec![
+            Node::new("a", "Buffer management", NodeKind::Note, "ropey rope"),
+            Node::new(
+                "b",
+                "Unrelated",
+                NodeKind::Note,
+                "nothing to do with either term",
+            ),
+        ]);
+        // Strict AND already satisfies "buffer rope" (both terms match node
+        // "a") -- the fallback pass must never run, in either KB. Regression
+        // guard: an unrelated distractor node's mere presence must not
+        // change node "a"'s own score (proving the fallback penalty was
+        // never applied) -- compared directly instead of against a
+        // hand-picked magic-number threshold.
+        let solo_ranked = solo.search_ranked("buffer rope", 10);
+        let distractor_ranked = with_distractor.search_ranked("buffer rope", 10);
+        assert_eq!(
+            distractor_ranked.len(),
+            1,
+            "only the strictly-matching node should appear, got {distractor_ranked:?}"
+        );
+        assert_eq!(distractor_ranked[0].0, "a");
+        assert_eq!(
+            distractor_ranked[0].1, solo_ranked[0].1,
+            "an unrelated distractor node must not change node a's own score \
+             (the fallback pass must never run when strict AND already found a match)"
+        );
+    }
+
+    #[test]
+    fn search_ranked_downweights_category_and_hub_role_nodes() {
+        let kb = kb_with(vec![
+            Node::new(
+                "a",
+                "Testing philosophy",
+                NodeKind::Note,
+                "adversarial testing philosophy for this project",
+            ),
+            Node::new(
+                "b",
+                "Testing philosophy hub",
+                NodeKind::Category,
+                "adversarial testing philosophy for this project",
+            ),
+        ]);
+        // Identical term-match strength (same title-ish text, same body) --
+        // only `kind` differs. The plain Note must rank first.
+        let ranked = kb.search_ranked("adversarial testing philosophy", 10);
+        assert_eq!(
+            ranked.first().map(|(id, _)| id.as_str()),
+            Some("a"),
+            "non-hub node with equal match strength should outrank the Category node, got {ranked:?}"
+        );
+
+        // Adversarial companion: a hub node with a *stronger* raw match
+        // (exact title) must still beat a barely-matching non-hub node --
+        // the down-weight tips near-ties, it doesn't blanket-bury hubs.
+        let kb2 = kb_with(vec![
+            Node::new(
+                "hub",
+                "Exact Phrase Match",
+                NodeKind::Category,
+                "exact phrase match",
+            ),
+            Node::new(
+                "weak",
+                "Something else",
+                NodeKind::Note,
+                "barely mentions exact",
+            ),
+        ]);
+        let ranked2 = kb2.search_ranked("exact phrase match", 10);
+        assert_eq!(
+            ranked2.first().map(|(id, _)| id.as_str()),
+            Some("hub"),
+            "a strong hub match must still beat a weak non-hub match, got {ranked2:?}"
+        );
+
+        // `:role: hub` property (not just NodeKind::Category/Meta) triggers
+        // the same down-weight.
+        let kb3 = kb_with(vec![
+            Node::new(
+                "c",
+                "Testing philosophy",
+                NodeKind::Note,
+                "adversarial testing philosophy for this project",
+            ),
+            Node::new(
+                "d",
+                "Testing philosophy hub",
+                NodeKind::Note,
+                "adversarial testing philosophy for this project",
+            )
+            .with_properties(HashMap::from([("role".to_string(), "hub".to_string())])),
+        ]);
+        let ranked3 = kb3.search_ranked("adversarial testing philosophy", 10);
+        assert_eq!(
+            ranked3.first().map(|(id, _)| id.as_str()),
+            Some("c"),
+            "role=hub property should down-weight like NodeKind::Category, got {ranked3:?}"
+        );
+    }
+
+    #[test]
+    fn search_ranked_natural_language_query_with_one_unmatched_filler_word_is_not_empty() {
+        // Principle #14 -- a short, natural phrasing (not a hand-picked bag
+        // of exact keywords) where exactly one word is absent from the
+        // target node's title/tags/body -- the case the soft-AND fallback
+        // (relax by exactly one term) is designed to rescue. A longer,
+        // heavily-filler-worded question with several unmatched terms is
+        // deliberately NOT rescued by this conservative fix -- full
+        // fuzzy/FTS body search is #81's scope, not this bounded down
+        // payment's.
+        let kb = kb_with(vec![
+            Node::new(
+                "practice:adversarial-testing",
+                "Adversarial testing philosophy",
+                NodeKind::Note,
+                "Tests exist to falsify the implementation, not confirm it.",
+            )
+            .with_tags(["testing", "philosophy"]),
+            Node::new(
+                "hub:dev-practices",
+                "Development practices hub",
+                NodeKind::Category,
+                "Links out to testing philosophy, commit conventions, and build tooling.",
+            ),
+        ]);
+        let ranked = kb.search_ranked("testing philosophy explained", 10);
+        assert!(
+            !ranked.is_empty(),
+            "a natural query with exactly one unmatched filler/synonym word must not return zero results"
+        );
+        assert_eq!(
+            ranked.first().map(|(id, _)| id.as_str()),
+            Some("practice:adversarial-testing"),
+            "the specific practice note should outrank the hub node despite both being on the fallback tier, got {ranked:?}"
+        );
     }
 
     #[test]

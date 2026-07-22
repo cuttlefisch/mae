@@ -513,6 +513,46 @@ fn kb_migrate_stranded_federation_nodes_removes_an_identical_duplicate() {
     );
 }
 
+/// Durability regression: the removal must reach the durable primary store,
+/// not just the in-memory mirror — otherwise the stale duplicate silently
+/// reappears on next launch (same class of bug as #303's promote-dedup and
+/// #269's :kb-ingest durability gap).
+#[test]
+fn kb_migrate_stranded_federation_nodes_persists_durable_delete() {
+    let mut editor = Editor::new();
+    let store = mae_kb::CozoKbStore::open_mem().unwrap();
+    store.seed_type_system().unwrap();
+
+    let mut stranded = mae_kb::Node::new("shared-id", "Same", mae_kb::NodeKind::Note, "same body");
+    stranded.source = Some(mae_kb::NodeSource::Federation);
+    store.insert_node(&stranded).unwrap();
+    editor.kb.primary.insert(stranded);
+    editor.kb.store = Some(std::sync::Arc::new(store));
+
+    let mut kb = mae_kb::KnowledgeBase::new();
+    kb.insert(mae_kb::Node::new(
+        "shared-id",
+        "Same",
+        mae_kb::NodeKind::Note,
+        "same body",
+    ));
+    editor.kb.instances.insert("real-instance".to_string(), kb);
+
+    let (removed, _) = editor.kb_migrate_stranded_federation_nodes();
+    assert_eq!(removed, 1);
+    let durable = editor
+        .kb
+        .store
+        .as_ref()
+        .unwrap()
+        .get_node("shared-id")
+        .unwrap();
+    assert!(
+        durable.is_none(),
+        "the durable primary store must also lose the stale duplicate, not just the mirror"
+    );
+}
+
 /// #76 adversarial case (principle #14): a stranded primary copy whose content
 /// DIFFERS from its joined instance's copy must NEVER be silently deleted — that
 /// would lose whatever local edits made it diverge in the first place. It must be

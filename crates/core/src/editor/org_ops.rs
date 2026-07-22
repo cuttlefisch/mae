@@ -264,7 +264,9 @@ impl Editor {
         let target = link.target.trim();
         if target.starts_with("http") {
             // Open external link
-            let _ = std::process::Command::new("xdg-open").arg(target).spawn();
+            let _ = std::process::Command::new(crate::link_detect::browser_command())
+                .arg(target)
+                .spawn();
             let msg = format!("Opening {}", target);
             self.set_status(msg.clone());
             msg

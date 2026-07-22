@@ -80,6 +80,19 @@ Stored at `~/.config/mae/kb-registry.toml`. Each instance has:
 | `:kb-reimport <name>` | Refresh after editing org files |
 | `:kb-instances` | List registered instances with node counts |
 | `:kb-health` | Health report (orphans, broken links, namespace counts) |
+| `:kb-promote` | Promote a node from a federated instance into the primary, CozoDB-backed KB |
+
+### Promoting Content to Primary
+
+`:kb-promote` (bound to `SPC n p`, or the `kb_promote` AI/MCP tool with an explicit node id) takes a node that
+currently lives in a federated/org-dir-imported instance and copies it into the primary KB, severing its
+dependency on the origin org file — the node's content, links, and version history are thereafter entirely
+CozoDB-backed. The original org file and any origin-instance copy are left untouched by default; a
+byte-identical origin-instance copy is deduplicated away automatically once the promotion completes, so a
+normal promotion converges to exactly one copy. If the origin copy has since diverged (an unusual, defensive
+case), both copies are kept and a notification asks you to reconcile manually. Promotion provenance
+(`promoted_from_org_dir`, `promoted_at`) is stamped into the node's properties and shown in its `*KB*` view
+header.
 
 ### Link Scheme
 

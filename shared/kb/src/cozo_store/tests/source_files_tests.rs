@@ -1,4 +1,113 @@
 use super::*;
+use sha2::Digest;
+
+fn real_mtime(path: &std::path::Path) -> i64 {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+// --- #303 follow-up: detect_reimport_stale_files ---
+//
+// Tests deliberately record a STORED mtime that's artificially older than
+// the file's real on-disk mtime (rather than sleeping + touching the file),
+// so drift detection is deterministic and CI-fast — no filesystem mtime
+// resolution/timing dependency.
+
+#[test]
+fn detect_reimport_stale_files_flags_edited_file_content_changed() {
+    let (_tmp, store) = make_store();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("note.org");
+    std::fs::write(&path, "current content").unwrap();
+    let path_str = path.to_string_lossy().to_string();
+    let real_mtime = real_mtime(&path);
+
+    store
+        .record_source_file(
+            &path_str,
+            "stale-hash-from-before-the-edit",
+            real_mtime - 100,
+            &["user:note".to_string()],
+        )
+        .unwrap();
+
+    let stale = store.detect_reimport_stale_files().unwrap();
+    assert_eq!(stale.len(), 1);
+    assert_eq!(stale[0].file_path, path);
+    assert_eq!(stale[0].node_ids, vec!["user:note".to_string()]);
+    assert_eq!(stale[0].stored_mtime, real_mtime - 100);
+    assert_eq!(stale[0].current_mtime, real_mtime);
+    assert!(
+        stale[0].content_changed,
+        "content genuinely differs from the stored hash"
+    );
+}
+
+#[test]
+fn detect_reimport_stale_files_touch_without_edit_is_not_content_changed() {
+    let (_tmp, store) = make_store();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("note.org");
+    let content = "unchanged content";
+    std::fs::write(&path, content).unwrap();
+    let path_str = path.to_string_lossy().to_string();
+    let real_mtime = real_mtime(&path);
+    let real_hash = hex::encode(sha2::Sha256::digest(content.as_bytes()));
+
+    // mtime drifted (as if the file was `touch`ed) but content is byte-identical.
+    store
+        .record_source_file(&path_str, &real_hash, real_mtime - 100, &[])
+        .unwrap();
+
+    let stale = store.detect_reimport_stale_files().unwrap();
+    assert_eq!(stale.len(), 1, "mtime drift alone is still flagged");
+    assert!(
+        !stale[0].content_changed,
+        "content is byte-identical, only mtime drifted"
+    );
+}
+
+#[test]
+fn detect_reimport_stale_files_excludes_files_with_matching_mtime() {
+    let (_tmp, store) = make_store();
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("note.org");
+    std::fs::write(&path, "content").unwrap();
+    let path_str = path.to_string_lossy().to_string();
+    let real_mtime = real_mtime(&path);
+
+    store
+        .record_source_file(&path_str, "irrelevant-hash", real_mtime, &[])
+        .unwrap();
+
+    let stale = store.detect_reimport_stale_files().unwrap();
+    assert!(
+        stale.is_empty(),
+        "a file whose mtime still matches what was recorded must not be flagged"
+    );
+}
+
+#[test]
+fn detect_reimport_stale_files_skips_deleted_files() {
+    // A deleted file is federation.rs's `Full`-reimport-mode concern (id
+    // retraction), not this signal's — it must be skipped, not flagged.
+    let (_tmp, store) = make_store();
+    store
+        .record_source_file(
+            "/nonexistent/path/gone.org",
+            "hash",
+            1,
+            &["user:gone".to_string()],
+        )
+        .unwrap();
+
+    let stale = store.detect_reimport_stale_files().unwrap();
+    assert!(stale.is_empty());
+}
 
 #[test]
 fn record_source_file_retracts_ids_dropped_from_a_still_existing_path() {

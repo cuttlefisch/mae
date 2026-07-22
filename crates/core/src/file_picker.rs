@@ -72,6 +72,45 @@ impl FilePicker {
         }
     }
 
+    /// Reorder `candidates` so recently-opened files sort first, for the
+    /// empty-query default (before typing, users mostly want the handful of
+    /// files they were just working with, not an arbitrary alphabetical
+    /// list -- usability gap, no tracked issue). `recent` is expected
+    /// MRU-ordered (most-recent-first, as `RecentFiles::list()` returns).
+    ///
+    /// Entries outside `self.root`, or not present in the current scan
+    /// (deleted, filtered by `SKIP_DIRS`, etc.), are silently skipped --
+    /// this reorders existing candidates, it never injects new ones. Never
+    /// touches `FilePicker::scan`'s signature, so it has zero blast radius
+    /// on existing callers; typed-query behavior is unaffected since
+    /// `update_filter` fully re-derives `filtered` from `candidates` on
+    /// every keystroke -- reordering the base array only changes (a) what's
+    /// shown before typing starts and (b) the tie-break order among
+    /// equal-scored typed matches (a disclosed, accepted side effect, not a
+    /// hidden behavior change; see `update_filter`'s stable `sort_by_key`).
+    pub fn reorder_by_recency(&mut self, recent: &std::collections::VecDeque<PathBuf>) {
+        if recent.is_empty() {
+            return;
+        }
+        let mut rank: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        for (i, path) in recent.iter().enumerate() {
+            if let Ok(rel) = path.strip_prefix(&self.root) {
+                // `recent` is already MRU-ordered; keep only the first
+                // (most-recent) rank if a duplicate somehow occurs.
+                rank.entry(rel.to_string_lossy().into_owned()).or_insert(i);
+            }
+        }
+        if rank.is_empty() {
+            return;
+        }
+        // Stable sort: never-opened files (rank absent -> usize::MAX) keep
+        // their existing alphabetical relative order, appended after the
+        // MRU block.
+        self.candidates
+            .sort_by_key(|c| rank.get(c).copied().unwrap_or(usize::MAX));
+        self.filtered = (0..self.candidates.len()).collect();
+    }
+
     /// Re-filter candidates based on current query.
     pub fn update_filter(&mut self) {
         if self.query.is_empty() {
@@ -562,6 +601,65 @@ mod tests {
             !picker.candidates.iter().any(|c| c.contains("deep.txt")),
             "should not find files beyond depth limit"
         );
+    }
+
+    #[test]
+    fn reorder_by_recency_promotes_recent_files_to_front() {
+        let tmp = tempfile::tempdir().unwrap();
+        create_test_tree(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
+        // MRU-ordered (most-recent-first), as RecentFiles::list() returns.
+        let recent: std::collections::VecDeque<PathBuf> = [
+            tmp.path().join("docs/readme.md"),
+            tmp.path().join("Cargo.toml"),
+        ]
+        .into_iter()
+        .collect();
+        picker.reorder_by_recency(&recent);
+        assert_eq!(
+            &picker.candidates[0..2],
+            &["docs/readme.md".to_string(), "Cargo.toml".to_string()],
+            "the two recent files should be first, most-recent first, got {:?}",
+            picker.candidates
+        );
+        // The rest keep their prior alphabetical order.
+        let rest = &picker.candidates[2..];
+        let mut sorted_rest = rest.to_vec();
+        sorted_rest.sort();
+        assert_eq!(
+            rest, sorted_rest,
+            "never-opened files should retain alphabetical relative order"
+        );
+    }
+
+    #[test]
+    fn reorder_by_recency_ignores_paths_outside_root_and_never_scanned() {
+        let tmp = tempfile::tempdir().unwrap();
+        create_test_tree(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
+        let before = picker.candidates.clone();
+        let other_tmp = tempfile::tempdir().unwrap();
+        let recent: std::collections::VecDeque<PathBuf> = [
+            other_tmp.path().join("elsewhere.txt"),   // outside root
+            tmp.path().join("deleted-after-open.rs"), // under root, never scanned
+        ]
+        .into_iter()
+        .collect();
+        picker.reorder_by_recency(&recent);
+        assert_eq!(
+            picker.candidates, before,
+            "entries outside root or never scanned must be silently skipped, not injected or panicking"
+        );
+    }
+
+    #[test]
+    fn reorder_by_recency_is_a_noop_on_empty_recent_list() {
+        let tmp = tempfile::tempdir().unwrap();
+        create_test_tree(tmp.path());
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
+        let before = picker.candidates.clone();
+        picker.reorder_by_recency(&std::collections::VecDeque::new());
+        assert_eq!(picker.candidates, before);
     }
 
     #[test]

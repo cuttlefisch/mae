@@ -289,6 +289,7 @@ Environment variable overrides for adapter/server paths:
 - **DAP:** `MAE_DAP_LLDB`, `MAE_DAP_CODELLDB`, `MAE_DAP_DEBUGPY`
 - **LSP:** `MAE_LSP_RUST`, `MAE_LSP_PYTHON`, `MAE_LSP_TYPESCRIPT`, `MAE_LSP_GO`, `MAE_LSP_CPP`, `MAE_LSP_C`
 - **Babel compilers:** `MAE_BABEL_CXX` (C++), `MAE_BABEL_CC` (C) — or the `babel_cxx_compiler` / `babel_c_compiler` / `babel_cxx_std` options, or a per-block `:cmd`
+- **Browser:** `MAE_BROWSER` — command used to open external `http(s)://` links (default `xdg-open`). Automated tests set this to a harmless no-op (`true`) so `cargo test` never pops a real GUI browser window; for interactive manual verification of link-opening without a GUI window, `export MAE_BROWSER=lynx` (or `w3m`/`elinks`) — those are optional and not required by any test.
 
 ## Scheme Testing Framework
 

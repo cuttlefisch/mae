@@ -169,6 +169,7 @@
 (define-key "leader" "n r" "kb-register")
 (define-key "leader" "n R" "kb-reimport")
 (define-key "leader" "n i" "kb-insert-link")
+(define-key "leader" "n p" "kb-promote")
 (define-key "leader" "n s" "capture-finalize")
 (define-key "leader" "n k" "capture-abort")
 (define-key "leader" "n C" "kb-cleanup-orphans")

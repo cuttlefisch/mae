@@ -93,7 +93,16 @@ pub fn record_kb_visit(editor: &mut Editor, id: &str) {
     editor.kb.record_visit(id);
 }
 
-pub fn execute_kb_search(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+/// `requester_provider` -- the caller's AI provider, when known -- lets this
+/// ScopedFederatedScanFilterable tool (ADR-048/#358) post-filter its own
+/// materialized results for the AI-residency seed-content exemption, since
+/// the gate (`crates/mae/src/ai_residency.rs`) allows the call through
+/// unconditionally for this shape rather than pre-denying it.
+pub fn execute_kb_search(
+    editor: &Editor,
+    args: &serde_json::Value,
+    requester_provider: Option<&str>,
+) -> Result<String, String> {
     let query = args.get("query").and_then(|v| v.as_str()).unwrap_or("");
     // Optional `scope` ("all" | "local" | "remote" | "<instance-name>") selects
     // which federated layers participate; an explicit arg wins, else the
@@ -113,6 +122,8 @@ pub fn execute_kb_search(editor: &Editor, args: &serde_json::Value) -> Result<St
     // objects (id/title/kind/instance/excerpt) so the agent can choose a node
     // without a follow-up kb_get round-trip.
     let results = editor.kb_federated_search_scoped(query, &scope);
+    let results =
+        mae_core::ai_residency::filter_residency_exempt(editor, requester_provider, results);
     let objs: Vec<serde_json::Value> = results
         .into_iter()
         .take(limit)
@@ -501,6 +512,32 @@ fn cleanup_candidates_json(kb: &mae_kb::KnowledgeBase) -> serde_json::Value {
     serde_json::json!(out)
 }
 
+/// Tracked source files whose on-disk mtime has drifted from what was
+/// recorded at last import — a still file-tethered node's org file may
+/// have changed since (a *pre*-promotion drift signal; promoted nodes have
+/// no `source_files` row and never appear here — see
+/// `CozoKbStore::detect_reimport_stale_files`). `None` when no durable
+/// store is configured for this scope (mirrors `kb_id_audit`'s existing
+/// "status: not loaded" degrade-gracefully shape).
+fn reimport_stale_files_json(store: Option<&dyn mae_kb::KbStore>) -> serde_json::Value {
+    let Some(store) = store else {
+        return serde_json::json!([]);
+    };
+    let Ok(stale) = store.detect_reimport_stale_files() else {
+        return serde_json::json!([]);
+    };
+    serde_json::json!(stale
+        .iter()
+        .map(|f| serde_json::json!({
+            "file_path": f.file_path.display().to_string(),
+            "node_ids": f.node_ids,
+            "stored_mtime": f.stored_mtime,
+            "current_mtime": f.current_mtime,
+            "content_changed": f.content_changed,
+        }))
+        .collect::<Vec<_>>())
+}
+
 /// Per-federated-instance sync/freshness diagnostics — the piece that lets you
 /// self-diagnose "why didn't process B see my new node" without a source dive:
 /// is `kb_notes_dir` even resolvable to a registered instance, is that
@@ -560,10 +597,12 @@ pub fn execute_kb_sync_status(editor: &Editor) -> Result<String, String> {
     serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
 }
 
-/// Detect ghost/stale ids across the primary KB and every federated instance —
-/// see `KnowledgeBase::detect_ghost_ids`. More expensive than `kb_health`
-/// (re-parses each distinct source file), so it's its own on-demand tool
-/// rather than folded into the routinely-called health report.
+/// Detect ghost/stale ids and reimport-stale files across the primary KB and
+/// every federated instance — see `KnowledgeBase::detect_ghost_ids` and
+/// `CozoKbStore::detect_reimport_stale_files`. More expensive than
+/// `kb_health` (re-parses/re-hashes each distinct source file), so it's its
+/// own on-demand tool rather than folded into the routinely-called health
+/// report.
 pub fn execute_kb_id_audit(editor: &Editor) -> Result<String, String> {
     let instances: Vec<serde_json::Value> = editor
         .kb
@@ -575,6 +614,9 @@ pub fn execute_kb_id_audit(editor: &Editor) -> Result<String, String> {
                 "name": inst.name,
                 "uuid": inst.uuid,
                 "ghost_ids": cleanup_candidates_json(kb),
+                "reimport_stale_files": reimport_stale_files_json(
+                    editor.kb.instance_stores.get(&inst.uuid).map(|s| s.as_ref() as &dyn mae_kb::KbStore),
+                ),
             }),
             None => serde_json::json!({
                 "name": inst.name,
@@ -585,7 +627,12 @@ pub fn execute_kb_id_audit(editor: &Editor) -> Result<String, String> {
         .collect();
 
     let out = serde_json::json!({
-        "local": { "ghost_ids": cleanup_candidates_json(&editor.kb.primary) },
+        "local": {
+            "ghost_ids": cleanup_candidates_json(&editor.kb.primary),
+            "reimport_stale_files": reimport_stale_files_json(
+                editor.kb.store.as_deref(),
+            ),
+        },
         "instances": instances,
     });
     serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
@@ -844,6 +891,29 @@ pub fn execute_kb_delete(editor: &mut Editor, args: &serde_json::Value) -> Resul
     Ok(format!("Deleted node: {}", id))
 }
 
+pub fn execute_kb_promote(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: id")?;
+
+    let result = editor.kb_promote_node(id)?;
+    let dedup = match result.dedup {
+        mae_core::editor::PromoteDedup::Removed => "removed",
+        mae_core::editor::PromoteDedup::KeptDiverged => "kept_diverged",
+    };
+    let node = node_json(editor, id);
+    serde_json::to_string_pretty(&serde_json::json!({
+        "status": "promoted",
+        "id": result.node_id,
+        "promoted_from_uuid": result.promoted_from_uuid,
+        "promoted_from_org_dir": result.promoted_from_org_dir.display().to_string(),
+        "instance_copy": dedup,
+        "node": node,
+    }))
+    .map_err(|e| e.to_string())
+}
+
 pub fn execute_kb_register(
     editor: &mut Editor,
     args: &serde_json::Value,
@@ -937,16 +1007,33 @@ pub fn execute_kb_reimport(
     }
 }
 
-/// Paragraph-aware excerpt: split by `\n\n`, accumulate until byte budget.
-/// Falls back to `floor_char_boundary` truncation for flat bodies.
-fn excerpt_body(body: &str, max_bytes: usize) -> String {
+/// Paragraph-aware excerpt: split by `\n\n`, accumulate until byte budget,
+/// starting from the paragraph containing `start_hint` (a byte offset into
+/// `body` -- typically the earliest query-term match, see
+/// `body_match_position`) instead of always doc-start, so a long note's
+/// excerpt surfaces the actually-relevant part (#357). `start_hint ==
+/// usize::MAX` (no match found) falls back to doc-start, same as before.
+/// Falls back to `floor_char_boundary` truncation from doc-start for flat
+/// bodies (single paragraph) or when the hinted paragraph alone exceeds the
+/// budget.
+fn excerpt_body(body: &str, max_bytes: usize, start_hint: usize) -> String {
     if body.len() <= max_bytes {
         return body.to_string();
     }
     let paragraphs: Vec<&str> = body.split("\n\n").collect();
     if paragraphs.len() > 1 {
+        let mut offset = 0usize;
+        let mut start_idx = 0usize;
+        for (i, para) in paragraphs.iter().enumerate() {
+            let para_end = offset + para.len();
+            if start_hint < para_end {
+                start_idx = i;
+                break;
+            }
+            offset = para_end + 2; // +2 for the "\n\n" separator
+        }
         let mut acc = String::new();
-        for para in paragraphs {
+        for para in &paragraphs[start_idx..] {
             let trimmed = para.trim();
             if trimmed.is_empty() {
                 continue;
@@ -963,39 +1050,113 @@ fn excerpt_body(body: &str, max_bytes: usize) -> String {
             return format!("{}…", acc);
         }
     }
-    // Flat body — use char-boundary truncation
+    // Flat body, or the hinted paragraph alone exceeded budget — use
+    // char-boundary truncation from doc-start.
     format!("{}…", &body[..body.floor_char_boundary(max_bytes)])
 }
 
-/// Simple relevance score for RAG ranking.
+/// Relevance score for RAG ranking: tokenized, field-weighted over
+/// titles/aliases/ids/tags (same field tiers as `KnowledgeBase::search_ranked`,
+/// `shared/kb/src/lib.rs`), summed across query terms rather than requiring
+/// the whole phrase to match verbatim -- the previous whole-phrase
+/// `.contains(query_lower)` check almost never matched a natural-language
+/// query, collapsing nearly every candidate to a tie (#357). A hub/meta
+/// navigational node (`NodeKind::Category`/`Meta`, or `:role: hub`) is
+/// down-weighted so its broad incidental keyword coverage doesn't outscore
+/// a specific atom with a few precise hits.
 fn score_node(query_lower: &str, node: &mae_core::KbNode) -> u32 {
-    let mut score = 0u32;
-    if node.title.to_lowercase().contains(query_lower) {
-        score += 3;
+    let terms: Vec<&str> = query_lower.split_whitespace().collect();
+    if terms.is_empty() {
+        return 1;
     }
-    for tag in &node.tags {
-        if tag.to_lowercase().contains(query_lower) {
+    let title_lower = node.title.to_lowercase();
+    let id_lower = node.id.to_lowercase();
+    let mut score = 0u32;
+    for term in &terms {
+        if title_lower.contains(term) {
+            score += 3;
+        }
+        if node.aliases.iter().any(|a| a.to_lowercase().contains(term)) {
+            score += 3;
+        }
+        if id_lower.contains(term) {
             score += 2;
         }
+        for tag in &node.tags {
+            if tag.to_lowercase().contains(term) {
+                score += 2;
+            }
+        }
+    }
+    // Whole-phrase bonus: reward an exact multi-word title/alias match,
+    // mirroring search_ranked's whole_bonus intuition.
+    if title_lower.contains(query_lower)
+        || node
+            .aliases
+            .iter()
+            .any(|a| a.to_lowercase().contains(query_lower))
+    {
+        score += 5;
     }
     if score == 0 {
-        score = 1; // body match (search already filtered)
+        score = 1; // pure body match -- kb_federated_search_scoped already found it relevant
     }
-    score
+    let is_hub = matches!(
+        node.kind,
+        mae_core::KbNodeKind::Category | mae_core::KbNodeKind::Meta
+    ) || node.properties.get("role").map(String::as_str) == Some("hub");
+    if is_hub {
+        score = score.saturating_sub(2);
+    }
+    score.max(1)
+}
+
+/// Byte offset of the first case-insensitive occurrence of any query term in
+/// `body`, or `usize::MAX` if no term appears -- used to pick which
+/// paragraph `excerpt_body` starts from (not as a sort key; ranking trusts
+/// `kb_federated_search_scoped`'s order on ties, see `execute_kb_search_context`, #357).
+fn body_match_position(terms: &[&str], body: &str) -> usize {
+    let body_lower = body.to_lowercase();
+    terms
+        .iter()
+        .filter_map(|t| body_lower.find(t))
+        .min()
+        .unwrap_or(usize::MAX)
 }
 
 /// RAG-optimized KB search: returns top-K nodes with body excerpts for AI
-/// reasoning context. Searches local KB and all federated instances.
-/// Deduplicated by node ID (local wins), ranked by relevance, with
-/// paragraph-aware excerpts and low-result guidance.
+/// reasoning context. Searches within `scope` (default: all local +
+/// federated instances, or the `kb_search_scope` option) via
+/// `kb_federated_search_scoped` -- the same scope-aware, already-deduped
+/// (local wins), already-`search_sort`-ordered mechanism `kb_search`
+/// itself uses (CLAUDE.md #8). This used to be a second, independently
+/// hand-rolled federated scan with no `scope` parameter at all, which is
+/// how it ended up unscopeable (#350). Re-ranked on top of that by a
+/// tokenized, field-weighted `score_node` (same field tiers as
+/// `kb_search`'s underlying `search_ranked`, with hub/meta navigational
+/// nodes down-weighted); ties preserve `kb_federated_search_scoped`'s
+/// already-correct order rather than falling back to alphabetical-by-id
+/// (#357). Results from a `LocalModelsOnly`-restricted KB are post-filtered
+/// (dropping non-seed-exempt hits) before scoring -- see
+/// `mae_core::ai_residency::filter_residency_exempt` (#358). Paragraph-aware
+/// excerpts are centered on the earliest query-term match in the body, and
+/// low-result guidance is returned when nothing survives.
+/// `requester_provider` -- see [`execute_kb_search`] for why this parameter
+/// exists (ADR-048/#358: this tool is also ScopedFederatedScanFilterable).
 pub fn execute_kb_search_context(
     editor: &Editor,
     args: &serde_json::Value,
+    requester_provider: Option<&str>,
 ) -> Result<String, String> {
     let query = args
         .get("query")
         .and_then(|v| v.as_str())
         .ok_or("Missing required parameter: query")?;
+    let scope = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .map(mae_kb::KbScope::parse)
+        .unwrap_or_else(|| mae_kb::KbScope::parse(&editor.kb.search_scope));
     let configured_limit = editor.kb.search_max_results;
     let limit = args
         .get("limit")
@@ -1003,52 +1164,26 @@ pub fn execute_kb_search_context(
         .unwrap_or(5)
         .min(configured_limit as u64) as usize;
     let excerpt_len = editor.kb.search_excerpt_length;
-
-    // Deduplicated collection
-    let mut seen = std::collections::HashSet::new();
-    let mut results: Vec<(Option<String>, mae_core::KbNode, u32)> = Vec::new();
     let query_lower = query.to_lowercase();
+    let terms: Vec<&str> = query_lower.split_whitespace().collect();
 
-    // Search using query layer (CozoDB-first) when available
-    if let Some(q) = editor.kb.query_layer() {
-        for hit in q.search(query, limit * 3) {
-            if let Some(node) = q.get(&hit.id) {
-                if seen.insert(node.id.clone()) {
-                    let score = score_node(&query_lower, &node);
-                    results.push((None, node, score));
-                }
-            }
-        }
-    } else {
-        // Fallback: search local KB first (wins on duplicates)
-        for id in editor.kb.primary.search(query) {
-            if let Some(node) = editor.kb.primary.get(&id) {
-                if seen.insert(node.id.clone()) {
-                    let score = score_node(&query_lower, node);
-                    results.push((None, node.clone(), score));
-                }
-            }
-        }
-        // Search federated instances
-        for (uuid, kb) in &editor.kb.instances {
-            let inst_name = editor
-                .kb
-                .registry
-                .find_by_uuid(uuid)
-                .map(|i| i.name.clone());
-            for id in kb.search(query) {
-                if let Some(node) = kb.get(&id) {
-                    if seen.insert(node.id.clone()) {
-                        let score = score_node(&query_lower, node);
-                        results.push((inst_name.clone(), node.clone(), score));
-                    }
-                }
-            }
-        }
-    }
+    let scoped_results = editor.kb_federated_search_scoped(query, &scope);
+    let scoped_results =
+        mae_core::ai_residency::filter_residency_exempt(editor, requester_provider, scoped_results);
+    let mut results: Vec<(Option<String>, mae_core::KbNode, u32, usize)> = scoped_results
+        .into_iter()
+        .map(|(inst_name, node)| {
+            let score = score_node(&query_lower, &node);
+            let position = body_match_position(&terms, &node.body);
+            (inst_name, node, score, position)
+        })
+        .collect();
 
-    // Sort by score desc, then ID for deterministic tie-breaking
-    results.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.1.id.cmp(&b.1.id)));
+    // Sort by score desc only. `sort_by` is stable, so residual ties keep
+    // `kb_federated_search_scoped`'s incoming order (already the correct
+    // field-weighted/activity/alphabetical order, whichever kb_search_sort
+    // selects) instead of collapsing to alphabetical-by-id (#357).
+    results.sort_by_key(|r| std::cmp::Reverse(r.2));
 
     // Context-budget-aware scaling
     let context_budget_pct = args
@@ -1067,7 +1202,7 @@ pub fn execute_kb_search_context(
     let items: Vec<serde_json::Value> = results
         .into_iter()
         .take(effective_limit)
-        .map(|(inst_name, node, score)| {
+        .map(|(inst_name, node, score, position)| {
             let mut val = serde_json::json!({
                 "id": node.id,
                 "title": node.title,
@@ -1075,7 +1210,8 @@ pub fn execute_kb_search_context(
                 "score": score,
             });
             if !ids_only {
-                val["excerpt"] = serde_json::json!(excerpt_body(&node.body, effective_excerpt_len));
+                val["excerpt"] =
+                    serde_json::json!(excerpt_body(&node.body, effective_excerpt_len, position));
             }
             if let Some(name) = inst_name {
                 val["instance"] = serde_json::json!(name);
@@ -1227,7 +1363,19 @@ pub fn execute_kb_raw_query(editor: &Editor, args: &serde_json::Value) -> Result
 
 // --- v0.12.0 graph KB tools ---
 
-pub fn execute_kb_agenda(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+/// `requester_provider` -- the caller's AI provider, when known -- lets this
+/// PrimaryOnlyFilterable tool (ADR-048/#358) post-filter its own
+/// materialized `Node` results for the AI-residency seed-content exemption,
+/// since the gate (`crates/mae/src/ai_residency.rs`) allows the call
+/// through unconditionally for this shape rather than pre-denying it. Seed
+/// nodes never set `todo_state`/`priority`, but DO carry tags and never set
+/// `role`, so `tag`/`missing_role`/`orphan`/`dead_end`/`weakly_linked`/
+/// `custom` filters can all surface real seed content today.
+pub fn execute_kb_agenda(
+    editor: &Editor,
+    args: &serde_json::Value,
+    requester_provider: Option<&str>,
+) -> Result<String, String> {
     let filter_type = args
         .get("filter")
         .and_then(|v| v.as_str())
@@ -1268,6 +1416,8 @@ pub fn execute_kb_agenda(editor: &Editor, args: &serde_json::Value) -> Result<St
         .as_ref()
         .ok_or_else(|| "No KB store configured".to_string())?;
     let nodes = store.agenda_query(&filter).map_err(|e| e.to_string())?;
+    let nodes =
+        mae_core::ai_residency::filter_residency_exempt_primary(editor, requester_provider, nodes);
     let out: Vec<serde_json::Value> = nodes
         .iter()
         .map(|n| {
@@ -1453,6 +1603,150 @@ pub fn execute_kb_vector_search(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A federated (`shared: true`, collab_id present) instance registered
+    /// under `uuid-lifecycle` -- the shape the #303 root-cause bug affected.
+    fn lifecycle_instance() -> mae_kb::federation::KbInstance {
+        mae_kb::federation::KbInstance {
+            uuid: "uuid-lifecycle".into(),
+            name: "LifecycleInstance".into(),
+            org_dir: std::path::PathBuf::from("/tmp/mae-test-lifecycle-org-dir"),
+            db_path: std::path::PathBuf::new(),
+            primary: false,
+            enabled: true,
+            last_import: None,
+            collab_id: Some("collab-lifecycle".into()),
+            shared: true,
+            remote_peers: Vec::new(),
+            last_sync: None,
+            ai_residency: mae_kb::federation::AiResidency::default(),
+        }
+    }
+
+    /// End-to-end regression for #303's actual promise: every CRUD path an
+    /// AI agent can reach (not just crates/core::Editor methods directly)
+    /// must work flawlessly against a promoted node. Drives the real
+    /// tool-executor functions -- promote -> update -> add_link -> history
+    /// -> health -> agenda -> delete -- exactly the layer an MCP client
+    /// exercises, which Part 2's fix never tested directly.
+    #[test]
+    fn promoted_node_full_crud_lifecycle_through_ai_tool_layer() {
+        let mut editor = Editor::new();
+
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store.seed_type_system().unwrap();
+        let arc = std::sync::Arc::new(store);
+        editor.kb.primary_cozo = Some(arc.clone());
+        editor.kb.store = Some(arc.clone());
+
+        let mut kb = mae_kb::KnowledgeBase::new();
+        let mut node = mae_kb::Node::new(
+            "test:promote-lifecycle",
+            "Lifecycle Node",
+            mae_kb::NodeKind::Note,
+            "original body",
+        );
+        node.source = Some(mae_kb::NodeSource::Federation);
+        kb.insert(node);
+        editor.kb.instances.insert("uuid-lifecycle".to_string(), kb);
+        editor.kb.registry.instances.push(lifecycle_instance());
+
+        // promote
+        let promote_result = execute_kb_promote(
+            &mut editor,
+            &serde_json::json!({"id": "test:promote-lifecycle"}),
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&promote_result).unwrap();
+        assert_eq!(v["status"], "promoted");
+        assert_eq!(
+            v["instance_copy"], "removed",
+            "the origin instance's identical copy must dedup away"
+        );
+        assert!(
+            editor.kb.instances["uuid-lifecycle"]
+                .get("test:promote-lifecycle")
+                .is_none(),
+            "origin instance copy must be gone post-dedup"
+        );
+
+        // update -- this is the root-cause regression: pre-fix, this would
+        // silently route to the (now-gone) stale instance copy instead.
+        execute_kb_update(
+            &mut editor,
+            &serde_json::json!({"id": "test:promote-lifecycle", "title": "Updated Title"}),
+        )
+        .unwrap();
+        let get_result = execute_kb_get(
+            &editor,
+            &serde_json::json!({"id": "test:promote-lifecycle"}),
+        )
+        .unwrap();
+        let g: serde_json::Value = serde_json::from_str(&get_result).unwrap();
+        assert_eq!(g["title"], "Updated Title");
+
+        // add_link
+        editor
+            .kb_create_node(
+                "test:promote-lifecycle-target",
+                "Target",
+                "body",
+                mae_kb::NodeKind::Note,
+            )
+            .unwrap();
+        execute_kb_add_link(
+            &mut editor,
+            &serde_json::json!({
+                "src": "test:promote-lifecycle",
+                "dst": "test:promote-lifecycle-target",
+                "rel_type": "related_to",
+            }),
+        )
+        .unwrap();
+        let links_result = execute_kb_links_from(
+            &editor,
+            &serde_json::json!({"id": "test:promote-lifecycle"}),
+        )
+        .unwrap();
+        assert!(links_result.contains("test:promote-lifecycle-target"));
+
+        // history + restore
+        let v1 = arc
+            .snapshot_version("test:promote-lifecycle", "post-promote checkpoint")
+            .unwrap();
+        let history_result = execute_kb_history(
+            &editor,
+            &serde_json::json!({"id": "test:promote-lifecycle"}),
+        )
+        .unwrap();
+        let h: serde_json::Value = serde_json::from_str(&history_result).unwrap();
+        assert!(h["version_count"].as_u64().unwrap() >= 1);
+        execute_kb_restore(
+            &editor,
+            &serde_json::json!({"id": "test:promote-lifecycle", "version": v1}),
+        )
+        .unwrap();
+
+        // health -- must not error against a promoted node's KB.
+        let health_result = execute_kb_health(&editor).unwrap();
+        let health_json: serde_json::Value = serde_json::from_str(&health_result).unwrap();
+        assert!(health_json["local"].is_object());
+
+        // agenda -- must not error against a promoted node's KB.
+        execute_kb_agenda(&editor, &serde_json::json!({"filter": "orphan"}), None).unwrap();
+
+        // delete (exercised last)
+        execute_kb_delete(
+            &mut editor,
+            &serde_json::json!({"id": "test:promote-lifecycle"}),
+        )
+        .unwrap();
+        let get_after_delete = execute_kb_get(
+            &editor,
+            &serde_json::json!({"id": "test:promote-lifecycle"}),
+        );
+        assert!(get_after_delete.is_err());
+    }
 
     #[test]
     fn kb_get_returns_node_fields() {
@@ -2083,7 +2377,8 @@ mod tests {
     #[test]
     fn kb_search_finds_by_title() {
         let editor = Editor::new();
-        let result = execute_kb_search(&editor, &serde_json::json!({"query": "buffer"})).unwrap();
+        let result =
+            execute_kb_search(&editor, &serde_json::json!({"query": "buffer"}), None).unwrap();
         let ids = kb_search_ids(&result);
         // Enriched results now rank the canonical concept node first.
         assert_eq!(ids.first().map(String::as_str), Some("concept:buffer"));
@@ -2097,7 +2392,7 @@ mod tests {
     #[test]
     fn kb_search_empty_query_returns_bounded() {
         let editor = Editor::new();
-        let result = execute_kb_search(&editor, &serde_json::json!({"query": ""})).unwrap();
+        let result = execute_kb_search(&editor, &serde_json::json!({"query": ""}), None).unwrap();
         let ids = kb_search_ids(&result);
         // Empty query lists nodes but is bounded by the result cap (kb_list is
         // the unbounded enumeration tool).
@@ -2108,9 +2403,12 @@ mod tests {
     #[test]
     fn kb_search_respects_explicit_limit() {
         let editor = Editor::new();
-        let result =
-            execute_kb_search(&editor, &serde_json::json!({"query": "buffer", "limit": 3}))
-                .unwrap();
+        let result = execute_kb_search(
+            &editor,
+            &serde_json::json!({"query": "buffer", "limit": 3}),
+            None,
+        )
+        .unwrap();
         let ids = kb_search_ids(&result);
         assert!(ids.len() <= 3);
     }
@@ -2119,10 +2417,12 @@ mod tests {
     fn kb_search_local_scope_excludes_federated() {
         // With no federated instances, local scope behaves like all.
         let editor = Editor::new();
-        let all = execute_kb_search(&editor, &serde_json::json!({"query": "buffer"})).unwrap();
+        let all =
+            execute_kb_search(&editor, &serde_json::json!({"query": "buffer"}), None).unwrap();
         let local = execute_kb_search(
             &editor,
             &serde_json::json!({"query": "buffer", "scope": "local"}),
+            None,
         )
         .unwrap();
         assert_eq!(kb_search_ids(&all), kb_search_ids(&local));
@@ -2483,9 +2783,12 @@ mod tests {
     #[test]
     fn kb_search_context_returns_excerpts() {
         let editor = Editor::new();
-        let result =
-            execute_kb_search_context(&editor, &serde_json::json!({"query": "buffer", "limit": 3}))
-                .unwrap();
+        let result = execute_kb_search_context(
+            &editor,
+            &serde_json::json!({"query": "buffer", "limit": 3}),
+            None,
+        )
+        .unwrap();
         let items: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
         assert!(!items.is_empty());
         assert!(items.len() <= 3);
@@ -2508,13 +2811,270 @@ mod tests {
             "This is a unique rag test body for federated search",
         ));
         editor.kb.instances.insert("rag-inst".to_string(), inst);
-        let result =
-            execute_kb_search_context(&editor, &serde_json::json!({"query": "unique rag test"}))
-                .unwrap();
+        let result = execute_kb_search_context(
+            &editor,
+            &serde_json::json!({"query": "unique rag test"}),
+            None,
+        )
+        .unwrap();
         let items: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
         assert!(
             items.iter().any(|i| i["id"] == "fed-rag-test"),
             "should include federated results"
+        );
+    }
+
+    // --- #350: scope param, alias-aware ranking ---
+    // --- #357: tokenized scoring, hub/meta down-weight, stable-sort tiebreak ---
+
+    #[test]
+    fn score_node_checks_aliases() {
+        let node = mae_core::KbNode::new(
+            "user:alias-test",
+            "Unrelated Title",
+            mae_core::KbNodeKind::Note,
+            "unrelated body",
+        )
+        .with_aliases(["orderless retrieval"]);
+        // Matches only via alias -- must score at the same tier as a title
+        // match, not fall through to the flat body-match default (1).
+        // Tokenized model: "orderless" (+3) + "retrieval" (+3) per-term, plus
+        // the whole-phrase bonus (+5) since the alias exactly contains the
+        // full query -- 11 total (#357).
+        assert_eq!(score_node("orderless retrieval", &node), 11);
+    }
+
+    #[test]
+    fn score_node_checks_id() {
+        let node = mae_core::KbNode::new(
+            "concept:special-id-term",
+            "Unrelated Title",
+            mae_core::KbNodeKind::Note,
+            "unrelated body",
+        );
+        assert_eq!(score_node("special-id-term", &node), 2);
+    }
+
+    #[test]
+    fn score_node_falls_back_to_body_match_score() {
+        let node = mae_core::KbNode::new(
+            "user:plain",
+            "Unrelated Title",
+            mae_core::KbNodeKind::Note,
+            "the term appears only here",
+        );
+        assert_eq!(score_node("the term appears", &node), 1);
+    }
+
+    #[test]
+    fn kb_search_context_ties_preserve_kb_federated_search_scoped_order() {
+        let mut editor = Editor::new();
+        // Both nodes tie at score 1 under score_node's tokenized model (a
+        // pure body-only match, no title/alias/id/tag hit for either -- the
+        // Category node's hub down-weight saturates at 0 then floors back to
+        // 1 via `.max(1)`, same as the non-hub node's fallback tier). They do
+        // NOT tie in kb_federated_search_scoped's own order, though: "aaa-tie"
+        // is a Category (hub-like) node with a lower relevance prior there
+        // (no flooring in search_ranked). If execute_kb_search_context's tie
+        // handling regressed back to alphabetical-by-id, "aaa-tie" would
+        // incorrectly win; the correct behavior preserves the upstream,
+        // prior-aware order instead (#357).
+        editor
+            .kb_create_node(
+                "user:aaa-tie",
+                "Unrelated A",
+                "padding tiebreaktermxyz padding",
+                mae_core::KbNodeKind::Category,
+            )
+            .unwrap();
+        editor
+            .kb_create_node(
+                "user:zzz-tie",
+                "Unrelated B",
+                "padding tiebreaktermxyz padding",
+                mae_core::KbNodeKind::Note,
+            )
+            .unwrap();
+
+        let scope = mae_kb::KbScope::parse(&editor.kb.search_scope);
+        let upstream: Vec<String> = editor
+            .kb_federated_search_scoped("tiebreaktermxyz", &scope)
+            .into_iter()
+            .map(|(_, node)| node.id)
+            .filter(|id| id == "user:aaa-tie" || id == "user:zzz-tie")
+            .collect();
+        assert_eq!(
+            upstream,
+            vec!["user:zzz-tie".to_string(), "user:aaa-tie".to_string()],
+            "sanity check: the Category node's lower prior should already put \
+             it second in kb_federated_search_scoped's own order, got {upstream:?}"
+        );
+
+        let result = execute_kb_search_context(
+            &editor,
+            &serde_json::json!({"query": "tiebreaktermxyz"}),
+            None,
+        )
+        .unwrap();
+        let items: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        let actual: Vec<String> = items
+            .iter()
+            .map(|i| i["id"].as_str().unwrap().to_string())
+            .filter(|id| id == "user:aaa-tie" || id == "user:zzz-tie")
+            .collect();
+
+        assert_eq!(
+            actual, upstream,
+            "tied score_node candidates must preserve kb_federated_search_scoped's \
+             order, not fall back to alphabetical-by-id: {actual:?}"
+        );
+    }
+
+    #[test]
+    fn kb_search_context_hub_node_does_not_outrank_specific_target() {
+        // End-to-end regression for #357's actual reported symptom: a
+        // hub/Category node with broad keyword coverage (mentions many topic
+        // words, like the issue's "token-efficiency-evidence" example) vs. a
+        // specific Note with a real but partial title/body match. The
+        // specific note must rank above the hub node for a natural-language
+        // query that doesn't exact-substring the note's title.
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node(
+                "practice:adversarial-testing",
+                "Adversarial testing philosophy",
+                "Tests exist to falsify the implementation, not confirm it. \
+                 Prefer property/round-trip tests over one fixed happy path.",
+                mae_core::KbNodeKind::Note,
+            )
+            .unwrap();
+        editor
+            .kb_create_node(
+                "hub:dev-practices",
+                "Development practices hub",
+                "Links out to testing philosophy, commit conventions, code review, \
+                 and build tooling practices used across this project.",
+                mae_core::KbNodeKind::Category,
+            )
+            .unwrap();
+
+        let result = execute_kb_search_context(
+            &editor,
+            &serde_json::json!({"query": "testing philosophy"}),
+            None,
+        )
+        .unwrap();
+        let items: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        let ids: Vec<&str> = items.iter().map(|i| i["id"].as_str().unwrap()).collect();
+        let pos_target = ids
+            .iter()
+            .position(|&id| id == "practice:adversarial-testing");
+        let pos_hub = ids.iter().position(|&id| id == "hub:dev-practices");
+        assert!(
+            pos_target.is_some(),
+            "the specific target note must be present in results: {ids:?}"
+        );
+        if let Some(pos_hub) = pos_hub {
+            assert!(
+                pos_target.unwrap() < pos_hub,
+                "specific target note must outrank the hub node, got {ids:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn kb_search_context_natural_language_query_with_one_unmatched_filler_word_is_not_empty() {
+        // Reproduces #357's "zero results" symptom directly, calibrated to
+        // what the soft-AND fallback in search_ranked actually guarantees
+        // (relax by exactly one unmatched term, see shared/kb/src/lib.rs) --
+        // a short natural phrasing with exactly one word absent from the
+        // target node.
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node(
+                "practice:caution-annotations",
+                "Caution annotation convention",
+                "Use @ai-caution comments to flag invariants for other AI agents.",
+                mae_core::KbNodeKind::Note,
+            )
+            .unwrap();
+
+        let result = execute_kb_search_context(
+            &editor,
+            &serde_json::json!({"query": "caution annotation guidance"}),
+            None,
+        )
+        .unwrap();
+        let items: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(
+            !items.is_empty(),
+            "a natural query with one unmatched filler/synonym word must not return zero results"
+        );
+        assert!(
+            items
+                .iter()
+                .any(|i| i["id"] == "practice:caution-annotations"),
+            "target node should be present in results: {items:?}"
+        );
+    }
+
+    #[test]
+    fn kb_search_context_scope_filters_out_other_instances() {
+        let mut editor = Editor::new();
+        let mut inst = mae_core::KnowledgeBase::new();
+        inst.insert(mae_core::KbNode::new(
+            "other-inst-node",
+            "Scope Filter Target",
+            mae_core::KbNodeKind::Note,
+            "a distinctive scopefiltertermxyz body",
+        ));
+        editor.kb.instances.insert("uuid-other".to_string(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-other".into(),
+                name: "OtherInstance".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+            });
+
+        // Unscoped: the federated node is included.
+        let all_result = execute_kb_search_context(
+            &editor,
+            &serde_json::json!({"query": "scopefiltertermxyz"}),
+            None,
+        )
+        .unwrap();
+        let all_items: Vec<serde_json::Value> = serde_json::from_str(&all_result).unwrap();
+        assert!(
+            all_items.iter().any(|i| i["id"] == "other-inst-node"),
+            "unscoped search must include the federated instance's node"
+        );
+
+        // Scoped to "local": the federated node must be excluded.
+        let local_result = execute_kb_search_context(
+            &editor,
+            &serde_json::json!({"query": "scopefiltertermxyz", "scope": "local"}),
+            None,
+        )
+        .unwrap();
+        let local_json: serde_json::Value = serde_json::from_str(&local_result).unwrap();
+        // Either an empty-results guidance object, or an array with no
+        // match from the excluded instance -- both are correct.
+        let local_items = local_json.as_array().cloned().unwrap_or_default();
+        assert!(
+            !local_items.iter().any(|i| i["id"] == "other-inst-node"),
+            "scope=local must exclude the federated instance's node: {local_json}"
         );
     }
 
@@ -2541,7 +3101,8 @@ mod tests {
         ));
         editor.kb.instances.insert("dedup-inst".to_string(), inst);
         let result =
-            execute_kb_search_context(&editor, &serde_json::json!({"query": "rag dedup"})).unwrap();
+            execute_kb_search_context(&editor, &serde_json::json!({"query": "rag dedup"}), None)
+                .unwrap();
         let items: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
         let count = items.iter().filter(|i| i["id"] == "user:rag-dedup").count();
         assert_eq!(count, 1, "same node should appear only once");
@@ -2550,12 +3111,18 @@ mod tests {
     #[test]
     fn kb_search_context_deterministic_ordering() {
         let editor = Editor::new();
-        let r1 =
-            execute_kb_search_context(&editor, &serde_json::json!({"query": "buffer", "limit": 5}))
-                .unwrap();
-        let r2 =
-            execute_kb_search_context(&editor, &serde_json::json!({"query": "buffer", "limit": 5}))
-                .unwrap();
+        let r1 = execute_kb_search_context(
+            &editor,
+            &serde_json::json!({"query": "buffer", "limit": 5}),
+            None,
+        )
+        .unwrap();
+        let r2 = execute_kb_search_context(
+            &editor,
+            &serde_json::json!({"query": "buffer", "limit": 5}),
+            None,
+        )
+        .unwrap();
         assert_eq!(r1, r2, "same query should produce identical JSON");
     }
 
@@ -2583,6 +3150,7 @@ mod tests {
         let result = execute_kb_search_context(
             &editor,
             &serde_json::json!({"query": "ranking", "limit": 10}),
+            None,
         )
         .unwrap();
         let items: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
@@ -2606,7 +3174,8 @@ mod tests {
             )
             .unwrap();
         // Should not panic on CJK truncation
-        let result = execute_kb_search_context(&editor, &serde_json::json!({"query": "CJK Test"}));
+        let result =
+            execute_kb_search_context(&editor, &serde_json::json!({"query": "CJK Test"}), None);
         assert!(result.is_ok(), "CJK excerpt should not panic");
     }
 
@@ -2623,7 +3192,7 @@ mod tests {
             )
             .unwrap();
         let result =
-            execute_kb_search_context(&editor, &serde_json::json!({"query": "Emoji Test"}));
+            execute_kb_search_context(&editor, &serde_json::json!({"query": "Emoji Test"}), None);
         assert!(result.is_ok(), "emoji excerpt should not panic");
     }
 
@@ -2708,15 +3277,19 @@ mod tests {
     #[test]
     fn kb_agenda_missing_filter_arg_is_error() {
         let editor = Editor::new();
-        let err = execute_kb_agenda(&editor, &serde_json::json!({})).unwrap_err();
+        let err = execute_kb_agenda(&editor, &serde_json::json!({}), None).unwrap_err();
         assert_eq!(err, "Missing required argument: filter");
     }
 
     #[test]
     fn kb_agenda_unknown_filter_type_is_error() {
         let editor = Editor::new();
-        let err = execute_kb_agenda(&editor, &serde_json::json!({"filter": "not_a_real_filter"}))
-            .unwrap_err();
+        let err = execute_kb_agenda(
+            &editor,
+            &serde_json::json!({"filter": "not_a_real_filter"}),
+            None,
+        )
+        .unwrap_err();
         assert_eq!(err, "Unknown filter type: not_a_real_filter");
     }
 
@@ -2747,8 +3320,12 @@ mod tests {
         let mut editor = Editor::new();
         editor.kb.store = Some(std::sync::Arc::new(store));
 
-        let result =
-            execute_kb_agenda(&editor, &serde_json::json!({"filter": "missing_role"})).unwrap();
+        let result = execute_kb_agenda(
+            &editor,
+            &serde_json::json!({"filter": "missing_role"}),
+            None,
+        )
+        .unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["filter"], "missing_role");
         let ids: Vec<&str> = v["nodes"]
@@ -2803,6 +3380,7 @@ mod tests {
         let at_2 = execute_kb_agenda(
             &editor,
             &serde_json::json!({"filter": "weakly_linked", "value": "2"}),
+            None,
         )
         .unwrap();
         let v2: serde_json::Value = serde_json::from_str(&at_2).unwrap();
@@ -2820,6 +3398,7 @@ mod tests {
         let at_5 = execute_kb_agenda(
             &editor,
             &serde_json::json!({"filter": "weakly_linked", "value": "5"}),
+            None,
         )
         .unwrap();
         let v5: serde_json::Value = serde_json::from_str(&at_5).unwrap();
@@ -2871,11 +3450,13 @@ mod tests {
         let malformed = execute_kb_agenda(
             &editor,
             &serde_json::json!({"filter": "weakly_linked", "value": "not-a-number"}),
+            None,
         )
         .unwrap();
         let explicit_2 = execute_kb_agenda(
             &editor,
             &serde_json::json!({"filter": "weakly_linked", "value": "2"}),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -2923,11 +3504,13 @@ mod tests {
         let malformed = execute_kb_agenda(
             &editor,
             &serde_json::json!({"filter": "stale", "value": "not-a-number"}),
+            None,
         )
         .unwrap();
         let explicit_30 = execute_kb_agenda(
             &editor,
             &serde_json::json!({"filter": "stale", "value": "30"}),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -2944,6 +3527,237 @@ mod tests {
                 .iter()
                 .any(|n| n["id"] == "note:agenda-stale-fresh"),
             "a freshly-inserted node should never be stale"
+        );
+    }
+
+    // --- New: AI-residency seed-content exemption post-filter (#358) ---
+    //
+    // These exercise execute_kb_search/execute_kb_search_context/execute_kb_agenda's
+    // own post-filter directly (mae_core::ai_residency::filter_residency_exempt(_primary)),
+    // complementing crates/mae/src/ai_residency.rs's gate-level tests, which only
+    // cover the SingleTarget shape's exemption (the gate now allows these three
+    // ScopedFederatedScanFilterable/PrimaryOnlyFilterable tools through
+    // unconditionally -- enforcement lives here).
+
+    fn seed_node_with(id: &str, body: &str) -> mae_core::KbNode {
+        mae_core::KbNode::new(id, "Seeded Node", mae_core::KbNodeKind::Concept, body)
+            .with_source(mae_kb::NodeSource::Seed, 1)
+    }
+
+    fn non_seed_node_with(id: &str, body: &str) -> mae_core::KbNode {
+        mae_core::KbNode::new(id, "User Node", mae_core::KbNodeKind::Note, body)
+            .with_source(mae_kb::NodeSource::Manual, 1)
+    }
+
+    #[test]
+    fn kb_search_keeps_seed_drops_non_seed_from_restricted_primary() {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(seed_node_with(
+            "seed:residency-a",
+            "findableresidencytestterm seed content",
+        ));
+        editor.kb.primary.insert(non_seed_node_with(
+            "user:residency-b",
+            "findableresidencytestterm user content",
+        ));
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+
+        let result = execute_kb_search(
+            &editor,
+            &serde_json::json!({"query": "findableresidencytestterm"}),
+            Some("claude"),
+        )
+        .unwrap();
+        let items: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(
+            items.iter().any(|i| i["id"] == "seed:residency-a"),
+            "seed content must stay reachable from a restricted primary: {items:?}"
+        );
+        assert!(
+            !items.iter().any(|i| i["id"] == "user:residency-b"),
+            "non-seed content must be filtered out of a restricted primary: {items:?}"
+        );
+    }
+
+    #[test]
+    fn kb_search_local_provider_bypasses_residency_filter_entirely() {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(seed_node_with(
+            "seed:residency-c",
+            "findableresidencytermtwo seed content",
+        ));
+        editor.kb.primary.insert(non_seed_node_with(
+            "user:residency-d",
+            "findableresidencytermtwo user content",
+        ));
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+
+        let result = execute_kb_search(
+            &editor,
+            &serde_json::json!({"query": "findableresidencytermtwo"}),
+            Some("ollama"),
+        )
+        .unwrap();
+        let items: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(
+            items.iter().any(|i| i["id"] == "seed:residency-c"),
+            "{items:?}"
+        );
+        assert!(
+            items.iter().any(|i| i["id"] == "user:residency-d"),
+            "a local provider must bypass filtering entirely: {items:?}"
+        );
+    }
+
+    #[test]
+    fn kb_search_no_filtering_when_primary_open() {
+        let mut editor = Editor::new(); // primary defaults to Open
+        editor.kb.primary.insert(non_seed_node_with(
+            "user:residency-e",
+            "findableresidencytermthree user content",
+        ));
+
+        let result = execute_kb_search(
+            &editor,
+            &serde_json::json!({"query": "findableresidencytermthree"}),
+            Some("claude"),
+        )
+        .unwrap();
+        let items: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(
+            items.iter().any(|i| i["id"] == "user:residency-e"),
+            "an open KB's content must never be filtered: {items:?}"
+        );
+    }
+
+    #[test]
+    fn kb_search_context_keeps_seed_drops_non_seed_from_restricted_primary() {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(seed_node_with(
+            "seed:residency-f",
+            "findableresidencytermfour seed content",
+        ));
+        editor.kb.primary.insert(non_seed_node_with(
+            "user:residency-g",
+            "findableresidencytermfour user content",
+        ));
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+
+        let result = execute_kb_search_context(
+            &editor,
+            &serde_json::json!({"query": "findableresidencytermfour"}),
+            Some("claude"),
+        )
+        .unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let items: Vec<serde_json::Value> = parsed.as_array().cloned().unwrap_or_default();
+        assert!(
+            items.iter().any(|i| i["id"] == "seed:residency-f"),
+            "seed content must stay reachable from a restricted primary: {items:?}"
+        );
+        assert!(
+            !items.iter().any(|i| i["id"] == "user:residency-g"),
+            "non-seed content must be filtered out of a restricted primary: {items:?}"
+        );
+    }
+
+    #[test]
+    fn kb_search_context_all_filtered_returns_low_result_guidance_not_a_mislabeled_empty_list() {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(non_seed_node_with(
+            "user:residency-h",
+            "findableresidencytermfive user-only content",
+        ));
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+
+        let result = execute_kb_search_context(
+            &editor,
+            &serde_json::json!({"query": "findableresidencytermfive"}),
+            Some("claude"),
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert!(
+            value.get("guidance").is_some(),
+            "an all-filtered result set must hit the low-result guidance branch, not a bare empty array: {value:?}"
+        );
+    }
+
+    #[test]
+    fn kb_agenda_keeps_seed_drops_non_seed_from_restricted_primary() {
+        // Seed nodes never set todo_state/priority, but DO carry tags -- use
+        // the "tag" filter so the positive case is real, not vacuous.
+        // kb_agenda reads editor.kb.store (a CozoKbStore), not editor.kb.primary
+        // (the in-memory KnowledgeBase kb_search/kb_get use) -- see the
+        // pre-existing kb_agenda_missing_role_dispatches_to_missing_role_filter
+        // test above for the same setup pattern.
+        use mae_kb::KbStore;
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store
+            .insert_node(
+                &seed_node_with("seed:residency-i", "seed agenda content")
+                    .with_tags(["residencytesttag"]),
+            )
+            .unwrap();
+        store
+            .insert_node(
+                &non_seed_node_with("user:residency-j", "user agenda content")
+                    .with_tags(["residencytesttag"]),
+            )
+            .unwrap();
+
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+
+        let result = execute_kb_agenda(
+            &editor,
+            &serde_json::json!({"filter": "tag", "value": "residencytesttag"}),
+            Some("claude"),
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let nodes = value["nodes"].as_array().unwrap();
+        assert!(
+            nodes.iter().any(|n| n["id"] == "seed:residency-i"),
+            "seed content must stay reachable from a restricted primary: {nodes:?}"
+        );
+        assert!(
+            !nodes.iter().any(|n| n["id"] == "user:residency-j"),
+            "non-seed content must be filtered out of a restricted primary: {nodes:?}"
+        );
+        // count must reflect the already-filtered node list, not the
+        // pre-filter total -- kept consistent by construction (both derive
+        // from the same filtered `nodes` vec), asserted here explicitly.
+        assert_eq!(value["count"], nodes.len());
+    }
+
+    #[test]
+    fn kb_agenda_local_provider_bypasses_residency_filter_entirely() {
+        use mae_kb::KbStore;
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store
+            .insert_node(
+                &non_seed_node_with("user:residency-k", "user agenda content")
+                    .with_tags(["residencytesttagtwo"]),
+            )
+            .unwrap();
+
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+
+        let result = execute_kb_agenda(
+            &editor,
+            &serde_json::json!({"filter": "tag", "value": "residencytesttagtwo"}),
+            Some("ollama"),
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let nodes = value["nodes"].as_array().unwrap();
+        assert!(
+            nodes.iter().any(|n| n["id"] == "user:residency-k"),
+            "a local provider must bypass filtering entirely: {nodes:?}"
         );
     }
 }

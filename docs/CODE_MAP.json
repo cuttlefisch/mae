@@ -65,6 +65,10 @@
           "kind": "mod"
         },
         {
+          "name": "guidance",
+          "kind": "mod"
+        },
+        {
           "name": "ollama",
           "kind": "mod"
         },
@@ -247,6 +251,10 @@
       "public_items": [
         {
           "name": "agenda_view",
+          "kind": "mod"
+        },
+        {
+          "name": "ai_residency",
           "kind": "mod"
         },
         {

@@ -173,6 +173,14 @@ fn render_kb_node_header(out: &mut String, node_id: &str, node: &mae_kb::Node) {
     if !node.tags.is_empty() {
         out.push_str(&format!("tags: {}\n", node.tags.join(", ")));
     }
+    if node.source == Some(mae_kb::NodeSource::Promoted) {
+        if let (Some(from), Some(at)) = (
+            node.properties.get("promoted_from_org_dir"),
+            node.properties.get("promoted_at"),
+        ) {
+            out.push_str(&format!("promoted from {} on {}\n", from, at));
+        }
+    }
     out.push('\n');
 }
 
@@ -2509,6 +2517,42 @@ mod tests {
                 .iter()
                 .all(|b| b.kind != crate::BufferKind::Conversation),
             "conversation buffers should be removed"
+        );
+    }
+
+    #[test]
+    fn render_kb_node_header_shows_promotion_provenance() {
+        let mut node = mae_kb::Node::new("test-note-1", "Note One", mae_kb::NodeKind::Note, "body");
+        node.source = Some(mae_kb::NodeSource::Promoted);
+        node.properties.insert(
+            "promoted_from_org_dir".to_string(),
+            "/home/user/notes".to_string(),
+        );
+        node.properties.insert(
+            "promoted_at".to_string(),
+            "2026-07-20T14:03:00Z".to_string(),
+        );
+
+        let mut out = String::new();
+        render_kb_node_header(&mut out, "test-note-1", &node);
+
+        assert!(
+            out.contains("promoted from /home/user/notes on 2026-07-20T14:03:00Z"),
+            "expected provenance line, got: {out}"
+        );
+    }
+
+    #[test]
+    fn render_kb_node_header_omits_provenance_for_non_promoted_node() {
+        let node = mae_kb::Node::new("user:x", "X", mae_kb::NodeKind::Note, "body")
+            .with_source(mae_kb::NodeSource::Manual, 0);
+
+        let mut out = String::new();
+        render_kb_node_header(&mut out, "user:x", &node);
+
+        assert!(
+            !out.contains("promoted from"),
+            "non-promoted node must not show a provenance line: {out}"
         );
     }
 

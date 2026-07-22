@@ -207,6 +207,28 @@ fn kb_search_scope_option_round_trip() {
 }
 
 #[test]
+fn ai_guidance_kb_option_round_trip() {
+    let mut editor = Editor::new();
+    // Empty (disabled, the default) always validates.
+    assert!(editor.set_option("ai_guidance_kb", "").is_ok());
+    assert_eq!(editor.ai_guidance_kb, "");
+    // "primary" always validates.
+    assert!(editor.set_option("ai_guidance_kb", "primary").is_ok());
+    assert_eq!(editor.ai_guidance_kb, "primary");
+    // An unknown instance name is rejected (no instance registered).
+    assert!(editor.set_option("ai_guidance_kb", "no-such-kb").is_err());
+    // A registered instance name validates.
+    let dir = create_test_org_dir();
+    let _test_dirs = with_test_dirs(&mut editor);
+    editor.kb_register("dev-practices", dir.path());
+    assert!(editor.set_option("ai_guidance_kb", "dev-practices").is_ok());
+    assert_eq!(
+        editor.get_option("ai_guidance_kb").map(|(v, _)| v),
+        Some("dev-practices".to_string())
+    );
+}
+
+#[test]
 fn kb_find_candidates_small_kb_returns_all() {
     let editor = Editor::new();
     // The seed manual is well under the lazy threshold.
@@ -251,6 +273,123 @@ fn kb_find_candidates_large_kb_is_bounded_but_query_reachable() {
     assert!(
         hits.iter().any(|(id, _, _)| id == "note:zebra-marker"),
         "targeted query must find the distinctive node at scale"
+    );
+}
+
+#[test]
+fn kb_find_candidates_empty_query_defaults_to_activity_order_not_alphabetical() {
+    let mut editor = Editor::new();
+    assert_eq!(
+        editor.kb.search_sort, "relevance",
+        "sanity check: default sort"
+    );
+    // "note:zzz-recent" sorts LAST alphabetically among these three, but is
+    // the most recently accessed -- an empty-query kb-find must default to
+    // activity order (most-recently-active first), not let the meaningless
+    // "relevance" default silently degenerate to alphabetical-by-id.
+    editor.kb.primary.insert(mae_kb::Node::new(
+        "note:aaa-old",
+        "Old note",
+        mae_kb::NodeKind::Note,
+        "body",
+    ));
+    editor.kb.primary.insert(mae_kb::Node::new(
+        "note:mmm-mid",
+        "Mid note",
+        mae_kb::NodeKind::Note,
+        "body",
+    ));
+    let (y, m, d) = today_ymd();
+    let today = mae_kb::activity::format_date(y, m, d);
+    let mut recent = mae_kb::Node::new(
+        "note:zzz-recent",
+        "Recent note",
+        mae_kb::NodeKind::Note,
+        "body",
+    );
+    recent.properties.insert("last-accessed".to_string(), today);
+    editor.kb.primary.insert(recent);
+
+    let cands = editor.kb_find_candidates("");
+    let ids: Vec<&str> = cands.iter().map(|(id, _, _)| id.as_str()).collect();
+    assert_eq!(
+        ids.first(),
+        Some(&"note:zzz-recent"),
+        "most recently accessed node should be first for an empty query, got {ids:?}"
+    );
+}
+
+#[test]
+fn kb_find_candidates_respects_explicit_alphabetical_override_even_on_empty_query() {
+    let mut editor = Editor::new();
+    editor.set_option("kb_search_sort", "alphabetical").unwrap();
+    editor.kb.primary.insert(mae_kb::Node::new(
+        "note:aaa-old",
+        "Old note",
+        mae_kb::NodeKind::Note,
+        "body",
+    ));
+    let (y, m, d) = today_ymd();
+    let today = mae_kb::activity::format_date(y, m, d);
+    let mut recent = mae_kb::Node::new(
+        "note:zzz-recent",
+        "Recent note",
+        mae_kb::NodeKind::Note,
+        "body",
+    );
+    recent.properties.insert("last-accessed".to_string(), today);
+    editor.kb.primary.insert(recent);
+
+    let cands = editor.kb_find_candidates("");
+    let ids: Vec<&str> = cands.iter().map(|(id, _, _)| id.as_str()).collect();
+    // Editor::new() seeds ~1000 manual-KB nodes, so "note:aaa-old" won't be
+    // globally first -- check its position RELATIVE to "note:zzz-recent"
+    // instead: alphabetically "aaa" sorts before "zzz", so if this held,
+    // the explicit alphabetical choice was correctly left untouched. Under
+    // the (wrong) activity default, zzz-recent's non-zero score would put
+    // it first instead.
+    let pos_old = ids.iter().position(|&id| id == "note:aaa-old").unwrap();
+    let pos_recent = ids.iter().position(|&id| id == "note:zzz-recent").unwrap();
+    assert!(
+        pos_old < pos_recent,
+        "an explicit alphabetical sort choice must stay alphabetical on an \
+         empty query, not be silently overridden by the activity default \
+         (note:aaa-old at {pos_old}, note:zzz-recent at {pos_recent})"
+    );
+}
+
+#[test]
+fn kb_find_candidates_nonempty_query_behavior_unchanged_by_empty_query_default() {
+    // Regression guard: the empty-query activity default must only apply
+    // when query.is_empty() -- a non-empty query's candidate set is
+    // unaffected (same nodes as kb_all_node_triples, no filtering here;
+    // ranking/filtering for non-empty queries happens client-side via the
+    // palette's fuzzy filter).
+    let mut editor = Editor::new();
+    editor.kb.primary.insert(mae_kb::Node::new(
+        "note:aaa-old",
+        "Old note",
+        mae_kb::NodeKind::Note,
+        "body",
+    ));
+    let (y, m, d) = today_ymd();
+    let today = mae_kb::activity::format_date(y, m, d);
+    let mut recent = mae_kb::Node::new(
+        "note:zzz-recent",
+        "Recent note",
+        mae_kb::NodeKind::Note,
+        "body",
+    );
+    recent.properties.insert("last-accessed".to_string(), today);
+    editor.kb.primary.insert(recent);
+
+    let all = editor.kb_all_node_triples();
+    let queried = editor.kb_find_candidates("note");
+    assert_eq!(
+        all.len(),
+        queried.len(),
+        "a non-empty query must return the same candidate set as kb_all_node_triples \
+         (small-KB path), unaffected by the empty-query activity default"
     );
 }
 

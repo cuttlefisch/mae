@@ -64,6 +64,13 @@ pub struct ClientSession {
     /// (`ai_event_handler::handle_mcp_request`) to decide whether this session may
     /// touch a `LocalModelsOnly`-flagged KB.
     pub declared_ai_provider: Option<String>,
+    /// Server-supplied `instructions` string surfaced in this session's
+    /// `initialize` response (the MCP spec's optional server→client guidance
+    /// field). Set once by the caller (`McpServer::run`'s accept loop, from
+    /// `McpServer::with_instructions`) before the request loop begins — this
+    /// crate itself has no KB/editor knowledge to compute it. `None`
+    /// (default) omits the field entirely, unchanged behavior.
+    pub instructions: Option<String>,
 }
 
 impl ClientSession {
@@ -83,6 +90,7 @@ impl ClientSession {
             events_dropped: 0,
             peer_identity: None,
             declared_ai_provider: None,
+            instructions: None,
         }
     }
 

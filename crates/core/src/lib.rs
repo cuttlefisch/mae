@@ -4,6 +4,7 @@
 //! @since: 0.1.0
 
 pub mod agenda_view;
+pub mod ai_residency;
 pub use mae_babel as babel;
 pub mod buffer;
 pub mod buffer_mode;

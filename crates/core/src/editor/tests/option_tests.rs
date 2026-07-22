@@ -156,6 +156,14 @@ fn open_link_at_cursor_no_link() {
 
 #[test]
 fn open_link_at_cursor_detects_url() {
+    // MAE_BROWSER (env-var-global, so serialize + restore per principle #14
+    // test isolation) is set to a harmless no-op so this exercises the real
+    // Command::new(...).spawn() path without popping a real browser window.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _lock = ENV_LOCK.lock().unwrap();
+    let prev = std::env::var("MAE_BROWSER").ok();
+    std::env::set_var("MAE_BROWSER", "true");
+
     let mut editor = Editor::new();
     editor.buffers[0].insert_text_at(0, "visit https://mae.invalid for info");
     // Move cursor to the URL
@@ -164,6 +172,11 @@ fn open_link_at_cursor_detects_url() {
     editor.dispatch_builtin("open-link-at-cursor");
     // URL opens externally, status shows "Opening ..."
     assert!(editor.status_msg.contains("Opening"));
+
+    match prev {
+        Some(v) => std::env::set_var("MAE_BROWSER", v),
+        None => std::env::remove_var("MAE_BROWSER"),
+    }
 }
 
 #[test]

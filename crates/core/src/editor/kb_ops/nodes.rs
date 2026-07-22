@@ -16,15 +16,26 @@ impl Editor {
     ///  - Copies title/body/tags/kind/aliases; does NOT copy `source_file`
     ///    (ephemeral anyway, `#[serde(skip)]`) — the promoted copy is no
     ///    longer file-tethered.
+    ///  - Resets `source` to `NodeSource::Promoted` and clears `crdt_doc`.
+    ///    Leaving the original `Federation` marker in place used to make
+    ///    `kb_owner_of`'s #76 stranded-node guard mistake the fresh primary
+    ///    copy for pre-ADR-019 leftover cruft and keep routing every future
+    ///    update/delete/adopt/remote-CRDT-update back to the stale instance
+    ///    copy — promotion was a no-op for CRUD purposes. Leaving the old
+    ///    `crdt_doc` in place would also let a later re-share
+    ///    (`kb_prepare_share_lineage`) reuse a lineage tied to the WRONG
+    ///    KB/epoch, since that function only mints a fresh one when
+    ///    `crdt_doc.is_none()`.
     ///  - Stamps `promoted_from_{uuid,org_dir,path}`/`promoted_at` into
     ///    `node.properties` (already durably persisted as `properties_json`
     ///    — no schema migration) so provenance isn't silently lost.
     ///  - The node's id is UNCHANGED — nothing elsewhere in the KB graph
     ///    needs link-rewriting, since resolution is by id string.
-    ///  - Leaves the original org file on disk untouched, and leaves the
-    ///    federated instance's own copy of the node in place (no
-    ///    dedup-on-promote in this first cut) — conservative, Alpha-
-    ///    appropriate defaults.
+    ///  - Leaves the original org file on disk untouched. The federated
+    ///    instance's own copy of the node is deduplicated away immediately
+    ///    (`kb_dedup_promoted_instance_copy`) when its content still
+    ///    matches what was just promoted; if it has since diverged, both
+    ///    copies are kept and surfaced via notification for manual review.
     ///
     /// Persistence mirrors the existing `kb_create_node`/`kb_persist_node`
     /// idiom exactly (including the daemon-hosted-primary CRDT-enqueue
@@ -65,6 +76,8 @@ impl Editor {
             .map(|p| p.display().to_string())
             .unwrap_or_default();
         node.source_file = None;
+        node.source = Some(mae_kb::NodeSource::Promoted);
+        node.crdt_doc = None;
         node.properties
             .insert("promoted_from_uuid".to_string(), owner_uuid.clone());
         node.properties.insert(
@@ -78,6 +91,9 @@ impl Editor {
 
         let owner: Option<String> = None; // primary
         self.kb_persist_node_in(&owner, &node);
+        // Snapshot before the branch below potentially moves `node` into
+        // `primary.insert` — the dedup check needs it afterward.
+        let promoted_snapshot = node.clone();
         if let Some(kb_id) = self.kb_sync_target(&owner) {
             self.kb_enqueue_node_crdt(&owner, &kb_id, node_id, node.clone());
             self.kb_enqueue_manifest_op(&kb_id, node_id, &node.title, true);
@@ -90,12 +106,92 @@ impl Editor {
         // layer here would silently reintroduce a variant of #303.
         self.kb.rebuild_query_layer();
 
-        self.set_status(format!("Promoted '{}' to the primary KB", node_id));
+        let dedup = self.kb_dedup_promoted_instance_copy(node_id, &owner_uuid, &promoted_snapshot);
+
+        let status = match dedup {
+            PromoteDedup::Removed => format!(
+                "Promoted '{}' to the primary KB (instance copy removed)",
+                node_id
+            ),
+            PromoteDedup::KeptDiverged => format!(
+                "Promoted '{}' to the primary KB (instance copy diverges — kept both, see notifications)",
+                node_id
+            ),
+        };
+        self.set_status(status);
         Ok(KbPromoteResult {
             node_id: node_id.to_string(),
             promoted_from_uuid: owner_uuid,
             promoted_from_org_dir: instance.org_dir,
+            dedup,
         })
+    }
+
+    /// Deduplicate the origin instance's now-redundant copy of a node that
+    /// was just promoted into primary (`kb_promote_node`). Inverse polarity
+    /// of `kb_migrate_stranded_federation_nodes`: there, the INSTANCE copy
+    /// is correct and a stale `primary` copy is cruft to remove; here, the
+    /// freshly-promoted PRIMARY copy is correct and the INSTANCE copy is
+    /// the leftover. Content is checked (not assumed) to still match what
+    /// was just promoted — normally true immediately post-copy, but this
+    /// stays correct if something else raced in between.
+    ///
+    /// `pub(super)` (not private) so tests can drive the divergence branch
+    /// directly — that path isn't reachable through `kb_promote_node`'s own
+    /// synchronous call sequence in v1 (content always matches immediately
+    /// post-copy), but must stay correct if something ever races.
+    pub(super) fn kb_dedup_promoted_instance_copy(
+        &mut self,
+        node_id: &str,
+        owner_uuid: &str,
+        promoted: &mae_kb::Node,
+    ) -> PromoteDedup {
+        let Some(instance_node) = self
+            .kb
+            .instances
+            .get(owner_uuid)
+            .and_then(|kb| kb.get(node_id))
+            .cloned()
+        else {
+            // Already gone — nothing to dedup.
+            return PromoteDedup::Removed;
+        };
+
+        if !super::sync::kb_content_equal(promoted, &instance_node) {
+            tracing::warn!(target: "kb_sync", node_id = %node_id, instance = %owner_uuid, "promoted copy diverges from its origin instance copy — preserved, surfacing for review");
+            self.notify(
+                crate::notifications::Notification::action_required(
+                    "kb",
+                    format!(
+                        "KB '{node_id}': the promoted copy diverges from its origin instance copy"
+                    ),
+                )
+                .key(format!("kb:promote-diverge:{node_id}"))
+                .body(
+                    "This node was just promoted to the primary KB, but its content no longer \
+                     matches the copy still in its origin federated instance. Both copies were \
+                     kept — review and delete the stale one manually (`:kb-find` or the KB \
+                     graph view) once you've confirmed which is correct.",
+                ),
+            );
+            return PromoteDedup::KeptDiverged;
+        }
+
+        if let Some(store) = self.kb.instance_stores.get(owner_uuid) {
+            if let Err(e) = store.delete_node(node_id) {
+                tracing::warn!(node_id = %node_id, error = %e, "KB instance store delete failed during promote dedup");
+            }
+        }
+        if let Some(kb) = self.kb.instances.get_mut(owner_uuid) {
+            kb.remove(node_id);
+        }
+
+        let instance_owner = Some(owner_uuid.to_string());
+        if let Some(kb_id) = self.kb_sync_target(&instance_owner) {
+            self.kb_enqueue_manifest_op(&kb_id, node_id, "", false);
+        }
+
+        PromoteDedup::Removed
     }
 
     /// Create a new KB node in the local knowledge base.

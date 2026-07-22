@@ -15,11 +15,13 @@ impl Editor {
             .map(|p| p.root.clone())
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_default();
-        self.file_picker = Some(FilePicker::scan(
+        let mut picker = FilePicker::scan(
             &root,
             self.file_picker_max_depth,
             self.file_picker_max_candidates,
-        ));
+        );
+        picker.reorder_by_recency(self.recent_files.list());
+        self.file_picker = Some(picker);
         self.set_mode(Mode::FilePicker);
     }
 

@@ -458,6 +458,13 @@ impl OptionRegistry {
                      transparently launches the mae-agent shell instead of opening the old \
                      conversation buffer. See ADR-049.",
                     OptionKind::Bool, "false", Some("ai.chat_enabled"), &[]),
+                opt!("ai_guidance_kb", &["ai-guidance-kb"],
+                    "Name of a registered KB instance (or \"primary\") whose content is actively \
+                     surfaced to AI agents at session start as standing practices/guidance that \
+                     should be followed — both mae-agent-cli's system prompt and, for any \
+                     MCP-connected client, the initialize response's instructions field. Empty \
+                     (default) disables this — no behavior change from today.",
+                    OptionKind::String, "", Some("ai.guidance_kb"), &[]),
                 // --- Which-key ---
                 opt!("which_key_idle_delay", &["which-key-idle-delay"],
                     "Milliseconds of idle time (no input) after the leader keypad activates \

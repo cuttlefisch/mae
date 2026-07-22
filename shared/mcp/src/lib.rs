@@ -126,6 +126,10 @@ pub struct McpServer {
     /// else dialing the socket) connects exactly as it always has, it just won't be
     /// able to declare an AI provider that gets trusted for `LocalModelsOnly` KBs.
     psk_auth: Option<Arc<auth::PskAuth>>,
+    /// Optional `initialize.instructions` string surfaced to every client
+    /// connecting to this server (see `with_instructions`). `None` preserves
+    /// today's behavior (field omitted from the response entirely).
+    instructions: Option<String>,
 }
 
 impl McpServer {
@@ -139,6 +143,7 @@ impl McpServer {
             tool_tx,
             broadcaster,
             psk_auth: None,
+            instructions: None,
         }
     }
 
@@ -152,6 +157,18 @@ impl McpServer {
     /// connect to this socket at all.
     pub fn with_psk_auth(mut self, psk: auth::PskAuth) -> Self {
         self.psk_auth = Some(Arc::new(psk));
+        self
+    }
+
+    /// Surface `s` as the `initialize` response's `instructions` field for
+    /// every client connecting to this server (the MCP spec's optional
+    /// server→client guidance string, which compliant clients — Claude Code
+    /// included — pass to the model). This crate has no KB/editor knowledge
+    /// of its own, so the content is entirely caller-supplied; the editor
+    /// binary is the typical caller, building it from a designated guidance
+    /// KB + registered KB names (`mae_ai::guidance`).
+    pub fn with_instructions(mut self, s: impl Into<String>) -> Self {
+        self.instructions = Some(s.into());
         self
     }
 
@@ -180,7 +197,8 @@ impl McpServer {
         loop {
             match listener.accept().await {
                 Ok((stream, _addr)) => {
-                    let session = ClientSession::new();
+                    let mut session = ClientSession::new();
+                    session.instructions = self.instructions.clone();
                     let session_id = session.id;
                     info!(session = session_id, "MCP client connected");
 
@@ -668,6 +686,7 @@ pub async fn handle_request(
                         "stateNotifications": true,
                     },
                 }),
+                instructions: session.instructions.clone(),
             };
             JsonRpcResponse::success(id, serde_json::to_value(result).unwrap())
         }
@@ -1320,6 +1339,86 @@ mod tests {
         )
         .await;
         assert!(resp.error.is_none());
+
+        drop(client);
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn with_instructions_surfaces_in_every_client_initialize_response() {
+        // McpServer::with_instructions -> ClientSession::instructions ->
+        // InitializeResult.instructions, exercised over a real accept loop
+        // (not a bare handle_request call) so the whole per-connection
+        // plumbing (run()'s accept loop setting session.instructions before
+        // the request loop begins) is actually covered, for two separate
+        // clients -- confirms it's server-level config, not consumed once.
+        let socket_path = format!("/tmp/mae-test-instructions-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        let (tool_tx, _tool_rx) = mpsc::channel::<McpToolRequest>(16);
+        let server = McpServer::new(&socket_path, tool_tx, dummy_broadcaster())
+            .with_instructions("Consult KB 'dev-practices' before acting.");
+
+        tokio::spawn(async move {
+            server.run(vec![]).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        for client_name in ["client-a", "client-b"] {
+            let mut client = tokio::net::UnixStream::connect(&socket_path)
+                .await
+                .expect("connect");
+            let resp = send_and_recv(
+                &mut client,
+                &serde_json::json!({
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {"clientInfo": {"name": client_name}}
+                }),
+            )
+            .await;
+            let result = resp.result.expect("initialize must succeed");
+            assert_eq!(
+                result["instructions"], "Consult KB 'dev-practices' before acting.",
+                "{client_name} must see the server's instructions"
+            );
+            drop(client);
+        }
+
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    #[tokio::test]
+    async fn without_with_instructions_the_field_is_absent_from_the_response() {
+        // Backward compat: a server that never calls with_instructions must
+        // produce a response with no `instructions` key at all (existing
+        // clients that don't expect the field are unaffected).
+        let socket_path = format!("/tmp/mae-test-no-instructions-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        let (tool_tx, _tool_rx) = mpsc::channel::<McpToolRequest>(16);
+        let server = McpServer::new(&socket_path, tool_tx, dummy_broadcaster());
+
+        tokio::spawn(async move {
+            server.run(vec![]).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let mut client = tokio::net::UnixStream::connect(&socket_path)
+            .await
+            .expect("connect");
+        let resp = send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "plain-client"}}
+            }),
+        )
+        .await;
+        let result = resp.result.expect("initialize must succeed");
+        assert!(
+            result.get("instructions").is_none(),
+            "instructions must be entirely absent, not null: {result}"
+        );
 
         drop(client);
         let _ = std::fs::remove_file(&socket_path);
