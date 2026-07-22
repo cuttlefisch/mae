@@ -683,6 +683,7 @@ mod tests {
                 id: format!("n{i}"),
                 title: "x".to_string(),
                 kind: NodeKind::Concept,
+                is_seed: false,
             })
             .collect();
         let graph = build_kb_graph_chord_positions(&nodes, &[], &[], &[], 1.0);
@@ -713,6 +714,7 @@ mod tests {
                 id: format!("n{i}"),
                 title: "x".to_string(),
                 kind: NodeKind::Concept,
+                is_seed: false,
             })
             .collect();
         let graph = build_kb_graph_chord_positions(&nodes, &[], &[], &[], 1.0);
@@ -746,6 +748,7 @@ mod tests {
                     id: format!("n{i}"),
                     title: "x".to_string(),
                     kind: NodeKind::Concept,
+                    is_seed: false,
                 })
                 .collect();
             let graph = build_kb_graph_chord_positions(&nodes, &[], &[], &[], 1.0);
