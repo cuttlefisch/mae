@@ -14,13 +14,52 @@
 //! without re-verifying the ordering comments inline.
 
 use mae_core::parse_key_seq_spaced;
-use mae_core::Editor;
+use mae_core::{CommandSource, Editor};
 
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use super::{SchemeRuntime, SharedState};
 
 impl SchemeRuntime {
+    /// Dispatch a command by name, Scheme-aware (#363). `editor.dispatch_builtin`
+    /// alone only knows about Rust-implemented builtins and silently no-ops for
+    /// a `CommandSource::Scheme` name — this is the shared helper that fixes
+    /// that for every non-interactive dispatch path (`(run-command ...)`'s
+    /// drain loop below, and the `execute_command` MCP tool in
+    /// `crates/mae/src/ai_event_handler.rs`). Mirrors the ONE dispatch path
+    /// that already got this right, `dispatch_command` in
+    /// `crates/mae/src/key_handling/mod.rs` (the interactive keystroke/
+    /// command-palette path) -- specifically its `CommandSource::Scheme` arm
+    /// (`inject_editor_state` -> `call_function` -> `apply_to_editor`) --
+    /// without replicating that function's hook/advice/autoload-re-dispatch
+    /// machinery, which is specific to the interactive UX and was never fired
+    /// by `run-command`/`execute_command` before either. Returns whether a
+    /// command was actually dispatched (found + run), matching
+    /// `dispatch_builtin`'s existing return contract.
+    pub fn dispatch_command_by_name(&mut self, editor: &mut Editor, name: &str) -> bool {
+        let source = editor.commands.get(name).map(|c| c.source.clone());
+        match source {
+            Some(CommandSource::Scheme(fn_name)) => {
+                self.inject_editor_state(editor);
+                match self.call_function(&fn_name) {
+                    Ok(result) => {
+                        self.apply_to_editor(editor);
+                        if !result.is_empty() {
+                            editor.set_status(result);
+                        }
+                        true
+                    }
+                    Err(e) => {
+                        error!(command = name, scheme_fn = %fn_name, error = %e, "scheme command failed");
+                        editor.set_status(format!("Scheme error: {}", e));
+                        false
+                    }
+                }
+            }
+            _ => editor.dispatch_builtin(name),
+        }
+    }
+
     pub fn apply_to_editor(&mut self, editor: &mut Editor) {
         let mut state = self.shared.lock();
 
@@ -49,7 +88,7 @@ impl SchemeRuntime {
         drop(state);
 
         for name in commands {
-            editor.dispatch_builtin(&name);
+            self.dispatch_command_by_name(editor, &name);
         }
 
         for cmd in ex_commands {
