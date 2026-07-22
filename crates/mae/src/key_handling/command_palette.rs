@@ -460,6 +460,7 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
                         .unwrap_or_default()
                         .to_string_lossy()
                         .to_string();
+                    editor.redetect_language_for(idx);
                     editor.set_status(format!("Renamed to {}", new_path.display()));
                 }
                 Err(e) => editor.set_status(format!("Rename failed: {}", e)),
@@ -494,6 +495,7 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_string();
+            editor.redetect_language_for(idx);
             editor.dispatch_builtin("save");
         }
         MiniDialogContext::FileTreeRename { path } => {
@@ -597,6 +599,7 @@ fn apply_mini_dialog(editor: &mut Editor, dialog: mae_core::command_palette::Min
             let buf_idx = *buf_idx;
             if buf_idx < editor.buffers.len() {
                 editor.buffers[buf_idx].set_file_path(resolved_path.clone());
+                editor.redetect_language_for(buf_idx);
                 editor.set_status(format!("Mapped to local path: {}", resolved_path.display()));
             } else {
                 editor.set_status("Buffer no longer exists".to_string());

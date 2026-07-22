@@ -668,6 +668,53 @@ fn run_command_from_scheme() {
     assert_eq!(editor.mode, mae_core::Mode::Search);
 }
 
+/// #363: `define-command` + `run-command` for the SAME name, through the
+/// actual pending-command drain (`apply_to_editor`'s `for name in commands`
+/// loop) -- not a direct `call_function`/`dispatch_command_by_name` call.
+/// This is the exact combination that silently no-opped before the fix
+/// (`editor.dispatch_builtin` discarded `CommandSource` entirely).
+#[test]
+fn define_command_then_run_command_dispatches_the_scheme_function() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+
+    rt.eval(
+        r#"(define (my-greet) (buffer-insert "hi")) (define-command "my-greet" "test" "my-greet")"#,
+    )
+    .unwrap();
+    rt.apply_to_editor(&mut editor);
+    assert_eq!(
+        editor.commands.get("my-greet").unwrap().source,
+        CommandSource::Scheme("my-greet".into()),
+        "sanity: registration must have landed before dispatch is exercised"
+    );
+
+    rt.eval(r#"(run-command "my-greet")"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    let idx = editor.active_buffer_idx();
+    assert_eq!(
+        editor.buffers[idx].rope().to_string(),
+        "hi",
+        "the scheme command's body must have actually run, not just been looked up"
+    );
+}
+
+/// Adversarial (#14): an unregistered name must still be a silent no-op
+/// through `run-command` -- the fix must not turn a genuinely unknown
+/// command into a panic or a false success.
+#[test]
+fn run_command_unknown_name_is_still_a_noop() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+    rt.eval(r#"(run-command "totally-unregistered-command")"#)
+        .unwrap();
+    rt.apply_to_editor(&mut editor);
+    // No panic, and no buffer content appeared from nowhere.
+    let idx = editor.active_buffer_idx();
+    assert_eq!(editor.buffers[idx].rope().to_string(), "");
+}
+
 #[test]
 fn eval_for_repl_formats_output() {
     let mut rt = new_runtime();

@@ -57,11 +57,37 @@ fn kb_label_ai_residency(editor: &Editor, instance_name: Option<&str>) -> AiResi
     }
 }
 
-/// Core filtering primitive (CLAUDE.md #8 — the one place this logic
-/// lives). Drops any `(instance, node)` hit that both (a) comes from a KB
-/// currently `LocalModelsOnly`, and (b) isn't itself [`is_residency_exempt`].
-/// No-op if `requester_provider` is already local. Used directly by
-/// `kb_search`/`kb_search_context`'s federated hits;
+/// Generic core filtering primitive (CLAUDE.md #8 — the one place this
+/// logic lives). Drops any item that both (a) comes from a KB currently
+/// `LocalModelsOnly` (per `instance_of`), and (b) isn't itself exempt (per
+/// `is_exempt_of`). No-op if `requester_provider` is already local.
+/// [`filter_residency_exempt`] is a thin adapter over this for the
+/// `(Option<String>, Node)` shape; callers whose result type isn't a `Node`
+/// but already carries its own `instance`/seed-exemption fields (e.g.
+/// `mae_kb::graph_query::RelatedItem`/`GraphBfsNode`, #361) call this
+/// directly instead of first reconstructing a `Node`.
+pub fn filter_residency_exempt_by<T>(
+    editor: &Editor,
+    requester_provider: Option<&str>,
+    items: Vec<T>,
+    instance_of: impl Fn(&T) -> Option<&str>,
+    is_exempt_of: impl Fn(&T) -> bool,
+) -> Vec<T> {
+    if requester_provider.is_some_and(is_local_provider) {
+        return items;
+    }
+    items
+        .into_iter()
+        .filter(|item| {
+            kb_label_ai_residency(editor, instance_of(item)) != AiResidency::LocalModelsOnly
+                || is_exempt_of(item)
+        })
+        .collect()
+}
+
+/// Drops any `(instance, node)` hit that both (a) comes from a KB currently
+/// `LocalModelsOnly`, and (b) isn't itself [`is_residency_exempt`]. Used
+/// directly by `kb_search`/`kb_search_context`'s federated hits;
 /// [`filter_residency_exempt_primary`] is a thin adapter over this same
 /// primitive for `kb_agenda`'s plain `Vec<Node>` shape (always primary) —
 /// not a second implementation.
@@ -70,16 +96,13 @@ pub fn filter_residency_exempt(
     requester_provider: Option<&str>,
     results: Vec<(Option<String>, mae_kb::Node)>,
 ) -> Vec<(Option<String>, mae_kb::Node)> {
-    if requester_provider.is_some_and(is_local_provider) {
-        return results;
-    }
-    results
-        .into_iter()
-        .filter(|(instance_name, node)| {
-            kb_label_ai_residency(editor, instance_name.as_deref()) != AiResidency::LocalModelsOnly
-                || is_residency_exempt(node)
-        })
-        .collect()
+    filter_residency_exempt_by(
+        editor,
+        requester_provider,
+        results,
+        |(instance_name, _)| instance_name.as_deref(),
+        |(_, node)| is_residency_exempt(node),
+    )
 }
 
 /// Adapter over [`filter_residency_exempt`] for `kb_agenda`'s plain

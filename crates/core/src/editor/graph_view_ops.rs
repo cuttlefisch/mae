@@ -423,6 +423,7 @@ impl Editor {
                 id: n.id.clone(),
                 title: n.title.clone(),
                 kind: crate::graph_view_support::shared_kind_to_canvas_kind(n.kind),
+                is_seed: crate::ai_residency::is_residency_exempt(n),
             })
             .collect();
         // Bridge from `mae_kb::SubgraphLink` to `mae_canvas::kb_graph::

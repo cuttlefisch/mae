@@ -75,13 +75,31 @@
 //!   their own responses are counts only (no per-node content at these two
 //!   entry points).
 //!
-//! `kb_related`, `kb_graph`, `kb_graph_view_state`, `kb_list`, `kb_links_to`,
-//! `kb_shortest_path`, `kb_neighborhood`, `kb_links_from`, `kb_health`,
-//! `kb_history`/`kb_restore` are real, structurally feasible candidates for
-//! the same exemption but need deeper plumbing (shared trait extensions,
-//! new per-id lookups, or report-level provenance splits) — tracked as a
-//! follow-up rather than silently left as a gap, see the issue cross-linked
-//! from #358.
+//! `kb_related`/`kb_graph` are now handled (#361, `SingleTargetFilterable`/
+//! `UnscopedFederatedContentFilterable` above) — the shared-trait extension
+//! (`GraphNeighbors`/`RelatedSource::describe` now also return
+//! `is_seed_content`) turned out to be cheap: both backends already fetched
+//! the full `Node` and discarded everything but title/kind. `kb_history`/
+//! `kb_restore` needed no code change at all: they were already
+//! `SingleTarget` with `"id"` in `TARGET_ARG_KEYS`, so `resolve_restricted_
+//! label`'s existing exemption check already covers them (their result
+//! shape is version metadata for the SAME id, so there is no other-node
+//! traversal-leak vector these two tools even have).
+//!
+//! `kb_neighborhood`/`kb_health`/`kb_graph_view_state` are now handled too
+//! (#361, `SingleTargetFilterable`/`UnscopedFederatedContentFilterable`
+//! above) -- `kb_graph_view_state` threads a per-node `is_seed` flag from
+//! `mae_kb::Node::source` all the way through `mae-canvas`'s `KbNodeInfo`/
+//! `SceneNode` (a deliberate no-`mae-kb`-dependency leaf crate, so this is a
+//! structural mirror field, same pattern as `NodeKind`) into
+//! `GraphViewNodeState`, letting the AI's read of an already-open graph
+//! buffer filter itself without restricting what the human sees on screen.
+//!
+//! `kb_list`, `kb_links_to`, `kb_shortest_path`, `kb_links_from` are real,
+//! structurally feasible candidates for the same exemption but need deeper
+//! plumbing (shared trait extensions, new per-id lookups, or a Datalog
+//! query change) — tracked as a follow-up rather than silently left as a
+//! gap, see the issue cross-linked from #358.
 
 use mae_core::ai_residency::{is_local_provider, is_residency_exempt};
 use mae_core::Editor;
@@ -99,6 +117,19 @@ enum ToolResidencyShape {
     /// `arguments` — checked precisely via [`TARGET_ARG_KEYS`], with the
     /// seed-content exemption (#358) applied by `resolve_restricted_label`.
     SingleTarget,
+    /// Same anchor-argument gate check as [`Self::SingleTarget`] (unchanged —
+    /// still denies outright if the anchor id's own KB is restricted and the
+    /// anchor isn't seed-exempt), but the tool ALSO traverses to OTHER nodes
+    /// that can live in a different KB than the anchor (`kb_related`'s
+    /// federated relatedness scan; `kb_neighborhood`'s same-KB-but-different-
+    /// node BFS) — so the tool impl additionally post-filters its own
+    /// multi-node result list via
+    /// `mae_core::ai_residency::filter_residency_exempt_by` (#361). Without
+    /// this, a permitted (open or seed) anchor could leak a *different*
+    /// restricted KB's non-seed content reached via traversal, or (for
+    /// same-KB neighbors) a non-seed sibling reachable from a seed anchor in
+    /// the SAME restricted KB.
+    SingleTargetFilterable,
     /// Only ever touches the primary store (`editor.kb.store`), never a
     /// federated instance, AND its result shape has no per-node identity to
     /// filter (arbitrary Datalog / a stored view's raw query) — checked
@@ -130,6 +161,14 @@ enum ToolResidencyShape {
     /// denied outright whenever ANY registered KB (or primary) is
     /// restricted (see the module doc's "Scope note").
     UnscopedFederatedContent,
+    /// Same unscoped multi-instance scan as [`Self::UnscopedFederatedContent`],
+    /// but its results ARE real per-node data the tool impl can post-filter —
+    /// the gate allows the call through unconditionally;
+    /// `execute_kb_graph`'s BFS walk (root node included, at hop 0) is
+    /// filtered via `mae_core::ai_residency::filter_residency_exempt_by`
+    /// (#361), the same pattern `ScopedFederatedScanFilterable` uses for
+    /// `kb_search`.
+    UnscopedFederatedContentFilterable,
     /// Meta/administrative only — no node titles/bodies/links/content ever
     /// leaves this tool (membership/policy/lifecycle actions, or pure
     /// view-state manipulation of an already-rendered scene). Never gated.
@@ -146,9 +185,13 @@ fn classify_kb_tool(tool_name: &str) -> Option<ToolResidencyShape> {
     Some(match tool_name {
         // --- SingleTarget: resolves to one node id or KB instance name ---
         "kb_get" | "kb_update" | "kb_delete" | "kb_promote" | "kb_restore" | "kb_add_link"
-        | "kb_links_from" | "kb_related" | "kb_shortest_path" | "kb_neighborhood"
-        | "kb_history" | "kb_preview_show" | "kb_create" | "kb_set_role" | "kb_reimport"
-        | "help_open" => SingleTarget,
+        | "kb_links_from" | "kb_shortest_path" | "kb_history" | "kb_preview_show"
+        | "kb_create" | "kb_set_role" | "kb_reimport" | "help_open" => SingleTarget,
+
+        // --- SingleTargetFilterable: same anchor-id gate check as
+        // SingleTarget, PLUS the tool impl post-filters its own multi-node
+        // traversal results (#361 -- see the shape's doc comment) ---
+        "kb_related" | "kb_neighborhood" => SingleTargetFilterable,
 
         // --- PrimaryOnly: implementation only ever reads editor.kb.store,
         // AND runs arbitrary Datalog with no per-row node-identity to
@@ -175,8 +218,15 @@ fn classify_kb_tool(tool_name: &str) -> Option<ToolResidencyShape> {
 
         // --- UnscopedFederatedContent: genuinely scans multiple instances,
         // no scope argument to narrow it ---
-        "kb_graph" | "kb_graph_view_open" | "kb_graph_view_refresh" | "kb_graph_view_state"
-        | "kb_list" | "kb_health" | "kb_id_audit" | "kb_links_to" => UnscopedFederatedContent,
+        "kb_graph_view_open" | "kb_graph_view_refresh" | "kb_list" | "kb_id_audit"
+        | "kb_links_to" => UnscopedFederatedContent,
+
+        // --- UnscopedFederatedContentFilterable: same unscoped multi-instance
+        // scan, AND the tool impl post-filters its real per-node results
+        // (root included, for kb_graph), per-KB report (for kb_health), or
+        // already-open-graph-buffer state (for kb_graph_view_state) for the
+        // seed exemption (#361) ---
+        "kb_graph" | "kb_health" | "kb_graph_view_state" => UnscopedFederatedContentFilterable,
 
         // --- NonContent: pure view/camera-state manipulation of an
         // already-rendered graph scene (no new cross-KB content fetched by
@@ -312,7 +362,17 @@ pub fn check_kb_residency(
             ResidencyDecision::Allow
         }
 
-        ToolResidencyShape::SingleTarget => {
+        // Same unscoped scan as UnscopedFederatedContent, but the gate
+        // allows the call through unconditionally; execute_kb_graph
+        // post-filters its own materialized per-node BFS results (root
+        // included) via mae_core::ai_residency::filter_residency_exempt_by
+        // (#361).
+        ToolResidencyShape::UnscopedFederatedContentFilterable => ResidencyDecision::Allow,
+
+        // SingleTargetFilterable's gate check is identical to SingleTarget's
+        // (same anchor-id resolution below) -- the extra post-filtering
+        // (#361) happens entirely inside the tool impl, not here.
+        ToolResidencyShape::SingleTarget | ToolResidencyShape::SingleTargetFilterable => {
             for key in TARGET_ARG_KEYS {
                 let Some(value) = arguments.get(*key).and_then(|v| v.as_str()) else {
                     continue;
@@ -856,7 +916,12 @@ mod tests {
     // --- New: UnscopedFederatedContent bucket ---
 
     #[test]
-    fn kb_graph_denied_outright_when_any_kb_restricted() {
+    fn kb_graph_gate_allows_when_any_kb_restricted_defers_to_tool_filter() {
+        // kb_graph is now UnscopedFederatedContentFilterable (#361) -- the
+        // gate no longer denies the whole call when a registered KB is
+        // restricted; execute_kb_graph post-filters its own materialized
+        // per-node BFS results instead (see crates/ai/src/tool_impls/kb.rs's
+        // behavioral tests for the actual filtering coverage).
         let mut editor = Editor::new();
         editor
             .kb
@@ -869,7 +934,7 @@ mod tests {
             &serde_json::json!({"id": "index"}),
             Some("claude"),
         );
-        assert!(matches!(decision, ResidencyDecision::Deny(_)));
+        assert_eq!(decision, ResidencyDecision::Allow);
     }
 
     #[test]
@@ -886,7 +951,12 @@ mod tests {
     }
 
     #[test]
-    fn kb_health_denied_outright_when_any_kb_restricted() {
+    fn kb_health_gate_allows_when_any_kb_restricted_defers_to_tool_filter() {
+        // kb_health is now UnscopedFederatedContentFilterable (#361) -- the
+        // gate no longer denies the whole call when a registered KB is
+        // restricted; execute_kb_health post-filters each KB's health
+        // report independently instead (see crates/ai/src/tool_impls/kb.rs's
+        // behavioral tests for the actual filtering coverage).
         let mut editor = Editor::new();
         editor
             .kb
@@ -895,7 +965,7 @@ mod tests {
             .push(restricted_instance("RestrictedInstance", "uuid-r"));
         let decision =
             check_kb_residency(&editor, "kb_health", &serde_json::json!({}), Some("claude"));
-        assert!(matches!(decision, ResidencyDecision::Deny(_)));
+        assert_eq!(decision, ResidencyDecision::Allow);
     }
 
     #[test]
@@ -959,6 +1029,36 @@ mod tests {
             Some("claude"),
         );
         assert!(matches!(decision, ResidencyDecision::Deny(_)));
+    }
+
+    #[test]
+    fn kb_history_and_kb_restore_seed_content_allowed_when_primary_restricted() {
+        // #361 correction: kb_history/kb_restore need no new plumbing --
+        // they were already SingleTarget with "id" in TARGET_ARG_KEYS, so
+        // resolve_restricted_label's existing seed-exemption check already
+        // covers them (their result is version metadata for the SAME id;
+        // there's no other-node traversal-leak vector to post-filter).
+        let editor = editor_with_restricted_primary();
+        assert_eq!(
+            check_kb_residency(
+                &editor,
+                "kb_history",
+                &serde_json::json!({"id": "index"}),
+                Some("claude")
+            ),
+            ResidencyDecision::Allow,
+            "seeded content's history must stay reachable from a restricted primary"
+        );
+        assert_eq!(
+            check_kb_residency(
+                &editor,
+                "kb_restore",
+                &serde_json::json!({"id": "index", "version": 1}),
+                Some("claude")
+            ),
+            ResidencyDecision::Allow,
+            "restoring seeded content must stay reachable from a restricted primary"
+        );
     }
 
     #[test]
