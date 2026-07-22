@@ -75,6 +75,13 @@ pub struct CollabConfig {
     pub auth: AuthConfig,
     /// P2P daemon-mesh configuration (ADR-025).
     pub p2p: P2pConfig,
+    /// Hard cap on concurrent TCP connections (accepted sockets, authenticated or
+    /// not) on the collab listener. 0 = unlimited. #342: before this, a client that
+    /// opened the connection and never completed its handshake — deliberately, or
+    /// just a stalled network — parked a task+socket forever, with nothing bounding
+    /// how many could accumulate; combined with the handshake timeout below, this
+    /// closes the one genuinely open-ended resource on the whole hub-model surface.
+    pub max_connections: usize,
 }
 
 impl Default for CollabConfig {
@@ -86,6 +93,9 @@ impl Default for CollabConfig {
             sync: SyncConfig::default(),
             auth: AuthConfig::default(),
             p2p: P2pConfig::default(),
+            // Generous default for a small/self-hosted team daemon; raise for a
+            // larger deployment, or set 0 to disable the cap entirely.
+            max_connections: 256,
         }
     }
 }

@@ -54,6 +54,14 @@ use mae_mcp::auth::AuthProvider;
 const WRITE_TIMEOUT_SECS: u64 = 5;
 /// Disconnect client after this many consecutive write failures.
 const MAX_CONSECUTIVE_WRITE_FAILURES: u32 = 3;
+/// #342: deadline for a client to complete its auth handshake (TLS handshake, or
+/// the plaintext JSON `KeyAuth`/`PskAuth` exchange) after the TCP connection is
+/// accepted. A real client completes this near-instantly; an accepted-but-silent
+/// connection (deliberate, or just a stalled network) would otherwise park a
+/// task+socket forever with nothing to reclaim it. `pub` — also used by the TLS
+/// accept call in `main.rs`, which happens before this module's own handshake
+/// logic runs for the plaintext auth paths.
+pub const HANDSHAKE_TIMEOUT_SECS: u64 = 10;
 
 /// Run the client handler with an authentication handshake before the main loop.
 ///
@@ -72,8 +80,13 @@ pub async fn handle_client_with_auth<R, W, A>(
     W: AsyncWrite + Unpin + Send,
     A: AuthProvider,
 {
-    let peer = match auth.server_handshake(&mut reader, &mut writer).await {
-        Ok(result) => {
+    let handshake = tokio::time::timeout(
+        std::time::Duration::from_secs(HANDSHAKE_TIMEOUT_SECS),
+        auth.server_handshake(&mut reader, &mut writer),
+    )
+    .await;
+    let peer = match handshake {
+        Ok(Ok(result)) => {
             info!(
                 auth = auth.name(),
                 client = %result.client_label,
@@ -83,7 +96,15 @@ pub async fn handle_client_with_auth<R, W, A>(
             // so bind a synthetic identity from the authenticated label.
             PeerIdentity::synthetic(&result.client_label)
         }
-        Err(e) => {
+        Err(_elapsed) => {
+            warn!(
+                auth = auth.name(),
+                timeout_secs = HANDSHAKE_TIMEOUT_SECS,
+                "auth handshake timed out, dropping connection"
+            );
+            return;
+        }
+        Ok(Err(e)) => {
             warn!(auth = auth.name(), error = %e, "auth handshake failed, dropping connection");
             return;
         }

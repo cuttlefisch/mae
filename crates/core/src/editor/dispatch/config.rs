@@ -96,12 +96,17 @@ impl Editor {
                 let _ = self.set_option("daemon_enabled", &new_val.to_string());
                 let _ = self.save_option_to_init("daemon_enabled");
                 let msg = if new_val {
+                    // #347: this command only flips config — it does not itself
+                    // start a process. Point at both the in-editor path
+                    // (:collab-start, no shell needed) and the systemd/launchd
+                    // path (persists across editor restarts) so a first-time user
+                    // doesn't read "enabled" and assume the daemon is now running.
                     let hint = if cfg!(target_os = "macos") {
-                        "Start with: brew services start mae (or launchctl)"
+                        "Run :collab-start now, or persist it: brew services start mae (or launchctl)"
                     } else {
-                        "Start with: systemctl --user enable --now mae-daemon"
+                        "Run :collab-start now, or persist it: systemctl --user enable --now mae-daemon"
                     };
-                    format!("Daemon enabled. {}", hint)
+                    format!("Daemon enabled (config only). {}", hint)
                 } else {
                     "Daemon disabled.".to_string()
                 };

@@ -63,8 +63,9 @@ log; the relaying daemon is never trusted to vouch for it.
   under the member's *current* epoch; stale-epoch ops are rejected.
 
 Enforcement is at the daemon today (the chokepoint `kb_access`), moving to **per-peer** on the mesh (each
-peer derives + enforces). See `SECURITY_REVIEW.md §4`; the hardening that unifies role+epoch+blocklist on
-every write path is ADR-039 D1 (#157).
+peer derives + enforces). See `SECURITY_REVIEW.md §4`; the hardening that unified role+epoch+blocklist on
+every write path — ADR-039 D1 (#157) — has **shipped**: `enforce_epoch_fence`/`enforce_epoch_fence_with_coll`
+is the single fence now called from both the hub write path and the mesh dialer relay.
 
 ## 4. Encryption (who may read)
 
@@ -142,8 +143,8 @@ removal denies *future* content (after rotation).
 content under it until rotation — `E2E_ENCRYPTION.md §7`); metadata to the host (edit sizes, timing, author
 attribution, the membership/social graph, and — today — cleartext node titles in the manifest); a malicious
 *member* (members hold the key by definition — membership control is the only defense); at-rest key exposure
-+ no key rotation yet (`SECURITY_REVIEW.md §3`, #158). Known authorization hardening in flight: the unified
-op-log fence (#157).
++ no key rotation yet (`SECURITY_REVIEW.md §3`, #158). The unified op-log fence (#157) — the authorization
+hardening item previously tracked here — has shipped; see §3 above.
 
 ## 9. Reference map
 
@@ -153,5 +154,5 @@ op-log fence (#157).
 - **ADRs:** 017 (peer auth) · 018 (access control) · 023 (epoch fence) · 025 (mesh transport) · 026
   (peer-verifiable membership) · 036 (signed content ops) · 037 (E2E encryption) · 038 (editor-authored
   membership) · 039 (identity + authz hardening)
-- **Trackers:** #131 (E2E umbrella) · #96 (P2P mesh) · #157 (unified fence) · #158 (identity hardening) ·
-  #156 (E2E hardening follow-ups)
+- **Trackers:** #131 (E2E umbrella) · #96 (P2P mesh) · #157 (unified fence, closed — shipped) · #158
+  (identity hardening) · #156 (E2E hardening follow-ups)

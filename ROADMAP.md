@@ -25,7 +25,6 @@ Near-term, code-grounded work extracted from this roadmap + the ADR backlog (fil
 
 **Daemon / reliability**
 - #77 — collab-WAL power-loss durability (synchronous/checkpoint discipline + kill-9 test)
-- #78 — doc-store eviction TOCTOU race
 
 **Editor / UI / KB**
 - #79 — migrate attention-worthy `set_status` emitters to the notification bus (ADR-024)
@@ -470,7 +469,11 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 - [ ] **KB tangle pipeline**: `make docs-tangle` extracts ADR markdown from KB concept nodes. CI job validates freshness (same as code-map pattern). Enables KB as single source of truth for architecture docs.
 - [ ] **Checkbox toggle in KB view mode**: Allow toggling checkboxes in read-only help/KB buffers without entering edit mode. Requires refactoring view-mode to allow targeted mutations.
 - [ ] **Replace mode (R)**: Standard vim replace mode where keystrokes overwrite characters.
-- [ ] **Doc store eviction TOCTOU** **→ #78**: Between identifying eviction candidates (read lock) and evicting (write lock), a client could reconnect. Low probability; fix requires holding write lock during entire eviction.
+- [x] **Doc store eviction TOCTOU** **→ #78** (closed — stale, already fixed): `evict_idle`
+  (`daemon/src/doc_store.rs:507-512`) already re-checks `connected_clients == 0` under the
+  write lock before removing a doc, closing the read-lock/write-lock race this item
+  described. Landed in #30 (`7e200e3f`); confirmed and closed during the hub-model
+  readiness review (2026-07-21).
 - [ ] **Unified buffer-switching strategy**: Three patterns exist (`switch_to_buffer`, `display_buffer_and_focus`, palette). Should converge on one with consistent view state management.
 - [ ] **KB fuzzy body search** **→ #81**: `kb_search` currently matches node titles and tags but not node body content in a fuzzy/substring way. Searching for a term like "DeltaDB" that only appears in the body of some nodes returns no results. Add full-text indexing of node bodies (CozoDB FTS) so `kb_search` and `:help` fuzzy completion can find concepts mentioned anywhere in the knowledge graph, not just in titles.
 - [x] **Binary architecture split** (v0.13.0, ADR-014): Split MAE into editor workspace + daemon workspace with separate `Cargo.lock` files. `mae-daemon` binary with CozoDB+SQLite backend for persistent KB, background maintenance (scheduler with watcher/maintenance/health ticks), and JSON-RPC API over Unix socket. Shared crates (`mae-kb`, `mae-sync`, `mae-mcp`) moved to `shared/` with feature flags (`storage-sled`, `crdt`). `CozoKbStore::open_with_engine()` + `open_mem()` for backend-agnostic storage. Resolves rusqlite linker conflict (separate dependency trees). LRU cache query layer (`LruQueryLayer`) + `DaemonClient` for editor-daemon integration. Config: `[daemon]` section with 3 options. CI/CD: daemon job, release artifacts include `mae-daemon`. ADR-014 written.

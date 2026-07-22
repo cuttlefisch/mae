@@ -971,7 +971,10 @@ impl CommandRegistry {
             "Configure collaboration mode and authentication",
         );
         reg.register_builtin("setup-kb", "Set knowledge base notes directory");
-        reg.register_builtin("setup-daemon", "Toggle background daemon");
+        reg.register_builtin(
+            "setup-daemon",
+            "Toggle background daemon config (see :collab-start to actually launch it)",
+        );
         reg.register_builtin("setup-all", "Run all unconfigured setup sections");
         reg.register_builtin("toggle-fps", "Toggle FPS overlay in status bar (SPC t F)");
         reg.register_builtin(
@@ -1399,7 +1402,10 @@ impl CommandRegistry {
         );
 
         // Collaboration
-        reg.register_builtin("collab-start", "Start local daemon");
+        reg.register_builtin(
+            "collab-start",
+            "Actually launch the local daemon process (:setup-daemon only configures it)",
+        );
         reg.register_builtin("collab-connect", "Connect to collaborative daemon");
         reg.register_builtin("collab-disconnect", "Disconnect from daemon");
         reg.register_builtin(

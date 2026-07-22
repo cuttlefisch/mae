@@ -45,7 +45,7 @@ use tokio::net::TcpListener;
 /// then reads (and ignores — fire-and-forget from the client) further messages until
 /// `hangup_rx` fires, at which point it drops the connection. Returns the bound
 /// address plus the `hangup` sender the test uses to kill the connection on demand.
-async fn spawn_fake_daemon(
+pub(crate) async fn spawn_fake_daemon(
     server_identity: Identity,
     client_pubkey: mae_mcp::identity::PublicKey,
 ) -> (
@@ -133,7 +133,7 @@ async fn spawn_fake_daemon(
 
 /// Poll `evt_rx` until `pred` matches an event, ignoring unrelated events
 /// (`Disconnected`, etc. from the reader task's own independent EOF detection).
-async fn recv_until(
+pub(crate) async fn recv_until(
     evt_rx: &mut mpsc::Receiver<CollabEvent>,
     pred: impl Fn(&CollabEvent) -> bool,
 ) -> CollabEvent {
@@ -151,7 +151,7 @@ async fn recv_until(
 
 /// Connect a real `run_collab_task` (KeyJson transport) against `addr`, wait for
 /// `Connected`, and hand back the command/event channels.
-async fn connect_client(
+pub(crate) async fn connect_client(
     addr: std::net::SocketAddr,
     client_identity: Identity,
     server_pubkey: mae_mcp::identity::PublicKey,
@@ -209,7 +209,7 @@ async fn connect_client(
 /// avoids depending on `PromptingHostKeyVerifier`'s live-policy/known_hosts-file
 /// plumbing when a direct fixed check is all this harness needs.
 #[derive(Debug)]
-struct FixedTrustVerifier {
+pub(crate) struct FixedTrustVerifier {
     expect_addr: String,
     expect_pubkey: mae_mcp::identity::PublicKey,
 }
@@ -222,7 +222,7 @@ impl HostKeyVerifier for FixedTrustVerifier {
 /// Build an owned, E2E-genesis'd `KbCollectionDoc` for `owner` — the same fixture
 /// shape as `collab_bridge_e2e_rotation_tests.rs`'s `plan_owner_rotation` tests —
 /// encoded as the `collection_state` bytes `KbSetEncryption` expects.
-fn owned_e2e_collection_state(kb_id: &str, owner: &Identity) -> Vec<u8> {
+pub(crate) fn owned_e2e_collection_state(kb_id: &str, owner: &Identity) -> Vec<u8> {
     let fp = owner.fingerprint();
     let mut coll = KbCollectionDoc::new_owned(kb_id, &fp, owner.label());
     let key = ContentKey::generate();

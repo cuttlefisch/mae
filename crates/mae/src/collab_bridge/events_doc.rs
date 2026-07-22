@@ -169,7 +169,31 @@ pub(super) fn handle_buffer_joined_event(
     doc_id: String,
     state_bytes: Vec<u8>,
 ) {
-    info!(doc = %doc_id, state_bytes = state_bytes.len(), "buffer joined event received");
+    handle_buffer_state_event(editor, doc_id, state_bytes, /* allow_merge */ true);
+}
+
+/// #338: the ForceSync counterpart of `handle_buffer_joined_event` — same full-state
+/// payload shape, but NEVER allowed to take the merge path. See
+/// `CollabEvent::BufferResynced`'s doc comment for why: a `sync/full_state` response
+/// is always a full genesis-encode, and a buffer whose `sync_doc` was only ever
+/// locally fabricated (via `enable_sync()` from on-disk content, not a real remote
+/// join) has no real causal relationship to the daemon's history for `apply_update`
+/// to merge against.
+pub(super) fn handle_buffer_resynced_event(
+    editor: &mut Editor,
+    doc_id: String,
+    state_bytes: Vec<u8>,
+) {
+    handle_buffer_state_event(editor, doc_id, state_bytes, /* allow_merge */ false);
+}
+
+fn handle_buffer_state_event(
+    editor: &mut Editor,
+    doc_id: String,
+    state_bytes: Vec<u8>,
+    allow_merge: bool,
+) {
+    info!(doc = %doc_id, state_bytes = state_bytes.len(), allow_merge, "buffer state event received");
     // Parse DocAddress from doc_id for structured addressing.
     let doc_addr = mae_sync::DocAddress::parse(&doc_id);
     // Use a display-friendly name for the buffer.
@@ -182,11 +206,11 @@ pub(super) fn handle_buffer_joined_event(
         }
         None => doc_id.clone(),
     };
-    // Check if a buffer with this collab_doc_id already exists (e.g.,
-    // the user shared a buffer and then also joined it, or a ForceSync
-    // response arrived). Using the doc_id match prevents creating a
-    // duplicate buffer with a different name but the same CRDT doc,
-    // which causes remote updates to be applied to the wrong sync_doc.
+    // Check if a buffer with this collab_doc_id already exists (e.g. the user
+    // shared a buffer and then also joined it, or this is a ForceSync resync of an
+    // already-open buffer). Using the doc_id match prevents creating a duplicate
+    // buffer with a different name but the same CRDT doc, which causes remote
+    // updates to be applied to the wrong sync_doc.
     let existing_by_doc_id = editor.find_buffer_by_collab_doc_id(&doc_id);
     let already_existed =
         existing_by_doc_id.is_some() || editor.find_buffer_by_name(&buf_name).is_some();
@@ -207,10 +231,16 @@ pub(super) fn handle_buffer_joined_event(
     let client_id = compute_client_id(idx);
     let load_ok = {
         let buf = &mut editor.buffers[idx];
-        if already_existed && buf.sync_doc.is_some() {
-            // Existing synced buffer (ForceSync resync): merge state via
-            // apply_update to preserve undo/redo history. yrs handles
-            // already-applied operations idempotently via vector clocks.
+        if allow_merge && already_existed && buf.sync_doc.is_some() {
+            // #338: ForceSync's full-state response NEVER reaches this branch
+            // (allow_merge=false, see handle_buffer_resynced_event) — the only
+            // remaining trigger is a genuine join response arriving for a buffer
+            // that already has a sync_doc (e.g. the user shared, then also
+            // explicitly joined, the same doc_id). That buffer's sync_doc may still
+            // be `enable_sync()`-fabricated from local content rather than real
+            // remote history — merging is only safe here because `compute_client_id`
+            // now guarantees a fresh, collision-proof id per fabrication (see its
+            // doc comment), not because this buffer's history is assumed real.
             info!(doc = %doc_id, "resync: merging state into existing buffer (preserving undo history)");
             match buf.apply_sync_update(&state_bytes) {
                 Ok(()) => Ok(()),
@@ -222,7 +252,10 @@ pub(super) fn handle_buffer_joined_event(
                 }
             }
         } else {
-            // New buffer (explicit join): full state load.
+            // Full state load: either a genuinely new buffer (explicit join), or
+            // (allow_merge=false) a ForceSync resync — always a full genesis-encode,
+            // so a full replace via load_sync_state is the only correct operation
+            // regardless of whether a buffer already existed here.
             match buf.load_sync_state(&state_bytes, client_id) {
                 Ok(()) => {
                     // Set doc_address for save policy resolution.
@@ -452,9 +485,24 @@ pub(super) fn doc_intent_to_command(
                 None // Buffer not found
             }
         }
-        CollabIntent::ForceSync { buffer_name } => Some(CollabCommand::ForceSync {
-            doc_id: buffer_name,
-        }),
+        CollabIntent::ForceSync { buffer_name } => {
+            // #338 drive-by: some callers pass a literal buffer name
+            // (`:collab-sync`, `dispatch/collab.rs`) while others already pass a
+            // doc_id (gap-detected resync, offline-reconnect resync). Prefer the
+            // buffer's already-established `collab_doc_id` — matching how
+            // `ShareBuffer` above resolves its doc_id — falling back to the raw
+            // string passed in when no buffer matches either way.
+            let doc_id = editor
+                .find_buffer_by_name(&buffer_name)
+                .and_then(|idx| editor.buffers[idx].collab_doc_id.clone())
+                .or_else(|| {
+                    editor
+                        .find_buffer_by_collab_doc_id(&buffer_name)
+                        .map(|_| buffer_name.clone())
+                })
+                .unwrap_or(buffer_name);
+            Some(CollabCommand::ForceSync { doc_id })
+        }
         CollabIntent::Doctor => {
             // Collect per-buffer sync info for the doctor report.
             let synced_info: Vec<(String, usize)> = editor

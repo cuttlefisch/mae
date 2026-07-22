@@ -85,24 +85,39 @@ fn mdns_discovered_peers() -> Vec<crate::mdns_discovery::DiscoveredPeer> {
 ///
 /// We use FNV-1a hash of (PID, buffer_index) to produce a 32-bit value,
 /// which is safe for the wire format and still deterministic per-process.
+/// #338: a monotonic per-process nonce mixed into `compute_client_id` so two
+/// independently-created sync docs for the same buffer slot (e.g. a file's buffer
+/// index reused within a session, or two process launches landing on the same pid)
+/// can never collide on yrs `(client_id, clock)` identity. Before this, the id was a
+/// pure function of `(pid, buffer_idx)` — a real remote edit history and a
+/// locally-fabricated one (from `enable_sync`/`load_sync_state`) could get the same
+/// client_id and be merged as if they were the same causal lineage, silently
+/// deleting/corrupting content instead of erroring. `Relaxed` is fine: this only
+/// needs "never repeats," not ordering against anything else.
+static CLIENT_ID_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 fn compute_client_id(buffer_idx: usize) -> u64 {
     let pid = std::process::id();
-    // FNV-1a 32-bit
-    let mut h: u32 = 0x811c_9dc5;
+    let nonce = CLIENT_ID_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // FNV-1a 64-bit over (pid, buffer_idx, nonce). The nonce alone already
+    // guarantees uniqueness within this process; pid+buffer_idx add cross-process
+    // spread and keep the value stable-looking for debugging. Folded into yrs's
+    // legal 53-bit ClientID range via the same technique `derive_kb_client_id`
+    // uses, rather than a plain mask, so the nonce's entropy isn't thrown away.
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in pid.to_le_bytes() {
-        h ^= b as u32;
-        h = h.wrapping_mul(0x0100_0193);
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01B3);
     }
-    for b in (buffer_idx as u32).to_le_bytes() {
-        h ^= b as u32;
-        h = h.wrapping_mul(0x0100_0193);
+    for b in (buffer_idx as u64).to_le_bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01B3);
     }
-    // Ensure non-zero (yrs uses 0 as sentinel in some paths).
-    if h == 0 {
-        1
-    } else {
-        h as u64
+    for b in nonce.to_le_bytes() {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01B3);
     }
+    mae_sync::text::fold_hash_to_yrs_client_id(h)
 }
 
 /// Marker the daemon embeds in an epoch-fence rejection's error message
@@ -425,6 +440,19 @@ pub enum CollabEvent {
     },
     /// Joined a remote document — carries the full CRDT state.
     BufferJoined {
+        doc_id: String,
+        state_bytes: Vec<u8>,
+    },
+    /// #338: a `sync/full_state` response for a ForceSync (`:collab-sync`, or the
+    /// automatic reconnect resync). Distinct from `BufferJoined` on purpose — the
+    /// state is *always* a full genesis-encode, never a delta, so it must always be
+    /// applied via `Buffer::load_sync_state` (full replace), never merged via
+    /// `apply_sync_update`. A buffer that was `enable_sync()`'d from on-disk content
+    /// (e.g. reopened after a restart) has a locally-fabricated CRDT lineage with no
+    /// real causal relationship to the daemon's history; merging it can collide
+    /// `(client_id, clock)` identities with the real history and silently
+    /// delete/corrupt content instead of erroring.
+    BufferResynced {
         doc_id: String,
         state_bytes: Vec<u8>,
     },
@@ -919,6 +947,10 @@ pub(crate) fn handle_collab_event(editor: &mut Editor, event: CollabEvent) {
             doc_id,
             state_bytes,
         } => events_doc::handle_buffer_joined_event(editor, doc_id, state_bytes),
+        CollabEvent::BufferResynced {
+            doc_id,
+            state_bytes,
+        } => events_doc::handle_buffer_resynced_event(editor, doc_id, state_bytes),
         CollabEvent::ShareFailed { doc_id, message } => {
             events_doc::handle_share_failed_event(editor, doc_id, message)
         }
@@ -1240,6 +1272,32 @@ pub(crate) enum PendingResponseKind {
         kb_id: String,
         node_id: String,
         pending_rowid: Option<i64>,
+    },
+    /// #339: response to the legacy (non-E2e) `kb/approve_member` — previously
+    /// unregistered, so a daemon-side rejection (wrong role, bad fingerprint) was
+    /// completely invisible. The E2e branch of the same command already registers
+    /// separately (see `e2e_write_failed`'s `CollabEvent::Error` above).
+    KbApproveMember {
+        kb_id: String,
+        principal: String,
+    },
+    /// #339: response to `kb/list_pending` — previously unregistered, dropping any
+    /// daemon-side error silently (no UI consumer of the success payload exists
+    /// yet; this only closes the error-visibility gap).
+    KbListPendingResult {
+        kb_id: String,
+    },
+    /// #339: response to `kb/set_policy` — previously unregistered.
+    KbSetPolicyResult {
+        kb_id: String,
+        policy: String,
+    },
+    /// #339: response to `kb/block_principal`/`unblock_principal` — previously
+    /// unregistered.
+    KbBlockPrincipalResult {
+        kb_id: String,
+        principal: String,
+        block: bool,
     },
 }
 
@@ -3082,7 +3140,18 @@ async fn run_collab_task(
                                         "params": { "kb_id": kb_id, "principal": principal, "role": role }
                                     });
                                     if let Ok(body) = serde_json::to_vec(&req) {
-                                        let _ = write_framed(w, &body, write_timeout).await;
+                                        // #339: register so a daemon-side rejection (wrong
+                                        // role, bad fingerprint) is no longer swallowed by
+                                        // the generic "unknown request id" fallback.
+                                        if write_framed(w, &body, write_timeout).await.is_ok() {
+                                            pending_responses.insert(
+                                                req_id,
+                                                PendingResponseKind::KbApproveMember {
+                                                    kb_id: kb_id.clone(),
+                                                    principal: principal.clone(),
+                                                },
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -3096,7 +3165,16 @@ async fn run_collab_task(
                                     "params": { "kb_id": kb_id }
                                 });
                                 if let Ok(body) = serde_json::to_vec(&req) {
-                                    let _ = write_framed(w, &body, write_timeout).await;
+                                    // #339: register so a daemon-side error is surfaced
+                                    // instead of silently dropped.
+                                    if write_framed(w, &body, write_timeout).await.is_ok() {
+                                        pending_responses.insert(
+                                            req_id,
+                                            PendingResponseKind::KbListPendingResult {
+                                                kb_id: kb_id.clone(),
+                                            },
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -3109,7 +3187,17 @@ async fn run_collab_task(
                                     "params": { "kb_id": kb_id, "policy": policy }
                                 });
                                 if let Ok(body) = serde_json::to_vec(&req) {
-                                    let _ = write_framed(w, &body, write_timeout).await;
+                                    // #339: register so a daemon-side rejection (e.g. a
+                                    // non-owner) is no longer swallowed silently.
+                                    if write_framed(w, &body, write_timeout).await.is_ok() {
+                                        pending_responses.insert(
+                                            req_id,
+                                            PendingResponseKind::KbSetPolicyResult {
+                                                kb_id: kb_id.clone(),
+                                                policy: policy.clone(),
+                                            },
+                                        );
+                                    }
                                 }
                             }
                         }
@@ -3130,7 +3218,17 @@ async fn run_collab_task(
                                     "params": { "kb_id": kb_id, "fingerprint": principal }
                                 });
                                 if let Ok(body) = serde_json::to_vec(&req) {
-                                    let _ = write_framed(w, &body, write_timeout).await;
+                                    // #339: register so a daemon-side rejection is surfaced.
+                                    if write_framed(w, &body, write_timeout).await.is_ok() {
+                                        pending_responses.insert(
+                                            req_id,
+                                            PendingResponseKind::KbBlockPrincipalResult {
+                                                kb_id: kb_id.clone(),
+                                                principal: principal.clone(),
+                                                block,
+                                            },
+                                        );
+                                    }
                                 }
                                 // Re-pull the blocklist so the *KB Sharing* Blocked view
                                 // reflects this change (the daemon is authoritative).
@@ -3143,6 +3241,14 @@ async fn run_collab_task(
                             // (it only stores the owner-signed delta via kb/collection_op).
                             if mode != "e2e" {
                                 warn!(kb = %kb_id, %mode, "kb/set_encryption: only 'e2e' is supported (one-way)");
+                                try_send_evt(
+                                    &evt_tx,
+                                    CollabEvent::Error {
+                                        message: format!(
+                                            "KB '{kb_id}': encryption mode '{mode}' is not supported — only 'e2e' can be set"
+                                        ),
+                                    },
+                                );
                             } else if let Some(id) = signing_identity.as_ref() {
                                 let owner_fp = id.fingerprint();
                                 let owner_pubkey = id.public().to_bytes();
@@ -3156,6 +3262,14 @@ async fn run_collab_task(
                                         );
                                         if gov != mae_sync::membership::Governance::SingleOwner {
                                             warn!(kb = %kb_id, "kb/set_encryption: E2e requires SingleOwner governance — refused");
+                                            try_send_evt(
+                                                &evt_tx,
+                                                CollabEvent::Error {
+                                                    message: format!(
+                                                        "KB '{kb_id}': E2E encryption requires SingleOwner governance — refused (a quorum-removable owner would freeze the content key)"
+                                                    ),
+                                                },
+                                            );
                                         } else {
                                             // Generate-or-load + persist the content key.
                                             let dir = mae_mcp::content_key_store::content_keys_dir();
@@ -3292,15 +3406,53 @@ async fn run_collab_task(
                                                         .insert(kb_id.clone(), coll.encode_state());
                                                     info!(kb = %kb_id, resealed_nodes = node_states.len(), "ADR-037: E2E enabled — content key generated + self-wrapped, signed genesis authored, nodes re-sealed");
                                                 }
-                                                Err(e) => warn!(kb = %kb_id, error = ?e, "kb/set_encryption: self-wrap failed"),
+                                                Err(e) => {
+                                                    warn!(kb = %kb_id, error = ?e, "kb/set_encryption: self-wrap failed");
+                                                    try_send_evt(
+                                                        &evt_tx,
+                                                        CollabEvent::Error {
+                                                            message: format!(
+                                                                "KB '{kb_id}': failed to self-wrap the content key: {e:?}"
+                                                            ),
+                                                        },
+                                                    );
+                                                }
                                             }
                                         }
                                     }
-                                    Ok(_) => warn!(kb = %kb_id, "kb/set_encryption: not the KB owner — skipped"),
-                                    Err(e) => warn!(kb = %kb_id, error = %e, "kb/set_encryption: collection decode failed"),
+                                    Ok(_) => {
+                                        warn!(kb = %kb_id, "kb/set_encryption: not the KB owner — skipped");
+                                        try_send_evt(
+                                            &evt_tx,
+                                            CollabEvent::Error {
+                                                message: format!(
+                                                    "KB '{kb_id}': only the owner can enable encryption"
+                                                ),
+                                            },
+                                        );
+                                    }
+                                    Err(e) => {
+                                        warn!(kb = %kb_id, error = %e, "kb/set_encryption: collection decode failed");
+                                        try_send_evt(
+                                            &evt_tx,
+                                            CollabEvent::Error {
+                                                message: format!(
+                                                    "KB '{kb_id}': failed to decode the collection state: {e}"
+                                                ),
+                                            },
+                                        );
+                                    }
                                 }
                             } else {
                                 warn!(kb = %kb_id, "kb/set_encryption: E2E requires key mode (no signing identity)");
+                                try_send_evt(
+                                    &evt_tx,
+                                    CollabEvent::Error {
+                                        message: format!(
+                                            "KB '{kb_id}': E2E encryption requires key-mode auth (no signing identity available)"
+                                        ),
+                                    },
+                                );
                             }
                         }
                         CollabCommand::KbCollectionOp { kb_id, update } => {
@@ -4425,8 +4577,11 @@ fn handle_response(
         }
         PendingResponseKind::ForceSync { doc_id } => {
             // sync/full_state response: {"result": {"doc": "...", "state": "<base64>"}}
-            // Use BufferJoined (load_sync_state path) to avoid content duplication
-            // that occurs when applying full state as an incremental update.
+            // #338: BufferResynced (not BufferJoined) — this is always a full
+            // genesis-encode, never a delta, and must always full-replace via
+            // load_sync_state, never merge via apply_sync_update. See
+            // BufferResynced's doc comment for why merging here silently
+            // corrupted/deleted content.
             let state_b64 = result
                 .and_then(|r| r.get("state"))
                 .and_then(|s| s.as_str())
@@ -4436,7 +4591,7 @@ fn handle_response(
                     Ok(state_bytes) => {
                         try_send_evt(
                             evt_tx,
-                            CollabEvent::BufferJoined {
+                            CollabEvent::BufferResynced {
                                 doc_id,
                                 state_bytes,
                             },
@@ -4823,6 +4978,102 @@ fn handle_response(
                             "{} '{member}' {} KB '{kb_id}'",
                             if add { "Added" } else { "Removed" },
                             if add { "to" } else { "from" }
+                        )],
+                    },
+                );
+            }
+        }
+        // #339: the 4 arms below were previously unregistered entirely — their
+        // responses fell into the generic "unknown/expired request id" debug-log
+        // fallback, so a daemon-side rejection was completely invisible. Same
+        // error/success shape as `KbMember` above.
+        PendingResponseKind::KbApproveMember { kb_id, principal } => {
+            if let Some(err) = val.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("approve failed");
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::Error {
+                        message: format!("Failed to approve '{principal}' for KB '{kb_id}': {msg}"),
+                    },
+                );
+            } else {
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::StatusReport {
+                        lines: vec![format!("Approved '{principal}' for KB '{kb_id}'")],
+                    },
+                );
+            }
+        }
+        PendingResponseKind::KbListPendingResult { kb_id } => {
+            if let Some(err) = val.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("list pending failed");
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::Error {
+                        message: format!("Failed to list pending requests for KB '{kb_id}': {msg}"),
+                    },
+                );
+            }
+            // No UI consumer of the success payload exists yet (#339 only closes
+            // the error-visibility gap; wiring the pending list itself is a
+            // separate, larger change — see the *KB Sharing* buffer's own
+            // pending-request source).
+        }
+        PendingResponseKind::KbSetPolicyResult { kb_id, policy } => {
+            if let Some(err) = val.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("set policy failed");
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::Error {
+                        message: format!("Failed to set policy '{policy}' on KB '{kb_id}': {msg}"),
+                    },
+                );
+            } else {
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::StatusReport {
+                        lines: vec![format!("KB '{kb_id}' policy set to '{policy}'")],
+                    },
+                );
+            }
+        }
+        PendingResponseKind::KbBlockPrincipalResult {
+            kb_id,
+            principal,
+            block,
+        } => {
+            if let Some(err) = val.get("error") {
+                let msg = err
+                    .get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("block/unblock failed");
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::Error {
+                        message: format!(
+                            "Failed to {} '{principal}' on KB '{kb_id}': {msg}",
+                            if block { "block" } else { "unblock" }
+                        ),
+                    },
+                );
+            } else {
+                try_send_evt(
+                    evt_tx,
+                    CollabEvent::StatusReport {
+                        lines: vec![format!(
+                            "{} '{principal}' {} KB '{kb_id}'",
+                            if block { "Blocked" } else { "Unblocked" },
+                            if block { "on" } else { "from" }
                         )],
                     },
                 );
