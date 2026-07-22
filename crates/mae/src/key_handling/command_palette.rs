@@ -280,6 +280,13 @@ pub(super) fn handle_command_palette_mode(
             editor.command_palette = None;
             editor.set_mode(Mode::Normal);
         }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            // Readline-style clear-query, parity with Mode::FilePicker's
+            // Ctrl-U (missing gap, no tracked issue).
+            palette.query.clear();
+            // Lazy re-query for large KB-find palettes; client-filter otherwise.
+            editor.kb_find_palette_query_changed();
+        }
         KeyCode::Char(ch) => {
             palette.query.push(ch);
             // Lazy re-query for large KB-find palettes; client-filter otherwise.

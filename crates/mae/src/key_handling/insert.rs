@@ -55,6 +55,16 @@ pub(super) fn handle_insert_mode(
             editor.lsp_complete_prev();
             return;
         }
+        KeyCode::Char('j') if key.modifiers.contains(KeyModifiers::CONTROL) && popup_open => {
+            // Ctrl-J moves the completion selection down when the popup is
+            // open -- parity with Mode::CommandPalette/Mode::FilePicker's
+            // Ctrl-J -> move-down (missing gap, no tracked issue). Must be
+            // matched before the unguarded C-j-newline arm below (Rust
+            // evaluates match arms with guards top-to-bottom); that arm
+            // remains the correct fallback when no popup is open.
+            editor.lsp_complete_next();
+            return;
+        }
         KeyCode::Esc if popup_open => {
             editor.lsp_dismiss_completion();
             // Also exit insert mode (fall through to keymap which handles Esc).
