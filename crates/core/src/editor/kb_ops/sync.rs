@@ -2,6 +2,17 @@
 
 use super::*;
 
+/// Compare the fields that matter for "is this a harmless duplicate or did
+/// content actually diverge" checks: title, body, tags. Shared by
+/// `Editor::kb_migrate_stranded_federation_nodes` (#76 — a stale `primary`
+/// copy vs. its joined instance) and `Editor::kb_dedup_promoted_instance_copy`
+/// (#303 — a freshly-promoted `primary` copy vs. its origin instance) so the
+/// same "safe to auto-resolve vs. ask the user" comparison isn't duplicated
+/// (CLAUDE.md #8).
+pub(super) fn kb_content_equal(a: &mae_kb::Node, b: &mae_kb::Node) -> bool {
+    a.title == b.title && a.body == b.body && a.tags == b.tags
+}
+
 impl Editor {
     /// Register a joined collaborative KB as a first-class federated instance
     /// (ADR-019). Joined nodes become addressable in their own instance instead
@@ -398,10 +409,7 @@ impl Editor {
             else {
                 continue;
             };
-            if primary_node.title == instance_node.title
-                && primary_node.body == instance_node.body
-                && primary_node.tags == instance_node.tags
-            {
+            if kb_content_equal(primary_node, &instance_node) {
                 to_remove.push(id.clone());
             } else {
                 diverged.push((id.clone(), uuid));
@@ -410,6 +418,7 @@ impl Editor {
 
         let removed = to_remove.len();
         for id in &to_remove {
+            self.kb_persist_delete(id);
             self.kb.primary.remove(id);
         }
         if removed > 0 {

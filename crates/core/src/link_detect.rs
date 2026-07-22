@@ -41,6 +41,19 @@ pub struct LinkSpan {
     pub label: Option<String>,
 }
 
+/// The command used to open an external URL — `xdg-open` by default,
+/// overridable via `MAE_BROWSER` (same env-var-override idiom as
+/// `MAE_DAP_LLDB`/`MAE_LSP_RUST`/etc.) so automated tests and users who
+/// prefer a CLI browser (`lynx`, `w3m`) aren't forced through a real GUI
+/// browser window. Single source of truth for both call sites that spawn
+/// it (`editor::org_ops::org_open_link`, `editor::mouse_ops::handle_link_click`).
+pub fn browser_command() -> String {
+    std::env::var("MAE_BROWSER")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "xdg-open".to_string())
+}
+
 /// Detect URLs and file paths in a line of text.
 /// Returns link spans relative to the start of the line.
 pub fn detect_links(text: &str) -> Vec<LinkSpan> {

@@ -501,6 +501,32 @@ fn cleanup_candidates_json(kb: &mae_kb::KnowledgeBase) -> serde_json::Value {
     serde_json::json!(out)
 }
 
+/// Tracked source files whose on-disk mtime has drifted from what was
+/// recorded at last import — a still file-tethered node's org file may
+/// have changed since (a *pre*-promotion drift signal; promoted nodes have
+/// no `source_files` row and never appear here — see
+/// `CozoKbStore::detect_reimport_stale_files`). `None` when no durable
+/// store is configured for this scope (mirrors `kb_id_audit`'s existing
+/// "status: not loaded" degrade-gracefully shape).
+fn reimport_stale_files_json(store: Option<&dyn mae_kb::KbStore>) -> serde_json::Value {
+    let Some(store) = store else {
+        return serde_json::json!([]);
+    };
+    let Ok(stale) = store.detect_reimport_stale_files() else {
+        return serde_json::json!([]);
+    };
+    serde_json::json!(stale
+        .iter()
+        .map(|f| serde_json::json!({
+            "file_path": f.file_path.display().to_string(),
+            "node_ids": f.node_ids,
+            "stored_mtime": f.stored_mtime,
+            "current_mtime": f.current_mtime,
+            "content_changed": f.content_changed,
+        }))
+        .collect::<Vec<_>>())
+}
+
 /// Per-federated-instance sync/freshness diagnostics — the piece that lets you
 /// self-diagnose "why didn't process B see my new node" without a source dive:
 /// is `kb_notes_dir` even resolvable to a registered instance, is that
@@ -560,10 +586,12 @@ pub fn execute_kb_sync_status(editor: &Editor) -> Result<String, String> {
     serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
 }
 
-/// Detect ghost/stale ids across the primary KB and every federated instance —
-/// see `KnowledgeBase::detect_ghost_ids`. More expensive than `kb_health`
-/// (re-parses each distinct source file), so it's its own on-demand tool
-/// rather than folded into the routinely-called health report.
+/// Detect ghost/stale ids and reimport-stale files across the primary KB and
+/// every federated instance — see `KnowledgeBase::detect_ghost_ids` and
+/// `CozoKbStore::detect_reimport_stale_files`. More expensive than
+/// `kb_health` (re-parses/re-hashes each distinct source file), so it's its
+/// own on-demand tool rather than folded into the routinely-called health
+/// report.
 pub fn execute_kb_id_audit(editor: &Editor) -> Result<String, String> {
     let instances: Vec<serde_json::Value> = editor
         .kb
@@ -575,6 +603,9 @@ pub fn execute_kb_id_audit(editor: &Editor) -> Result<String, String> {
                 "name": inst.name,
                 "uuid": inst.uuid,
                 "ghost_ids": cleanup_candidates_json(kb),
+                "reimport_stale_files": reimport_stale_files_json(
+                    editor.kb.instance_stores.get(&inst.uuid).map(|s| s.as_ref() as &dyn mae_kb::KbStore),
+                ),
             }),
             None => serde_json::json!({
                 "name": inst.name,
@@ -585,7 +616,12 @@ pub fn execute_kb_id_audit(editor: &Editor) -> Result<String, String> {
         .collect();
 
     let out = serde_json::json!({
-        "local": { "ghost_ids": cleanup_candidates_json(&editor.kb.primary) },
+        "local": {
+            "ghost_ids": cleanup_candidates_json(&editor.kb.primary),
+            "reimport_stale_files": reimport_stale_files_json(
+                editor.kb.store.as_deref(),
+            ),
+        },
         "instances": instances,
     });
     serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
@@ -842,6 +878,29 @@ pub fn execute_kb_delete(editor: &mut Editor, args: &serde_json::Value) -> Resul
         .ok_or("Missing required parameter: id")?;
     editor.kb_delete_node(id)?;
     Ok(format!("Deleted node: {}", id))
+}
+
+pub fn execute_kb_promote(editor: &mut Editor, args: &serde_json::Value) -> Result<String, String> {
+    let id = args
+        .get("id")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: id")?;
+
+    let result = editor.kb_promote_node(id)?;
+    let dedup = match result.dedup {
+        mae_core::editor::PromoteDedup::Removed => "removed",
+        mae_core::editor::PromoteDedup::KeptDiverged => "kept_diverged",
+    };
+    let node = node_json(editor, id);
+    serde_json::to_string_pretty(&serde_json::json!({
+        "status": "promoted",
+        "id": result.node_id,
+        "promoted_from_uuid": result.promoted_from_uuid,
+        "promoted_from_org_dir": result.promoted_from_org_dir.display().to_string(),
+        "instance_copy": dedup,
+        "node": node,
+    }))
+    .map_err(|e| e.to_string())
 }
 
 pub fn execute_kb_register(
@@ -1453,6 +1512,150 @@ pub fn execute_kb_vector_search(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A federated (`shared: true`, collab_id present) instance registered
+    /// under `uuid-lifecycle` -- the shape the #303 root-cause bug affected.
+    fn lifecycle_instance() -> mae_kb::federation::KbInstance {
+        mae_kb::federation::KbInstance {
+            uuid: "uuid-lifecycle".into(),
+            name: "LifecycleInstance".into(),
+            org_dir: std::path::PathBuf::from("/tmp/mae-test-lifecycle-org-dir"),
+            db_path: std::path::PathBuf::new(),
+            primary: false,
+            enabled: true,
+            last_import: None,
+            collab_id: Some("collab-lifecycle".into()),
+            shared: true,
+            remote_peers: Vec::new(),
+            last_sync: None,
+            ai_residency: mae_kb::federation::AiResidency::default(),
+        }
+    }
+
+    /// End-to-end regression for #303's actual promise: every CRUD path an
+    /// AI agent can reach (not just crates/core::Editor methods directly)
+    /// must work flawlessly against a promoted node. Drives the real
+    /// tool-executor functions -- promote -> update -> add_link -> history
+    /// -> health -> agenda -> delete -- exactly the layer an MCP client
+    /// exercises, which Part 2's fix never tested directly.
+    #[test]
+    fn promoted_node_full_crud_lifecycle_through_ai_tool_layer() {
+        let mut editor = Editor::new();
+
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store.seed_type_system().unwrap();
+        let arc = std::sync::Arc::new(store);
+        editor.kb.primary_cozo = Some(arc.clone());
+        editor.kb.store = Some(arc.clone());
+
+        let mut kb = mae_kb::KnowledgeBase::new();
+        let mut node = mae_kb::Node::new(
+            "test:promote-lifecycle",
+            "Lifecycle Node",
+            mae_kb::NodeKind::Note,
+            "original body",
+        );
+        node.source = Some(mae_kb::NodeSource::Federation);
+        kb.insert(node);
+        editor.kb.instances.insert("uuid-lifecycle".to_string(), kb);
+        editor.kb.registry.instances.push(lifecycle_instance());
+
+        // promote
+        let promote_result = execute_kb_promote(
+            &mut editor,
+            &serde_json::json!({"id": "test:promote-lifecycle"}),
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&promote_result).unwrap();
+        assert_eq!(v["status"], "promoted");
+        assert_eq!(
+            v["instance_copy"], "removed",
+            "the origin instance's identical copy must dedup away"
+        );
+        assert!(
+            editor.kb.instances["uuid-lifecycle"]
+                .get("test:promote-lifecycle")
+                .is_none(),
+            "origin instance copy must be gone post-dedup"
+        );
+
+        // update -- this is the root-cause regression: pre-fix, this would
+        // silently route to the (now-gone) stale instance copy instead.
+        execute_kb_update(
+            &mut editor,
+            &serde_json::json!({"id": "test:promote-lifecycle", "title": "Updated Title"}),
+        )
+        .unwrap();
+        let get_result = execute_kb_get(
+            &editor,
+            &serde_json::json!({"id": "test:promote-lifecycle"}),
+        )
+        .unwrap();
+        let g: serde_json::Value = serde_json::from_str(&get_result).unwrap();
+        assert_eq!(g["title"], "Updated Title");
+
+        // add_link
+        editor
+            .kb_create_node(
+                "test:promote-lifecycle-target",
+                "Target",
+                "body",
+                mae_kb::NodeKind::Note,
+            )
+            .unwrap();
+        execute_kb_add_link(
+            &mut editor,
+            &serde_json::json!({
+                "src": "test:promote-lifecycle",
+                "dst": "test:promote-lifecycle-target",
+                "rel_type": "related_to",
+            }),
+        )
+        .unwrap();
+        let links_result = execute_kb_links_from(
+            &editor,
+            &serde_json::json!({"id": "test:promote-lifecycle"}),
+        )
+        .unwrap();
+        assert!(links_result.contains("test:promote-lifecycle-target"));
+
+        // history + restore
+        let v1 = arc
+            .snapshot_version("test:promote-lifecycle", "post-promote checkpoint")
+            .unwrap();
+        let history_result = execute_kb_history(
+            &editor,
+            &serde_json::json!({"id": "test:promote-lifecycle"}),
+        )
+        .unwrap();
+        let h: serde_json::Value = serde_json::from_str(&history_result).unwrap();
+        assert!(h["version_count"].as_u64().unwrap() >= 1);
+        execute_kb_restore(
+            &editor,
+            &serde_json::json!({"id": "test:promote-lifecycle", "version": v1}),
+        )
+        .unwrap();
+
+        // health -- must not error against a promoted node's KB.
+        let health_result = execute_kb_health(&editor).unwrap();
+        let health_json: serde_json::Value = serde_json::from_str(&health_result).unwrap();
+        assert!(health_json["local"].is_object());
+
+        // agenda -- must not error against a promoted node's KB.
+        execute_kb_agenda(&editor, &serde_json::json!({"filter": "orphan"})).unwrap();
+
+        // delete (exercised last)
+        execute_kb_delete(
+            &mut editor,
+            &serde_json::json!({"id": "test:promote-lifecycle"}),
+        )
+        .unwrap();
+        let get_after_delete = execute_kb_get(
+            &editor,
+            &serde_json::json!({"id": "test:promote-lifecycle"}),
+        );
+        assert!(get_after_delete.is_err());
+    }
 
     #[test]
     fn kb_get_returns_node_fields() {

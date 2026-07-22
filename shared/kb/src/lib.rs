@@ -69,7 +69,7 @@ pub use org::{IngestReport, OrgParseResult, ParsedLink};
 pub use query::{CozoQueryLayer, FederatedQuery, InMemoryQueryLayer, KbQueryLayer};
 pub use store::{
     AgendaFilter, Block, BrokenLinkInfo, BrokenLinkReason, HealthReport, IntegrityError, KbStore,
-    KbStoreError, Link, MetaMember, NodeVersion, SubGraph, VectorHit,
+    KbStoreError, Link, MetaMember, NodeVersion, ReimportStaleFile, SubGraph, VectorHit,
 };
 
 /// Kind of a node. Controls how the node is surfaced to the user
@@ -209,6 +209,13 @@ pub enum NodeSource {
     Manual,
     /// Received via federation from another MAE instance.
     Federation,
+    /// Promoted into the primary KB from a federated/org-dir-imported
+    /// instance (#303) — deliberately distinct from `Federation` so
+    /// `kb_owner_of`'s stranded-node guard (issue #76) never mistakes a
+    /// freshly-promoted primary copy for pre-ADR-019 leftover cruft, and
+    /// distinct from `Manual` so promotion provenance isn't conflated with
+    /// hand-authored nodes. See `Editor::kb_promote_node`.
+    Promoted,
 }
 
 /// A single node in the knowledge base.

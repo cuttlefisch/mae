@@ -207,6 +207,28 @@ fn kb_search_scope_option_round_trip() {
 }
 
 #[test]
+fn ai_guidance_kb_option_round_trip() {
+    let mut editor = Editor::new();
+    // Empty (disabled, the default) always validates.
+    assert!(editor.set_option("ai_guidance_kb", "").is_ok());
+    assert_eq!(editor.ai_guidance_kb, "");
+    // "primary" always validates.
+    assert!(editor.set_option("ai_guidance_kb", "primary").is_ok());
+    assert_eq!(editor.ai_guidance_kb, "primary");
+    // An unknown instance name is rejected (no instance registered).
+    assert!(editor.set_option("ai_guidance_kb", "no-such-kb").is_err());
+    // A registered instance name validates.
+    let dir = create_test_org_dir();
+    let _test_dirs = with_test_dirs(&mut editor);
+    editor.kb_register("dev-practices", dir.path());
+    assert!(editor.set_option("ai_guidance_kb", "dev-practices").is_ok());
+    assert_eq!(
+        editor.get_option("ai_guidance_kb").map(|(v, _)| v),
+        Some("dev-practices".to_string())
+    );
+}
+
+#[test]
 fn kb_find_candidates_small_kb_returns_all() {
     let editor = Editor::new();
     // The seed manual is well under the lazy threshold.

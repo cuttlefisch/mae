@@ -37,6 +37,7 @@ const SINGLE_TARGET_KB_TOOLS: &[&str] = &[
     "kb_delete",
     "kb_add_link",
     "kb_restore",
+    "kb_promote",
     "kb_links_from",
     "kb_links_to",
     "kb_related",

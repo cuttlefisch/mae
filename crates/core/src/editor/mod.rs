@@ -75,7 +75,7 @@ pub use diagnostics::{Diagnostic, DiagnosticSeverity, DiagnosticStore};
 pub use git_ops::{BlameEntry, BlameOverlay, PendingGitDiff};
 pub use help_ops::is_builtin_node;
 pub use jumps::{JumpEntry, JUMP_LIST_CAP};
-pub use kb_ops::{KbResolution, KbWatcherStats};
+pub use kb_ops::{KbPromoteResult, KbResolution, KbWatcherStats, PromoteDedup};
 pub use kb_state::{DaemonControl, DaemonMode, KbContext};
 pub use lsp_state::{
     CodeActionItem, CodeActionMenu, CompletionItem, HoverPopup, LspContext, LspServerInfo,
@@ -1004,6 +1004,11 @@ pub struct Editor {
     /// Enable the legacy embedded AI chat window (deprecated in favor of
     /// the mae-agent TUI harness). Default false; see ADR-049.
     pub ai_chat_enabled: bool,
+    /// Name of a registered KB instance (or "primary") whose content is
+    /// actively surfaced to AI agents at session start as standing
+    /// practices/guidance. Empty (default) disables this. See
+    /// `mae_ai::guidance`.
+    pub ai_guidance_kb: String,
     /// Saved help view state from the last `help_close`. `help-reopen`
     /// restores this to resume exactly where the user left off.
     pub last_kb_state: Option<crate::kb_view::KbView>,
@@ -1427,6 +1432,7 @@ impl Editor {
             format_on_save: false,
             spell_enabled: false,
             ai_chat_enabled: false,
+            ai_guidance_kb: String::new(),
             ai: AiState::new(),
             bell_until: None,
             project: None,

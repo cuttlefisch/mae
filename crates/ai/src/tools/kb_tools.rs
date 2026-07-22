@@ -219,7 +219,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .build(),
         ToolDefBuilder::new(
             "kb_id_audit",
-            "Detect ghost/stale node ids that no longer match reality: either an id no longer produced by its (still-existing) source file's current content (an in-place :ID: edit/rename), or a node whose source_file has been deleted/renamed entirely. Re-parses/stats each distinct source file on demand — more expensive than kb_health, call when investigating id-rename or duplicate-node symptoms, not routinely.",
+            "Detect ghost/stale node ids that no longer match reality: either an id no longer produced by its (still-existing) source file's current content (an in-place :ID: edit/rename), or a node whose source_file has been deleted/renamed entirely. Also flags reimport_stale_files: still file-tethered nodes whose org file's on-disk mtime/content has drifted from what was recorded at last import (a candidate for :kb-reimport) — promoted nodes never appear here. Re-parses/stats each distinct source file on demand — more expensive than kb_health, call when investigating id-rename, duplicate-node, or stale-content symptoms, not routinely.",
         )
         .permission(PermissionTier::ReadOnly)
         .build(),
@@ -565,6 +565,14 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .prop("id", "string", "Node ID to restore")
         .prop("version", "integer", "Version number to restore to")
         .required(["id", "version"])
+        .permission(PermissionTier::Write)
+        .build(),
+        ToolDefBuilder::new(
+            "kb_promote",
+            "Promote a federated/imported KB node into the primary CozoDB-backed KB by id (#303) — severs its dependency on the origin org file/instance, so it becomes a fully graph-native node. The origin instance's now-redundant copy is deduplicated automatically when content still matches (or preserved + flagged for manual review if it has since diverged).",
+        )
+        .prop("id", "string", "Node ID to promote")
+        .required(["id"])
         .permission(PermissionTier::Write)
         .build(),
         ToolDefBuilder::new(

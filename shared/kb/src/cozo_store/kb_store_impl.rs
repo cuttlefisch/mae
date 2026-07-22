@@ -239,59 +239,6 @@ impl KbStore for CozoKbStore {
             .collect())
     }
 
-    fn get_crdt_doc(&self, id: &str) -> Result<Option<Vec<u8>>, KbStoreError> {
-        let result = self
-            .run_immut_params(
-                "?[crdt_doc, has_crdt] := *nodes{id, crdt_doc, has_crdt}, id = $id",
-                btree_params([("id", dv_str(id))]),
-            )
-            .map_err(cozo_err)?;
-
-        if let Some(row) = result.rows.first() {
-            let has_crdt = row.get(1).and_then(|v| v.get_bool()).unwrap_or(false);
-            if has_crdt {
-                let doc = row.first().and_then(|v| v.get_bytes().map(|b| b.to_vec()));
-                Ok(doc)
-            } else {
-                Ok(None)
-            }
-        } else {
-            Ok(None)
-        }
-    }
-
-    fn update_crdt_doc(&self, id: &str, doc: &[u8]) -> Result<(), KbStoreError> {
-        let now = self.now_epoch();
-        self.run_mut_params(
-            r#"
-            old[id, title, kind, body, tags_json, todo_state, priority, source, source_version,
-                aliases_json, properties_json, origin_instance, assignee, due_date, sprint, created_at]
-                := *nodes{id, title, kind, body, tags_json, todo_state, priority, source, source_version,
-                          aliases_json, properties_json, origin_instance, assignee, due_date, sprint,
-                          crdt_doc: _, has_crdt: _, created_at, updated_at: _},
-                id = $id
-
-            ?[id, title, kind, body, tags_json, todo_state, priority, source, source_version,
-              aliases_json, properties_json, crdt_doc, has_crdt, origin_instance, assignee, due_date, sprint,
-              created_at, updated_at]
-                := old[id, title, kind, body, tags_json, todo_state, priority, source, source_version,
-                       aliases_json, properties_json, origin_instance, assignee, due_date, sprint, created_at],
-                crdt_doc = $crdt_doc, has_crdt = true, updated_at = $now
-
-            :put nodes {id => title, kind, body, tags_json, todo_state, priority, source, source_version,
-                        aliases_json, properties_json, crdt_doc, has_crdt, origin_instance, assignee,
-                        due_date, sprint, created_at, updated_at}
-            "#,
-            btree_params([
-                ("id", dv_str(id)),
-                ("crdt_doc", DataValue::Bytes(doc.to_vec())),
-                ("now", DataValue::from(now)),
-            ]),
-        )
-        .map_err(cozo_err)?;
-        Ok(())
-    }
-
     fn push_pending_update(
         &self,
         kb_id: &str,
@@ -525,6 +472,10 @@ impl KbStore for CozoKbStore {
 
     fn health_report(&self) -> Result<HealthReport, KbStoreError> {
         CozoKbStore::health_report(self)
+    }
+
+    fn detect_reimport_stale_files(&self) -> Result<Vec<ReimportStaleFile>, KbStoreError> {
+        CozoKbStore::detect_reimport_stale_files(self)
     }
 
     fn id_title_pairs(&self, prefix: Option<&str>) -> Result<Vec<(String, String)>, KbStoreError> {

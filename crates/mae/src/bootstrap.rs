@@ -916,25 +916,11 @@ pub fn build_system_prompt_with_model(
             ));
         }
 
-        // Add project context from CLAUDE.md, README.md, etc.
-        let project_files = ["CLAUDE.md", "README.md", "README.org", ".project"];
-        for filename in &project_files {
-            let path = cwd.join(filename);
-            if path.exists() {
-                if let Ok(content) = std::fs::read_to_string(&path) {
-                    let max_chars = 8000;
-                    let truncated = if content.len() > max_chars {
-                        format!("{}...\n[truncated]", &content[..max_chars])
-                    } else {
-                        content
-                    };
-                    prompt.push_str(&format!(
-                        "\n## Project Context ({})\n```\n{}\n```\n",
-                        filename, truncated
-                    ));
-                    break;
-                }
-            }
+        // Add project context from CLAUDE.md, README.md, etc. — shared with
+        // mae-agent-cli's system prompt and the MCP `instructions` field
+        // (mae_ai::guidance), so this logic isn't duplicated per AI surface.
+        if let Some(ctx) = mae_ai::guidance::read_project_context(&cwd) {
+            prompt.push_str(&ctx);
         }
 
         // Add memory context from .mae/memory/*.txt

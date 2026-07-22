@@ -86,13 +86,20 @@ fn pending_updates_lifecycle() {
 
 #[test]
 fn crdt_doc_persistence() {
+    // get_crdt_doc/update_crdt_doc (narrow point-read/point-write trait
+    // methods) were removed as dead code (#303 follow-up) -- crdt_doc is
+    // an ordinary field on the ordinary node-row path (insert_node/
+    // get_node/update_node), which this now exercises directly.
     let (_tmp, store) = make_store();
     let mut node = Node::new("crdt:1", "CRDT Node", NodeKind::Note, "body");
     node.crdt_doc = Some(vec![10, 20, 30, 40]);
     store.insert_node(&node).unwrap();
 
-    let doc = store.get_crdt_doc("crdt:1").unwrap();
-    assert_eq!(doc, Some(vec![10, 20, 30, 40]));
+    let reloaded = store.get_node("crdt:1").unwrap();
+    assert_eq!(
+        reloaded.and_then(|n| n.crdt_doc),
+        Some(vec![10, 20, 30, 40])
+    );
 }
 
 #[test]

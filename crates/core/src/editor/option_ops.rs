@@ -176,6 +176,7 @@ impl super::Editor {
             "format_on_save" => self.format_on_save.to_string(),
             "spell_enabled" => self.spell_enabled.to_string(),
             "ai_chat_enabled" => self.ai_chat_enabled.to_string(),
+            "ai_guidance_kb" => self.ai_guidance_kb.clone(),
             "file_tree_focus_on_open" => self.file_tree_focus_on_open.to_string(),
             "collab_server_address" => self.collab.server_address.clone(),
             "collab_auto_connect" => self.collab.auto_connect.to_string(),
@@ -846,6 +847,22 @@ impl super::Editor {
             }
             "ai_chat_enabled" => {
                 self.ai_chat_enabled = parse_option_bool(value)?;
+            }
+            "ai_guidance_kb" => {
+                // Empty disables it; "primary" or a registered instance name
+                // must resolve to something real -- mirrors kb_search_scope's
+                // validation shape.
+                let trimmed = value.trim();
+                if !trimmed.is_empty()
+                    && trimmed != "primary"
+                    && self.kb.registry.find(trimmed).is_none()
+                {
+                    return Err(format!(
+                        "Invalid ai_guidance_kb: no KB instance named '{}' (expected: empty to disable, \"primary\", or a registered instance name)",
+                        trimmed
+                    ));
+                }
+                self.ai_guidance_kb = trimmed.to_string();
             }
             "file_tree_focus_on_open" => {
                 self.file_tree_focus_on_open = parse_option_bool(value)?;

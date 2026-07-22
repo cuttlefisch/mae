@@ -65,6 +65,10 @@
           "kind": "mod"
         },
         {
+          "name": "guidance",
+          "kind": "mod"
+        },
+        {
           "name": "ollama",
           "kind": "mod"
         },

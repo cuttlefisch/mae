@@ -9,6 +9,7 @@ pub mod context_limits;
 pub mod executor;
 pub mod gemini;
 pub mod guardrail;
+pub mod guidance;
 pub mod ollama;
 pub mod openai;
 pub mod pricing;

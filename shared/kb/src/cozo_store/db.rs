@@ -49,6 +49,7 @@ impl CozoKbStore {
                 crate::NodeSource::UserOrg => "user_org",
                 crate::NodeSource::Manual => "manual",
                 crate::NodeSource::Federation => "federation",
+                crate::NodeSource::Promoted => "promoted",
             })
             .unwrap_or("");
         let (crdt_bytes, has_crdt) = match &node.crdt_doc {
@@ -97,6 +98,7 @@ impl CozoKbStore {
                 crate::NodeSource::UserOrg => "user_org",
                 crate::NodeSource::Manual => "manual",
                 crate::NodeSource::Federation => "federation",
+                crate::NodeSource::Promoted => "promoted",
             })
             .unwrap_or("");
         let (crdt_bytes, has_crdt) = match &node.crdt_doc {

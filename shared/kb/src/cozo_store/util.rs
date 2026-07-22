@@ -44,6 +44,7 @@ fn str_to_source(s: &str) -> Option<crate::NodeSource> {
         "user_org" => Some(crate::NodeSource::UserOrg),
         "manual" => Some(crate::NodeSource::Manual),
         "federation" => Some(crate::NodeSource::Federation),
+        "promoted" => Some(crate::NodeSource::Promoted),
         "" => None,
         _ => None,
     }

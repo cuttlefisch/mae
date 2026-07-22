@@ -184,6 +184,39 @@ fn filter_tools(tools: Vec<ToolDefinition>, only: &[String]) -> Vec<ToolDefiniti
         .collect()
 }
 
+/// Base system prompt every agent session starts from — extended with
+/// project-context/guidance-KB content (`build_agent_system_prompt`) when
+/// configured, otherwise used verbatim (no behavior change for users who
+/// haven't opted into `ai_guidance_kb`).
+const BASE_SYSTEM_PROMPT: &str =
+    "You are an AI agent operating MAE's editor and knowledge-base tools.";
+
+/// Build this session's system prompt: the base prompt plus, when
+/// configured, project-context files (`CLAUDE.md`/etc.) and a designated
+/// "guidance KB" of standing practices (`mae_ai::guidance`) — read once at
+/// session start via `get_option` against the connected editor, not
+/// per-turn. Best-effort throughout: any failure (tool call error, no
+/// guidance configured, files/KB unreadable) falls back to the base prompt
+/// unchanged — a missing/misconfigured guidance source must never block
+/// startup.
+async fn build_agent_system_prompt(mcp: &mut McpClient) -> String {
+    let guidance_kb = mcp
+        .call_tool("get_option", serde_json::json!({"name": "ai_guidance_kb"}))
+        .await
+        .ok()
+        .filter(|o| o.success)
+        .and_then(|o| serde_json::from_str::<serde_json::Value>(&o.text).ok())
+        .and_then(|v| v.get("value").and_then(|s| s.as_str()).map(str::to_string))
+        .unwrap_or_default();
+
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let data_dir = mae_ai::guidance::default_data_dir();
+    match mae_ai::guidance::build_guidance_context(&cwd, data_dir.as_deref(), &guidance_kb) {
+        Some(ctx) => format!("{BASE_SYSTEM_PROMPT}{ctx}"),
+        None => BASE_SYSTEM_PROMPT.to_string(),
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
@@ -210,6 +243,7 @@ async fn main() -> anyhow::Result<()> {
     let tool_infos = mcp.list_tools().await?;
     let tools = convert_tool_infos(tool_infos);
     let tools = filter_tools(tools, &args.only_tools);
+    let system_prompt = build_agent_system_prompt(&mut mcp).await;
 
     let api_key = args
         .api_key
@@ -247,7 +281,7 @@ async fn main() -> anyhow::Result<()> {
     };
 
     if let Some(prompt) = args.prompt.clone() {
-        return run_once(&args, prompt, mcp, tools, provider).await;
+        return run_once(&args, prompt, mcp, tools, provider, system_prompt).await;
     }
 
     let permission_mode = PermissionMode::parse(&args.permission_mode).unwrap_or_default();
@@ -259,7 +293,7 @@ async fn main() -> anyhow::Result<()> {
         args.permission_mode
     ));
 
-    run_tui(app, provider, mcp, tools).await
+    run_tui(app, provider, mcp, tools, system_prompt).await
 }
 
 /// Non-interactive single-turn mode (`--prompt`): no TUI, no human to answer
@@ -278,6 +312,7 @@ async fn run_once(
     mcp: McpClient,
     tools: Vec<ToolDefinition>,
     provider: Arc<dyn AgentProvider>,
+    system_prompt: String,
 ) -> anyhow::Result<()> {
     let permission_mode = PermissionMode::parse(&args.permission_mode).unwrap_or_default();
     eprintln!(
@@ -303,7 +338,7 @@ async fn run_once(
             provider: provider.as_ref(),
             executor: &mut executor,
             tools: &tools,
-            system_prompt: "You are an AI agent operating MAE's editor and knowledge-base tools.",
+            system_prompt: &system_prompt,
         },
         &mut messages,
         &config,
@@ -566,6 +601,7 @@ async fn run_tui(
     provider: Arc<dyn AgentProvider>,
     mcp: McpClient,
     tools: Vec<ToolDefinition>,
+    system_prompt: String,
 ) -> anyhow::Result<()> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -573,7 +609,7 @@ async fn run_tui(
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_event_loop(&mut terminal, &mut app, provider, mcp, tools).await;
+    let result = run_event_loop(&mut terminal, &mut app, provider, mcp, tools, system_prompt).await;
 
     disable_raw_mode()?;
     io::stdout().execute(LeaveAlternateScreen)?;
@@ -587,6 +623,7 @@ async fn run_event_loop(
     provider: Arc<dyn AgentProvider>,
     mcp: McpClient,
     tools: Vec<ToolDefinition>,
+    system_prompt: String,
 ) -> anyhow::Result<()> {
     let mut messages: Vec<Message> = Vec::new();
     let mut crossterm_events = EventStream::new();
@@ -637,6 +674,7 @@ async fn run_event_loop(
                                 messages.clone(),
                                 submitted,
                                 events_tx.clone(),
+                                system_prompt.clone(),
                             ));
                         } else {
                             app.push_system_note(
@@ -703,16 +741,16 @@ fn spawn_turn(
     mut messages: Vec<Message>,
     user_input: String,
     events_tx: mpsc::UnboundedSender<HarnessEvent>,
+    system_prompt: String,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let system_prompt = "You are an AI agent operating MAE's editor and knowledge-base tools.";
         let tx = events_tx.clone();
         let result = agent_loop::run_turn(
             agent_loop::TurnContext {
                 provider: provider.as_ref(),
                 executor: &mut executor,
                 tools: &tools,
-                system_prompt,
+                system_prompt: &system_prompt,
             },
             &mut messages,
             &agent_loop::TurnConfig::default(),
@@ -1178,6 +1216,97 @@ mod tests {
         );
 
         drop(executor);
+        server.abort();
+    }
+
+    // ---- build_agent_system_prompt: guidance-context plumbing ----
+
+    /// Fake server that answers `get_option` with a fixed `ai_guidance_kb`
+    /// value (mirroring `execute_get_option`'s real JSON shape) and
+    /// anything else with `{}`.
+    async fn run_get_option_fake_server(
+        mut reader: tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>,
+        mut writer: tokio::net::unix::OwnedWriteHalf,
+        guidance_kb_value: &str,
+    ) {
+        loop {
+            let Some(msg) = mae_mcp::read_message(&mut reader).await.unwrap() else {
+                break;
+            };
+            let parsed: serde_json::Value = serde_json::from_str(&msg).unwrap();
+            if let Some(id) = parsed.get("id").cloned() {
+                let method = parsed.get("method").and_then(|m| m.as_str()).unwrap_or("");
+                let result = if method == "tools/call" {
+                    let info = serde_json::json!({
+                        "name": "ai_guidance_kb",
+                        "value": guidance_kb_value,
+                        "type": "string",
+                        "default": "",
+                        "doc": "test",
+                    });
+                    serde_json::json!({
+                        "isError": false,
+                        "content": [{"type": "text", "text": info.to_string()}],
+                    })
+                } else {
+                    serde_json::json!({})
+                };
+                let response = serde_json::json!({"jsonrpc": "2.0", "id": id, "result": result});
+                let body = serde_json::to_vec(&response).unwrap();
+                mae_mcp::write_framed(&mut writer, &body, std::time::Duration::from_secs(5))
+                    .await
+                    .unwrap();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn build_agent_system_prompt_unset_option_returns_base_prompt_unchanged() {
+        // Adversarial per principle #14: the no-op default (no guidance
+        // configured) must produce output byte-identical to today's
+        // hardcoded prompt -- no regression for users who haven't opted in.
+        let (client_stream, server_stream) = tokio::net::UnixStream::pair().unwrap();
+        let (server_read, server_write) = server_stream.into_split();
+        let server_reader = tokio::io::BufReader::new(server_read);
+        let server = tokio::spawn(run_get_option_fake_server(server_reader, server_write, ""));
+
+        let mut mcp = McpClient::from_stream(client_stream, None, None)
+            .await
+            .expect("connect should succeed");
+
+        let prompt = build_agent_system_prompt(&mut mcp).await;
+        assert_eq!(
+            prompt, BASE_SYSTEM_PROMPT,
+            "an unset ai_guidance_kb must produce the base prompt verbatim"
+        );
+
+        drop(mcp);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn build_agent_system_prompt_unknown_guidance_kb_falls_back_to_base_prompt() {
+        // A configured-but-unregistered KB name must degrade gracefully
+        // (no panic, no error surfaced to the session) rather than break
+        // startup -- read_guidance_kb_context returns None for it, and
+        // there's no project-context file in this crate's test cwd either.
+        let (client_stream, server_stream) = tokio::net::UnixStream::pair().unwrap();
+        let (server_read, server_write) = server_stream.into_split();
+        let server_reader = tokio::io::BufReader::new(server_read);
+        let server = tokio::spawn(run_get_option_fake_server(
+            server_reader,
+            server_write,
+            "no-such-guidance-kb",
+        ));
+
+        let mut mcp = McpClient::from_stream(client_stream, None, None)
+            .await
+            .expect("connect should succeed");
+
+        let prompt = build_agent_system_prompt(&mut mcp).await;
+        assert_eq!(prompt, BASE_SYSTEM_PROMPT);
+
+        drop(mcp);
         server.abort();
     }
 }

@@ -147,6 +147,15 @@ pub struct InitializeResult {
     pub protocol_version: String,
     pub capabilities: ServerCapabilities,
     pub server_info: serde_json::Value,
+    /// Optional server→client guidance surfaced to the model by compliant
+    /// clients (part of the MCP spec's `initialize` response; previously
+    /// unimplemented here — structurally absent, not just unset). Caller-
+    /// supplied (e.g. `McpServer::with_instructions`) since this crate is
+    /// intentionally transport-generic with no KB/editor knowledge of its
+    /// own — see `mae_ai::guidance` for the content this typically carries
+    /// (a designated guidance KB + registered KB names).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<String>,
 }
 
 /// Server capabilities declaration.
@@ -209,10 +218,42 @@ mod tests {
                 "name": "mae-editor",
                 "version": "0.3.0",
             }),
+            instructions: None,
         };
         let json = serde_json::to_string(&result).unwrap();
         assert!(json.contains("protocolVersion"));
         assert!(json.contains("2025-11-25"));
+    }
+
+    #[test]
+    fn initialize_result_omits_instructions_field_when_none() {
+        // Backward compat: older clients parsing this response must see no
+        // instructions field at all when unset, not `"instructions":null`.
+        let result = InitializeResult {
+            protocol_version: PROTOCOL_VERSION.to_string(),
+            capabilities: ServerCapabilities { tools: None },
+            server_info: serde_json::json!({}),
+            instructions: None,
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(!json.contains("instructions"));
+    }
+
+    #[test]
+    fn initialize_result_round_trips_instructions_when_present() {
+        let result = InitializeResult {
+            protocol_version: PROTOCOL_VERSION.to_string(),
+            capabilities: ServerCapabilities { tools: None },
+            server_info: serde_json::json!({}),
+            instructions: Some("Consult KB 'dev-practices' first.".to_string()),
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        assert!(json.contains("\"instructions\":\"Consult KB 'dev-practices' first.\""));
+        let round_tripped: InitializeResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            round_tripped.instructions.as_deref(),
+            Some("Consult KB 'dev-practices' first.")
+        );
     }
 
     #[test]

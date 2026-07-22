@@ -618,7 +618,9 @@ registration. It marks the directory as a MAE KB instance.\n\n\
 - `:kb-unregister <name>` — remove instance.\n\
 - `:kb-reimport <name>` — refresh after editing org files.\n\
 - `:kb-instances` — list registered instances.\n\
-- `:kb-health` — health report (orphans, broken links, namespace counts).\n\n\
+- `:kb-health` — health report (orphans, broken links, namespace counts).\n\
+- `:kb-promote` — promote a node from a federated instance into the primary,\n\
+  CozoDB-backed KB (SPC n p), severing its dependency on the origin org file.\n\n\
 See also: [[concept:knowledge-base]], [[concept:kb-workflows]], [[lesson:kb-import-roam]]\n";
 
 pub(super) const CONCEPT_KB_WORKFLOWS: &str = "\

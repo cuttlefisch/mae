@@ -276,7 +276,9 @@ impl super::Editor {
     pub(crate) fn handle_link_click(&mut self, target: &str) {
         if target.starts_with("http://") || target.starts_with("https://") {
             // Open URL externally
-            let _ = std::process::Command::new("xdg-open").arg(target).spawn();
+            let _ = std::process::Command::new(crate::link_detect::browser_command())
+                .arg(target)
+                .spawn();
             self.set_status(format!("Opening {}", target));
         } else if self.resolve_kb_link(target) {
             // Handled as a KB graph node.

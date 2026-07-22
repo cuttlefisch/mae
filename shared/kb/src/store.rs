@@ -195,6 +195,22 @@ pub struct HealthReport {
     pub hub_nodes: Vec<(String, usize)>,
 }
 
+/// A tracked source file whose on-disk mtime no longer matches what was
+/// recorded at last import — a pre-promotion drift signal ("org file
+/// changed since last reimport") for still file-tethered (`UserOrg`/
+/// `Federation`-sourced) nodes. `Promoted` nodes are excluded automatically:
+/// they have `source_file == None` and no `source_files` row of their own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReimportStaleFile {
+    pub file_path: std::path::PathBuf,
+    pub node_ids: Vec<String>,
+    pub stored_mtime: i64,
+    pub current_mtime: i64,
+    /// Re-hashed only when mtime differs, to avoid false positives from a
+    /// touch-without-edit (`false` there means "stale mtime, same content").
+    pub content_changed: bool,
+}
+
 /// Error type for KbStore operations.
 #[derive(Debug)]
 pub enum KbStoreError {
@@ -243,11 +259,6 @@ pub trait KbStore: Send + Sync {
     fn remove_link(&self, src: &str, dst: &str) -> Result<(), KbStoreError>;
     fn links_from(&self, id: &str) -> Result<Vec<Link>, KbStoreError>;
     fn links_to(&self, id: &str) -> Result<Vec<Link>, KbStoreError>;
-
-    // --- CRDT ---
-
-    fn get_crdt_doc(&self, id: &str) -> Result<Option<Vec<u8>>, KbStoreError>;
-    fn update_crdt_doc(&self, id: &str, doc: &[u8]) -> Result<(), KbStoreError>;
 
     // --- Offline queue ---
 
@@ -332,6 +343,17 @@ pub trait KbStore: Send + Sync {
     fn raw_query(&self, _script: &str) -> Result<(Vec<String>, Vec<Vec<String>>), KbStoreError> {
         Err(KbStoreError::NotSupported(
             "raw queries require CozoDB backend".into(),
+        ))
+    }
+
+    /// Detect tracked source files whose on-disk mtime has drifted from
+    /// what was recorded at last import (`kb-reimport`/`kb-register`) — a
+    /// pre-promotion "org file changed since last reimport" drift signal.
+    /// Default `NotSupported`; only `CozoKbStore` overrides it (delegating
+    /// to its inherent `detect_reimport_stale_files`).
+    fn detect_reimport_stale_files(&self) -> Result<Vec<ReimportStaleFile>, KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "reimport-staleness detection requires CozoDB backend".into(),
         ))
     }
 

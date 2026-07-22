@@ -174,7 +174,23 @@ Quick shortcut for `project-search` (ripgrep in project root).\n\n\
 *** SPC n — +notes\n\
 | Key | Command | Description |\n\
 |-----|---------|-------------|\n\
-| `f` | [[cmd:kb-find]] | Search KB nodes |\n\n\
+| `f` | [[cmd:kb-find]] | Search KB nodes |\n\
+| `v` | [[cmd:kb-view]] | View KB node |\n\
+| `e` | [[cmd:kb-edit-source]] | Edit node's source file |\n\
+| `c` | [[cmd:kb-create]] | Create KB node |\n\
+| `D` | [[cmd:kb-delete]] | Delete KB node |\n\
+| `r` | [[cmd:kb-register]] | Register org dir as KB instance |\n\
+| `R` | [[cmd:kb-reimport]] | Reimport a registered KB instance |\n\
+| `i` | [[cmd:kb-insert-link]] | Insert a link to a KB node |\n\
+| `p` | [[cmd:kb-promote]] | Promote a federated node into the primary KB |\n\
+| `s` | [[cmd:capture-finalize]] | Finish a capture note |\n\
+| `k` | [[cmd:capture-abort]] | Abort a capture note |\n\
+| `C` | [[cmd:kb-cleanup-orphans]] | Remove orphaned KB nodes |\n\
+| `I` | [[cmd:kb-instances]] | List registered KB instances |\n\
+| `h` | [[cmd:kb-health]] | KB health report |\n\
+| `N` | [[cmd:kb-narrow]] | Narrow KB search scope |\n\
+| `W` | [[cmd:kb-widen]] | Widen KB search scope |\n\
+| `S` | [[cmd:kb-set-scope]] | Set KB search scope |\n\n\
 *** SPC e — +eval\n\
 | Key | Command | Description |\n\
 |-----|---------|-------------|\n\

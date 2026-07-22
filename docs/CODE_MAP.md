@@ -84,6 +84,7 @@ Source: `crates/ai/src/lib.rs`
 | `executor` | mod |
 | `gemini` | mod |
 | `guardrail` | mod |
+| `guidance` | mod |
 | `ollama` | mod |
 | `openai` | mod |
 | `pricing` | mod |

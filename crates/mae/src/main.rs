@@ -705,11 +705,50 @@ fn main() -> io::Result<()> {
                     permission: t.permission.map(|p| format!("{p:?}")),
                 })
                 .collect();
-            let server = mae_mcp::McpServer::new(
+            // Always-on AI guidance (gap closed alongside mae-agent-cli's
+            // system prompt, mae_ai::guidance): surface the designated
+            // guidance KB (ai_guidance_kb option) + every registered KB
+            // instance's name via the MCP `initialize` response's
+            // `instructions` field, so ANY MCP-connected client — not just
+            // mae-agent-cli — gets pointed at relevant KBs on connect.
+            // `None` (both unset/empty) omits the field entirely, matching
+            // today's behavior for editors with nothing configured.
+            let mcp_instructions: Option<String> = {
+                let guidance_kb = editor
+                    .get_option("ai_guidance_kb")
+                    .map(|(v, _)| v)
+                    .unwrap_or_default();
+                let registered: Vec<String> = editor
+                    .kb
+                    .registry
+                    .instances
+                    .iter()
+                    .map(|i| i.name.clone())
+                    .collect();
+                if guidance_kb.is_empty() && registered.is_empty() {
+                    None
+                } else {
+                    let mut s = String::new();
+                    if !guidance_kb.is_empty() {
+                        s.push_str(&format!(
+                            "Before acting, consult KB '{guidance_kb}' for required practices. "
+                        ));
+                    }
+                    if !registered.is_empty() {
+                        s.push_str(&format!("Registered KBs: {}.", registered.join(", ")));
+                    }
+                    Some(s)
+                }
+            };
+
+            let mut server = mae_mcp::McpServer::new(
                 &mcp_socket_path,
                 mcp_tool_tx.clone(),
                 sync_broadcaster.clone(),
             );
+            if let Some(ref instructions) = mcp_instructions {
+                server = server.with_instructions(instructions.clone());
+            }
             tokio::spawn(server.run(mcp_tools.clone()));
             info!(socket = %mcp_socket_path, "MCP server started");
 
@@ -727,12 +766,15 @@ fn main() -> io::Result<()> {
             let psk = mae_mcp::auth::generate_psk();
             match mae_mcp::keystore::write_secure(std::path::Path::new(&psk_path), &psk) {
                 Ok(()) => {
-                    let agent_server = mae_mcp::McpServer::new(
+                    let mut agent_server = mae_mcp::McpServer::new(
                         &agent_socket_path,
                         mcp_tool_tx,
                         sync_broadcaster.clone(),
                     )
                     .with_psk_auth(mae_mcp::auth::PskAuth::new(&psk));
+                    if let Some(ref instructions) = mcp_instructions {
+                        agent_server = agent_server.with_instructions(instructions.clone());
+                    }
                     tokio::spawn(agent_server.run(mcp_tools));
                     info!(socket = %agent_socket_path, psk_file = %psk_path, "MCP agent (PSK-required) server started");
                 }

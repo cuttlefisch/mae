@@ -20,7 +20,7 @@
 
 use crate::store::{
     AgendaFilter, Block, HealthReport, KbStore, KbStoreError, Link, MetaMember, NodeVersion,
-    PendingUpdate, SearchHit, SubGraph, VectorHit,
+    PendingUpdate, ReimportStaleFile, SearchHit, SubGraph, VectorHit,
 };
 use crate::{Node, NodeKind};
 use cozo::{DataValue, DbInstance, NamedRows, ScriptMutability, Vector};
