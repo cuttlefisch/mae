@@ -818,6 +818,13 @@ pub struct Editor {
     /// Curvature of internal graph-view edges, as a fraction of edge
     /// length. Mirrors `kb_graph_edge_curvature`.
     pub kb_graph_edge_curvature: f32,
+    /// Opacity (0.0-1.0) of internal graph-view edges. Mirrors
+    /// `kb_graph_edge_alpha`.
+    pub kb_graph_edge_alpha: f32,
+    /// Whether a boundary stub's "... (+N)" label is always drawn instead
+    /// of only on hover/selection of its source node. Mirrors
+    /// `kb_graph_boundary_stub_label_always_shown`.
+    pub kb_graph_boundary_stub_label_always_shown: bool,
     /// Whether the graph view animates hover/selection color transitions.
     /// Mirrors `kb_graph_color_tween_enabled`.
     pub kb_graph_color_tween_enabled: bool,
@@ -1367,6 +1374,8 @@ impl Editor {
             kb_graph_label_zoom_threshold: 0.5,
             kb_graph_label_declutter_enabled: true,
             kb_graph_edge_curvature: 0.12,
+            kb_graph_edge_alpha: 0.5,
+            kb_graph_boundary_stub_label_always_shown: false,
             kb_graph_color_tween_enabled: true,
             kb_graph_color_tween_duration_ms: 150,
             kb_graph_node_border_enabled: false,

@@ -579,6 +579,22 @@ impl OptionRegistry {
                      behavior). Adjacent/parallel edges curve in alternating directions so \
                      they bow apart instead of overlapping.",
                     OptionKind::Float, "0.12", Some("kb-graph.edge-curvature"), &[]),
+                opt!("kb_graph_edge_alpha", &["kb-graph-edge-alpha"],
+                    "Opacity (0.0-1.0) of internal (non-boundary) graph-view edges. Lower values \
+                     keep dense/overlapping edges (especially in chord mode, where many curves \
+                     converge near the circle's center) readable instead of blending into a \
+                     solid mass, while nodes stay fully opaque so they remain the visual focus.",
+                    OptionKind::Float, "0.5", Some("kb-graph.edge-alpha"), &[]),
+                opt!("kb_graph_boundary_stub_label_always_shown",
+                    &["kb-graph-boundary-stub-label-always-shown"],
+                    "Whether a subgraph boundary stub's '... (+N)' collapsed-link-count label is \
+                     always drawn (the original behavior). When off (default), the label only \
+                     appears when that stub's source node is hovered or selected — the dashed \
+                     stub line itself (a 'there are more connections here' signal) is always \
+                     visible either way; only the numeric annotation is hidden by default to \
+                     reduce default-view clutter.",
+                    OptionKind::Bool, "false",
+                    Some("kb-graph.boundary-stub-label-always-shown"), &[]),
                 opt!("kb_graph_color_tween_enabled", &["kb-graph-color-tween-enabled"],
                     "Whether the graph view animates a node's color transition when it becomes \
                      hovered/selected (asymmetric — only the newly-highlighted node tweens in; \

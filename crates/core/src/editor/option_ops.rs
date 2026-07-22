@@ -250,6 +250,10 @@ impl super::Editor {
             "kb_graph_label_zoom_threshold" => self.kb_graph_label_zoom_threshold.to_string(),
             "kb_graph_label_declutter_enabled" => self.kb_graph_label_declutter_enabled.to_string(),
             "kb_graph_edge_curvature" => self.kb_graph_edge_curvature.to_string(),
+            "kb_graph_edge_alpha" => self.kb_graph_edge_alpha.to_string(),
+            "kb_graph_boundary_stub_label_always_shown" => {
+                self.kb_graph_boundary_stub_label_always_shown.to_string()
+            }
             "kb_graph_color_tween_enabled" => self.kb_graph_color_tween_enabled.to_string(),
             "kb_graph_color_tween_duration_ms" => self.kb_graph_color_tween_duration_ms.to_string(),
             "kb_graph_node_border_enabled" => self.kb_graph_node_border_enabled.to_string(),
@@ -1141,6 +1145,15 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.kb_graph_edge_curvature = v.clamp(0.0, 1.0);
+            }
+            "kb_graph_edge_alpha" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_edge_alpha = v.clamp(0.0, 1.0);
+            }
+            "kb_graph_boundary_stub_label_always_shown" => {
+                self.kb_graph_boundary_stub_label_always_shown = parse_option_bool(value)?;
             }
             "kb_graph_color_tween_enabled" => {
                 self.kb_graph_color_tween_enabled = parse_option_bool(value)?;
@@ -2650,6 +2663,53 @@ mod graph_view_option_tests {
             .set_option("kb_graph_node_saturation_cap", "not-a-number")
             .is_err());
         assert_eq!(editor.kb_graph_node_saturation_cap, before);
+    }
+
+    #[test]
+    fn kb_graph_edge_alpha_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(editor.get_option("kb_graph_edge_alpha").unwrap().0, "0.5");
+
+        editor.set_option("kb_graph_edge_alpha", "0.3").unwrap();
+        assert_eq!(editor.kb_graph_edge_alpha, 0.3);
+
+        // Out-of-range values clamp rather than error.
+        editor.set_option("kb_graph_edge_alpha", "-1.0").unwrap();
+        assert_eq!(editor.kb_graph_edge_alpha, 0.0);
+        editor.set_option("kb_graph_edge_alpha", "5.0").unwrap();
+        assert_eq!(editor.kb_graph_edge_alpha, 1.0);
+
+        let before = editor.kb_graph_edge_alpha;
+        assert!(editor
+            .set_option("kb_graph_edge_alpha", "not-a-number")
+            .is_err());
+        assert_eq!(editor.kb_graph_edge_alpha, before);
+    }
+
+    #[test]
+    fn kb_graph_boundary_stub_label_always_shown_option_roundtrips() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor
+                .get_option("kb_graph_boundary_stub_label_always_shown")
+                .unwrap()
+                .0,
+            "false"
+        );
+
+        editor
+            .set_option("kb_graph_boundary_stub_label_always_shown", "true")
+            .unwrap();
+        assert!(editor.kb_graph_boundary_stub_label_always_shown);
+
+        editor
+            .set_option("kb_graph_boundary_stub_label_always_shown", "false")
+            .unwrap();
+        assert!(!editor.kb_graph_boundary_stub_label_always_shown);
+
+        assert!(editor
+            .set_option("kb_graph_boundary_stub_label_always_shown", "not-a-bool")
+            .is_err());
     }
 
     /// Roundtrip + clamp for every DisplayPolicy-backed split-ratio option:

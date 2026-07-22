@@ -28,6 +28,15 @@ pub enum VisualElement {
         /// are unaffected.
         #[serde(default)]
         dashed: bool,
+        /// Stroke opacity, 0.0-1.0. `#[serde(default = "one_f32")]` (not a
+        /// plain `#[serde(default)]`, which would deserialize old/missing
+        /// snapshots to `0.0` — fully transparent) so pre-existing
+        /// snapshots/callers stay fully opaque, matching behavior before
+        /// this field existed. Added for `kb_graph_edge_alpha` (#367
+        /// follow-up) so dense chord-diagram edges can stay readable
+        /// instead of overlapping into a solid mass.
+        #[serde(default = "one_f32")]
+        alpha: f32,
     },
     Circle {
         cx: f32,
@@ -42,6 +51,21 @@ pub enum VisualElement {
         text: String,
         font_size: f32,
         color: String,
+        /// Rotation in degrees, clockwise, applied around `(x, y)` before
+        /// drawing. `0.0` (the `#[serde(default)]`) is a plain, unrotated
+        /// draw — every non-graph-view caller and Force-mode graph labels.
+        /// Used by chord-mode graph labels (`graph_view::chord_label_placement`)
+        /// to orient each label radially around the ring.
+        #[serde(default)]
+        rotation_degrees: f32,
+        /// When true, `(x, y)` is the text's END (not start) — the GUI
+        /// draw call measures the string and offsets backward so it grows
+        /// away from `(x, y)` instead of from it. Used together with
+        /// `rotation_degrees` for the far half of a chord-diagram ring, so
+        /// the flipped-180° label still reads right-side-up extending
+        /// outward from its node instead of back into the ring's interior.
+        #[serde(default)]
+        right_align: bool,
     },
     /// A quadratic bezier curve — used by the native KB graph view
     /// (`crate::graph_view::flatten_scene_graph`) for edges, so adjacent/
@@ -56,7 +80,14 @@ pub enum VisualElement {
         y2: f32,
         color: String,
         thickness: f32,
+        /// See `Line::alpha`'s doc comment — identical role and default.
+        #[serde(default = "one_f32")]
+        alpha: f32,
     },
+}
+
+fn one_f32() -> f32 {
+    1.0
 }
 
 /// Structured state for `BufferKind::Visual`.

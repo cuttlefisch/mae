@@ -138,6 +138,7 @@ impl SchemeRuntime {
                                     color,
                                     thickness,
                                     dashed: false,
+                                    alpha: 1.0,
                                 });
                             }
                             VisualOp::AddCircle {
@@ -168,6 +169,8 @@ impl SchemeRuntime {
                                     text,
                                     font_size,
                                     color,
+                                    rotation_degrees: 0.0,
+                                    right_align: false,
                                 });
                             }
                             VisualOp::Clear => vb.clear(),

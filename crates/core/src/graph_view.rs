@@ -743,6 +743,14 @@ pub struct GraphStyleOptions {
     /// see the curved-edge control-point computation in
     /// `flatten_scene_graph`'s edge loop and `MAX_CURVE_OFFSET_PX`'s cap.
     pub edge_curvature: f32,
+    /// Opacity (0.0-1.0) of internal (non-boundary) edges. Mirrors
+    /// `kb_graph_edge_alpha`. Keeps dense/overlapping edges — especially
+    /// in chord mode, where many curves converge near the circle's center
+    /// — readable instead of blending into a solid mass. The boundary
+    /// self-loop stub always draws at full opacity regardless (see
+    /// `flatten_scene_graph`'s edge loop) — it's sparse and a meaningful
+    /// correctness signal, not part of the density problem this fixes.
+    pub edge_alpha: f32,
     /// Which algorithm computed the scene's node positions — the
     /// edge-curve control-point formula in `flatten_scene_graph` branches
     /// on this (#367): `Chord` pulls toward the circle's center instead of
@@ -787,6 +795,12 @@ pub struct GraphStyleOptions {
     /// label — see `node_text_colors`' doc comment.
     pub boundary_edge_text_color: String,
     pub background_color: String,
+    /// Whether a boundary stub's "... (+N)" label is always drawn instead
+    /// of only on hover/selection of its source node. Mirrors
+    /// `kb_graph_boundary_stub_label_always_shown`. The dashed stub LINE
+    /// itself (a "there are more connections here" signal) is always
+    /// drawn regardless — only the numeric annotation is gated.
+    pub boundary_stub_label_always_shown: bool,
 }
 
 /// Stable index of a canvas `NodeKind` into `GraphStyleOptions::node_colors`
@@ -953,6 +967,7 @@ impl GraphStyleOptions {
             label_zoom_threshold: editor.kb_graph_label_zoom_threshold,
             label_declutter_enabled: editor.kb_graph_label_declutter_enabled,
             edge_curvature: editor.kb_graph_edge_curvature,
+            edge_alpha: editor.kb_graph_edge_alpha,
             layout_algorithm: editor.kb_graph_layout_algorithm,
             color_override: None,
             node_border_enabled: editor.kb_graph_node_border_enabled,
@@ -978,6 +993,7 @@ impl GraphStyleOptions {
             ),
             boundary_edge_color,
             background_color,
+            boundary_stub_label_always_shown: editor.kb_graph_boundary_stub_label_always_shown,
         }
     }
 
@@ -1161,20 +1177,113 @@ const LABEL_CHAR_WIDTH_RATIO: f32 = 0.6;
 /// to vary (principle #7's "truly fixed" carve-out).
 const LABEL_DECLUTTER_PADDING_PX: f32 = 2.0;
 
+/// Radial label placement for a chord-diagram node — `(label_x, label_y,
+/// rotation_degrees, right_align)`. `(scx, scy)` is the node's screen
+/// position, `(center_x, center_y)` the circle's screen-space center
+/// (`flatten_scene_graph`'s precomputed scene-origin transform).
+///
+/// The standard D3/Circos technique: rotate each label to point radially
+/// outward along its node's angle from center; on the far ("left") half of
+/// the ring — `angle.cos() < 0.0` — flip the rotation 180° and right-align
+/// (grow backward from the anchor) instead, so the label still reads
+/// right-side-up extending away from the node instead of upside-down or
+/// growing back into the ring's interior. `rem_euclid(360.0)` normalizes
+/// into `[0, 360)`: e.g. a due-left node's raw `180.0 + 180.0 = 360.0`
+/// normalizes to `0.0` — perfectly horizontal, right-aligned text growing
+/// further left, matching the standard `text-anchor:end` + `rotate(θ+180)`
+/// idiom exactly (verified against Skia's rotate convention, not assumed).
+fn chord_label_placement(
+    scx: f32,
+    scy: f32,
+    r: f32,
+    center_x: f32,
+    center_y: f32,
+) -> (f32, f32, f32, bool) {
+    let angle = (scy - center_y).atan2(scx - center_x);
+    // A due-north/south node's angle is theoretically exactly +/-90 degrees
+    // (cos == 0, neither half), but `atan2`/`to_degrees`/`cos` compound
+    // floating-point rounding can land the computed cosine on a tiny
+    // negative epsilon instead of exact zero — which half a
+    // near-vertical node's label counts as doesn't meaningfully affect
+    // readability (it's the boundary case where rotation is already near
+    // +/-90 degrees either way), so a small dead zone keeps the choice
+    // deterministic instead of flip-flopping on FP noise between
+    // otherwise-identical calls/platforms.
+    const RIGHT_ALIGN_EPSILON: f32 = 1e-4;
+    let right_align = angle.cos() < -RIGHT_ALIGN_EPSILON;
+    let rotation = (angle.to_degrees() + if right_align { 180.0 } else { 0.0 }).rem_euclid(360.0);
+    let label_x = scx + (r + 4.0) * angle.cos();
+    let label_y = scy + (r + 4.0) * angle.sin();
+    (label_x, label_y, rotation, right_align)
+}
+
+/// Node-label placement dispatcher — the ONLY place either the real draw
+/// (`flatten_scene_graph`'s node loop) or `compute_label_winners` computes
+/// where/how a node's label goes, so they can never disagree (principle
+/// #8, same discipline as `node_render_radius`). `Force` mode keeps the
+/// original flat horizontal offset unrotated; `Chord` mode radially
+/// orients via `chord_label_placement`.
+fn node_label_placement(
+    style: &GraphStyleOptions,
+    scx: f32,
+    scy: f32,
+    r: f32,
+    center_x: f32,
+    center_y: f32,
+) -> (f32, f32, f32, bool) {
+    match style.layout_algorithm {
+        GraphLayoutAlgorithm::Chord => chord_label_placement(scx, scy, r, center_x, center_y),
+        GraphLayoutAlgorithm::Force => (scx + r + 4.0, scy, 0.0, false),
+    }
+}
+
 /// A node's estimated screen-space label bounding box `(x0, y0, x1, y1)`,
-/// in the SAME coordinate space the node loop actually draws the label
-/// into (`x: scx + r + 4.0`, baseline-left at `y: scy`) — this is the
-/// ONLY place either `compute_label_winners` or the real draw computes
-/// that offset, so they can never disagree (principle #8, same discipline
-/// as `node_render_radius`).
-fn label_bbox(scx: f32, scy: f32, r: f32, label: &str, font_size: f32) -> (f32, f32, f32, f32) {
-    let x0 = scx + r + 4.0;
+/// built from the SAME `(label_x, label_y, rotation_degrees, right_align)`
+/// `node_label_placement` returns — never independently recomputed, so the
+/// declutter pass and the real draw can never disagree (principle #8).
+/// `right_align` extends the estimated-width rect BACKWARD (toward
+/// negative local-x) from the anchor, matching the GUI draw code's
+/// `(-advance, 0.0)` right-aligned origin exactly.
+fn label_bbox(
+    label_x: f32,
+    label_y: f32,
+    rotation_degrees: f32,
+    right_align: bool,
+    label: &str,
+    font_size: f32,
+) -> (f32, f32, f32, f32) {
     let width = label.chars().count() as f32 * font_size * LABEL_CHAR_WIDTH_RATIO;
-    // The real draw's `y` is the text baseline; approximate generous
-    // ascent/descent bounds around it (no real font-metrics query
-    // available here) — errs tall, same generous-on-purpose philosophy as
-    // the width estimate above.
-    (x0, scy - font_size, x0 + width, scy + font_size * 0.3)
+    // Local rect relative to the anchor, before rotation. The real draw's
+    // `y` is the text baseline; approximate generous ascent/descent bounds
+    // around it (no real font-metrics query available here) — errs tall,
+    // same generous-on-purpose philosophy as the width estimate above.
+    let (lx0, lx1) = if right_align {
+        (-width, 0.0)
+    } else {
+        (0.0, width)
+    };
+    let (ly0, ly1) = (-font_size, font_size * 0.3);
+    if rotation_degrees == 0.0 {
+        // Fast, exact path — also what every pre-rotation (Force-mode)
+        // caller hits, so their bbox stays byte-for-byte identical to
+        // before this function gained rotation support.
+        return (label_x + lx0, label_y + ly0, label_x + lx1, label_y + ly1);
+    }
+    let (sin, cos) = rotation_degrees.to_radians().sin_cos();
+    let corners = [(lx0, ly0), (lx1, ly0), (lx1, ly1), (lx0, ly1)];
+    let mut min_x = f32::MAX;
+    let mut max_x = f32::MIN;
+    let mut min_y = f32::MAX;
+    let mut max_y = f32::MIN;
+    for (x, y) in corners {
+        let rx = label_x + x * cos - y * sin;
+        let ry = label_y + x * sin + y * cos;
+        min_x = min_x.min(rx);
+        max_x = max_x.max(rx);
+        min_y = min_y.min(ry);
+        max_y = max_y.max(ry);
+    }
+    (min_x, min_y, max_x, max_y)
 }
 
 fn label_boxes_overlap(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
@@ -1210,6 +1319,7 @@ fn compute_label_winners(
     degrees: &[u32],
     style: &GraphStyleOptions,
     viewport: &mae_canvas::scene::Viewport,
+    center: (f32, f32),
 ) -> std::collections::HashSet<usize> {
     let mut candidates: Vec<usize> = (0..scene.nodes.len())
         .filter(|&i| !node_is_offscreen(positions[i].0, positions[i].1, radii[i], viewport))
@@ -1229,7 +1339,16 @@ fn compute_label_winners(
     let mut winners = std::collections::HashSet::with_capacity(candidates.len());
     for i in candidates {
         let (scx, scy) = positions[i];
-        let bbox = label_bbox(scx, scy, radii[i], &scene.nodes[i].label, style.font_size);
+        let (label_x, label_y, rotation_degrees, right_align) =
+            node_label_placement(style, scx, scy, radii[i], center.0, center.1);
+        let bbox = label_bbox(
+            label_x,
+            label_y,
+            rotation_degrees,
+            right_align,
+            &scene.nodes[i].label,
+            style.font_size,
+        );
         // Early-exit on first overlap found — avoids scanning the full
         // `placed` list for candidates rejected by the very first
         // already-placed box, the common case in a dense hub region
@@ -1377,6 +1496,11 @@ pub fn flatten_scene_graph(
                     y2: sy2 as f32,
                     color,
                     thickness: edge.style.width as f32,
+                    // Boundary self-loop stubs never reach this branch
+                    // (they always stay straight, see the comment above) —
+                    // this is always an internal edge, so `edge_alpha`
+                    // always applies.
+                    alpha: style.edge_alpha,
                 });
                 continue;
             }
@@ -1389,6 +1513,12 @@ pub fn flatten_scene_graph(
             color: color.clone(),
             thickness: edge.style.width as f32,
             dashed: is_boundary,
+            // The boundary self-loop stub is sparse and a meaningful
+            // correctness signal ("more graph beyond this depth, here"),
+            // not part of the dense-overlapping-edges problem `edge_alpha`
+            // exists to fix — it always draws fully opaque, regardless of
+            // the configured edge_alpha.
+            alpha: if is_boundary { 1.0 } else { style.edge_alpha },
         });
         // A boundary stub's label ("...", or "... (+N)" for a source with
         // multiple collapsed out-of-subgraph links — see
@@ -1396,21 +1526,31 @@ pub fn flatten_scene_graph(
         // exposed through `describe_state()`/introspection but never
         // actually drawn anywhere in the GUI — the red dashed stub had no
         // visible explanation of what it meant. Draw it at the stub's far
-        // end, in the same boundary color.
+        // end, in the same boundary color. The stub LINE above is always
+        // drawn regardless of the gate below — only the numeric annotation
+        // is conditional, so "there's more here" stays visible even when
+        // the count itself is hidden.
         if let Some(label) = &edge.label {
-            // `boundary_edge_text_color` is precomputed ONCE by
-            // `GraphStyleOptions::from_editor` (see its doc comment) —
-            // the boundary/edge color is tuned to read well as a thin
-            // stroke, which doesn't guarantee it's legible as small TEXT,
-            // so a WCAG AA minimum is enforced, preserving hue when it
-            // already clears the bar.
-            elements.push(VisualElement::Text {
-                x: sx2 as f32 + 4.0,
-                y: sy2 as f32,
-                text: label.clone(),
-                font_size: style.font_size,
-                color: style.boundary_edge_text_color.clone(),
-            });
+            let show_boundary_label = style.boundary_stub_label_always_shown
+                || scene.hovered == Some(edge.source)
+                || scene.selection == Some(edge.source);
+            if show_boundary_label {
+                // `boundary_edge_text_color` is precomputed ONCE by
+                // `GraphStyleOptions::from_editor` (see its doc comment) —
+                // the boundary/edge color is tuned to read well as a thin
+                // stroke, which doesn't guarantee it's legible as small TEXT,
+                // so a WCAG AA minimum is enforced, preserving hue when it
+                // already clears the bar.
+                elements.push(VisualElement::Text {
+                    x: sx2 as f32 + 4.0,
+                    y: sy2 as f32,
+                    text: label.clone(),
+                    font_size: style.font_size,
+                    color: style.boundary_edge_text_color.clone(),
+                    rotation_degrees: 0.0,
+                    right_align: false,
+                });
+            }
         }
     }
 
@@ -1422,7 +1562,13 @@ pub fn flatten_scene_graph(
     let label_winners: Option<std::collections::HashSet<usize>> =
         if style.label_declutter_enabled && viewport.zoom >= style.label_zoom_threshold as f64 {
             Some(compute_label_winners(
-                scene, &positions, &radii, degrees, style, viewport,
+                scene,
+                &positions,
+                &radii,
+                degrees,
+                style,
+                viewport,
+                (center_x as f32, center_y as f32),
             ))
         } else {
             None
@@ -1495,12 +1641,16 @@ pub fn flatten_scene_graph(
                 _ if is_hovered => style.hover_text_color.clone(),
                 _ => style.text_color_for_kind(node.kind).to_string(),
             };
+            let (label_x, label_y, rotation_degrees, right_align) =
+                node_label_placement(style, scx, scy, r, center_x as f32, center_y as f32);
             elements.push(VisualElement::Text {
-                x: scx + r + 4.0,
-                y: scy,
+                x: label_x,
+                y: label_y,
                 text: node.label.clone(),
                 font_size: style.font_size,
                 color: text_color,
+                rotation_degrees,
+                right_align,
             });
         }
     }
@@ -1549,6 +1699,11 @@ mod tests {
             // — new curved-edge tests build their own style with a
             // nonzero curvature explicitly.
             edge_curvature: 0.0,
+            // 1.0 (fully opaque) — a no-op alpha so every pre-existing edge
+            // test's exact-color assertions stay valid unmodified; new
+            // alpha-specific tests build their own style with a lower value
+            // explicitly, same pattern as `edge_curvature` above.
+            edge_alpha: 1.0,
             // Force, matching `edge_curvature: 0.0` above — every existing
             // edge-curve test here asserts the Force perpendicular-offset
             // formula (or a straight line); new chord-mode tests build
@@ -1603,6 +1758,12 @@ mod tests {
             boundary_edge_color: "#boundary".into(),
             boundary_edge_text_color: "#ffffff".into(),
             background_color: "#bg".into(),
+            // true — matches the ORIGINAL always-on behavior every
+            // pre-existing boundary-stub-label test here was written
+            // against, so they stay valid unmodified; new
+            // visibility-gating tests build their own style with this set
+            // to `false` explicitly, same pattern as `label_declutter_enabled`.
+            boundary_stub_label_always_shown: true,
         }
     }
 
@@ -1713,6 +1874,122 @@ mod tests {
         style.node_max_radius = 10.0;
         let r = node_render_radius(&style, 0, 1.0);
         assert!((10.0..=50.0).contains(&r));
+    }
+
+    #[test]
+    fn chord_label_placement_due_right_is_unrotated_and_left_anchored() {
+        // Node directly right of center (angle = 0).
+        let (_, _, rotation, right_align) = chord_label_placement(100.0, 0.0, 10.0, 0.0, 0.0);
+        assert!((rotation - 0.0).abs() < 0.01, "rotation was {rotation}");
+        assert!(!right_align);
+    }
+
+    #[test]
+    fn chord_label_placement_due_left_normalizes_to_zero_and_right_aligns() {
+        // Node directly left of center (angle = 180 degrees). The raw
+        // `180 + 180 = 360` must normalize close to `0.0` (tolerance, not
+        // exact equality — libm's atan2/cos may differ slightly by
+        // platform, principle #13) — a canonical, horizontal,
+        // right-aligned label extending further left, not a literal
+        // unnormalized ~360.0.
+        let (_, _, rotation, right_align) = chord_label_placement(-100.0, 0.0, 10.0, 0.0, 0.0);
+        assert!(
+            !(0.01..=359.99).contains(&rotation),
+            "rotation was {rotation}, expected ~0.0 (mod 360)"
+        );
+        assert!(
+            right_align,
+            "a due-left label must right-align so it grows away from the node, not into the ring"
+        );
+    }
+
+    #[test]
+    fn chord_label_placement_top_and_bottom_rotate_perpendicular_and_do_not_conflate() {
+        // Node above center (screen y-down, so "above" is negative y —
+        // angle = -90 degrees / 270 after normalization). Rotation is
+        // compared with a small tolerance, not exact equality — atan2/
+        // to_degrees/rem_euclid compound floating-point rounding can land
+        // a hair off the mathematically-exact 270.0/90.0.
+        let (_, _, top_rotation, top_right_align) =
+            chord_label_placement(0.0, -100.0, 10.0, 0.0, 0.0);
+        assert!(
+            (top_rotation - 270.0).abs() < 0.01,
+            "top_rotation was {top_rotation}, expected ~270.0"
+        );
+        assert!(
+            !top_right_align,
+            "top is on the right half (cos(-90) == 0, not meaningfully < 0)"
+        );
+
+        // Node below center (angle = 90 degrees).
+        let (_, _, bottom_rotation, bottom_right_align) =
+            chord_label_placement(0.0, 100.0, 10.0, 0.0, 0.0);
+        assert!(
+            (bottom_rotation - 90.0).abs() < 0.01,
+            "bottom_rotation was {bottom_rotation}, expected ~90.0"
+        );
+        assert!(!bottom_right_align);
+
+        assert!(
+            (top_rotation - bottom_rotation).abs() > 1.0,
+            "top and bottom must not be conflated into the same rotation"
+        );
+    }
+
+    #[test]
+    fn chord_label_placement_points_radially_outward_from_the_node() {
+        let (label_x, label_y, _, _) = chord_label_placement(100.0, 0.0, 10.0, 0.0, 0.0);
+        // Due-right node: label anchor must be further right than the
+        // node itself (radius + 4px offset along the outward angle).
+        assert!(label_x > 100.0);
+        assert!((label_y - 0.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn node_label_placement_force_mode_is_always_unrotated_regardless_of_position() {
+        // Regression guard: Force mode must produce the exact pre-rotation
+        // behavior (flat offset, zero rotation, no right-align) no matter
+        // where the node sits — confirms the Chord-only gate leaves Force
+        // mode byte-for-byte unaffected.
+        let style = test_style(); // Force by default
+        for (scx, scy) in [(100.0, 0.0), (-100.0, 0.0), (0.0, -100.0), (0.0, 100.0)] {
+            let (x, y, rotation, right_align) =
+                node_label_placement(&style, scx, scy, 10.0, 0.0, 0.0);
+            assert_eq!(x, scx + 10.0 + 4.0);
+            assert_eq!(y, scy);
+            assert_eq!(rotation, 0.0);
+            assert!(!right_align);
+        }
+    }
+
+    #[test]
+    fn label_bbox_rotated_90_degrees_swaps_width_and_height() {
+        let unrotated = label_bbox(0.0, 0.0, 0.0, false, "hello", 14.0);
+        let rotated = label_bbox(0.0, 0.0, 90.0, false, "hello", 14.0);
+        let unrotated_w = unrotated.2 - unrotated.0;
+        let unrotated_h = unrotated.3 - unrotated.1;
+        let rotated_w = rotated.2 - rotated.0;
+        let rotated_h = rotated.3 - rotated.1;
+        assert!(
+            (rotated_w - unrotated_h).abs() < 0.01,
+            "a 90-degree rotation's width must match the unrotated height: \
+             rotated_w={rotated_w}, unrotated_h={unrotated_h}"
+        );
+        assert!(
+            (rotated_h - unrotated_w).abs() < 0.01,
+            "a 90-degree rotation's height must match the unrotated width: \
+             rotated_h={rotated_h}, unrotated_w={unrotated_w}"
+        );
+    }
+
+    #[test]
+    fn label_bbox_zero_rotation_matches_the_pre_rotation_formula_exactly() {
+        // (label_x, label_y) = (scx + r + 4.0, scy) is what every Force-mode
+        // caller passes — confirms the new signature's rotation=0.0 fast
+        // path reproduces the original unrotated box byte-for-byte.
+        let bbox = label_bbox(114.0, 0.0, 0.0, false, "abc", 14.0);
+        let width = 3.0 * 14.0 * LABEL_CHAR_WIDTH_RATIO;
+        assert_eq!(bbox, (114.0, -14.0, 114.0 + width, 14.0 * 0.3));
     }
 
     #[test]
@@ -1922,8 +2199,15 @@ mod tests {
             .map(|&d| node_render_radius(&style, d, viewport.zoom))
             .collect();
 
-        let winners1 =
-            compute_label_winners(&scene, &positions, &radii, &degrees, &style, &viewport);
+        let winners1 = compute_label_winners(
+            &scene,
+            &positions,
+            &radii,
+            &degrees,
+            &style,
+            &viewport,
+            (0.0, 0.0),
+        );
         assert!(winners1.contains(&0), "the onscreen node must win a slot");
         assert!(
             !winners1.contains(&1),
@@ -1931,8 +2215,15 @@ mod tests {
         );
 
         // Determinism: repeated calls on identical input produce the same set.
-        let winners2 =
-            compute_label_winners(&scene, &positions, &radii, &degrees, &style, &viewport);
+        let winners2 = compute_label_winners(
+            &scene,
+            &positions,
+            &radii,
+            &degrees,
+            &style,
+            &viewport,
+            (0.0, 0.0),
+        );
         assert_eq!(winners1, winners2);
     }
 
@@ -2600,6 +2891,68 @@ mod tests {
     }
 
     #[test]
+    fn flatten_edge_alpha_applies_to_internal_edges_but_not_boundary_stub() {
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("a", 0.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("b", 50.0, 0.0, NodeKind::Note));
+        scene.edges.push(test_edge(0, 1)); // internal, straight (edge_curvature stays 0.0)
+        scene.edges.push(SceneEdge {
+            source: 0,
+            target: 0, // self-loop = boundary stub
+            label: Some("...".to_string()),
+            style: EdgeStyle {
+                color: "#unused".to_string(),
+                width: 1.0,
+                dashed: true,
+            },
+            weight: 1.0,
+            rel_type: None,
+        });
+        let mut style = test_style();
+        style.edge_alpha = 0.4;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        match &elements[0] {
+            VisualElement::Line { alpha, dashed, .. } => {
+                assert!(!dashed);
+                assert_eq!(*alpha, 0.4, "internal edges must pick up edge_alpha");
+            }
+            other => panic!("expected Line, got {other:?}"),
+        }
+        match &elements[1] {
+            VisualElement::Line { alpha, dashed, .. } => {
+                assert!(dashed);
+                assert_eq!(
+                    *alpha, 1.0,
+                    "the boundary self-loop stub must stay fully opaque \
+                     regardless of edge_alpha — it's a sparse correctness \
+                     signal, not part of the density problem edge_alpha fixes"
+                );
+            }
+            other => panic!("expected Line, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn flatten_curve_alpha_applies_to_internal_curved_edges() {
+        let mut scene = SceneGraph::new();
+        scene
+            .nodes
+            .push(test_node("a", -100.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("b", 100.0, 0.0, NodeKind::Note));
+        scene.edges.push(test_edge(0, 1));
+        let mut style = test_style();
+        style.edge_curvature = 0.2;
+        style.edge_alpha = 0.6;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        match &elements[0] {
+            VisualElement::Curve { alpha, .. } => assert_eq!(*alpha, 0.6),
+            other => panic!("expected Curve, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn flatten_curves_internal_edges_when_curvature_is_nonzero() {
         let mut scene = SceneGraph::new();
         scene
@@ -2686,6 +3039,51 @@ mod tests {
     }
 
     /// #367: a Chord-mode edge's control point must be pulled toward the
+    #[test]
+    fn flatten_chord_mode_produces_a_rotated_label_at_a_non_zero_angle() {
+        // A single node NOT on the right side of center (scene x=0, y=100,
+        // i.e. below center in screen space) — its label must come out
+        // rotated (matching chord_label_placement's own math), unlike
+        // Force mode's always-flat-horizontal label for the same position.
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("a", 0.0, 100.0, NodeKind::Note));
+        let viewport = mae_canvas::scene::Viewport::default();
+
+        let mut chord_style = test_style();
+        chord_style.layout_algorithm = GraphLayoutAlgorithm::Chord;
+        let chord_elements = flatten_scene_graph(&scene, &viewport, &chord_style, &[]);
+        let chord_text = chord_elements
+            .iter()
+            .find_map(|e| match e {
+                VisualElement::Text {
+                    rotation_degrees, ..
+                } => Some(*rotation_degrees),
+                _ => None,
+            })
+            .expect("expected a Text element");
+        assert_ne!(
+            chord_text, 0.0,
+            "a node below center must get a non-zero rotation in chord mode"
+        );
+
+        let mut force_style = test_style();
+        force_style.layout_algorithm = GraphLayoutAlgorithm::Force;
+        let force_elements = flatten_scene_graph(&scene, &viewport, &force_style, &[]);
+        let force_text = force_elements
+            .iter()
+            .find_map(|e| match e {
+                VisualElement::Text {
+                    rotation_degrees, ..
+                } => Some(*rotation_degrees),
+                _ => None,
+            })
+            .expect("expected a Text element");
+        assert_eq!(
+            force_text, 0.0,
+            "the SAME node position must stay unrotated in force mode"
+        );
+    }
+
     /// circle's (viewport-transformed) center, meaningfully DIFFERENT from
     /// the Force-mode perpendicular-offset formula the tests above cover —
     /// not just "some offset exists" (already proven for Force), but the
@@ -2910,6 +3308,83 @@ mod tests {
             }
             other => panic!("expected Text (the boundary stub's label), got {other:?}"),
         }
+    }
+
+    fn boundary_stub_scene() -> SceneGraph {
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("a", 0.0, 0.0, NodeKind::Note));
+        scene.edges.push(SceneEdge {
+            source: 0,
+            target: 0,
+            label: Some("... (+2)".to_string()),
+            style: EdgeStyle {
+                color: "#unused".to_string(),
+                width: 1.0,
+                dashed: true,
+            },
+            weight: 1.0,
+            rel_type: None,
+        });
+        scene
+    }
+
+    fn has_boundary_label_text(elements: &[VisualElement]) -> bool {
+        elements
+            .iter()
+            .any(|e| matches!(e, VisualElement::Text { text, .. } if text == "... (+2)"))
+    }
+
+    #[test]
+    fn flatten_boundary_stub_label_hidden_by_default_when_source_not_hovered_or_selected() {
+        let scene = boundary_stub_scene();
+        let mut style = test_style();
+        style.boundary_stub_label_always_shown = false;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        assert!(
+            matches!(elements[0], VisualElement::Line { .. }),
+            "the stub LINE itself must always draw regardless of label visibility"
+        );
+        assert!(
+            !has_boundary_label_text(&elements),
+            "the '+N' text must be hidden by default when its source node is neither \
+             hovered nor selected"
+        );
+    }
+
+    #[test]
+    fn flatten_boundary_stub_label_shown_when_source_node_hovered() {
+        let mut scene = boundary_stub_scene();
+        scene.hovered = Some(0);
+        let mut style = test_style();
+        style.boundary_stub_label_always_shown = false;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        assert!(has_boundary_label_text(&elements));
+    }
+
+    #[test]
+    fn flatten_boundary_stub_label_shown_when_source_node_selected() {
+        let mut scene = boundary_stub_scene();
+        scene.selection = Some(0);
+        let mut style = test_style();
+        style.boundary_stub_label_always_shown = false;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        assert!(has_boundary_label_text(&elements));
+    }
+
+    #[test]
+    fn flatten_boundary_stub_label_always_shown_ignores_hover_and_selection() {
+        let scene = boundary_stub_scene(); // neither hovered nor selected
+        let mut style = test_style();
+        style.boundary_stub_label_always_shown = true;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        assert!(
+            has_boundary_label_text(&elements),
+            "always_shown=true must restore the original always-on behavior"
+        );
     }
 
     #[test]

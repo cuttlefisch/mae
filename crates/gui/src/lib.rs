@@ -1524,8 +1524,10 @@ fn render_visual_buffer_with_bg(
                     color,
                     thickness,
                     dashed,
+                    alpha,
                 } => {
-                    if let Some(c) = theme::parse_hex_to_skia(color) {
+                    if let Some(mut c) = theme::parse_hex_to_skia(color) {
+                        c.a *= *alpha;
                         let mut paint = Paint::new(c, None);
                         paint.set_anti_alias(true);
                         paint.set_stroke_width(*thickness);
@@ -1575,11 +1577,13 @@ fn render_visual_buffer_with_bg(
                     y2,
                     color,
                     thickness,
+                    alpha,
                 } => {
                     // Mirrors canvas.rs's `draw_wavy_underline_at_pixel` —
                     // same PathBuilder/quad_to/detach/draw_path shape, just
                     // one control point instead of many.
-                    if let Some(c) = theme::parse_hex_to_skia(color) {
+                    if let Some(mut c) = theme::parse_hex_to_skia(color) {
+                        c.a *= *alpha;
                         let mut paint = Paint::new(c, None);
                         paint.set_anti_alias(true);
                         paint.set_stroke_width(*thickness);
@@ -1628,6 +1632,8 @@ fn render_visual_buffer_with_bg(
                     text,
                     font_size,
                     color,
+                    rotation_degrees,
+                    right_align,
                 } => {
                     if let Some(c) = theme::parse_hex_to_skia(color) {
                         let mut paint = Paint::new(c, None);
@@ -1638,9 +1644,34 @@ fn render_visual_buffer_with_bg(
                         // Skia's platform-default font.
                         let scale = *font_size / canvas.base_font_size();
                         let font = canvas.get_scaled_font(false, scale).clone();
-                        canvas
-                            .canvas()
-                            .draw_str(text, (x_off + x, y_off + y), &font, &paint);
+                        if *rotation_degrees == 0.0 && !*right_align {
+                            // Plain, unrotated draw — Force-mode/non-graph-
+                            // view labels, zero-cost vs. before this field
+                            // existed.
+                            canvas
+                                .canvas()
+                                .draw_str(text, (x_off + x, y_off + y), &font, &paint);
+                        } else {
+                            // Chord-diagram radial labels — same save/
+                            // translate/transform/draw/restore idiom as
+                            // canvas.rs's synthetic-italic skew, substituting
+                            // a rotation for the skew matrix. `right_align`
+                            // (the far/left half of the ring, flipped 180
+                            // degrees) measures the string and draws
+                            // backward from the anchor so it grows away
+                            // from the node instead of into the ring.
+                            canvas.canvas().save();
+                            canvas.canvas().translate((x_off + x, y_off + y));
+                            canvas.canvas().rotate(*rotation_degrees, None);
+                            let origin = if *right_align {
+                                let (advance, _) = font.measure_str(text, None);
+                                (-advance, 0.0)
+                            } else {
+                                (0.0, 0.0)
+                            };
+                            canvas.canvas().draw_str(text, origin, &font, &paint);
+                            canvas.canvas().restore();
+                        }
                     }
                 }
             }
