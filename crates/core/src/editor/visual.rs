@@ -6,10 +6,22 @@ impl Editor {
     // --- Visual mode ---
 
     /// Enter visual mode, recording the anchor at the current cursor position.
+    ///
+    /// Also stamps `Cursor::anchor` on every cursor (primary + secondaries)
+    /// -- a per-cursor field that already existed for exactly this purpose
+    /// but was never populated before #364. The primary keeps using
+    /// `vi.visual_anchor_row/col` as its authoritative anchor (unchanged,
+    /// every other visual-mode method already depends on it); secondaries'
+    /// `Cursor::anchor` is what lets `visual_selection_ranges()` give each
+    /// one its own independent selection instead of collapsing to just the
+    /// primary's.
     pub fn enter_visual_mode(&mut self, vtype: VisualType) {
-        let win = self.window_mgr.focused_window();
+        let win = self.window_mgr.focused_window_mut();
         self.vi.visual_anchor_row = win.cursor_row;
         self.vi.visual_anchor_col = win.cursor_col;
+        for c in win.cursor_set.iter_mut() {
+            c.anchor = Some((c.row, c.col));
+        }
         self.set_mode(Mode::Visual(vtype));
     }
 
@@ -58,29 +70,132 @@ impl Editor {
         }
     }
 
-    /// Delete the visual selection, storing it in the default register.
+    /// Compute one char-offset range PER ACTIVE CURSOR for the current
+    /// visual selection (#364). Single-cursor: returns exactly
+    /// `vec![self.visual_selection_range()]`, byte-for-byte identical to
+    /// pre-#364 behavior. Block mode is unaffected (multi-cursor +
+    /// block-visual stays primary-only -- see the #364 follow-up issue).
+    ///
+    /// The primary's range is `visual_selection_range()`, unchanged. Each
+    /// secondary's range is computed from ITS OWN `Cursor::anchor`
+    /// (stamped by `enter_visual_mode`) to its own current position --
+    /// falling back to its current position as its own anchor if somehow
+    /// unset (defensive; `enter_visual_mode` always sets it, but a cursor
+    /// added via `mc-add-cursor-*` AFTER entering visual mode would have no
+    /// anchor otherwise).
+    pub fn visual_selection_ranges(&self) -> Vec<(usize, usize)> {
+        let win = self.window_mgr.focused_window();
+        if win.cursor_set.is_single() || matches!(self.mode, Mode::Visual(VisualType::Block)) {
+            return vec![self.visual_selection_range()];
+        }
+
+        let buf = &self.buffers[self.active_buffer_idx()];
+        let mut ranges = vec![self.visual_selection_range()];
+        for c in win.cursor_set.secondaries() {
+            let (anchor_row, anchor_col) = c.anchor.unwrap_or((c.row, c.col));
+            match self.mode {
+                Mode::Visual(VisualType::Line) => {
+                    let min_row = anchor_row.min(c.row);
+                    let max_row = anchor_row.max(c.row);
+                    let start = buf.rope().line_to_char(min_row);
+                    let end = if max_row + 1 < buf.line_count() {
+                        buf.rope().line_to_char(max_row + 1)
+                    } else {
+                        buf.rope().len_chars()
+                    };
+                    ranges.push((start, end));
+                }
+                _ => {
+                    let anchor_off = buf.char_offset_at(anchor_row, anchor_col);
+                    let cursor_off = buf.char_offset_at(c.row, c.col);
+                    let start = anchor_off.min(cursor_off);
+                    let end = (anchor_off.max(cursor_off) + 1).min(buf.rope().len_chars());
+                    ranges.push((start, end));
+                }
+            }
+        }
+        ranges
+    }
+
+    /// Delete the visual selection(s), storing the combined text in the
+    /// default register. Multi-cursor (#364): deletes each cursor's own
+    /// range (`visual_selection_ranges()`), not just the primary's.
     pub fn visual_delete(&mut self) {
-        let (start, end) = self.visual_selection_range();
-        if start >= end {
+        let mut ranges = self.visual_selection_ranges();
+        if ranges.iter().all(|(s, e)| s >= e) {
             self.set_mode(Mode::Normal);
             return;
         }
         let idx = self.active_buffer_idx();
-        let text = self.buffers[idx].text_range(start, end);
-        self.buffers[idx].delete_range(start, end);
-        self.save_delete(text);
-        // Move cursor to start of deleted range
-        let rope = self.buffers[idx].rope();
-        let new_row = rope.char_to_line(start.min(rope.len_chars().saturating_sub(1)));
-        let line_start = rope.line_to_char(new_row);
+
+        // Capture register text in ascending (top-to-bottom) order BEFORE
+        // any mutation invalidates later ranges' offsets.
+        let mut ascending = ranges.clone();
+        ascending.sort_by_key(|(s, _)| *s);
+        let combined: String = ascending
+            .iter()
+            .filter(|(s, e)| s < e)
+            .map(|(s, e)| self.buffers[idx].text_range(*s, *e))
+            .collect();
+        self.save_delete(combined);
+
+        // Mutate in descending order so an earlier (higher-offset) deletion
+        // never shifts a later (lower-offset) range's start/end out from
+        // under it -- mirrors `replay_at_secondaries`'s established pattern
+        // (`multicursor.rs`).
+        ranges.sort_by_key(|b| std::cmp::Reverse(b.0));
+        let mut new_positions: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+        for (start, end) in &ranges {
+            if start >= end {
+                continue;
+            }
+            self.buffers[idx].delete_range(*start, *end);
+            let rope = self.buffers[idx].rope();
+            let new_row = rope.char_to_line((*start).min(rope.len_chars().saturating_sub(1)));
+            let line_start = rope.line_to_char(new_row);
+            new_positions.push((new_row, start.saturating_sub(line_start)));
+        }
+        // Each position was clamped against the rope state immediately
+        // after ITS OWN deletion -- but earlier (higher-offset) entries can
+        // still be stale once LATER deletions shrink the buffer further
+        // (e.g. deleting every cursor's line leaves several positions
+        // computed against intermediate, now-too-large rope sizes). Re-clamp
+        // every position against the FINAL buffer state before dedup.
+        let final_line_count = self.buffers[idx].line_count();
+        for (row, col) in &mut new_positions {
+            *row = (*row).min(final_line_count.saturating_sub(1));
+            *col = (*col).min(self.buffers[idx].line_len(*row));
+        }
+        new_positions.sort();
+        // Collapsed ranges (e.g. deleting the entire buffer) can leave
+        // multiple cursors pointing at the identical resulting position --
+        // dedup so cursor_set doesn't end up with redundant secondaries
+        // stacked on top of the primary.
+        new_positions.dedup();
+
+        // Rebuild cursor_set: the topmost surviving position becomes
+        // primary, the rest become secondaries -- lets a following
+        // `visual_change`'s insert-mode typing replicate at all of them via
+        // the existing multi-cursor insert-replay mechanism.
         let win = self.window_mgr.focused_window_mut();
-        win.cursor_row = new_row;
-        win.cursor_col = start.saturating_sub(line_start);
+        win.cursor_set.clear_secondaries();
+        if let Some(&(row, col)) = new_positions.first() {
+            win.cursor_row = row;
+            win.cursor_col = col;
+        }
         win.clamp_cursor(&self.buffers[idx]);
+        win.sync_primary();
+        for &(row, col) in &new_positions[1..] {
+            win.cursor_set.add(row, col);
+        }
         self.set_mode(Mode::Normal);
     }
 
-    /// Yank the visual selection into the default register without deleting.
+    /// Yank the visual selection(s) into the default register without
+    /// deleting. Multi-cursor (#364): the register holds each cursor's own
+    /// range concatenated in top-to-bottom order; cursor positions are left
+    /// untouched (nothing was deleted, so there's no "start of what
+    /// changed" to move to for more than one range).
     pub fn visual_yank(&mut self) {
         let idx = self.active_buffer_idx();
 
@@ -93,20 +208,30 @@ impl Editor {
             return;
         }
 
-        let (start, end) = self.visual_selection_range();
-        if start >= end {
+        let mut ranges = self.visual_selection_ranges();
+        if ranges.iter().all(|(s, e)| s >= e) {
             self.set_mode(Mode::Normal);
             return;
         }
-        let text = self.buffers[idx].text_range(start, end);
-        self.save_yank(text);
-        // Move cursor to start of selection
-        let rope = self.buffers[idx].rope();
-        let new_row = rope.char_to_line(start);
-        let line_start = rope.line_to_char(new_row);
-        let win = self.window_mgr.focused_window_mut();
-        win.cursor_row = new_row;
-        win.cursor_col = start - line_start;
+        ranges.sort_by_key(|(s, _)| *s); // ascending, top-to-bottom
+        let combined: String = ranges
+            .iter()
+            .filter(|(s, e)| s < e)
+            .map(|(s, e)| self.buffers[idx].text_range(*s, *e))
+            .collect();
+        self.save_yank(combined);
+
+        if ranges.len() == 1 {
+            // Preserve pre-#364 single-cursor behavior exactly: move cursor
+            // to selection start.
+            let (start, _) = ranges[0];
+            let rope = self.buffers[idx].rope();
+            let new_row = rope.char_to_line(start);
+            let line_start = rope.line_to_char(new_row);
+            let win = self.window_mgr.focused_window_mut();
+            win.cursor_row = new_row;
+            win.cursor_col = start - line_start;
+        }
         self.set_mode(Mode::Normal);
     }
 
@@ -294,19 +419,32 @@ impl Editor {
         self.set_mode(Mode::Normal);
     }
 
-    /// Uppercase the visual selection text.
+    /// Uppercase the visual selection(s) text. Multi-cursor (#364): each
+    /// cursor's own range is transformed. Cursor position(s) are left as-is
+    /// (matches pre-#364 single-cursor behavior, which never repositioned
+    /// the cursor for this operator either).
     pub fn visual_uppercase(&mut self) {
         self.save_visual_state();
-        let (start, end) = self.visual_selection_range();
-        if start >= end {
+        let mut ranges = self.visual_selection_ranges();
+        if ranges.iter().all(|(s, e)| s >= e) {
             self.set_mode(Mode::Normal);
             return;
         }
+        // Descending order avoids offset drift: `delete_range` +
+        // `insert_text_at` isn't guaranteed length-preserving for all
+        // Unicode case folding (e.g. German `ß` -> `SS`), so this is a real
+        // risk across multiple ranges, not just for `visual_delete`.
+        ranges.sort_by_key(|b| std::cmp::Reverse(b.0));
         let idx = self.active_buffer_idx();
-        let text = self.buffers[idx].text_range(start, end);
-        let upper = text.to_uppercase();
-        self.buffers[idx].delete_range(start, end);
-        self.buffers[idx].insert_text_at(start, &upper);
+        for (start, end) in ranges {
+            if start >= end {
+                continue;
+            }
+            let text = self.buffers[idx].text_range(start, end);
+            let upper = text.to_uppercase();
+            self.buffers[idx].delete_range(start, end);
+            self.buffers[idx].insert_text_at(start, &upper);
+        }
         self.set_mode(Mode::Normal);
     }
 
@@ -433,19 +571,26 @@ impl Editor {
         self.set_mode(Mode::Insert);
     }
 
-    /// Lowercase the visual selection text.
+    /// Lowercase the visual selection(s) text. See `visual_uppercase`'s doc
+    /// comment (#364) — same multi-cursor treatment.
     pub fn visual_lowercase(&mut self) {
         self.save_visual_state();
-        let (start, end) = self.visual_selection_range();
-        if start >= end {
+        let mut ranges = self.visual_selection_ranges();
+        if ranges.iter().all(|(s, e)| s >= e) {
             self.set_mode(Mode::Normal);
             return;
         }
+        ranges.sort_by_key(|b| std::cmp::Reverse(b.0));
         let idx = self.active_buffer_idx();
-        let text = self.buffers[idx].text_range(start, end);
-        let lower = text.to_lowercase();
-        self.buffers[idx].delete_range(start, end);
-        self.buffers[idx].insert_text_at(start, &lower);
+        for (start, end) in ranges {
+            if start >= end {
+                continue;
+            }
+            let text = self.buffers[idx].text_range(start, end);
+            let lower = text.to_lowercase();
+            self.buffers[idx].delete_range(start, end);
+            self.buffers[idx].insert_text_at(start, &lower);
+        }
         self.set_mode(Mode::Normal);
     }
 }

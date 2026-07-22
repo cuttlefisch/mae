@@ -6,13 +6,26 @@
 use crate::cursor::CursorOp;
 use crate::editor::Editor;
 
-/// Add a secondary cursor one line below the primary cursor.
+/// Add a secondary cursor one line below the LOWEST (max row) cursor
+/// currently in the set.
+///
+/// #364: this used to anchor to the primary's row unconditionally, so
+/// calling it repeatedly (the exact `mc-add-cursor-below` x3 in the bug
+/// report) piled up duplicate cursors on the SAME line instead of walking
+/// downward one line per call, since the primary itself never moves. Every
+/// existing single-call test's behavior is unchanged (with only the primary
+/// in the set, "lowest cursor" and "primary" are the same row).
 pub(crate) fn mc_add_cursor_below(editor: &mut Editor) {
     let win = editor.window_mgr.focused_window_mut();
     let buf = &editor.buffers[win.buffer_idx];
-    let primary_row = win.cursor_row;
     let primary_col = win.cursor_col;
-    let new_row = primary_row + 1;
+    let max_row = win
+        .cursor_set
+        .iter()
+        .map(|c| c.row)
+        .max()
+        .unwrap_or(win.cursor_row);
+    let new_row = max_row + 1;
     if new_row < buf.line_count() {
         let line_len = buf.line_len(new_row);
         let col = primary_col.min(if line_len > 0 { line_len - 1 } else { 0 });
@@ -20,14 +33,21 @@ pub(crate) fn mc_add_cursor_below(editor: &mut Editor) {
     }
 }
 
-/// Add a secondary cursor one line above the primary cursor.
+/// Add a secondary cursor one line above the HIGHEST (min row) cursor
+/// currently in the set. See `mc_add_cursor_below`'s doc comment (#364) —
+/// same fix, mirrored direction.
 pub(crate) fn mc_add_cursor_above(editor: &mut Editor) {
     let win = editor.window_mgr.focused_window_mut();
     let buf = &editor.buffers[win.buffer_idx];
-    let primary_row = win.cursor_row;
     let primary_col = win.cursor_col;
-    if primary_row > 0 {
-        let new_row = primary_row - 1;
+    let min_row = win
+        .cursor_set
+        .iter()
+        .map(|c| c.row)
+        .min()
+        .unwrap_or(win.cursor_row);
+    if min_row > 0 {
+        let new_row = min_row - 1;
         let line_len = buf.line_len(new_row);
         let col = primary_col.min(if line_len > 0 { line_len - 1 } else { 0 });
         win.cursor_set.add(new_row, col);
@@ -477,6 +497,11 @@ mod tests {
         let win = editor.window_mgr.focused_window_mut();
         win.cursor_row = 2;
         win.cursor_col = 0;
+        // #364: mc_add_cursor_above now reads the cursor_set's own min row,
+        // not the raw win.cursor_row field, so the fixture must keep them
+        // in sync -- exactly what every real dispatch path already does
+        // via sync_primary()/clamp_cursor() after a movement.
+        win.sync_primary();
         mc_add_cursor_above(&mut editor);
         let win = editor.window_mgr.focused_window();
         assert_eq!(win.cursor_set.len(), 2);
