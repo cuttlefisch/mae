@@ -608,6 +608,7 @@ pub fn execute_visual_buffer_add_line(
             color,
             thickness,
             dashed: false,
+            alpha: 1.0,
         });
         Ok(format!(
             "Added line from ({}, {}) to ({}, {})",
@@ -701,6 +702,8 @@ pub fn execute_visual_buffer_add_text(
             text,
             font_size,
             color,
+            rotation_degrees: 0.0,
+            right_align: false,
         });
         Ok(format!("Added text at ({}, {})", x, y))
     } else {

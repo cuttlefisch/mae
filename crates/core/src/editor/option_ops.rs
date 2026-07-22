@@ -250,6 +250,10 @@ impl super::Editor {
             "kb_graph_label_zoom_threshold" => self.kb_graph_label_zoom_threshold.to_string(),
             "kb_graph_label_declutter_enabled" => self.kb_graph_label_declutter_enabled.to_string(),
             "kb_graph_edge_curvature" => self.kb_graph_edge_curvature.to_string(),
+            "kb_graph_edge_alpha" => self.kb_graph_edge_alpha.to_string(),
+            "kb_graph_boundary_stub_label_always_shown" => {
+                self.kb_graph_boundary_stub_label_always_shown.to_string()
+            }
             "kb_graph_color_tween_enabled" => self.kb_graph_color_tween_enabled.to_string(),
             "kb_graph_color_tween_duration_ms" => self.kb_graph_color_tween_duration_ms.to_string(),
             "kb_graph_node_border_enabled" => self.kb_graph_node_border_enabled.to_string(),
@@ -288,6 +292,7 @@ impl super::Editor {
             "kb_graph_layout_iterations" => self.kb_graph_layout_iterations.to_string(),
             "kb_graph_layout_kind_clustering" => self.kb_graph_layout_kind_clustering.to_string(),
             "kb_graph_layout_spacing_scale" => self.kb_graph_layout_spacing_scale.to_string(),
+            "kb_graph_layout_algorithm" => self.kb_graph_layout_algorithm.as_str().to_string(),
             "kb_graph_follow_current_node" => self.kb_graph_follow_current_node.to_string(),
             "kb_graph_animate" => self.kb_graph_animate.to_string(),
             "kb_graph_hover_enabled" => self.kb_graph_hover_enabled.to_string(),
@@ -1141,6 +1146,15 @@ impl super::Editor {
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.kb_graph_edge_curvature = v.clamp(0.0, 1.0);
             }
+            "kb_graph_edge_alpha" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_edge_alpha = v.clamp(0.0, 1.0);
+            }
+            "kb_graph_boundary_stub_label_always_shown" => {
+                self.kb_graph_boundary_stub_label_always_shown = parse_option_bool(value)?;
+            }
             "kb_graph_color_tween_enabled" => {
                 self.kb_graph_color_tween_enabled = parse_option_bool(value)?;
             }
@@ -1242,6 +1256,12 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.kb_graph_layout_spacing_scale = v.clamp(0.1, 25.0);
+            }
+            "kb_graph_layout_algorithm" => {
+                let algo = crate::graph_view::GraphLayoutAlgorithm::parse(value).ok_or_else(
+                    || format!("Invalid kb_graph_layout_algorithm '{value}' (expected force|chord)"),
+                )?;
+                self.kb_graph_layout_algorithm = algo;
             }
             "kb_graph_follow_current_node" => {
                 self.kb_graph_follow_current_node = parse_option_bool(value)?;
@@ -2645,6 +2665,53 @@ mod graph_view_option_tests {
         assert_eq!(editor.kb_graph_node_saturation_cap, before);
     }
 
+    #[test]
+    fn kb_graph_edge_alpha_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(editor.get_option("kb_graph_edge_alpha").unwrap().0, "0.5");
+
+        editor.set_option("kb_graph_edge_alpha", "0.3").unwrap();
+        assert_eq!(editor.kb_graph_edge_alpha, 0.3);
+
+        // Out-of-range values clamp rather than error.
+        editor.set_option("kb_graph_edge_alpha", "-1.0").unwrap();
+        assert_eq!(editor.kb_graph_edge_alpha, 0.0);
+        editor.set_option("kb_graph_edge_alpha", "5.0").unwrap();
+        assert_eq!(editor.kb_graph_edge_alpha, 1.0);
+
+        let before = editor.kb_graph_edge_alpha;
+        assert!(editor
+            .set_option("kb_graph_edge_alpha", "not-a-number")
+            .is_err());
+        assert_eq!(editor.kb_graph_edge_alpha, before);
+    }
+
+    #[test]
+    fn kb_graph_boundary_stub_label_always_shown_option_roundtrips() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor
+                .get_option("kb_graph_boundary_stub_label_always_shown")
+                .unwrap()
+                .0,
+            "false"
+        );
+
+        editor
+            .set_option("kb_graph_boundary_stub_label_always_shown", "true")
+            .unwrap();
+        assert!(editor.kb_graph_boundary_stub_label_always_shown);
+
+        editor
+            .set_option("kb_graph_boundary_stub_label_always_shown", "false")
+            .unwrap();
+        assert!(!editor.kb_graph_boundary_stub_label_always_shown);
+
+        assert!(editor
+            .set_option("kb_graph_boundary_stub_label_always_shown", "not-a-bool")
+            .is_err());
+    }
+
     /// Roundtrip + clamp for every DisplayPolicy-backed split-ratio option:
     /// (option name, BufferKind, default). Table-driven so all 7 share one
     /// test body instead of 7 near-identical copies.
@@ -2818,6 +2885,52 @@ mod graph_view_option_tests {
         assert!(
             (output_height as i32 - expected).abs() <= 2,
             "output pane height {output_height} should be ~60% of {total_height}"
+        );
+    }
+
+    #[test]
+    fn kb_graph_layout_algorithm_option_roundtrips_and_rejects_invalid_values() {
+        use crate::graph_view::GraphLayoutAlgorithm;
+
+        let mut editor = Editor::new();
+        // Default is chord (#367).
+        assert_eq!(
+            editor.get_option("kb_graph_layout_algorithm").unwrap().0,
+            "chord"
+        );
+        assert_eq!(
+            editor.kb_graph_layout_algorithm,
+            GraphLayoutAlgorithm::Chord
+        );
+
+        editor
+            .set_option("kb_graph_layout_algorithm", "force")
+            .unwrap();
+        assert_eq!(
+            editor.get_option("kb_graph_layout_algorithm").unwrap().0,
+            "force"
+        );
+        assert_eq!(
+            editor.kb_graph_layout_algorithm,
+            GraphLayoutAlgorithm::Force
+        );
+
+        editor
+            .set_option("kb_graph_layout_algorithm", "chord")
+            .unwrap();
+        assert_eq!(
+            editor.kb_graph_layout_algorithm,
+            GraphLayoutAlgorithm::Chord
+        );
+
+        // Invalid value is rejected, state unchanged -- mirrors
+        // daemon_mode_option_set_get_and_gate_sync's shape exactly.
+        assert!(editor
+            .set_option("kb_graph_layout_algorithm", "nonsense")
+            .is_err());
+        assert_eq!(
+            editor.kb_graph_layout_algorithm,
+            GraphLayoutAlgorithm::Chord
         );
     }
 }

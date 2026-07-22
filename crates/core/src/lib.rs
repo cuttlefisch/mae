@@ -101,8 +101,8 @@ pub use editor::{
 pub use file_browser::{Activation as BrowserActivation, BrowserEntry, FileBrowser};
 pub use file_picker::FilePicker;
 pub use graph_view::{
-    flatten_scene_graph, GraphLayoutIntent, GraphLayoutMode, GraphNavDirection, GraphStyleOptions,
-    GraphView, GraphViewIntent,
+    flatten_scene_graph, GraphLayoutAlgorithm, GraphLayoutIntent, GraphLayoutMode,
+    GraphNavDirection, GraphStyleOptions, GraphView, GraphViewIntent,
 };
 pub use hooks::HookRegistry;
 pub use input::{InputEvent, MouseButton};
