@@ -996,16 +996,33 @@ pub fn execute_kb_reimport(
     }
 }
 
-/// Paragraph-aware excerpt: split by `\n\n`, accumulate until byte budget.
-/// Falls back to `floor_char_boundary` truncation for flat bodies.
-fn excerpt_body(body: &str, max_bytes: usize) -> String {
+/// Paragraph-aware excerpt: split by `\n\n`, accumulate until byte budget,
+/// starting from the paragraph containing `start_hint` (a byte offset into
+/// `body` -- typically the earliest query-term match, see
+/// `body_match_position`) instead of always doc-start, so a long note's
+/// excerpt surfaces the actually-relevant part (#357). `start_hint ==
+/// usize::MAX` (no match found) falls back to doc-start, same as before.
+/// Falls back to `floor_char_boundary` truncation from doc-start for flat
+/// bodies (single paragraph) or when the hinted paragraph alone exceeds the
+/// budget.
+fn excerpt_body(body: &str, max_bytes: usize, start_hint: usize) -> String {
     if body.len() <= max_bytes {
         return body.to_string();
     }
     let paragraphs: Vec<&str> = body.split("\n\n").collect();
     if paragraphs.len() > 1 {
+        let mut offset = 0usize;
+        let mut start_idx = 0usize;
+        for (i, para) in paragraphs.iter().enumerate() {
+            let para_end = offset + para.len();
+            if start_hint < para_end {
+                start_idx = i;
+                break;
+            }
+            offset = para_end + 2; // +2 for the "\n\n" separator
+        }
         let mut acc = String::new();
-        for para in paragraphs {
+        for para in &paragraphs[start_idx..] {
             let trimmed = para.trim();
             if trimmed.is_empty() {
                 continue;
@@ -1022,47 +1039,78 @@ fn excerpt_body(body: &str, max_bytes: usize) -> String {
             return format!("{}…", acc);
         }
     }
-    // Flat body — use char-boundary truncation
+    // Flat body, or the hinted paragraph alone exceeded budget — use
+    // char-boundary truncation from doc-start.
     format!("{}…", &body[..body.floor_char_boundary(max_bytes)])
 }
 
-/// Simple relevance score for RAG ranking. Field-weighted over
-/// titles/aliases/ids/tags/body, matching this tool's own advertised
-/// ranking contract and `KnowledgeBase::search_ranked`'s equivalent
-/// alias/id handling (`shared/kb/src/lib.rs`) -- an alias is an alternate
-/// name, so it scores at the same tier as title (#350).
+/// Relevance score for RAG ranking: tokenized, field-weighted over
+/// titles/aliases/ids/tags (same field tiers as `KnowledgeBase::search_ranked`,
+/// `shared/kb/src/lib.rs`), summed across query terms rather than requiring
+/// the whole phrase to match verbatim -- the previous whole-phrase
+/// `.contains(query_lower)` check almost never matched a natural-language
+/// query, collapsing nearly every candidate to a tie (#357). A hub/meta
+/// navigational node (`NodeKind::Category`/`Meta`, or `:role: hub`) is
+/// down-weighted so its broad incidental keyword coverage doesn't outscore
+/// a specific atom with a few precise hits.
 fn score_node(query_lower: &str, node: &mae_core::KbNode) -> u32 {
+    let terms: Vec<&str> = query_lower.split_whitespace().collect();
+    if terms.is_empty() {
+        return 1;
+    }
+    let title_lower = node.title.to_lowercase();
+    let id_lower = node.id.to_lowercase();
     let mut score = 0u32;
-    if node.title.to_lowercase().contains(query_lower) {
-        score += 3;
-    }
-    if node
-        .aliases
-        .iter()
-        .any(|a| a.to_lowercase().contains(query_lower))
-    {
-        score += 3;
-    }
-    if node.id.to_lowercase().contains(query_lower) {
-        score += 2;
-    }
-    for tag in &node.tags {
-        if tag.to_lowercase().contains(query_lower) {
+    for term in &terms {
+        if title_lower.contains(term) {
+            score += 3;
+        }
+        if node.aliases.iter().any(|a| a.to_lowercase().contains(term)) {
+            score += 3;
+        }
+        if id_lower.contains(term) {
             score += 2;
         }
+        for tag in &node.tags {
+            if tag.to_lowercase().contains(term) {
+                score += 2;
+            }
+        }
+    }
+    // Whole-phrase bonus: reward an exact multi-word title/alias match,
+    // mirroring search_ranked's whole_bonus intuition.
+    if title_lower.contains(query_lower)
+        || node
+            .aliases
+            .iter()
+            .any(|a| a.to_lowercase().contains(query_lower))
+    {
+        score += 5;
     }
     if score == 0 {
-        score = 1; // body match (search already filtered)
+        score = 1; // pure body match -- kb_federated_search_scoped already found it relevant
     }
-    score
+    let is_hub = matches!(
+        node.kind,
+        mae_core::KbNodeKind::Category | mae_core::KbNodeKind::Meta
+    ) || node.properties.get("role").map(String::as_str) == Some("hub");
+    if is_hub {
+        score = score.saturating_sub(2);
+    }
+    score.max(1)
 }
 
-/// Byte offset of the first case-insensitive occurrence of `query_lower` in
-/// `body`, or `usize::MAX` if absent -- an earlier/denser match is a
-/// stronger relevance signal than a later one, used as the tie-break ahead
-/// of alphabetical-by-ID (#350).
-fn body_match_position(query_lower: &str, body: &str) -> usize {
-    body.to_lowercase().find(query_lower).unwrap_or(usize::MAX)
+/// Byte offset of the first case-insensitive occurrence of any query term in
+/// `body`, or `usize::MAX` if no term appears -- used to pick which
+/// paragraph `excerpt_body` starts from (not as a sort key; ranking trusts
+/// `kb_federated_search_scoped`'s order on ties, see `execute_kb_search_context`, #357).
+fn body_match_position(terms: &[&str], body: &str) -> usize {
+    let body_lower = body.to_lowercase();
+    terms
+        .iter()
+        .filter_map(|t| body_lower.find(t))
+        .min()
+        .unwrap_or(usize::MAX)
 }
 
 /// RAG-optimized KB search: returns top-K nodes with body excerpts for AI
@@ -1072,8 +1120,14 @@ fn body_match_position(query_lower: &str, body: &str) -> usize {
 /// (local wins), already-`search_sort`-ordered mechanism `kb_search`
 /// itself uses (CLAUDE.md #8). This used to be a second, independently
 /// hand-rolled federated scan with no `scope` parameter at all, which is
-/// how it ended up unscopeable (#350). Ranked by relevance on top of that,
-/// with paragraph-aware excerpts and low-result guidance.
+/// how it ended up unscopeable (#350). Re-ranked on top of that by a
+/// tokenized, field-weighted `score_node` (same field tiers as
+/// `kb_search`'s underlying `search_ranked`, with hub/meta navigational
+/// nodes down-weighted); ties preserve `kb_federated_search_scoped`'s
+/// already-correct order rather than falling back to alphabetical-by-id
+/// (#357). Paragraph-aware excerpts are centered on the earliest query-term
+/// match in the body, and low-result guidance is returned when nothing
+/// survives.
 pub fn execute_kb_search_context(
     editor: &Editor,
     args: &serde_json::Value,
@@ -1095,24 +1149,23 @@ pub fn execute_kb_search_context(
         .min(configured_limit as u64) as usize;
     let excerpt_len = editor.kb.search_excerpt_length;
     let query_lower = query.to_lowercase();
+    let terms: Vec<&str> = query_lower.split_whitespace().collect();
 
     let mut results: Vec<(Option<String>, mae_core::KbNode, u32, usize)> = editor
         .kb_federated_search_scoped(query, &scope)
         .into_iter()
         .map(|(inst_name, node)| {
             let score = score_node(&query_lower, &node);
-            let position = body_match_position(&query_lower, &node.body);
+            let position = body_match_position(&terms, &node.body);
             (inst_name, node, score, position)
         })
         .collect();
 
-    // Sort by score desc, then body-match position asc (denser/earlier
-    // match wins), then id asc as the final deterministic tiebreak (#350).
-    results.sort_by(|a, b| {
-        b.2.cmp(&a.2)
-            .then_with(|| a.3.cmp(&b.3))
-            .then_with(|| a.1.id.cmp(&b.1.id))
-    });
+    // Sort by score desc only. `sort_by` is stable, so residual ties keep
+    // `kb_federated_search_scoped`'s incoming order (already the correct
+    // field-weighted/activity/alphabetical order, whichever kb_search_sort
+    // selects) instead of collapsing to alphabetical-by-id (#357).
+    results.sort_by_key(|r| std::cmp::Reverse(r.2));
 
     // Context-budget-aware scaling
     let context_budget_pct = args
@@ -1131,7 +1184,7 @@ pub fn execute_kb_search_context(
     let items: Vec<serde_json::Value> = results
         .into_iter()
         .take(effective_limit)
-        .map(|(inst_name, node, score, _position)| {
+        .map(|(inst_name, node, score, position)| {
             let mut val = serde_json::json!({
                 "id": node.id,
                 "title": node.title,
@@ -1139,7 +1192,8 @@ pub fn execute_kb_search_context(
                 "score": score,
             });
             if !ids_only {
-                val["excerpt"] = serde_json::json!(excerpt_body(&node.body, effective_excerpt_len));
+                val["excerpt"] =
+                    serde_json::json!(excerpt_body(&node.body, effective_excerpt_len, position));
             }
             if let Some(name) = inst_name {
                 val["instance"] = serde_json::json!(name);
@@ -2726,7 +2780,8 @@ mod tests {
         );
     }
 
-    // --- #350: scope param, alias-aware ranking, body-position tie-break ---
+    // --- #350: scope param, alias-aware ranking ---
+    // --- #357: tokenized scoring, hub/meta down-weight, stable-sort tiebreak ---
 
     #[test]
     fn score_node_checks_aliases() {
@@ -2738,8 +2793,11 @@ mod tests {
         )
         .with_aliases(["orderless retrieval"]);
         // Matches only via alias -- must score at the same tier as a title
-        // match (3), not fall through to the flat body-match default (1).
-        assert_eq!(score_node("orderless retrieval", &node), 3);
+        // match, not fall through to the flat body-match default (1).
+        // Tokenized model: "orderless" (+3) + "retrieval" (+3) per-term, plus
+        // the whole-phrase bonus (+5) since the alias exactly contains the
+        // full query -- 11 total (#357).
+        assert_eq!(score_node("orderless retrieval", &node), 11);
     }
 
     #[test]
@@ -2765,39 +2823,147 @@ mod tests {
     }
 
     #[test]
-    fn kb_search_context_ties_break_by_body_match_position_not_alphabetical() {
+    fn kb_search_context_ties_preserve_kb_federated_search_scoped_order() {
         let mut editor = Editor::new();
-        // Both tie at score 1 (body-only match, no title/alias/id/tag hit).
-        // "user:z-early" has a later alphabetical id but an earlier body
-        // match -- it must rank FIRST, proving the tiebreak isn't
-        // alphabetical-by-id anymore (#350).
+        // Both nodes tie at score 1 under score_node's tokenized model (a
+        // pure body-only match, no title/alias/id/tag hit for either -- the
+        // Category node's hub down-weight saturates at 0 then floors back to
+        // 1 via `.max(1)`, same as the non-hub node's fallback tier). They do
+        // NOT tie in kb_federated_search_scoped's own order, though: "aaa-tie"
+        // is a Category (hub-like) node with a lower relevance prior there
+        // (no flooring in search_ranked). If execute_kb_search_context's tie
+        // handling regressed back to alphabetical-by-id, "aaa-tie" would
+        // incorrectly win; the correct behavior preserves the upstream,
+        // prior-aware order instead (#357).
         editor
             .kb_create_node(
-                "user:a-late",
-                "Unrelated",
-                "padding padding padding padding tiebreaktermxyz",
-                mae_core::KbNodeKind::Note,
+                "user:aaa-tie",
+                "Unrelated A",
+                "padding tiebreaktermxyz padding",
+                mae_core::KbNodeKind::Category,
             )
             .unwrap();
         editor
             .kb_create_node(
-                "user:z-early",
-                "Unrelated",
-                "tiebreaktermxyz padding padding padding padding",
+                "user:zzz-tie",
+                "Unrelated B",
+                "padding tiebreaktermxyz padding",
                 mae_core::KbNodeKind::Note,
             )
             .unwrap();
+
+        let scope = mae_kb::KbScope::parse(&editor.kb.search_scope);
+        let upstream: Vec<String> = editor
+            .kb_federated_search_scoped("tiebreaktermxyz", &scope)
+            .into_iter()
+            .map(|(_, node)| node.id)
+            .filter(|id| id == "user:aaa-tie" || id == "user:zzz-tie")
+            .collect();
+        assert_eq!(
+            upstream,
+            vec!["user:zzz-tie".to_string(), "user:aaa-tie".to_string()],
+            "sanity check: the Category node's lower prior should already put \
+             it second in kb_federated_search_scoped's own order, got {upstream:?}"
+        );
 
         let result =
             execute_kb_search_context(&editor, &serde_json::json!({"query": "tiebreaktermxyz"}))
                 .unwrap();
         let items: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        let actual: Vec<String> = items
+            .iter()
+            .map(|i| i["id"].as_str().unwrap().to_string())
+            .filter(|id| id == "user:aaa-tie" || id == "user:zzz-tie")
+            .collect();
+
+        assert_eq!(
+            actual, upstream,
+            "tied score_node candidates must preserve kb_federated_search_scoped's \
+             order, not fall back to alphabetical-by-id: {actual:?}"
+        );
+    }
+
+    #[test]
+    fn kb_search_context_hub_node_does_not_outrank_specific_target() {
+        // End-to-end regression for #357's actual reported symptom: a
+        // hub/Category node with broad keyword coverage (mentions many topic
+        // words, like the issue's "token-efficiency-evidence" example) vs. a
+        // specific Note with a real but partial title/body match. The
+        // specific note must rank above the hub node for a natural-language
+        // query that doesn't exact-substring the note's title.
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node(
+                "practice:adversarial-testing",
+                "Adversarial testing philosophy",
+                "Tests exist to falsify the implementation, not confirm it. \
+                 Prefer property/round-trip tests over one fixed happy path.",
+                mae_core::KbNodeKind::Note,
+            )
+            .unwrap();
+        editor
+            .kb_create_node(
+                "hub:dev-practices",
+                "Development practices hub",
+                "Links out to testing philosophy, commit conventions, code review, \
+                 and build tooling practices used across this project.",
+                mae_core::KbNodeKind::Category,
+            )
+            .unwrap();
+
+        let result =
+            execute_kb_search_context(&editor, &serde_json::json!({"query": "testing philosophy"}))
+                .unwrap();
+        let items: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
         let ids: Vec<&str> = items.iter().map(|i| i["id"].as_str().unwrap()).collect();
-        let pos_early = ids.iter().position(|&id| id == "user:z-early").unwrap();
-        let pos_late = ids.iter().position(|&id| id == "user:a-late").unwrap();
+        let pos_target = ids
+            .iter()
+            .position(|&id| id == "practice:adversarial-testing");
+        let pos_hub = ids.iter().position(|&id| id == "hub:dev-practices");
         assert!(
-            pos_early < pos_late,
-            "earlier body match must rank first despite losing alphabetically: {ids:?}"
+            pos_target.is_some(),
+            "the specific target note must be present in results: {ids:?}"
+        );
+        if let Some(pos_hub) = pos_hub {
+            assert!(
+                pos_target.unwrap() < pos_hub,
+                "specific target note must outrank the hub node, got {ids:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn kb_search_context_natural_language_query_with_one_unmatched_filler_word_is_not_empty() {
+        // Reproduces #357's "zero results" symptom directly, calibrated to
+        // what the soft-AND fallback in search_ranked actually guarantees
+        // (relax by exactly one unmatched term, see shared/kb/src/lib.rs) --
+        // a short natural phrasing with exactly one word absent from the
+        // target node.
+        let mut editor = Editor::new();
+        editor
+            .kb_create_node(
+                "practice:caution-annotations",
+                "Caution annotation convention",
+                "Use @ai-caution comments to flag invariants for other AI agents.",
+                mae_core::KbNodeKind::Note,
+            )
+            .unwrap();
+
+        let result = execute_kb_search_context(
+            &editor,
+            &serde_json::json!({"query": "caution annotation guidance"}),
+        )
+        .unwrap();
+        let items: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(
+            !items.is_empty(),
+            "a natural query with one unmatched filler/synonym word must not return zero results"
+        );
+        assert!(
+            items
+                .iter()
+                .any(|i| i["id"] == "practice:caution-annotations"),
+            "target node should be present in results: {items:?}"
         );
     }
 

@@ -299,7 +299,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .build(),
         ToolDefBuilder::new(
             "kb_search_context",
-            "RAG-optimized KB search: returns top-K nodes with excerpts and relevance scores for AI reasoning context. Field-weighted ranking over titles, ids, bodies, tags, and aliases (same ranking kb_search uses), with ties broken by body-match position rather than node id. Searches local + federated KBs by default. Use this instead of kb_search + kb_get loops.",
+            "RAG-optimized KB search: returns top-K nodes with excerpts and relevance scores for AI reasoning context. Tokenized, field-weighted relevance (same field tiers as kb_search's underlying ranking) over titles, ids, bodies, tags, and aliases, with hub/meta navigational nodes down-weighted below the specific note they merely index; ties preserve kb_search's underlying order rather than falling back to node id. Searches local + federated KBs by default. Use this instead of kb_search + kb_get loops.",
         )
         .prop("query", "string", "Search query (case-insensitive substring, fuzzy fallback)")
         .prop(
