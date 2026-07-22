@@ -765,6 +765,8 @@ impl Editor {
     pub fn sync_mode_to_buffer(&mut self) {
         let idx = self.active_buffer_idx();
         self.ensure_buffer_git_branch(idx);
+        self.buffer_focus_seq += 1;
+        self.buffers[idx].last_focused = self.buffer_focus_seq;
         let kind = self.buffers[idx].kind;
 
         if let Some(saved) = self.buffers[idx].saved_mode {

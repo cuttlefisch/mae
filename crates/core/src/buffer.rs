@@ -284,6 +284,13 @@ pub struct Buffer {
     /// `SyntaxMap` to detect stale cached spans without external
     /// invalidation calls.
     pub generation: u64,
+    /// Focus-order sequence number, bumped from `Editor::buffer_focus_seq`
+    /// in `sync_mode_to_buffer()` on every focus/buffer change. `0` means
+    /// never explicitly focused (a brand-new buffer), which naturally sorts
+    /// after ones that have been -- correct MRU semantics. Drives
+    /// `switch-buffer`'s empty-query default ordering (usability gap, no
+    /// tracked issue).
+    pub last_focused: u64,
     /// Per-buffer mode persistence (evil-mode pattern).  When switching away
     /// from a buffer the editor saves its current mode here; switching back
     /// restores it so that e.g. a Shell buffer in Normal mode stays Normal.
@@ -412,6 +419,7 @@ impl Buffer {
             agent_shell: false,
             folded_ranges: Vec::new(),
             generation: 0,
+            last_focused: 0,
             saved_mode: None,
             narrowed_range: None,
             changed_lines: HashSet::new(),

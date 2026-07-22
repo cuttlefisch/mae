@@ -50,23 +50,32 @@ impl Editor {
         }
 
         if self.kb.search_sort == "activity" {
-            let weights = mae_kb::activity::ActivityWeights {
-                decay: self.kb.activity_decay,
-                ..Default::default()
-            };
-            let today = today_ymd();
-            triples.sort_by(|a, b| {
-                let score_a = self.kb_activity_score_for_id(&a.0, &weights, today);
-                let score_b = self.kb_activity_score_for_id(&b.0, &weights, today);
-                score_b
-                    .partial_cmp(&score_a)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-                    .then_with(|| a.0.cmp(&b.0))
-            });
+            self.sort_triples_by_activity(&mut triples);
         } else {
             triples.sort_by(|a, b| a.0.cmp(&b.0));
         }
         triples
+    }
+
+    /// Sort `triples` by activity score descending (most recently
+    /// accessed/modified/linked first), id ascending as the tiebreak.
+    /// Factored out of `kb_all_node_triples`'s `"activity"` branch so
+    /// `kb_find_candidates`'s empty-query default (below) can reuse the
+    /// exact same comparator instead of duplicating it.
+    fn sort_triples_by_activity(&self, triples: &mut [(String, String, String)]) {
+        let weights = mae_kb::activity::ActivityWeights {
+            decay: self.kb.activity_decay,
+            ..Default::default()
+        };
+        let today = today_ymd();
+        triples.sort_by(|a, b| {
+            let score_a = self.kb_activity_score_for_id(&a.0, &weights, today);
+            let score_b = self.kb_activity_score_for_id(&b.0, &weights, today);
+            score_b
+                .partial_cmp(&score_a)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
     }
 
     /// Node-count signal for deciding the kb-find completion strategy. Uses the
@@ -89,7 +98,21 @@ impl Editor {
     /// path.
     pub fn kb_find_candidates(&self, query: &str) -> Vec<(String, String, String)> {
         if self.kb_loaded_node_count() <= Self::KB_FIND_LAZY_THRESHOLD {
-            return self.kb_all_node_triples();
+            let mut triples = self.kb_all_node_triples();
+            // Empty-query default: "relevance" has nothing to rank against
+            // with zero query terms and silently degenerates to
+            // alphabetical-by-id, which doesn't match how users actually
+            // work -- mostly cycling between a handful of recent nodes.
+            // Default to activity order instead, but only when the sort is
+            // still at its default ("relevance"); an explicit
+            // "alphabetical"/"activity"/"recency" choice is left untouched.
+            // The moment a query is typed this branch no longer applies,
+            // restoring today's behavior exactly (usability gap fix, no
+            // tracked issue).
+            if query.is_empty() && self.kb.search_sort == "relevance" {
+                self.sort_triples_by_activity(&mut triples);
+            }
+            return triples;
         }
         let limit = Self::KB_FIND_LAZY_LIMIT;
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();

@@ -1039,6 +1039,10 @@ pub struct Editor {
     pub git_branch: Option<String>,
     /// Recently opened files (bounded, deduplicated).
     pub recent_files: crate::project::RecentFiles,
+    /// Monotonic counter bumped in `sync_mode_to_buffer()` on every
+    /// focus/buffer change; assigned into `Buffer::last_focused` to drive
+    /// `switch-buffer`'s empty-query MRU ordering.
+    pub buffer_focus_seq: u64,
     /// Recently used project roots (bounded, deduplicated).
     pub recent_projects: crate::project::RecentProjects,
     /// Persistent project list (saved to `projects.toml`).
@@ -1438,6 +1442,7 @@ impl Editor {
             project: None,
             git_branch: None,
             recent_files: crate::project::RecentFiles::default(),
+            buffer_focus_seq: 0,
             recent_projects: crate::project::RecentProjects::default(),
             project_list: crate::project::ProjectList::default(),
             show_line_numbers: true,
