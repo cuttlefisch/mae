@@ -21,6 +21,7 @@ impl Editor {
             if let Some(path) = args {
                 let idx = self.active_buffer_idx();
                 self.buffers[idx].set_file_path(std::path::PathBuf::from(path));
+                self.redetect_language_for(idx);
             }
             self.save_current_buffer();
             return true;
@@ -376,6 +377,7 @@ impl Editor {
                                     new.file_name().map_or(new_path.to_string(), |n| {
                                         n.to_string_lossy().to_string()
                                     });
+                                self.redetect_language_for(idx);
                                 self.set_status(format!(
                                     "Renamed: {} → {}",
                                     old_path.display(),
@@ -420,6 +422,7 @@ impl Editor {
                 if let Some(path) = args.map(str::trim).filter(|s| !s.is_empty()) {
                     let idx = self.active_buffer_idx();
                     self.buffers[idx].set_file_path(std::path::PathBuf::from(path));
+                    self.redetect_language_for(idx);
                     self.save_current_buffer();
                 } else {
                     self.set_status("Usage: :saveas <path>");

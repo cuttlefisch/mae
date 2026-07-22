@@ -10,6 +10,36 @@ use crate::theme::{bundled_theme_names, BundledResolver, Theme};
 use super::Editor;
 
 impl Editor {
+    /// Re-run language detection for `idx` against its (possibly just
+    /// changed) file path and invalidate the syntax cache accordingly.
+    ///
+    /// `Buffer::set_file_path` alone doesn't bump `generation` or touch
+    /// `editor.syntax`, so a bare rename/save-as leaves the syntax cache
+    /// "fresh" under the *old* language -- the next edit reparses with the
+    /// wrong grammar (#355). Callers that change a live buffer's file path
+    /// (`:rename`, `:saveas`, `:w <path>`, the `rename_file` AI tool, the
+    /// rename/save-as command-palette dialogs) must call this afterward.
+    /// Mirrors the detection `open_file_hidden` already runs for newly
+    /// opened files.
+    pub fn redetect_language_for(&mut self, idx: usize) {
+        let Some(buf) = self.buffers.get(idx) else {
+            return;
+        };
+        let detected = buf
+            .file_path()
+            .and_then(|p| crate::syntax::language_for_buffer(p, &buf.text()));
+        match detected {
+            Some(lang) => {
+                self.syntax.set_language(idx, lang);
+                self.buffers[idx]
+                    .local_options
+                    .apply_defaults(&lang.default_local_options());
+            }
+            None => self.syntax.remove(idx),
+        }
+        self.mark_full_redraw();
+    }
+
     /// Clean up swap files on clean exit: delete all swap files for open
     /// buffers and remove the session index.
     pub fn cleanup_swap_files(&mut self) {
@@ -1950,6 +1980,58 @@ mod tests {
         assert!(
             editor.status_msg.contains("Failed to save"),
             "the immediate status-line toast must still fire too"
+        );
+    }
+
+    // --- #355: rename/save-as must re-run language detection ---
+
+    #[test]
+    fn redetect_language_for_switches_grammar_on_extension_change() {
+        let dir = tempfile::tempdir().unwrap();
+        let rs_path = dir.path().join("thing.rs");
+        std::fs::write(&rs_path, "fn main() {}\n").unwrap();
+
+        let mut editor = Editor::new();
+        let idx = editor.open_file_hidden(&rs_path).unwrap();
+        assert_eq!(
+            editor.syntax.language_of(idx),
+            Some(crate::syntax::Language::Rust),
+            "sanity: opening a .rs file should detect Rust"
+        );
+
+        // Simulate a rename to a .py path without touching the content —
+        // set_file_path alone must not silently keep the stale Rust grammar.
+        let py_path = dir.path().join("thing.py");
+        editor.buffers[idx].set_file_path(py_path);
+        editor.redetect_language_for(idx);
+
+        assert_eq!(
+            editor.syntax.language_of(idx),
+            Some(crate::syntax::Language::Python),
+            "renaming to a .py path must re-detect Python, not keep the stale Rust grammar"
+        );
+    }
+
+    #[test]
+    fn redetect_language_for_clears_language_when_new_path_has_none() {
+        let dir = tempfile::tempdir().unwrap();
+        let rs_path = dir.path().join("thing.rs");
+        std::fs::write(&rs_path, "fn main() {}\n").unwrap();
+
+        let mut editor = Editor::new();
+        let idx = editor.open_file_hidden(&rs_path).unwrap();
+        assert!(editor.syntax.language_of(idx).is_some());
+
+        // Rename to a path/extension with no recognized language at all —
+        // the stale Rust association must be cleared, not left dangling.
+        let unknown_path = dir.path().join("thing.unknownext");
+        editor.buffers[idx].set_file_path(unknown_path);
+        editor.redetect_language_for(idx);
+
+        assert_eq!(
+            editor.syntax.language_of(idx),
+            None,
+            "no recognized language for the new path should clear the stale grammar"
         );
     }
 }
