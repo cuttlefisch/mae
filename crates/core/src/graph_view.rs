@@ -390,6 +390,7 @@ impl GraphView {
                     pinned: n.pinned,
                     selected: self.scene.selection == Some(i),
                     hovered: self.scene.hovered == Some(i),
+                    is_seed: n.is_seed,
                 })
                 .collect(),
             edges: self
@@ -431,6 +432,10 @@ pub struct GraphViewNodeState {
     pub kind: mae_canvas::scene::NodeKind,
     pub x: f64,
     pub y: f64,
+    /// See `mae_canvas::scene::SceneNode::is_seed`'s doc comment (#361) --
+    /// lets `execute_kb_graph_view_state` (the AI's read of this buffer)
+    /// post-filter without restricting what the human sees on screen.
+    pub is_seed: bool,
     pub pinned: bool,
     pub selected: bool,
     pub hovered: bool,
@@ -1529,6 +1534,7 @@ mod tests {
             kind,
             style: NodeStyle::default(),
             pinned: false,
+            is_seed: false,
         }
     }
 

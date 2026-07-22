@@ -252,7 +252,16 @@ pub fn execute_kb_links_to(editor: &Editor, args: &serde_json::Value) -> Result<
 /// primitive via `mae_kb::graph_query::related_enriched` — see that module's
 /// docs (CLAUDE.md principle #8: the ranking logic exists in exactly one
 /// place, not duplicated between the MCP and Scheme surfaces).
-pub fn execute_kb_related(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+/// `requester_provider` -- the caller's AI provider, when known -- lets this
+/// tool post-filter its own materialized results for the AI-residency
+/// seed-content exemption (ADR-048/#358, extended #361): a related node can
+/// live in a *different* KB than the anchor `id`, so filtering must happen
+/// per-result here, not just at the gate on the anchor id.
+pub fn execute_kb_related(
+    editor: &Editor,
+    args: &serde_json::Value,
+    requester_provider: Option<&str>,
+) -> Result<String, String> {
     let id = args
         .get("id")
         .and_then(|v| v.as_str())
@@ -267,8 +276,16 @@ pub fn execute_kb_related(editor: &Editor, args: &serde_json::Value) -> Result<S
         query: editor.kb.query_layer(),
         primary: &editor.kb.primary,
         instances: &editor.kb.instances,
+        registry: &editor.kb.registry,
     };
     let items = mae_kb::graph_query::related_enriched(&backend, id, limit);
+    let items = mae_core::ai_residency::filter_residency_exempt_by(
+        editor,
+        requester_provider,
+        items,
+        |it| it.instance.as_deref(),
+        |it| it.is_seed,
+    );
 
     let objs: Vec<serde_json::Value> = items
         .into_iter()
@@ -293,7 +310,17 @@ pub fn execute_kb_related(editor: &Editor, args: &serde_json::Value) -> Result<S
 /// executor supplies the federated backends (query layer, or in-memory
 /// `KnowledgeBase` federation as a fallback); Scheme supplies a
 /// single-`KbStore` backend instead, since that's all it has access to.
-pub fn execute_kb_graph(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+///
+/// `requester_provider` -- the caller's AI provider, when known -- lets this
+/// UnscopedFederatedContentFilterable tool (#361) post-filter its own
+/// materialized BFS node list (root included, at hop 0) for the
+/// AI-residency seed-content exemption, since a permitted root can traverse
+/// into a different, restricted KB's non-exempt nodes.
+pub fn execute_kb_graph(
+    editor: &Editor,
+    args: &serde_json::Value,
+    requester_provider: Option<&str>,
+) -> Result<String, String> {
     let id = args
         .get("id")
         .and_then(|v| v.as_str())
@@ -319,8 +346,28 @@ pub fn execute_kb_graph(editor: &Editor, args: &serde_json::Value) -> Result<Str
         )
     }?;
 
-    let nodes: Vec<serde_json::Value> = result
-        .nodes
+    // Filter BEFORE building the edges/output so a dropped node's id also
+    // disappears from the edge list below (edges are restricted to the
+    // `in_set` at walk time in bfs_neighborhood, but that set was computed
+    // pre-filter -- rebuild edges against the filtered node set instead of
+    // leaking a dropped node's id via an edge that still names it).
+    let kept_nodes = mae_core::ai_residency::filter_residency_exempt_by(
+        editor,
+        requester_provider,
+        result.nodes,
+        |n| n.instance.as_deref(),
+        // Missing/dangling nodes carry no content to protect -- always kept.
+        |n| n.missing || n.is_seed,
+    );
+    let kept_ids: std::collections::HashSet<&str> =
+        kept_nodes.iter().map(|n| n.id.as_str()).collect();
+    let kept_edges: Vec<(String, String)> = result
+        .edges
+        .into_iter()
+        .filter(|(src, dst)| kept_ids.contains(src.as_str()) && kept_ids.contains(dst.as_str()))
+        .collect();
+
+    let nodes: Vec<serde_json::Value> = kept_nodes
         .iter()
         .map(|n| {
             if n.missing {
@@ -339,8 +386,7 @@ pub fn execute_kb_graph(editor: &Editor, args: &serde_json::Value) -> Result<Str
             }
         })
         .collect();
-    let edges_json: Vec<serde_json::Value> = result
-        .edges
+    let edges_json: Vec<serde_json::Value> = kept_edges
         .into_iter()
         .map(|(src, dst)| serde_json::json!({ "src": src, "dst": dst }))
         .collect();
@@ -399,12 +445,30 @@ fn broken_links_json(links: &[mae_core::BrokenLink]) -> serde_json::Value {
     })
 }
 
-pub fn execute_kb_health(editor: &Editor) -> Result<String, String> {
+/// `requester_provider` -- the caller's AI provider, when known -- lets this
+/// UnscopedFederatedContentFilterable tool (#361) post-filter each KB's
+/// (primary and every federated instance, independently) health report for
+/// the AI-residency seed-content exemption. Filtering happens INSIDE the
+/// same fold `health_report_with_visibility` uses to derive
+/// `total_nodes`/`orphan_ids`/etc., so every count/list in the output stays
+/// internally consistent -- never a post-hoc filter of just one field.
+pub fn execute_kb_health(
+    editor: &Editor,
+    requester_provider: Option<&str>,
+) -> Result<String, String> {
+    let local_bypass = requester_provider.is_some_and(mae_core::ai_residency::is_local_provider);
+    let is_visible = |restricted: bool| {
+        move |n: &mae_kb::Node| !restricted || mae_core::ai_residency::is_residency_exempt(n)
+    };
+
     // Build a cross-federation resolver: local KB checks federated instances.
-    let report = editor
-        .kb
-        .primary
-        .health_report_with(|id| editor.kb.instances.values().any(|kb| kb.contains(id)));
+    let primary_restricted = !local_bypass
+        && editor.kb.registry.primary_ai_residency
+            == mae_kb::federation::AiResidency::LocalModelsOnly;
+    let report = editor.kb.primary.health_report_with_visibility(
+        |id| editor.kb.instances.values().any(|kb| kb.contains(id)),
+        is_visible(primary_restricted),
+    );
 
     // Federated instance health summaries — with full broken link detail.
     let instances: Vec<serde_json::Value> = editor
@@ -413,21 +477,25 @@ pub fn execute_kb_health(editor: &Editor) -> Result<String, String> {
         .instances
         .iter()
         .map(|inst| {
-            let kb_health = editor.kb.instances.get(&inst.uuid).map(|kb| {
-                // Cross-federation: check local KB + other instances.
-                kb.health_report_with(|id| {
-                    if let Some(q) = editor.kb.query_layer() {
-                        q.contains(id)
-                    } else {
-                        editor.kb.primary.contains(id)
-                            || editor
-                                .kb
-                                .instances
-                                .iter()
-                                .any(|(uuid, other)| *uuid != inst.uuid && other.contains(id))
-                    }
-                })
-            });
+            let inst_restricted = !local_bypass
+                && inst.ai_residency == mae_kb::federation::AiResidency::LocalModelsOnly;
+            let kb_health =
+                editor.kb.instances.get(&inst.uuid).map(|kb| {
+                    // Cross-federation: check local KB + other instances.
+                    kb.health_report_with_visibility(
+                        |id| {
+                            if let Some(q) = editor.kb.query_layer() {
+                                q.contains(id)
+                            } else {
+                                editor.kb.primary.contains(id)
+                                    || editor.kb.instances.iter().any(|(uuid, other)| {
+                                        *uuid != inst.uuid && other.contains(id)
+                                    })
+                            }
+                        },
+                        is_visible(inst_restricted),
+                    )
+                });
             match kb_health {
                 Some(h) => serde_json::json!({
                     "name": inst.name,
@@ -846,11 +914,54 @@ pub fn execute_kb_graph_view_toggle_overlay(
     ))
 }
 
+/// `requester_provider` -- the caller's AI provider, when known -- lets this
+/// UnscopedFederatedContentFilterable tool (#361) post-filter the AI's read
+/// of an already-open graph buffer without restricting what the human sees
+/// on screen: a graph view is scoped to exactly one KB (`kb_instance`, or
+/// primary when `None`), so if THAT kb is restricted, only seed-exempt
+/// nodes (and edges between surviving nodes) are reported; `selected_node`/
+/// `hovered_node` are cleared if they pointed at a filtered-out node.
 pub fn execute_kb_graph_view_state(
     editor: &mut Editor,
     _args: &serde_json::Value,
+    requester_provider: Option<&str>,
 ) -> Result<String, String> {
-    serde_json::to_string_pretty(&editor.kb_graph_view_state()).map_err(|e| e.to_string())
+    let mut state = editor.kb_graph_view_state();
+    if let Some(s) = state.as_mut() {
+        let local_bypass =
+            requester_provider.is_some_and(mae_core::ai_residency::is_local_provider);
+        let restricted = !local_bypass
+            && match &s.kb_instance {
+                None => {
+                    editor.kb.registry.primary_ai_residency
+                        == mae_kb::federation::AiResidency::LocalModelsOnly
+                }
+                Some(uuid) => editor.kb.registry.find_by_uuid(uuid).is_some_and(|inst| {
+                    inst.ai_residency == mae_kb::federation::AiResidency::LocalModelsOnly
+                }),
+            };
+        if restricted {
+            s.nodes.retain(|n| n.is_seed);
+            let kept_ids: std::collections::HashSet<&str> =
+                s.nodes.iter().map(|n| n.id.as_str()).collect();
+            s.edges.retain(|e| {
+                kept_ids.contains(e.source_id.as_str()) && kept_ids.contains(e.target_id.as_str())
+            });
+            if s.selected_node
+                .as_deref()
+                .is_some_and(|id| !kept_ids.contains(id))
+            {
+                s.selected_node = None;
+            }
+            if s.hovered_node
+                .as_deref()
+                .is_some_and(|id| !kept_ids.contains(id))
+            {
+                s.hovered_node = None;
+            }
+        }
+    }
+    serde_json::to_string_pretty(&state).map_err(|e| e.to_string())
 }
 
 // --- KB-link hover preview (Part D) ---
@@ -1257,9 +1368,19 @@ pub fn execute_kb_shortest_path(
     }
 }
 
+/// `requester_provider` -- the caller's AI provider, when known -- lets this
+/// SingleTargetFilterable tool (#361) post-filter its own materialized
+/// neighborhood: `editor.kb.store` is always the PRIMARY KB's durable store
+/// (no federation here), so a seed-exempt anchor's own gate check passing
+/// isn't enough -- a non-seed SIBLING in that same restricted primary can
+/// still be reachable in the walk and must be dropped too. Each node's
+/// `.source` isn't in `SubGraph` (id/title only), so this re-resolves it via
+/// `store.get_node` -- one extra cheap per-id lookup, bounded by the walk's
+/// own small size (depth capped at 5), not a new query design question.
 pub fn execute_kb_neighborhood(
     editor: &Editor,
     args: &serde_json::Value,
+    requester_provider: Option<&str>,
 ) -> Result<String, String> {
     let id = args
         .get("id")
@@ -1277,13 +1398,36 @@ pub fn execute_kb_neighborhood(
         .ok_or_else(|| "No KB store configured".to_string())?;
     match store.neighborhood(id, depth) {
         Ok(subgraph) => {
+            let local_bypass =
+                requester_provider.is_some_and(mae_core::ai_residency::is_local_provider);
+            let primary_restricted = !local_bypass
+                && editor.kb.registry.primary_ai_residency
+                    == mae_kb::federation::AiResidency::LocalModelsOnly;
+            let kept_ids: std::collections::HashSet<&str> = subgraph
+                .nodes
+                .iter()
+                .filter(|(nid, _)| {
+                    !primary_restricted
+                        || store
+                            .get_node(nid)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|n| mae_core::ai_residency::is_residency_exempt(&n))
+                })
+                .map(|(nid, _)| nid.as_str())
+                .collect();
+
             let out = serde_json::json!({
                 "root": id,
                 "depth": depth,
-                "nodes": subgraph.nodes.iter().map(|(nid, title)| {
+                "nodes": subgraph.nodes.iter()
+                    .filter(|(nid, _)| kept_ids.contains(nid.as_str()))
+                    .map(|(nid, title)| {
                     serde_json::json!({"id": nid, "title": title})
                 }).collect::<Vec<_>>(),
-                "edges": subgraph.edges.iter().map(|(src, dst, rel)| {
+                "edges": subgraph.edges.iter()
+                    .filter(|(src, dst, _)| kept_ids.contains(src.as_str()) && kept_ids.contains(dst.as_str()))
+                    .map(|(src, dst, rel)| {
                     serde_json::json!({"src": src, "dst": dst, "rel_type": rel})
                 }).collect::<Vec<_>>(),
             });
@@ -1728,7 +1872,7 @@ mod tests {
         .unwrap();
 
         // health -- must not error against a promoted node's KB.
-        let health_result = execute_kb_health(&editor).unwrap();
+        let health_result = execute_kb_health(&editor, None).unwrap();
         let health_json: serde_json::Value = serde_json::from_str(&health_result).unwrap();
         assert!(health_json["local"].is_object());
 
@@ -1871,7 +2015,8 @@ mod tests {
     #[test]
     fn kb_graph_view_state_is_null_when_no_graph_is_open() {
         let mut editor = Editor::new();
-        let result = execute_kb_graph_view_state(&mut editor, &serde_json::json!({})).unwrap();
+        let result =
+            execute_kb_graph_view_state(&mut editor, &serde_json::json!({}), None).unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert!(v.is_null());
     }
@@ -1881,7 +2026,8 @@ mod tests {
         let mut editor = Editor::new();
         execute_kb_graph_view_open(&mut editor, &serde_json::json!({"id": "index", "depth": 1}))
             .unwrap();
-        let result = execute_kb_graph_view_state(&mut editor, &serde_json::json!({})).unwrap();
+        let result =
+            execute_kb_graph_view_state(&mut editor, &serde_json::json!({}), None).unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["center_node"], "index");
         assert_eq!(v["depth"], 1);
@@ -2434,7 +2580,8 @@ mod tests {
         // concept:buffer is a well-connected manual node; it should have
         // related neighbors via the seeded link graph.
         let result =
-            execute_kb_related(&editor, &serde_json::json!({"id": "concept:buffer"})).unwrap();
+            execute_kb_related(&editor, &serde_json::json!({"id": "concept:buffer"}), None)
+                .unwrap();
         let objs: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
         assert!(
             !objs.is_empty(),
@@ -2474,6 +2621,7 @@ mod tests {
         let result = execute_kb_related(
             &editor,
             &serde_json::json!({"id": "concept:buffer", "limit": 2}),
+            None,
         )
         .unwrap();
         let objs: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
@@ -2528,7 +2676,7 @@ mod tests {
     #[test]
     fn kb_graph_default_depth_is_one_hop() {
         let editor = Editor::new();
-        let result = execute_kb_graph(&editor, &serde_json::json!({"id": "index"})).unwrap();
+        let result = execute_kb_graph(&editor, &serde_json::json!({"id": "index"}), None).unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["root"], "index");
         assert_eq!(v["depth"], 1);
@@ -2550,7 +2698,7 @@ mod tests {
     fn kb_graph_includes_backlinks_as_neighbors() {
         let editor = Editor::new();
         let result =
-            execute_kb_graph(&editor, &serde_json::json!({"id": "concept:buffer"})).unwrap();
+            execute_kb_graph(&editor, &serde_json::json!({"id": "concept:buffer"}), None).unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         let nodes = v["nodes"].as_array().unwrap();
         // Every backlink to concept:buffer should appear in the neighborhood.
@@ -2566,10 +2714,18 @@ mod tests {
     #[test]
     fn kb_graph_depth_two_includes_further_nodes() {
         let editor = Editor::new();
-        let d1 =
-            execute_kb_graph(&editor, &serde_json::json!({"id": "index", "depth": 1})).unwrap();
-        let d2 =
-            execute_kb_graph(&editor, &serde_json::json!({"id": "index", "depth": 2})).unwrap();
+        let d1 = execute_kb_graph(
+            &editor,
+            &serde_json::json!({"id": "index", "depth": 1}),
+            None,
+        )
+        .unwrap();
+        let d2 = execute_kb_graph(
+            &editor,
+            &serde_json::json!({"id": "index", "depth": 2}),
+            None,
+        )
+        .unwrap();
         let v1: serde_json::Value = serde_json::from_str(&d1).unwrap();
         let v2: serde_json::Value = serde_json::from_str(&d2).unwrap();
         let n1 = v1["nodes"].as_array().unwrap().len();
@@ -2580,7 +2736,7 @@ mod tests {
     #[test]
     fn kb_graph_edges_only_connect_nodes_in_set() {
         let editor = Editor::new();
-        let result = execute_kb_graph(&editor, &serde_json::json!({"id": "index"})).unwrap();
+        let result = execute_kb_graph(&editor, &serde_json::json!({"id": "index"}), None).unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         let node_ids: std::collections::HashSet<String> = v["nodes"]
             .as_array()
@@ -2597,15 +2753,20 @@ mod tests {
     #[test]
     fn kb_graph_missing_seed_is_error() {
         let editor = Editor::new();
-        let err = execute_kb_graph(&editor, &serde_json::json!({"id": "no:such"})).unwrap_err();
+        let err =
+            execute_kb_graph(&editor, &serde_json::json!({"id": "no:such"}), None).unwrap_err();
         assert!(err.contains("No KB node"));
     }
 
     #[test]
     fn kb_graph_depth_clamped_to_three() {
         let editor = Editor::new();
-        let result =
-            execute_kb_graph(&editor, &serde_json::json!({"id": "index", "depth": 99})).unwrap();
+        let result = execute_kb_graph(
+            &editor,
+            &serde_json::json!({"id": "index", "depth": 99}),
+            None,
+        )
+        .unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(v["depth"], 3);
     }
@@ -2613,7 +2774,7 @@ mod tests {
     #[test]
     fn kb_health_returns_json() {
         let editor = Editor::new();
-        let result = execute_kb_health(&editor).unwrap();
+        let result = execute_kb_health(&editor, None).unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         let local = &v["local"];
         assert!(local["total_nodes"].as_u64().unwrap() > 0);
@@ -2769,7 +2930,7 @@ mod tests {
             "see [[index]]",
         ));
         editor.kb.instances.insert("inst-1".to_string(), inst);
-        let result = execute_kb_graph(&editor, &serde_json::json!({"id": "index"})).unwrap();
+        let result = execute_kb_graph(&editor, &serde_json::json!({"id": "index"}), None).unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         let nodes = v["nodes"].as_array().unwrap();
         assert!(
@@ -3758,6 +3919,471 @@ mod tests {
         assert!(
             nodes.iter().any(|n| n["id"] == "user:residency-k"),
             "a local provider must bypass filtering entirely: {nodes:?}"
+        );
+    }
+
+    // --- New: #361 -- kb_related/kb_graph post-filter (SingleTargetFilterable /
+    // UnscopedFederatedContentFilterable). A seed anchor's own gate-check
+    // passing (or an open primary) is not enough: OTHER nodes reached via
+    // relatedness scoring or graph traversal can be non-seed content from
+    // the same (or, for kb_graph, a different federated) restricted KB.
+
+    #[test]
+    fn kb_related_keeps_seed_drops_non_seed_sibling_in_restricted_primary() {
+        let mut editor = Editor::new();
+        // Direct adjacency is the strongest `related()` signal (W_DIRECT) --
+        // link the seed anchor to both a seed and a non-seed sibling so both
+        // are scored, then assert only the seed one survives filtering.
+        editor.kb.primary.insert(seed_node_with(
+            "seed:related-anchor",
+            "see [[seed:related-sibling]] and [[user:related-sibling]]",
+        ));
+        editor
+            .kb
+            .primary
+            .insert(seed_node_with("seed:related-sibling", "sibling content"));
+        editor.kb.primary.insert(non_seed_node_with(
+            "user:related-sibling",
+            "sibling content",
+        ));
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+
+        let result = execute_kb_related(
+            &editor,
+            &serde_json::json!({"id": "seed:related-anchor"}),
+            Some("claude"),
+        )
+        .unwrap();
+        let items: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(
+            items.iter().any(|i| i["id"] == "seed:related-sibling"),
+            "seed sibling must stay reachable: {items:?}"
+        );
+        assert!(
+            !items.iter().any(|i| i["id"] == "user:related-sibling"),
+            "non-seed sibling in the same restricted primary must be filtered out: {items:?}"
+        );
+    }
+
+    #[test]
+    fn kb_related_local_provider_bypasses_residency_filter_entirely() {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(seed_node_with(
+            "seed:related-anchor2",
+            "see [[user:related-sibling2]]",
+        ));
+        editor.kb.primary.insert(non_seed_node_with(
+            "user:related-sibling2",
+            "sibling content",
+        ));
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+
+        let result = execute_kb_related(
+            &editor,
+            &serde_json::json!({"id": "seed:related-anchor2"}),
+            Some("ollama"),
+        )
+        .unwrap();
+        let items: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(
+            items.iter().any(|i| i["id"] == "user:related-sibling2"),
+            "a local provider must bypass filtering entirely: {items:?}"
+        );
+    }
+
+    #[test]
+    fn kb_graph_keeps_seed_drops_non_seed_from_restricted_federated_instance() {
+        let mut editor = Editor::new(); // open primary
+        let mut inst = mae_core::KnowledgeBase::new();
+        inst.insert(seed_node_with("fed-seed", "see [[index]]"));
+        inst.insert(non_seed_node_with("fed-user", "see [[index]]"));
+        editor
+            .kb
+            .instances
+            .insert("uuid-restricted".to_string(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-restricted".into(),
+                name: "Restricted".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::LocalModelsOnly,
+            });
+
+        let result =
+            execute_kb_graph(&editor, &serde_json::json!({"id": "index"}), Some("claude")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let nodes = v["nodes"].as_array().unwrap();
+        assert!(
+            nodes.iter().any(|n| n["id"] == "fed-seed"),
+            "seed content in a restricted federated instance must stay reachable: {nodes:?}"
+        );
+        assert!(
+            !nodes.iter().any(|n| n["id"] == "fed-user"),
+            "non-seed content in a restricted federated instance must be filtered out: {nodes:?}"
+        );
+        // The dropped node's id must not leak via an edge either.
+        let edges = v["edges"].as_array().unwrap();
+        assert!(
+            !edges
+                .iter()
+                .any(|e| e["src"] == "fed-user" || e["dst"] == "fed-user"),
+            "a filtered-out node's id must not survive in the edge list: {edges:?}"
+        );
+    }
+
+    #[test]
+    fn kb_graph_local_provider_bypasses_residency_filter_entirely() {
+        let mut editor = Editor::new();
+        let mut inst = mae_core::KnowledgeBase::new();
+        inst.insert(non_seed_node_with("fed-user2", "see [[index]]"));
+        editor
+            .kb
+            .instances
+            .insert("uuid-restricted2".to_string(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-restricted2".into(),
+                name: "Restricted2".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::LocalModelsOnly,
+            });
+
+        let result =
+            execute_kb_graph(&editor, &serde_json::json!({"id": "index"}), Some("ollama")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let nodes = v["nodes"].as_array().unwrap();
+        assert!(
+            nodes.iter().any(|n| n["id"] == "fed-user2"),
+            "a local provider must bypass filtering entirely: {nodes:?}"
+        );
+    }
+
+    #[test]
+    fn kb_neighborhood_keeps_seed_drops_non_seed_sibling_in_restricted_primary() {
+        use mae_kb::KbStore;
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store
+            .insert_node(&seed_node_with("seed:nbhd-anchor", "anchor content"))
+            .unwrap();
+        store
+            .insert_node(&seed_node_with("seed:nbhd-sibling", "sibling content"))
+            .unwrap();
+        store
+            .insert_node(&non_seed_node_with("user:nbhd-sibling", "sibling content"))
+            .unwrap();
+        store
+            .add_typed_link("seed:nbhd-anchor", "seed:nbhd-sibling", "related", 1.0)
+            .unwrap();
+        store
+            .add_typed_link("seed:nbhd-anchor", "user:nbhd-sibling", "related", 1.0)
+            .unwrap();
+
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+
+        let result = execute_kb_neighborhood(
+            &editor,
+            &serde_json::json!({"id": "seed:nbhd-anchor", "depth": 1}),
+            Some("claude"),
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let nodes = v["nodes"].as_array().unwrap();
+        assert!(
+            nodes.iter().any(|n| n["id"] == "seed:nbhd-sibling"),
+            "seed sibling must stay reachable: {nodes:?}"
+        );
+        assert!(
+            !nodes.iter().any(|n| n["id"] == "user:nbhd-sibling"),
+            "non-seed sibling in the same restricted primary must be filtered out: {nodes:?}"
+        );
+        let edges = v["edges"].as_array().unwrap();
+        assert!(
+            !edges
+                .iter()
+                .any(|e| e["src"] == "user:nbhd-sibling" || e["dst"] == "user:nbhd-sibling"),
+            "a filtered-out node's id must not survive in the edge list: {edges:?}"
+        );
+    }
+
+    #[test]
+    fn kb_neighborhood_local_provider_bypasses_residency_filter_entirely() {
+        use mae_kb::KbStore;
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store
+            .insert_node(&seed_node_with("seed:nbhd-anchor2", "anchor content"))
+            .unwrap();
+        store
+            .insert_node(&non_seed_node_with("user:nbhd-sibling2", "sibling content"))
+            .unwrap();
+        store
+            .add_typed_link("seed:nbhd-anchor2", "user:nbhd-sibling2", "related", 1.0)
+            .unwrap();
+
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+
+        let result = execute_kb_neighborhood(
+            &editor,
+            &serde_json::json!({"id": "seed:nbhd-anchor2", "depth": 1}),
+            Some("ollama"),
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let nodes = v["nodes"].as_array().unwrap();
+        assert!(
+            nodes.iter().any(|n| n["id"] == "user:nbhd-sibling2"),
+            "a local provider must bypass filtering entirely: {nodes:?}"
+        );
+    }
+
+    #[test]
+    fn kb_health_local_counts_exclude_non_seed_from_restricted_primary() {
+        let mut editor = Editor::new();
+        editor
+            .kb
+            .primary
+            .insert(seed_node_with("seed:health-a", "seed health content"));
+        editor
+            .kb
+            .primary
+            .insert(non_seed_node_with("user:health-b", "user health content"));
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+        let before_total = editor.kb.primary.health_report().total_nodes;
+
+        let result = execute_kb_health(&editor, Some("claude")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let local = &v["local"];
+        assert!(
+            !local["orphan_nodes"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|n| n == "user:health-b"),
+            "non-seed content must not appear in a restricted primary's orphan list: {local:?}"
+        );
+        assert!(
+            (local["total_nodes"].as_u64().unwrap() as usize) < before_total,
+            "total_nodes must reflect only visible (seed-exempt) nodes, not the full corpus: {local:?}"
+        );
+    }
+
+    #[test]
+    fn kb_health_local_provider_bypasses_residency_filter_entirely() {
+        let mut editor = Editor::new();
+        editor
+            .kb
+            .primary
+            .insert(non_seed_node_with("user:health-c", "user health content"));
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+        let expected_total = editor.kb.primary.health_report().total_nodes;
+
+        let result = execute_kb_health(&editor, Some("ollama")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(
+            v["local"]["total_nodes"].as_u64().unwrap() as usize,
+            expected_total,
+            "a local provider must bypass filtering entirely"
+        );
+    }
+
+    #[test]
+    fn kb_health_instance_report_excludes_non_seed_from_restricted_instance() {
+        let mut editor = Editor::new(); // open primary
+        let mut inst = mae_core::KnowledgeBase::new();
+        inst.insert(seed_node_with("seed:health-inst-a", "seed content"));
+        inst.insert(non_seed_node_with("user:health-inst-b", "user content"));
+        editor
+            .kb
+            .instances
+            .insert("uuid-health-restricted".to_string(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-health-restricted".into(),
+                name: "HealthRestricted".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::LocalModelsOnly,
+            });
+
+        let result = execute_kb_health(&editor, Some("claude")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let inst_report = v["instances"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["name"] == "HealthRestricted")
+            .unwrap();
+        assert_eq!(
+            inst_report["total_nodes"].as_u64().unwrap(),
+            1,
+            "restricted instance's total_nodes must only count the seed node: {inst_report:?}"
+        );
+    }
+
+    #[test]
+    fn kb_graph_view_state_keeps_seed_drops_non_seed_from_restricted_primary() {
+        let mut editor = Editor::new();
+        // The center's OUTGOING link guarantees the sibling is reachable
+        // regardless of the `kb_graph_include_backlinks` option's default
+        // (an incoming-only link would make inclusion direction-dependent
+        // and risk a vacuous "filtered out" pass when the sibling was never
+        // walked into in the first place).
+        editor.kb.primary.insert(seed_node_with(
+            "seed:graphview-center",
+            "see [[user:graphview-a]]",
+        ));
+        editor
+            .kb
+            .primary
+            .insert(non_seed_node_with("user:graphview-a", "sibling content"));
+        execute_kb_graph_view_open(
+            &mut editor,
+            &serde_json::json!({"id": "seed:graphview-center", "depth": 1}),
+        )
+        .unwrap();
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+
+        let result =
+            execute_kb_graph_view_state(&mut editor, &serde_json::json!({}), Some("claude"))
+                .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let nodes = v["nodes"].as_array().unwrap();
+        assert!(
+            nodes.iter().any(|n| n["id"] == "seed:graphview-center"),
+            "seed center node must stay reachable: {nodes:?}"
+        );
+        assert!(
+            !nodes.iter().any(|n| n["id"] == "user:graphview-a"),
+            "non-seed node must be filtered out of a restricted primary's graph view: {nodes:?}"
+        );
+        let edges = v["edges"].as_array().unwrap();
+        assert!(
+            !edges
+                .iter()
+                .any(|e| e["source_id"] == "user:graphview-a"
+                    || e["target_id"] == "user:graphview-a"),
+            "a filtered-out node's id must not survive in the edge list: {edges:?}"
+        );
+    }
+
+    #[test]
+    fn kb_graph_view_state_local_provider_bypasses_residency_filter_entirely() {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(seed_node_with(
+            "seed:graphview-center2",
+            "see [[user:graphview-b]]",
+        ));
+        editor
+            .kb
+            .primary
+            .insert(non_seed_node_with("user:graphview-b", "sibling content"));
+        execute_kb_graph_view_open(
+            &mut editor,
+            &serde_json::json!({"id": "seed:graphview-center2", "depth": 1}),
+        )
+        .unwrap();
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+
+        let result =
+            execute_kb_graph_view_state(&mut editor, &serde_json::json!({}), Some("ollama"))
+                .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let nodes = v["nodes"].as_array().unwrap();
+        assert!(
+            nodes.iter().any(|n| n["id"] == "user:graphview-b"),
+            "a local provider must bypass filtering entirely: {nodes:?}"
+        );
+    }
+
+    #[test]
+    fn kb_graph_view_state_keeps_seed_drops_non_seed_from_restricted_federated_instance() {
+        let mut editor = Editor::new(); // open primary
+        let mut inst = mae_core::KnowledgeBase::new();
+        inst.insert(seed_node_with(
+            "seed:graphview-inst-a",
+            "see [[user:graphview-inst-b]]",
+        ));
+        inst.insert(non_seed_node_with(
+            "user:graphview-inst-b",
+            "sibling content",
+        ));
+        editor
+            .kb
+            .instances
+            .insert("uuid-graphview-restricted".to_string(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-graphview-restricted".into(),
+                name: "GraphViewRestricted".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::LocalModelsOnly,
+            });
+
+        execute_kb_graph_view_open(
+            &mut editor,
+            &serde_json::json!({"id": "seed:graphview-inst-a", "depth": 1}),
+        )
+        .unwrap();
+
+        let result =
+            execute_kb_graph_view_state(&mut editor, &serde_json::json!({}), Some("claude"))
+                .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["kb_instance"], "uuid-graphview-restricted");
+        let nodes = v["nodes"].as_array().unwrap();
+        assert!(
+            nodes.iter().any(|n| n["id"] == "seed:graphview-inst-a"),
+            "seed content in a restricted federated instance must stay reachable: {nodes:?}"
+        );
+        assert!(
+            !nodes.iter().any(|n| n["id"] == "user:graphview-inst-b"),
+            "non-seed content in a restricted federated instance must be filtered out: {nodes:?}"
         );
     }
 }

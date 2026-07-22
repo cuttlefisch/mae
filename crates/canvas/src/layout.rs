@@ -253,6 +253,7 @@ mod tests {
             kind,
             style: NodeStyle::default(),
             pinned: false,
+            is_seed: false,
         }
     }
 

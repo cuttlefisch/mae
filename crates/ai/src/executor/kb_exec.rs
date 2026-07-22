@@ -23,10 +23,12 @@ use crate::types::ToolCall;
 /// Records visited IDs for kb_get/links_from/links_to to detect manual
 /// graph traversal loops and steer the AI toward kb_graph.
 /// `requester_provider` -- the caller's AI provider, when known -- is
-/// threaded to the ScopedFederatedScanFilterable/PrimaryOnlyFilterable
-/// tools (kb_search, kb_search_context, kb_agenda) so they can post-filter
-/// their own results for the AI-residency seed-content exemption
-/// (ADR-048/#358); every other arm is unaffected.
+/// threaded to the ScopedFederatedScanFilterable/PrimaryOnlyFilterable/
+/// SingleTargetFilterable/UnscopedFederatedContentFilterable tools
+/// (kb_search, kb_search_context, kb_agenda, kb_related, kb_graph,
+/// kb_health, kb_neighborhood) so they can post-filter their own results
+/// for the AI-residency seed-content exemption (ADR-048/#358, extended
+/// #361); every other arm is unaffected.
 pub(super) fn dispatch(
     editor: &mut Editor,
     call: &ToolCall,
@@ -56,15 +58,15 @@ pub(super) fn dispatch(
             }
             r
         }
-        "kb_graph" => execute_kb_graph(editor, &call.arguments),
+        "kb_graph" => execute_kb_graph(editor, &call.arguments, requester_provider),
         "kb_related" => {
-            let r = execute_kb_related(editor, &call.arguments);
+            let r = execute_kb_related(editor, &call.arguments, requester_provider);
             if let Some(id) = call.arguments.get("id").and_then(|v| v.as_str()) {
                 record_kb_visit(editor, id);
             }
             r
         }
-        "kb_health" => execute_kb_health(editor),
+        "kb_health" => execute_kb_health(editor, requester_provider),
         "kb_id_audit" => execute_kb_id_audit(editor),
         "kb_sync_status" => execute_kb_sync_status(editor),
         "kb_create" => execute_kb_create(editor, &call.arguments),
@@ -79,7 +81,7 @@ pub(super) fn dispatch(
             execute_kb_search_context(editor, &call.arguments, requester_provider)
         }
         "kb_shortest_path" => execute_kb_shortest_path(editor, &call.arguments),
-        "kb_neighborhood" => execute_kb_neighborhood(editor, &call.arguments),
+        "kb_neighborhood" => execute_kb_neighborhood(editor, &call.arguments, requester_provider),
         "kb_add_link" => execute_kb_add_link(editor, &call.arguments),
         "kb_raw_query" => execute_kb_raw_query(editor, &call.arguments),
         "kb_agenda" => execute_kb_agenda(editor, &call.arguments, requester_provider),
@@ -101,7 +103,9 @@ pub(super) fn dispatch(
         "kb_graph_view_toggle_overlay" => {
             execute_kb_graph_view_toggle_overlay(editor, &call.arguments)
         }
-        "kb_graph_view_state" => execute_kb_graph_view_state(editor, &call.arguments),
+        "kb_graph_view_state" => {
+            execute_kb_graph_view_state(editor, &call.arguments, requester_provider)
+        }
         "kb_preview_show" => execute_kb_preview_show(editor, &call.arguments),
         "kb_preview_dismiss" => execute_kb_preview_dismiss(editor, &call.arguments),
         "help_open" => execute_help_open(editor, &call.arguments),

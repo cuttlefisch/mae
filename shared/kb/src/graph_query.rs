@@ -44,6 +44,12 @@ pub struct GraphBfsNode {
     /// federation and the node isn't in the "home" KB. Always `None` for
     /// single-store backends (they have no federation concept).
     pub instance: Option<String>,
+    /// MAE's own seeded/built-in content (`Node::source ==
+    /// Some(NodeSource::Seed)`) — the AI-residency seed exemption (#358)
+    /// needs this per-*result* (not just for the walk's root id) since a
+    /// permitted root can still traverse into a different, restricted KB's
+    /// non-exempt nodes (#361). `false` for missing/dangling nodes.
+    pub is_seed: bool,
 }
 
 /// Result of a [`bfs_neighborhood`] walk.
@@ -67,8 +73,13 @@ pub trait GraphNeighbors {
     fn neighbor_ids(&self, id: &str) -> Vec<String>;
     /// Outgoing target ids only (edges in the result are directional).
     fn outgoing_ids(&self, id: &str) -> Vec<String>;
-    /// `(title, kind_str, owning_instance_name)` for display, if `id` exists.
-    fn describe(&self, id: &str) -> Option<(String, String, Option<String>)>;
+    /// `(title, kind_str, owning_instance_name, is_seed_content)` for
+    /// display, if `id` exists. `is_seed_content` mirrors
+    /// `mae_core::ai_residency::is_residency_exempt` (`Node::source ==
+    /// Some(NodeSource::Seed)`) computed here since the full `Node` is
+    /// already in hand — this crate has no dependency on `mae_core` to call
+    /// that helper directly (#361).
+    fn describe(&self, id: &str) -> Option<(String, String, Option<String>, bool)>;
 }
 
 /// BFS neighborhood walk shared by every `kb_graph`-shaped surface. Hop
@@ -106,13 +117,14 @@ pub fn bfs_neighborhood(
         .map(|nid| {
             let hop = hops[nid];
             match backend.describe(nid) {
-                Some((title, kind, instance)) => GraphBfsNode {
+                Some((title, kind, instance, is_seed)) => GraphBfsNode {
                     id: nid.clone(),
                     hop,
                     missing: false,
                     title: Some(title),
                     kind: Some(kind),
                     instance,
+                    is_seed,
                 },
                 None => GraphBfsNode {
                     id: nid.clone(),
@@ -121,6 +133,7 @@ pub fn bfs_neighborhood(
                     title: None,
                     kind: None,
                     instance: None,
+                    is_seed: false,
                 },
             }
         })
@@ -172,10 +185,11 @@ impl GraphNeighbors for QueryLayerBackend<'_> {
         self.0.links_from(id).into_iter().map(|l| l.dst).collect()
     }
 
-    fn describe(&self, id: &str) -> Option<(String, String, Option<String>)> {
-        self.0
-            .get(id)
-            .map(|n| (n.title, n.kind.as_str().to_string(), None))
+    fn describe(&self, id: &str) -> Option<(String, String, Option<String>, bool)> {
+        self.0.get(id).map(|n| {
+            let is_seed = n.source == Some(crate::NodeSource::Seed);
+            (n.title, n.kind.as_str().to_string(), None, is_seed)
+        })
     }
 }
 
@@ -219,14 +233,21 @@ impl GraphNeighbors for InMemoryFederatedBackend<'_> {
         out
     }
 
-    fn describe(&self, id: &str) -> Option<(String, String, Option<String>)> {
+    fn describe(&self, id: &str) -> Option<(String, String, Option<String>, bool)> {
         if let Some(n) = self.primary.get(id) {
-            return Some((n.title.clone(), n.kind.as_str().to_string(), None));
+            let is_seed = n.source == Some(crate::NodeSource::Seed);
+            return Some((n.title.clone(), n.kind.as_str().to_string(), None, is_seed));
         }
         for (uuid, kb) in self.instances {
             if let Some(n) = kb.get(id) {
                 let inst_name = self.registry.find_by_uuid(uuid).map(|i| i.name.clone());
-                return Some((n.title.clone(), n.kind.as_str().to_string(), inst_name));
+                let is_seed = n.source == Some(crate::NodeSource::Seed);
+                return Some((
+                    n.title.clone(),
+                    n.kind.as_str().to_string(),
+                    inst_name,
+                    is_seed,
+                ));
             }
         }
         None
@@ -273,12 +294,11 @@ impl GraphNeighbors for KbStoreBackend<'_> {
             .collect()
     }
 
-    fn describe(&self, id: &str) -> Option<(String, String, Option<String>)> {
-        self.0
-            .get_node(id)
-            .ok()
-            .flatten()
-            .map(|n| (n.title, n.kind.as_str().to_string(), None))
+    fn describe(&self, id: &str) -> Option<(String, String, Option<String>, bool)> {
+        self.0.get_node(id).ok().flatten().map(|n| {
+            let is_seed = n.source == Some(crate::NodeSource::Seed);
+            (n.title, n.kind.as_str().to_string(), None, is_seed)
+        })
     }
 }
 
@@ -293,6 +313,12 @@ pub struct RelatedItem {
     pub title: String,
     pub kind: String,
     pub score: f64,
+    /// Federated instance name owning this node, `None` for the primary KB
+    /// (or for single-store backends with no federation concept).
+    pub instance: Option<String>,
+    /// MAE's own seeded/built-in content — see [`GraphBfsNode::is_seed`]'s
+    /// doc for why this is needed per-result (#361).
+    pub is_seed: bool,
 }
 
 /// Backend abstraction for [`related_enriched`]. Kept separate from
@@ -305,8 +331,10 @@ pub trait RelatedSource {
     /// Scored related-node ids for `id`, already ranked/limited by the
     /// backend's own algorithm.
     fn scored(&self, id: &str, limit: usize) -> Vec<(String, f64)>;
-    /// `(title, kind_str)` for display.
-    fn describe(&self, id: &str) -> Option<(String, String)>;
+    /// `(title, kind_str, owning_instance_name, is_seed_content)` for
+    /// display — see [`GraphNeighbors::describe`]'s doc for the last two
+    /// fields' rationale (#361).
+    fn describe(&self, id: &str) -> Option<(String, String, Option<String>, bool)>;
 }
 
 /// Rank-then-enrich shared by every `kb_related`-shaped surface.
@@ -315,12 +343,14 @@ pub fn related_enriched(backend: &dyn RelatedSource, id: &str, limit: usize) -> 
         .scored(id, limit)
         .into_iter()
         .map(|(rid, score)| {
-            let (title, kind) = backend.describe(&rid).unwrap_or_default();
+            let (title, kind, instance, is_seed) = backend.describe(&rid).unwrap_or_default();
             RelatedItem {
                 id: rid,
                 title,
                 kind,
                 score,
+                instance,
+                is_seed,
             }
         })
         .collect()
@@ -336,6 +366,7 @@ pub struct FederatedRelatedBackend<'a> {
     pub query: Option<&'a dyn KbQueryLayer>,
     pub primary: &'a KnowledgeBase,
     pub instances: &'a HashMap<String, KnowledgeBase>,
+    pub registry: &'a KbRegistry,
 }
 
 impl RelatedSource for FederatedRelatedBackend<'_> {
@@ -356,13 +387,21 @@ impl RelatedSource for FederatedRelatedBackend<'_> {
         Vec::new()
     }
 
-    fn describe(&self, id: &str) -> Option<(String, String)> {
+    fn describe(&self, id: &str) -> Option<(String, String, Option<String>, bool)> {
         if let Some(n) = self.primary.get(id) {
-            return Some((n.title.clone(), n.kind.as_str().to_string()));
+            let is_seed = n.source == Some(crate::NodeSource::Seed);
+            return Some((n.title.clone(), n.kind.as_str().to_string(), None, is_seed));
         }
-        for kb in self.instances.values() {
+        for (uuid, kb) in self.instances {
             if let Some(n) = kb.get(id) {
-                return Some((n.title.clone(), n.kind.as_str().to_string()));
+                let inst_name = self.registry.find_by_uuid(uuid).map(|i| i.name.clone());
+                let is_seed = n.source == Some(crate::NodeSource::Seed);
+                return Some((
+                    n.title.clone(),
+                    n.kind.as_str().to_string(),
+                    inst_name,
+                    is_seed,
+                ));
             }
         }
         None
@@ -382,12 +421,11 @@ impl RelatedSource for KbStoreRelatedBackend<'_> {
         self.0.related(id, limit).unwrap_or_default()
     }
 
-    fn describe(&self, id: &str) -> Option<(String, String)> {
-        self.0
-            .get_node(id)
-            .ok()
-            .flatten()
-            .map(|n| (n.title, n.kind.as_str().to_string()))
+    fn describe(&self, id: &str) -> Option<(String, String, Option<String>, bool)> {
+        self.0.get_node(id).ok().flatten().map(|n| {
+            let is_seed = n.source == Some(crate::NodeSource::Seed);
+            (n.title, n.kind.as_str().to_string(), None, is_seed)
+        })
     }
 }
 
@@ -483,7 +521,7 @@ mod tests {
             fn scored(&self, _id: &str, _limit: usize) -> Vec<(String, f64)> {
                 Vec::new()
             }
-            fn describe(&self, _id: &str) -> Option<(String, String)> {
+            fn describe(&self, _id: &str) -> Option<(String, String, Option<String>, bool)> {
                 None
             }
         }
@@ -498,8 +536,8 @@ mod tests {
             fn scored(&self, _id: &str, _limit: usize) -> Vec<(String, f64)> {
                 vec![("b".to_string(), 2.5), ("c".to_string(), 1.0)]
             }
-            fn describe(&self, id: &str) -> Option<(String, String)> {
-                Some((format!("Title-{id}"), "note".to_string()))
+            fn describe(&self, id: &str) -> Option<(String, String, Option<String>, bool)> {
+                Some((format!("Title-{id}"), "note".to_string(), None, false))
             }
         }
         let items = related_enriched(&FixedBackend, "a", 10);
