@@ -1,6 +1,6 @@
 [package]
 name = "mae-daemon"
-version = "0.14.51"
+version = "0.14.52"
 edition = "2021"
 license = "GPL-3.0-or-later"
 description = "MAE daemon — background KB persistence, maintenance, collaboration, and services"

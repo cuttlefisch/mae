@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.52] - 2026-07-22
+
+### Bug Fixes
+
+- *(syntax)* Stop serving stale spans on the GUI fast path, fix AI-edit redraw, fix rename language re-detection (#355) ([1c109a8](https://github.com/cuttlefisch/mae/commit/1c109a8ad2f0c6e36f86e1a2f13835de5a344006))
+- *(mcp)* Mae-mcp-shim reconnects on socket drop instead of exiting (#356) ([85318fb](https://github.com/cuttlefisch/mae/commit/85318fb17c4948ba9e06891c1db1415611ce2ee8))
+- *(ai)* Extend AI-residency seed-content exemption to graph/list/health/neighborhood/graph-view tools (#361) ([4af100f](https://github.com/cuttlefisch/mae/commit/4af100f1f23651eb1ec66a065a6ea18bba667ab6))
+- *(scheme)* Run-command and execute_command now dispatch Scheme-defined commands (#363) ([48a6958](https://github.com/cuttlefisch/mae/commit/48a6958c5c7f2a2d615ae7c8ec85e6aced9dd8a2))
+- *(editor)* Visual-mode bulk operators now affect every cursor's own selection (#364) ([717cfdd](https://github.com/cuttlefisch/mae/commit/717cfdd2ba16a9f04eb537859e23333021cfe899))
+
+## [0.14.51] - 2026-07-22
+
+### Miscellaneous
+
+- Bump version to 0.14.51 ([7c470a4](https://github.com/cuttlefisch/mae/commit/7c470a4da37b0159f5bf32af543a5196b4785eef))
+
 ## [0.14.50] - 2026-07-22
 
 ### Bug Fixes
