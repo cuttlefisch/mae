@@ -2,6 +2,22 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.49] - 2026-07-22
+
+### Bug Fixes
+
+- *(collab)* Stop ForceSync from merge-corrupting reopened shared-file buffers (#338) ([71df97c](https://github.com/cuttlefisch/mae/commit/71df97c6b3cb43ebf7279244f79efb2c15917fe1))
+- *(collab)* Stop swallowing kb-approve/set-policy/block-principal daemon rejections (#339) ([c658685](https://github.com/cuttlefisch/mae/commit/c658685e9d60f4d98cf63cbb7c42d0fbb517cbce))
+- *(collab)* Surface kb-set-encryption's local validation failures (#340) ([6f4a8f9](https://github.com/cuttlefisch/mae/commit/6f4a8f9d9a90635ce19c34246910eae46c1ca4cb))
+- *(collab)* Resync ALL offline-edited buffers on reconnect, not just the first (#341) ([bab6239](https://github.com/cuttlefisch/mae/commit/bab62395add595142bce505e6361b526e048f737))
+- *(daemon)* Bound unauthenticated connections with a handshake timeout + max_connections cap (#342) ([26df4a9](https://github.com/cuttlefisch/mae/commit/26df4a9213d8212068e3a60355e10978146d1087))
+- *(collab)* Repaint *KB Sharing*/*Collab Status* on connect/disconnect (#346) ([b820c45](https://github.com/cuttlefisch/mae/commit/b820c4547e754ebef3f9f3576285b0ed5cb08879))
+- *(ui)* Cross-reference setup-daemon and collab-start command text (#347) ([b2c8cbf](https://github.com/cuttlefisch/mae/commit/b2c8cbf61b538ebe3c3d4dfd5cdb9b096475d288))
+
+### Documentation
+
+- Fix ROADMAP.md/KB_SHARING.md citing closed #78/#157 as still open (#348) ([925fe29](https://github.com/cuttlefisch/mae/commit/925fe29e285efb9f5cac6a8dc1b9b14fa3db2963))
+
 ## [0.14.48] - 2026-07-21
 
 ### Bug Fixes
@@ -50,6 +66,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - *(gui,core)* Remove verified-dead code, narrow FrameLayout's dead_code allow ([af7c796](https://github.com/cuttlefisch/mae/commit/af7c7963d29b4f46a2cbe7a6dfd05c72d4f2ebf2))
+- Bump version to 0.14.48 ([726942e](https://github.com/cuttlefisch/mae/commit/726942e5ca976cf21f3f8131275f425d5aa32adb))
 
 ### Refactor
 
