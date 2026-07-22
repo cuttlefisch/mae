@@ -171,11 +171,22 @@ Event types: `buffer_edit`, `cursor_move`, `diagnostics`, `mode_change`, `buffer
 
 `mae-mcp-shim` is a standalone binary that bridges stdio ↔ Unix socket:
 
-1. **Socket auto-discovery**: scans `/tmp/mae-*.sock` for a valid MAE socket
-2. **Bidirectional relay**: stdin → socket, socket → stdout
-3. **Framing**: uses `read_message()` / `write_framed()` for Content-Length framing on both sides
-4. **Debug logging**: set `MAE_MCP_SHIM_LOG=/path/to/log` to trace all traffic
-5. **Error handling**: exits cleanly on EOF from either side
+1. **Socket auto-discovery**: scans `/tmp/mae-*.sock` for a valid MAE socket (or honors
+   `MAE_MCP_SOCKET` if set), re-resolved on every (re)connect attempt — a restarted editor's new
+   PID/socket is picked up automatically
+2. **Connect-time verification**: a fresh connection is verified healthy (`initialize` →
+   `notifications/initialized` → `$/ping`, each with a bounded timeout) before it's used, not just
+   assumed live because the socket file accepted a connection
+3. **Bidirectional relay**: stdin → socket, socket → stdout
+4. **Framing**: uses `read_message()` / `write_framed()` for Content-Length framing on both sides
+5. **Debug logging**: set `MAE_MCP_SHIM_LOG=/path/to/log` to trace all traffic
+6. **Reconnect on socket drop, exit on stdin EOF** (#356): stdin is read on its own long-lived task,
+   independent of the socket connection, so it survives across reconnects. If the editor-side
+   socket drops or errors, the shim rediscovers a live socket and reconnects with bounded
+   exponential backoff (2s → 60s) instead of exiting — a killed/restarted `mae`/`mae --gui`
+   instance no longer ends the MCP session. Stdin EOF (the MCP host closing the pipe) is the shim's
+   actual terminal-shutdown signal and always exits the process; a broken stdout is treated the
+   same way (the host itself is gone, not just the editor)
 
 ## Security
 

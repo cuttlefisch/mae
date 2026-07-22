@@ -24,6 +24,8 @@ pub struct KbNodeInfo {
     pub id: String,
     pub title: String,
     pub kind: NodeKind,
+    /// See [`crate::scene::SceneNode::is_seed`]'s doc comment (#361).
+    pub is_seed: bool,
 }
 
 /// A simplified typed KB link for graph building (no dependency on mae-kb
@@ -213,6 +215,7 @@ fn positions_to_scene(
                 kind,
                 style,
                 pinned: false,
+                is_seed: node.is_seed,
             }
         })
         .collect();
@@ -353,16 +356,19 @@ mod tests {
                 id: "concept:buffer".to_string(),
                 title: "Buffer".to_string(),
                 kind: NodeKind::Concept,
+                is_seed: false,
             },
             KbNodeInfo {
                 id: "concept:window".to_string(),
                 title: "Window".to_string(),
                 kind: NodeKind::Concept,
+                is_seed: false,
             },
             KbNodeInfo {
                 id: "cmd:save".to_string(),
                 title: "Save".to_string(),
                 kind: NodeKind::Command,
+                is_seed: false,
             },
         ];
         let links = vec![
@@ -458,6 +464,7 @@ mod tests {
             id: "concept:not-really".to_string(),
             title: "Fooled you".to_string(),
             kind: NodeKind::Task,
+            is_seed: false,
         }];
         let graph = build_kb_graph(&nodes, &[], &[], &[], 1.0);
         assert_eq!(graph.nodes[0].kind, NodeKind::Task);
@@ -531,6 +538,7 @@ mod tests {
                     id: format!("n{i}"),
                     title: "x".to_string(),
                     kind: NodeKind::Concept,
+                    is_seed: false,
                 })
                 .collect();
             let graph = build_kb_graph_positions_only(&nodes, &[], &[], &[], 1.0);
@@ -568,6 +576,7 @@ mod tests {
                 id: format!("n{i}"),
                 title: "x".to_string(),
                 kind: NodeKind::Concept,
+                is_seed: false,
             })
             .collect();
         let tight = build_kb_graph_positions_only(&nodes, &[], &[], &[], 1.0);
@@ -609,11 +618,13 @@ mod tests {
                 id: "a".to_string(),
                 title: "Hi".to_string(),
                 kind: NodeKind::Note,
+                is_seed: false,
             },
             KbNodeInfo {
                 id: "b".to_string(),
                 title: "A Very Long Title For Testing Width".to_string(),
                 kind: NodeKind::Note,
+                is_seed: false,
             },
         ];
         let graph = build_kb_graph(&nodes, &[], &[], &[], 1.0);
@@ -627,16 +638,19 @@ mod tests {
                 id: "a".to_string(),
                 title: "A".to_string(),
                 kind: NodeKind::Note,
+                is_seed: false,
             },
             KbNodeInfo {
                 id: "b".to_string(),
                 title: "B".to_string(),
                 kind: NodeKind::Note,
+                is_seed: false,
             },
             KbNodeInfo {
                 id: "c".to_string(),
                 title: "C".to_string(),
                 kind: NodeKind::Note,
+                is_seed: false,
             },
         ];
         let links = vec![link("a", "b"), link("b", "c")];

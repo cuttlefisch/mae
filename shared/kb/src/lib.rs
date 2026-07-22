@@ -1745,10 +1745,30 @@ impl KnowledgeBase {
     /// Health report with an external resolver for cross-KB link checking.
     /// `external_contains` returns true if a target exists in another KB.
     pub fn health_report_with(&self, external_contains: impl Fn(&str) -> bool) -> KbHealthReport {
+        self.health_report_with_visibility(external_contains, |_| true)
+    }
+
+    /// Like [`Self::health_report_with`], but only folds VISIBLE nodes
+    /// (`node_visible`) into `total_nodes`/`total_links`/`orphan_ids`/
+    /// `namespace_counts` -- the AI-residency seed-content exemption (#361)
+    /// needs this so a restricted KB's non-seed content doesn't surface
+    /// through `kb_health`'s counts/lists even though no single node id was
+    /// ever requested directly. `all_ids` (used for broken-link detection)
+    /// deliberately still includes EVERY node, visible or not: a link
+    /// pointing at a real-but-hidden node is not "broken" (deleted/
+    /// nonexistent) -- it's just not shown to this caller, a different fact.
+    /// The default [`Self::health_report_with`] passes `|_| true` (every
+    /// node visible), so existing callers/behavior are unchanged.
+    pub fn health_report_with_visibility(
+        &self,
+        external_contains: impl Fn(&str) -> bool,
+        node_visible: impl Fn(&Node) -> bool,
+    ) -> KbHealthReport {
         let all_ids: HashSet<&str> = self.nodes.keys().map(|s| s.as_str()).collect();
 
-        // Single fold over all nodes: accumulate link count, broken links,
-        // orphan IDs, and namespace counts in one pass.
+        // Single fold over VISIBLE nodes only: accumulate link count, broken
+        // links, orphan IDs, and namespace counts in one pass -- keeps every
+        // derived count/list internally consistent by construction (#361).
         struct Acc {
             total_links: usize,
             broken_links: Vec<BrokenLink>,
@@ -1756,7 +1776,7 @@ impl KnowledgeBase {
             namespace_counts: HashMap<String, usize>,
         }
 
-        let result = self.nodes.iter().fold(
+        let result = self.nodes.iter().filter(|(_, n)| node_visible(n)).fold(
             Acc {
                 total_links: 0,
                 broken_links: Vec::new(),
@@ -1800,9 +1820,10 @@ impl KnowledgeBase {
 
         let mut orphan_ids = result.orphan_ids;
         orphan_ids.sort();
+        let total_nodes = self.nodes.values().filter(|n| node_visible(n)).count();
 
         KbHealthReport {
-            total_nodes: self.nodes.len(),
+            total_nodes,
             total_links: result.total_links,
             orphan_ids,
             broken_links: result.broken_links,

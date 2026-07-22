@@ -67,6 +67,10 @@ pub fn execute_buffer_write(
         if !content.is_empty() {
             buf.insert_text_at(char_start, content);
         }
+        // #355: direct rope mutation bumps `generation` but never escalates
+        // `redraw_level` on its own -- without this, a subsequent pure
+        // scroll/cursor-move frame can serve stale, misaligned syntax spans.
+        editor.mark_full_redraw();
         editor.recompute_search_matches();
         editor.clamp_all_cursors();
         Ok(format!(
@@ -83,6 +87,7 @@ pub fn execute_buffer_write(
             buf.rope().line_to_char(start_idx)
         };
         buf.insert_text_at(char_pos, content);
+        editor.mark_full_redraw();
         editor.recompute_search_matches();
         editor.clamp_all_cursors();
         Ok(format!(
@@ -175,4 +180,54 @@ pub fn execute_list_buffers(editor: &Editor) -> Result<String, String> {
         })
         .collect();
     serde_json::to_string_pretty(&buffers).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod buffer_write_tests {
+    use super::*;
+    use mae_core::redraw::RedrawLevel;
+
+    /// #355: `buffer_write` mutates the rope directly (bumping `generation`)
+    /// but previously never escalated `redraw_level` -- leaving a stale
+    /// syntax-span cache in place until the next keystroke. Regression guard
+    /// for both mutation branches (replace-range and insert-before-line).
+    #[test]
+    fn execute_buffer_write_replace_range_escalates_redraw_level() {
+        let mut editor = Editor::new();
+        editor.buffers[0].insert_text_at(0, "line one\nline two\nline three\n");
+        editor.redraw_level = RedrawLevel::None;
+
+        execute_buffer_write(
+            &mut editor,
+            &serde_json::json!({"start_line": 2, "end_line": 3, "content": "replaced\n"}),
+        )
+        .unwrap();
+
+        assert!(
+            editor.redraw_level >= RedrawLevel::Full,
+            "expected redraw_level escalated to Full after a direct rope \
+             mutation, got {:?}",
+            editor.redraw_level
+        );
+    }
+
+    #[test]
+    fn execute_buffer_write_insert_before_line_escalates_redraw_level() {
+        let mut editor = Editor::new();
+        editor.buffers[0].insert_text_at(0, "line one\nline two\n");
+        editor.redraw_level = RedrawLevel::None;
+
+        execute_buffer_write(
+            &mut editor,
+            &serde_json::json!({"start_line": 1, "content": "inserted\n"}),
+        )
+        .unwrap();
+
+        assert!(
+            editor.redraw_level >= RedrawLevel::Full,
+            "expected redraw_level escalated to Full after a direct rope \
+             mutation, got {:?}",
+            editor.redraw_level
+        );
+    }
 }

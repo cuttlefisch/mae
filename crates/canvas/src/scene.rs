@@ -65,6 +65,15 @@ pub struct SceneNode {
     pub kind: NodeKind,
     pub style: NodeStyle,
     pub pinned: bool,
+    /// MAE's own seeded/built-in content (structurally mirrors
+    /// `shared_kb::NodeSource::Seed`, threaded through the same
+    /// no-mae-kb-dependency pattern as `NodeKind` above) — the AI-residency
+    /// seed-content exemption (#361) needs this per-node so
+    /// `kb_graph_view_state` can post-filter the AI's read of an
+    /// already-rendered graph buffer without restricting what the human
+    /// sees on screen.
+    #[serde(default)]
+    pub is_seed: bool,
 }
 
 /// Kind of scene node.
@@ -221,6 +230,7 @@ mod tests {
             kind: NodeKind::Concept,
             style: NodeStyle::default(),
             pinned: false,
+            is_seed: false,
         });
         assert!(sg.selected_node().is_none());
         sg.selection = Some(0);

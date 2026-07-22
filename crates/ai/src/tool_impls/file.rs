@@ -194,6 +194,7 @@ pub fn execute_rename_file(
     editor.buffers[idx].name = new
         .file_name()
         .map_or(new_path.to_string(), |n| n.to_string_lossy().to_string());
+    editor.redetect_language_for(idx);
 
     Ok(format!(
         "Renamed: {} → {}",

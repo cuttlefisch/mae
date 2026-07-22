@@ -551,3 +551,119 @@ fn visual_line_selection_range_conversation_buffer() {
         text
     );
 }
+
+// --- #364: multi-cursor visual-mode bulk operators ---
+
+/// The literal #364 repro: `move-to-first-line`, `mc-add-cursor-below` x3,
+/// `enter-visual-line`, `visual-uppercase` -- all 4 lines must uppercase,
+/// not just the primary's (line 1).
+#[test]
+fn mc_visual_uppercase_affects_all_cursor_lines() {
+    let mut editor = editor_with_text("line one\nline two\nline three\nline four\n");
+    editor.dispatch_builtin("move-to-first-line");
+    editor.dispatch_builtin("mc-add-cursor-below");
+    editor.dispatch_builtin("mc-add-cursor-below");
+    editor.dispatch_builtin("mc-add-cursor-below");
+    assert_eq!(editor.window_mgr.focused_window().cursor_set.len(), 4);
+
+    editor.enter_visual_mode(VisualType::Line);
+    editor.visual_uppercase();
+
+    let idx = editor.active_buffer_idx();
+    let text = editor.buffers[idx].rope().to_string();
+    assert_eq!(
+        text, "LINE ONE\nLINE TWO\nLINE THREE\nLINE FOUR\n",
+        "all 4 cursor lines must uppercase, not just the primary's"
+    );
+    assert_eq!(editor.mode, Mode::Normal);
+}
+
+/// Same setup with `visual_delete` — adversarial: descending-order
+/// processing is what prevents this from deleting the wrong lines or
+/// corrupting offsets. A passing test here is worthless if the ranges were
+/// computed in the wrong order and merely happened to still delete SOME 4
+/// lines — assert the buffer is EXACTLY empty, not just "shorter".
+#[test]
+fn mc_visual_delete_removes_all_cursor_lines_exactly() {
+    let mut editor = editor_with_text("line one\nline two\nline three\nline four\n");
+    editor.dispatch_builtin("move-to-first-line");
+    editor.dispatch_builtin("mc-add-cursor-below");
+    editor.dispatch_builtin("mc-add-cursor-below");
+    editor.dispatch_builtin("mc-add-cursor-below");
+
+    editor.enter_visual_mode(VisualType::Line);
+    editor.visual_delete();
+
+    let idx = editor.active_buffer_idx();
+    assert_eq!(
+        editor.buffers[idx].rope().to_string(),
+        "",
+        "all 4 lines must be deleted, buffer must be exactly empty"
+    );
+    assert_eq!(editor.mode, Mode::Normal);
+    assert!(
+        editor.window_mgr.focused_window().cursor_set.is_single(),
+        "cursor_set should collapse to a single cursor after the lines it tracked are gone"
+    );
+}
+
+/// Same setup with `visual_yank` — proves ascending-order text composition
+/// (top-to-bottom reading), not just "yank ran without crashing".
+#[test]
+fn mc_visual_yank_captures_all_cursor_lines_in_order() {
+    let mut editor = editor_with_text("line one\nline two\nline three\nline four\n");
+    editor.dispatch_builtin("move-to-first-line");
+    editor.dispatch_builtin("mc-add-cursor-below");
+    editor.dispatch_builtin("mc-add-cursor-below");
+    editor.dispatch_builtin("mc-add-cursor-below");
+
+    editor.enter_visual_mode(VisualType::Line);
+    editor.visual_yank();
+
+    let register = editor.vi.registers.get(&'"').cloned().unwrap_or_default();
+    assert_eq!(register, "line one\nline two\nline three\nline four\n");
+    // Yank must not delete anything.
+    let idx = editor.active_buffer_idx();
+    assert_eq!(
+        editor.buffers[idx].rope().to_string(),
+        "line one\nline two\nline three\nline four\n"
+    );
+}
+
+/// Negative/boundary case (#14): cursors NOT on contiguous lines (lines 1
+/// and 3 of a 4-line buffer, skipping lines 2 and 4) — must not degrade to
+/// "select everything between the topmost and bottommost cursor."
+#[test]
+fn mc_visual_uppercase_skips_unselected_lines_between_cursors() {
+    let mut editor = editor_with_text("line one\nline two\nline three\nline four\n");
+    editor.dispatch_builtin("move-to-first-line");
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_set.add(2, 0); // line three (0-indexed row 2), skipping lines two and four
+
+    editor.enter_visual_mode(VisualType::Line);
+    editor.visual_uppercase();
+
+    let idx = editor.active_buffer_idx();
+    let text = editor.buffers[idx].rope().to_string();
+    assert_eq!(
+        text, "LINE ONE\nline two\nLINE THREE\nline four\n",
+        "only the two cursor lines should uppercase; lines two and four must be untouched"
+    );
+}
+
+/// Single-cursor regression guard: the existing single-cursor uppercase
+/// test's exact assertions, run again through the new code path, proving
+/// the `is_single()` fast path in `visual_selection_ranges()` didn't change
+/// common-case behavior.
+#[test]
+fn mc_single_cursor_visual_uppercase_unchanged() {
+    let mut editor = editor_with_text("hello world\n");
+    editor.enter_visual_mode(VisualType::Char);
+    editor.dispatch_builtin("move-right");
+    editor.dispatch_builtin("move-right");
+    editor.dispatch_builtin("move-right");
+    editor.dispatch_builtin("move-right");
+    editor.visual_uppercase();
+    let idx = editor.active_buffer_idx();
+    assert_eq!(editor.buffers[idx].rope().to_string(), "HELLO world\n");
+}

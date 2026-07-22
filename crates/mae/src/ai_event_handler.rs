@@ -839,13 +839,49 @@ pub fn handle_mcp_request(
                 output: reason,
             })
         }
-        crate::ai_residency::ResidencyDecision::Allow => execute_tool_with_requester(
-            editor,
-            &fake_call,
-            all_tools,
-            permission_policy,
-            requester_provider,
-        ),
+        crate::ai_residency::ResidencyDecision::Allow => {
+            // #363: `execute_command` normally routes into `crates/ai`'s
+            // `dispatch_builtin_in_target` (builtins-only — `crates/ai` has
+            // no `SchemeRuntime` in scope, so it structurally can never
+            // dispatch a Scheme-defined command). This handler already has
+            // both `editor` and `scheme`, same as the `eval_scheme` drain
+            // just below — bridge the gap here for Scheme-sourced commands,
+            // mirroring `dispatch_command_by_name`'s (`state_sync_apply.rs`)
+            // fix for the `(run-command ...)` path, and fall through to the
+            // existing builtins-only dispatch unchanged for everything else.
+            let scheme_command = (fake_call.name == "execute_command")
+                .then(|| fake_call.arguments.get("command").and_then(|v| v.as_str()))
+                .flatten()
+                .filter(|cmd| {
+                    matches!(
+                        editor.commands.get(cmd).map(|c| &c.source),
+                        Some(mae_core::CommandSource::Scheme(_))
+                    )
+                })
+                .map(str::to_string);
+            match scheme_command {
+                Some(cmd) => {
+                    scheme.dispatch_command_by_name(editor, &cmd);
+                    // Matches execute_command_dispatch's existing response
+                    // shape exactly (`crates/ai/src/executor/core_exec.rs`) —
+                    // this bridge is a dispatch-mechanism swap, not a
+                    // response-contract change.
+                    ExecuteResult::Immediate(ToolResult {
+                        tool_call_id: fake_call.id.clone(),
+                        tool_name: fake_call.name.clone(),
+                        success: true,
+                        output: format!("Executed: {}", cmd),
+                    })
+                }
+                None => execute_tool_with_requester(
+                    editor,
+                    &fake_call,
+                    all_tools,
+                    permission_policy,
+                    requester_provider,
+                ),
+            }
+        }
     };
     // Drain any pending Scheme evals queued by the tool (e.g. eval_scheme).
     let scheme_output = drain_pending_scheme_evals(editor, scheme);
@@ -1491,5 +1527,125 @@ mod tests {
             2,
             "expected the guardrail's empty-response retry nudge to fire a second send()"
         );
+    }
+
+    // --- #363: execute_command MCP tool must dispatch Scheme-sourced commands ---
+
+    fn mcp_request(
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> (
+        mae_mcp::McpToolRequest,
+        tokio::sync::oneshot::Receiver<mae_mcp::McpToolResult>,
+    ) {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        (
+            mae_mcp::McpToolRequest {
+                tool_name: tool_name.to_string(),
+                arguments,
+                reply: tx,
+                requester: mae_mcp::RequesterContext::default(),
+            },
+            rx,
+        )
+    }
+
+    #[tokio::test]
+    async fn execute_command_dispatches_a_scheme_sourced_command() {
+        let mut editor = Editor::new();
+        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
+        scheme
+            .eval(r#"(define (my-greet) (buffer-insert "hi")) (define-command "my-greet" "test" "my-greet")"#)
+            .unwrap();
+        scheme.apply_to_editor(&mut editor);
+        assert_eq!(
+            editor.commands.get("my-greet").map(|c| &c.source),
+            Some(&mae_core::CommandSource::Scheme("my-greet".into())),
+            "sanity: registration must have landed before dispatch is exercised"
+        );
+
+        let (req, mut rx) = mcp_request(
+            "execute_command",
+            serde_json::json!({"command": "my-greet"}),
+        );
+        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
+        let mut deferred = Vec::new();
+        let resolved = handle_mcp_request(
+            &mut editor,
+            req,
+            &[],
+            &mae_ai::PermissionPolicy::default(),
+            &lsp_tx,
+            &mut deferred,
+            &mut scheme,
+        );
+
+        assert!(resolved, "execute_command must resolve immediately");
+        let result = rx.try_recv().expect("reply must have been sent");
+        assert!(result.success, "expected success: {}", result.output);
+        let idx = editor.active_buffer_idx();
+        assert_eq!(
+            editor.buffers[idx].rope().to_string(),
+            "hi",
+            "the scheme command's body must have actually run, not just been looked up"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_command_unknown_name_still_errors() {
+        let mut editor = Editor::new();
+        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
+
+        let (req, mut rx) = mcp_request(
+            "execute_command",
+            serde_json::json!({"command": "totally-unregistered-command"}),
+        );
+        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
+        let mut deferred = Vec::new();
+        handle_mcp_request(
+            &mut editor,
+            req,
+            &[],
+            &mae_ai::PermissionPolicy::default(),
+            &lsp_tx,
+            &mut deferred,
+            &mut scheme,
+        );
+
+        let result = rx.try_recv().expect("reply must have been sent");
+        assert!(
+            !result.success,
+            "an unregistered command must still error, not silently succeed: {}",
+            result.output
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_command_builtin_still_dispatches_via_the_original_path() {
+        // Regression guard: the #363 bridge must not break the pre-existing
+        // builtins path it falls through to.
+        let mut editor = Editor::new();
+        editor.buffers[0].insert_text_at(0, "line one\nline two\n");
+        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
+
+        let (req, mut rx) = mcp_request(
+            "execute_command",
+            serde_json::json!({"command": "move-down"}),
+        );
+        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
+        let mut deferred = Vec::new();
+        handle_mcp_request(
+            &mut editor,
+            req,
+            &[],
+            &mae_ai::PermissionPolicy::default(),
+            &lsp_tx,
+            &mut deferred,
+            &mut scheme,
+        );
+
+        let result = rx.try_recv().expect("reply must have been sent");
+        assert!(result.success, "expected success: {}", result.output);
+        assert_eq!(editor.window_mgr.focused_window().cursor_row, 1);
     }
 }
