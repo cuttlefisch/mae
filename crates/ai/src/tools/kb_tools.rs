@@ -209,6 +209,11 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "kb_health",
             "Compute KB health report: orphan nodes (no links in or out), broken links (references to missing nodes), namespace counts, total stats.",
         )
+        .prop(
+            "scope",
+            "string",
+            "Which KBs to report on: 'all' (default), 'local' (primary only), 'remote' (federated instances only), or a specific instance name. Restricts which KBs are even scanned — use this to check one KB without touching other unrelated registered instances.",
+        )
         .permission(PermissionTier::ReadOnly)
         .build(),
         ToolDefBuilder::new(
@@ -550,6 +555,11 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "value",
             "string",
             "Filter value: todo state (e.g. 'TODO'), priority char (e.g. 'A'), tag name, days for stale, N for weakly_linked, or Datalog query for custom",
+        )
+        .prop(
+            "scope",
+            "string",
+            "Which KBs to query: 'all' (default), 'local' (primary only), 'remote' (federated instances only), or a specific instance name.",
         )
         .required(["filter"])
         .permission(PermissionTier::ReadOnly)

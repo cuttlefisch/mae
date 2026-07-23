@@ -452,10 +452,38 @@ fn broken_links_json(links: &[mae_core::BrokenLink]) -> serde_json::Value {
 /// same fold `health_report_with_visibility` uses to derive
 /// `total_nodes`/`orphan_ids`/etc., so every count/list in the output stays
 /// internally consistent -- never a post-hoc filter of just one field.
+///
+/// `args`'s optional `scope` ("all" | "local" | "remote" | "<instance-name>",
+/// same contract as `kb_search`) restricts which of `local`/`instances` gets
+/// computed at all -- unlike the AI-residency filter above (which redacts
+/// restricted *content* but still reports on every registered KB), scope
+/// controls which KBs are even looked at. Previously this always scanned
+/// every registered instance with no way to restrict it (mae#372 follow-up:
+/// found while preparing a KB-health-check demo against one KB on a machine
+/// with several other, unrelated federated KBs registered).
 pub fn execute_kb_health(
     editor: &Editor,
+    args: &serde_json::Value,
     requester_provider: Option<&str>,
 ) -> Result<String, String> {
+    let scope = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .map(mae_kb::KbScope::parse)
+        .unwrap_or_else(|| mae_kb::KbScope::parse(&editor.kb.search_scope));
+    let primary_name = editor
+        .kb
+        .registry
+        .instances
+        .iter()
+        .find(|i| i.primary)
+        .map(|i| i.name.as_str());
+    let include_local = match &scope {
+        mae_kb::KbScope::All | mae_kb::KbScope::LocalOnly => true,
+        mae_kb::KbScope::RemoteOnly => false,
+        mae_kb::KbScope::Named(n) => primary_name == Some(n.as_str()),
+    };
+
     let local_bypass = requester_provider.is_some_and(mae_core::ai_residency::is_local_provider);
     let is_visible = |restricted: bool| {
         move |n: &mae_kb::Node| !restricted || mae_core::ai_residency::is_residency_exempt(n)
@@ -465,17 +493,30 @@ pub fn execute_kb_health(
     let primary_restricted = !local_bypass
         && editor.kb.registry.primary_ai_residency
             == mae_kb::federation::AiResidency::LocalModelsOnly;
-    let report = editor.kb.primary.health_report_with_visibility(
-        |id| editor.kb.instances.values().any(|kb| kb.contains(id)),
-        is_visible(primary_restricted),
-    );
+    let report = if include_local {
+        Some(editor.kb.primary.health_report_with_visibility(
+            |id| editor.kb.instances.values().any(|kb| kb.contains(id)),
+            is_visible(primary_restricted),
+        ))
+    } else {
+        None
+    };
 
     // Federated instance health summaries — with full broken link detail.
+    // Filtered to the instances this scope actually includes: All/RemoteOnly
+    // include every non-primary instance, Named includes only the one match
+    // (or none, if the name is the primary's — that's `include_local` above,
+    // not this loop), LocalOnly includes none.
     let instances: Vec<serde_json::Value> = editor
         .kb
         .registry
         .instances
         .iter()
+        .filter(|inst| match &scope {
+            mae_kb::KbScope::All | mae_kb::KbScope::RemoteOnly => !inst.primary,
+            mae_kb::KbScope::LocalOnly => false,
+            mae_kb::KbScope::Named(n) => &inst.name == n,
+        })
         .map(|inst| {
             let inst_restricted = !local_bypass
                 && inst.ai_residency == mae_kb::federation::AiResidency::LocalModelsOnly;
@@ -515,8 +556,8 @@ pub fn execute_kb_health(
         })
         .collect();
 
-    let out = serde_json::json!({
-        "local": {
+    let local_json = report.map(|report| {
+        serde_json::json!({
             "total_nodes": report.total_nodes,
             "total_links": report.total_links,
             "avg_links_per_node": if report.total_nodes > 0 {
@@ -525,7 +566,12 @@ pub fn execute_kb_health(
             "orphan_nodes": report.orphan_ids,
             "broken_links": broken_links_json(&report.broken_links),
             "namespace_counts": report.namespace_counts,
-        },
+        })
+    });
+
+    let out = serde_json::json!({
+        "scope": scope.as_token(),
+        "local": local_json,
         "instances": instances,
     });
     serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
@@ -1525,6 +1571,15 @@ pub fn execute_kb_agenda(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required argument: filter".to_string())?;
     let value = args.get("value").and_then(|v| v.as_str()).unwrap_or("");
+    // Optional `scope` ("all" | "local" | "remote" | "<instance-name>"), same
+    // contract as kb_search/kb_search_context (mae#372 follow-up: previously
+    // this always scanned every registered instance with no way to restrict
+    // it to one, e.g. for a demo/audit against a single non-primary KB).
+    let scope = args
+        .get("scope")
+        .and_then(|v| v.as_str())
+        .map(mae_kb::KbScope::parse)
+        .unwrap_or_else(|| mae_kb::KbScope::parse(&editor.kb.search_scope));
 
     let filter = match filter_type {
         "todo" => {
@@ -1559,7 +1614,10 @@ pub fn execute_kb_agenda(
         .store
         .as_ref()
         .ok_or_else(|| "No KB store configured".to_string())?;
-    let nodes = store.agenda_query(&filter).map_err(|e| e.to_string())?;
+    let mut nodes = store.agenda_query(&filter).map_err(|e| e.to_string())?;
+    if scope != mae_kb::KbScope::All {
+        nodes.retain(|n| editor.kb.node_matches_scope(&n.id, &scope));
+    }
     let nodes =
         mae_core::ai_residency::filter_residency_exempt_primary(editor, requester_provider, nodes);
     let out: Vec<serde_json::Value> = nodes
@@ -1577,6 +1635,7 @@ pub fn execute_kb_agenda(
         .collect();
     serde_json::to_string_pretty(&serde_json::json!({
         "filter": filter_type,
+        "scope": scope.as_token(),
         "count": out.len(),
         "nodes": out,
     }))
@@ -1872,7 +1931,7 @@ mod tests {
         .unwrap();
 
         // health -- must not error against a promoted node's KB.
-        let health_result = execute_kb_health(&editor, None).unwrap();
+        let health_result = execute_kb_health(&editor, &serde_json::json!({}), None).unwrap();
         let health_json: serde_json::Value = serde_json::from_str(&health_result).unwrap();
         assert!(health_json["local"].is_object());
 
@@ -2774,7 +2833,7 @@ mod tests {
     #[test]
     fn kb_health_returns_json() {
         let editor = Editor::new();
-        let result = execute_kb_health(&editor, None).unwrap();
+        let result = execute_kb_health(&editor, &serde_json::json!({}), None).unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         let local = &v["local"];
         assert!(local["total_nodes"].as_u64().unwrap() > 0);
@@ -3893,6 +3952,122 @@ mod tests {
         assert_eq!(value["count"], nodes.len());
     }
 
+    /// Adversarial (mae#372): kb_agenda's underlying `agenda_query` runs
+    /// against the shared Cozo store, which is NOT itself instance-scoped --
+    /// two federated instances' orphan nodes both come back from one query.
+    /// The attacker-model property this must hold: asking for instance A's
+    /// orphans must never leak instance B's, even though both exist in the
+    /// same underlying store. Register two federated instances with a
+    /// distinct orphan node each; scope to one by name; the other's node id
+    /// must be completely absent, not merely reordered or de-emphasized.
+    #[test]
+    fn kb_agenda_scope_named_excludes_other_federated_instances_orphans() {
+        use mae_kb::KbStore;
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store
+            .insert_node(&non_seed_node_with(
+                "user:scope-orphan-a",
+                "instance A's own orphan node",
+            ))
+            .unwrap();
+        store
+            .insert_node(&non_seed_node_with(
+                "user:scope-orphan-b",
+                "instance B's own orphan node -- must never leak into a scope=A query",
+            ))
+            .unwrap();
+
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+
+        let mut kb_a = mae_core::KnowledgeBase::new();
+        kb_a.insert(non_seed_node_with(
+            "user:scope-orphan-a",
+            "instance A's own orphan node",
+        ));
+        editor.kb.instances.insert("uuid-scope-a".to_string(), kb_a);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-scope-a".into(),
+                name: "ScopeInstanceA".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+            });
+
+        let mut kb_b = mae_core::KnowledgeBase::new();
+        kb_b.insert(non_seed_node_with(
+            "user:scope-orphan-b",
+            "instance B's own orphan node -- must never leak into a scope=A query",
+        ));
+        editor.kb.instances.insert("uuid-scope-b".to_string(), kb_b);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-scope-b".into(),
+                name: "ScopeInstanceB".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+            });
+
+        let result = execute_kb_agenda(
+            &editor,
+            &serde_json::json!({"filter": "orphan", "scope": "ScopeInstanceA"}),
+            None,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let nodes = value["nodes"].as_array().unwrap();
+        assert!(
+            nodes.iter().any(|n| n["id"] == "user:scope-orphan-a"),
+            "scope=ScopeInstanceA must include that instance's own orphan node: {nodes:?}"
+        );
+        assert!(
+            !nodes.iter().any(|n| n["id"] == "user:scope-orphan-b"),
+            "scope=ScopeInstanceA must NOT leak instance B's orphan node: {nodes:?}"
+        );
+        assert_eq!(value["scope"], "ScopeInstanceA");
+
+        // Flip the scope: B's node must appear, A's must not -- confirms this
+        // is real per-instance filtering, not e.g. an alphabetical accident.
+        let result_b = execute_kb_agenda(
+            &editor,
+            &serde_json::json!({"filter": "orphan", "scope": "ScopeInstanceB"}),
+            None,
+        )
+        .unwrap();
+        let value_b: serde_json::Value = serde_json::from_str(&result_b).unwrap();
+        let nodes_b = value_b["nodes"].as_array().unwrap();
+        assert!(
+            nodes_b.iter().any(|n| n["id"] == "user:scope-orphan-b"),
+            "scope=ScopeInstanceB must include that instance's own orphan node: {nodes_b:?}"
+        );
+        assert!(
+            !nodes_b.iter().any(|n| n["id"] == "user:scope-orphan-a"),
+            "scope=ScopeInstanceB must NOT leak instance A's orphan node: {nodes_b:?}"
+        );
+    }
+
     #[test]
     fn kb_agenda_local_provider_bypasses_residency_filter_entirely() {
         use mae_kb::KbStore;
@@ -4175,7 +4350,7 @@ mod tests {
         editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
         let before_total = editor.kb.primary.health_report().total_nodes;
 
-        let result = execute_kb_health(&editor, Some("claude")).unwrap();
+        let result = execute_kb_health(&editor, &serde_json::json!({}), Some("claude")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         let local = &v["local"];
         assert!(
@@ -4202,7 +4377,7 @@ mod tests {
         editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
         let expected_total = editor.kb.primary.health_report().total_nodes;
 
-        let result = execute_kb_health(&editor, Some("ollama")).unwrap();
+        let result = execute_kb_health(&editor, &serde_json::json!({}), Some("ollama")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         assert_eq!(
             v["local"]["total_nodes"].as_u64().unwrap() as usize,
@@ -4240,7 +4415,7 @@ mod tests {
                 ai_residency: mae_kb::federation::AiResidency::LocalModelsOnly,
             });
 
-        let result = execute_kb_health(&editor, Some("claude")).unwrap();
+        let result = execute_kb_health(&editor, &serde_json::json!({}), Some("claude")).unwrap();
         let v: serde_json::Value = serde_json::from_str(&result).unwrap();
         let inst_report = v["instances"]
             .as_array()
@@ -4253,6 +4428,106 @@ mod tests {
             1,
             "restricted instance's total_nodes must only count the seed node: {inst_report:?}"
         );
+    }
+
+    /// Adversarial (mae#372): scope="all" (the default before this fix)
+    /// reports on the primary AND every federated instance -- exactly the
+    /// behavior that made kb_health unsafe to run on a machine with
+    /// unrelated, confidential federated KBs registered alongside the one
+    /// actually being checked. Verify scope=<name> restricts to ONLY that
+    /// instance: `local` must be absent (not primary), `instances` must
+    /// contain exactly the named instance, and a second, unrelated
+    /// federated instance registered alongside it must not appear at all.
+    #[test]
+    fn kb_health_scope_named_excludes_local_and_other_federated_instances() {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(non_seed_node_with(
+            "user:health-scope-local",
+            "must not appear when scoped",
+        ));
+
+        let mut kb_target = mae_core::KnowledgeBase::new();
+        kb_target.insert(non_seed_node_with(
+            "user:health-scope-target",
+            "the instance actually being checked",
+        ));
+        editor
+            .kb
+            .instances
+            .insert("uuid-health-scope-target".to_string(), kb_target);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-health-scope-target".into(),
+                name: "HealthScopeTarget".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+            });
+
+        let mut kb_other = mae_core::KnowledgeBase::new();
+        kb_other.insert(non_seed_node_with(
+            "user:health-scope-other-confidential",
+            "an unrelated federated KB that must never be scanned/reported when scoped elsewhere",
+        ));
+        editor
+            .kb
+            .instances
+            .insert("uuid-health-scope-other".to_string(), kb_other);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-health-scope-other".into(),
+                name: "HealthScopeOtherConfidential".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+            });
+
+        let result = execute_kb_health(
+            &editor,
+            &serde_json::json!({"scope": "HealthScopeTarget"}),
+            None,
+        )
+        .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+
+        assert!(
+            v["local"].is_null(),
+            "scope=<named federated instance> must not report on primary: {v}"
+        );
+        let instances = v["instances"].as_array().unwrap();
+        assert_eq!(
+            instances.len(),
+            1,
+            "scope=HealthScopeTarget must report on exactly one instance, got: {instances:?}"
+        );
+        assert_eq!(instances[0]["name"], "HealthScopeTarget");
+        assert!(
+            !instances
+                .iter()
+                .any(|i| i["name"] == "HealthScopeOtherConfidential"),
+            "the unrelated confidential instance must not appear at all: {instances:?}"
+        );
+        assert_eq!(v["scope"], "HealthScopeTarget");
     }
 
     #[test]
