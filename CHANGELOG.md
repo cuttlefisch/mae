@@ -2,11 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.54] - 2026-07-23
+
+### Documentation
+
+- Cross-link RUSTSEC-2026-0215 exception to tracking issue #374 ([226829e](https://github.com/cuttlefisch/mae/commit/226829e8b860bd7e0c51fa43250a23f18d96075e))
+
+### Miscellaneous
+
+- Accept RUSTSEC-2026-0215 (smallstr unmaintained, transitive via yrs) ([8c885ff](https://github.com/cuttlefisch/mae/commit/8c885ff784be1bc11b66edd82e334720f3e529f3))
+
 ## [0.14.53] - 2026-07-22
 
 ### Features
 
 - *(graph-view)* Chord-diagram theming polish — edge alpha, muted default color, radial labels, quieter boundary badges ([2c8b01b](https://github.com/cuttlefisch/mae/commit/2c8b01b59caa0916e326c13d99bb6d0b92b08dca))
+- *(kb)* Scope-aware kb_health and kb_agenda ([fd1ec98](https://github.com/cuttlefisch/mae/commit/fd1ec987f1365c0d5773a6ae7d861d6b9e79e022))
+- Enforced companion-window scope, default practices KB, graph zoom-to-fit ([c2a7207](https://github.com/cuttlefisch/mae/commit/c2a720730f7846d6ee82b43dbf729da817f29203))
+
+### Miscellaneous
+
+- Bump version to 0.14.53 ([c18351d](https://github.com/cuttlefisch/mae/commit/c18351d591b9455e0ec827fd3e852b25df67e122))
 
 ## [0.14.52] - 2026-07-22
 
