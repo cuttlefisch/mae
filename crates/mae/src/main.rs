@@ -24,6 +24,7 @@ mod graph_layout_bridge;
 mod gui_app;
 #[cfg(feature = "gui")]
 mod gui_event;
+mod headless_loop;
 mod key_handling;
 mod lsp_bridge;
 mod manual_kb;
@@ -787,18 +788,57 @@ fn main() -> io::Result<()> {
                 Ok(()) => {
                     let mut agent_server = mae_mcp::McpServer::new(
                         &agent_socket_path,
-                        mcp_tool_tx,
+                        mcp_tool_tx.clone(),
                         sync_broadcaster.clone(),
                     )
                     .with_psk_auth(mae_mcp::auth::PskAuth::new(&psk));
                     if let Some(ref instructions) = mcp_instructions {
                         agent_server = agent_server.with_instructions(instructions.clone());
                     }
-                    tokio::spawn(agent_server.run(mcp_tools));
+                    tokio::spawn(agent_server.run(mcp_tools.clone()));
                     info!(socket = %agent_socket_path, psk_file = %psk_path, "MCP agent (PSK-required) server started");
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, path = %psk_path, "failed to write PSK file — agent socket not started");
+                }
+            }
+
+            // --headless (ADR-055): an additional stable, project-keyed
+            // socket for long-lived instances, alongside the ephemeral
+            // PID-based ones above. Gated strictly on the flag — interactive
+            // GUI/TUI sessions never bind this extra listener.
+            if args.iter().any(|a| a == "--headless") {
+                match headless_loop::claim_stable_socket(editor.active_project_root()).await {
+                    Ok(headless_loop::StableSocketClaim::NoProjectRoot) => {
+                        info!("headless: no project root detected — stable socket not bound (PID-based socket only)");
+                    }
+                    Ok(headless_loop::StableSocketClaim::Claimed(stable_path)) => {
+                        let stable_path_str = stable_path.to_string_lossy().to_string();
+                        let mut stable_server = mae_mcp::McpServer::new(
+                            &stable_path_str,
+                            mcp_tool_tx.clone(),
+                            sync_broadcaster.clone(),
+                        );
+                        if let Some(ref instructions) = mcp_instructions {
+                            stable_server = stable_server.with_instructions(instructions.clone());
+                        }
+                        tokio::spawn(stable_server.run(mcp_tools.clone()));
+                        info!(socket = %stable_path_str, "MCP headless stable socket started");
+                    }
+                    Ok(headless_loop::StableSocketClaim::AlreadyRunning(stable_path)) => {
+                        // ADR-055's required adversarial test: a second
+                        // headless instance for the same project must fail
+                        // loudly, never silently share or overwrite the
+                        // first instance's stable socket.
+                        eprintln!(
+                            "mae --headless: another instance is already running for this project (stable socket: {})",
+                            stable_path.display()
+                        );
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to claim stable headless socket — continuing with PID-based socket only");
+                    }
                 }
             }
         }
@@ -849,6 +889,44 @@ fn main() -> io::Result<()> {
 
         let _ = std::fs::remove_file(&mcp_socket_path);
         std::process::exit(exit_code);
+    }
+
+    // --headless (ADR-055): long-running full engine, no Renderer, MCP-only.
+    // Reuses the same buffers/windows/KB/AI/LSP/DAP/MCP bootstrap every mode
+    // shares — the only difference from the interactive paths below is which
+    // event loop it enters (headless_loop::run_headless_loop instead of
+    // run_terminal_loop/gui_app::run_gui). Runs until SIGTERM/Ctrl-C.
+    if args.iter().any(|a| a == "--headless") {
+        info!("entering headless event loop");
+        let (mut collab_event_rx, collab_command_tx, collab_spawn) =
+            collab_bridge::setup_collab_channels(&editor);
+        let result = rt.block_on(async {
+            collab_bridge::spawn_collab_task(collab_spawn);
+            headless_loop::run_headless_loop(
+                &mut editor,
+                &mut scheme,
+                &mut ai_event_rx,
+                &ai_event_tx,
+                &ai_command_tx,
+                &mut lsp_event_rx,
+                &lsp_command_tx,
+                &mut dap_event_rx,
+                &dap_command_tx,
+                &mut mcp_tool_rx,
+                &mut collab_event_rx,
+                &collab_command_tx,
+                &mcp_socket_path,
+                &all_tools,
+                &permission_policy,
+                &app_config,
+                &mcp_client_mgr,
+                &sync_broadcaster,
+            )
+            .await
+        });
+        let _ = std::fs::remove_file(&mcp_socket_path);
+        info!("mae --headless exited cleanly");
+        return result;
     }
 
     if use_gui {

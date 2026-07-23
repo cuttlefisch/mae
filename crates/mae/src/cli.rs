@@ -70,6 +70,7 @@ pub(crate) fn handle_help(args: &[String]) -> Option<io::Result<()>> {
         println!("  --debug-init            Verbose init file loading (show errors in *Messages*)");
         println!("  -q, --clean             Skip config, init.scm, and history (like emacs -q)");
         println!("  --self-test [CATS]      Run AI self-test headless, exit with pass/fail code");
+        println!("  --headless              Run the full engine (KB/AI/LSP/DAP/MCP), no UI, until SIGTERM/Ctrl-C (ADR-055)");
         println!("  --test PATH             Run Scheme tests headless (file or directory)");
         println!("  --test-filter PATTERN   Filter tests by name pattern");
         println!("  --test-output FORMAT    Output format: tap (default) | human");

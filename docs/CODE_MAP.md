@@ -367,6 +367,7 @@ Source: `crates/renderer/src/lib.rs`
 |------|------|
 | `splash_render` | mod |
 | `Renderer` | trait |
+| `NullRenderer` | struct |
 | `TerminalRenderer` | struct |
 
 ## mae-scheme

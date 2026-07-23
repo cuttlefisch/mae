@@ -937,6 +937,10 @@
           "kind": "trait"
         },
         {
+          "name": "NullRenderer",
+          "kind": "struct"
+        },
+        {
           "name": "TerminalRenderer",
           "kind": "struct"
         }
