@@ -253,6 +253,13 @@ Day-one tools worth knowing: `introspect` (editor state snapshot), `execute_comm
 tool catalog and selection guidance live in
 [CLAUDE.md](CLAUDE.md#developing-mae-inside-mae-mcp-tools).
 
+This isn't Claude-Code-specific — the same `mae-mcp-shim` bridge pairs MAE with VS Code +
+GitHub Copilot's Agent mode, or any other stdio-capable MCP client (Zed, Cursor, a
+hand-rolled client). See
+[docs/EXTERNAL_EDITOR_MCP_PAIRING.md](docs/EXTERNAL_EDITOR_MCP_PAIRING.md) for setup
+steps, a working `.vscode/mcp.json` example (this repo has one — try it against MAE's own
+codebase), and what to expect re: config-format differences across hosts.
+
 ### Configuration
 
 `init.scm` is MAE's **primary configuration surface** — options
