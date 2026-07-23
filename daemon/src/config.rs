@@ -57,6 +57,11 @@ pub struct DaemonConfig {
     pub log_level: String,
     /// Collaboration server settings (absorbed from mae-state-server).
     pub collab: CollabConfig,
+    /// OAuth 2.1 resource-server settings (ADR-052). A dedicated HTTPS
+    /// listener, deliberately separate from `collab` (which stays
+    /// mTLS/PSK-authenticated JSON-RPC) — the MCP spec scopes OAuth to
+    /// HTTP-based transports specifically.
+    pub oauth: OAuthConfig,
 }
 
 /// Collaboration server configuration (TCP sync, persistence, auth).
@@ -309,6 +314,54 @@ impl Default for DaemonConfig {
             data_dir: None,
             log_level: "info".to_string(),
             collab: CollabConfig::default(),
+            oauth: OAuthConfig::default(),
+        }
+    }
+}
+
+/// OAuth 2.1 resource-server configuration (ADR-052). Never on by default
+/// (principle #12 — daemon value is earned by an explicit need, not
+/// assumed) — an operator opts in by setting `enabled = true` and pointing
+/// `jwks_url`/`issuer` at their chosen external authorization server.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct OAuthConfig {
+    /// Whether the OAuth HTTPS listener starts at all.
+    pub enabled: bool,
+    /// TCP bind address for the OAuth-protected HTTPS listener — separate
+    /// from `collab.bind` (the mTLS/PSK JSON-RPC listener).
+    pub bind: SocketAddr,
+    /// This server's own canonical resource URI (RFC 8707 `resource` /
+    /// RFC 9728 protected-resource identifier). MUST be set by the
+    /// operator to a real, stable, externally-reachable URL before
+    /// `enabled = true` is meaningful — there is no safe default to infer
+    /// this from.
+    pub canonical_resource_uri: String,
+    /// URL to fetch the authorization server's JWKS from.
+    pub jwks_url: String,
+    /// The authorization server's issuer, checked against each token's
+    /// `iss` claim. Strongly recommended to set; `None` skips issuer
+    /// validation.
+    pub issuer: Option<String>,
+    /// Which JWT claim becomes the mapped `kb_access` principal.
+    pub principal_claim: String,
+    /// PEM-encoded TLS certificate chain path for the HTTPS listener.
+    pub cert_path: PathBuf,
+    /// PEM-encoded TLS private key path for the HTTPS listener.
+    pub key_path: PathBuf,
+}
+
+impl Default for OAuthConfig {
+    fn default() -> Self {
+        OAuthConfig {
+            enabled: false,
+            bind: "127.0.0.1:9474".parse().unwrap(),
+            canonical_resource_uri: String::new(),
+            jwks_url: String::new(),
+            issuer: None,
+            principal_claim: "sub".to_string(),
+            cert_path: PathBuf::new(),
+            key_path: PathBuf::new(),
         }
     }
 }

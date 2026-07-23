@@ -54,3 +54,35 @@
 # compaction_interval_secs = 60
 # Idle document eviction timeout in seconds
 # idle_eviction_secs = 300
+
+# ========================================================================
+# OAuth 2.1 resource server (ADR-052) — a dedicated HTTPS listener,
+# separate from [collab], for external MCP clients (e.g. VS Code/Copilot)
+# to authenticate against a hub-hosted KB. Never enabled by default: the
+# daemon validates bearer tokens issued by an external authorization
+# server you configure — it never issues tokens itself.
+# ========================================================================
+[oauth]
+# Enable the OAuth-protected HTTPS listener.
+# enabled = false
+
+# TCP bind address for the OAuth listener.
+# bind = "127.0.0.1:9474"
+
+# This server's own canonical resource URI (RFC 8707 / RFC 9728). Must be
+# a real, stable, externally-reachable URL — every valid token presented
+# here must include this exact value in its `aud` claim.
+# canonical_resource_uri = "https://mae.example.com:9474"
+
+# URL to fetch the authorization server's JWKS from.
+# jwks_url = "https://idp.example.com/.well-known/jwks.json"
+
+# The authorization server's issuer, checked against each token's `iss`.
+# issuer = "https://idp.example.com"
+
+# Which JWT claim becomes the mapped kb_access principal.
+# principal_claim = "sub"
+
+# PEM-encoded TLS certificate chain + private key for the HTTPS listener.
+# cert_path = "/etc/mae/oauth-tls.crt"
+# key_path = "/etc/mae/oauth-tls.key"

@@ -38,6 +38,30 @@ hex = "0.4"
 iroh = "1.0.0"
 data-encoding = "2"
 
+# ADR-052: OAuth 2.1 resource-server bearer-token validation. Hand-rolled
+# scaffolding (PRM endpoint, audience checks, principal mapping) around this
+# crate's JWT decode/signature-verification primitive -- a deliberate,
+# evaluated choice over the third-party `rmcp-server-kit` wrapper (see the
+# ADR's "Alternatives rejected"). `jsonwebtoken` itself is the widely-used,
+# well-established Keats crate, not a new/unproven dependency.
+jsonwebtoken = { version = "10", default-features = false, features = ["use_pem", "rust_crypto"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "tls12", "logging"] }
+tokio-rustls = "0.26"
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio", "server-auto", "http1"] }
+http-body-util = "0.1"
+rustls-pemfile = "2"
+bytes = "1"
+
 [dev-dependencies]
 hex = "0.4"
 tempfile = "3"
+# oauth.rs adversarial tests sign real JWTs with freshly-generated RSA
+# keypairs per test (CLAUDE.md principle #14 -- real inputs, not a shared
+# hardcoded test key) rather than relying on a live external IdP.
+# rsa 0.9 depends on rand_core 0.6 -- rand must stay on the matching 0.8
+# line or RsaPrivateKey::new's CryptoRngCore bound fails to resolve.
+rsa = "0.9"
+rand = "0.8"
+base64 = "0.22"

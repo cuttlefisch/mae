@@ -15,6 +15,7 @@ mod config;
 mod dialer;
 mod handler;
 pub mod hygiene;
+mod oauth;
 mod p2p;
 mod scheduler;
 mod ticket;
@@ -230,6 +231,32 @@ async fn main() {
         }
     } else {
         info!("collab service disabled in config");
+    }
+
+    // --- OAuth 2.1 resource-server listener (ADR-052) ---
+    if config.oauth.enabled {
+        if config.oauth.canonical_resource_uri.is_empty() || config.oauth.jwks_url.is_empty() {
+            error!("oauth.enabled is true but canonical_resource_uri/jwks_url are not set — OAuth listener disabled");
+        } else {
+            let server_config = oauth::ResourceServerConfig {
+                canonical_resource_uri: config.oauth.canonical_resource_uri.clone(),
+                principal_claim: config.oauth.principal_claim.clone(),
+                jwks_url: config.oauth.jwks_url.clone(),
+                issuer: config.oauth.issuer.clone(),
+            };
+            let bind = config.oauth.bind;
+            let cert_path = config.oauth.cert_path.clone();
+            let key_path = config.oauth.key_path.clone();
+            tokio::spawn(async move {
+                if let Err(e) =
+                    oauth::run_oauth_listener(server_config, bind, &cert_path, &key_path).await
+                {
+                    error!(error = %e, "OAuth listener failed to start");
+                }
+            });
+        }
+    } else {
+        info!("OAuth resource-server listener disabled in config (default)");
     }
 
     // KB accept loop

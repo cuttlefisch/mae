@@ -59,13 +59,21 @@ already natively supports (`oauth` config object in `.vscode/mcp.json`, includin
    issue them. RFC 9728 Protected Resource Metadata is served at the well-known path;
    `WWW-Authenticate` on 401 points clients to it; RFC 8707 audience validation is
    mandatory before any tool/query call proceeds.
-3. **Adopt `rmcp`/`rmcp-server-kit`** for the PKCE and JWKS-validation machinery rather
-   than hand-rolling it. OAuth's security surface (token validation, replay protection,
-   audience binding) is exactly the class of code CLAUDE.md principle #14 says should not
-   be reinvented without strong reason, and spec-compliant, actively maintained crates
-   already exist. `rmcp-server-kit`'s existing OAuth 2.1 Bearer JWT + cached-JWKS support
-   is evaluated first; hand-rolling is only justified if its dependency footprint or async
-   runtime assumptions conflict with `mae-daemon`'s existing `tokio` setup.
+3. **Hand-roll the resource-server scaffolding (PRM endpoint, `WWW-Authenticate`, audience
+   validation, principal mapping) directly against `jsonwebtoken`** (the well-established,
+   widely-used JWT crate) for the actual token decode/signature-verification primitive,
+   rather than adopting `rmcp-server-kit`. This is a deliberate, evaluated decision, not a
+   default: `rmcp-server-kit` was assessed (real crate, published, `oauth` feature is
+   itself a thin layer over `jsonwebtoken`) and rejected specifically because it is a
+   newer, single-maintainer third-party project providing the surrounding
+   server/RBAC/HTTP scaffolding around a security-critical listener — a supply-chain trust
+   concern principle #14's "don't reinvent" guidance doesn't outweigh here, since the
+   actual cryptographic primitive (signature verification) still comes from the trusted
+   `jsonwebtoken` crate either way. Hand-rolling the *protocol-shaped scaffolding* (which
+   is a much smaller, more auditable surface than "reinvent JWT crypto") keeps this
+   security boundary's design fully under MAE's own control and consistent with
+   `mae-mcp`'s existing hand-rolled style, at the cost of writing and testing more of that
+   scaffolding ourselves.
 4. **Identity mapping.** A validated OAuth subject (a config-selectable claim — never
    hardcoded to one IdP's claim shape, per principle #7) maps to a **new principal type**
    parallel to `PeerIdentity`'s Ed25519-fingerprint principal, feeding the *same*
@@ -103,11 +111,15 @@ security-relevant, not defaulted silently.
 
 ## Alternatives rejected
 
-- **Hand-roll OAuth 2.1 token validation to keep `mae-mcp` dependency-pure and stylistically
-  consistent.** Rejected — the security surface (replay, audience confusion, PKCE
-  downgrade) is exactly what principle #14 says shouldn't be reinvented without strong
-  reason, and doing so here would mean MAE's first OAuth implementation is also its least
-  battle-tested.
+- **Adopt `rmcp-server-kit`'s `oauth` feature for the resource-server scaffolding.**
+  Evaluated directly (crates.io: real, published, MIT/Apache-2.0, `oauth` feature gated on
+  `jsonwebtoken`+`urlencoding`) and rejected — it is a single-maintainer, comparatively new
+  (v2.1.0) third-party project, and depending on it for the scaffolding *around* a
+  security-critical listener is a supply-chain trust trade the project owner explicitly
+  decided against, even though the underlying crypto primitive it wraps
+  (`jsonwebtoken`) is itself trustworthy. See Decision point 3 above for the full
+  reasoning — this is a deliberate reversal of this ADR's original draft position, not an
+  oversight.
 - **Retrofit OAuth onto the existing TCP collab listener instead of a new HTTPS
   listener.** Rejected — that listener's wire format is MAE's own Content-Length JSON-RPC
   framing, not HTTP; grafting bearer-token semantics onto a non-HTTP transport contradicts
