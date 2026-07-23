@@ -18,8 +18,8 @@ use crate::types::*;
 
 // Re-export all public items from submodules.
 pub use categories::{
-    classify_command_permission, classify_tool_category, classify_tool_tier, parse_categories,
-    request_tools_definition, PermissionPolicy, ToolCategory, ToolTier,
+    annotations_for_tier, classify_command_permission, classify_tool_category, classify_tool_tier,
+    parse_categories, request_tools_definition, PermissionPolicy, ToolCategory, ToolTier,
 };
 
 /// Valid AI prompt profiles. Used in tool definitions for ai_set_profile and delegate.

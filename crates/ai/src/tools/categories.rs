@@ -214,6 +214,27 @@ pub fn classify_command_permission(name: &str) -> PermissionTier {
     }
 }
 
+/// Mechanically derive MCP tool-annotation hints from a tool's
+/// `PermissionTier` (ADR-050 D2). Returns `(read_only_hint, destructive_hint,
+/// idempotent_hint)`. This is the single source of truth for the mapping --
+/// never hand-author a tool's annotations elsewhere, since doing so per tool
+/// across 700+ registered tools would be an unauditable drift risk (a false
+/// `read_only_hint: true` on a mutating tool would make external clients
+/// like VS Code's Copilot skip their own confirmation dialog on a real
+/// write). `ReadOnly` tools are read-only and idempotent by construction;
+/// `Write` tools mutate but are ordinary, reversible editing operations;
+/// `Shell`/`Privileged` tools can perform effects MAE cannot reason about or
+/// undo (arbitrary shell commands, host filesystem/network access), so both
+/// are flagged destructive.
+pub fn annotations_for_tier(tier: PermissionTier) -> (bool, bool, bool) {
+    match tier {
+        PermissionTier::ReadOnly => (true, false, true),
+        PermissionTier::Write => (false, false, false),
+        PermissionTier::Shell => (false, true, false),
+        PermissionTier::Privileged => (false, true, false),
+    }
+}
+
 /// Policy for auto-approving or prompting for tool calls.
 #[derive(Debug, Clone)]
 pub struct PermissionPolicy {
@@ -234,5 +255,62 @@ impl PermissionPolicy {
     /// Check if a permission tier is auto-approved.
     pub fn is_allowed(&self, tier: PermissionTier) -> bool {
         tier <= self.auto_approve_up_to
+    }
+}
+
+#[cfg(test)]
+mod annotation_tests {
+    use super::*;
+
+    #[test]
+    fn read_only_tier_is_read_only_and_idempotent_never_destructive() {
+        let (read_only, destructive, idempotent) = annotations_for_tier(PermissionTier::ReadOnly);
+        assert!(read_only);
+        assert!(!destructive);
+        assert!(idempotent);
+    }
+
+    #[test]
+    fn write_tier_is_neither_read_only_nor_flagged_destructive() {
+        let (read_only, destructive, idempotent) = annotations_for_tier(PermissionTier::Write);
+        assert!(!read_only);
+        assert!(!destructive);
+        assert!(!idempotent);
+    }
+
+    #[test]
+    fn shell_and_privileged_tiers_are_flagged_destructive_never_read_only() {
+        for tier in [PermissionTier::Shell, PermissionTier::Privileged] {
+            let (read_only, destructive, _) = annotations_for_tier(tier);
+            assert!(!read_only, "{tier:?} must never be read_only_hint: true");
+            assert!(
+                destructive,
+                "{tier:?} must be flagged destructive_hint: true"
+            );
+        }
+    }
+
+    /// Exhaustive consistency check across every `PermissionTier` variant:
+    /// `read_only_hint` must be true if and only if the tier is `ReadOnly`.
+    /// This is what makes the mapping in `annotations_for_tier` a genuine
+    /// single source of truth rather than something that could silently
+    /// drift from `PermissionTier` if a variant is ever added -- add the new
+    /// variant to this array and the compiler/test forces the mapping to be
+    /// considered.
+    #[test]
+    fn read_only_hint_is_exactly_read_only_tier() {
+        for tier in [
+            PermissionTier::ReadOnly,
+            PermissionTier::Write,
+            PermissionTier::Shell,
+            PermissionTier::Privileged,
+        ] {
+            let (read_only, _, _) = annotations_for_tier(tier);
+            assert_eq!(
+                read_only,
+                tier == PermissionTier::ReadOnly,
+                "read_only_hint mismatch for {tier:?}"
+            );
+        }
     }
 }

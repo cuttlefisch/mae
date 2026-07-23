@@ -1013,6 +1013,7 @@ mod tests {
             description: "A test tool".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
             permission: None,
+            annotations: None,
         }];
         let msg = r#"{"jsonrpc":"2.0","id":4,"method":"tools/list"}"#;
 
@@ -1173,6 +1174,7 @@ mod tests {
             description: "Echo tool".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
             permission: None,
+            annotations: None,
         }];
 
         // Spawn the server.
@@ -1436,6 +1438,7 @@ mod tests {
             description: "Test".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
             permission: None,
+            annotations: None,
         }];
 
         tokio::spawn(async move {
@@ -2374,6 +2377,7 @@ mod tests {
             description: "A test tool".to_string(),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
             permission: None,
+            annotations: None,
         }];
 
         tokio::spawn(async move {
@@ -2545,12 +2549,14 @@ mod tests {
                 description: "A".to_string(),
                 input_schema: serde_json::json!({"type": "object"}),
                 permission: None,
+                annotations: None,
             },
             ToolInfo {
                 name: "tool_b".to_string(),
                 description: "B".to_string(),
                 input_schema: serde_json::json!({"type": "object"}),
                 permission: None,
+                annotations: None,
             },
         ];
 

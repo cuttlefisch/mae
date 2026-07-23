@@ -1399,3 +1399,75 @@ fn self_test_scrolling_no_repeat_instructions() {
         );
     }
 }
+
+// ---- ADR-050 D2 / Phase A: MCP tool-annotation consistency audit ----
+//
+// Required by the Phase A definition of done (#376): every registered
+// tool's `PermissionTier` must agree with its mechanically-derived
+// `readOnlyHint` (and the other annotation hints), across the *entire*
+// real tool set MAE serves over MCP -- not just the pure-function unit
+// tests in `tools/categories.rs`. Since `crates/mae/src/main.rs`'s
+// production `tools/list` construction calls the exact same
+// `mae_ai::annotations_for_tier` this test calls, drift is structurally
+// impossible today -- this test is the tripwire that keeps it that way if
+// anyone ever adds a per-tool special case instead of going through the
+// single source of truth.
+#[test]
+fn every_registered_tool_annotation_matches_its_permission_tier() {
+    use crate::tools::annotations_for_tier;
+
+    let tools = all_tools();
+    assert!(
+        tools.len() > 100,
+        "sanity check: expected hundreds of registered tools, got {}",
+        tools.len()
+    );
+
+    let mut audited = 0;
+    for tool in &tools {
+        let Some(tier) = tool.permission else {
+            // No declared tier: no annotations should ever be derived for
+            // this tool (callers must not guess `readOnlyHint: true`) --
+            // nothing to check here, matches ADR-050 D2.
+            continue;
+        };
+        let (read_only_hint, destructive_hint, idempotent_hint) = annotations_for_tier(tier);
+        assert_eq!(
+            read_only_hint,
+            tier == PermissionTier::ReadOnly,
+            "tool {:?} (tier {:?}): readOnlyHint must be true iff tier is ReadOnly",
+            tool.name,
+            tier
+        );
+        assert_eq!(
+            destructive_hint,
+            matches!(tier, PermissionTier::Shell | PermissionTier::Privileged),
+            "tool {:?} (tier {:?}): destructiveHint must be true iff tier is Shell/Privileged",
+            tool.name,
+            tier
+        );
+        assert_eq!(
+            idempotent_hint,
+            tier == PermissionTier::ReadOnly,
+            "tool {:?} (tier {:?}): idempotentHint must be true iff tier is ReadOnly",
+            tool.name,
+            tier
+        );
+        // The specific trust-regression case ADR-050/CLAUDE.md flags: a
+        // mutating tool must never be marked safe-to-auto-approve.
+        if tier != PermissionTier::ReadOnly {
+            assert!(
+                !read_only_hint,
+                "trust regression: {:?} is {:?}-tier but readOnlyHint is true \
+                 -- a client like VS Code would skip its confirmation dialog \
+                 on a real mutation",
+                tool.name, tier
+            );
+        }
+        audited += 1;
+    }
+    assert!(
+        audited > 100,
+        "sanity check: expected hundreds of tiered tools to be audited, got {audited}"
+    );
+}

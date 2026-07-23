@@ -699,11 +699,29 @@ fn main() -> io::Result<()> {
         {
             let mcp_tools: Vec<mae_mcp::protocol::ToolInfo> = all_tools
                 .iter()
-                .map(|t| mae_mcp::protocol::ToolInfo {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    input_schema: serde_json::to_value(&t.parameters).unwrap_or_default(),
-                    permission: t.permission.map(|p| format!("{p:?}")),
+                .map(|t| {
+                    // ADR-050 D2: annotations are mechanically derived from
+                    // the tool's own PermissionTier, never hand-authored --
+                    // see mae_ai::annotations_for_tier for the single source
+                    // of truth. A tool with no declared tier gets no
+                    // annotations at all (never guess readOnlyHint: true).
+                    let annotations = t.permission.map(|tier| {
+                        let (read_only_hint, destructive_hint, idempotent_hint) =
+                            mae_ai::annotations_for_tier(tier);
+                        mae_mcp::protocol::ToolAnnotations {
+                            title: None,
+                            read_only_hint: Some(read_only_hint),
+                            destructive_hint: Some(destructive_hint),
+                            idempotent_hint: Some(idempotent_hint),
+                        }
+                    });
+                    mae_mcp::protocol::ToolInfo {
+                        name: t.name.clone(),
+                        description: t.description.clone(),
+                        input_schema: serde_json::to_value(&t.parameters).unwrap_or_default(),
+                        permission: t.permission.map(|p| format!("{p:?}")),
+                        annotations,
+                    }
                 })
                 .collect();
             // Always-on AI guidance (gap closed alongside mae-agent-cli's
