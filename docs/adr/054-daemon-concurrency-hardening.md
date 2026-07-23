@@ -1,6 +1,6 @@
 # ADR-054: Daemon concurrency hardening & benchmarked capacity figure
 
-**Status:** Proposed.
+**Status:** Accepted (implemented — see "Verification" for status per bullet).
 **Extends:** ADR-035 (editor↔daemon boundary), ADR-019/ADR-020/ADR-022 (durable/replicated/
 crash-safe sync — this ADR generalizes the per-document locking pattern already proven
 there onto a second code path that lacks it).
@@ -111,14 +111,69 @@ ADR.
   event, keep the connection" semantics don't directly translate; if/when push
   notifications are added to this path, revisit.
 
+## Implementation note (added during Phase D implementation planning, principle #15)
+
+Decision point 1 above, as originally written, described the mechanism as **"per-KB-instance
+locking."** During implementation planning that literal mechanism was verified against Cozo's own
+source and found to be the wrong shape — not because the goal was wrong, but because a new
+application-level lock would be redundant with concurrency control Cozo already provides:
+
+- Cozo's `Db<S>` (`cozo-0.7.6/src/runtime/db.rs:97-109`) already carries its own fine-grained
+  internal concurrency control: `relation_locks: Arc<ShardedLock<BTreeMap<..., Arc<ShardedLock<()>>>>>`
+  (per-*relation*, finer than per-KB) plus `running_queries: Arc<Mutex<...>>`.
+- `CozoKbStore`'s own write path, `run_mut_params` (`shared/kb/src/cozo_store/db.rs:184-193`), takes
+  `&self`, not `&mut self` — the type is already `Send + Sync` with interior mutability, relying
+  entirely on Cozo's own locking, never on external synchronization MAE provides.
+- None of the 12 fully-locked read arms (`kb/get` through `kb/hygiene_dismiss`) take an
+  instance-scoping parameter on the RPC surface at all — `state.query_layer` is a single
+  `FederatedQuery` that fans out across every registered instance inside one synchronous call
+  (`shared/kb/src/query.rs`), so "per-KB-instance" doesn't correspond to an addressable unit here.
+
+**Resolved mechanism:** generalize the **snapshot-then-drop** idiom already used by 3 of the 19
+`handler.rs` arms (`kb/node_crdt`, `daemon/status`, `p2p/share_kb`) to the other 12 — clone the
+needed `Arc` under `state.lock().await` in a tight scoped block, drop the lock, then run the actual
+synchronous CozoDB call inside `tokio::task::spawn_blocking` (currently absent from this file
+entirely). This adds **zero new locks**: the single `Arc<tokio::sync::Mutex<DaemonState>>` remains
+the only lock in the picture, so a lock-ordering deadlock is structurally impossible (there's
+nothing to order against). It fully satisfies this ADR's Verification bullets below via a smaller,
+more precisely justified change than the original literal phrasing implied.
+
+Cross-checked against existing precedent: MAE already has an adversarially-tested concurrent-write
+path for Cozo's SQLite backend (`sqlite_multi_instance_concurrent_writes_converge`,
+`crates/core/src/editor/kb_ops/tests/kb_ops_concurrency_tests.rs:76+`, backed by
+`run_with_busy_retry`'s exponential-backoff-with-jitter, `shared/kb/src/cozo_store/db.rs:194-238` —
+`MAX_ATTEMPTS` deliberately raised 100→400 after a real observed CI flake under contention). That
+test covers a different-but-related axis (two separate `CozoKbStore` handles on the same file,
+modeling cross-*process* contention); this ADR's own new adversarial test
+(`kb_write_concurrency_tests.rs`) covers the complementary axis actually needed here: one shared
+`Arc<CozoKbStore>` accessed by many `spawn_blocking` tasks within the *same* daemon process,
+exercising Cozo's in-process `relation_locks` directly rather than the cross-connection retry path.
+
 ## Verification
 
 - The new parallel-connection load test runs in default CI (not opt-in) and passes.
+  Status: **done** — `daemon/src/tests/kb_socket_concurrency_tests.rs`'s
+  `concurrent_reads_across_different_kbs_do_not_serialize` (N=8, a `SleepyQueryLayer`
+  decorator makes contention measurable), runs in default `cargo test`.
 - Concurrent reads against *different* KBs are empirically shown not to serialize behind
   each other (measured latency under concurrent load, not just asserted from the lock
-  design).
+  design). Status: **done**, same test — asserts total wall-clock stays under 3x a fixed
+  per-call delay for 8 concurrent calls spanning two distinct stores (would show ~8x if
+  still serialized behind `DaemonState`'s lock).
 - A published, CI-verified capacity number replaces ADR-004's "5-10 concurrent editors"
-  claim in that document.
+  claim in that document. Status: **done** —
+  `daemon/benches/kb_dispatch_concurrency.rs` (criterion, `cargo bench`, spawns the real
+  `mae-daemon` binary against a 20,000-node store) measured **~8 concurrent MCP sessions**
+  before p99 latency exceeds 2x the single-client baseline, with smooth (not cliff)
+  degradation beyond that point — recorded in `docs/adr/004-kb-scaling.md`'s Tier 1
+  section with the full per-level p50/p99 table. ("CI-verified" here means the
+  concurrency *test* above (default CI) proves the mechanism is sound; the *bench* number
+  itself is a manually-run, hardware-dependent snapshot, not re-verified per CI run —
+  consistent with criterion benches generally not being CI-gated.)
 - Connection-cap rejection and handshake-timeout tests exist for both the KB socket and
   the P2P listener, mirroring the existing `collab_handler_connection_limits_tests.rs`
-  pattern already proven for the TCP listener.
+  pattern already proven for the TCP listener. Status: **done** —
+  `kb_socket_connection_limit_tests.rs` (cap rejection, idle-timeout self-heal, and the
+  `idle_timeout=0`-disables-the-timeout case) and two new tests in `p2p.rs`'s existing
+  `#[cfg(test)] mod tests` (`mesh_connection_cap_rejects_the_nplus1th_client`,
+  `mesh_peer_that_never_opens_a_stream_is_dropped_within_the_handshake_timeout`).

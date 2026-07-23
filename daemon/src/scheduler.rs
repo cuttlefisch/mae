@@ -81,7 +81,20 @@ impl DaemonScheduler {
                     if let Some(ref store) = ds.store {
                         let store = std::sync::Arc::clone(store);
                         drop(ds); // Release lock before blocking scan
-                        let result = crate::hygiene::run_hygiene_scan(&store);
+                        // Off the async executor (ADR-054) — a synchronous CozoDB
+                        // scan left inline here would starve every connection's
+                        // I/O sharing this worker thread for the scan's duration.
+                        let result = match tokio::task::spawn_blocking(move || {
+                            crate::hygiene::run_hygiene_scan(&store)
+                        })
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(e) => {
+                                tracing::warn!(error = %e, "hygiene scan task panicked");
+                                continue;
+                            }
+                        };
                         if result.suggestions_created > 0 {
                             tracing::info!(
                                 created = result.suggestions_created,

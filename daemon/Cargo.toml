@@ -65,3 +65,13 @@ tempfile = "3"
 rsa = "0.9"
 rand = "0.8"
 base64 = "0.22"
+# ADR-054: the capacity benchmark spawns the real compiled mae-daemon binary
+# (bench targets, like `daemon/tests/*.rs`, only see the library crate's
+# public re-exports -- handler/accept_loop/DaemonState are bin-crate-private
+# by design, see `daemon/src/tests/mod.rs`) and drives it over its real KB
+# Unix socket -- same convention as `daemon/tests/network_e2e.rs`.
+criterion = { version = "0.8", features = ["html_reports", "async_tokio"] }
+
+[[bench]]
+name = "kb_dispatch_concurrency"
+harness = false

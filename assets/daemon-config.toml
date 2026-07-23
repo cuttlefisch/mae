@@ -46,8 +46,10 @@
 # [collab.storage]
 # Collab WAL data directory (default: data_dir/collab)
 # data_dir = ""
-# Number of SQLite shards (default: 4)
-# pool_size = 4
+# Number of SQLite connections opened in WAL mode to the same file (ADR-054).
+# Raising this gives concurrent writers more shards to spread across under
+# load, at the cost of one more open connection/fd per shard.
+# shard_count = 4
 
 # [collab.sync]
 # Background compaction interval in seconds
@@ -86,3 +88,21 @@
 # PEM-encoded TLS certificate chain + private key for the HTTPS listener.
 # cert_path = "/etc/mae/oauth-tls.crt"
 # key_path = "/etc/mae/oauth-tls.key"
+
+# ========================================================================
+# KB Unix socket connection hardening (ADR-054). This is the local,
+# filesystem-permissions-only-trust listener every locally-connected
+# frontend's routine kb_search/kb_get/etc. calls use. There is no
+# per-principal/per-IP identity to sub-limit against on a Unix domain
+# socket, so only a total connection cap + idle timeout are configurable
+# here (unlike [collab]/[oauth]'s richer per-network-client controls).
+# ========================================================================
+[kb_socket]
+# Hard cap on concurrent connections (0 = unlimited).
+# max_connections = 256
+
+# Seconds a connection may sit with no request in flight before the server
+# closes it (0 = disabled). Self-healing: DaemonClient transparently
+# reconnects on I/O error, so this is not a hard failure for legitimate
+# long-idle editor sessions.
+# idle_timeout_secs = 300

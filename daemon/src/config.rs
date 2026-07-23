@@ -62,6 +62,12 @@ pub struct DaemonConfig {
     /// mTLS/PSK-authenticated JSON-RPC) — the MCP spec scopes OAuth to
     /// HTTP-based transports specifically.
     pub oauth: OAuthConfig,
+    /// KB Unix-socket connection hardening (ADR-054). This socket is local,
+    /// unauthenticated, filesystem-permissions-only trust (SECURITY.md) — no
+    /// per-principal/per-IP sub-limits apply here (there is no principal or
+    /// IP on a Unix domain socket), only a total connection cap + idle
+    /// timeout, mirroring the collab TCP listener's own `#342` hardening.
+    pub kb_socket: KbSocketConfig,
 }
 
 /// Collaboration server configuration (TCP sync, persistence, auth).
@@ -127,6 +133,11 @@ pub struct P2pConfig {
     ///   who via the verified `remote_id`); per-KB access stays fully mediated by
     ///   membership + JoinPolicy. Enables the frictionless magnet-link join.
     pub connection_gate: String,
+    /// Hard cap on concurrent mesh connections (0 = unlimited), RAII-counted
+    /// via `conn_limit::ConnLimiter` (ADR-054) — same shape as
+    /// `collab.max_connections`, bounding an authenticated-but-otherwise-silent
+    /// peer parking a task forever alongside the existing `accept_bi` timeout.
+    pub max_connections: usize,
 }
 
 impl Default for P2pConfig {
@@ -135,6 +146,7 @@ impl Default for P2pConfig {
             enabled: false,
             relay: "default".to_string(),
             connection_gate: "authorized_keys".to_string(),
+            max_connections: 256,
         }
     }
 }
@@ -243,6 +255,12 @@ pub struct StorageConfig {
     pub compact_threshold: u64,
     /// Maximum WAL entries between forced compactions (0 = no forced compaction).
     pub max_wal_entries: u64,
+    /// Number of SQLite connections opened in WAL mode to the same file
+    /// (`SqliteBackend::open_with_pool_size`, ADR-054) — was hardcoded to 4;
+    /// raising it gives concurrent writers more shards to spread across
+    /// under load, at the cost of one more open file descriptor/connection
+    /// per shard.
+    pub shard_count: usize,
 }
 
 impl Default for StorageConfig {
@@ -252,6 +270,7 @@ impl Default for StorageConfig {
             data_dir: None,
             compact_threshold: 500,
             max_wal_entries: 5000,
+            shard_count: 4,
         }
     }
 }
@@ -315,6 +334,7 @@ impl Default for DaemonConfig {
             log_level: "info".to_string(),
             collab: CollabConfig::default(),
             oauth: OAuthConfig::default(),
+            kb_socket: KbSocketConfig::default(),
         }
     }
 }
@@ -362,6 +382,39 @@ impl Default for OAuthConfig {
             principal_claim: "sub".to_string(),
             cert_path: PathBuf::new(),
             key_path: PathBuf::new(),
+        }
+    }
+}
+
+/// KB Unix-socket connection hardening (ADR-054). This is the daemon's local,
+/// filesystem-permissions-only-trust listener (SECURITY.md) that every
+/// locally-connected frontend's routine `kb_search`/`kb_get`/etc. calls
+/// actually use — unlike `collab`/`oauth`, there is no per-principal or
+/// per-IP identity to sub-limit against here (a Unix domain socket carries
+/// neither), so this config deliberately offers only a total connection cap
+/// and an idle-read timeout, not the finer-grained knobs the network-facing
+/// listeners have.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct KbSocketConfig {
+    /// Hard cap on concurrent connections (0 = unlimited), RAII-counted via
+    /// `conn_limit::ConnLimiter` — same shape as `collab.max_connections`.
+    pub max_connections: usize,
+    /// Seconds a connection may sit with no request in flight before the
+    /// server closes it (0 = disabled). `DaemonClient` keeps one persistent
+    /// connection open for the whole editor session and transparently
+    /// reconnects on I/O error, so a server-side idle-close is self-healing
+    /// from the client's perspective, not a hard failure. Default is
+    /// generous (mirrors `collab.sync.idle_eviction_secs`'s own default)
+    /// since a genuinely idle-but-still-open editor session is normal.
+    pub idle_timeout_secs: u64,
+}
+
+impl Default for KbSocketConfig {
+    fn default() -> Self {
+        KbSocketConfig {
+            max_connections: 256,
+            idle_timeout_secs: 300,
         }
     }
 }
