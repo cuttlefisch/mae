@@ -16,6 +16,9 @@ mod conn_limit;
 mod dialer;
 mod handler;
 pub mod hygiene;
+mod kb_query;
+#[cfg(test)]
+mod lazy_fetch_client;
 mod oauth;
 mod p2p;
 mod scheduler;
@@ -220,7 +223,13 @@ async fn main() {
         scheduler.run(scheduler_shutdown).await;
     });
 
-    // --- Collab server (absorbed from mae-state-server) ---
+    // --- Collab doc_store (absorbed from mae-state-server) ---
+    // ADR-053/Phase G (#382): constructed once here (not inside
+    // `spawn_collab_server`) so it can also be shared with the OAuth
+    // listener's `kb/query.*` surface below — that surface needs read
+    // access to the same `DocStore`, independent of whether the TCP
+    // listener's own auth setup succeeds.
+    let mut doc_store_for_query: Option<Arc<doc_store::DocStore>> = None;
     if config.collab.enabled {
         let collab_issues = config.check_collab();
         if !collab_issues.is_empty() {
@@ -229,14 +238,26 @@ async fn main() {
             }
             // Non-fatal: KB service continues, collab disabled
             warn!("collab service disabled due to config errors");
+        } else if let Some((doc_store, broadcaster, server_start_time)) =
+            init_doc_store(&config).await
+        {
+            doc_store_for_query = Some(Arc::clone(&doc_store));
+            spawn_collab_server(
+                &config,
+                Arc::clone(&state),
+                doc_store,
+                broadcaster,
+                server_start_time,
+            )
+            .await;
         } else {
-            spawn_collab_server(&config, Arc::clone(&state)).await;
+            warn!("collab service disabled");
         }
     } else {
         info!("collab service disabled in config");
     }
 
-    // --- OAuth 2.1 resource-server listener (ADR-052) ---
+    // --- OAuth 2.1 resource-server listener (ADR-052); kb/query.* (ADR-053/Phase G) ---
     if config.oauth.enabled {
         if config.oauth.canonical_resource_uri.is_empty() || config.oauth.jwks_url.is_empty() {
             error!("oauth.enabled is true but canonical_resource_uri/jwks_url are not set — OAuth listener disabled");
@@ -246,13 +267,19 @@ async fn main() {
                 principal_claim: config.oauth.principal_claim.clone(),
                 jwks_url: config.oauth.jwks_url.clone(),
                 issuer: config.oauth.issuer.clone(),
+                kb_query_enabled: config.oauth.kb_query_enabled,
+                kb_query_max_body_bytes: config.oauth.kb_query_max_body_bytes,
+                kb_query_max_scan_nodes: config.oauth.kb_query_max_scan_nodes,
+                kb_query_max_search_results: config.oauth.kb_query_max_search_results,
             };
             let bind = config.oauth.bind;
             let cert_path = config.oauth.cert_path.clone();
             let key_path = config.oauth.key_path.clone();
+            let doc_store = doc_store_for_query.clone();
             tokio::spawn(async move {
                 if let Err(e) =
-                    oauth::run_oauth_listener(server_config, bind, &cert_path, &key_path).await
+                    oauth::run_oauth_listener(server_config, bind, &cert_path, &key_path, doc_store)
+                        .await
                 {
                     error!(error = %e, "OAuth listener failed to start");
                 }
@@ -378,10 +405,21 @@ async fn spawn_p2p_mesh(
     ));
 }
 
-async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState>>) {
+/// Construct + warm up the collab `DocStore`/`broadcaster` (open storage, hydrate
+/// blocklists, recover documents) — split out from `spawn_collab_server` (ADR-053/
+/// Phase G, #382) so the OAuth listener's `kb/query.*` surface can share the SAME
+/// `DocStore` instance without depending on the TCP listener's own setup/auth/accept
+/// logic. Returns `None` on any construction failure (already logged) — same
+/// disable-collab-non-fatally behavior as before this split, just observable to the
+/// caller instead of an internal early `return`.
+async fn init_doc_store(
+    config: &DaemonConfig,
+) -> Option<(
+    Arc<doc_store::DocStore>,
+    SharedBroadcaster,
+    std::time::Instant,
+)> {
     let collab = &config.collab;
-
-    // Open collab storage
     let collab_data_dir = config.resolve_collab_data_dir();
     let db_path = collab_data_dir.join("state.db");
     let backend =
@@ -389,12 +427,10 @@ async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState
             Ok(b) => Arc::new(b),
             Err(e) => {
                 error!(error = %e, path = %db_path.display(), "failed to open collab SQLite");
-                warn!("collab service disabled");
-                return;
+                return None;
             }
         };
 
-    // Create doc store and broadcaster
     let doc_store = Arc::new(
         doc_store::DocStore::new(backend.clone(), collab.storage.compact_threshold)
             .with_max_documents(collab.sync.max_documents)
@@ -427,6 +463,19 @@ async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState
         }
         Err(e) => warn!(error = %e, "failed to list collab documents for recovery"),
     }
+
+    Some((doc_store, broadcaster, server_start_time))
+}
+
+async fn spawn_collab_server(
+    config: &DaemonConfig,
+    state: Arc<Mutex<DaemonState>>,
+    doc_store: Arc<doc_store::DocStore>,
+    broadcaster: SharedBroadcaster,
+    server_start_time: std::time::Instant,
+) {
+    let collab = &config.collab;
+    let collab_data_dir = config.resolve_collab_data_dir();
 
     // Create the auth provider for this listener.
     //   "psk": trust a SET of symmetric keys (keystore + legacy psk/psk_command).

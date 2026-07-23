@@ -369,6 +369,30 @@ pub struct OAuthConfig {
     pub cert_path: PathBuf,
     /// PEM-encoded TLS private key path for the HTTPS listener.
     pub key_path: PathBuf,
+    /// ADR-053/Phase G (#382): whether the `kb/query.get`/`search`/`graph`/
+    /// `capabilities` RPC family is reachable on this listener at all.
+    /// Independently toggleable from `enabled` — an operator may want the
+    /// OAuth listener up (e.g. for the plain bearer-verification diagnostic)
+    /// without exposing the KB-query surface yet. Default false (principle
+    /// #12 — never on by default). Also requires `collab.enabled` (a
+    /// `DocStore` must exist to serve from — see `main.rs`'s
+    /// `doc_store_for_query` wiring); this flag alone does not create one.
+    pub kb_query_enabled: bool,
+    /// Cap on a single `kb/query.get` response body's node-body size, bytes
+    /// (unencrypted KBs only — an E2E KB's response is raw ciphertext,
+    /// capped by nothing since the daemon can't inspect it to truncate it
+    /// meaningfully; the op-set itself is already bounded elsewhere).
+    /// Prevents a single "get" from being a disguised bulk-content vector.
+    pub kb_query_max_body_bytes: usize,
+    /// Cap on how many nodes a single `kb/query.search` call will
+    /// materialize and scan (unencrypted KBs only) — bounds server-side
+    /// cost and is the literal "prevent search from being a disguised
+    /// full-dump vector" cap (ADR-053 decision 3), independent of
+    /// `kb_query_max_search_results` below (a cap on the *scan*, not just
+    /// the returned count).
+    pub kb_query_max_scan_nodes: usize,
+    /// Cap on the number of results a single `kb/query.search` call returns.
+    pub kb_query_max_search_results: usize,
 }
 
 impl Default for OAuthConfig {
@@ -382,6 +406,10 @@ impl Default for OAuthConfig {
             principal_claim: "sub".to_string(),
             cert_path: PathBuf::new(),
             key_path: PathBuf::new(),
+            kb_query_enabled: false,
+            kb_query_max_body_bytes: 65_536,
+            kb_query_max_scan_nodes: 500,
+            kb_query_max_search_results: 20,
         }
     }
 }

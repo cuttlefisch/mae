@@ -637,9 +637,11 @@ enum KbOp {
 
 /// The access decision (ADR-018). `AllowAutoJoin` = a permissive-policy non-member
 /// the caller must add as a viewer; `Pending` = an invite-policy non-member to be
-/// recorded for owner approval.
+/// recorded for owner approval. `pub` (ADR-053/Phase G, #382) so
+/// `check_kb_read_access` can return it across the `oauth` module boundary — `KbOp`
+/// itself stays private, since nothing outside this module needs to construct one.
 #[derive(Debug, PartialEq, Eq)]
-enum AccessDecision {
+pub enum AccessDecision {
     Allow,
     AllowAutoJoin,
     Pending,
@@ -652,7 +654,13 @@ enum AccessDecision {
 /// fingerprint-anchored schema right here, via `authorized_keys` label resolution —
 /// not only on owner re-share (`set_owner`) as before. `migrate_if_legacy` is a
 /// no-op once the collection is already v2, so this is safe to run on every load.
-async fn load_collection(doc_store: &DocStore, kb_id: &str) -> Result<KbCollectionDoc, String> {
+///
+/// `pub` (ADR-053/Phase G, #382): the `kb_query` module (bin crate) needs its own
+/// collection-doc snapshot for node listing/encryption resolution after
+/// `check_kb_read_access` has already gated the call — a second small load of the
+/// same doc, not a second gate; simpler than threading a `_with_coll` variant
+/// through the public wrapper for a call path that isn't hot.
+pub async fn load_collection(doc_store: &DocStore, kb_id: &str) -> Result<KbCollectionDoc, String> {
     let collection_doc = format!("kbc:{kb_id}");
     let (state, _sv) = doc_store
         .encode_state_and_sv(&collection_doc)
@@ -1201,6 +1209,26 @@ async fn kb_access_with_coll(
             ))),
         },
     }
+}
+
+/// ADR-053/Phase G (#382): the one narrow public entry point into this module's
+/// access engine, for the OAuth HTTPS listener (`daemon/src/oauth.rs`, a sibling
+/// module in the **binary** crate — `kb_access`/`kb_access_with_coll` are private to
+/// this **library**-crate module and unreachable from there otherwise). Deliberately
+/// hardcodes `KbOp::Read` — this wrapper structurally cannot be used for `Edit`/
+/// `Manage`, so exposing it can never widen the collab access engine's surface beyond
+/// read access, regardless of what a future caller passes in. `principal` is
+/// expected to always be `Some` in practice for an OAuth caller (every validated
+/// bearer token yields a real `ValidatedPrincipal.principal` string); `None` inherits
+/// `kb_access`'s existing loopback-trusted semantics (N/A here, kept only so this
+/// wrapper's behavior never silently diverges from the function it wraps).
+pub async fn check_kb_read_access(
+    doc_store: &DocStore,
+    kb_id: &str,
+    principal: Option<&str>,
+    transport: Transport,
+) -> Result<AccessDecision, String> {
+    kb_access(doc_store, kb_id, principal, KbOp::Read, transport).await
 }
 
 /// The current member principals as the daemon derives them for `kb_id` — the same

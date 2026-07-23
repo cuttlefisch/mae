@@ -180,6 +180,25 @@ pub fn open_new_ops(
     }
 }
 
+/// Materialize an op-set into a plaintext [`crate::kb::KbNodeDoc`]: open every op (in
+/// causal order, via [`open_new_ops`]) and apply the inner plaintext updates to ONE
+/// node doc, built FROM the ops (so there is no pre-created structure to conflict
+/// with). A non-member (empty open, or the wrong key) gets an empty node — this is the
+/// reference "member-side lazy-fetch decrypt" primitive (ADR-053/Phase G, #382): the
+/// daemon never calls this (it never holds `key`); a thin client does, after fetching
+/// `kb/query.get`'s raw `ciphertext_b64` for an `Encryption::E2e` KB.
+pub fn materialize(op_set_state: &[u8], key: &ContentKey) -> crate::kb::KbNodeDoc {
+    let opened = open_new_ops(op_set_state, key, &BTreeSet::new());
+    if opened.ops.is_empty() {
+        return crate::kb::KbNodeDoc::new_with_client_id("n1", "", "", &[], 99);
+    }
+    let mut node = crate::kb::KbNodeDoc::from_bytes(&opened.ops[0].1).unwrap();
+    for (_id, plaintext) in &opened.ops[1..] {
+        node.apply_update(plaintext).unwrap();
+    }
+    node
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,22 +222,6 @@ mod tests {
             state = merge(&state, &outer).unwrap();
         }
         (state, node.title(), node.body())
-    }
-
-    /// Materialize an op-set into a KbNodeDoc: open every op (in causal order) and
-    /// apply the inner plaintext updates to ONE node doc, built FROM the ops (so there
-    /// is no pre-created structure to conflict with). A non-member (empty open) gets
-    /// an empty node.
-    fn materialize(op_set_state: &[u8], key: &ContentKey) -> KbNodeDoc {
-        let opened = open_new_ops(op_set_state, key, &BTreeSet::new());
-        if opened.ops.is_empty() {
-            return KbNodeDoc::new_with_client_id("n1", "", "", &[], 99);
-        }
-        let mut node = KbNodeDoc::from_bytes(&opened.ops[0].1).unwrap();
-        for (_id, plaintext) in &opened.ops[1..] {
-            node.apply_update(plaintext).unwrap();
-        }
-        node
     }
 
     #[test]

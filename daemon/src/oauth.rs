@@ -44,6 +44,18 @@ pub struct ResourceServerConfig {
     /// claim. `None` skips issuer validation (not recommended, but some
     /// deployments' AS metadata omits a stable issuer during evaluation).
     pub issuer: Option<String>,
+    /// ADR-053/Phase G (#382): whether `kb/query.*` is reachable at all —
+    /// independently toggleable from the listener being up (see
+    /// `config::OAuthConfig::kb_query_enabled`'s doc comment).
+    pub kb_query_enabled: bool,
+    /// Cap on a single `kb/query.get` response's node-body size, bytes
+    /// (unencrypted KBs only). See `config::OAuthConfig`'s doc comment.
+    pub kb_query_max_body_bytes: usize,
+    /// Cap on how many nodes a single `kb/query.search`/`kb/query.graph`
+    /// call materializes and scans. See `config::OAuthConfig`'s doc comment.
+    pub kb_query_max_scan_nodes: usize,
+    /// Cap on the number of results a single `kb/query.search` call returns.
+    pub kb_query_max_search_results: usize,
 }
 
 /// A single JSON Web Key, the subset of RFC 7517 fields this module uses
@@ -260,6 +272,7 @@ use bytes::Bytes;
 use http_body_util::Full;
 use hyper::body::Incoming;
 use hyper::{Request, Response, StatusCode};
+use mae_daemon::doc_store::DocStore;
 
 /// Load a PEM certificate chain + private key into a rustls server config.
 /// Supports PKCS8 and PKCS1 (RSA) private keys — whichever `rustls-pemfile`
@@ -330,15 +343,17 @@ fn unauthorized(config: &ResourceServerConfig, reason: &str) -> Response<Full<By
 }
 
 /// Per-request handler: serves the PRM document unauthenticated, gates
-/// everything else on a valid bearer token. The authenticated branch is
-/// intentionally a minimal diagnostic response for this phase (ADR-052) —
-/// the real KB-query methods (`kb/query.*`, ADR-053/Phase G) attach here
-/// once that phase lands, reusing this exact validated-principal handoff
-/// rather than building a second auth layer.
+/// everything else on a valid bearer token. Once a token validates: if the
+/// request carries a parseable JSON-RPC body AND `kb_query_enabled` AND a
+/// `DocStore` is available, dispatch it as a `kb/query.*` call
+/// (ADR-053/Phase G); otherwise fall back to the plain diagnostic response
+/// (ADR-052) — keeps `mae-daemon doctor`-style bare bearer-verification
+/// working unchanged for callers that never send a body.
 async fn handle_request(
     req: Request<Incoming>,
     config: Arc<ResourceServerConfig>,
     jwks: Arc<JwksCache>,
+    doc_store: Option<Arc<DocStore>>,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     if req.uri().path() == "/.well-known/oauth-protected-resource" {
         return Ok(json_response(
@@ -362,14 +377,80 @@ async fn handle_request(
         }
     };
 
-    match validate_bearer_token(token, &keys, &config) {
-        Ok(principal) => Ok(json_response(
-            StatusCode::OK,
-            serde_json::json!({"principal": principal.principal, "resource": config.canonical_resource_uri}),
-        )),
+    let principal = match validate_bearer_token(token, &keys, &config) {
+        Ok(p) => p,
         Err(e) => {
             tracing::debug!(?e, "bearer token rejected");
-            Ok(unauthorized(&config, &format!("{e:?}")))
+            return Ok(unauthorized(&config, &format!("{e:?}")));
+        }
+    };
+
+    // Read the body (never done before this phase) to see if this is a
+    // kb/query.* JSON-RPC call. An empty/unparseable body is not an error —
+    // it's exactly what a bare bearer-verification probe sends.
+    let body_bytes = match http_body_util::BodyExt::collect(req.into_body()).await {
+        Ok(collected) => collected.to_bytes(),
+        Err(e) => {
+            tracing::debug!(error = %e, "failed to read request body");
+            Bytes::new()
+        }
+    };
+
+    let rpc_request: Option<mae_mcp::protocol::JsonRpcRequest> = if body_bytes.is_empty() {
+        None
+    } else {
+        serde_json::from_slice(&body_bytes).ok()
+    };
+
+    let body =
+        route_authenticated_request(rpc_request, &config, doc_store.as_ref(), &principal).await;
+    Ok(json_response(StatusCode::OK, body))
+}
+
+/// The routing decision `handle_request` makes once a bearer token has
+/// already validated — split out (ADR-053/Phase G, #382) so it's directly
+/// unit-testable without a live HTTP connection (constructing a real
+/// `Request<Incoming>` body outside an actual hyper connection isn't
+/// straightforward; this function needs only already-parsed pieces).
+pub(crate) async fn route_authenticated_request(
+    rpc_request: Option<mae_mcp::protocol::JsonRpcRequest>,
+    config: &ResourceServerConfig,
+    doc_store: Option<&Arc<DocStore>>,
+    principal: &ValidatedPrincipal,
+) -> serde_json::Value {
+    match (rpc_request, config.kb_query_enabled, doc_store) {
+        (Some(rpc), true, Some(store)) => {
+            let limits = crate::kb_query::KbQueryLimits {
+                max_body_bytes: config.kb_query_max_body_bytes,
+                max_scan_nodes: config.kb_query_max_scan_nodes,
+                max_search_results: config.kb_query_max_search_results,
+            };
+            let params = rpc.params.unwrap_or(serde_json::Value::Null);
+            let rpc_response = match crate::kb_query::dispatch(
+                &rpc.method,
+                &params,
+                store,
+                Some(&principal.principal),
+                limits,
+            )
+            .await
+            {
+                Ok(result) => mae_mcp::protocol::JsonRpcResponse::success(rpc.id, result),
+                Err(e) => mae_mcp::protocol::JsonRpcResponse::error(rpc.id, e),
+            };
+            serde_json::to_value(&rpc_response).unwrap_or(serde_json::Value::Null)
+        }
+        (Some(rpc), false, _) => serde_json::to_value(mae_mcp::protocol::JsonRpcResponse::error(
+            rpc.id,
+            mae_mcp::protocol::McpError::internal_error(
+                "kb/query.* is disabled on this daemon (oauth.kb_query_enabled is false, or \
+                 collab.enabled is false)"
+                    .to_string(),
+            ),
+        ))
+        .unwrap_or(serde_json::Value::Null),
+        _ => {
+            serde_json::json!({"principal": principal.principal, "resource": config.canonical_resource_uri})
         }
     }
 }
@@ -377,12 +458,16 @@ async fn handle_request(
 /// Runs the OAuth-protected HTTPS listener until the process shuts down.
 /// Never called unless `OAuthConfig::enabled` is true (checked by the
 /// caller) — this listener does not exist at all for the common case of a
-/// solo/local-only daemon.
+/// solo/local-only daemon. `doc_store` is `Some` only when `collab.enabled`
+/// (ADR-053/Phase G, #382) — `kb/query.*` has nothing to serve from
+/// otherwise, regardless of `kb_query_enabled`; `handle_request` reports
+/// this distinctly from "disabled" (see its `_` fallback below).
 pub async fn run_oauth_listener(
     server_config: ResourceServerConfig,
     bind: std::net::SocketAddr,
     cert_path: &Path,
     key_path: &Path,
+    doc_store: Option<Arc<DocStore>>,
 ) -> std::io::Result<()> {
     let tls_config = load_tls_config(cert_path, key_path).map_err(std::io::Error::other)?;
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_config));
@@ -403,6 +488,7 @@ pub async fn run_oauth_listener(
         let acceptor = acceptor.clone();
         let config = config.clone();
         let jwks = jwks.clone();
+        let doc_store = doc_store.clone();
 
         tokio::spawn(async move {
             let tls_stream = match acceptor.accept(tcp_stream).await {
@@ -414,7 +500,7 @@ pub async fn run_oauth_listener(
             };
             let io = hyper_util::rt::TokioIo::new(tls_stream);
             let service = hyper::service::service_fn(move |req| {
-                handle_request(req, config.clone(), jwks.clone())
+                handle_request(req, config.clone(), jwks.clone(), doc_store.clone())
             });
             if let Err(e) =
                 hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
@@ -482,6 +568,10 @@ mod tests {
             principal_claim: "sub".to_string(),
             jwks_url: "https://unused-in-these-tests.example.com/jwks".to_string(),
             issuer: Some("https://idp.example.com".to_string()),
+            kb_query_enabled: false,
+            kb_query_max_body_bytes: 65_536,
+            kb_query_max_scan_nodes: 500,
+            kb_query_max_search_results: 20,
         }
     }
 

@@ -1,6 +1,6 @@
 # ADR-053: Live scoped read-through KB query surface (no full replication required)
 
-**Status:** Proposed.
+**Status:** Accepted (implemented — see "Verification" and the Implementation note below).
 **Extends:** ADR-035 (editor↔daemon boundary — the federation query layer is already named
 as daemon-owned SHARED value in ADR-035's own table; this ADR extends that value across the
 network boundary, it does not invent a new capability class), ADR-018 (identity-anchored
@@ -98,16 +98,68 @@ ADR exists to avoid, just deferred and unbounded instead of upfront and capped.
   situations into one API, making it easy to accidentally apply the wrong guarantee to the
   wrong KB type; keeping them explicitly distinct (with capability negotiation) is safer.
 
+## Implementation note (added during Phase G implementation planning, principle #15)
+
+Two corrections to this ADR's original text, found during implementation planning and
+verified directly against the code rather than assumed:
+
+**Correction 1 — the reuse target is `DocStore`/`daemon/src/collab_handler/kb_content.rs`,
+not `daemon/src/handler.rs`.** This ADR originally said the new RPCs reuse "`handler.rs`'s
+existing query-layer execution logic." That's wrong: `handler.rs`'s `KbQueryLayer`/
+`CozoKbStore` machinery (Phase D/ADR-054's own rewrite target) serves the daemon's
+**locally-federated** KB instances (`kb-register`'d org directories) — a structurally
+different data model from a **hub-hosted, collaboratively-shared** KB, which lives in
+`DocStore` as `kbc:{kb_id}` (`KbCollectionDoc`, manifest) + `kb:{node_id}`
+(`KbNodeDoc`/op-set) yrs docs. "A thin client searching a KB it doesn't locally replicate"
+is, by definition, talking about the collaborative/hub model. The actual reusable
+precedent is `kb_content.rs::handle_kb_node_fetch`, which already does exactly "load
+`kbc:{kb_id}`, gate `kb_access(Read)`, load+decode `kb:{node_id}`."
+
+**Correction 2 — `daemon_mode=shared` cannot be the daemon-side gate.** `daemon_mode`
+(`crates/core/src/editor/kb_state.rs`) has zero presence in `daemon/src` — it is a pure
+editor-side attach-policy concept (whether *this editor* spawns/owns a daemon), not
+something the daemon binary can read or branch on. The real daemon-side gate is a TOML
+boolean, matching the existing `config.oauth.enabled` pattern: `oauth.kb_query_enabled`
+(new, default false, independently toggleable from `oauth.enabled` itself), plus
+`collab.enabled` (a `DocStore` must exist to serve from at all — an implementation
+consequence, not a design choice). `daemon_mode=shared` remains meaningful only as an
+editor-side UX signal (whether the local editor's tooling should attempt to *use*
+`kb/query.*`), never a security boundary.
+
+**Scoping decision — `kb/query.graph` is a whole-KB snapshot, not a parameterized BFS.**
+Implemented as `{kb_id}` only (no `node_id`/`depth` params): returns every node id in the
+KB (+ real edges for unencrypted KBs), capped by the same `max_scan_nodes` cap `search`
+uses. A depth-limited traversal from a specific node is the LOCAL `kb_neighborhood` tool's
+job (a different, already-solved problem); this surface's job is "what does the whole
+graph look like from a thin client with nothing cached yet," which a capped snapshot
+answers directly and more simply.
+
 ## Verification
 
 - A thin client with no local replica can search/read an unencrypted hub KB it has
-  Viewer+ access to, correctly gated by role.
+  Viewer+ access to, correctly gated by role. **Done** —
+  `daemon/src/tests/kb_query_tests.rs::thin_client_with_no_replica_reads_an_unencrypted_kb_it_has_viewer_access_to`.
 - A thin client can incrementally read an E2E-encrypted KB via the lazy-fetch primitive,
   with bounded, evictable local cache growth verified never to exceed its configured cap
-  under sustained use.
+  under sustained use. **Done** — `daemon/src/lazy_fetch_client.rs` (reuses
+  `mae_kb::cache::NodeCache` unmodified, principal-scoped keys), exercised end-to-end by
+  `kb_query_tests.rs::a_member_can_decrypt_kb_query_get_and_cache_it_via_the_lazy_fetch_client`
+  and bound/no-cross-contamination proven by its own 3 unit tests.
 - **Adversarial test (required, none exists today):** a "hostile/curious hub operator"
   test proving server-side plaintext search of an E2E-encrypted KB is structurally
   impossible through this surface — same test class as ADR-037's existing key-blind-relay
-  tests.
-- The surface is confirmed unreachable when `daemon_mode` is not `shared` or the network
-  listener is disabled.
+  tests. **Done** —
+  `kb_query_tests.rs::hostile_hub_operator_cannot_search_an_e2e_kb_for_plaintext`: real
+  sealed op-set ciphertext, structural search refusal asserted, and a byte-level scan of
+  the serialized wire response proving the plaintext secret never appears anywhere in it.
+  Also new: `unencrypted_kb_search_is_capped_and_cannot_full_dump` (the scan cap, not just
+  the result-count cap, is what's actually enforced) and
+  `non_member_is_denied_regardless_of_encryption` (the access gate fires before the
+  encryption branch on both KB types).
+- The surface is confirmed unreachable when `collab.enabled` is false, `oauth.enabled` is
+  false, or `oauth.kb_query_enabled` is false (see the corrected gating above —
+  supersedes the original "`daemon_mode` is not `shared`" phrasing). **Done** —
+  `kb_query_tests.rs::kb_query_unreachable_when_disabled` drives the real
+  `oauth::route_authenticated_request` gate directly, asserting a distinct "disabled"
+  error (not "method not found") even with an otherwise-valid principal and a real
+  `DocStore` available.

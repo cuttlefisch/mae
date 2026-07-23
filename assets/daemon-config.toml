@@ -89,6 +89,23 @@
 # cert_path = "/etc/mae/oauth-tls.crt"
 # key_path = "/etc/mae/oauth-tls.key"
 
+# Live scoped read-through KB query surface (ADR-053, kb/query.get/search/graph/
+# capabilities). Independently toggleable from `enabled` above. Also requires
+# [collab] enabled = true (a DocStore must exist to serve from).
+# kb_query_enabled = false
+
+# Cap on a single kb/query.get response's node-body size, bytes (unencrypted KBs
+# only -- an E2E KB's response is opaque ciphertext, not truncatable).
+# kb_query_max_body_bytes = 65536
+
+# Cap on how many nodes a single kb/query.search call materializes and scans
+# (unencrypted KBs only) -- bounds cost independent of the result-count cap below;
+# this is what actually prevents "search" from being a disguised full-dump vector.
+# kb_query_max_scan_nodes = 500
+
+# Cap on the number of results a single kb/query.search call returns.
+# kb_query_max_search_results = 20
+
 # ========================================================================
 # KB Unix socket connection hardening (ADR-054). This is the local,
 # filesystem-permissions-only-trust listener every locally-connected
