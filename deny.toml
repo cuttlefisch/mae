@@ -36,8 +36,9 @@ ignore = [
     { id = "RUSTSEC-2026-0195", reason = "wayland-scanner build-time parse of trusted protocol XML; not attacker input; quick-xml pinned ^0.39 upstream" },
     # smallstr unmaintained (yrs → smallstr) — yrs is the CRDT substrate ADR-002
     # accepted as the sync engine (mae-sync); advisory itself states no safe
-    # upgrade is available. Revisit if yrs drops the dependency upstream.
-    { id = "RUSTSEC-2026-0215", reason = "yrs transitive dep, no upstream fix available" },
+    # upgrade is available. Tracked in #374 — revisit if yrs drops the
+    # dependency upstream (check `cargo tree -i smallstr`).
+    { id = "RUSTSEC-2026-0215", reason = "yrs transitive dep, no upstream fix available; tracked in #374" },
 ]
 
 [licenses]

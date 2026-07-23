@@ -598,6 +598,11 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   version-skew warning onto the notification bus (detection/surfacing only, not auto-restart, per
   principle #10). The narrower per-KB-instance last-ingested-vs-build signal in `kb_health` remains
   a separate follow-up (needs a new persisted field).
+- [ ] **Accepted cargo-deny advisory exception: RUSTSEC-2026-0215** **→ #374**: `deny.toml` ignores
+  `smallstr` (unmaintained, transitive via `yrs` — the ADR-002 CRDT sync substrate) because no safe
+  upgrade is available upstream. `cargo-deny` never flags a stale/unnecessary ignore entry (confirmed
+  empirically), so nothing signals when this is safe to remove — revisit via `cargo tree -i smallstr`
+  next time `yrs` gets bumped (weekly grouped Dependabot cargo update) or during a tech-debt pass.
 
 ---
 
