@@ -1,0 +1,42 @@
+:PROPERTIES:
+:ID: practice:shared-computation
+:KIND: concept
+:END:
+#+title: Shared Computation, No Duplicated Logic
+#+filetags: :practices:architecture:
+
+When two or more call sites — two rendering backends, two dispatch entry
+points, two protocol handlers — need to do the same computation, that
+computation belongs in exactly one shared place, consumed by both, not
+copied and hand-adjusted per site.
+
+** Why duplication is the failure mode to watch for
+Copied logic doesn't stay identical. The first bug fix or feature tweak
+lands in whichever copy the author happened to be looking at, and the
+other copy silently drifts — now there are two subtly different behaviors
+where a user reasonably expects one. This is a *correctness* bug, not just
+a style complaint: the divergence is usually invisible until a user hits
+the one copy that didn't get the fix.
+
+** The extraction reflex
+When implementing a fix or feature, before writing new logic at a call
+site, check: does an equivalent already exist elsewhere doing almost the
+same thing? If so:
+- Extract the common part into a shared function/module that both sites call.
+- Parameterize only the genuine difference (not by branching on which
+  caller it is, but by passing in what actually varies).
+- Prefer pure code motion (move existing logic verbatim into the shared
+  location) over a rewrite when the existing logic is already correct —
+  rewriting while extracting conflates two changes and makes the diff
+  harder to review for correctness.
+
+** Enforcement over convention
+Where possible, make the shared path the *only* path, not merely the
+*recommended* one — a boundary function that every caller is structurally
+required to go through (rather than one each caller must remember to call)
+is far more robust than a convention documented in a comment. A duplicated
+implementation that's easy to bypass will eventually be bypassed by a new
+call site that didn't know the convention existed.
+
+See also [[practice:downstream-impact-review][Downstream Impact Review]],
+[[index][index]].

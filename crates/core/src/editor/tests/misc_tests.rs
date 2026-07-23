@@ -469,7 +469,7 @@ fn ai_cursor_row_uses_target_window() {
 }
 
 #[test]
-fn dispatch_builtin_in_target_restores_focus() {
+fn with_ai_dispatch_scope_restores_focus() {
     let mut editor = editor_with_bulk_text("line one\nline two\nline three");
     editor.buffers.push(Buffer::new());
     let area = crate::window::Rect {
@@ -492,7 +492,7 @@ fn dispatch_builtin_in_target_restores_focus() {
     editor.ai.target_window_id = Some(new_win_id);
 
     // Dispatch move-down in the target window
-    editor.dispatch_builtin_in_target("move-down");
+    editor.with_ai_dispatch_scope(|e| e.dispatch_builtin("move-down"));
 
     // Focus should be restored to original
     assert_eq!(editor.window_mgr.focused_id(), original_id);
@@ -531,7 +531,7 @@ fn execute_command_respects_ai_target() {
     assert_eq!(target_row_before, 0);
 
     // Dispatch move-down in the target window
-    editor.dispatch_builtin_in_target("move-down");
+    editor.with_ai_dispatch_scope(|e| e.dispatch_builtin("move-down"));
 
     // Target window cursor should have moved
     let target_row_after = editor
@@ -544,6 +544,99 @@ fn execute_command_respects_ai_target() {
 
     // Original window cursor should NOT have moved
     assert_eq!(editor.window_mgr.focused_window().cursor_row, 0);
+}
+
+// --- Issue #372: enforced companion-window scope for MCP/AI dispatch ---
+
+#[test]
+fn is_conversation_buffer_recognizes_agent_shell() {
+    let mut editor = Editor::new();
+    editor.buffers[0].name = "*AI:claude*".to_string();
+    editor.buffers[0].agent_shell = true;
+    assert!(
+        editor.is_conversation_buffer(0),
+        "an agent-shell buffer must be treated as protected, same as BufferKind::Conversation"
+    );
+}
+
+#[test]
+fn with_ai_dispatch_scope_isolates_conversation_window() {
+    let mut editor = Editor::new();
+    editor.buffers[0].name = "*AI:claude*".to_string();
+    editor.buffers[0].agent_shell = true;
+    let original_id = editor.window_mgr.focused_id();
+    assert_eq!(editor.window_mgr.iter_windows().count(), 1);
+    assert!(editor.ai.target_window_id.is_none());
+
+    editor.with_ai_dispatch_scope(|e| e.dispatch_builtin("git-status"));
+
+    // A companion window was created; the original still shows the agent shell.
+    assert_eq!(editor.window_mgr.iter_windows().count(), 2);
+    let orig_win = editor.window_mgr.window(original_id).unwrap();
+    assert_eq!(
+        orig_win.buffer_idx, 0,
+        "agent-shell window must not be replaced"
+    );
+    assert!(editor.buffers[orig_win.buffer_idx].agent_shell);
+
+    let target_id = editor
+        .ai
+        .target_window_id
+        .expect("target window should be established");
+    assert_ne!(target_id, original_id);
+    let companion_buf = editor.window_mgr.window(target_id).unwrap().buffer_idx;
+    assert_eq!(editor.buffers[companion_buf].name, "*git-status*");
+
+    // Focus restored to the original (agent-shell) window after the scope.
+    assert_eq!(editor.window_mgr.focused_id(), original_id);
+}
+
+#[test]
+fn with_ai_dispatch_scope_noop_when_nothing_to_protect() {
+    let mut editor = Editor::new();
+    // Buffer 0 is a plain Text buffer by default — nothing worth protecting.
+    assert!(!editor.is_conversation_buffer(0));
+
+    editor.with_ai_dispatch_scope(|e| e.dispatch_builtin("git-status"));
+
+    assert!(editor.ai.target_window_id.is_none());
+    assert_eq!(editor.window_mgr.iter_windows().count(), 1);
+}
+
+#[test]
+fn with_ai_dispatch_scope_reuses_established_target() {
+    let mut editor = Editor::new();
+    editor.buffers[0].name = "*AI:claude*".to_string();
+    editor.buffers[0].agent_shell = true;
+
+    editor.with_ai_dispatch_scope(|e| e.dispatch_builtin("git-status"));
+    assert_eq!(editor.window_mgr.iter_windows().count(), 2);
+    let first_target = editor
+        .ai
+        .target_window_id
+        .expect("target established on first dispatch");
+
+    editor.with_ai_dispatch_scope(|e| e.dispatch_builtin("git-diff"));
+    assert_eq!(
+        editor.window_mgr.iter_windows().count(),
+        2,
+        "must not create a second companion window on subsequent dispatch"
+    );
+    assert_eq!(editor.ai.target_window_id, Some(first_target));
+}
+
+#[test]
+fn with_ai_dispatch_scope_handles_split_failure_gracefully() {
+    let mut editor = Editor::new();
+    editor.buffers[0].name = "*AI:claude*".to_string();
+    editor.buffers[0].agent_shell = true;
+    // Force the companion split to fail (too small), regardless of terminal
+    // size, to exercise the same too-small-to-split fallback
+    // `display_buffer_for_agent` already has — parity, not a new invariant.
+    editor.agent_display_split_ratio = 0.01;
+
+    // Must not panic.
+    editor.with_ai_dispatch_scope(|e| e.dispatch_builtin("git-status"));
 }
 
 // --- Async git diff tests ---

@@ -1,0 +1,39 @@
+:PROPERTIES:
+:ID: practice:no-hardcoding
+:KIND: concept
+:END:
+#+title: No Hardcoding, Scheme-First Configurability
+#+filetags: :practices:configuration:
+
+Any user-visible behavior that could reasonably differ between users or
+projects must be exposed as a configurable option through the project's
+option registry, not a magic constant buried in application logic. Concretely:
+
+- Register the option with a stable, documented key, so it's persistable
+  and discoverable at runtime (via a `:set`-style command, a live REPL, or
+  equivalent), not only settable at compile time or via a one-off env var.
+- Default values live in the option's own definition, never scattered as
+  literal numbers/strings inside rendering, layout, or dispatch code.
+- Constants that are genuinely fixed (protocol limits, buffer sizes) belong
+  in the module that owns them, with a comment explaining *why* they're
+  fixed rather than configurable.
+
+** Corollary: no ad-hoc workarounds
+Never add a hardcoded fix for a problem that should be solved
+architecturally. If the same logic is being duplicated across two code
+paths (e.g. two rendering backends, two dispatch entry points) to patch one
+of them, that's a signal to extract shared code (see
+[[practice:shared-computation][Shared Computation]]), not to patch the
+symptom twice. If a fix only works for one backend/platform/caller, it
+isn't a fix — it manufactures the next debugging session for whoever hits
+the other one.
+
+** Why this matters more than it looks
+A codebase that lets configuration leak into ad-hoc constants accumulates a
+compounding tax: every new "just this once" special case makes the next
+one look normal, and eventually no single person can say what's actually
+configurable versus what's accidentally fixed. Treating the option registry
+(or equivalent) as the single source of truth for user-visible behavior
+keeps that question answerable by grep, not by institutional memory.
+
+See also [[index][index]].

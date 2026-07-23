@@ -35,7 +35,29 @@ pub fn execute_tool(
 /// filtering only ever removes results, and only when a KB is actually
 /// `LocalModelsOnly` -- callers that don't care about residency (tests,
 /// most existing call sites) are unaffected either way.
+///
+/// Wraps the actual dispatch (`execute_tool_dispatch_body`) in
+/// `Editor::with_ai_dispatch_scope` (issue #372) -- this is THE enforced
+/// MCP/AI dispatch boundary: every tool call, for every builtin command
+/// (`command_*`) and every other tool category, is guaranteed a companion
+/// window that keeps the conversation/agent-shell buffer visible, without
+/// any individual tool needing its own window-protection logic. Do not
+/// bypass this function for tool dispatch -- see also the Scheme-command
+/// bridge in `crates/mae/src/ai_event_handler.rs`, the one other
+/// MCP-originated mutation path, which wraps itself the same way.
 pub fn execute_tool_with_requester(
+    editor: &mut Editor,
+    call: &ToolCall,
+    all_tools: &[ToolDefinition],
+    policy: &PermissionPolicy,
+    requester_provider: Option<&str>,
+) -> ExecuteResult {
+    editor.with_ai_dispatch_scope(|editor| {
+        execute_tool_dispatch_body(editor, call, all_tools, policy, requester_provider)
+    })
+}
+
+fn execute_tool_dispatch_body(
     editor: &mut Editor,
     call: &ToolCall,
     all_tools: &[ToolDefinition],
@@ -521,6 +543,11 @@ fn dispatch_tool(
     Err(format!("Unknown tool: {}", call.name))
 }
 
+/// Execute a registered editor command by name (MCP `command_*` tool
+/// handler). Plain `dispatch_builtin` is correct here (no target-window
+/// redirection needed locally) -- the enclosing `with_ai_dispatch_scope`
+/// call in `execute_tool_with_requester` has already focused the companion
+/// window, if one was needed, before this ever runs (issue #372).
 fn execute_registry_command(editor: &mut Editor, tool_suffix: &str) -> Result<String, String> {
     let cmd_name = tool_suffix.replace('_', "-");
     if editor.dispatch_builtin(&cmd_name) {

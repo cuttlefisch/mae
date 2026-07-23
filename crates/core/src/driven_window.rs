@@ -31,9 +31,23 @@
 //!   something else, with no ownership/choice by the actor (a graph panel:
 //!   "whichever window had focus right before attention moved to me").
 //!
+//! A third pattern lives on `Editor` itself rather than as a `DrivenWindow`
+//! method, since it needs full `&mut Editor` (buffer-kind lookups, splitting)
+//! rather than `resolve_persistent`'s narrow `&WindowManager`-only closure:
+//! `Editor::ensure_ai_dispatch_target` / `Editor::with_ai_dispatch_scope`
+//! (`editor/window_ops.rs`, issue #372) — the ENFORCED default population
+//! path for MCP/AI dispatch. Where `display_buffer_for_agent` only reuses
+//! `ai.work_window` for a buffer it's already been told to show,
+//! `with_ai_dispatch_scope` proactively establishes the driven window
+//! *before* an MCP-originated command runs at all, so companion-window
+//! protection is a standing invariant rather than something each call site
+//! has to opt into. Every MCP dispatch entry point (`execute_tool_with_requester`
+//! and the Scheme-command bridge in `crates/mae/src/ai_event_handler.rs`)
+//! routes through this rather than reimplementing target redirection locally.
+//!
 //! Any future driven-window need (a per-MCP-session target, a future feature
 //! panel) should use `DrivenWindow` too, picking whichever existing strategy
-//! fits or adding a third named one here if a genuinely new population
+//! fits or adding a new named one here if a genuinely new population
 //! pattern emerges — this module is the intended single home for all of
 //! them, not a per-feature reimplementation.
 

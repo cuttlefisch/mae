@@ -1,0 +1,42 @@
+:PROPERTIES:
+:ID: practice:adversarial-testing
+:KIND: concept
+:END:
+#+title: Adversarial Testing
+#+filetags: :practices:testing:
+
+A test exists to *falsify* the implementation, not to congratulate it. Three
+failure modes let bugs ship green even with "good" test coverage:
+
+** No fragile linear tests
+A test that only walks the happy path in one fixed order — setup, do,
+assert-it-worked — proves the code works on *that one path*, nothing more.
+Prefer:
+- Property/round-trip tests (encode then decode, seal then open, same
+  result under shuffled apply order)
+- N-way convergence (three or more peers/writers, not two — two-way tests
+  hide bugs that only appear with a third participant)
+- State-machine coverage (the transitions, not one trace through them)
+
+** No cherry-picked "unicorn" values
+Inputs chosen because they make the test pass — a magic constant, one
+hand-picked identity, a value that happens to dodge the edge case — hide the
+bug they were chosen around. Use real inputs (freshly generated identities,
+varied/boundary/random-but-seeded values, multiple distinct cases) and
+selective oracles that pin the *meaningful* outcome, not an incidental one.
+
+** Favor the attacker's test
+For anything security-, auth-, crypto-, or sync-adjacent, the primary test
+should encode the attacker's model: wrong key opens nothing, a tampered
+signature is rejected, a stale-epoch operation is fenced, a removed member
+can't read after rotation, a malicious relay sees only ciphertext, concurrent
+or out-of-order operations still converge. One negative case that *must*
+fail is worth more than ten that pass.
+
+** Review pass: what wasn't tried?
+After writing tests for a change, ask "what did these tests not try to
+break?" The gap becomes the next test. The goal is code that is correct
+*because it survived an honest attempt to break it*, not because nobody
+tried.
+
+See also [[index][index]].

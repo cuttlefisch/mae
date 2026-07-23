@@ -66,7 +66,7 @@ pub(super) fn dispatch(
             }
             r
         }
-        "kb_health" => execute_kb_health(editor, requester_provider),
+        "kb_health" => execute_kb_health(editor, &call.arguments, requester_provider),
         "kb_id_audit" => execute_kb_id_audit(editor),
         "kb_sync_status" => execute_kb_sync_status(editor),
         "kb_create" => execute_kb_create(editor, &call.arguments),

@@ -339,6 +339,16 @@ make test-scheme-all                # All local Scheme tests
 
 Check [Known Bugs in ROADMAP.md](ROADMAP.md#known-bugs) before filing a new issue — it may already be tracked.
 
+**Dev-practices KB (issue #370):** a fresh install's `init.scm` sets `ai_guidance_kb` to
+`"MaePractices"` by default — a small, curated KB (`assets/practices/*.org`, built via
+`make practices-kb`) distilled from this file's design principles, the ADR process, and
+ROADMAP's architecture-debt tracking convention. It's auto-registered at startup
+(`crates/mae/src/practices_kb.rs`) whenever the pre-built `mae-practices.cozo` is found, and
+surfaced automatically to every AI session (built-in `mae-agent`, or an external harness
+connected via `mae-mcp-shim`) as standing practice, not just something you have to remember to
+tell it. If you add or change a design principle here, consider whether the corresponding
+practices note needs updating too.
+
 ### Good First Contributions
 
 - **Documentation:** adding or improving KB nodes in `scheme/help/`, correcting doc-comments, clarifying error messages

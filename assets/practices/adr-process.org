@@ -1,0 +1,40 @@
+:PROPERTIES:
+:ID: practice:adr-process
+:KIND: concept
+:END:
+#+title: Architecture Decision Records
+#+filetags: :practices:documentation:
+
+An Architecture Decision Record (ADR) captures a significant, hard-to-reverse
+design decision — the choice, the alternatives seriously considered, and
+*why* the alternatives lost — so a future contributor (human or AI) doesn't
+have to re-litigate a settled question or, worse, silently drift away from
+it without realizing a decision was ever made.
+
+** When a change warrants one
+Not every change needs an ADR. Write one when the decision:
+- Chooses between fundamentally different approaches with real tradeoffs
+  (a storage engine, a sync protocol, a security model) rather than a
+  straightforward implementation of already-agreed direction.
+- Would be expensive to reverse once other code depends on it.
+- Resolves a genuine open question, rather than restating a preference.
+
+A bug fix, a refactor, or an incremental feature within an already-decided
+architecture does not need a new ADR — it needs to be checked *against*
+existing ones (see below).
+
+** What one contains
+At minimum: the decision itself, the alternatives considered and why they
+were rejected, and the consequences (what becomes easier, what becomes
+harder). An ADR that only records the decision without the rejected
+alternatives loses most of its future value — the "why not X" is usually
+what a later contributor actually needs.
+
+** Before writing a fix, check for a governing ADR
+If a bug's root cause traces back to a place where the implementation fell
+behind an already-decided ADR, the correct fix addresses that drift for the
+whole affected area — see [[practice:architecture-debt-tracking][Architecture
+Debt Is Tracked, Not Silent]] — rather than patching the one symptom and
+leaving the same drift to regenerate similar bugs elsewhere.
+
+See also [[index][index]].

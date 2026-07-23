@@ -284,6 +284,67 @@ impl KbContext {
         self.daemon_query.as_deref().or(self.query.as_deref())
     }
 
+    /// Whether `id` belongs to the primary KB specifically. Handles the thin-
+    /// primary case (Phase D3: in-memory mirror skipped, daemon-hosted) by
+    /// falling back to the query layer, but excludes ids also owned by a
+    /// federated instance's in-memory mirror so a shared daemon-hosted query
+    /// layer's federation-wide reach doesn't get misattributed to "primary".
+    fn primary_contains(&self, id: &str) -> bool {
+        if self.primary_thin() {
+            self.query_layer().is_some_and(|q| q.contains(id))
+                && !self.instances.values().any(|kb| kb.contains(id))
+        } else {
+            self.primary.contains(id)
+        }
+    }
+
+    /// Whether a node id belongs to the given scope's participating KB(s).
+    /// Mirrors `Editor::kb_federated_search_scoped`'s per-scope inclusion
+    /// rules (primary participates for All/LocalOnly, a specific instance
+    /// for Named, any non-primary federated instance for RemoteOnly) but
+    /// checks a single already-known id rather than performing a fresh
+    /// search. Used to post-filter `kb_health`/`kb_agenda`, whose underlying
+    /// queries (`agenda_query`, the per-instance health loop) aren't scope-
+    /// aware themselves — unlike `kb_search`, which filters during the scan.
+    /// See mae#372 (external-agent window-visibility gap found while
+    /// preparing the DevPractices KB-health-check demo, which surfaced this
+    /// as a real blocker: no way to run kb_health against one federated
+    /// instance without scanning every other registered KB too).
+    pub fn node_matches_scope(&self, id: &str, scope: &mae_kb::KbScope) -> bool {
+        use mae_kb::KbScope;
+        match scope {
+            KbScope::All => true,
+            KbScope::LocalOnly => self.primary_contains(id),
+            KbScope::RemoteOnly => self
+                .registry
+                .instances
+                .iter()
+                .filter(|inst| !inst.primary)
+                .any(|inst| {
+                    self.instances
+                        .get(&inst.uuid)
+                        .is_some_and(|kb| kb.contains(id))
+                }),
+            KbScope::Named(name) => {
+                let primary_name = self
+                    .registry
+                    .instances
+                    .iter()
+                    .find(|i| i.primary)
+                    .map(|i| i.name.as_str());
+                if primary_name == Some(name.as_str()) {
+                    return self.primary_contains(id);
+                }
+                self.registry
+                    .instances
+                    .iter()
+                    .find(|inst| &inst.name == name)
+                    .and_then(|inst| self.instances.get(&inst.uuid))
+                    .is_some_and(|kb| kb.contains(id))
+            }
+        }
+    }
+
     /// Return the local-only query layer (bypasses daemon).
     pub fn local_query_layer(&self) -> Option<&dyn KbQueryLayer> {
         self.query.as_deref()

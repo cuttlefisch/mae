@@ -13,6 +13,10 @@ path = "src/main.rs"
 name = "build-manual-kb"
 path = "src/bin/build_manual_kb.rs"
 
+[[bin]]
+name = "build-practices-kb"
+path = "src/bin/build_practices_kb.rs"
+
 [dependencies]
 mae-core = { path = "../core" }
 mae-canvas = { path = "../canvas" }

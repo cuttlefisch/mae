@@ -859,6 +859,13 @@ pub struct Editor {
     /// the `k = sqrt(area/n) ~ sqrt(spacing_scale)` relationship. Mirrors
     /// `kb_graph_layout_spacing_scale`.
     pub kb_graph_layout_spacing_scale: f32,
+    /// Margin applied on top of the tightest-fitting axis when a freshly
+    /// opened graph window computes its initial zoom-to-fit level (issue:
+    /// chord-diagram view opened way too zoomed in by default) — 1.0 fits
+    /// the scene's node extent exactly to the viewport edges, lower values
+    /// leave breathing room. See `graph_view::zoom_to_fit`. Mirrors
+    /// `kb_graph_zoom_to_fit_margin`.
+    pub kb_graph_zoom_to_fit_margin: f32,
     /// Which algorithm computes graph-view node positions — see
     /// `GraphLayoutAlgorithm`'s doc comment. Mirrors
     /// `kb_graph_layout_algorithm`.
@@ -1384,6 +1391,7 @@ impl Editor {
             kb_graph_layout_iterations: 50,
             kb_graph_layout_kind_clustering: 0.5,
             kb_graph_layout_spacing_scale: 2.25,
+            kb_graph_zoom_to_fit_margin: 0.85,
             kb_graph_layout_algorithm: crate::graph_view::GraphLayoutAlgorithm::Chord,
             kb_graph_follow_current_node: true,
             kb_graph_animate: false,

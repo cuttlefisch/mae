@@ -169,12 +169,18 @@ impl Editor {
         true
     }
 
-    /// Returns true if the buffer at `idx` is a Conversation buffer.
+    /// Returns true if the buffer at `idx` is a Conversation buffer, or an
+    /// agent-shell buffer (e.g. an external MCP agent's `*AI:claude*` PTY) —
+    /// both are "protected" surfaces an AI/MCP dispatch must never silently
+    /// steal (see `ensure_ai_dispatch_target`/`with_ai_dispatch_scope`).
     pub fn is_conversation_buffer(&self, idx: usize) -> bool {
         if idx >= self.buffers.len() {
             return false;
         }
         if self.buffers[idx].kind == crate::BufferKind::Conversation {
+            return true;
+        }
+        if self.buffers[idx].agent_shell {
             return true;
         }
         // The *ai-input* buffer is also part of the conversation pair.
@@ -436,18 +442,102 @@ impl Editor {
             self.ai.work_window.set(None); // stale reference (no-op if already unset)
         }
 
-        // 1. Is this buffer already visible?
-        if let Some(w) = self.window_mgr.iter_windows().find(|w| w.buffer_idx == idx) {
-            self.ai.target_window_id = Some(w.id);
-            return true;
+        self.find_or_create_companion_window(idx, None).is_some()
+    }
+
+    /// Proactively guarantees `ai.target_window_id` points at a real,
+    /// isolated window before MCP/AI-driven dispatch runs — a standing
+    /// invariant (CLAUDE.md principle #3: the AI is a peer, and must never
+    /// silently hide the human/conversation view), established up front
+    /// rather than inferred after the fact from a before/after diff. No-op
+    /// once a valid target already exists; also a no-op if the
+    /// currently-focused window isn't showing anything worth protecting
+    /// (e.g. the agent is already working in a plain file buffer) — this
+    /// never forces a split when there's nothing to isolate. See
+    /// `with_ai_dispatch_scope`, the enforced entry point that calls this.
+    fn ensure_ai_dispatch_target(&mut self) -> Option<crate::window::WindowId> {
+        if let Some(id) = self.ai.target_window_id {
+            if self.window_mgr.window(id).is_some() {
+                return Some(id);
+            }
+        }
+        let focused_id = self.window_mgr.focused_id();
+        let focused_buf = self.window_mgr.window(focused_id)?.buffer_idx;
+        if !self.is_conversation_buffer(focused_buf) {
+            return None;
+        }
+        // Split (or reuse) a companion window; if a split happens it clones
+        // the currently-focused buffer into the new pane rather than
+        // swapping in a foreign one — the same thing a human would do by
+        // hand (`command_split_vertical` first), just automatic.
+        let companion = self.find_or_create_companion_window(focused_buf, Some(focused_id))?;
+        self.ai.work_window.set(Some(companion));
+        self.ai.target_window_id = Some(companion);
+        Some(companion)
+    }
+
+    /// The single enforced scope for MCP/AI-driven editor mutations
+    /// (issue #372). Ensures an isolated target window exists (see
+    /// `ensure_ai_dispatch_target`), focuses it for the duration of `f`,
+    /// then restores whatever was focused beforehand — a Python
+    /// `with`/Rust-RAII-guard-shaped primitive: setup, run the body,
+    /// guaranteed teardown. Because focus is redirected *before* `f` runs,
+    /// everything inside it — `dispatch_builtin`, `dispatch_command_by_name`,
+    /// any future dispatch mechanism — automatically operates against the
+    /// companion window through the existing `display_buffer`/
+    /// `ReplaceFocused` machinery, with no per-command or per-call-site
+    /// awareness required. Every MCP dispatch entry point MUST route
+    /// through this rather than reimplementing target redirection locally.
+    pub fn with_ai_dispatch_scope<R>(&mut self, f: impl FnOnce(&mut Editor) -> R) -> R {
+        self.ensure_ai_dispatch_target();
+        let target = self.ai.target_window_id;
+        let saved_focus = self.window_mgr.focused_id();
+        if let Some(win_id) = target {
+            self.window_mgr.set_focused(win_id);
+        }
+        let result = f(self);
+        if target.is_some() {
+            self.window_mgr.set_focused(saved_focus);
+        }
+        result
+    }
+
+    /// Find (or create by splitting) a window — distinct from `exclude` when
+    /// given — that ends up showing buffer `idx`. Shared by
+    /// `display_buffer_for_agent_impl` (which passes `exclude: None`: it just
+    /// wants a home for `idx`, wherever that ends up — including the
+    /// currently-focused window, if `idx` already happens to be shown there)
+    /// and `ensure_ai_dispatch_target` (which passes `exclude: Some(focused_id)`:
+    /// it specifically wants a window DIFFERENT from the one currently
+    /// focused, since the whole point is giving the conversation/agent-shell
+    /// buffer its own untouched window rather than reporting "it's already
+    /// showing what you asked for" when `idx` IS that same protected buffer).
+    /// On every terminal branch this sets `self.ai.work_window`/`target_window_id`
+    /// to the returned id, matching the pre-refactor behavior exactly (pure
+    /// code motion, CLAUDE.md principle #8 — no logic change for the
+    /// `exclude: None` caller).
+    fn find_or_create_companion_window(
+        &mut self,
+        idx: usize,
+        exclude: Option<crate::window::WindowId>,
+    ) -> Option<crate::window::WindowId> {
+        // 1. Is this buffer already visible (other than in `exclude`)?
+        if let Some(w) = self
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == idx && Some(w.id) != exclude)
+        {
+            let id = w.id;
+            self.ai.target_window_id = Some(id);
+            return Some(id);
         }
 
         // 2. Can we put it in a non-focused, non-dedicated window?
         let focused_id = self.window_mgr.focused_id();
         let win_ids: Vec<_> = self.window_mgr.iter_windows().map(|w| w.id).collect();
-        let other = win_ids
-            .into_iter()
-            .find(|&wid| wid != focused_id && !self.is_dedicated_window(wid));
+        let other = win_ids.into_iter().find(|&wid| {
+            wid != focused_id && Some(wid) != exclude && !self.is_dedicated_window(wid)
+        });
 
         if let Some(other_id) = other {
             if let Some(win) = self.window_mgr.window_mut(other_id) {
@@ -458,24 +548,30 @@ impl Editor {
             self.ai.work_window.set(Some(other_id));
             self.ai.target_window_id = Some(other_id);
             self.mark_full_redraw();
-            return true;
+            return Some(other_id);
         }
 
         // 2.5: If there's a replaceable window (e.g. dashboard), take it over.
         if let Some(repl_id) = self.find_replaceable_window() {
-            if let Some(win) = self.window_mgr.window_mut(repl_id) {
-                win.buffer_idx = idx;
-                win.cursor_row = 0;
-                win.cursor_col = 0;
+            if Some(repl_id) != exclude {
+                if let Some(win) = self.window_mgr.window_mut(repl_id) {
+                    win.buffer_idx = idx;
+                    win.cursor_row = 0;
+                    win.cursor_col = 0;
+                }
+                self.ai.work_window.set(Some(repl_id));
+                self.ai.target_window_id = Some(repl_id);
+                self.mark_full_redraw();
+                return Some(repl_id);
             }
-            self.ai.work_window.set(Some(repl_id));
-            self.ai.target_window_id = Some(repl_id);
-            self.mark_full_redraw();
-            return true;
         }
 
         // 3. Fallback: split a window. Prefer a non-conversation window to avoid
-        // splitting the tiny *ai-input* pane or the *AI* output pane.
+        // splitting the tiny *ai-input* pane or the *AI* output pane. (No
+        // `exclude` handling needed below: a split always produces a brand
+        // new window id, and the conversation-avoidance logic already skips
+        // any window showing a protected buffer — which is exactly what
+        // `exclude` would be in the `ensure_ai_dispatch_target` caller.)
         let focused_is_conv = self.is_conversation_buffer(self.active_buffer_idx());
         if focused_is_conv {
             // Find any non-conversation window to focus before splitting.
@@ -503,7 +599,7 @@ impl Editor {
                     self.ai.work_window.set(Some(out_id));
                     self.ai.target_window_id = Some(out_id);
                     self.mark_full_redraw();
-                    return true;
+                    return Some(out_id);
                 }
                 // Agent shell: fall through to split attempt.
             }
@@ -532,16 +628,20 @@ impl Editor {
                 self.ai.work_window.set(Some(new_id));
                 self.ai.target_window_id = Some(new_id);
                 self.mark_full_redraw();
-                true
+                Some(new_id)
             }
             Err(_) => {
                 // Too small to split — if we are in conversation, we HAVE to steal focus
                 // but we try to avoid it.
                 if self.is_conversation_buffer(self.active_buffer_idx()) {
-                    self.switch_to_buffer(idx)
+                    if self.switch_to_buffer(idx) {
+                        Some(self.window_mgr.focused_id())
+                    } else {
+                        None
+                    }
                 } else {
                     // Not in conversation, so just keep focus where it is.
-                    true
+                    Some(self.window_mgr.focused_id())
                 }
             }
         }

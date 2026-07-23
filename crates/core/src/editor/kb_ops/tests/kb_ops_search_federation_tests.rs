@@ -215,9 +215,16 @@ fn ai_guidance_kb_option_round_trip() {
     // "primary" always validates.
     assert!(editor.set_option("ai_guidance_kb", "primary").is_ok());
     assert_eq!(editor.ai_guidance_kb, "primary");
-    // An unknown instance name is rejected (no instance registered).
-    assert!(editor.set_option("ai_guidance_kb", "no-such-kb").is_err());
-    // A registered instance name validates.
+    // Issue #370 drift fix: unlike `kb_search_scope`, an unknown/not-yet-registered
+    // instance name is intentionally ACCEPTED, not rejected -- init.scm evaluates
+    // BEFORE KB federation populates `self.kb.registry`, so the shipped default
+    // ("MaePractices") would always fail eager validation here even though it
+    // resolves correctly moments later. Resolution is deliberately deferred to
+    // read time (`crates/ai/src/guidance.rs::read_guidance_kb_context`, which is
+    // already best-effort and silently no-ops for an unresolvable name).
+    assert!(editor.set_option("ai_guidance_kb", "no-such-kb").is_ok());
+    assert_eq!(editor.ai_guidance_kb, "no-such-kb");
+    // A registered instance name also validates, same as before.
     let dir = create_test_org_dir();
     let _test_dirs = with_test_dirs(&mut editor);
     editor.kb_register("dev-practices", dir.path());
