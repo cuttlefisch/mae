@@ -89,6 +89,19 @@ pub struct RequesterContext {
     /// (`session.declared_ai_provider`'s own invariant) — a second belt-and-
     /// suspenders check, not the only enforcement of that invariant.
     pub declared_provider: Option<String>,
+    /// The issuing `ClientSession`'s id (ADR-051). `0` is a sentinel meaning
+    /// "no real session" -- used only by internal/test call sites that build
+    /// a `RequesterContext` without a live `ClientSession` (real sessions are
+    /// always >= 1, `session::NEXT_SESSION_ID` starts there). Used to scope
+    /// per-session `DrivenWindow` state and the per-session permission
+    /// ceiling below, so concurrent MCP clients never share or leak each
+    /// other's window-targeting or approval state.
+    pub session_id: u64,
+    /// This session's self-declared permission ceiling (`declared_permission_ceiling`
+    /// on `ClientSession`), if any. See that field's doc comment for why this
+    /// is safe to trust unauthenticated: it can only tighten policy, never
+    /// loosen it.
+    pub declared_permission_ceiling: Option<String>,
 }
 
 /// A tool call request sent from the MCP server to the main editor thread.
@@ -658,6 +671,23 @@ pub async fn handle_request(
                         );
                     }
                 }
+                // ADR-051: a self-declared permission ceiling, unlike
+                // `declaredProvider`, is trusted from ANY client -- it can
+                // only tighten this session's effective policy, never loosen
+                // it (the consuming side takes the minimum of this and the
+                // server's own configured policy), so there's no auth gate
+                // to apply here. An unrecognized/malformed value is stored
+                // as-is; the consuming side (which owns the PermissionTier
+                // type this crate doesn't depend on) is responsible for
+                // validating it and falling back safely on a bad value.
+                if let Some(ceiling) = params.get("permissionCeiling").and_then(|v| v.as_str()) {
+                    session.declared_permission_ceiling = Some(ceiling.to_string());
+                    debug!(
+                        session = session.id,
+                        permission_ceiling = ceiling,
+                        "MCP client declared a permission ceiling"
+                    );
+                }
             }
 
             let negotiated = match client_requested_version {
@@ -751,14 +781,23 @@ pub async fn handle_request(
             JsonRpcResponse::success(id, serde_json::Value::Null)
         }
         "tools/list" => {
+            // Serialize the full `ToolInfo` (via its own `Serialize` impl,
+            // not a hand-picked field list) so every field -- `permission`,
+            // `annotations` (ADR-050 D2), and anything added later --
+            // reaches the wire automatically. A prior version of this
+            // handler hand-rolled `json!({name, description, inputSchema})`
+            // per tool, which silently dropped `permission`/`annotations`
+            // even though `ToolInfo` carried them -- the exact bug
+            // `ToolInfo::permission`'s own doc comment describes as already
+            // fixed once (a client-side permission gate that never actually
+            // saw tier data). Re-deriving field lists by hand is how that
+            // regressed; serializing the struct itself is how it can't.
             let tools: Vec<serde_json::Value> = tool_definitions
                 .iter()
                 .map(|t| {
-                    serde_json::json!({
-                        "name": t.name,
-                        "description": t.description,
-                        "inputSchema": t.input_schema,
-                    })
+                    serde_json::to_value(t).unwrap_or_else(
+                        |_| serde_json::json!({"name": t.name, "description": t.description}),
+                    )
                 })
                 .collect();
             JsonRpcResponse::success(id, serde_json::json!({ "tools": tools }))
@@ -774,6 +813,8 @@ pub async fn handle_request(
                 requester: RequesterContext {
                     psk_authenticated: session.authenticated_principal().is_some(),
                     declared_provider: session.declared_ai_provider.clone(),
+                    session_id: session.id,
+                    declared_permission_ceiling: session.declared_permission_ceiling.clone(),
                 },
             };
             debug!(session = session.id, method = %request.method, "sync method dispatched");
@@ -823,6 +864,8 @@ pub async fn handle_request(
                 requester: RequesterContext {
                     psk_authenticated: session.authenticated_principal().is_some(),
                     declared_provider: session.declared_ai_provider.clone(),
+                    session_id: session.id,
+                    declared_permission_ceiling: session.declared_permission_ceiling.clone(),
                 },
             };
 
@@ -1022,6 +1065,43 @@ mod tests {
         let tools_arr = result["tools"].as_array().unwrap();
         assert_eq!(tools_arr.len(), 1);
         assert_eq!(tools_arr[0]["name"], "test_tool");
+    }
+
+    /// Regression guard (ADR-050 D2): `tools/list` must transmit `permission`
+    /// AND `annotations` over the wire, not just carry them on the in-process
+    /// `ToolInfo` struct. A prior version of this handler hand-rolled a
+    /// `name`/`description`/`inputSchema`-only JSON object per tool, which
+    /// silently dropped both fields even though `ToolInfo` had them --
+    /// exactly the class of incident `ToolInfo::permission`'s doc comment
+    /// already describes once. Without this, a client like VS Code's Copilot
+    /// gets no `readOnlyHint` and prompts for confirmation on every call,
+    /// including harmless reads.
+    #[tokio::test]
+    async fn handle_request_tools_list_transmits_permission_and_annotations() {
+        let (tx, _rx) = mpsc::channel(1);
+        let mut session = ClientSession::new();
+        let bc = dummy_broadcaster();
+        let tools = vec![ToolInfo {
+            name: "kb_search".to_string(),
+            description: "Search the KB".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            permission: Some("ReadOnly".to_string()),
+            annotations: Some(protocol::ToolAnnotations {
+                title: None,
+                read_only_hint: Some(true),
+                destructive_hint: Some(false),
+                idempotent_hint: Some(true),
+            }),
+        }];
+        let msg = r#"{"jsonrpc":"2.0","id":5,"method":"tools/list"}"#;
+
+        let resp = handle_request(msg, &tools, &tx, &mut session, &bc).await;
+        let result = resp.result.unwrap();
+        let tool = &result["tools"].as_array().unwrap()[0];
+        assert_eq!(tool["permission"], "ReadOnly");
+        assert_eq!(tool["annotations"]["readOnlyHint"], true);
+        assert_eq!(tool["annotations"]["destructiveHint"], false);
+        assert_eq!(tool["annotations"]["idempotentHint"], true);
     }
 
     #[tokio::test]

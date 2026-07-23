@@ -237,6 +237,25 @@ impl Editor {
                 return true;
             }
         }
+        // ADR-051: a window another live MCP session is currently driving is
+        // just as protected as a file-tree/conversation-pair window --
+        // without this, `find_or_create_companion_window`'s "reuse any
+        // non-focused, non-dedicated window" scan (branches 2/2.5) would
+        // happily repurpose session A's already-established companion
+        // window for session B's dispatch, silently reintroducing the
+        // cross-session window-stealing bug this ADR exists to close. This
+        // does not affect a session reusing its OWN window -- that path is
+        // short-circuited earlier, in
+        // `Editor::ensure_ai_dispatch_target_for_session`, before this scan
+        // ever runs.
+        if self
+            .ai
+            .mcp_session_windows
+            .values()
+            .any(|s| s.target_window_id == Some(win_id))
+        {
+            return true;
+        }
         // Fallback: check buffer kind for other sidebar types (debug, messages, etc.)
         // but exclude replaceable kinds — those windows CAN be repurposed.
         if let Some(w) = self.window_mgr.window(win_id) {
@@ -488,10 +507,77 @@ impl Editor {
     /// `ReplaceFocused` machinery, with no per-command or per-call-site
     /// awareness required. Every MCP dispatch entry point MUST route
     /// through this rather than reimplementing target redirection locally.
+    ///
+    /// This is the `session_id: None` case of
+    /// [`Self::with_ai_dispatch_scope_for_session`] — kept as its own method
+    /// so every pre-ADR-051 caller (the embedded human AI path, `--self-test`,
+    /// and any future caller with no MCP session to scope to) keeps this
+    /// exact signature and exact single-session behavior, unaffected by
+    /// per-session dispatch existing at all.
     pub fn with_ai_dispatch_scope<R>(&mut self, f: impl FnOnce(&mut Editor) -> R) -> R {
-        self.ensure_ai_dispatch_target();
-        let target = self.ai.target_window_id;
+        self.with_ai_dispatch_scope_for_session(None, f)
+    }
+
+    /// Per-MCP-session variant of [`Self::with_ai_dispatch_scope`] (ADR-051).
+    /// `session_id` should be the issuing `ClientSession::id` for a real
+    /// external MCP client, or `None` for dispatch with no MCP session
+    /// (identical behavior to `with_ai_dispatch_scope`). Concurrent MCP
+    /// clients each get their own companion window — one session's dispatch
+    /// can never observe or redirect another session's target window.
+    ///
+    /// For `session_id: Some(sid)`, the global `ai.target_window_id`/
+    /// `ai.work_window` fields are made to reflect `sid`'s own window for the
+    /// **entire duration** of `f`, not just during target *resolution* —
+    /// this matters because `f` itself (e.g. a dispatched command deciding
+    /// where to put its own output) may read those fields directly, the same
+    /// way the no-session path always has. Restoring them too early (before
+    /// `f` runs) was tried and is wrong: it makes `f` see "no established
+    /// target," so any target-aware logic inside it re-derives one from
+    /// scratch and can orphan the window this function just resolved. The
+    /// fields are saved before and restored after `f`, and whatever `f` left
+    /// in them is captured back into `sid`'s own map entry first — so a
+    /// command that updates the target mid-dispatch (as `git-status`'s own
+    /// display routing does) is correctly remembered for `sid`'s *next*
+    /// dispatch too.
+    pub fn with_ai_dispatch_scope_for_session<R>(
+        &mut self,
+        session_id: Option<u64>,
+        f: impl FnOnce(&mut Editor) -> R,
+    ) -> R {
+        let Some(sid) = session_id else {
+            self.ensure_ai_dispatch_target();
+            let target = self.ai.target_window_id;
+            let saved_focus = self.window_mgr.focused_id();
+            if let Some(win_id) = target {
+                self.window_mgr.set_focused(win_id);
+            }
+            let result = f(self);
+            if target.is_some() {
+                self.window_mgr.set_focused(saved_focus);
+            }
+            return result;
+        };
+
+        let saved_global_target = self.ai.target_window_id;
+        let saved_global_work_window = self.ai.work_window;
+        // Captured BEFORE `resolve_session_target` runs, not after: creating
+        // a companion window for an agent-shell buffer can restructure the
+        // whole root-level window tree (`split_root`, used specifically so
+        // the shell's split lands beside the entire conversation group
+        // rather than nested under whatever's currently focused) and, as an
+        // observed side effect, change which window is focused when that
+        // restructuring happens against an already-multi-window layout (the
+        // single-split case a fresh editor always starts from never
+        // triggers this; a second/third distinct session's split does).
+        // Capturing focus early means "restore" always means the state
+        // truly in effect before this dispatch began, not some
+        // already-mutated mid-resolution value.
         let saved_focus = self.window_mgr.focused_id();
+
+        let target = self.resolve_session_target(sid);
+        self.ai.target_window_id = target;
+        self.ai.work_window.set(target);
+
         if let Some(win_id) = target {
             self.window_mgr.set_focused(win_id);
         }
@@ -499,6 +585,67 @@ impl Editor {
         if target.is_some() {
             self.window_mgr.set_focused(saved_focus);
         }
+
+        // Capture whatever `f` left in the global fields back into `sid`'s
+        // own slot (it may have advanced past `target`, e.g. a command that
+        // itself re-resolves the target mid-dispatch), THEN restore the
+        // global fields to whatever they held before this call -- never
+        // leaking `sid`'s state into the global/no-session view or a
+        // different session's subsequent call.
+        let entry = self.ai.mcp_session_windows.entry(sid).or_default();
+        entry.target_window_id = self.ai.target_window_id;
+        entry.work_window = self.ai.work_window;
+
+        self.ai.target_window_id = saved_global_target;
+        self.ai.work_window = saved_global_work_window;
+
+        result
+    }
+
+    /// Resolve session `sid`'s own companion window (ADR-051): reuse it if
+    /// still valid, otherwise find/create one via the existing shared
+    /// companion-window logic (`ensure_ai_dispatch_target`) — with the
+    /// global `work_window`/`target_window_id` fields temporarily cleared
+    /// first, so that logic's own "reuse if valid" fast path can never hand
+    /// back a *different* session's window, and restored immediately after
+    /// (the caller, `with_ai_dispatch_scope_for_session`, is responsible for
+    /// what the global fields reflect during `f` — this method only ever
+    /// discovers/creates the window). `is_dedicated_window` separately
+    /// ensures the window-scan branches inside `find_or_create_companion_window`
+    /// can't repurpose a window already tracked as another live session's.
+    fn resolve_session_target(&mut self, sid: u64) -> Option<crate::window::WindowId> {
+        if let Some(state) = self.ai.mcp_session_windows.get(&sid) {
+            if let Some(id) = state.target_window_id {
+                if self.window_mgr.window(id).is_some() {
+                    return Some(id);
+                }
+            }
+        }
+
+        let saved_target = self.ai.target_window_id.take();
+        let saved_work_window = self.ai.work_window;
+        self.ai.work_window.set(None);
+
+        let result = self.ensure_ai_dispatch_target();
+
+        self.ai.target_window_id = saved_target;
+        self.ai.work_window = saved_work_window;
+
+        if !self.ai.mcp_session_windows.contains_key(&sid)
+            && self.ai.mcp_session_windows.len() >= super::ai_state::MAX_TRACKED_MCP_SESSION_WINDOWS
+        {
+            // Coarse size bound, not LRU -- see MAX_TRACKED_MCP_SESSION_WINDOWS'
+            // doc comment. Evicting is always safe: a session that gets
+            // evicted here just re-creates a companion window on its next
+            // dispatch, same as any other stale/never-set entry.
+            if let Some(&evict) = self.ai.mcp_session_windows.keys().next() {
+                self.ai.mcp_session_windows.remove(&evict);
+            }
+        }
+        let entry = self.ai.mcp_session_windows.entry(sid).or_default();
+        entry.target_window_id = result;
+        entry.work_window.set(result);
+
         result
     }
 

@@ -24,7 +24,7 @@ pub fn execute_tool(
     all_tools: &[ToolDefinition],
     policy: &PermissionPolicy,
 ) -> ExecuteResult {
-    execute_tool_with_requester(editor, call, all_tools, policy, None)
+    execute_tool_with_requester(editor, call, all_tools, policy, None, None)
 }
 
 /// Real logic behind [`execute_tool`]. `requester_provider` -- the caller's
@@ -36,23 +36,35 @@ pub fn execute_tool(
 /// `LocalModelsOnly` -- callers that don't care about residency (tests,
 /// most existing call sites) are unaffected either way.
 ///
+/// `session_id` (ADR-051) -- the issuing MCP `ClientSession::id`, or `None`
+/// for dispatch with no MCP session (the embedded human AI path,
+/// `--self-test`) -- is threaded to `Editor::with_ai_dispatch_scope_for_session`
+/// so concurrent MCP clients each get their own companion window. `policy`
+/// itself should already be the CALLER's effective, possibly per-session-
+/// tightened policy (see `crates/mae/src/ai_event_handler.rs`'s
+/// `effective_permission_policy`) -- this function does not itself look up
+/// or apply any session-specific override, it just enforces whatever
+/// `policy` it's given, same as always.
+///
 /// Wraps the actual dispatch (`execute_tool_dispatch_body`) in
-/// `Editor::with_ai_dispatch_scope` (issue #372) -- this is THE enforced
-/// MCP/AI dispatch boundary: every tool call, for every builtin command
-/// (`command_*`) and every other tool category, is guaranteed a companion
-/// window that keeps the conversation/agent-shell buffer visible, without
-/// any individual tool needing its own window-protection logic. Do not
-/// bypass this function for tool dispatch -- see also the Scheme-command
-/// bridge in `crates/mae/src/ai_event_handler.rs`, the one other
-/// MCP-originated mutation path, which wraps itself the same way.
+/// `Editor::with_ai_dispatch_scope_for_session` (issue #372, ADR-051) --
+/// this is THE enforced MCP/AI dispatch boundary: every tool call, for
+/// every builtin command (`command_*`) and every other tool category, is
+/// guaranteed a companion window that keeps the conversation/agent-shell
+/// buffer visible, without any individual tool needing its own
+/// window-protection logic. Do not bypass this function for tool dispatch
+/// -- see also the Scheme-command bridge in
+/// `crates/mae/src/ai_event_handler.rs`, the one other MCP-originated
+/// mutation path, which wraps itself the same way.
 pub fn execute_tool_with_requester(
     editor: &mut Editor,
     call: &ToolCall,
     all_tools: &[ToolDefinition],
     policy: &PermissionPolicy,
     requester_provider: Option<&str>,
+    session_id: Option<u64>,
 ) -> ExecuteResult {
-    editor.with_ai_dispatch_scope(|editor| {
+    editor.with_ai_dispatch_scope_for_session(session_id, |editor| {
         execute_tool_dispatch_body(editor, call, all_tools, policy, requester_provider)
     })
 }
