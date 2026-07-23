@@ -2380,6 +2380,15 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
                 info!("migrated kb-registry.toml from config to data directory");
             }
         }
+        // Issue #370: auto-register the shipped dev-practices KB as a
+        // federated instance, if one is installed and not already
+        // registered, so `ai_guidance_kb` (default "MaePractices" in the
+        // shipped init.scm template) resolves out of the box. Additive-only
+        // and a silent no-op otherwise — run BEFORE the registry load below
+        // so a newly-added entry is picked up by the same import loop that
+        // handles every other instance, with no separate import path needed.
+        crate::practices_kb::ensure_registered(&data_dir);
+
         let registry = mae_kb::federation::KbRegistry::load(&data_dir);
         for inst in &registry.instances {
             if !inst.enabled {
@@ -2819,6 +2828,103 @@ mod tests {
         assert_eq!(
             hit.unwrap().severity,
             mae_core::notifications::Severity::Warning
+        );
+    }
+
+    /// Recursively copy a directory tree (mirrors `manual_kb.rs::copy_dir_all` —
+    /// duplicated rather than shared since that one is private to its module
+    /// and this is test-only code). Used to stage a throwaway copy of a
+    /// pre-built KB asset before opening it live: CozoDB (sled in
+    /// particular) always opens read-write and may migrate/compact/write
+    /// recovery snapshots on open, which would dirty a git-tracked asset —
+    /// see `manual_kb.rs::load_nodes_readonly`'s doc comment for the same
+    /// hazard, hit for real once already while writing this test (a sled
+    /// directory got silently migrated to sqlite, with `.sled.bak-*` debris
+    /// left alongside, the moment `init_kb_federation`'s normal federated-
+    /// instance import path opened it in place).
+    fn copy_kb_asset_to_tempdir(src: &std::path::Path) -> tempfile::TempDir {
+        fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+            std::fs::create_dir_all(dst)?;
+            for entry in std::fs::read_dir(src)? {
+                let entry = entry?;
+                let to = dst.join(entry.file_name());
+                if entry.file_type()?.is_dir() {
+                    copy_dir_all(&entry.path(), &to)?;
+                } else {
+                    std::fs::copy(entry.path(), &to)?;
+                }
+            }
+            Ok(())
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        let dst = tmp.path().join(src.file_name().unwrap());
+        if src.is_dir() {
+            copy_dir_all(src, &dst).expect("failed to stage KB asset copy");
+        } else {
+            std::fs::copy(src, &dst).expect("failed to stage KB asset copy");
+        }
+        tmp
+    }
+
+    /// Issue #370, end-to-end: `init_kb_federation` must auto-register the
+    /// shipped practices KB and load it into `editor.kb.registry`/
+    /// `editor.kb.instances`, using the REAL built `assets/mae-practices.cozo`
+    /// (not a synthetic fixture) so this proves the whole chain — locate,
+    /// register, import — against the actual asset that ships, not a stand-in
+    /// that might not reflect its real shape. Operates on a throwaway COPY
+    /// (see `copy_kb_asset_to_tempdir`) — the committed asset itself is
+    /// never opened directly.
+    #[test]
+    fn init_kb_federation_auto_registers_and_loads_the_practices_kb() {
+        // Isolate from any ambient env override so this test's own
+        // `MAE_PRACTICES_KB_PATH` is authoritative regardless of what else
+        // might be running in this process.
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _lock = ENV_LOCK.lock().unwrap();
+        let prev = std::env::var("MAE_PRACTICES_KB_PATH").ok();
+
+        let real_asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/mae-practices.cozo");
+        assert!(
+            real_asset.exists(),
+            "expected the real built practices KB at {} -- run `make practices-kb` first",
+            real_asset.display()
+        );
+        let staged = copy_kb_asset_to_tempdir(&real_asset);
+        let staged_asset = staged.path().join(real_asset.file_name().unwrap());
+        std::env::set_var("MAE_PRACTICES_KB_PATH", &staged_asset);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut editor = mae_core::Editor::new();
+        editor.data_dir_override = Some(tmp.path().to_path_buf());
+
+        init_kb_federation(&mut editor, false);
+
+        match prev {
+            Some(v) => std::env::set_var("MAE_PRACTICES_KB_PATH", v),
+            None => std::env::remove_var("MAE_PRACTICES_KB_PATH"),
+        }
+
+        let inst = editor
+            .kb
+            .registry
+            .find(crate::practices_kb::INSTANCE_NAME)
+            .expect("MaePractices must be auto-registered");
+        // `ensure_registered` copies the located asset into this data dir's
+        // own canonical location before registering it (never the located
+        // path directly, unless it was already there) — see its doc
+        // comment for why a federated instance's `db_path` can't safely
+        // point straight at `staged_asset`'s source location either.
+        assert_eq!(inst.db_path, tmp.path().join("mae-practices.cozo"));
+        assert!(
+            editor.kb.instances.contains_key(&inst.uuid),
+            "the newly-registered instance must be imported into kb.instances \
+             this same session, not only persisted to the registry file"
+        );
+        let kb = &editor.kb.instances[&inst.uuid];
+        assert!(
+            kb.get("index").is_some(),
+            "the real practices KB's index node must have loaded"
         );
     }
 

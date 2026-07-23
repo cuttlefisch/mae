@@ -27,10 +27,12 @@ fn execute_eval_scheme(editor: &mut Editor, args: &serde_json::Value) -> Result<
     Ok("eval_scheme: queued".into())
 }
 
-/// Execute a registered editor command by name (MCP tool handler).
-/// Uses `dispatch_builtin_in_target()` so the command operates on the
-/// AI target window (if set via `set_ai_target`) rather than the
-/// human-focused window. This is the `with-current-buffer` pattern.
+/// Execute a registered editor command by name (MCP tool handler). Plain
+/// `dispatch_builtin` is correct here -- `execute_tool_with_requester`'s
+/// enclosing `with_ai_dispatch_scope` call has already focused the AI
+/// target/companion window, if one was needed, before this ever runs
+/// (issue #372's enforced dispatch boundary; superseded the older
+/// opt-in-per-caller `dispatch_builtin_in_target`).
 fn execute_command_dispatch(
     editor: &mut Editor,
     args: &serde_json::Value,
@@ -39,16 +41,17 @@ fn execute_command_dispatch(
         .get("command")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'command' argument")?;
-    if editor.dispatch_builtin_in_target(cmd) {
+    if editor.dispatch_builtin(cmd) {
         Ok(format!("Executed: {}", cmd))
     } else {
         Err(format!("Unknown command: {}", cmd))
     }
 }
 
-/// Dispatch a builtin command by name (no arguments).
+/// Dispatch a builtin command by name (no arguments). See
+/// `execute_command_dispatch`'s doc comment -- same reasoning applies.
 fn execute_dispatch_command(editor: &mut Editor, cmd: &str) -> Result<String, String> {
-    if editor.dispatch_builtin_in_target(cmd) {
+    if editor.dispatch_builtin(cmd) {
         let status = editor.status_msg.clone();
         if status.is_empty() {
             Ok(format!("Executed: {}", cmd))

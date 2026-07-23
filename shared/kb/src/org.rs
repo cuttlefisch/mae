@@ -872,6 +872,7 @@ const KB_NAMESPACES: &[&str] = &[
     "meta:",
     "index",
     "daily:",
+    "practice:",
 ];
 
 /// Check if a link target looks like an internal KB node ID.

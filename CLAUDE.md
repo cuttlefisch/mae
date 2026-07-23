@@ -202,17 +202,45 @@ lifecycle parity across the human (buffer + Scheme `(kb-…)` primitives) and th
 (`resolve_persistent` / `follow_focus_away_from`) that fixes AI/MCP agent actions — including
 external Claude Code via the MCP shim — cascading into repeated new window splits;
 `AiState.work_window` now uses it, and `display_buffer_for_agent()` (renamed from
-`switch_to_buffer_non_conversation()`) is the generalized agent-display entry point. A native
+`switch_to_buffer_non_conversation()`) is the generalized agent-display entry point.
+Companion-window protection is now a structurally enforced *default* for all MCP-driven
+dispatch (issue #372) — `Editor::with_ai_dispatch_scope` proactively establishes the driven
+window before an MCP-originated command runs (not only after a call site that happens to
+invoke `display_buffer_for_agent` itself), wrapping both `execute_tool_with_requester` and
+the Scheme-command bridge in `crates/mae/src/ai_event_handler.rs` — the two MCP/AI mutation
+entry points — so a single external agent can never silently steal the sole visible window. A native
 org-roam-ui-style KB graph view (`BufferKind::Graph`, `crates/core/src/graph_view.rs`) is built on
 the previously-orphaned `mae-canvas` crate — background-threaded force layout
 (`crates/mae/src/graph_layout_bridge.rs`), click-to-navigate via `DrivenWindow`'s companion-window
 strategy, follow-current-node, opt-in physics animation, full Scheme+MCP parity
 (`kb-graph-view-*`). A shared idle-dispatch mechanism (`Editor::on_idle_tick`,
 `crates/core/src/editor/idle_ops.rs`) closes ROADMAP #83 (which-key idle delay) and now also
-drives a new KB-link hover preview popup. Deferred: full per-MCP-session window isolation (two
+drives a new KB-link hover preview popup. A freshly opened graph window now computes an initial
+zoom-to-fit level (`graph_view::zoom_to_fit`, applied once in `Editor::graph_view_reflatten_window`
+only when a window's `Viewport` is first created) instead of always defaulting to a fixed `zoom:
+1.0` regardless of diagram size — previously a dense chord/force diagram opened way too zoomed in
+to see anything. Deliberately one-directional (only ever zooms OUT, via `kb_graph_zoom_to_fit_margin`,
+default 0.85) — a sparse graph's tiny node extent is left at the natural 1.0 scale rather than
+zoomed artificially far IN to fill the viewport. Deferred: full per-MCP-session window isolation (two
 simultaneous MCP clients still share one driven window — candidate for its own ADR), GPU-accelerated
 rendering (still out of scope, confirmed 100% CPU-rasterized). See ROADMAP.md's "Completed
 Features" and "Architecture Debt" for the full breakdown.
+
+**Also shipped — dev-practices KB dogfooding** (issue #370): `ai_guidance_kb`
+(`crates/ai/src/guidance.rs`) already shipped as an opt-in mechanism to surface a registered
+KB's standing practices to every AI session; MAE's own shipped `init.scm` template
+(`crates/mae/src/config.rs::default_init_template`) now defaults it to `"MaePractices"` — a
+small curated KB (`assets/practices/*.org`, built via `make practices-kb` into
+`assets/mae-practices.cozo`, same pipeline as the manual/help KB) distilled from this file's
+design principles, the ADR process, and the architecture-debt tracking convention above.
+Auto-registered as a federated instance at every startup (`crates/mae/src/practices_kb.rs`)
+whenever the pre-built KB is found — additive-only, never overwrites a contributor's own
+customized entry of the same name, and a silent no-op if nothing is found (e.g. a
+terminal-only build that skipped `make practices-kb`). `ai_guidance_kb`'s validation was
+relaxed to accept any name unconditionally at set time (previously it hard-rejected an
+unregistered name, which broke the moment this shipped default was added: `init.scm`
+evaluates before KB federation populates the registry) — resolution is deferred to read
+time, matching `read_guidance_kb_context`'s already-existing best-effort design.
 
 **Next — P2P decentralized KB sync** (multi-session/multi-machine initiative): a **daemon mesh** so global
 peers maintain shared KBs with **no central server**. Design = **ADR-025** (iroh QUIC transport, Ed25519

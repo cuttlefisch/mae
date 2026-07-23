@@ -1,0 +1,43 @@
+:PROPERTIES:
+:ID: practice:architecture-debt-tracking
+:KIND: concept
+:END:
+#+title: Architecture Debt Is Tracked, Not Silent
+#+filetags: :practices:maintenance:
+
+Bugs are drift signals, not just defects. When a bug's root cause traces to
+a place where the implementation fell behind an already-decided design (see
+[[practice:adr-process][Architecture Decision Records]]), the response
+should fix the drift for that whole feature area — or explicitly scope a
+bounded down payment and cross-link the owning tracking issue so the
+remainder stays visibly tracked — rather than patching the local symptom
+and leaving the same drift to regenerate similar bugs later.
+
+** If no ADR applies but the bug reveals duplication
+If a bug reveals duplicated logic or an ad-hoc workaround rather than
+drift from a specific decision, resolve it by consolidation (see
+[[practice:shared-computation][Shared Computation]]), not by adding a
+third parallel implementation alongside the two that already disagree.
+
+** Debt gets a name and a place to live
+Accepted, tracked architectural debt (a known shortcut, a file that's
+grown too large, a gap deliberately deferred) should be:
+- Named in-code with a short, greppable marker at the exact location, so a
+  reader who lands there by reading the source (not a separate doc) finds
+  the context immediately.
+- Cross-linked to wherever the project tracks debt at a higher level (a
+  roadmap document, a tracked issue, an audit checklist), so the two views
+  stay in sync — a marker with no tracking entry decays into an unexplained
+  landmine; a tracking entry with no in-code marker is invisible to anyone
+  reading the code.
+- Reviewed periodically, not written once and forgotten — a per-phase or
+  per-release review pass that asks "is this debt still accepted, or has it
+  become worth paying down?" keeps the list honest.
+
+** Why silence is the actual risk
+Debt that isn't tracked doesn't go away — it just stops being visible,
+which means the next person to touch that code has no way to know it's
+there, and either repeats the same shortcut elsewhere or spends time
+rediscovering a constraint that was already understood once.
+
+See also [[index][index]].

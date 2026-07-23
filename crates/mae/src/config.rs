@@ -430,6 +430,10 @@ fn default_init_template() -> &'static str {
 
 ;; ── AI ──────────────────────────────────────────────────
 ;; (set-option! "ai-provider" "claude")
+;; Standing dev-practices guidance surfaced to every AI session (issue #370)
+;; — a no-op if "MaePractices" isn't registered (e.g. a terminal-only build
+;; that skipped `make practices-kb`), so this is always safe to leave on.
+(set-option! "ai-guidance-kb" "MaePractices")
 
 ;; ── Daemon (KB persistence & hosting, ADR-035) ───────────
 ;; off (default) = in-process embedded KB only, no daemon needed.

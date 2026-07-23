@@ -64,6 +64,11 @@ pub struct AiState {
     /// sequence of agent-triggered display calls (open_file, KB node
     /// display, etc.) regardless of the displayed content's `BufferKind`.
     /// See `crate::driven_window::DrivenWindow` for the shared primitive.
+    /// Since issue #372, this is also established proactively (not just
+    /// reused) by `Editor::ensure_ai_dispatch_target`/`with_ai_dispatch_scope`
+    /// — the enforced default for MCP/AI dispatch, so a companion window
+    /// exists before a command runs, not only after a call site that
+    /// happens to know how to ask for one.
     pub work_window: DrivenWindow,
     /// AI editor/agent command (e.g. "claude", "aider").
     pub editor_name: String,

@@ -46,7 +46,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean clean-cache ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual
+.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean clean-cache ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual practices-kb install-practices
 
 # Default target: release build
 all: build
@@ -72,8 +72,8 @@ verify-binary:
 dev:
 	$(CARGO) build $(FEAT_FLAG)
 
-## install: build release binary + manual KB, install to PREFIX, register desktop entry
-install: build manual-kb
+## install: build release binary + manual KB + practices KB, install to PREFIX, register desktop entry
+install: build manual-kb practices-kb
 	@mkdir -p $(PREFIX)
 	@install -m 755 $(RELEASE_BIN) $(PREFIX)/$(BINARY)
 	@install -m 755 $(RELEASE_SHIM) $(PREFIX)/$(SHIM_BINARY)
@@ -84,6 +84,10 @@ install: build manual-kb
 	@cp -r assets/mae-manual.cozo $(DATADIR)/mae/mae-manual.cozo
 	@cp assets/mae-manual.cozo.sha256 $(DATADIR)/mae/mae-manual.cozo.sha256
 	@echo "Installed manual KB -> $(DATADIR)/mae/mae-manual.cozo"
+	@rm -rf $(DATADIR)/mae/mae-practices.cozo
+	@cp -r assets/mae-practices.cozo $(DATADIR)/mae/mae-practices.cozo
+	@cp assets/mae-practices.cozo.sha256 $(DATADIR)/mae/mae-practices.cozo.sha256
+	@echo "Installed practices KB -> $(DATADIR)/mae/mae-practices.cozo"
 	@mkdir -p $(DATADIR)/applications
 	@sed 's|Exec=mae|Exec=$(PREFIX)/$(BINARY)|' $(DESKTOP_FILE) > $(DATADIR)/applications/mae.desktop
 	@echo "Installed desktop entry -> $(DATADIR)/applications/mae.desktop"
@@ -380,6 +384,19 @@ install-manual: manual-kb
 	@cp -r assets/mae-manual.cozo $(DATADIR)/mae/mae-manual.cozo
 	@cp assets/mae-manual.cozo.sha256 $(DATADIR)/mae/mae-manual.cozo.sha256
 	@echo "Installed manual KB -> $(DATADIR)/mae/mae-manual.cozo"
+
+## practices-kb: build the pre-built dev-practices KB (issue #370)
+practices-kb:
+	@mkdir -p assets
+	$(CARGO) run --release --bin build-practices-kb -- assets/mae-practices.cozo
+
+## install-practices: install pre-built practices KB to XDG data dir
+install-practices: practices-kb
+	@mkdir -p $(DATADIR)/mae
+	@rm -rf $(DATADIR)/mae/mae-practices.cozo
+	@cp -r assets/mae-practices.cozo $(DATADIR)/mae/mae-practices.cozo
+	@cp assets/mae-practices.cozo.sha256 $(DATADIR)/mae/mae-practices.cozo.sha256
+	@echo "Installed practices KB -> $(DATADIR)/mae/mae-practices.cozo"
 
 ## install-daemon: build + install mae-daemon to PREFIX
 install-daemon: build-daemon

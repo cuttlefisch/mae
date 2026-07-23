@@ -241,6 +241,7 @@ impl Editor {
     fn graph_view_reflatten_window(&mut self, buf_idx: usize, win_id: WindowId) {
         let (width, height) = self.graph_viewport_pixel_size(win_id);
         let mut style = self.graph_style_options();
+        let zoom_to_fit_margin = self.kb_graph_zoom_to_fit_margin as f64;
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
             // Merge in the active color tween's current eased color, if
             // any — `from_editor` has no per-`GraphView` knowledge, so
@@ -249,10 +250,31 @@ impl Editor {
             if let Some(tween) = &gv.color_tween {
                 style.color_override = Some((tween.node_index, tween.current_color()));
             }
+            // A freshly created (never-before-seen) per-window `Viewport`
+            // defaults to `zoom: 1.0` regardless of the diagram's actual
+            // size — for a dense chord/force layout this opens way too
+            // zoomed in to see anything. Compute a fit-to-viewport zoom
+            // ONLY on first creation, using the real pixel size just
+            // resolved above — never on later reflattens (resize, pan,
+            // topology change), so this can't fight a user's own manual
+            // zoom after the window has already been opened once.
+            let is_new_viewport = !gv.viewports.contains_key(&win_id);
             let viewport = gv.viewports.entry(win_id).or_default();
             viewport.width = width as f64;
             viewport.height = height as f64;
-            let viewport = *viewport;
+            if is_new_viewport {
+                if let Some(fit) = crate::graph_view::zoom_to_fit(
+                    &gv.scene,
+                    &style,
+                    &gv.node_degrees,
+                    width as f64,
+                    height as f64,
+                    zoom_to_fit_margin,
+                ) {
+                    mae_canvas::interaction::set_zoom(gv.viewports.get_mut(&win_id).unwrap(), fit);
+                }
+            }
+            let viewport = *gv.viewports.get(&win_id).unwrap();
             let elements = flatten_scene_graph(&gv.scene, &viewport, &style, &gv.node_degrees);
             gv.rendered.insert(win_id, VisualBuffer { elements });
             // Bump so the GUI's per-window render cache
@@ -3030,6 +3052,10 @@ mod tests {
             .find(|w| w.buffer_idx == graph_idx)
             .map(|w| w.id)
             .unwrap();
+        // This test's drag math below assumes a 1:1 pixel-to-scene mapping
+        // (see the comment at `final_x`/`final_y`) — pin zoom explicitly
+        // rather than depending on zoom-to-fit's exact output.
+        pin_zoom(&mut editor, graph_idx, graph_win_id, 1.0);
         let (scene_x0, scene_y0, press_x, press_y) = {
             let gv = editor.buffers[graph_idx].graph_view().unwrap();
             let node = &gv.scene.nodes[0];
@@ -3341,6 +3367,127 @@ mod tests {
             .zoom
     }
 
+    /// Force window `win_id`'s zoom to an exact, known value directly
+    /// (bypassing `zoom_to_fit`/`set_zoom`'s clamp — not needed here since
+    /// tests only ever pin to values already inside `[0.1, 10.0]`). Several
+    /// pre-existing tests below are about drag/hit-test/independent-
+    /// viewport MECHANICS, not the zoom-to-fit feature itself, and their
+    /// math depends on a deterministic starting zoom — since the real
+    /// zoom-to-fit computation now legitimately gives a fresh window a
+    /// non-1.0 zoom whenever the diagram doesn't fit the test's (fairly
+    /// narrow) window, those tests pin a known starting zoom explicitly
+    /// rather than depending on the fit calculation's exact output for a
+    /// given KB shape/window size.
+    fn pin_zoom(editor: &mut Editor, graph_idx: usize, win_id: WindowId, zoom: f64) {
+        editor.buffers[graph_idx]
+            .graph_view_mut()
+            .unwrap()
+            .viewports
+            .get_mut(&win_id)
+            .unwrap()
+            .zoom = zoom;
+    }
+
+    fn synthetic_wide_node(id: &str, x: f64) -> mae_canvas::scene::SceneNode {
+        mae_canvas::scene::SceneNode {
+            id: id.to_string(),
+            label: id.to_string(),
+            x,
+            y: 0.0,
+            width: 100.0,
+            height: 40.0,
+            kind: mae_canvas::scene::NodeKind::Note,
+            style: mae_canvas::scene::NodeStyle::default(),
+            pinned: false,
+            is_seed: false,
+        }
+    }
+
+    /// Issue: the chord-diagram graph view opened way too zoomed in by
+    /// default. A freshly created window's `Viewport` must compute a
+    /// fit-to-viewport zoom from the scene's actual extent instead of
+    /// always defaulting to `zoom: 1.0` regardless of diagram size.
+    #[test]
+    fn fresh_graph_window_computes_a_fit_zoom_for_a_wide_diagram() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+
+        // Replace the (tiny, single-node) real scene with a synthetic wide
+        // one, and reset the viewport to simulate a fresh/never-before-seen
+        // window — isolates this test from `kb_graph_view_open`'s KB
+        // neighborhood traversal, which isn't what's under test here.
+        if let Some(gv) = editor.buffers[graph_idx].graph_view_mut() {
+            gv.scene.nodes.clear();
+            gv.scene.nodes.push(synthetic_wide_node("a", -1000.0));
+            gv.scene.nodes.push(synthetic_wide_node("b", 1000.0));
+            gv.node_degrees = vec![0, 0];
+            gv.viewports.remove(&graph_win_id);
+        }
+
+        editor.graph_view_reflatten_window(graph_idx, graph_win_id);
+
+        let zoom = zoom_of(&editor, graph_idx, graph_win_id);
+        assert!(
+            zoom < 1.0,
+            "a diagram 2000px wide must not open at the old fixed default of 1.0, got {zoom}"
+        );
+    }
+
+    /// The fit-zoom computation must apply ONLY when a window's viewport is
+    /// first created — never on a later reflatten — so it can't clobber a
+    /// zoom level the user (or AI) set manually after the window was
+    /// already open once.
+    #[test]
+    fn fit_zoom_does_not_reapply_on_a_later_reflatten() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+
+        if let Some(gv) = editor.buffers[graph_idx].graph_view_mut() {
+            gv.scene.nodes.clear();
+            gv.scene.nodes.push(synthetic_wide_node("a", -1000.0));
+            gv.scene.nodes.push(synthetic_wide_node("b", 1000.0));
+            gv.node_degrees = vec![0, 0];
+            gv.viewports.remove(&graph_win_id);
+        }
+        editor.graph_view_reflatten_window(graph_idx, graph_win_id);
+        let fit_zoom = zoom_of(&editor, graph_idx, graph_win_id);
+        assert!(fit_zoom < 1.0, "sanity: fit zoom must have applied first");
+
+        // Simulate a manual zoom after the window's already open once.
+        editor.kb_graph_view_zoom_to(3.0);
+        assert_eq!(zoom_of(&editor, graph_idx, graph_win_id), 3.0);
+
+        // A later reflatten (e.g. a resize) must leave the manual zoom alone.
+        editor.graph_view_reflatten_window(graph_idx, graph_win_id);
+        assert_eq!(
+            zoom_of(&editor, graph_idx, graph_win_id),
+            3.0,
+            "reflatten on an already-seen window must not recompute/reapply the fit zoom"
+        );
+    }
+
     #[test]
     fn zoom_changes_viewport_zoom_within_clamped_range_and_reflattens() {
         let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
@@ -3567,6 +3714,12 @@ mod tests {
             "window B must have its own viewport entry"
         );
 
+        // This test is about viewport INDEPENDENCE, not zoom-to-fit — pin
+        // both windows to a known starting zoom rather than depending on
+        // the fit calculation's exact output for this KB shape/window size.
+        pin_zoom(&mut editor, graph_idx, win_a, 1.0);
+        pin_zoom(&mut editor, graph_idx, win_b, 1.0);
+
         // Zoom window A only.
         editor.kb_graph_view_zoom(win_a, 100.0, 400.0, 300.0);
         let zoom_a = zoom_of(&editor, graph_idx, win_a);
@@ -3599,6 +3752,11 @@ mod tests {
             .split(SplitDirection::Vertical, graph_idx, area)
             .unwrap();
         editor.sync_open_graph_viewports();
+        // This test is about hit-testing resolving through the RIGHT
+        // viewport, not zoom-to-fit — pin both windows to a known starting
+        // zoom rather than depending on the fit calculation's exact output.
+        pin_zoom(&mut editor, graph_idx, win_a, 1.0);
+        pin_zoom(&mut editor, graph_idx, win_b, 1.0);
 
         // Zoom window A substantially (each call's step is clamped — see
         // GRAPH_ZOOM_MAX_STEP — so repeat it) so its scene<->pixel transform
@@ -3676,6 +3834,11 @@ mod tests {
             .find(|w| w.buffer_idx == graph_idx)
             .map(|w| w.id)
             .unwrap();
+        // Pin the starting zoom before the wheel-zoom-in steps below —
+        // this test isn't about zoom-to-fit, and its ">1.0" assertion
+        // wants a known baseline to zoom in FROM, not the fit
+        // calculation's exact output for this KB shape/window size.
+        pin_zoom(&mut editor, graph_idx, graph_win_id, 1.0);
         for _ in 0..3 {
             editor.kb_graph_view_zoom(graph_win_id, 300.0, 400.0, 300.0);
         }

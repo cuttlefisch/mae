@@ -292,6 +292,7 @@ impl super::Editor {
             "kb_graph_layout_iterations" => self.kb_graph_layout_iterations.to_string(),
             "kb_graph_layout_kind_clustering" => self.kb_graph_layout_kind_clustering.to_string(),
             "kb_graph_layout_spacing_scale" => self.kb_graph_layout_spacing_scale.to_string(),
+            "kb_graph_zoom_to_fit_margin" => self.kb_graph_zoom_to_fit_margin.to_string(),
             "kb_graph_layout_algorithm" => self.kb_graph_layout_algorithm.as_str().to_string(),
             "kb_graph_follow_current_node" => self.kb_graph_follow_current_node.to_string(),
             "kb_graph_animate" => self.kb_graph_animate.to_string(),
@@ -854,19 +855,25 @@ impl super::Editor {
                 self.ai_chat_enabled = parse_option_bool(value)?;
             }
             "ai_guidance_kb" => {
-                // Empty disables it; "primary" or a registered instance name
-                // must resolve to something real -- mirrors kb_search_scope's
-                // validation shape.
+                // Deliberately NOT validated against `self.kb.registry` the
+                // way `kb_search_scope` is (issue #370 drift fix): init.scm
+                // evaluates BEFORE `init_kb_federation` populates the
+                // registry (other options like `kb_notes_dir`/`daemon_mode`/
+                // `kb_storage_engine` depend on that exact ordering, so
+                // reordering bootstrap isn't an option), so an init.scm-set
+                // name — including the shipped default "MaePractices" —
+                // would ALWAYS fail eager validation here even though it
+                // resolves correctly moments later. That's inconsistent with
+                // this option's own documented contract: `guidance.rs`'s
+                // `read_guidance_kb_context` is deliberately best-effort and
+                // silently returns nothing for an unresolvable name rather
+                // than erroring, specifically so "a missing/misconfigured
+                // guidance KB must never break session startup" — the
+                // setter rejecting the value outright was violating that
+                // same guarantee at set-time instead of read-time. Accept
+                // any string unconditionally; resolution happens lazily,
+                // every time guidance context is built.
                 let trimmed = value.trim();
-                if !trimmed.is_empty()
-                    && trimmed != "primary"
-                    && self.kb.registry.find(trimmed).is_none()
-                {
-                    return Err(format!(
-                        "Invalid ai_guidance_kb: no KB instance named '{}' (expected: empty to disable, \"primary\", or a registered instance name)",
-                        trimmed
-                    ));
-                }
                 self.ai_guidance_kb = trimmed.to_string();
             }
             "file_tree_focus_on_open" => {
@@ -1256,6 +1263,12 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.kb_graph_layout_spacing_scale = v.clamp(0.1, 25.0);
+            }
+            "kb_graph_zoom_to_fit_margin" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_zoom_to_fit_margin = v.clamp(0.05, 1.0);
             }
             "kb_graph_layout_algorithm" => {
                 let algo = crate::graph_view::GraphLayoutAlgorithm::parse(value).ok_or_else(

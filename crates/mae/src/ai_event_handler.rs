@@ -841,7 +841,7 @@ pub fn handle_mcp_request(
         }
         crate::ai_residency::ResidencyDecision::Allow => {
             // #363: `execute_command` normally routes into `crates/ai`'s
-            // `dispatch_builtin_in_target` (builtins-only — `crates/ai` has
+            // `execute_tool_with_requester` (builtins-only — `crates/ai` has
             // no `SchemeRuntime` in scope, so it structurally can never
             // dispatch a Scheme-defined command). This handler already has
             // both `editor` and `scheme`, same as the `eval_scheme` drain
@@ -861,7 +861,20 @@ pub fn handle_mcp_request(
                 .map(str::to_string);
             match scheme_command {
                 Some(cmd) => {
-                    scheme.dispatch_command_by_name(editor, &cmd);
+                    // Issue #372: this is the one MCP-originated mutation
+                    // path that bypasses `execute_tool_with_requester` (and
+                    // thus its `with_ai_dispatch_scope` wrap) entirely, since
+                    // `crates/ai` has no `SchemeRuntime` in scope and can't
+                    // dispatch a Scheme-defined command itself. Wrap this
+                    // call site the same way so it gets the same companion-
+                    // window guarantee — do NOT wrap `dispatch_command_by_name`
+                    // itself, since it's also called from
+                    // `state_sync_apply.rs`'s `(run-command ...)` drain loop
+                    // for ordinary human-triggered Scheme automation, where
+                    // running in the human's own focused window is correct.
+                    editor.with_ai_dispatch_scope(|editor| {
+                        scheme.dispatch_command_by_name(editor, &cmd)
+                    });
                     // Matches execute_command_dispatch's existing response
                     // shape exactly (`crates/ai/src/executor/core_exec.rs`) —
                     // this bridge is a dispatch-mechanism swap, not a
@@ -1647,5 +1660,62 @@ mod tests {
         let result = rx.try_recv().expect("reply must have been sent");
         assert!(result.success, "expected success: {}", result.output);
         assert_eq!(editor.window_mgr.focused_window().cursor_row, 1);
+    }
+
+    // --- Issue #372: the Scheme-command bridge must also get companion-window protection ---
+
+    #[tokio::test]
+    async fn execute_command_scheme_sourced_gets_companion_window_protection() {
+        // This is the one MCP dispatch path that bypasses
+        // `execute_tool_with_requester` (and thus its `with_ai_dispatch_scope`
+        // wrap) entirely, since `crates/ai` has no `SchemeRuntime` in scope.
+        // Prove the bridge branch at line ~864 wraps itself the same way.
+        let mut editor = Editor::new();
+        editor.buffers[0].name = "*AI:claude*".to_string();
+        editor.buffers[0].agent_shell = true;
+        let original_id = editor.window_mgr.focused_id();
+        assert_eq!(editor.window_mgr.iter_windows().count(), 1);
+
+        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
+        scheme
+            .eval(r#"(define (my-greet) (buffer-insert "hi")) (define-command "my-greet" "test" "my-greet")"#)
+            .unwrap();
+        scheme.apply_to_editor(&mut editor);
+
+        let (req, mut rx) = mcp_request(
+            "execute_command",
+            serde_json::json!({"command": "my-greet"}),
+        );
+        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
+        let mut deferred = Vec::new();
+        handle_mcp_request(
+            &mut editor,
+            req,
+            &[],
+            &mae_ai::PermissionPolicy::default(),
+            &lsp_tx,
+            &mut deferred,
+            &mut scheme,
+        );
+
+        let result = rx.try_recv().expect("reply must have been sent");
+        assert!(result.success, "expected success: {}", result.output);
+
+        // A companion window must have been established, and the original
+        // agent-shell window/buffer must be untouched and still visible.
+        assert_eq!(
+            editor.window_mgr.iter_windows().count(),
+            2,
+            "Scheme-command dispatch must establish a companion window, same as the builtins path"
+        );
+        let orig_win = editor.window_mgr.window(original_id).unwrap();
+        assert_eq!(orig_win.buffer_idx, 0);
+        assert!(editor.buffers[orig_win.buffer_idx].agent_shell);
+        assert!(editor.ai.target_window_id.is_some());
+        assert_eq!(
+            editor.window_mgr.focused_id(),
+            original_id,
+            "focus must be restored to the agent-shell window after the scope exits"
+        );
     }
 }

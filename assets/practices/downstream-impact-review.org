@@ -1,0 +1,44 @@
+:PROPERTIES:
+:ID: practice:downstream-impact-review
+:KIND: concept
+:END:
+#+title: Downstream Impact Review
+#+filetags: :practices:review:
+
+Before implementing any non-trivial change, assess it against four
+questions — not as a bureaucratic checklist, but because each catches a
+distinct class of bug that's cheap to prevent before writing code and
+expensive to find after:
+
+** Bug risk
+What existing behavior could this change break? What edge cases does it
+touch that the obvious happy path doesn't exercise? Name them before
+writing the fix, not after a test fails.
+
+** Performance impact
+Does this add work to a hot path (render loop, input dispatch, a function
+called per-keystroke or per-frame)? Is the added work O(1), O(n), or worse?
+A change that's correct but silently turns an O(1) path into an O(n) one
+is a regression even though no test asserts on latency.
+
+** Type safety at boundaries
+When extracting or refactoring shared code (see
+[[practice:shared-computation][Shared Computation]]), check that type
+conversions at the boundary — narrowing casts, unit mismatches, signed/
+unsigned coercions — don't silently truncate or wrap. These bugs are
+invisible in a diff review that only reads the logic, not the types.
+
+** Regression guard across surfaces
+If the change touches a piece of shared infrastructure that multiple
+surfaces depend on (e.g. two rendering backends, a config value reachable
+from both a CLI flag and a live-set command, an API used by both a human
+and an automated caller), verify all of the affected surfaces, not just
+the one you're looking at. The bug that ships is disproportionately often
+the one in the surface nobody re-checked.
+
+** Adversarial case, for security/auth/crypto/sync work specifically
+Any change to these subsystems should add or extend a test that exercises
+the *failure mode* — see [[practice:adversarial-testing][Adversarial
+Testing]] — not just confirm the success path still works.
+
+See also [[index][index]].

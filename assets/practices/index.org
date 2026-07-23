@@ -1,0 +1,25 @@
+:PROPERTIES:
+:ID: index
+:KIND: index
+:END:
+#+title: MAE Development Practices
+#+filetags: :practices:guidance:
+
+Standing engineering practices for working on MAE itself, distilled from
+this project's own design principles, ADR process, and tech-debt tracking
+convention. Any AI agent (built-in or external, via MCP) working in this
+repository should treat the linked notes below as required practice, not
+optional style preference — they encode hard-won constraints, not taste.
+
+** Practices
+- [[practice:adversarial-testing][Adversarial Testing]] -- tests exist to falsify the implementation, not confirm it
+- [[practice:no-hardcoding][No Hardcoding, Scheme-First Configurability]] -- every user-visible behavior is an option, not a magic constant
+- [[practice:shared-computation][Shared Computation, No Duplicated Logic]] -- one implementation, reused across call sites/backends
+- [[practice:downstream-impact-review][Downstream Impact Review]] -- assess bug risk, perf, type safety, and regressions before changing shared code
+- [[practice:adr-process][Architecture Decision Records]] -- how and when to write one, and how they're tracked
+- [[practice:architecture-debt-tracking][Architecture Debt Is Tracked, Not Silent]] -- debt gets a name, a cross-link, and a place to live
+
+** How to use this
+Read the linked note relevant to the change at hand before proposing an
+approach. These practices are deliberately short — each is meant to be
+skimmed in the time it takes to plan a task, not studied as documentation.

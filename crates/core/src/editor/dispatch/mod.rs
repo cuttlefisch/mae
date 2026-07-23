@@ -470,33 +470,6 @@ impl Editor {
         false
     }
 
-    /// Dispatch a built-in command in the AI target window context.
-    ///
-    /// Temporarily switches focus to the AI target window (if set), dispatches
-    /// the command, then restores focus. This is the Emacs `save-excursion` /
-    /// `with-current-buffer` pattern. Synchronous — no render between
-    /// save/restore, so no visual flicker.
-    ///
-    /// Returns true if the command was recognized.
-    pub fn dispatch_builtin_in_target(&mut self, name: &str) -> bool {
-        let target_win = self.ai.target_window_id;
-        let saved_focus = self.window_mgr.focused_id();
-
-        // Switch focus to the AI target window if set
-        if let Some(win_id) = target_win {
-            self.window_mgr.set_focused(win_id);
-        }
-
-        let result = self.dispatch_builtin(name);
-
-        // Restore original focus
-        if target_win.is_some() {
-            self.window_mgr.set_focused(saved_focus);
-        }
-
-        result
-    }
-
     /// Dispatch a command and replay at secondary cursors if applicable.
     pub fn dispatch_with_multicursor(&mut self, name: &str) -> bool {
         let result = self.dispatch_builtin(name);

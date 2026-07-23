@@ -459,11 +459,17 @@ impl OptionRegistry {
                      conversation buffer. See ADR-049.",
                     OptionKind::Bool, "false", Some("ai.chat_enabled"), &[]),
                 opt!("ai_guidance_kb", &["ai-guidance-kb"],
-                    "Name of a registered KB instance (or \"primary\") whose content is actively \
-                     surfaced to AI agents at session start as standing practices/guidance that \
-                     should be followed — both mae-agent-cli's system prompt and, for any \
-                     MCP-connected client, the initialize response's instructions field. Empty \
-                     (default) disables this — no behavior change from today.",
+                    "Name of a registered KB instance whose content is actively surfaced to AI \
+                     agents at session start as standing practices/guidance that should be \
+                     followed — both mae-agent-cli's system prompt and, for any MCP-connected \
+                     client, the initialize response's instructions field. Empty (default) \
+                     disables this — no behavior change from today. Not validated against the \
+                     KB registry at set time (init.scm evaluates before KB federation loads, so \
+                     the shipped default \"MaePractices\" must still be settable before it's \
+                     registered) — an unresolvable name is a silent no-op at read time instead, \
+                     never a startup error. \"primary\" (the built-in help KB) is accepted here \
+                     but not yet wired in `crates/ai/src/guidance.rs`'s reader — setting it \
+                     currently surfaces no content; use a registered instance name instead.",
                     OptionKind::String, "", Some("ai.guidance_kb"), &[]),
                 // --- Which-key ---
                 opt!("which_key_idle_delay", &["which-key-idle-delay"],
@@ -651,6 +657,17 @@ impl OptionRegistry {
                      simulation, iteratively refined on a background thread).",
                     OptionKind::String, "chord", Some("kb-graph.layout-algorithm"),
                     &["force", "chord"]),
+                opt!("kb_graph_zoom_to_fit_margin", &["kb-graph-zoom-to-fit-margin"],
+                    "Margin applied when a freshly opened graph-view window computes its \
+                     initial zoom level to fit the whole diagram in view (default behavior — \
+                     previously every new graph window opened at a fixed zoom of 1.0 regardless \
+                     of diagram size, which for the chord layout in particular meant a \
+                     large/dense KB opened way too zoomed in to see anything). 1.0 fits the \
+                     diagram's node extent exactly to the viewport edges; lower values (the \
+                     default) leave breathing room. Only applied once, when a window's viewport \
+                     is first created — never re-applied on resize/pan/zoom, so it can't fight \
+                     a later manual zoom.",
+                    OptionKind::Float, "0.85", Some("kb-graph.zoom-to-fit-margin"), &[]),
                 opt!("kb_graph_follow_current_node", &["kb-graph-follow-current-node"],
                     "Whether the graph view re-centers on the human/AI's current KB node \
                      automatically. Registered ahead of the Phase 2 command-post wiring that \

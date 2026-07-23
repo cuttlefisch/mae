@@ -29,6 +29,7 @@ mod lsp_bridge;
 mod manual_kb;
 mod mdns_discovery;
 pub mod pkg;
+mod practices_kb;
 mod scheme_dap_bridge;
 mod scheme_lsp_bridge;
 mod shell_keys;

@@ -1089,6 +1089,73 @@ pub fn node_render_radius(style: &GraphStyleOptions, degree: u32, zoom: f64) -> 
     r.clamp(lo, hi)
 }
 
+/// The scene's node extent — `(min_x, min_y, max_x, max_y)`, each node's
+/// point padded by its zoom-1.0 render radius so labels/circles aren't
+/// clipped at the computed fit boundary. `None` for an empty scene (nothing
+/// to fit). `node_degrees` is expected to be either empty or exactly
+/// `scene.nodes.len()` long (as `GraphView.node_degrees` always is); a
+/// missing/short entry falls back to degree 0, matching `node_render_radius`'s
+/// own floor behavior for a never-scaled node.
+fn scene_bounding_box(
+    scene: &mae_canvas::scene::SceneGraph,
+    style: &GraphStyleOptions,
+    node_degrees: &[u32],
+) -> Option<(f64, f64, f64, f64)> {
+    scene
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(i, node)| {
+            let degree = node_degrees.get(i).copied().unwrap_or(0);
+            let r = node_render_radius(style, degree, 1.0) as f64;
+            (node.x - r, node.y - r, node.x + r, node.y + r)
+        })
+        .reduce(|(min_x, min_y, max_x, max_y), (x0, y0, x1, y1)| {
+            (min_x.min(x0), min_y.min(y0), max_x.max(x1), max_y.max(y1))
+        })
+}
+
+/// Compute the zoom level that fits the scene's node extent within a
+/// `viewport_width` x `viewport_height` pixel area, with `margin` (e.g. 0.9
+/// leaves 10% breathing room) applied on top of the tightest-fitting axis.
+///
+/// Deliberately ONE-DIRECTIONAL: only ever suggests zooming OUT (a value
+/// `< 1.0`), never zooming IN beyond the natural 1:1 scale. A sparse graph
+/// (few nodes, e.g. a single node) has a tiny node-extent bounding box
+/// relative to a typical viewport, and the raw fit ratio for that case is
+/// enormous (zoom in hugely to make one small circle fill the screen) —
+/// exactly the opposite of the reported problem (a DENSE chord diagram
+/// opening too zoomed IN to see anything) and not something to "fix" the
+/// same way. `None` (meaning: use the existing default,
+/// `Viewport::default()`'s `zoom: 1.0`, unchanged) whenever the diagram
+/// already fits at 1.0, for an empty scene, a degenerate (zero-area)
+/// extent, or a not-yet-known (zero) viewport size.
+pub fn zoom_to_fit(
+    scene: &mae_canvas::scene::SceneGraph,
+    style: &GraphStyleOptions,
+    node_degrees: &[u32],
+    viewport_width: f64,
+    viewport_height: f64,
+    margin: f64,
+) -> Option<f64> {
+    if viewport_width <= 0.0 || viewport_height <= 0.0 {
+        return None;
+    }
+    let (min_x, min_y, max_x, max_y) = scene_bounding_box(scene, style, node_degrees)?;
+    let bbox_w = max_x - min_x;
+    let bbox_h = max_y - min_y;
+    if bbox_w <= 0.0 || bbox_h <= 0.0 {
+        return None;
+    }
+    let raw_fit = (viewport_width / bbox_w).min(viewport_height / bbox_h);
+    if raw_fit >= 1.0 {
+        // Already fits (or is smaller than the viewport) at the natural
+        // scale — leave the default alone rather than zooming in further.
+        return None;
+    }
+    Some(raw_fit * margin)
+}
+
 /// Flatten a `mae-canvas` `SceneGraph` into `VisualElement`s for the GUI's
 /// `render_visual_buffer` pipeline, projected through one window's
 /// `Viewport` (issue #321 — the same shared `scene` can be flattened once
@@ -1874,6 +1941,75 @@ mod tests {
         style.node_max_radius = 10.0;
         let r = node_render_radius(&style, 0, 1.0);
         assert!((10.0..=50.0).contains(&r));
+    }
+
+    #[test]
+    fn zoom_to_fit_scales_down_a_diagram_wider_than_the_viewport() {
+        let style = test_style();
+        let mut scene = SceneGraph::new();
+        // Two nodes 2000 logical px apart — much wider than an 800px viewport.
+        scene
+            .nodes
+            .push(test_node("a", -1000.0, 0.0, NodeKind::Note));
+        scene
+            .nodes
+            .push(test_node("b", 1000.0, 0.0, NodeKind::Note));
+        let degrees = vec![0, 0];
+
+        let fit = zoom_to_fit(&scene, &style, &degrees, 800.0, 600.0, 1.0)
+            .expect("a non-degenerate scene must produce a fit zoom");
+        assert!(
+            fit < 1.0,
+            "a diagram wider than the viewport must zoom out below 1.0, got {fit}"
+        );
+        // The x-axis is the binding constraint here (2000+padding wide vs.
+        // 800px) — the fit zoom's x term, scene width * fit, must land at
+        // (or just under, since margin=1.0 here) the viewport width.
+        let node_r = node_render_radius(&style, 0, 1.0) as f64;
+        let bbox_w = 2000.0 + 2.0 * node_r;
+        assert!((fit - 800.0 / bbox_w).abs() < 1e-9);
+    }
+
+    #[test]
+    fn zoom_to_fit_applies_the_margin_on_top_of_the_tightest_axis() {
+        let style = test_style();
+        let mut scene = SceneGraph::new();
+        scene
+            .nodes
+            .push(test_node("a", -1000.0, 0.0, NodeKind::Note));
+        scene
+            .nodes
+            .push(test_node("b", 1000.0, 0.0, NodeKind::Note));
+        let degrees = vec![0, 0];
+
+        let unmargined = zoom_to_fit(&scene, &style, &degrees, 800.0, 600.0, 1.0).unwrap();
+        let margined = zoom_to_fit(&scene, &style, &degrees, 800.0, 600.0, 0.85).unwrap();
+        assert!(
+            (margined - unmargined * 0.85).abs() < 1e-9,
+            "margin must scale the fit zoom proportionally: unmargined={unmargined}, margined={margined}"
+        );
+    }
+
+    #[test]
+    fn zoom_to_fit_is_none_for_an_empty_scene() {
+        let style = test_style();
+        let scene = SceneGraph::new();
+        assert!(zoom_to_fit(&scene, &style, &[], 800.0, 600.0, 0.85).is_none());
+    }
+
+    #[test]
+    fn zoom_to_fit_is_none_for_a_zero_size_viewport() {
+        let style = test_style();
+        let mut scene = SceneGraph::new();
+        scene
+            .nodes
+            .push(test_node("a", -1000.0, 0.0, NodeKind::Note));
+        scene
+            .nodes
+            .push(test_node("b", 1000.0, 0.0, NodeKind::Note));
+        let degrees = vec![0, 0];
+        assert!(zoom_to_fit(&scene, &style, &degrees, 0.0, 600.0, 0.85).is_none());
+        assert!(zoom_to_fit(&scene, &style, &degrees, 800.0, 0.0, 0.85).is_none());
     }
 
     #[test]
