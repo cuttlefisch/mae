@@ -154,19 +154,35 @@ these up expecting them to affect Copilot in any way.
 **What still matters, server-side:**
 
 - **`ai_guidance_kb`** — if set (MAE ships a default of `"MaePractices"`; check via
-  `:describe-option ai-guidance-kb`), its content is surfaced in the MCP `initialize`
-  response's `instructions` field to *every* connected client, including a paired VS Code
-  session — for free, no extra config. Whether VS Code's Copilot MCP client actually
-  forwards `instructions` into the model's context is tracked separately
-  ([ADR-050 D4](adr/050-external-editor-mcp-pairing.md), Phase H of this initiative) — a
-  fallback exporter to `.github/copilot-instructions.md`/`AGENTS.md` is planned for
-  whichever hosts don't.
+  `:describe-option ai-guidance-kb`), it's surfaced to *every* connected client's MCP
+  `initialize` response `instructions` field — for free, no extra config. **Precisely
+  what that field contains** (verified directly against `crates/mae/src/main.rs`, not
+  assumed): a short *pointer* sentence — `"Before acting, consult KB '<name>' for
+  required practices. Registered KBs: <names>."` — not the guidance KB's actual content.
+  An agent that reads it still has to call `kb_search`/`kb_get` itself to get the real
+  text. Whether VS Code's Copilot MCP client even forwards `instructions` into the
+  model's context at all is a separate, still-unverified question
+  ([ADR-050 D4](adr/050-external-editor-mcp-pairing.md)) needing a live human check, same
+  caveat as Path 1 above.
+  For the FULL guidance content (project `CLAUDE.md`/`README.md` + the guidance KB's
+  index body) delivered as plain text any host reads unconditionally as part of its own
+  repo scan, use the **`kb_export_guidance`** tool (callable by the built-in `mae` agent
+  or any MCP client, including a paired VS Code session) — writes to `AGENTS.md` by
+  default, or pass `{"path": ".github/copilot-instructions.md"}` for that convention
+  instead. Additive-merge-safe: re-running only replaces MAE's own clearly delimited
+  managed block, never touching hand-written content elsewhere in the file. Set
+  `ai_guidance_export_live_sync = true` (`:set-save`) to have this happen automatically
+  once at every session start instead of needing to trigger it by hand each time — this
+  is session-start sync, not a continuous file watcher.
 - **The server-side permission policy** (`MAE_AI_PERMISSIONS` env var, or `config.toml`'s
   `[ai] auto_approve_tier`; default `"trusted"` = auto-approves up through Shell-tier
   tools with **no server-side confirmation at all**) — this, not VS Code's own
   confirmation dialog, is MAE's actual security boundary. See the note below.
 - **The KB registry** (`kb_register`/`kb_instances` — which KBs MAE has open and
   searchable).
+- **AI-residency policy** (`kb_set_ai_residency`, ADR-048) — if the guidance KB is marked
+  `local_models_only`, `kb_export_guidance` is denied for a non-local requester (a paired
+  external agent counts), exactly like a direct `kb_get` against that KB would be.
 
 **What's irrelevant:** MAE's own `ai_provider`/`ai_model`/API-key settings, the embedded
 AI chat (`ai_chat_enabled`), and anything else that only affects the *built-in* `mae`

@@ -761,6 +761,33 @@ fn main() -> io::Result<()> {
                 }
             };
 
+            // ADR-050 D4 (Phase H): ai_guidance_export_live_sync -- if the
+            // user has opted in, keep AGENTS.md in sync with the guidance KB
+            // automatically each session start, so external editors that
+            // read AGENTS.md unconditionally (rather than via MCP
+            // initialize.instructions, whose forwarding is host-dependent
+            // and unverified) see current content without a manual export.
+            // Best-effort: never blocks startup on a missing project root or
+            // a write failure, matching ai_guidance_kb's own read path.
+            let guidance_live_sync = editor
+                .get_option("ai_guidance_export_live_sync")
+                .map(|(v, _)| v == "true")
+                .unwrap_or(false);
+            if guidance_live_sync {
+                let guidance_kb = editor
+                    .get_option("ai_guidance_kb")
+                    .map(|(v, _)| v)
+                    .unwrap_or_default();
+                if !guidance_kb.is_empty() {
+                    match mae_ai::execute_kb_export_guidance(&editor, &serde_json::json!({})) {
+                        Ok(msg) => info!(message = %msg, "guidance export (live-sync) complete"),
+                        Err(e) => {
+                            warn!(error = %e, "guidance export (live-sync) skipped")
+                        }
+                    }
+                }
+            }
+
             let mut server = mae_mcp::McpServer::new(
                 &mcp_socket_path,
                 mcp_tool_tx.clone(),

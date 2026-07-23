@@ -1027,6 +1027,10 @@ pub struct Editor {
     /// practices/guidance. Empty (default) disables this. See
     /// `mae_ai::guidance`.
     pub ai_guidance_kb: String,
+    /// When true, re-export the guidance KB to AGENTS.md automatically each
+    /// session start (ADR-050 D4). Default false — one-time/on-demand export
+    /// only, matching `ai_guidance_kb`'s own opt-in philosophy.
+    pub ai_guidance_export_live_sync: bool,
     /// Saved help view state from the last `help_close`. `help-reopen`
     /// restores this to resume exactly where the user left off.
     pub last_kb_state: Option<crate::kb_view::KbView>,
@@ -1459,6 +1463,7 @@ impl Editor {
             spell_enabled: false,
             ai_chat_enabled: false,
             ai_guidance_kb: String::new(),
+            ai_guidance_export_live_sync: false,
             ai: AiState::new(),
             bell_until: None,
             project: None,

@@ -471,6 +471,16 @@ impl OptionRegistry {
                      but not yet wired in `crates/ai/src/guidance.rs`'s reader — setting it \
                      currently surfaces no content; use a registered instance name instead.",
                     OptionKind::String, "", Some("ai.guidance_kb"), &[]),
+                opt!("ai_guidance_export_live_sync", &["ai-guidance-export-live-sync"],
+                    "When true, re-run kb-export-guidance/kb_export_guidance once automatically \
+                     at session start whenever ai_guidance_kb is set (ADR-050 D4) — kept in sync \
+                     with the guidance KB from one session to the next, not a continuous \
+                     file-watcher. Default false: exporting to AGENTS.md/.github/copilot-instructions.md \
+                     stays a one-time/on-demand action the user (or an external agent, via the \
+                     kb_export_guidance tool) triggers explicitly, matching ai_guidance_kb's own \
+                     opt-in-by-default philosophy. A missing project root or export failure never \
+                     blocks startup — best-effort, same as ai_guidance_kb's own read path.",
+                    OptionKind::Bool, "false", Some("ai.guidance_export_live_sync"), &[]),
                 // --- Which-key ---
                 opt!("which_key_idle_delay", &["which-key-idle-delay"],
                     "Milliseconds of idle time (no input) after the leader keypad activates \
