@@ -1,4 +1,5 @@
 import * as assert from 'assert';
+import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as net from 'net';
 import * as os from 'os';
@@ -12,6 +13,25 @@ import {
   spawnHeadlessInstance,
 } from '../../src/headlessDiscovery';
 import { createSpawnSpy } from './fakeChildProcess';
+
+/**
+ * Binds a real Unix socket at `socketPath` in a child process, then SIGKILLs
+ * it — leaving a genuinely orphaned socket file on disk, since a killed
+ * process never runs its own close/unlink handler. Mirrors the Rust-side
+ * precedent this composes with (`headless_loop.rs`'s own
+ * `claim_stable_socket_clears_a_stale_file_with_no_live_listener` test,
+ * which relies on the identical "a Unix listener does not unlink on drop"
+ * property) — this is the ADR-055 orphan-cleanup scenario, exercised here
+ * specifically through the extension's own client-side detection primitive
+ * rather than assumed to compose correctly with the server side untested.
+ */
+async function createOrphanedSocketFile(socketPath: string): Promise<void> {
+  const script = "require('net').createServer().listen(process.argv[1]);";
+  const child = cp.spawn(process.execPath, ['-e', script, socketPath], { stdio: 'ignore' });
+  await new Promise((r) => setTimeout(r, 200)); // let the bind land
+  child.kill('SIGKILL');
+  await new Promise((r) => setTimeout(r, 100)); // let the kill land
+}
 
 function makeTempExecutable(dir: string, name: string): string {
   const filePath = path.join(dir, name);
@@ -126,6 +146,26 @@ describe('headlessDiscovery', () => {
     it('resolves false when nothing is listening at the path', async () => {
       const socketPath = path.join(tmpDir, 'nothing-here.sock');
       assert.strictEqual(await probeSocket(socketPath), false);
+    });
+
+    // --- Adversarial: orphan-cleanup through the extension's own lifecycle
+    // path (#384 DoD) ---
+    it('never mistakes a genuinely orphaned (kill -9\'d) socket file for a live instance', async function () {
+      this.timeout(5000);
+      const socketPath = path.join(tmpDir, 'orphaned.sock');
+      await createOrphanedSocketFile(socketPath);
+
+      assert.ok(
+        fs.existsSync(socketPath),
+        'the orphaned file must genuinely still be present on disk (the whole point of the scenario)'
+      );
+      assert.strictEqual(
+        await probeSocket(socketPath),
+        false,
+        'a kill -9\'d socket file must never be mistaken for a live instance -- ' +
+          'ensureHeadlessRunning depends on this to correctly spawn a fresh instance ' +
+          'instead of getting stuck believing a dead one is still running'
+      );
     });
   });
 });

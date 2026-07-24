@@ -185,11 +185,22 @@ anticipate, recorded here rather than left as undocumented drift:
   `every_registered_tool_annotation_matches_its_permission_tier`,
   `crates/ai/src/executor/mod_tests.rs`.
 - **D1 full extension (Phase I, #384):** the extension auto-spawns a headless instance via
-  `McpServerDefinitionProvider` when none is running (never a GUI window), never touches
-  `.vscode/mcp.json`, and the required "capability declaration abuse" adversarial test
-  (a hostile workspace's `mae.shimPath`/`mae.headlessBinaryPath`) passes. **Done** —
-  `editors/vscode/`, unit suite (`npm run test:unit`, 16 tests incl. the adversarial pair
-  in `shimCommand.test.ts`/`headlessDiscovery.test.ts`) and a real-extension-host smoke
-  test (`npm run test:integration`), both in default CI (`vscode-extension` job). Live
-  interactive VS Code+Copilot verification remains the one open item, per the first bullet
-  above.
+  `McpServerDefinitionProvider` when none is running (never a GUI window), correctly
+  discovers/reuses an already-running instance otherwise, never touches
+  `.vscode/mcp.json`, never prompts for or requires MAE AI-provider configuration (P2), and
+  the two required adversarial tests pass. **Done** — `editors/vscode/`, unit suite
+  (`npm run test:unit`, 17 tests) and a real-extension-host smoke test
+  (`npm run test:integration`), both in default CI (`vscode-extension` job):
+  - *Capability-declaration-abuse escalation*: both the client-declared-permission-ceiling
+    vector (proven end-to-end against real session/dispatch machinery in
+    `shared/mcp/src/lib.rs`) and the hostile-workspace-settings vector (`mae.shimPath`/
+    `mae.headlessBinaryPath` shell-injection attempts, `shimCommand.test.ts`/
+    `headlessDiscovery.test.ts`) are covered — the latter turned out to be this phase's
+    genuinely new attack surface, not the former alone.
+  - *Orphan-cleanup through the extension's own lifecycle path*: a real kill -9'd (never
+    unlinked) socket file is proven never mistaken for a live instance
+    (`headlessDiscovery.test.ts`'s `never mistakes a genuinely orphaned... socket file`),
+    composing correctly with the already-tested server-side self-healing (Phase E).
+
+  Live interactive VS Code+Copilot verification remains the one open item, per the first
+  bullet above.
