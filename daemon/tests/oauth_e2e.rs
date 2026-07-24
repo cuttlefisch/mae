@@ -419,14 +419,35 @@ async fn oauth_listener_connection_cap_rejects_the_nplus1th_client() {
     let jwks_addr = spawn_mock_jwks_server(&jwks).await;
     let daemon = spawn_daemon_with_oauth_capped(jwks_addr, 2).await;
 
-    // Open 2 raw TCP connections and keep them alive (matches
-    // max_connections = 2) -- no TLS/HTTP needed to prove the cap itself,
-    // since `try_acquire()` runs before the TLS handshake even starts.
+    // Open exactly `max_connections` (2) real TCP connections, confirming
+    // EACH ONE was genuinely accepted (its guard acquired) before opening
+    // the next. A raw `connect()` succeeding only proves the OS completed
+    // the TCP handshake and queued the connection in the kernel backlog --
+    // NOT that the server's accept loop has processed it yet, and NOT that
+    // processing order matches client-side connect() call order (a real
+    // flake found on CI: the "3rd"/over-cap connection was sometimes the
+    // one the server's accept loop actually serviced first, while one of
+    // the ostensibly in-cap "kept" connections got silently rejected
+    // instead -- the original version of this test never checked that).
+    // Confirmation without disturbing the held guard: an accepted
+    // connection stays open with no data at all (the server is waiting on
+    // a ClientHello that never arrives, holding the guard for the whole
+    // `HANDSHAKE_TIMEOUT_SECS` window) -- a short read-with-timeout that
+    // itself times out (never EOFs) is proof of acceptance.
     let mut kept = Vec::new();
-    for _ in 0..2 {
-        let conn = tokio::net::TcpStream::connect(daemon.oauth_addr)
+    for i in 0..2 {
+        let mut conn = tokio::net::TcpStream::connect(daemon.oauth_addr)
             .await
             .expect("connection within the cap must be accepted");
+        let mut probe = [0u8; 1];
+        let probe_result =
+            tokio::time::timeout(Duration::from_millis(750), conn.read(&mut probe)).await;
+        assert!(
+            probe_result.is_err(),
+            "kept connection {i} (within the configured cap of 2) must stay open with no data \
+             -- got {probe_result:?} instead, meaning it was unexpectedly closed/rejected \
+             (an accept-order race, not a real cap-enforcement failure)"
+        );
         kept.push(conn);
     }
 
