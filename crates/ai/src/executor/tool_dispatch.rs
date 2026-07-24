@@ -439,6 +439,69 @@ fn execute_tool_dispatch_body(
         });
     }
 
+    // 4d2. Handle request_tools for a generic MCP client. The embedded agent
+    // (crates/ai/src/session/handle_prompt.rs) intercepts `request_tools`
+    // earlier, in-session, mutating its own live `self.tools` set -- that
+    // mechanism only exists for `AgentSession`, not for an external MCP
+    // client dispatching through this chokepoint. `tools/call` dispatch is
+    // never restricted to what `tools/list` advertised (K2's tiered
+    // `mcp_tools` in crates/mae/src/main.rs only filters the wire-visible
+    // list, never what's callable) -- so what actually unlocks an
+    // Extended-tier tool for an external client is returning its full
+    // definition (name + input schema) here; the client can then call it
+    // directly by name with no server-side session-tool-list mutation
+    // needed or possible.
+    if call.name == "request_tools" {
+        let categories = crate::tools::parse_categories(
+            call.arguments
+                .get("categories")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+        );
+        let requested_names: Vec<&str> = call
+            .arguments
+            .get("tools")
+            .and_then(|v| v.as_str())
+            .map(|s| {
+                s.split(',')
+                    .map(|n| n.trim())
+                    .filter(|n| !n.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let matched: Vec<&ToolDefinition> = all_tools
+            .iter()
+            .filter(|t| {
+                categories
+                    .iter()
+                    .any(|c| crate::tools::classify_tool_category(&t.name) == Some(*c))
+                    || requested_names.contains(&t.name.as_str())
+            })
+            .collect();
+        let json_results: Vec<serde_json::Value> = matched
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.parameters,
+                    "permission": t.permission.map(|p| format!("{p:?}")),
+                })
+            })
+            .collect();
+        let output = if json_results.is_empty() {
+            "No tools matched the given categories/names.".to_string()
+        } else {
+            serde_json::to_string_pretty(&json_results).unwrap_or_default()
+        };
+        return ExecuteResult::Immediate(ToolResult {
+            tool_call_id: call.id.clone(),
+            tool_name: call.name.clone(),
+            success: true,
+            output,
+        });
+    }
+
     // 4e. Handle search_tools (needs access to all_tools).
     if call.name == "search_tools" {
         let query = call

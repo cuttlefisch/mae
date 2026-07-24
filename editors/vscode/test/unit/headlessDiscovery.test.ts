@@ -7,6 +7,7 @@ import * as path from 'path';
 
 import { InvalidExecutableError } from '../../src/shimCommand';
 import {
+  ensureGuidanceConfigured,
   HeadlessEnsureError,
   probeSocket,
   resolveStableSocketPath,
@@ -229,6 +230,44 @@ describe('headlessDiscovery', () => {
           'ensureHeadlessRunning depends on this to correctly spawn a fresh instance ' +
           'instead of getting stuck believing a dead one is still running'
       );
+    });
+  });
+
+  describe('ensureGuidanceConfigured', () => {
+    it('runs `mae --ensure-guidance-config` with cwd set to the workspace root', async () => {
+      const exe = makeTempExecutable(tmpDir, 'mae');
+      const { spawnFn, calls } = createSpawnSpy();
+
+      const resultPromise = ensureGuidanceConfigured(exe, tmpDir, spawnFn);
+      await Promise.resolve();
+      assert.strictEqual(calls.length, 1);
+      assert.deepStrictEqual(calls[0].args, ['--ensure-guidance-config']);
+      assert.strictEqual(calls[0].options?.cwd, tmpDir);
+      calls[0].child.emitStdout('mae: guidance config updated: ...\n');
+      calls[0].child.emitClose(0);
+
+      const result = await resultPromise;
+      assert.strictEqual(result.code, 0);
+      assert.ok(result.stdout.includes('guidance config updated'));
+    });
+
+    // K3's own CLI flag is designed to be best-effort (exits non-zero only
+    // on a genuine I/O failure) -- this function must surface that exit
+    // code/stderr to the caller rather than throwing, so the extension's
+    // own best-effort wrapper (a try/catch around this call) can log and
+    // move on instead of treating a non-zero exit as an unhandled rejection.
+    it('resolves (does not throw) even on a non-zero exit code, surfacing stderr', async () => {
+      const exe = makeTempExecutable(tmpDir, 'mae');
+      const { spawnFn, calls } = createSpawnSpy();
+
+      const resultPromise = ensureGuidanceConfigured(exe, tmpDir, spawnFn);
+      await Promise.resolve();
+      calls[0].child.emitStderr('mae: --ensure-guidance-config: failed to persist ...\n');
+      calls[0].child.emitClose(1);
+
+      const result = await resultPromise;
+      assert.strictEqual(result.code, 1);
+      assert.ok(result.stderr.includes('failed to persist'));
     });
   });
 });

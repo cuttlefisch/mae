@@ -403,6 +403,9 @@ fn main() -> io::Result<()> {
     if let Some(result) = cli::handle_check_config(&args) {
         return result;
     }
+    if let Some(result) = cli::handle_ensure_guidance_config(&args) {
+        return result;
+    }
     cli::handle_test_mode(&args)?;
 
     // First-run wizard: runs only when stdin is a TTY, no config file exists,
@@ -701,7 +704,39 @@ fn main() -> io::Result<()> {
         let sync_broadcaster: mae_mcp::broadcast::SharedBroadcaster =
             std::sync::Arc::new(std::sync::Mutex::new(mae_mcp::broadcast::EventBroadcaster::new()));
         {
-            let mcp_tools: Vec<mae_mcp::protocol::ToolInfo> = all_tools
+            // K2 (post-ship quality pass): a flat ~758-tool tools/list
+            // measurably degrades external MCP clients' tool-selection
+            // accuracy (docs/MODEL_SUPPORT.md's cited finding; live-observed
+            // this session as an external agent repeatedly calling the wrong
+            // tool with empty arguments instead of a well-named Core one).
+            // The built-in agent already solves this for itself
+            // (AgentSession::new, crates/ai/src/session/mod.rs) via
+            // classify_tool_tier's Core/Extended split + request_tools --
+            // apply the same split to the MCP server's own tools/list by
+            // default. This only narrows what's *advertised*; tools/call
+            // dispatch (crates/ai/src/executor/tool_dispatch.rs,
+            // reached via ai_event_handler.rs's mcp_tool_rx handler) is
+            // always given the FULL `all_tools`, so any Extended-tier tool
+            // discovered via search_tools/request_tools remains directly
+            // callable by name even though it wasn't listed.
+            let mcp_tools_tiered = editor
+                .get_option("mcp_tools_tiered_by_default")
+                .map(|(v, _)| v == "true")
+                .unwrap_or(true);
+            let mcp_tool_defs: Vec<mae_ai::ToolDefinition> = if mcp_tools_tiered {
+                let mut core: Vec<mae_ai::ToolDefinition> = all_tools
+                    .iter()
+                    .filter(|t| mae_ai::classify_tool_tier(&t.name) == mae_ai::ToolTier::Core)
+                    .cloned()
+                    .collect();
+                if !core.iter().any(|t| t.name == "request_tools") {
+                    core.push(mae_ai::request_tools_definition());
+                }
+                core
+            } else {
+                all_tools.clone()
+            };
+            let mcp_tools: Vec<mae_mcp::protocol::ToolInfo> = mcp_tool_defs
                 .iter()
                 .map(|t| {
                     // ADR-050 D2: annotations are mechanically derived from
@@ -748,7 +783,7 @@ fn main() -> io::Result<()> {
                     .iter()
                     .map(|i| i.name.clone())
                     .collect();
-                if guidance_kb.is_empty() && registered.is_empty() {
+                if guidance_kb.is_empty() && registered.is_empty() && !mcp_tools_tiered {
                     None
                 } else {
                     let mut s = String::new();
@@ -758,7 +793,24 @@ fn main() -> io::Result<()> {
                         ));
                     }
                     if !registered.is_empty() {
-                        s.push_str(&format!("Registered KBs: {}.", registered.join(", ")));
+                        s.push_str(&format!("Registered KBs: {}. ", registered.join(", ")));
+                    }
+                    if mcp_tools_tiered {
+                        // K2 (post-ship quality pass): a fresh client only
+                        // sees this Core-tier tools/list, never the full
+                        // catalog, unless it already knew search_tools/
+                        // request_tools existed -- name both explicitly here
+                        // so the escalation path is discoverable from the
+                        // very first handshake, not just from
+                        // request_tools' own tool description.
+                        s.push_str(
+                            "Only a curated core set of tools is listed here. Call \
+                             search_tools to find additional tools by keyword, then \
+                             request_tools (by category or exact name) to get full \
+                             definitions for tools not shown above -- once you have a \
+                             tool's name you can call it directly, whether or not it \
+                             appeared in this list.",
+                        );
                     }
                     Some(s)
                 }

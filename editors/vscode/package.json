@@ -48,6 +48,11 @@
           "default": 15000,
           "markdownDescription": "Milliseconds to wait for `mae --headless --print-socket-path` to resolve, and (separately) for a freshly-spawned headless instance to start accepting connections. The default is generous for a native filesystem; increase it if your workspace folder is a slow or cross-boundary mount (e.g. a Windows drive mounted into WSL2, especially under active antivirus real-time scanning) where even simple filesystem operations can take several seconds."
         },
+        "mae.autoConfigureGuidance": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Automatically run `mae --ensure-guidance-config` once per workspace on first activation, so a fresh project gets standing dev-practices guidance surfaced to Copilot (or any other MCP-connected agent) without a manual setup step. Set-if-unset server-side — never overwrites an already-explicit `ai_guidance_kb`/`ai_guidance_export_live_sync` choice. Best-effort: a failure is logged, never blocks MCP pairing. Set to `false` to disable entirely."
+        },
         "mae.permissionCeiling": {
           "type": "string",
           "enum": [

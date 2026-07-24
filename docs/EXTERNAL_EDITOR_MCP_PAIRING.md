@@ -74,13 +74,35 @@ other MCP host (Path 2) and for anyone who'd rather not install an extension.
 2. Open the **Chat** view, switch to **Agent** mode (MCP tools are only exposed in Agent
    mode — not Ask or Edit mode), and open the tools picker (🔧) to confirm `mae-editor`'s
    tools are listed.
-3. Ask it to do something that exercises a MAE tool, e.g. "search the knowledge base for
-   X" or "what does `kb_search` return for Y". Read-only MAE tools (`kb_search`,
+3. **Required, easy-to-miss step (found via live testing — nothing in VS Code's own UI
+   flags this as necessary):** a tool being *listed* in the 🔧 picker does **not** mean
+   Copilot can call it yet. Open the chat view's **settings (⚙️) icon** — a different
+   icon from the 🔧 tools picker — and explicitly check the `mae-editor` checkbox to
+   enable its tools for use in this chat session. Skipping this step is the single most
+   common reason a correctly-connected MAE pairing looks "broken": the MCP `Output` log
+   will show a clean `Discovered N tools` line, and the picker will list them, but Copilot
+   will never actually call any of them until this checkbox is checked.
+4. Ask it to do something that exercises a MAE tool, e.g. "search the knowledge base for
+   X" or "what does `kb_search_context` return for Y". Read-only MAE tools (`kb_search`,
    `kb_get`, `lsp_definition`, …) are annotated `readOnlyHint: true`
    ([ADR-050 D2](adr/050-external-editor-mcp-pairing.md), mechanically derived from every
    tool's `PermissionTier` — audited by a CI test, `every_registered_tool_annotation_matches_its_permission_tier`)
    — VS Code Copilot skips the confirmation dialog for these and prompts for anything
    else, same as any other MCP server.
+
+**Tool list is curated by default, not the full ~700+ tool catalog (K2, post-ship quality
+pass).** `tools/list` only advertises a smaller "Core" tier (~85 tools) plus two
+discovery tools, `search_tools`/`request_tools`
+(`mcp_tools_tiered_by_default`, default `true` — a large flat tool list measurably
+degrades tool-selection accuracy for external clients, see `docs/MODEL_SUPPORT.md`). This
+is not a capability restriction: any tool not shown in the 🔧 picker is still directly
+callable once you know its name — Copilot (or any agent) is expected to call
+`search_tools` to find a tool by keyword, then `request_tools` (by category or exact name)
+to get its full definition/schema, then call it directly. `kb_search` and `kb_get`
+themselves are Extended-tier under this default and won't appear in the picker — this is
+expected, not a bug; ask the agent to search for/request them if it doesn't do so on its
+own. Set `mcp_tools_tiered_by_default = false` (`:set-save`) to go back to the full flat
+list for a deployment already tuned around it.
 
 **Minimum VS Code version:** ADR-050's research found broad MCP support landing around VS
 Code 1.99. This is a fast-moving area of VS Code — if `mae-editor`'s tools don't appear,
@@ -101,7 +123,10 @@ config-fragmentation risk noted below).
 **Verifying the mechanism without a specific branded client**: `scripts/mcp-shim-stdio-smoke.sh`
 in this repo drives the shim exactly as any generic MCP host would — spawns it, does a
 real `initialize` → `notifications/initialized` → `tools/list` → `tools/call` round trip
-over stdio, and asserts `kb_search` carries a correct `readOnlyHint: true` annotation.
+over stdio, confirms the tiered-by-default tool list (K2) carries a correctly-annotated
+Core-tier tool, and proves an Extended-tier tool (`kb_search`, deliberately absent from
+the default list) is still discoverable via `request_tools` and directly callable via
+`tools/call` even though it was never advertised.
 Run it against a live MAE instance to confirm the pairing mechanism itself is sound before
 troubleshooting a specific host's own MCP client:
 
@@ -188,7 +213,13 @@ these up expecting them to affect Copilot in any way.
   managed block, never touching hand-written content elsewhere in the file. Set
   `ai_guidance_export_live_sync = true` (`:set-save`) to have this happen automatically
   once at every session start instead of needing to trigger it by hand each time — this
-  is session-start sync, not a continuous file watcher.
+  is session-start sync, not a continuous file watcher. **Setting this up doesn't require
+  an agent to correctly guess a tool call**: `mae --ensure-guidance-config
+  [--guidance-kb <name>]` (K3) is a deterministic, one-shot CLI flag that does exactly
+  this — set-if-unset for both `ai_guidance_kb` and `ai_guidance_export_live_sync`, never
+  overwriting an already-explicit choice. The "MAE for VS Code" extension runs this
+  automatically on first activation per workspace (`mae.autoConfigureGuidance`, default
+  `true`).
 - **The server-side permission policy** (`MAE_AI_PERMISSIONS` env var, or `config.toml`'s
   `[ai] auto_approve_tier`; default `"trusted"` = auto-approves up through Shell-tier
   tools with **no server-side confirmation at all**) — this, not VS Code's own
@@ -223,6 +254,16 @@ expose a way to set this today, but a hand-rolled or scripted client can.)
   actually running for this project (`ls /tmp/mae-*.sock`), and that `mae-mcp-shim` is on
   `PATH` (`which mae-mcp-shim`). Run `mae-mcp-shim --check` for a connectivity diagnostic,
   or `scripts/mcp-shim-stdio-smoke.sh` for a full protocol-level check.
+- **Tools discovered (MCP Output log shows `Discovered N tools`) but Copilot never
+  actually calls any of them / acts like MAE isn't connected at all**: this is almost
+  always the settings-checkbox step above (Path 1, step 3) — "discovered" and "listed in
+  the picker" are not the same as "enabled for this chat session." Open the chat view's
+  ⚙️ settings icon (not 🔧) and check `mae-editor`.
+- **A specific tool you expect (e.g. `kb_search`) never gets called, even after enabling
+  `mae-editor`**: check whether it's Extended-tier under K2's default tiering — it won't
+  appear in `tools/list`, and a less-capable agent may not think to call `search_tools`/
+  `request_tools` to reach it unprompted. Ask explicitly ("use search_tools to find a KB
+  search tool"), or set `mcp_tools_tiered_by_default = false` to always send the full list.
 - **Tools listed but every call needs confirmation**: you're likely on a MAE build
   predating [ADR-050 D2](adr/050-external-editor-mcp-pairing.md)'s tool annotations
   (check `mae --version`; annotations shipped alongside this doc) — rebuild.

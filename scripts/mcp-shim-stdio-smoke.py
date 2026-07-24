@@ -65,13 +65,24 @@ def main(shim_path):
         assert resp is not None and "error" not in resp, f"tools/list failed: {resp}"
         tools = resp["result"]["tools"]
         print(f"tools/list OK — {len(tools)} tools")
-        kb_search = next((t for t in tools if t["name"] == "kb_search"), None)
-        assert kb_search is not None, "kb_search tool missing from tools/list"
-        ann = kb_search.get("annotations")
-        print("kb_search annotations:", ann)
+        # K2 (post-ship quality pass): tools/list is tiered (Core +
+        # request_tools/search_tools) by default, so kb_search (Extended)
+        # is deliberately NOT expected here — kb_search_context is Core.
+        kb_search_context = next(
+            (t for t in tools if t["name"] == "kb_search_context"), None
+        )
+        assert kb_search_context is not None, "kb_search_context (Core-tier) missing from tools/list"
+        ann = kb_search_context.get("annotations")
+        print("kb_search_context annotations:", ann)
         assert ann and ann.get("readOnlyHint") is True, (
-            "kb_search must be annotated readOnlyHint=true (ADR-050 D2) — a stale/pre-Phase-A "
-            "mae build would fail this exact check"
+            "kb_search_context must be annotated readOnlyHint=true (ADR-050 D2) — a stale/"
+            "pre-Phase-A mae build would fail this exact check"
+        )
+        assert any(t["name"] == "request_tools" for t in tools), (
+            "request_tools must be present so a client can discover Extended-tier tools"
+        )
+        assert not any(t["name"] == "kb_search" for t in tools), (
+            "kb_search is Extended-tier and must not be pre-listed under K2's tiered default"
         )
 
         # 4. tools/call: introspect (a safe, always-available read tool)
@@ -88,7 +99,11 @@ def main(shim_path):
         print("tools/call(introspect) OK")
 
         # 5. tools/call: kb_search — a real read-only KB round trip, the
-        #    actual capability this whole pairing story is for.
+        #    actual capability this whole pairing story is for. kb_search is
+        #    Extended-tier (not in tools/list above) — this proves K2's core
+        #    claim: tools/call dispatch is never restricted to what was
+        #    advertised, so a client that discovers a tool name via
+        #    search_tools/request_tools can call it directly.
         send(
             {
                 "jsonrpc": "2.0",
@@ -99,13 +114,14 @@ def main(shim_path):
         )
         resp = recv()
         assert resp is not None and "error" not in resp, f"tools/call kb_search failed: {resp}"
-        print("tools/call(kb_search) OK")
+        print("tools/call(kb_search) OK — an Extended-tier tool, absent from tools/list, still dispatches")
 
         # 6. tools/call: kb_get — the other half of the "kb_search/kb_get
-        #    round trip" this pairing exists for. A nonexistent id is
-        #    deliberate: this asserts the *protocol* round trip (a valid
-        #    JSON-RPC response, not an error) rather than depending on any
-        #    particular KB content being registered.
+        #    round trip" this pairing exists for, same Extended-tier-but-
+        #    still-callable point as above. A nonexistent id is deliberate:
+        #    this asserts the *protocol* round trip (a valid JSON-RPC
+        #    response, not an error) rather than depending on any particular
+        #    KB content being registered.
         send(
             {
                 "jsonrpc": "2.0",
@@ -117,6 +133,29 @@ def main(shim_path):
         resp = recv()
         assert resp is not None and "error" not in resp, f"tools/call kb_get failed: {resp}"
         print("tools/call(kb_get) OK")
+
+        # 7. tools/call: request_tools by exact name — the K2 escalation
+        #    path a real client (Claude Code, VS Code+Copilot, etc.) is
+        #    told about via initialize.instructions. Confirms the returned
+        #    result actually carries enough (a schema) to construct a call.
+        send(
+            {
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "tools/call",
+                "params": {
+                    "name": "request_tools",
+                    "arguments": {"categories": "", "tools": "kb_search"},
+                },
+            }
+        )
+        resp = recv()
+        assert resp is not None and "error" not in resp, f"tools/call request_tools failed: {resp}"
+        text = resp["result"]["content"][0]["text"]
+        assert "kb_search" in text and "input_schema" in text, (
+            f"request_tools must return kb_search's full definition (with schema), got: {text}"
+        )
+        print("tools/call(request_tools) OK — Extended-tier tool discoverable with a usable schema")
 
         print("\nALL CHECKS PASSED")
     finally:

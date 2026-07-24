@@ -568,6 +568,115 @@ pub(crate) fn handle_check_config(args: &[String]) -> Option<io::Result<()>> {
     Some(Ok(()))
 }
 
+/// `--ensure-guidance-config [--guidance-kb <name>]`: deterministic,
+/// non-AI-dependent one-shot setup for the guidance-KB delivery mechanism
+/// (K3, post-ship quality pass). Mirrors `--print-socket-path`'s shape —
+/// a scriptable primitive an external tool (the "MAE for VS Code"
+/// extension's first-activation hook) can call directly, rather than
+/// depending on an LLM correctly guessing which of N MCP tools to call for
+/// a one-shot setup step (principle #8: reuses the proven `set_option`/
+/// `save_option_to_init` `:set-save` persistence path verbatim, never a
+/// hand-rolled config writer).
+///
+/// Set-if-unset only, for both options independently:
+/// - `ai_guidance_kb`: if already non-empty (e.g. the shipped init.scm
+///   template's default `"MaePractices"`, or a user's own explicit choice),
+///   left untouched. If empty and `--guidance-kb <name>` was given, set to
+///   that name. If empty and no `--guidance-kb` given, left empty (nothing
+///   to default to — printed as a no-op, not an error).
+/// - `ai_guidance_export_live_sync`: if not already `true`, set to `true`
+///   (ADR-050 D4) so a fresh workspace gets automatic per-session AGENTS.md
+///   sync without a manual `kb_export_guidance` call.
+///
+/// Never overwrites an EXISTING explicit value for either option. Exits 0
+/// in every case (nothing here is a hard error worth failing a caller's
+/// script over) except genuine I/O failure persisting to init.scm.
+pub(crate) fn handle_ensure_guidance_config(args: &[String]) -> Option<io::Result<()>> {
+    if !args.iter().any(|a| a == "--ensure-guidance-config") {
+        return None;
+    }
+    let guidance_kb_arg = args
+        .iter()
+        .position(|a| a == "--guidance-kb")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+
+    let mut editor = Editor::new();
+    let mut scheme = match SchemeRuntime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("mae: scheme runtime init failed: {}", e.message);
+            std::process::exit(1);
+        }
+    };
+    let _module_registry = load_init_file(&mut scheme, &mut editor);
+
+    let mut changes: Vec<String> = Vec::new();
+
+    let current_guidance_kb = editor
+        .get_option("ai_guidance_kb")
+        .map(|(v, _)| v)
+        .unwrap_or_default();
+    if current_guidance_kb.is_empty() {
+        match &guidance_kb_arg {
+            Some(name) => {
+                if let Err(e) = editor.set_option("ai_guidance_kb", name) {
+                    eprintln!("mae: --ensure-guidance-config: failed to set ai_guidance_kb: {e}");
+                    std::process::exit(1);
+                }
+                match editor.save_option_to_init("ai_guidance_kb") {
+                    Ok(_) => changes.push(format!("ai_guidance_kb set to '{name}'")),
+                    Err(e) => {
+                        eprintln!(
+                            "mae: --ensure-guidance-config: failed to persist ai_guidance_kb: {e}"
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            }
+            None => println!(
+                "mae: ai_guidance_kb is unset and no --guidance-kb given -- leaving unset \
+                 (a fresh install's shipped init.scm template already defaults to \
+                 \"MaePractices\"; nothing to do for an existing config with no KB chosen)"
+            ),
+        }
+    } else {
+        println!("mae: ai_guidance_kb already set to '{current_guidance_kb}' -- leaving unchanged");
+    }
+
+    let live_sync_already_on = editor
+        .get_option("ai_guidance_export_live_sync")
+        .map(|(v, _)| v == "true")
+        .unwrap_or(false);
+    if !live_sync_already_on {
+        if let Err(e) = editor.set_option("ai_guidance_export_live_sync", "true") {
+            eprintln!(
+                "mae: --ensure-guidance-config: failed to set ai_guidance_export_live_sync: {e}"
+            );
+            std::process::exit(1);
+        }
+        match editor.save_option_to_init("ai_guidance_export_live_sync") {
+            Ok(_) => changes.push("ai_guidance_export_live_sync set to true".to_string()),
+            Err(e) => {
+                eprintln!(
+                    "mae: --ensure-guidance-config: failed to persist \
+                     ai_guidance_export_live_sync: {e}"
+                );
+                std::process::exit(1);
+            }
+        }
+    } else {
+        println!("mae: ai_guidance_export_live_sync already true -- leaving unchanged");
+    }
+
+    if changes.is_empty() {
+        println!("mae: guidance config already fully configured, no changes made");
+    } else {
+        println!("mae: guidance config updated: {}", changes.join(", "));
+    }
+    Some(Ok(()))
+}
+
 /// `--test PATH`: headless Scheme test runner. Always terminates the process
 /// (`std::process::exit`) when triggered; returns `Ok(())` untouched when not.
 pub(crate) fn handle_test_mode(args: &[String]) -> io::Result<()> {

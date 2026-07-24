@@ -146,8 +146,13 @@ async fn headless_real_subprocess_boots_serves_mcp_and_shuts_down_cleanly() {
     let child = spawn_cmd.spawn().expect("failed to spawn `mae --headless`");
     let mut guard = HeadlessGuard { child: Some(child) };
 
+    // 30s, not 15s: a cold headless boot was observed using 14.7s out of a
+    // 15s budget even in isolation on this machine -- flaky-under-load, not
+    // a real regression (found while hardening K2's own tiering e2e test,
+    // mcp_tool_tiering_e2e.rs, the same class of fix as the VS Code
+    // extension's own too-tight timeout bump, c2edc5f0).
     assert!(
-        wait_for_socket_live(&socket_path, Duration::from_secs(15)),
+        wait_for_socket_live(&socket_path, Duration::from_secs(30)),
         "headless instance never bound its stable socket at {}",
         socket_path.display()
     );
@@ -209,20 +214,27 @@ async fn headless_real_subprocess_boots_serves_mcp_and_shuts_down_cleanly() {
     let tools = tools_value["result"]["tools"]
         .as_array()
         .expect("tools array present");
+    // K2 (post-ship quality pass, `mcp_tools_tiered_by_default` defaults
+    // true): a fresh editor with no explicit override now advertises only
+    // the Core tier (~85 tools) + request_tools, not the full ~700+ catalog
+    // — see mcp_tool_tiering_e2e.rs for the dedicated tiering test, this is
+    // just confirming the real default didn't silently regress back to the
+    // full flat list.
     assert!(
-        tools.len() > 100,
-        "expected the real ~700+ tool set from a genuinely booted editor, got {}",
+        tools.len() < 100,
+        "expected the K2 tiered-by-default Core tool set, got {} (full flat list?)",
         tools.len()
     );
 
     // Regression guard spanning two phases through one real process: Phase
     // A's annotation wiring must still be live end-to-end, not just correct
-    // in its own isolated unit tests.
-    let kb_search = tools
+    // in its own isolated unit tests. `buffer_read` is Core-tier, unlike
+    // `kb_search` (Extended), so it stays present under K2's default tiering.
+    let buffer_read = tools
         .iter()
-        .find(|t| t["name"] == "kb_search")
-        .expect("kb_search tool present in the real tool set");
-    assert_eq!(kb_search["annotations"]["readOnlyHint"], true);
+        .find(|t| t["name"] == "buffer_read")
+        .expect("buffer_read tool present in the real tool set");
+    assert_eq!(buffer_read["annotations"]["readOnlyHint"], true);
 
     drop(stream);
 

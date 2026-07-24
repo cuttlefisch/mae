@@ -1031,6 +1031,12 @@ pub struct Editor {
     /// session start (ADR-050 D4). Default false — one-time/on-demand export
     /// only, matching `ai_guidance_kb`'s own opt-in philosophy.
     pub ai_guidance_export_live_sync: bool,
+    /// When true (default), the MCP server's `tools/list` response is
+    /// tiered (Core + `request_tools`/`search_tools` only) instead of the
+    /// full flat tool set — see `crates/mae/src/main.rs`'s `mcp_tools`
+    /// construction (K2, post-ship quality pass). Read at MCP-server-startup
+    /// time, not live-reloadable mid-session.
+    pub mcp_tools_tiered_by_default: bool,
     /// Saved help view state from the last `help_close`. `help-reopen`
     /// restores this to resume exactly where the user left off.
     pub last_kb_state: Option<crate::kb_view::KbView>,
@@ -1464,6 +1470,7 @@ impl Editor {
             ai_chat_enabled: false,
             ai_guidance_kb: String::new(),
             ai_guidance_export_live_sync: false,
+            mcp_tools_tiered_by_default: true,
             ai: AiState::new(),
             bell_until: None,
             project: None,

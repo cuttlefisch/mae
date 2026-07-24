@@ -151,7 +151,15 @@ describe('real-binary headless + shim round trip', () => {
 
         const toolsResp = await shimCall(rl, shim.stdin!, { jsonrpc: '2.0', id: 2, method: 'tools/list' }, 15000);
         const result = toolsResp.result as { tools?: unknown[] } | undefined;
-        assert.ok(result?.tools && result.tools.length > 100, `expected the real tool set, got: ${JSON.stringify(toolsResp).slice(0, 300)}`);
+        // K2 (post-ship quality pass): tools/list is tiered (Core +
+        // request_tools/search_tools) by default now, not the full ~700+
+        // flat set — a fresh instance with no explicit override returns the
+        // smaller Core tier. This just confirms a real, non-empty,
+        // sane-sized response came back through the real shim.
+        assert.ok(
+          result?.tools && result.tools.length > 10 && result.tools.length < 200,
+          `expected the K2 tiered Core tool set, got: ${JSON.stringify(toolsResp).slice(0, 300)}`
+        );
       } finally {
         rl.close();
         shim.kill();

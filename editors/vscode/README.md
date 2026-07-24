@@ -25,6 +25,24 @@ to MAE:
 It never reads or writes `.vscode/mcp.json` — discovery and lifecycle are entirely
 in-memory, via the dynamic provider API.
 
+## Required step in VS Code after connecting (easy to miss)
+
+Once MAE is discovered (the MCP `Output` log shows a clean `Discovered N tools` line),
+that alone does **not** mean Copilot can call any of them yet. In the Chat view's Agent
+mode, open the **settings (⚙️) icon** — a different icon from the 🔧 tools picker — and
+explicitly check the `mae-editor` checkbox to enable its tools for this chat session.
+Skipping this is the single most common reason a correctly-connected pairing looks
+"broken": the log is clean, the picker lists the tools, but nothing ever actually gets
+called. See `docs/EXTERNAL_EDITOR_MCP_PAIRING.md` (repo root) for the full walkthrough.
+
+**Tool list is curated by default, not the full catalog.** MAE's own `tools/list`
+response only advertises a curated Core tier (~85 tools) plus `search_tools`/
+`request_tools` by default (a large flat tool list measurably hurts external
+tool-selection accuracy) — a tool like `kb_search` deliberately won't appear in the 🔧
+picker under this default, but remains directly callable once an agent discovers its name
+via `search_tools`/`request_tools`. This is server-side config (`mcp_tools_tiered_by_default`),
+not something this extension controls.
+
 ## Requirements
 
 - `mae` and `mae-mcp-shim` on `PATH` (`make install` from the MAE repo root, or your package
@@ -40,6 +58,8 @@ in-memory, via the dynamic provider API.
 | `mae.shimPath` | `"mae-mcp-shim"` | Path to the shim binary (resolved via `PATH` if bare). |
 | `mae.headlessBinaryPath` | `"mae"` | Path to the `mae` binary used to auto-spawn a headless instance. |
 | `mae.permissionCeiling` | `""` (unset) | Optional self-declared permission ceiling (ADR-051) — `ReadOnly`/`Write`/`Shell`/`Privileged`. Can only *tighten* MAE's own server-side policy, never loosen it. |
+| `mae.headlessTimeoutMs` | `15000` | Milliseconds to wait for headless discovery/spawn. Increase for a slow or cross-boundary workspace mount (e.g. a Windows drive under WSL2 with active antivirus scanning). |
+| `mae.autoConfigureGuidance` | `true` | Runs `mae --ensure-guidance-config` once per workspace on first activation, so a fresh project gets standing dev-practices guidance without a manual setup step. Set-if-unset server-side — never overwrites an already-explicit `ai_guidance_kb`/`ai_guidance_export_live_sync` choice. Best-effort: a failure is logged, never blocks MCP pairing. |
 
 **Note on `mae.*` settings and workspace trust:** both path settings are validated to
 resolve to a real, existing, executable file before any process is spawned — and every

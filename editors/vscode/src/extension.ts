@@ -8,7 +8,11 @@
 
 import * as vscode from 'vscode';
 
-import { DEFAULT_HEADLESS_TIMEOUT_MS, ensureHeadlessRunning } from './headlessDiscovery';
+import {
+  DEFAULT_HEADLESS_TIMEOUT_MS,
+  ensureGuidanceConfigured,
+  ensureHeadlessRunning,
+} from './headlessDiscovery';
 import { InvalidExecutableError, resolveShimCommand } from './shimCommand';
 
 const PROVIDER_ID = 'mae-editor-provider';
@@ -22,6 +26,8 @@ function firstWorkspaceFolder(): vscode.WorkspaceFolder | undefined {
 }
 
 class MaeMcpServerDefinitionProvider implements vscode.McpServerDefinitionProvider {
+  constructor(private readonly context: vscode.ExtensionContext) {}
+
   provideMcpServerDefinitions(): vscode.McpServerDefinition[] {
     const folder = firstWorkspaceFolder();
     if (!folder) {
@@ -63,6 +69,35 @@ class MaeMcpServerDefinitionProvider implements vscode.McpServerDefinitionProvid
       return undefined;
     }
 
+    // K3 (post-ship quality pass): first-activation-per-workspace guidance
+    // auto-configure. Deliberately AFTER the headless instance is confirmed
+    // running (not before) -- this step is best-effort and must never be
+    // the reason MCP pairing itself fails. globalState (not workspaceState)
+    // is used so re-opening the same folder as a different workspace root
+    // still tracks it correctly by the folder's own path, matching how
+    // ensureHeadlessRunning's own socket keying works per-project, not
+    // per-VS-Code-workspace-session.
+    if (config.get<boolean>('autoConfigureGuidance', true)) {
+      const stateKey = `mae.guidanceConfigured:${workspaceRoot}`;
+      if (!this.context.globalState.get<boolean>(stateKey, false)) {
+        try {
+          const result = await ensureGuidanceConfigured(headlessBinary, workspaceRoot, undefined, timeoutMs);
+          if (result.code !== 0) {
+            console.warn(`MAE: --ensure-guidance-config exited ${result.code}: ${result.stderr}`);
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.warn(`MAE: --ensure-guidance-config failed: ${message}`);
+        }
+        // Mark attempted regardless of outcome: this is a best-effort,
+        // set-if-unset server-side operation (K3's CLI flag never
+        // overwrites an existing explicit value) -- retrying on every
+        // single activation would add no value once we've tried once, and
+        // a transient failure shouldn't spam this on every workspace open.
+        void this.context.globalState.update(stateKey, true);
+      }
+    }
+
     let plan;
     try {
       plan = resolveShimCommand(shimPath);
@@ -85,7 +120,10 @@ class MaeMcpServerDefinitionProvider implements vscode.McpServerDefinitionProvid
 
 export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(
-    vscode.lm.registerMcpServerDefinitionProvider(PROVIDER_ID, new MaeMcpServerDefinitionProvider())
+    vscode.lm.registerMcpServerDefinitionProvider(
+      PROVIDER_ID,
+      new MaeMcpServerDefinitionProvider(context)
+    )
   );
 }
 

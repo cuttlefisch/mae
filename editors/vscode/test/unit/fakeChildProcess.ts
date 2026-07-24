@@ -25,6 +25,10 @@ export class FakeChildProcess extends EventEmitter {
     this.stdout.emit('data', Buffer.from(chunk));
   }
 
+  emitStderr(chunk: string): void {
+    this.stderr.emit('data', Buffer.from(chunk));
+  }
+
   emitClose(code: number | null): void {
     this.emit('close', code);
   }

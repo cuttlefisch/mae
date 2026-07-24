@@ -50,10 +50,11 @@ function runCapture(
   args: string[],
   cwd: string,
   timeoutMs: number,
-  spawnFn: SpawnFn
+  spawnFn: SpawnFn,
+  env?: NodeJS.ProcessEnv
 ): Promise<{ code: number | null; stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawnFn(command, args, { cwd, shell: false });
+    const child = spawnFn(command, args, { cwd, shell: false, ...(env ? { env } : {}) });
     let stdout = '';
     let stderr = '';
     let settled = false;
@@ -78,6 +79,30 @@ function runCapture(
       resolve({ code, stdout, stderr });
     });
   });
+}
+
+/**
+ * K3 (post-ship quality pass): deterministic, non-AI-dependent guidance-KB
+ * setup for a fresh workspace — runs the real `mae --ensure-guidance-config`
+ * once (reuses the proven `set_option`/`save_option_to_init` persistence
+ * path server-side, `crates/mae/src/cli.rs::handle_ensure_guidance_config`,
+ * rather than an LLM having to correctly guess which of many MCP tools to
+ * call for a one-shot setup step). Best-effort by design, mirroring the CLI
+ * flag's own "nothing here is a hard error" contract — never throws on a
+ * non-zero exit; the caller should log a failure, not block MCP pairing on
+ * it. Set-if-unset on the server side, so calling this on every activation
+ * (guarded by the caller's own per-workspace `globalState` check) is safe
+ * either way — this function itself has no idempotency logic of its own.
+ */
+export async function ensureGuidanceConfigured(
+  maeBinary: string,
+  workspaceRoot: string,
+  spawnFn: SpawnFn = cp.spawn,
+  timeoutMs: number = DEFAULT_HEADLESS_TIMEOUT_MS,
+  env?: NodeJS.ProcessEnv
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const resolved = resolveExecutable(maeBinary);
+  return runCapture(resolved, ['--ensure-guidance-config'], workspaceRoot, timeoutMs, spawnFn, env);
 }
 
 /**
