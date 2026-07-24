@@ -94,6 +94,12 @@
 # [collab] enabled = true (a DocStore must exist to serve from).
 # kb_query_enabled = false
 
+# Cap on the raw size (bytes) of an incoming authenticated request body, enforced
+# BEFORE it's read into memory, regardless of kb_query_enabled -- protects against
+# an authenticated caller forcing unbounded server-side buffering. Distinct from
+# kb_query_max_body_bytes below (a cap on response content, not the request).
+# max_request_body_bytes = 1048576
+
 # Cap on a single kb/query.get response's node-body size, bytes (unencrypted KBs
 # only -- an E2E KB's response is opaque ciphertext, not truncatable).
 # kb_query_max_body_bytes = 65536

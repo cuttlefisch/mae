@@ -268,6 +268,7 @@ async fn main() {
                 jwks_url: config.oauth.jwks_url.clone(),
                 issuer: config.oauth.issuer.clone(),
                 kb_query_enabled: config.oauth.kb_query_enabled,
+                max_request_body_bytes: config.oauth.max_request_body_bytes,
                 kb_query_max_body_bytes: config.oauth.kb_query_max_body_bytes,
                 kb_query_max_scan_nodes: config.oauth.kb_query_max_scan_nodes,
                 kb_query_max_search_results: config.oauth.kb_query_max_search_results,

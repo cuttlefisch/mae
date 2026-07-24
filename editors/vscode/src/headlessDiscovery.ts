@@ -142,11 +142,20 @@ async function pollUntilListening(socketPath: string, totalTimeoutMs: number): P
  * `shell: false` with an argv array — the adversarial "capability
  * declaration abuse" test (a hostile workspace's `mae.headlessBinaryPath`)
  * targets exactly this call.
+ *
+ * `onSpawnError`, if given, is called if the child emits an `'error'` event
+ * (EACCES, a post-validation-race ENOENT if the binary vanishes between
+ * `resolveExecutable`'s check and the actual spawn, etc.). Attaching a
+ * listener here is the load-bearing part, independent of what the callback
+ * does: an unhandled `'error'` event on a `ChildProcess` is fatal (Node
+ * throws it as an uncaught exception outside any caller's try/catch) —
+ * QA-pass finding, this was previously unguarded.
  */
 export function spawnHeadlessInstance(
   maeBinary: string,
   workspaceRoot: string,
-  spawnFn: SpawnFn = cp.spawn
+  spawnFn: SpawnFn = cp.spawn,
+  onSpawnError?: (err: Error) => void
 ): cp.ChildProcess {
   const resolvedBinary = resolveExecutable(maeBinary);
   const child = spawnFn(resolvedBinary, ['--headless'], {
@@ -154,6 +163,9 @@ export function spawnHeadlessInstance(
     detached: true,
     stdio: 'ignore',
     shell: false,
+  });
+  child.on('error', (err: Error) => {
+    onSpawnError?.(err);
   });
   child.unref?.();
   return child;
@@ -183,13 +195,17 @@ export async function ensureHeadlessRunning(
     return { socketPath, spawnedNewInstance: false };
   }
 
-  spawnHeadlessInstance(maeBinary, workspaceRoot, spawnFn);
+  let spawnError: Error | undefined;
+  spawnHeadlessInstance(maeBinary, workspaceRoot, spawnFn, (err) => {
+    spawnError = err;
+  });
 
   const started = await pollUntilListening(socketPath, SPAWN_CONFIRM_TIMEOUT_MS);
   if (!started) {
+    const detail = spawnError ? ` (spawn error: ${spawnError.message})` : '';
     throw new HeadlessEnsureError(
       `spawned 'mae --headless' for ${workspaceRoot} but it never accepted connections on ` +
-        `${socketPath} within ${SPAWN_CONFIRM_TIMEOUT_MS}ms`
+        `${socketPath} within ${SPAWN_CONFIRM_TIMEOUT_MS}ms${detail}`
     );
   }
   return { socketPath, spawnedNewInstance: true };

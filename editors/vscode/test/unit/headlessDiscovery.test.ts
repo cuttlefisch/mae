@@ -100,6 +100,30 @@ describe('headlessDiscovery', () => {
       assert.strictEqual(calls[0].command, exe, 'the whole funny-named path is one literal argv element');
       assert.strictEqual(calls[0].options.shell, false);
     });
+
+    // Bug fix (QA-pass finding): an async spawn failure (EACCES, a
+    // post-validation-race ENOENT, etc.) fires an 'error' event on the
+    // ChildProcess. With no listener attached, Node treats this as an
+    // uncaught exception -- a real extension-host crash risk, since it
+    // happens outside any try/catch in extension.ts (the spawn call itself
+    // returns synchronously before the async error would ever fire).
+    it('never crashes the process when the spawned child later emits an error event', () => {
+      const exe = makeTempExecutable(tmpDir, 'mae');
+      const { spawnFn } = createSpawnSpy();
+      let captured: Error | undefined;
+
+      const child = spawnHeadlessInstance(exe, tmpDir, spawnFn, (err) => {
+        captured = err;
+      });
+
+      // Before the fix, this would throw synchronously (Node's EventEmitter
+      // treats an unlistened 'error' event as fatal) -- proving it doesn't
+      // throw here IS proving the listener is attached.
+      assert.doesNotThrow(() => {
+        child.emit('error', new Error('spawn EACCES'));
+      });
+      assert.strictEqual(captured?.message, 'spawn EACCES');
+    });
   });
 
   describe('resolveStableSocketPath', () => {

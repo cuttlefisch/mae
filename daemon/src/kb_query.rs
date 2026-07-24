@@ -149,6 +149,23 @@ async fn capabilities(
     }))
 }
 
+/// Truncate `s` to at most `max_bytes` bytes without splitting a multi-byte
+/// UTF-8 character (QA-pass finding: `max_body_bytes` is documented and
+/// configured as a byte cap, but the original implementation truncated by
+/// `.chars().take(n)` — up to 4x overshoot on multi-byte content, e.g. a
+/// body of all 4-byte emoji would produce up to `4 * max_body_bytes` bytes
+/// on the wire, silently defeating the cap's actual purpose).
+fn truncate_to_byte_boundary(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    s[..end].to_string()
+}
+
 async fn get(
     doc_store: &DocStore,
     kb_id: &str,
@@ -168,11 +185,13 @@ async fn get(
         Encryption::None => {
             let doc = KbNodeDoc::from_bytes(&state)
                 .map_err(|e| McpError::internal_error(format!("bad node doc: {e}")))?;
-            let mut body = doc.body();
+            let body = doc.body();
             let truncated = body.len() > max_body_bytes;
-            if truncated {
-                body = body.chars().take(max_body_bytes).collect();
-            }
+            let body = if truncated {
+                truncate_to_byte_boundary(&body, max_body_bytes)
+            } else {
+                body
+            };
             Ok(json!({
                 "kb_id": kb_id,
                 "node_id": node_id,
@@ -269,12 +288,26 @@ async fn graph(
 
     match encryption {
         Encryption::None => {
+            // QA-pass finding: `node_ids` is already capped by
+            // `max_scan_nodes`, but a single "hub" node can hold an
+            // unbounded number of outgoing links -- without a separate cap
+            // on the total edge count, a densely-linked KB could still
+            // produce a full-dump-sized response through this path alone.
+            // Reuses `max_scan_nodes` as the edge budget too (same "capped,
+            // never unbounded" property the whole surface already commits
+            // to, no new config knob needed for a v1 cap) rather than a
+            // fresh magic number.
             let mut edges = Vec::new();
-            for id in &node_ids {
+            let mut edges_truncated = false;
+            'scan: for id in &node_ids {
                 let node_doc = format!("kb:{id}");
                 if let Ok((state, _sv)) = doc_store.encode_state_and_sv(&node_doc).await {
                     if let Ok(doc) = KbNodeDoc::from_bytes(&state) {
                         for link in doc.links() {
+                            if edges.len() >= max_scan_nodes {
+                                edges_truncated = true;
+                                break 'scan;
+                            }
                             edges.push(json!([id, link]));
                         }
                     }
@@ -285,6 +318,7 @@ async fn graph(
                 "encryption": "none",
                 "nodes": node_ids,
                 "edges": edges,
+                "edges_truncated": edges_truncated,
             }))
         }
         Encryption::E2e => {
@@ -297,6 +331,7 @@ async fn graph(
                 "encryption": "e2e",
                 "nodes": node_ids,
                 "edges": [],
+                "edges_truncated": false,
             }))
         }
     }

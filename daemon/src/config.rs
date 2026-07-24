@@ -378,6 +378,15 @@ pub struct OAuthConfig {
     /// `DocStore` must exist to serve from — see `main.rs`'s
     /// `doc_store_for_query` wiring); this flag alone does not create one.
     pub kb_query_enabled: bool,
+    /// Cap on the raw size (bytes) of an incoming authenticated request
+    /// body, enforced BEFORE it's read into memory at all (`http_body_util
+    /// ::Limited`, which errors mid-stream rather than buffering past the
+    /// limit) and regardless of `kb_query_enabled` — a validly-authenticated
+    /// caller hitting ANY endpoint on this listener must not be able to
+    /// force unbounded server-side buffering merely by sending a large body.
+    /// Distinct from `kb_query_max_body_bytes` below, which bounds a
+    /// *response*'s node content, not the request itself.
+    pub max_request_body_bytes: usize,
     /// Cap on a single `kb/query.get` response body's node-body size, bytes
     /// (unencrypted KBs only — an E2E KB's response is raw ciphertext,
     /// capped by nothing since the daemon can't inspect it to truncate it
@@ -407,6 +416,7 @@ impl Default for OAuthConfig {
             cert_path: PathBuf::new(),
             key_path: PathBuf::new(),
             kb_query_enabled: false,
+            max_request_body_bytes: 1_048_576,
             kb_query_max_body_bytes: 65_536,
             kb_query_max_scan_nodes: 500,
             kb_query_max_search_results: 20,

@@ -48,6 +48,10 @@ pub struct ResourceServerConfig {
     /// independently toggleable from the listener being up (see
     /// `config::OAuthConfig::kb_query_enabled`'s doc comment).
     pub kb_query_enabled: bool,
+    /// Cap on the raw size of an incoming request body, enforced before it's
+    /// read into memory, regardless of `kb_query_enabled`. See
+    /// `config::OAuthConfig::max_request_body_bytes`'s doc comment.
+    pub max_request_body_bytes: usize,
     /// Cap on a single `kb/query.get` response's node-body size, bytes
     /// (unencrypted KBs only). See `config::OAuthConfig`'s doc comment.
     pub kb_query_max_body_bytes: usize,
@@ -387,9 +391,33 @@ async fn handle_request(
 
     // Read the body (never done before this phase) to see if this is a
     // kb/query.* JSON-RPC call. An empty/unparseable body is not an error —
-    // it's exactly what a bare bearer-verification probe sends.
-    let body_bytes = match http_body_util::BodyExt::collect(req.into_body()).await {
+    // it's exactly what a bare bearer-verification probe sends. The size
+    // limit is enforced by `Limited` DURING the read (errors mid-stream once
+    // the budget is exceeded), not after collecting into memory — an
+    // authenticated caller cannot force unbounded server-side buffering by
+    // sending an oversized body, regardless of `kb_query_enabled`.
+    let limited_body = http_body_util::Limited::new(req.into_body(), config.max_request_body_bytes);
+    let body_bytes = match http_body_util::BodyExt::collect(limited_body).await {
         Ok(collected) => collected.to_bytes(),
+        Err(e)
+            if e.downcast_ref::<http_body_util::LengthLimitError>()
+                .is_some() =>
+        {
+            tracing::debug!(
+                limit = config.max_request_body_bytes,
+                "request body exceeded size limit"
+            );
+            return Ok(json_response(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                serde_json::json!({
+                    "error": "payload_too_large",
+                    "error_description": format!(
+                        "request body exceeds the {}-byte limit",
+                        config.max_request_body_bytes
+                    ),
+                }),
+            ));
+        }
         Err(e) => {
             tracing::debug!(error = %e, "failed to read request body");
             Bytes::new()
@@ -440,16 +468,33 @@ pub(crate) async fn route_authenticated_request(
             };
             serde_json::to_value(&rpc_response).unwrap_or(serde_json::Value::Null)
         }
-        (Some(rpc), false, _) => serde_json::to_value(mae_mcp::protocol::JsonRpcResponse::error(
+        // kb_query_enabled=true but no DocStore exists to serve from
+        // (collab.enabled=false) — a DISTINCT condition from "disabled"
+        // below, and the caller sent a real RPC it deserves a real
+        // JSON-RPC-shaped error for, not the bare unauthenticated-probe
+        // diagnostic the true no-body case gets.
+        (Some(rpc), true, None) => serde_json::to_value(mae_mcp::protocol::JsonRpcResponse::error(
             rpc.id,
             mae_mcp::protocol::McpError::internal_error(
-                "kb/query.* is disabled on this daemon (oauth.kb_query_enabled is false, or \
-                 collab.enabled is false)"
+                "kb/query.* is enabled but no DocStore is available on this daemon \
+                 (collab.enabled is false)"
                     .to_string(),
             ),
         ))
         .unwrap_or(serde_json::Value::Null),
-        _ => {
+        (Some(rpc), false, _) => serde_json::to_value(mae_mcp::protocol::JsonRpcResponse::error(
+            rpc.id,
+            mae_mcp::protocol::McpError::internal_error(
+                "kb/query.* is disabled on this daemon (oauth.kb_query_enabled is false)"
+                    .to_string(),
+            ),
+        ))
+        .unwrap_or(serde_json::Value::Null),
+        // No RPC body sent at all — the plain bearer-verification probe
+        // case (ADR-052), never touched by the kb_query_enabled/doc_store
+        // distinctions above since there's no request `id` to shape a
+        // JSON-RPC error response around.
+        (None, _, _) => {
             serde_json::json!({"principal": principal.principal, "resource": config.canonical_resource_uri})
         }
     }
@@ -569,6 +614,7 @@ mod tests {
             jwks_url: "https://unused-in-these-tests.example.com/jwks".to_string(),
             issuer: Some("https://idp.example.com".to_string()),
             kb_query_enabled: false,
+            max_request_body_bytes: 1_048_576,
             kb_query_max_body_bytes: 65_536,
             kb_query_max_scan_nodes: 500,
             kb_query_max_search_results: 20,
@@ -693,6 +739,44 @@ mod tests {
             metadata["authorization_servers"][0],
             "https://idp.example.com"
         );
+    }
+
+    // --- Request body size limiting (QA-pass finding, principle #15) ---
+    //
+    // These exercise the exact same `http_body_util::Limited` +
+    // `BodyExt::collect` + `LengthLimitError` downcast triple `handle_request`
+    // uses, against a concrete `Full` body -- `Incoming` (the real hyper
+    // connection body type) can't be constructed outside a live connection,
+    // so this is the faithful unit-level proof; a real over-the-wire 413
+    // round trip is covered separately by the OAuth/kb-query e2e suite.
+
+    #[tokio::test]
+    async fn a_request_body_over_the_configured_limit_is_rejected_before_full_buffering() {
+        use http_body_util::{BodyExt, Full, Limited};
+        let oversized = Full::new(Bytes::from(vec![b'x'; 200]));
+        let limited = Limited::new(oversized, 100);
+
+        let result = BodyExt::collect(limited).await;
+
+        let err = result.expect_err("a body exceeding the limit must error, never fully buffer");
+        assert!(
+            err.downcast_ref::<http_body_util::LengthLimitError>()
+                .is_some(),
+            "expected a LengthLimitError specifically, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_request_body_within_the_configured_limit_is_accepted_unchanged() {
+        use http_body_util::{BodyExt, Full, Limited};
+        let payload = vec![b'x'; 50];
+        let body = Full::new(Bytes::from(payload.clone()));
+        let limited = Limited::new(body, 100);
+
+        let result = BodyExt::collect(limited).await;
+
+        let collected = result.expect("a body within the limit must be read successfully");
+        assert_eq!(collected.to_bytes().as_ref(), payload.as_slice());
     }
 
     #[test]

@@ -417,6 +417,117 @@ async fn unencrypted_kb_search_is_capped_and_cannot_full_dump() {
     );
 }
 
+/// Adversarial (QA-pass finding, principle #15): `max_body_bytes` is
+/// documented and configured as a byte cap, but truncating via
+/// `.chars().take(n)` could return up to `4 * max_body_bytes` bytes for
+/// multi-byte UTF-8 content — silently defeating the cap's whole purpose
+/// (bounding response size). Uses real 4-byte-per-character content (emoji),
+/// not a cherry-picked ASCII value that would pass either way.
+#[tokio::test]
+async fn kb_query_get_body_cap_is_enforced_in_bytes_not_chars() {
+    let doc_store = fresh_doc_store().await;
+    let owner = Arc::new(Identity::generate("owner"));
+    let viewer_principal = "oauth:viewer@example.com";
+
+    // 🎉 is 4 bytes in UTF-8; 100 of them is 400 bytes, well over the cap.
+    let body: String = "🎉".repeat(100);
+    seed_unencrypted_kb(
+        &doc_store,
+        &owner,
+        "emoji-kb",
+        Some((viewer_principal, Role::Viewer)),
+        "n1",
+        "T",
+        &body,
+        &[],
+    )
+    .await;
+
+    let tight_limits = KbQueryLimits {
+        max_body_bytes: 10, // deliberately not a multiple of 4
+        max_scan_nodes: 500,
+        max_search_results: 20,
+    };
+    let result = extract_result(
+        kb_query::dispatch(
+            "kb/query.get",
+            &json!({"kb_id": "emoji-kb", "node_id": "n1"}),
+            &doc_store,
+            Some(viewer_principal),
+            tight_limits,
+        )
+        .await,
+    );
+
+    let returned_body = result["body"].as_str().unwrap();
+    assert!(
+        returned_body.len() <= 10,
+        "returned body must never exceed max_body_bytes BYTES (got {} bytes for {:?}) — a \
+         char-based truncation would silently return up to 4x this cap for emoji/multi-byte \
+         content",
+        returned_body.len(),
+        returned_body
+    );
+    assert_eq!(result["body_truncated"], true);
+}
+
+/// Adversarial (QA-pass finding, principle #15): `graph` bounds the number
+/// of NODES scanned via `max_scan_nodes`, but without a separate cap on the
+/// total edge count, a small number of densely-linked "hub" nodes could
+/// still produce a full-dump-sized response through the edges array alone.
+#[tokio::test]
+async fn kb_query_graph_edge_count_is_capped_even_from_a_single_densely_linked_hub_node() {
+    let doc_store = fresh_doc_store().await;
+    let owner = Arc::new(Identity::generate("owner"));
+    let viewer_principal = "oauth:viewer@example.com";
+
+    doc_store.set_signer(Arc::clone(&owner));
+    let mut coll = KbCollectionDoc::new_owned("hub-kb", &owner.fingerprint(), "owner");
+    coll.set_transport_policy(TransportPolicy::Hub);
+    coll.upsert_member(viewer_principal, "viewer", Role::Viewer);
+    let _ = coll.add_node("hub", "Hub");
+    doc_store
+        .share_doc("kbc:hub-kb", &coll.encode_state())
+        .await
+        .unwrap();
+
+    // A single hub node linking to far more targets than the cap.
+    const LINK_COUNT: usize = 200;
+    let mut hub = KbNodeDoc::new("hub", "Hub", "links to everything", &[]);
+    for i in 0..LINK_COUNT {
+        let _ = hub.add_link(&format!("target-{i}"));
+    }
+    doc_store
+        .share_doc("kb:hub", &hub.encode_state())
+        .await
+        .unwrap();
+
+    let tight_limits = KbQueryLimits {
+        max_body_bytes: 65_536,
+        max_scan_nodes: 20, // « LINK_COUNT
+        max_search_results: 20,
+    };
+    let result = extract_result(
+        kb_query::dispatch(
+            "kb/query.graph",
+            &json!({"kb_id": "hub-kb"}),
+            &doc_store,
+            Some(viewer_principal),
+            tight_limits,
+        )
+        .await,
+    );
+
+    let edges = result["edges"].as_array().unwrap();
+    assert!(
+        edges.len() <= 20,
+        "edge count must be capped even when a single node contributes far more links than \
+         max_scan_nodes — got {} edges from one hub node with {LINK_COUNT} real links",
+        edges.len()
+    );
+    assert_eq!(result["edges_truncated"], true);
+}
+
 // ---------------------------------------------------------------------------
 // Access-gate adversarial tests.
 // ---------------------------------------------------------------------------
@@ -496,6 +607,7 @@ async fn kb_query_unreachable_when_disabled() {
         jwks_url: "https://unused.example.com/jwks".to_string(),
         issuer: None,
         kb_query_enabled: false,
+        max_request_body_bytes: 1_048_576,
         kb_query_max_body_bytes: 65_536,
         kb_query_max_scan_nodes: 500,
         kb_query_max_search_results: 20,
@@ -522,6 +634,51 @@ async fn kb_query_unreachable_when_disabled() {
         "expected a clear 'disabled' error distinct from 'method not found', got: {error}"
     );
     assert!(response.get("result").is_none());
+}
+
+/// Adversarial (QA-pass finding, principle #15): `kb_query_enabled=true` but
+/// no `DocStore` exists to serve from (`collab.enabled=false`) is a
+/// DISTINCT condition from "disabled" above and must get its own clear,
+/// JSON-RPC-shaped error — not silently fall into the bare
+/// unauthenticated-probe diagnostic (which has no `error`/`result` field at
+/// all and would be indistinguishable from "no RPC body was sent").
+#[tokio::test]
+async fn kb_query_enabled_but_no_doc_store_gets_a_distinct_jsonrpc_error() {
+    let config = crate::oauth::ResourceServerConfig {
+        canonical_resource_uri: "https://mae.example.com/mcp".to_string(),
+        principal_claim: "sub".to_string(),
+        jwks_url: "https://unused.example.com/jwks".to_string(),
+        issuer: None,
+        kb_query_enabled: true,
+        max_request_body_bytes: 1_048_576,
+        kb_query_max_body_bytes: 65_536,
+        kb_query_max_scan_nodes: 500,
+        kb_query_max_search_results: 20,
+    };
+    let principal = mae_mcp_test_principal("oauth:someone@example.com");
+    let rpc = mae_mcp::protocol::JsonRpcRequest {
+        jsonrpc: "2.0".to_string(),
+        id: json!(7),
+        method: "kb/query.capabilities".to_string(),
+        params: Some(json!({"kb_id": "kb1"})),
+    };
+
+    let response =
+        crate::oauth::route_authenticated_request(Some(rpc), &config, None, &principal).await;
+
+    let error = response
+        .get("error")
+        .and_then(|e| e.get("message"))
+        .and_then(|m| m.as_str())
+        .expect("kb_query_enabled=true with no DocStore must return a JSON-RPC error, not silently a bare diagnostic");
+    assert!(
+        error.contains("DocStore") || error.contains("collab"),
+        "expected an error naming the actual cause (no DocStore / collab.enabled), got: {error}"
+    );
+    assert!(response.get("result").is_none());
+    // Distinct from the "disabled" wording so an operator can tell the two
+    // conditions apart.
+    assert!(!error.contains("kb_query_enabled is false"));
 }
 
 /// Build a `ValidatedPrincipal` directly — this file tests below the JWT
