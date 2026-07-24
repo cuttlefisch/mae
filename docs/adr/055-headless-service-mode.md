@@ -137,5 +137,5 @@ both must be measured, not assumed away by "no `Renderer` is constructed").
   corruption.
 - **An orphaned socket** from an ungracefully-killed VS Code session (no clean MCP
   `shutdown`) is cleaned up on the next launch — extends the existing
-  `cleanup_stale_mcp_sockets` (`crates/mae/src/main.rs:62`) to the new stable-path
+  `cleanup_stale_mcp_sockets` (`crates/mae/src/terminal_loop.rs:727`) to the new stable-path
   convention.

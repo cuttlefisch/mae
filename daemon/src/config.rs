@@ -402,6 +402,13 @@ pub struct OAuthConfig {
     pub kb_query_max_scan_nodes: usize,
     /// Cap on the number of results a single `kb/query.search` call returns.
     pub kb_query_max_search_results: usize,
+    /// Hard cap on concurrent connections this listener will accept
+    /// (ADR-054's `#342` failure class — found missing here via an
+    /// independent security review: every OTHER listener in this daemon
+    /// gained this cap, but the OAuth HTTPS listener, added later, never
+    /// did). Same shape as `collab.max_connections`/`p2p.max_connections`
+    /// (`conn_limit::ConnLimiter`, `0` = unlimited).
+    pub max_connections: usize,
 }
 
 impl Default for OAuthConfig {
@@ -420,6 +427,7 @@ impl Default for OAuthConfig {
             kb_query_max_body_bytes: 65_536,
             kb_query_max_scan_nodes: 500,
             kb_query_max_search_results: 20,
+            max_connections: 256,
         }
     }
 }

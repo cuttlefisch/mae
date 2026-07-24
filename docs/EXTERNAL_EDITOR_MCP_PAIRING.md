@@ -156,11 +156,13 @@ never implied to be fine by omission (P1's config-fragmentation mitigation, ADR-
 | Cursor | ⬜ Not yet verified | ⬜ Not yet verified | ⬜ Not yet verified | Same as Zed |
 | JetBrains (any IDE with MCP support) | ⬜ Not yet verified | ⬜ Not yet verified | ⬜ Not yet verified | Same as Zed |
 
-**Minimum verified versions:** VS Code 1.130.0 (the version this session's live testing
-actually ran against — see `editors/vscode/README.md`'s own note on the `@types/vscode`
-floor). ADR-050's broader "MCP support landing around 1.99" claim is from release-notes
-research, not a live-tested floor — treat 1.130.0 as the actually-proven version and
-1.99 as an unverified lower bound.
+**Minimum verified versions:** VS Code `^1.104.0` (`editors/vscode/package.json`'s
+`engines.vscode` floor, mechanically checked against the installed `@types/vscode` `.d.ts`
+per Phase I's build-time self-check — see `editors/vscode/README.md`). The exact build
+used during this session's live human testing was not recorded, so 1.104.0 is the
+proven floor, not a claim about a specific tested version above it. ADR-050's broader
+"MCP support landing around 1.99" claim is from release-notes research, not a live-tested
+floor — treat 1.104.0 as the actually-proven version and 1.99 as an unverified lower bound.
 
 ## Which instance gets used?
 

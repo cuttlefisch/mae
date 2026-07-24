@@ -268,7 +268,8 @@ editor as the human's GUI and MAE running invisibly underneath. Design = **ADR-0
 cross-editor MCP compatibility: MCP-standard tool `annotations`, flat-schema extension, guidance-delivery
 fallback), **ADR-051** (per-session permission policy + per-session `DrivenWindow` isolation — closes the
 gap noted above), **ADR-052** (OAuth 2.1 resource-server design — a new HTTPS listener on `mae-daemon`,
-adopting `rmcp`/`rmcp-server-kit` rather than hand-rolling), **ADR-053** (live scoped read-through KB
+hand-rolled directly against `jsonwebtoken` after evaluating and explicitly rejecting `rmcp-server-kit`
+as a single-maintainer third-party dependency for a security-critical listener), **ADR-053** (live scoped read-through KB
 query surface — search/read a hub KB without full local replication; capped server-side search for
 unencrypted KBs, capped lazy-fetch-and-decrypt for E2E-encrypted KBs, never naive plaintext search of
 encrypted content), **ADR-054** (daemon concurrency hardening — replaces the KB-query path's single

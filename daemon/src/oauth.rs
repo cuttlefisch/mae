@@ -276,7 +276,10 @@ use bytes::Bytes;
 use http_body_util::Full;
 use hyper::body::Incoming;
 use hyper::{Request, Response, StatusCode};
+use mae_daemon::collab_handler;
 use mae_daemon::doc_store::DocStore;
+
+use crate::conn_limit::ConnLimiter;
 
 /// Load a PEM certificate chain + private key into a rustls server config.
 /// Supports PKCS8 and PKCS1 (RSA) private keys — whichever `rustls-pemfile`
@@ -507,12 +510,26 @@ pub(crate) async fn route_authenticated_request(
 /// (ADR-053/Phase G, #382) — `kb/query.*` has nothing to serve from
 /// otherwise, regardless of `kb_query_enabled`; `handle_request` reports
 /// this distinctly from "disabled" (see its `_` fallback below).
+///
+/// `limiter` bounds concurrent connections (ADR-054's `#342` failure class —
+/// found missing here via an independent security review: every OTHER
+/// listener in this daemon — collab TCP, KB Unix socket, P2P mesh — already
+/// had this cap; this one, added later, didn't. Checked immediately after
+/// `accept()`, before the TLS handshake, so a connection at capacity costs
+/// nothing beyond the accept itself, matching the P2P listener's own
+/// placement). The TLS handshake itself is wrapped in
+/// `collab_handler::HANDSHAKE_TIMEOUT_SECS` (reused, not a new constant) —
+/// without it, a client that opens the TCP connection and then stalls the
+/// TLS handshake parks one task+socket per connection forever, the same
+/// failure class just at an earlier step than the P2P mesh's own
+/// post-handshake `accept_bi` timeout.
 pub async fn run_oauth_listener(
     server_config: ResourceServerConfig,
     bind: std::net::SocketAddr,
     cert_path: &Path,
     key_path: &Path,
     doc_store: Option<Arc<DocStore>>,
+    limiter: ConnLimiter,
 ) -> std::io::Result<()> {
     let tls_config = load_tls_config(cert_path, key_path).map_err(std::io::Error::other)?;
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_config));
@@ -530,16 +547,38 @@ pub async fn run_oauth_listener(
                 continue;
             }
         };
+        let Some(guard) = limiter.try_acquire() else {
+            tracing::warn!(
+                active = limiter.current(),
+                %peer_addr,
+                "OAuth listener: connection cap reached, rejecting new connection"
+            );
+            continue;
+        };
         let acceptor = acceptor.clone();
         let config = config.clone();
         let jwks = jwks.clone();
         let doc_store = doc_store.clone();
 
         tokio::spawn(async move {
-            let tls_stream = match acceptor.accept(tcp_stream).await {
-                Ok(s) => s,
-                Err(e) => {
+            let _guard = guard;
+            let tls_stream = match tokio::time::timeout(
+                Duration::from_secs(collab_handler::HANDSHAKE_TIMEOUT_SECS),
+                acceptor.accept(tcp_stream),
+            )
+            .await
+            {
+                Ok(Ok(s)) => s,
+                Ok(Err(e)) => {
                     tracing::debug!(error = %e, %peer_addr, "TLS handshake failed");
+                    return;
+                }
+                Err(_) => {
+                    tracing::debug!(
+                        %peer_addr,
+                        timeout_secs = collab_handler::HANDSHAKE_TIMEOUT_SECS,
+                        "TLS handshake timed out"
+                    );
                     return;
                 }
             };

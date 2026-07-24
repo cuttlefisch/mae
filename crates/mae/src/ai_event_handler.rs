@@ -910,34 +910,72 @@ pub fn handle_mcp_request(
                 .map(str::to_string);
             match scheme_command {
                 Some(cmd) => {
-                    // Issue #372: this is the one MCP-originated mutation
-                    // path that bypasses `execute_tool_with_requester` (and
-                    // thus its `with_ai_dispatch_scope` wrap) entirely, since
-                    // `crates/ai` has no `SchemeRuntime` in scope and can't
-                    // dispatch a Scheme-defined command itself. Wrap this
-                    // call site the same way so it gets the same companion-
-                    // window guarantee — do NOT wrap `dispatch_command_by_name`
-                    // itself, since it's also called from
-                    // `state_sync_apply.rs`'s `(run-command ...)` drain loop
-                    // for ordinary human-triggered Scheme automation, where
-                    // running in the human's own focused window is correct.
-                    // ADR-051: session-scoped the same way execute_tool_with_
-                    // requester below is, so this bridge doesn't reintroduce
-                    // the cross-session window-sharing gap for exactly the
-                    // one dispatch path that doesn't go through that function.
-                    editor.with_ai_dispatch_scope_for_session(Some(session_id), |editor| {
-                        scheme.dispatch_command_by_name(editor, &cmd)
-                    });
-                    // Matches execute_command_dispatch's existing response
-                    // shape exactly (`crates/ai/src/executor/core_exec.rs`) —
-                    // this bridge is a dispatch-mechanism swap, not a
-                    // response-contract change.
-                    ExecuteResult::Immediate(ToolResult {
-                        tool_call_id: fake_call.id.clone(),
-                        tool_name: fake_call.name.clone(),
-                        success: true,
-                        output: format!("Executed: {}", cmd),
-                    })
+                    // SECURITY (found via adversarial review): this bridge
+                    // used to dispatch straight through with NO permission
+                    // check at all -- it never reaches
+                    // `execute_tool_dispatch_body`'s `policy.is_allowed(...)`
+                    // gate (line ~98), which is the ONLY enforcement point in
+                    // the builtins-only path below. A session that declared
+                    // a ReadOnly ceiling at `initialize` (ADR-051's own
+                    // headline feature) could call `execute_command` naming
+                    // any Scheme-sourced command -- a large fraction of
+                    // feature-module commands (git, kb-sharing, collab,
+                    // babel, etc. per `crates/core/src/commands.rs`) are
+                    // Scheme-sourced -- and it would execute with full
+                    // effect regardless of the declared/global policy.
+                    // Enforce the SAME blanket bar the generic
+                    // `execute_command` tool itself carries for the Rust-
+                    // builtin path (`execute_command_dispatch`,
+                    // `crates/ai/src/executor/core_exec.rs`, dispatches via
+                    // `editor.dispatch_builtin` with no further per-command
+                    // check beyond that tool's own registered `Write` tier)
+                    // -- this bridge must never be a strictly weaker path
+                    // than the one it's standing in for.
+                    if !effective_policy.is_allowed(PermissionTier::Write) {
+                        ExecuteResult::Immediate(ToolResult {
+                            tool_call_id: fake_call.id.clone(),
+                            tool_name: fake_call.name.clone(),
+                            success: false,
+                            output: format!(
+                                "Permission denied: {} requires {:?} tier",
+                                fake_call.name,
+                                PermissionTier::Write
+                            ),
+                        })
+                    } else {
+                        // Issue #372: this is the one MCP-originated mutation
+                        // path that bypasses `execute_tool_with_requester`
+                        // (and thus its `with_ai_dispatch_scope` wrap)
+                        // entirely, since `crates/ai` has no `SchemeRuntime`
+                        // in scope and can't dispatch a Scheme-defined
+                        // command itself. Wrap this call site the same way
+                        // so it gets the same companion-window guarantee —
+                        // do NOT wrap `dispatch_command_by_name` itself,
+                        // since it's also called from
+                        // `state_sync_apply.rs`'s `(run-command ...)` drain
+                        // loop for ordinary human-triggered Scheme
+                        // automation, where running in the human's own
+                        // focused window is correct. ADR-051: session-scoped
+                        // the same way execute_tool_with_requester below is,
+                        // so this bridge doesn't reintroduce the
+                        // cross-session window-sharing gap for exactly the
+                        // one dispatch path that doesn't go through that
+                        // function.
+                        editor.with_ai_dispatch_scope_for_session(Some(session_id), |editor| {
+                            scheme.dispatch_command_by_name(editor, &cmd)
+                        });
+                        // Matches execute_command_dispatch's existing
+                        // response shape exactly
+                        // (`crates/ai/src/executor/core_exec.rs`) — this
+                        // bridge is a dispatch-mechanism swap, not a
+                        // response-contract change.
+                        ExecuteResult::Immediate(ToolResult {
+                            tool_call_id: fake_call.id.clone(),
+                            tool_name: fake_call.name.clone(),
+                            success: true,
+                            output: format!("Executed: {}", cmd),
+                        })
+                    }
                 }
                 None => execute_tool_with_requester(
                     editor,
@@ -1655,6 +1693,78 @@ mod tests {
             editor.buffers[idx].rope().to_string(),
             "hi",
             "the scheme command's body must have actually run, not just been looked up"
+        );
+    }
+
+    /// Adversarial regression test (found via an independent security
+    /// review of this branch, not by a happy-path pass): before this fix,
+    /// the Scheme-sourced-command bridge above dispatched with NO
+    /// permission check at all — it never reached
+    /// `execute_tool_dispatch_body`'s `policy.is_allowed(...)` gate, the
+    /// only enforcement point in the parallel builtins-only path. A session
+    /// that declared a ReadOnly ceiling at `initialize` (ADR-051's own
+    /// headline feature, and the exact mechanism
+    /// `session_declared_ceiling_denies_a_call_the_global_policy_alone_
+    /// would_allow` above already proves for a Rust builtin command) could
+    /// still execute ANY Scheme-sourced command with full effect via
+    /// `execute_command`. Proves both properties: the call is denied, AND
+    /// the command's body never actually ran (buffer unchanged) — a test
+    /// that only checked `result.success == false` without also checking
+    /// for a real side effect would pass even if denial were reported but
+    /// dispatch happened anyway.
+    #[tokio::test]
+    async fn execute_command_denies_a_scheme_sourced_command_above_the_declared_ceiling() {
+        let mut editor = Editor::new();
+        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
+        scheme
+            .eval(r#"(define (my-greet) (buffer-insert "hi")) (define-command "my-greet" "test" "my-greet")"#)
+            .unwrap();
+        scheme.apply_to_editor(&mut editor);
+        assert_eq!(
+            editor.commands.get("my-greet").map(|c| &c.source),
+            Some(&mae_core::CommandSource::Scheme("my-greet".into())),
+            "sanity: registration must have landed before dispatch is exercised"
+        );
+
+        let global_policy = PermissionPolicy {
+            auto_approve_up_to: PermissionTier::Shell,
+        };
+        let (req, mut rx) = mcp_request_with_ceiling(
+            "execute_command",
+            serde_json::json!({"command": "my-greet"}),
+            1,
+            Some("ReadOnly"),
+        );
+        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
+        let mut deferred = Vec::new();
+        handle_mcp_request(
+            &mut editor,
+            req,
+            &[],
+            &global_policy,
+            &lsp_tx,
+            &mut deferred,
+            &mut scheme,
+        );
+
+        let result = rx.try_recv().expect("reply must have been sent");
+        assert!(
+            !result.success,
+            "a session with a declared ReadOnly ceiling must be denied a Scheme-sourced \
+             command dispatched via execute_command, got success: {}",
+            result.output
+        );
+        assert!(
+            result.output.contains("Permission denied"),
+            "denial reason should be a permission error, got: {}",
+            result.output
+        );
+        let idx = editor.active_buffer_idx();
+        assert_eq!(
+            editor.buffers[idx].rope().to_string(),
+            "",
+            "the Scheme command's body must NOT have run -- denial that still executes the \
+             command would be a strictly worse bug than reporting no error at all"
         );
     }
 

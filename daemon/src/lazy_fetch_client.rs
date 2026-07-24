@@ -45,8 +45,19 @@ impl LazyFetchClient {
     /// decision 7's "keyed per authenticated principal," and the actual
     /// defense against a multi-tenant client cross-serving decrypted
     /// content between two different authenticated identities.
+    ///
+    /// Length-prefixed, not a bare `"{principal}:{node_id}"` join (found via
+    /// an independent security review: a plain `:`-joined key lets
+    /// `principal="alice", node_id="concept:x"` collide with
+    /// `principal="alice:concept", node_id="x"` — MAE's own node-id
+    /// convention is colon-namespaced, and OAuth `sub` claims can
+    /// legitimately contain colons too, e.g. URN-style OIDC subjects). The
+    /// principal's exact byte length is embedded ahead of it, so no
+    /// delimiter inside either component can ever shift where one field
+    /// ends and the other begins — this is provably collision-free for any
+    /// input, not just the inputs this module happens to be tested with.
     fn cache_key(principal: &str, node_id: &str) -> String {
-        format!("{principal}:{node_id}")
+        format!("{}:{principal}:{node_id}", principal.len())
     }
 
     /// A cached hit, if present, for `(principal, node_id)`.
@@ -187,5 +198,63 @@ mod tests {
         let a_cached = client.get_cached("principal-a", "shared-node");
         assert!(a_cached.is_some());
         assert_eq!(a_cached.unwrap().title, "Real Title");
+    }
+
+    /// Adversarial regression test (found via an independent security
+    /// review): the cache key used to be a bare `"{principal}:{node_id}"`
+    /// join, which lets a colon inside `principal` shift the field boundary
+    /// -- `principal="alice", node_id="concept:x"` and
+    /// `principal="alice:concept", node_id="x"` produced the IDENTICAL key
+    /// under the old scheme. Both are realistic inputs, not contrived edge
+    /// cases: MAE's own node-id convention is colon-namespaced
+    /// (`concept:x`, `cmd:y`, ...) and OAuth `sub` claims can legitimately
+    /// contain colons (URN-style OIDC subjects). Proves the two genuinely
+    /// distinct `(principal, node_id)` pairs above produce DIFFERENT cache
+    /// keys, and that caching under one never produces a hit for the other
+    /// -- the actual property this module's own doc comment claims
+    /// (`cache_key`'s "the actual defense against a multi-tenant client
+    /// cross-serving decrypted content between two different authenticated
+    /// identities").
+    #[test]
+    fn colliding_delimiter_shaped_principal_and_node_id_never_cross_contaminate() {
+        let client = LazyFetchClient::new(10);
+        let key = ContentKey::generate();
+
+        let mut node_a = mae_sync::kb::KbNodeDoc::new_with_client_id("x", "", "", &[], 1);
+        let mut state_a = Vec::new();
+        for pt in [
+            node_a.encode_state(),
+            node_a.set_title("Node under alice/concept:x"),
+        ] {
+            let (_id, outer) = op_set::seal_op(&state_a, &key, &pt, 1).unwrap();
+            state_a = op_set::merge(&state_a, &outer).unwrap();
+        }
+        let ciphertext_a = encoding::update_to_base64(&state_a);
+
+        // (principal="alice", node_id="concept:x") — the realistic case: a
+        // colon-namespaced MAE node id fetched by a plain principal.
+        let cached_a = client.decrypt_and_cache("alice", "concept:x", &ciphertext_a, &key);
+        assert!(cached_a.is_some(), "expected a successful decrypt");
+
+        // (principal="alice:concept", node_id="x") — a DIFFERENT identity
+        // (a colon-bearing principal string, e.g. a URN-style OIDC subject)
+        // fetching a DIFFERENT, unrelated node id that happens to be the
+        // suffix of the string above. Under the old bare-join scheme this
+        // would have been a cache HIT for principal "alice"'s content --
+        // proving the fix, this must be a genuine miss.
+        let should_be_miss = client.get_cached("alice:concept", "x");
+        assert!(
+            should_be_miss.is_none(),
+            "principal 'alice:concept' fetching node 'x' must NOT get a cache hit from \
+             principal 'alice''s node 'concept:x' -- got: {should_be_miss:?}"
+        );
+
+        // And the original entry is still correctly retrievable under its
+        // own real key.
+        let correct_hit = client.get_cached("alice", "concept:x");
+        assert!(
+            correct_hit.is_some(),
+            "the original entry must be unaffected"
+        );
     }
 }

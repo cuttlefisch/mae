@@ -68,10 +68,15 @@ instance — never a GUI window — when none is running for the current workspa
 to avoid drift across ~700+ registered tools (per CLAUDE.md principle #7's "no hardcoding"
 corollary: a derived, single-source-of-truth mapping, not per-tool manual annotation).
 Extend the flat `ToolParameters`/`ToolProperty` JSON-Schema subset
-(`crates/ai/src/types.rs:24-49` — scalar properties only today, no nested objects/arrays,
+(`crates/ai/src/types.rs` — originally scalar properties only, no nested objects/arrays,
 no `oneOf`, string enums only) additively with nested-object/array support for richer KB
 tool parameters (e.g. structured search filters), without breaking any existing flat tool
-definition.
+definition. **Implemented in the L1 closure pass (issue #376):** `ToolProperty` gained
+`items: Option<Box<ToolProperty>>` (array element schema) and `properties`/`object_required`
+(object shape), both `#[serde(skip_serializing_if = "Option::is_none")]` so every
+pre-existing flat tool's serialized schema is byte-identical; `propose_changes`'s `changes`
+param is the first real nested-object case (`items.properties.file_path`/`new_content`),
+verified via a real `tools/list` round-trip test — see `docs/adr/050-final-adversarial-review.md`.
 
 **D3 — Cross-editor generality.** The wire protocol, annotations, schema, and
 guidance-instructions delivery are shared and host-agnostic. A documented, tested, generic

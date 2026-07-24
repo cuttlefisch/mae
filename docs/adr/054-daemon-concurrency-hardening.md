@@ -29,7 +29,7 @@ timeout (issue #342's fix).
 
 **The local KB Unix-socket path — the one every routine `kb_search`/`kb_get`/etc. call
 from every locally-connected frontend actually uses — is dramatically less mature:**
-- `DaemonState` is wrapped once in `Arc<Mutex<DaemonState>>` (`daemon/src/main.rs:33,148`),
+- `DaemonState` is wrapped once in `Arc<Mutex<DaemonState>>` (`daemon/src/main.rs:155`),
   and essentially every `handler::dispatch` arm (`daemon/src/handler.rs:88-346`) takes
   `state.lock().await` and runs its query **while holding that single global lock** — with
   **no** per-KB, per-node, or per-store granularity anywhere on this path.

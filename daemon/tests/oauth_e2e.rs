@@ -149,6 +149,15 @@ struct DaemonGuard {
 /// at the mock server above) and wait for it to actually accept TLS
 /// connections before returning.
 async fn spawn_daemon_with_oauth(jwks_addr: SocketAddr) -> DaemonGuard {
+    spawn_daemon_with_oauth_capped(jwks_addr, 0).await
+}
+
+/// Same as `spawn_daemon_with_oauth`, with an explicit `max_connections`
+/// (`0` = unlimited, matching `ConnLimiter`'s own convention).
+async fn spawn_daemon_with_oauth_capped(
+    jwks_addr: SocketAddr,
+    max_connections: usize,
+) -> DaemonGuard {
     let tmp = tempfile::tempdir().unwrap();
     let cert_path = tmp.path().join("oauth.crt");
     let key_path = tmp.path().join("oauth.key");
@@ -178,12 +187,14 @@ max_request_body_bytes = 200
 kb_query_max_body_bytes = 65536
 kb_query_max_scan_nodes = 500
 kb_query_max_search_results = 20
+max_connections = {max_connections}
 "#,
         collab_port = collab_port,
         oauth_port = oauth_port,
         jwks_port = jwks_addr.port(),
         cert_path = cert_path.display(),
         key_path = key_path.display(),
+        max_connections = max_connections,
     );
     let config_path = tmp.path().join("daemon.toml");
     std::fs::write(&config_path, config_toml).unwrap();
@@ -342,4 +353,116 @@ async fn oauth_and_kb_query_over_a_real_tls_connection() {
         "an authenticated caller sending a body over max_request_body_bytes must get a clean \
          413, never be allowed to force unbounded server-side buffering"
     );
+}
+
+/// Adversarial test (found via an independent security review of this
+/// branch): `oauth.rs`'s own unit tests already prove a tampered/forged
+/// signature is rejected (`daemon/src/oauth.rs`'s
+/// `tampered_signature_is_rejected`), but only in-process -- never carried
+/// over a real TLS+HTTP connection the way this file's other adversarial
+/// cases (wrong-audience, expired) already are. Closes that gap: signs a
+/// token with a SECOND, unrelated keypair (never published to the mock JWKS
+/// server, so it's cryptographically indistinguishable from a legitimate
+/// signature except for the fact that it doesn't verify against `alice`'s
+/// registered key) and asserts the real wire response is a clean 401, not a
+/// crash, a hang, or -- worse -- a response that reached dispatch.
+#[tokio::test]
+async fn forged_signature_token_is_rejected_over_the_real_wire() {
+    let (_private_key_pem, jwks) = generate_key_material();
+    let jwks_addr = spawn_mock_jwks_server(&jwks).await;
+    let daemon = spawn_daemon_with_oauth(jwks_addr).await;
+    let base_url = format!("https://{}", daemon.oauth_addr);
+    let client = insecure_https_client();
+
+    // A completely different keypair, never registered in the JWKS this
+    // daemon trusts -- the token is well-formed and its claims are
+    // otherwise valid, but the signature does not match any key the
+    // server will accept.
+    let (forger_private_key_pem, _unused_jwks) = generate_key_material();
+    let forged_token = sign_token(&forger_private_key_pem, &valid_claims());
+
+    let forged_resp = client
+        .get(&base_url)
+        .bearer_auth(&forged_token)
+        .send()
+        .await
+        .expect("forged-signature request");
+    assert_eq!(
+        forged_resp.status(),
+        401,
+        "a token signed by a key not present in the trusted JWKS must be rejected over the \
+         real wire, exactly like the in-process unit test already proves for the local case"
+    );
+    assert!(
+        forged_resp
+            .headers()
+            .get(reqwest::header::WWW_AUTHENTICATE)
+            .is_some(),
+        "a rejected forged token must still get a spec-compliant WWW-Authenticate challenge"
+    );
+}
+
+/// Adversarial regression test (found via an independent security review of
+/// this branch): the OAuth HTTPS listener was the one new network-facing
+/// surface in this daemon that never got a `ConnLimiter` cap, unlike collab
+/// TCP / KB Unix socket / P2P mesh which all already had one (ADR-054's
+/// `#342` failure class). Proves the fix over the real wire: opens
+/// `max_connections` real TCP connections and keeps them alive, then proves
+/// the next one is rejected -- the server closes it immediately, before any
+/// TLS handshake, rather than accepting an unbounded number of parked
+/// connections.
+#[tokio::test]
+async fn oauth_listener_connection_cap_rejects_the_nplus1th_client() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (_private_key_pem, jwks) = generate_key_material();
+    let jwks_addr = spawn_mock_jwks_server(&jwks).await;
+    let daemon = spawn_daemon_with_oauth_capped(jwks_addr, 2).await;
+
+    // Open 2 raw TCP connections and keep them alive (matches
+    // max_connections = 2) -- no TLS/HTTP needed to prove the cap itself,
+    // since `try_acquire()` runs before the TLS handshake even starts.
+    let mut kept = Vec::new();
+    for _ in 0..2 {
+        let conn = tokio::net::TcpStream::connect(daemon.oauth_addr)
+            .await
+            .expect("connection within the cap must be accepted");
+        kept.push(conn);
+    }
+
+    // The 3rd connection exceeds the cap -- the server drops it (via the
+    // guard never being acquired, so the accepted `TcpStream` is dropped at
+    // the end of that loop iteration with no task ever spawned for it)
+    // before any TLS handshake is attempted. From the client's side: the
+    // raw TCP connect can succeed (accept() already happened at the OS
+    // level), but a subsequent read must hit EOF almost immediately, never
+    // a real TLS ServerHello.
+    let mut over_cap = tokio::net::TcpStream::connect(daemon.oauth_addr)
+        .await
+        .expect("raw TCP connect can still succeed even when the daemon-level cap is full");
+    let _ = over_cap.write_all(b"\x16\x03\x01\x00\x00").await; // harmless TLS-shaped bytes
+    let mut buf = [0u8; 16];
+    let read_result = tokio::time::timeout(Duration::from_secs(5), over_cap.read(&mut buf)).await;
+    match read_result {
+        Ok(Ok(0)) => {} // EOF -- server closed it, exactly as expected
+        Ok(Ok(n)) => panic!(
+            "expected the over-cap connection to be closed with no data, got {n} bytes \
+             (a real TLS response would mean the cap was NOT enforced)"
+        ),
+        Ok(Err(e)) => {
+            // A reset (ECONNRESET) is also an acceptable "closed" signal
+            // depending on OS/timing.
+            assert!(
+                matches!(e.kind(), std::io::ErrorKind::ConnectionReset),
+                "expected a clean EOF or connection reset for the over-cap connection, got: {e}"
+            );
+        }
+        Err(_) => panic!(
+            "the over-cap connection was neither closed nor served within 5s -- the cap \
+             appears to not be enforced at all (a stuck/parked connection is exactly the \
+             #342 failure class this test exists to catch)"
+        ),
+    }
+
+    drop(kept);
 }

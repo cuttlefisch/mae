@@ -277,10 +277,17 @@ async fn main() {
             let cert_path = config.oauth.cert_path.clone();
             let key_path = config.oauth.key_path.clone();
             let doc_store = doc_store_for_query.clone();
+            let oauth_limiter = conn_limit::ConnLimiter::new(config.oauth.max_connections);
             tokio::spawn(async move {
-                if let Err(e) =
-                    oauth::run_oauth_listener(server_config, bind, &cert_path, &key_path, doc_store)
-                        .await
+                if let Err(e) = oauth::run_oauth_listener(
+                    server_config,
+                    bind,
+                    &cert_path,
+                    &key_path,
+                    doc_store,
+                    oauth_limiter,
+                )
+                .await
                 {
                     error!(error = %e, "OAuth listener failed to start");
                 }
