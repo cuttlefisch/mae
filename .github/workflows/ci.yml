@@ -47,6 +47,19 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # crates/mae/tests/headless_kb_convergence_e2e.rs (L3d, #380) spawns a
+      # real `mae-daemon` via find_daemon_binary()'s daemon/target/release/
+      # candidate path. It's intentionally in the default (non-#[ignore]d)
+      # suite, unlike the daemon workspace itself is only built by the
+      # separate `daemon` job -- making this job `needs: [daemon]` would
+      # serialize every matrix leg (test/clippy/fmt x stable/nightly) behind
+      # daemon's own ~10min job just for one test in one leg, so build only
+      # the daemon binary here instead, scoped to exactly the leg that needs
+      # it. Cheap relative to the full `daemon` job (no test/clippy/fmt).
+      - name: Build mae-daemon (for headless_kb_convergence_e2e)
+        if: matrix.toolchain == 'stable' && matrix.step == 'test'
+        run: cd daemon && cargo build --release --bin mae-daemon
+
       # Stable: release build (reused by e2e job via artifact upload).
       # Nightly: debug build (faster, no artifact needed).
       - name: cargo test

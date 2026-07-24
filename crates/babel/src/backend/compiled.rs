@@ -385,6 +385,22 @@ mod tests {
         assert_eq!(b.cxx_std, "c++17");
     }
 
+    /// A genuinely unique per-invocation temp dir name -- `std::process::id()`
+    /// alone (the previous scheme) is constant for every test THREAD within
+    /// one `cargo test` process, so it can't disambiguate concurrent test
+    /// runs sharing the same machine's `/tmp` (observed in CI: two different
+    /// tests in this file intermittently hit "Text file busy" executing
+    /// each other's same-named `big_output.sh`, once per failing run, always
+    /// a different one of the two -- a real cross-test race, not a fluke).
+    /// No new dependency added (this crate has zero deps, deliberately) --
+    /// pid + a process-local atomic counter is sufficient and immune to any
+    /// possible collision regardless of the exact interleaving.
+    fn unique_test_dir(label: &str) -> std::path::PathBuf {
+        static COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        std::env::temp_dir().join(format!("mae_babel_{label}_{}_{n}", std::process::id()))
+    }
+
     /// Regression test for the pipe-deadlock class `execute_shell` already
     /// fixed (`execute.rs`): a child that writes more than the OS pipe
     /// buffer (~64KB) before exiting must not hang forever, since nothing
@@ -394,8 +410,7 @@ mod tests {
     /// about pipe buffer backpressure and isn't reproducible any other way.
     #[test]
     fn run_binary_does_not_deadlock_on_large_stdout() {
-        let dir =
-            std::env::temp_dir().join(format!("mae_babel_run_binary_test_{}", std::process::id()));
+        let dir = unique_test_dir("run_binary_test");
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("big_output.sh");
         // ~200KB of stdout — well over the ~64KB pipe buffer that triggers
@@ -430,10 +445,7 @@ mod tests {
     /// original bug's second half — see `run_binary`'s doc comment).
     #[test]
     fn run_binary_truncates_output_past_the_configured_limit() {
-        let dir = std::env::temp_dir().join(format!(
-            "mae_babel_run_binary_trunc_test_{}",
-            std::process::id()
-        ));
+        let dir = unique_test_dir("run_binary_trunc_test");
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("big_output.sh");
         std::fs::write(&script, "#!/bin/sh\nyes | head -c 200000\n").unwrap();
