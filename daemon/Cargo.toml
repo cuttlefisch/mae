@@ -65,6 +65,10 @@ tempfile = "3"
 rsa = "0.9"
 rand = "0.8"
 base64 = "0.22"
+# oauth_kb_query_e2e.rs generates a real self-signed TLS cert for the real
+# OAuth listener it spawns -- same crate `shared/mcp/src/tls.rs` already
+# uses for mTLS test cert generation.
+rcgen = { version = "0.14", default-features = false, features = ["ring", "pem"] }
 # ADR-054: the capacity benchmark spawns the real compiled mae-daemon binary
 # (bench targets, like `daemon/tests/*.rs`, only see the library crate's
 # public re-exports -- handler/accept_loop/DaemonState are bin-crate-private
