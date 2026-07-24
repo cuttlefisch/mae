@@ -153,6 +153,45 @@ describe('headlessDiscovery', () => {
 
       await assert.rejects(resultPromise, HeadlessEnsureError);
     });
+
+    // Regression test for a real bug found via live debugging with a user:
+    // the original hardcoded 3000ms timeout was too tight for a workspace
+    // folder on a slow/cross-boundary mount (e.g. a Windows drive mounted
+    // into WSL2 under active antivirus scanning), where even simple
+    // filesystem stat calls can take several seconds — `mae --headless
+    // --print-socket-path` itself was fine, the timeout was just wrong.
+    it('honors a caller-supplied timeoutMs instead of a fixed default', async () => {
+      const exe = makeTempExecutable(tmpDir, 'mae');
+      const { spawnFn, calls } = createSpawnSpy();
+
+      const resultPromise = resolveStableSocketPath(exe, tmpDir, spawnFn, 50);
+      // Attach the rejection expectation immediately (before awaiting
+      // anything else) so Node never observes an unhandled-rejection window
+      // between the promise settling and something handling it.
+      const assertion = assert.rejects(resultPromise, HeadlessEnsureError);
+      await new Promise((r) => setTimeout(r, 100));
+
+      // The short custom timeout must have already fired -- proven by the
+      // spawned child having been killed -- well before this test's own
+      // mocha timeout would ever be at risk.
+      assert.strictEqual(calls[0].child.killed, true, 'expected the short custom timeout to fire and kill the child');
+      await assertion;
+    });
+
+    it('does not time out early when the caller-supplied timeoutMs is generous', async () => {
+      const exe = makeTempExecutable(tmpDir, 'mae');
+      const { spawnFn, calls } = createSpawnSpy();
+
+      const resultPromise = resolveStableSocketPath(exe, tmpDir, spawnFn, 10000);
+      // Simulate a slow-but-real response: waits past what the OLD hardcoded
+      // 3000ms default would have tolerated, then completes successfully.
+      await new Promise((r) => setTimeout(r, 200));
+      assert.strictEqual(calls[0].child.killed, false, 'must not have been killed by a premature timeout');
+      calls[0].child.emitStdout('/home/user/.local/share/mae/headless/abc123.sock\n');
+      calls[0].child.emitClose(0);
+
+      assert.strictEqual(await resultPromise, '/home/user/.local/share/mae/headless/abc123.sock');
+    });
   });
 
   describe('probeSocket', () => {

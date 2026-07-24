@@ -43,6 +43,11 @@
           "default": "mae",
           "markdownDescription": "Path to the `mae` binary used to auto-spawn a headless instance for the current workspace. Defaults to resolving it from `PATH`. Must resolve to an existing executable file — never interpreted by a shell."
         },
+        "mae.headlessTimeoutMs": {
+          "type": "number",
+          "default": 15000,
+          "markdownDescription": "Milliseconds to wait for `mae --headless --print-socket-path` to resolve, and (separately) for a freshly-spawned headless instance to start accepting connections. The default is generous for a native filesystem; increase it if your workspace folder is a slow or cross-boundary mount (e.g. a Windows drive mounted into WSL2, especially under active antivirus real-time scanning) where even simple filesystem operations can take several seconds."
+        },
         "mae.permissionCeiling": {
           "type": "string",
           "enum": [

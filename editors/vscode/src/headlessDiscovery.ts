@@ -22,9 +22,21 @@ export type SpawnFn = (
 ) => cp.ChildProcess;
 
 const PROBE_TIMEOUT_MS = 500;
-const SPAWN_CONFIRM_TIMEOUT_MS = 5000;
 const SPAWN_POLL_INTERVAL_MS = 250;
-const PRINT_SOCKET_PATH_TIMEOUT_MS = 3000;
+
+/**
+ * Default budget (ms) for `mae --headless --print-socket-path` to complete,
+ * and (scaled up) for a freshly-spawned instance to start accepting
+ * connections. 3s was the original default -- too tight in practice: on a
+ * remote/WSL session where the workspace folder is a cross-boundary mount
+ * (e.g. a Windows drive mounted into WSL2 via 9p, especially under active
+ * antivirus real-time scanning), even a handful of directory stat calls can
+ * take multiple seconds, well past what's typical on a native filesystem.
+ * Both `ensureHeadlessRunning` call sites accept an override (wired to the
+ * `mae.headlessTimeoutMs` setting in `extension.ts`) rather than forcing
+ * every environment to accept one hardcoded value.
+ */
+export const DEFAULT_HEADLESS_TIMEOUT_MS = 15000;
 
 export class HeadlessEnsureError extends Error {
   constructor(message: string) {
@@ -78,14 +90,15 @@ function runCapture(
 export async function resolveStableSocketPath(
   maeBinary: string,
   workspaceRoot: string,
-  spawnFn: SpawnFn = cp.spawn
+  spawnFn: SpawnFn = cp.spawn,
+  timeoutMs: number = DEFAULT_HEADLESS_TIMEOUT_MS
 ): Promise<string> {
   const resolved = resolveExecutable(maeBinary);
   const { code, stdout, stderr } = await runCapture(
     resolved,
     ['--headless', '--print-socket-path'],
     workspaceRoot,
-    PRINT_SOCKET_PATH_TIMEOUT_MS,
+    timeoutMs,
     spawnFn
   );
   const socketPath = stdout.trim();
@@ -187,9 +200,10 @@ export interface EnsureHeadlessResult {
 export async function ensureHeadlessRunning(
   maeBinary: string,
   workspaceRoot: string,
-  spawnFn: SpawnFn = cp.spawn
+  spawnFn: SpawnFn = cp.spawn,
+  timeoutMs: number = DEFAULT_HEADLESS_TIMEOUT_MS
 ): Promise<EnsureHeadlessResult> {
-  const socketPath = await resolveStableSocketPath(maeBinary, workspaceRoot, spawnFn);
+  const socketPath = await resolveStableSocketPath(maeBinary, workspaceRoot, spawnFn, timeoutMs);
 
   if (await probeSocket(socketPath)) {
     return { socketPath, spawnedNewInstance: false };
@@ -200,12 +214,12 @@ export async function ensureHeadlessRunning(
     spawnError = err;
   });
 
-  const started = await pollUntilListening(socketPath, SPAWN_CONFIRM_TIMEOUT_MS);
+  const started = await pollUntilListening(socketPath, timeoutMs);
   if (!started) {
     const detail = spawnError ? ` (spawn error: ${spawnError.message})` : '';
     throw new HeadlessEnsureError(
       `spawned 'mae --headless' for ${workspaceRoot} but it never accepted connections on ` +
-        `${socketPath} within ${SPAWN_CONFIRM_TIMEOUT_MS}ms${detail}`
+        `${socketPath} within ${timeoutMs}ms${detail}`
     );
   }
   return { socketPath, spawnedNewInstance: true };

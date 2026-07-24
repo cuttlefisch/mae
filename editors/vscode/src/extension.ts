@@ -8,7 +8,7 @@
 
 import * as vscode from 'vscode';
 
-import { ensureHeadlessRunning } from './headlessDiscovery';
+import { DEFAULT_HEADLESS_TIMEOUT_MS, ensureHeadlessRunning } from './headlessDiscovery';
 import { InvalidExecutableError, resolveShimCommand } from './shimCommand';
 
 const PROVIDER_ID = 'mae-editor-provider';
@@ -51,11 +51,12 @@ class MaeMcpServerDefinitionProvider implements vscode.McpServerDefinitionProvid
     const shimPath = config.get<string>('shimPath', 'mae-mcp-shim');
     const headlessBinary = config.get<string>('headlessBinaryPath', 'mae');
     const permissionCeiling = config.get<string>('permissionCeiling', '').trim();
+    const timeoutMs = config.get<number>('headlessTimeoutMs', DEFAULT_HEADLESS_TIMEOUT_MS);
     const workspaceRoot = folder.uri.fsPath;
 
     let ensured;
     try {
-      ensured = await ensureHeadlessRunning(headlessBinary, workspaceRoot);
+      ensured = await ensureHeadlessRunning(headlessBinary, workspaceRoot, undefined, timeoutMs);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       void vscode.window.showErrorMessage(`MAE: failed to start a headless instance — ${message}`);
