@@ -266,6 +266,17 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .required(["name"])
         .permission(PermissionTier::Shell)
         .build(),
+        ToolDefBuilder::new(
+            "kb_export_guidance",
+            "Export MAE's guidance context (project CLAUDE.md/README.md files + the ai_guidance_kb-designated KB's index body) to a plain markdown file an external editor's AI agent reads unconditionally as part of its own repo scan (AGENTS.md by default; point 'path' at .github/copilot-instructions.md instead if preferred). Use this for external-editor pairings (VS Code/Copilot, etc.) since MCP's initialize.instructions field only sends a short pointer sentence, not the full guidance content, and whether a given host even forwards that field into its model's context is host-dependent and unverified. Additive-merge-safe: re-running only replaces MAE's own clearly delimited managed block, never touching hand-written content elsewhere in the file (a fresh file gets just the block; an existing file's content is fully preserved either way).",
+        )
+        .prop(
+            "path",
+            "string",
+            "Output path relative to the project root (default: 'AGENTS.md'). Pass '.github/copilot-instructions.md' to target that convention instead.",
+        )
+        .permission(PermissionTier::Write)
+        .build(),
         // --- KB CRUD tools ---
         ToolDefBuilder::new(
             "kb_create",

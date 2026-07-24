@@ -184,6 +184,37 @@ pub struct ToolInfo {
     /// Write-tier one by any client-side permission gate.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub permission: Option<String>,
+    /// Standard MCP tool annotations (readOnlyHint et al.), which clients
+    /// like VS Code's Copilot agent mode use to skip the confirmation
+    /// dialog on safe reads. `None` when the caller has no declared
+    /// permission tier for this tool to derive annotations from (ADR-050 D2
+    /// -- callers must derive these mechanically from `PermissionTier`, never
+    /// hand-author them per tool, to avoid drift across 700+ tools).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub annotations: Option<ToolAnnotations>,
+}
+
+/// MCP-standard tool annotations (see the MCP tool-annotations spec).
+/// `title` is a display-friendly name distinct from `ToolInfo::name`; the
+/// three `*_hint` fields are advisory hints, not security guarantees --
+/// server-side enforcement (`PermissionPolicy`/`kb_access`) is the actual
+/// boundary regardless of what a client does with these hints (see ADR-051).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolAnnotations {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// True if the tool never mutates editor/KB/filesystem state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub read_only_hint: Option<bool>,
+    /// True if the tool may perform a destructive update (irreversible or
+    /// hard to undo). Only meaningful when `read_only_hint` is false/absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destructive_hint: Option<bool>,
+    /// True if calling the tool repeatedly with the same arguments has no
+    /// additional effect beyond the first call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idempotent_hint: Option<bool>,
 }
 
 /// Result of a tool call.
@@ -285,6 +316,7 @@ mod tests {
                 }
             }),
             permission: None,
+            annotations: None,
         };
         let json = serde_json::to_value(&tool).unwrap();
         assert_eq!(json["name"], "read_buffer");
@@ -303,5 +335,44 @@ mod tests {
     fn negotiate_version_unknown_returns_latest() {
         assert_eq!(negotiate_version("9999-01-01"), PROTOCOL_VERSION);
         assert_eq!(negotiate_version("2023-01-01"), PROTOCOL_VERSION);
+    }
+
+    #[test]
+    fn tool_info_omits_annotations_when_none() {
+        let tool = ToolInfo {
+            name: "kb_search".to_string(),
+            description: "Search the KB".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            permission: None,
+            annotations: None,
+        };
+        let json = serde_json::to_string(&tool).unwrap();
+        assert!(!json.contains("annotations"));
+    }
+
+    #[test]
+    fn tool_info_serializes_annotations_as_camel_case() {
+        let tool = ToolInfo {
+            name: "kb_search".to_string(),
+            description: "Search the KB".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            permission: Some("ReadOnly".to_string()),
+            annotations: Some(ToolAnnotations {
+                title: None,
+                read_only_hint: Some(true),
+                destructive_hint: Some(false),
+                idempotent_hint: Some(true),
+            }),
+        };
+        let json = serde_json::to_value(&tool).unwrap();
+        assert_eq!(json["annotations"]["readOnlyHint"], true);
+        assert_eq!(json["annotations"]["destructiveHint"], false);
+        assert_eq!(json["annotations"]["idempotentHint"], true);
+        // `title` was None -- must be structurally absent, not `null`, so a
+        // strict client doesn't choke on an unexpected null string field.
+        assert!(!json["annotations"]
+            .as_object()
+            .unwrap()
+            .contains_key("title"));
     }
 }

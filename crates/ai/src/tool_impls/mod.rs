@@ -3,6 +3,7 @@ mod dap;
 mod editor_tools;
 mod file;
 mod git;
+mod guidance_export;
 mod help;
 mod image;
 mod introspect;
@@ -44,6 +45,7 @@ pub use git::{
     execute_git_stage, execute_git_stash_list, execute_git_stash_pop, execute_git_stash_push,
     execute_git_status, execute_git_unstage, execute_github_pr_create, execute_github_pr_status,
 };
+pub use guidance_export::execute_kb_export_guidance;
 pub use help::execute_help_open;
 pub use image::{execute_image_info, execute_image_list};
 pub use introspect::execute_introspect;

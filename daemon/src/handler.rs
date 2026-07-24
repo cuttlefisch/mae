@@ -88,126 +88,139 @@ pub async fn dispatch(
         "kb/get" => {
             let id = params["id"]
                 .as_str()
-                .ok_or(DaemonError::InvalidParams("missing 'id'"))?;
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            match ql.get(id) {
-                Some(node) => Ok(json!({
+                .ok_or(DaemonError::InvalidParams("missing 'id'"))?
+                .to_string();
+            let ql = snapshot_query_layer(state).await?;
+            spawn_query(move || match ql.get(&id) {
+                Some(node) => json!({
                     "id": node.id,
                     "title": node.title,
                     "kind": node.kind.as_str(),
                     "body": node.body,
                     "tags": node.tags,
-                })),
-                None => Ok(Value::Null),
-            }
+                }),
+                None => Value::Null,
+            })
+            .await
         }
 
         "kb/search" => {
             let query = params["query"]
                 .as_str()
-                .ok_or(DaemonError::InvalidParams("missing 'query'"))?;
+                .ok_or(DaemonError::InvalidParams("missing 'query'"))?
+                .to_string();
             let limit = std::cmp::min(params["limit"].as_u64().unwrap_or(20), 1000) as usize;
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            let hits: Vec<Value> = ql
-                .search(query, limit)
-                .into_iter()
-                .map(|h: SearchHit| json!({ "id": h.id, "score": h.score }))
-                .collect();
-            Ok(json!(hits))
+            let ql = snapshot_query_layer(state).await?;
+            spawn_query(move || {
+                let hits: Vec<Value> = ql
+                    .search(&query, limit)
+                    .into_iter()
+                    .map(|h: SearchHit| json!({ "id": h.id, "score": h.score }))
+                    .collect();
+                json!(hits)
+            })
+            .await
         }
 
         "kb/links_from" => {
             let id = params["id"]
                 .as_str()
-                .ok_or(DaemonError::InvalidParams("missing 'id'"))?;
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            let links: Vec<Value> = ql
-                .links_from(id)
-                .into_iter()
-                .map(|l| {
-                    json!({
-                        "src": l.src,
-                        "dst": l.dst,
-                        "rel_type": l.rel_type,
+                .ok_or(DaemonError::InvalidParams("missing 'id'"))?
+                .to_string();
+            let ql = snapshot_query_layer(state).await?;
+            spawn_query(move || {
+                let links: Vec<Value> = ql
+                    .links_from(&id)
+                    .into_iter()
+                    .map(|l| {
+                        json!({
+                            "src": l.src,
+                            "dst": l.dst,
+                            "rel_type": l.rel_type,
+                        })
                     })
-                })
-                .collect();
-            Ok(json!(links))
+                    .collect();
+                json!(links)
+            })
+            .await
         }
 
         "kb/links_to" => {
             let id = params["id"]
                 .as_str()
-                .ok_or(DaemonError::InvalidParams("missing 'id'"))?;
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            let links: Vec<Value> = ql
-                .links_to(id)
-                .into_iter()
-                .map(|l| {
-                    json!({
-                        "src": l.src,
-                        "dst": l.dst,
-                        "rel_type": l.rel_type,
+                .ok_or(DaemonError::InvalidParams("missing 'id'"))?
+                .to_string();
+            let ql = snapshot_query_layer(state).await?;
+            spawn_query(move || {
+                let links: Vec<Value> = ql
+                    .links_to(&id)
+                    .into_iter()
+                    .map(|l| {
+                        json!({
+                            "src": l.src,
+                            "dst": l.dst,
+                            "rel_type": l.rel_type,
+                        })
                     })
-                })
-                .collect();
-            Ok(json!(links))
+                    .collect();
+                json!(links)
+            })
+            .await
         }
 
         "kb/list_ids" => {
-            let prefix = params["prefix"].as_str();
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            Ok(json!(ql.list_ids(prefix)))
+            let prefix = params["prefix"].as_str().map(|s| s.to_string());
+            let ql = snapshot_query_layer(state).await?;
+            spawn_query(move || json!(ql.list_ids(prefix.as_deref()))).await
         }
 
         "kb/health" => {
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            match ql.health_report() {
-                Some(report) => Ok(json!({
+            let ql = snapshot_query_layer(state).await?;
+            spawn_query(move || match ql.health_report() {
+                Some(report) => json!({
                     "total_nodes": report.total_nodes,
                     "total_links": report.total_links,
                     "orphan_count": report.orphan_ids.len(),
                     "broken_link_count": report.broken_links.len(),
-                })),
-                None => Ok(json!({"error": "health report unavailable"})),
-            }
+                }),
+                None => json!({"error": "health report unavailable"}),
+            })
+            .await
         }
 
         "kb/neighborhood" => {
             let id = params["id"]
                 .as_str()
-                .ok_or(DaemonError::InvalidParams("missing 'id'"))?;
+                .ok_or(DaemonError::InvalidParams("missing 'id'"))?
+                .to_string();
             let depth = params["depth"].as_u64().unwrap_or(1) as u32;
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            match ql.neighborhood(id, depth) {
-                Some(sg) => Ok(json!({
+            let ql = snapshot_query_layer(state).await?;
+            spawn_query(move || match ql.neighborhood(&id, depth) {
+                Some(sg) => json!({
                     "nodes": sg.nodes.iter().map(|(id, t)| json!([id, t])).collect::<Vec<_>>(),
                     "edges": sg.edges.iter().map(|(s, d, r)| json!([s, d, r])).collect::<Vec<_>>(),
-                })),
-                None => Ok(json!({"nodes": [], "edges": []})),
-            }
+                }),
+                None => json!({"nodes": [], "edges": []}),
+            })
+            .await
         }
 
         "kb/related" => {
             let id = params["id"]
                 .as_str()
-                .ok_or(DaemonError::InvalidParams("missing 'id'"))?;
+                .ok_or(DaemonError::InvalidParams("missing 'id'"))?
+                .to_string();
             let limit = std::cmp::min(params["limit"].as_u64().unwrap_or(10), 1000) as usize;
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            let related: Vec<Value> = ql
-                .related(id, limit)
-                .into_iter()
-                .map(|(id, score)| json!([id, score]))
-                .collect();
-            Ok(json!(related))
+            let ql = snapshot_query_layer(state).await?;
+            spawn_query(move || {
+                let related: Vec<Value> = ql
+                    .related(&id, limit)
+                    .into_iter()
+                    .map(|(id, score)| json!([id, score]))
+                    .collect();
+                json!(related)
+            })
+            .await
         }
 
         // Phase D3b (ADR-029): return a node's authoritative CRDT doc state from the
@@ -238,111 +251,127 @@ pub async fn dispatch(
             // Phase D thin-client: the agenda buffer was mirror-only. Serve all
             // TODO-bearing nodes as full (serde) nodes — minus the heavy crdt_doc
             // lineage, which the agenda doesn't need.
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            let nodes: Vec<Value> = ql
-                .todo_nodes()
-                .into_iter()
-                .map(|mut n| {
-                    n.crdt_doc = None;
-                    serde_json::to_value(&n).unwrap_or(Value::Null)
-                })
-                .collect();
-            Ok(json!(nodes))
+            let ql = snapshot_query_layer(state).await?;
+            spawn_query(move || {
+                let nodes: Vec<Value> = ql
+                    .todo_nodes()
+                    .into_iter()
+                    .map(|mut n| {
+                        n.crdt_doc = None;
+                        serde_json::to_value(&n).unwrap_or(Value::Null)
+                    })
+                    .collect();
+                json!(nodes)
+            })
+            .await
         }
 
         "kb/id_title_pairs" => {
-            let prefix = params["prefix"].as_str();
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            let pairs: Vec<Value> = ql
-                .id_title_pairs(prefix)
-                .into_iter()
-                .map(|(id, title)| json!([id, title]))
-                .collect();
-            Ok(json!(pairs))
+            let prefix = params["prefix"].as_str().map(|s| s.to_string());
+            let ql = snapshot_query_layer(state).await?;
+            spawn_query(move || {
+                let pairs: Vec<Value> = ql
+                    .id_title_pairs(prefix.as_deref())
+                    .into_iter()
+                    .map(|(id, title)| json!([id, title]))
+                    .collect();
+                json!(pairs)
+            })
+            .await
         }
 
         "kb/id_title_body_triples" => {
-            let prefix = params["prefix"].as_str();
+            let prefix = params["prefix"].as_str().map(|s| s.to_string());
             let body_limit =
                 std::cmp::min(params["body_limit"].as_u64().unwrap_or(0), 10_000) as usize;
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            let triples: Vec<Value> = ql
-                .id_title_body_triples(prefix, body_limit)
-                .into_iter()
-                .map(|(id, title, body)| json!([id, title, body]))
-                .collect();
-            Ok(json!(triples))
+            let ql = snapshot_query_layer(state).await?;
+            spawn_query(move || {
+                let triples: Vec<Value> = ql
+                    .id_title_body_triples(prefix.as_deref(), body_limit)
+                    .into_iter()
+                    .map(|(id, title, body)| json!([id, title, body]))
+                    .collect();
+                json!(triples)
+            })
+            .await
         }
 
         // --- Hygiene ---
         "kb/hygiene_scan" => {
-            let state = state.lock().await;
-            let store = state.store.as_ref().ok_or(DaemonError::NotReady)?;
-            let result = crate::hygiene::run_hygiene_scan(store);
-            Ok(json!({
-                "suggestions_created": result.suggestions_created,
-                "nodes_scanned": result.nodes_scanned,
-                "errors": result.errors,
-            }))
+            let store = snapshot_store(state).await?;
+            spawn_query(move || {
+                let result = crate::hygiene::run_hygiene_scan(&store);
+                json!({
+                    "suggestions_created": result.suggestions_created,
+                    "nodes_scanned": result.nodes_scanned,
+                    "errors": result.errors,
+                })
+            })
+            .await
         }
 
         "kb/hygiene_report" => {
-            let category = params["category"].as_str();
-            let status = params["status"].as_str();
-            let state = state.lock().await;
-            let store = state.store.as_ref().ok_or(DaemonError::NotReady)?;
-            let suggestions = store
-                .list_suggestions(category, status)
-                .map_err(|e| DaemonError::Internal(e.to_string()))?;
-            let items: Vec<Value> = suggestions
-                .iter()
-                .map(|s| {
-                    json!({
-                        "node_id": s.node_id,
-                        "suggestion_id": s.suggestion_id,
-                        "category": s.category,
-                        "message": s.message,
-                        "suggested_action": s.suggested_action_json,
-                        "confidence": s.confidence,
-                        "status": s.status,
-                        "created_at": s.created_at,
+            let category = params["category"].as_str().map(|s| s.to_string());
+            let status = params["status"].as_str().map(|s| s.to_string());
+            let store = snapshot_store(state).await?;
+            spawn_query_result(move || {
+                let suggestions = store
+                    .list_suggestions(category.as_deref(), status.as_deref())
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?;
+                let items: Vec<Value> = suggestions
+                    .iter()
+                    .map(|s| {
+                        json!({
+                            "node_id": s.node_id,
+                            "suggestion_id": s.suggestion_id,
+                            "category": s.category,
+                            "message": s.message,
+                            "suggested_action": s.suggested_action_json,
+                            "confidence": s.confidence,
+                            "status": s.status,
+                            "created_at": s.created_at,
+                        })
                     })
-                })
-                .collect();
-            Ok(json!(items))
+                    .collect();
+                Ok(json!(items))
+            })
+            .await
         }
 
         "kb/hygiene_accept" => {
             let node_id = params["node_id"]
                 .as_str()
-                .ok_or(DaemonError::InvalidParams("missing 'node_id'"))?;
+                .ok_or(DaemonError::InvalidParams("missing 'node_id'"))?
+                .to_string();
             let suggestion_id = params["suggestion_id"]
                 .as_i64()
                 .ok_or(DaemonError::InvalidParams("missing 'suggestion_id'"))?;
-            let state = state.lock().await;
-            let store = state.store.as_ref().ok_or(DaemonError::NotReady)?;
-            store
-                .update_suggestion_status(node_id, suggestion_id, "accepted")
-                .map_err(|e| DaemonError::Internal(e.to_string()))?;
-            Ok(json!({"ok": true}))
+            let store = snapshot_store(state).await?;
+            spawn_query_result(move || {
+                store
+                    .update_suggestion_status(&node_id, suggestion_id, "accepted")
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?;
+                Ok(json!({"ok": true}))
+            })
+            .await
         }
 
         "kb/hygiene_dismiss" => {
             let node_id = params["node_id"]
                 .as_str()
-                .ok_or(DaemonError::InvalidParams("missing 'node_id'"))?;
+                .ok_or(DaemonError::InvalidParams("missing 'node_id'"))?
+                .to_string();
             let suggestion_id = params["suggestion_id"]
                 .as_i64()
                 .ok_or(DaemonError::InvalidParams("missing 'suggestion_id'"))?;
-            let state = state.lock().await;
-            let store = state.store.as_ref().ok_or(DaemonError::NotReady)?;
-            store
-                .update_suggestion_status(node_id, suggestion_id, "dismissed")
-                .map_err(|e| DaemonError::Internal(e.to_string()))?;
-            Ok(json!({"ok": true}))
+            let store = snapshot_store(state).await?;
+            spawn_query_result(move || {
+                store
+                    .update_suggestion_status(&node_id, suggestion_id, "dismissed")
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?;
+                Ok(json!({"ok": true}))
+            })
+            .await
         }
 
         // --- Lifecycle ---
@@ -499,29 +528,44 @@ pub async fn dispatch(
                 (doc_store, broadcaster, owner, kb_store)
             };
             // Build the collection + node states from the daemon's KB store (outside
-            // the state lock — `load_all` is a blocking CozoDB read). Reuses the same
-            // `KnowledgeBase::to_collection` the editor's `kb/share` uses, so the
-            // seeded node docs are byte-identical. Absent store / empty KB ⇒ an empty
-            // collection (still a valid mesh share at collection level).
-            let seed = match kb_store {
-                Some(store) => {
-                    let nodes = store
-                        .load_all()
-                        .map_err(|e| DaemonError::Internal(format!("load KB nodes: {e}")))?;
-                    let mut kb = mae_kb::KnowledgeBase::new();
-                    for node in nodes {
-                        kb.insert(node);
-                    }
-                    Some(
-                        kb.to_collection(&kb_id, &owner.fingerprint(), &[])
-                            .map_err(|e| {
-                                DaemonError::Internal(format!(
-                                    "build collection from KB store: {e}"
+            // the state lock AND off the async executor — `load_all` is a blocking
+            // CozoDB read). Reuses the same `KnowledgeBase::to_collection` the
+            // editor's `kb/share` uses, so the seeded node docs are byte-identical.
+            // Absent store / empty KB ⇒ an empty collection (still a valid mesh
+            // share at collection level).
+            let seed = {
+                let blocking_kb_id = kb_id.clone();
+                let blocking_owner = Arc::clone(&owner);
+                tokio::task::spawn_blocking(
+                    move || -> Result<Option<SeededCollection>, DaemonError> {
+                        match kb_store {
+                            Some(store) => {
+                                let nodes = store.load_all().map_err(|e| {
+                                    DaemonError::Internal(format!("load KB nodes: {e}"))
+                                })?;
+                                let mut kb = mae_kb::KnowledgeBase::new();
+                                for node in nodes {
+                                    kb.insert(node);
+                                }
+                                Ok(Some(
+                                    kb.to_collection(
+                                        &blocking_kb_id,
+                                        &blocking_owner.fingerprint(),
+                                        &[],
+                                    )
+                                    .map_err(|e| {
+                                        DaemonError::Internal(format!(
+                                            "build collection from KB store: {e}"
+                                        ))
+                                    })?,
                                 ))
-                            })?,
-                    )
-                }
-                None => None,
+                            }
+                            None => Ok(None),
+                        }
+                    },
+                )
+                .await
+                .map_err(|e| DaemonError::Internal(format!("blocking task panicked: {e}")))??
             };
             let (created, node_count) = establish_p2p_share(
                 &doc_store,
@@ -556,6 +600,49 @@ pub async fn dispatch(
 
         _ => Err(DaemonError::MethodNotFound(method.to_string())),
     }
+}
+
+/// Snapshot the federated query layer `Arc` under the state lock, then drop
+/// the lock (ADR-054). This is the read-arm half of the "snapshot-then-drop +
+/// spawn_blocking" idiom generalized from the pre-existing `kb/node_crdt` /
+/// `daemon/status` / `p2p/share_kb` arms: `DaemonState`'s lock must never be
+/// held across the actual (synchronous, potentially slow) CozoDB call.
+async fn snapshot_query_layer(
+    state: &Arc<Mutex<DaemonState>>,
+) -> Result<Arc<dyn KbQueryLayer>, DaemonError> {
+    let state = state.lock().await;
+    state.query_layer.clone().ok_or(DaemonError::NotReady)
+}
+
+/// Snapshot the primary CozoDB store `Arc` under the state lock, then drop
+/// the lock — the hygiene arms' equivalent of `snapshot_query_layer` (they
+/// need direct store access, not the federated query layer).
+async fn snapshot_store(state: &Arc<Mutex<DaemonState>>) -> Result<Arc<CozoKbStore>, DaemonError> {
+    let state = state.lock().await;
+    state.store.clone().ok_or(DaemonError::NotReady)
+}
+
+/// Run an infallible synchronous query on a blocking-pool thread, off the
+/// async executor (ADR-054) — a synchronous CozoDB call left inline on an
+/// async task starves every other connection's I/O sharing that worker.
+async fn spawn_query<F>(f: F) -> Result<Value, DaemonError>
+where
+    F: FnOnce() -> Value + Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| DaemonError::Internal(format!("blocking task panicked: {e}")))
+}
+
+/// Like [`spawn_query`], for a synchronous body that can itself fail (the
+/// hygiene write arms, which surface a `DaemonError` from the store call).
+async fn spawn_query_result<F>(f: F) -> Result<Value, DaemonError>
+where
+    F: FnOnce() -> Result<Value, DaemonError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| DaemonError::Internal(format!("blocking task panicked: {e}")))?
 }
 
 /// A store-seeded collection ready to share: the collection doc (manifest +

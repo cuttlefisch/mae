@@ -221,6 +221,11 @@ A guided path for a brand-new user — copy-paste in order:
    help knowledge base.
 6. **(Optional) Share a KB** — start a daemon (`mae-daemon`), then `SPC C K m` opens the
    `*KB Sharing*` management buffer. See [docs/COLLABORATION.md](docs/COLLABORATION.md).
+7. **(Optional) Pair with VS Code + Copilot** — `make install-vscode` packages and
+   installs the "MAE for VS Code" extension (requires `npm` + the `code` CLI); it
+   auto-spawns a headless MAE instance per workspace and pairs it with Copilot's Agent
+   mode over MCP, zero manual `.vscode/mcp.json` setup. See
+   [docs/EXTERNAL_EDITOR_MCP_PAIRING.md](docs/EXTERNAL_EDITOR_MCP_PAIRING.md).
 
 If anything in this list doesn't work as written, that's a bug — please file it.
 
@@ -252,6 +257,13 @@ Day-one tools worth knowing: `introspect` (editor state snapshot), `execute_comm
 `kb_sharing_status` (introspect shared-KB membership/roles before managing). The full
 tool catalog and selection guidance live in
 [CLAUDE.md](CLAUDE.md#developing-mae-inside-mae-mcp-tools).
+
+This isn't Claude-Code-specific — the same `mae-mcp-shim` bridge pairs MAE with VS Code +
+GitHub Copilot's Agent mode, or any other stdio-capable MCP client (Zed, Cursor, a
+hand-rolled client). See
+[docs/EXTERNAL_EDITOR_MCP_PAIRING.md](docs/EXTERNAL_EDITOR_MCP_PAIRING.md) for setup
+steps, a working `.vscode/mcp.json` example (this repo has one — try it against MAE's own
+codebase), and what to expect re: config-format differences across hosts.
 
 ### Configuration
 

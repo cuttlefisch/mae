@@ -17,6 +17,9 @@
 #   make install-tui  — terminal-only install
 #   make setup-hooks  — configure git to use .githooks/ (pre-commit fmt+clippy check)
 #   make setup-dev    — install dev deps (rustfmt/clippy/lldb/rust-analyzer/…) + hooks
+#   make install-vscode — package + install the "MAE for VS Code" extension (requires
+#                         npm + the `code` CLI; not part of the default `install`, since
+#                         the Rust workspace itself has no Node.js dependency)
 #
 # Configuration (override on the command line or in the environment):
 #
@@ -46,7 +49,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean clean-cache ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual practices-kb install-practices
+.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean clean-cache ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual practices-kb install-practices build-vscode package-vscode install-vscode test-vscode
 
 # Default target: release build
 all: build
@@ -398,6 +401,25 @@ install-practices: practices-kb
 	@cp assets/mae-practices.cozo.sha256 $(DATADIR)/mae/mae-practices.cozo.sha256
 	@echo "Installed practices KB -> $(DATADIR)/mae/mae-practices.cozo"
 
+## build-vscode: compile + typecheck the "MAE for VS Code" extension (requires npm)
+build-vscode:
+	@command -v npm >/dev/null 2>&1 || { echo "npm not found -- install Node.js to build the VS Code extension (https://nodejs.org)"; exit 1; }
+	cd editors/vscode && npm install && npm run compile
+
+## package-vscode: build + package the VS Code extension into a .vsix (requires npm)
+package-vscode: build-vscode
+	cd editors/vscode && npm run package
+
+## install-vscode: package + install the extension into a local VS Code (requires the `code` CLI)
+install-vscode: package-vscode
+	@command -v code >/dev/null 2>&1 || { echo "'code' CLI not found on PATH -- from VS Code's Command Palette, run 'Shell Command: Install code command in PATH'"; exit 1; }
+	code --install-extension editors/vscode/mae-vscode-*.vsix
+	@echo "Installed MAE for VS Code -- reload/restart VS Code for it to take effect"
+
+## test-vscode: run the extension's unit test suite (requires npm)
+test-vscode: build-vscode
+	cd editors/vscode && npm run test:unit
+
 ## install-daemon: build + install mae-daemon to PREFIX
 install-daemon: build-daemon
 	@mkdir -p $(PREFIX)
@@ -508,6 +530,21 @@ docker-collab-test:
 	docker compose -f docker-compose.collab-test.yml logs --no-log-prefix verifier; \
 	echo "--- verifier exit code: $${RC:-unknown} ---"; \
 	docker compose -f docker-compose.collab-test.yml down --volumes --timeout 10; \
+	exit $${RC:-1}
+
+## docker-headless-e2e: run headless MAE service-mode E2E in Docker containers
+## (ADR-055, Phase J / #385) — real mae --headless, a real two-instance
+## collision race, and a real MCP handshake via mae-mcp-shim --check.
+## Uses `--wait` so compose exits once all client/verifier services complete,
+## then inspects the verifier exit code for pass/fail.
+docker-headless-e2e:
+	@echo "Running headless MAE E2E tests (docker compose)..."
+	@docker compose -f docker-compose.headless-e2e.yml up --build --wait 2>&1; \
+	RC=$$(docker compose -f docker-compose.headless-e2e.yml ps -a verifier --format '{{.ExitCode}}' 2>/dev/null); \
+	echo "--- verifier output ---"; \
+	docker compose -f docker-compose.headless-e2e.yml logs --no-log-prefix verifier; \
+	echo "--- verifier exit code: $${RC:-unknown} ---"; \
+	docker compose -f docker-compose.headless-e2e.yml down --volumes --timeout 10; \
 	exit $${RC:-1}
 
 ## docker-ci: run full CI pipeline in a container (no local toolchain needed)

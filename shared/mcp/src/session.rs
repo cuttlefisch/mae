@@ -71,6 +71,17 @@ pub struct ClientSession {
     /// crate itself has no KB/editor knowledge to compute it. `None`
     /// (default) omits the field entirely, unchanged behavior.
     pub instructions: Option<String>,
+    /// Permission-tier ceiling this session declared at `initialize`
+    /// (`permissionCeiling` param), e.g. `"ReadOnly"` (ADR-051). Unlike
+    /// `declared_ai_provider`, this is trusted from ANY client regardless of
+    /// authentication: a self-declared ceiling can only ever *tighten* what
+    /// the session is allowed to do (the consuming side, `mae-ai`'s
+    /// `PermissionPolicy`, takes the minimum of this and the server's own
+    /// configured policy — never the maximum), so there is no
+    /// privilege-escalation vector an unauthenticated client could exploit
+    /// by declaring one. `None` (default) means "use the server's policy
+    /// unchanged", identical to every client that predates this field.
+    pub declared_permission_ceiling: Option<String>,
 }
 
 impl ClientSession {
@@ -91,6 +102,7 @@ impl ClientSession {
             peer_identity: None,
             declared_ai_provider: None,
             instructions: None,
+            declared_permission_ceiling: None,
         }
     }
 

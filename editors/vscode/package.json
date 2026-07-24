@@ -1,0 +1,96 @@
+{
+  "name": "mae-vscode",
+  "displayName": "MAE",
+  "description": "Pairs VS Code (Copilot Agent mode or any MCP-capable extension) with a headless MAE instance for the current workspace — KB search/CRUD, dev-guidance-KB-driven behavior, zero manual .vscode/mcp.json setup.",
+  "version": "0.1.0",
+  "publisher": "mae-editor",
+  "private": true,
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cuttlefisch/mae.git",
+    "directory": "editors/vscode"
+  },
+  "engines": {
+    "vscode": "^1.104.0",
+    "node": ">=18"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "activationEvents": [
+    "onMcpCollection:mae-editor-provider"
+  ],
+  "main": "./out/src/extension.js",
+  "contributes": {
+    "mcpServerDefinitionProviders": [
+      {
+        "id": "mae-editor-provider",
+        "label": "MAE"
+      }
+    ],
+    "configuration": {
+      "title": "MAE",
+      "properties": {
+        "mae.shimPath": {
+          "type": "string",
+          "default": "mae-mcp-shim",
+          "markdownDescription": "Path to the `mae-mcp-shim` binary. Defaults to resolving it from `PATH` (install via `make install` in the MAE repo, or your package manager). Must resolve to an existing executable file — never interpreted by a shell, so shell metacharacters in this value have no special effect."
+        },
+        "mae.headlessBinaryPath": {
+          "type": "string",
+          "default": "mae",
+          "markdownDescription": "Path to the `mae` binary used to auto-spawn a headless instance for the current workspace. Defaults to resolving it from `PATH`. Must resolve to an existing executable file — never interpreted by a shell."
+        },
+        "mae.headlessTimeoutMs": {
+          "type": "number",
+          "default": 15000,
+          "markdownDescription": "Milliseconds to wait for `mae --headless --print-socket-path` to resolve, and (separately) for a freshly-spawned headless instance to start accepting connections. The default is generous for a native filesystem; increase it if your workspace folder is a slow or cross-boundary mount (e.g. a Windows drive mounted into WSL2, especially under active antivirus real-time scanning) where even simple filesystem operations can take several seconds."
+        },
+        "mae.autoConfigureGuidance": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Automatically run `mae --ensure-guidance-config` once per workspace on first activation, so a fresh project gets standing dev-practices guidance surfaced to Copilot (or any other MCP-connected agent) without a manual setup step. Set-if-unset server-side — never overwrites an already-explicit `ai_guidance_kb`/`ai_guidance_export_live_sync` choice. Best-effort: a failure is logged, never blocks MCP pairing. Set to `false` to disable entirely."
+        },
+        "mae.permissionCeiling": {
+          "type": "string",
+          "enum": [
+            "",
+            "ReadOnly",
+            "Write",
+            "Shell",
+            "Privileged"
+          ],
+          "default": "",
+          "markdownDescription": "Optional self-declared permission ceiling (ADR-051) for this VS Code session's MAE tool calls. Empty (default) defers entirely to MAE's own server-side configuration. This can only *tighten* the effective policy, never loosen it — setting a higher tier than the server allows has no effect."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -w -p ./",
+    "pretest": "npm run compile",
+    "lint": "tsc --noEmit -p ./",
+    "test:unit": "mocha --require source-map-support/register out/test/unit/**/*.test.js",
+    "test:integration": "node ./out/test/integration/runTest.js",
+    "test:real-binaries": "mocha --require source-map-support/register --timeout 30000 out/test/real-binaries/**/*.test.js",
+    "test": "npm run test:unit",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.0",
+    "@types/node": "^20.0.0",
+    "@types/vscode": "1.104.0",
+    "@vscode/test-electron": "^2.4.0",
+    "@vscode/vsce": "^3.0.0",
+    "mocha": "^11.0.0",
+    "source-map-support": "^0.5.21",
+    "typescript": "^5.4.0"
+  },
+  "overrides": {
+    "serialize-javascript": "^7.0.5",
+    "diff": "^8.0.3"
+  }
+}

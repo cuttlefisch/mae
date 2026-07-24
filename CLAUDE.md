@@ -222,7 +222,8 @@ only when a window's `Viewport` is first created) instead of always defaulting t
 to see anything. Deliberately one-directional (only ever zooms OUT, via `kb_graph_zoom_to_fit_margin`,
 default 0.85) — a sparse graph's tiny node extent is left at the natural 1.0 scale rather than
 zoomed artificially far IN to fill the viewport. Deferred: full per-MCP-session window isolation (two
-simultaneous MCP clients still share one driven window — candidate for its own ADR), GPU-accelerated
+simultaneous MCP clients still share one driven window — now designed in **ADR-051**, tracked under
+issue #375's Phase C, #378), GPU-accelerated
 rendering (still out of scope, confirmed 100% CPU-rasterized). See ROADMAP.md's "Completed
 Features" and "Architecture Debt" for the full breakdown.
 
@@ -259,6 +260,26 @@ KB batch work. Design = **ADR-045** (provider parity + local-model harness), **A
 embedded-GUI agent surface — embedded window frozen at current feature set, new work targets a CLI harness
 on `mae-mcp-shim`), **ADR-047** (multi-agent orchestration scoped to KB batch work only). Phased epics
 A–G tracked under the epic issue cross-linked from those ADRs.
+
+**Also next — external-editor MCP pairing** (v0.15 initiative): make MAE a general-purpose, headless
+MCP backend for **any** editor's AI agent — starting with VS Code + GitHub Copilot's agent mode — so
+external tool calls are steered by MAE's KB search/CRUD and dev-guidance-KB mechanism, with the paired
+editor as the human's GUI and MAE running invisibly underneath. Design = **ADR-050** (VS Code/Copilot +
+cross-editor MCP compatibility: MCP-standard tool `annotations`, flat-schema extension, guidance-delivery
+fallback), **ADR-051** (per-session permission policy + per-session `DrivenWindow` isolation — closes the
+gap noted above), **ADR-052** (OAuth 2.1 resource-server design — a new HTTPS listener on `mae-daemon`,
+hand-rolled directly against `jsonwebtoken` after evaluating and explicitly rejecting `rmcp-server-kit`
+as a single-maintainer third-party dependency for a security-critical listener), **ADR-053** (live scoped read-through KB
+query surface — search/read a hub KB without full local replication; capped server-side search for
+unencrypted KBs, capped lazy-fetch-and-decrypt for E2E-encrypted KBs, never naive plaintext search of
+encrypted content), **ADR-054** (daemon concurrency hardening — replaces the KB-query path's single
+global `Mutex<DaemonState>` with per-KB-instance locking, adds connection caps to the previously-unbounded
+KB socket + P2P listener, and supersedes-with-evidence ADR-004's unbenchmarked "5-10 concurrent editors"
+claim), **ADR-055** (headless MAE as a first-class release/service target — new `mae --headless` entry
+point on the existing TUI binary, reusing the proven `--self-test` bootstrap shape, with systemd/launchd
+units and dedicated soak/idle-CPU testing). **Tracker: issue #375**; phased issues #376–385 (Phases
+A–J); every phase carries explicit success criteria and required adversarial tests, not just a merged-PR
+definition of done.
 
 ## Key Design Decisions Already Made
 
@@ -518,7 +539,7 @@ Events carry version numbers for ordering. Slow clients are dropped, not blocked
 
 ### Architecture Decision Records
 ADRs live in `docs/adr/` and as KB concept nodes (`concept:adr-*`).
-See ADR-001 (protocol), ADR-002 (text sync — accepted: yrs), ADR-003 (file safety), ADR-004 (KB scaling), ADR-005 (KB CRDT), ADR-006 (collaborative state engine), ADR-007 (save coordination), ADR-008 (CRDT target metrics), ADR-014 (binary architecture — editor + daemon workspaces), ADR-017/018 (asymmetric peer auth + identity-anchored access control), ADR-019/020/022/023 (durable / replicated / crash-safe sync + epoch-fenced write access), ADR-024 (notification attention bus), the **P2P daemon-mesh trio ADR-025/026/027** (iroh transport / peer-verifiable signed-hash-chained integrity / collaboration observability), the **KB-architecture set ADR-028–034** (data lifecycle / CRDT-as-truth + cozo-as-projection / in-text link grammar / derived intelligence / durable CRDT store / operation coordination / cross-peer artifact sharing), **ADR-035** (editor↔daemon boundary + `daemon_mode`), the **content-integrity + confidentiality pair ADR-036/037** (signed content ops / E2E content encryption), the **E2E KB-sharing pair ADR-038/039** (editor-authored key-blind membership / identity + authorization hardening), the **identity-arc pair ADR-040/041** (key rotation/rebind — cross-signed, history-preserving / key separation — a published X25519 wrap key), **ADR-042** (membership-derivation cache + O(n) deterministic causal order), **ADR-043** (P2P share integrity — a fresh mesh share seeds the signed owner-genesis so it anchors membership + E2E identically to the hub), **ADR-044** (e2e daemon-lifecycle safety), **ADR-048** (AI residency policy for sensitive KBs), and **ADR-049** (`mae-agent` as the default AI-interaction surface, `ai_chat_enabled` gates the legacy embedded chat — supersedes ADR-046's rejected-deprecation call in part). The holistic sharing story + security audits live in `docs/KB_SHARING.md`, `docs/E2E_ENCRYPTION.md`, and `docs/SECURITY_REVIEW.md`.
+See ADR-001 (protocol), ADR-002 (text sync — accepted: yrs), ADR-003 (file safety), ADR-004 (KB scaling), ADR-005 (KB CRDT), ADR-006 (collaborative state engine), ADR-007 (save coordination), ADR-008 (CRDT target metrics), ADR-014 (binary architecture — editor + daemon workspaces), ADR-017/018 (asymmetric peer auth + identity-anchored access control), ADR-019/020/022/023 (durable / replicated / crash-safe sync + epoch-fenced write access), ADR-024 (notification attention bus), the **P2P daemon-mesh trio ADR-025/026/027** (iroh transport / peer-verifiable signed-hash-chained integrity / collaboration observability), the **KB-architecture set ADR-028–034** (data lifecycle / CRDT-as-truth + cozo-as-projection / in-text link grammar / derived intelligence / durable CRDT store / operation coordination / cross-peer artifact sharing), **ADR-035** (editor↔daemon boundary + `daemon_mode`), the **content-integrity + confidentiality pair ADR-036/037** (signed content ops / E2E content encryption), the **E2E KB-sharing pair ADR-038/039** (editor-authored key-blind membership / identity + authorization hardening), the **identity-arc pair ADR-040/041** (key rotation/rebind — cross-signed, history-preserving / key separation — a published X25519 wrap key), **ADR-042** (membership-derivation cache + O(n) deterministic causal order), **ADR-043** (P2P share integrity — a fresh mesh share seeds the signed owner-genesis so it anchors membership + E2E identically to the hub), **ADR-044** (e2e daemon-lifecycle safety), **ADR-048** (AI residency policy for sensitive KBs), **ADR-049** (`mae-agent` as the default AI-interaction surface, `ai_chat_enabled` gates the legacy embedded chat — supersedes ADR-046's rejected-deprecation call in part), and the **external-editor MCP pairing set ADR-050–055** (VS Code/Copilot + cross-editor MCP compatibility / per-session permission+DrivenWindow isolation / OAuth 2.1 resource server / live scoped read-through KB query surface / daemon concurrency hardening / headless service mode). The holistic sharing story + security audits live in `docs/KB_SHARING.md`, `docs/E2E_ENCRYPTION.md`, and `docs/SECURITY_REVIEW.md`.
 
 ### Sync Engine (yrs — Accepted)
 Collaborative state uses **yrs** (Yjs Rust port, YATA algorithm). Decision rationale:

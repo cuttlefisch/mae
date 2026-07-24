@@ -177,6 +177,8 @@ impl super::Editor {
             "spell_enabled" => self.spell_enabled.to_string(),
             "ai_chat_enabled" => self.ai_chat_enabled.to_string(),
             "ai_guidance_kb" => self.ai_guidance_kb.clone(),
+            "ai_guidance_export_live_sync" => self.ai_guidance_export_live_sync.to_string(),
+            "mcp_tools_tiered_by_default" => self.mcp_tools_tiered_by_default.to_string(),
             "file_tree_focus_on_open" => self.file_tree_focus_on_open.to_string(),
             "collab_server_address" => self.collab.server_address.clone(),
             "collab_auto_connect" => self.collab.auto_connect.to_string(),
@@ -875,6 +877,12 @@ impl super::Editor {
                 // every time guidance context is built.
                 let trimmed = value.trim();
                 self.ai_guidance_kb = trimmed.to_string();
+            }
+            "ai_guidance_export_live_sync" => {
+                self.ai_guidance_export_live_sync = parse_option_bool(value)?;
+            }
+            "mcp_tools_tiered_by_default" => {
+                self.mcp_tools_tiered_by_default = parse_option_bool(value)?;
             }
             "file_tree_focus_on_open" => {
                 self.file_tree_focus_on_open = parse_option_bool(value)?;

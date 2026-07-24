@@ -19,7 +19,7 @@ multi-client and team environments, the KB needs to scale.
 
 ## Decision
 
-### Tier 1: Single-Machine (< 20K nodes, 5-10 concurrent editors) — IMPLEMENTED
+### Tier 1: Single-Machine (< 20K nodes, ~8 concurrent MCP sessions at a p99 ≤ 2x-baseline SLO) — IMPLEMENTED
 
 Enable WAL mode and SQLite pragmas for concurrent access:
 
@@ -36,6 +36,41 @@ PRAGMA synchronous = NORMAL;     -- safe with WAL, better performance
 - Write latency: slightly improved (WAL batches writes)
 - Concurrent reads: now safe during writes
 - SQLITE_BUSY failures: reduced (5s retry)
+
+**Measured capacity (ADR-054, ~2026-07):** the "5-10 concurrent editors" figure
+above was an unverified estimate — before ADR-054's daemon concurrency
+hardening, every KB Unix-socket read/write RPC held a single global
+`Arc<Mutex<DaemonState>>` across the entire synchronous CozoDB call
+(`daemon/src/handler.rs`), which would have serialized concurrent sessions
+regardless of what this section claimed. ADR-054 replaced that with a
+snapshot-then-drop + `spawn_blocking` pattern (relying on Cozo's own
+in-process `relation_locks`/`running_queries` concurrency control, not a new
+app-level lock) and added a `criterion` benchmark
+(`daemon/benches/kb_dispatch_concurrency.rs`) that spawns the real
+`mae-daemon` binary against a **20,000-node** store (matching this section's
+own "< 20K nodes" framing) and drives 1/4/8/16/32/64 concurrent real
+Unix-socket `kb/search` clients, measuring p50/p99 latency per level. Result
+on the reference dev machine:
+
+| Concurrent sessions | p50 | p99 |
+|---|---|---|
+| 1  | 53ms  | 71ms  |
+| 4  | 62ms  | 99ms  |
+| 8  | 73ms  | 95ms  |
+| 16 | 143ms | 241ms |
+| 32 | 285ms | 393ms |
+| 64 | 551ms | 734ms |
+
+Applying an SLO of "p99 stays within 2x the single-client baseline"
+(71ms → 142ms ceiling) yields **~8 concurrent MCP sessions** before that SLO
+is exceeded — coincidentally close to the old unverified figure, but now for
+a verified, different reason: degradation past that point is smooth (roughly
+linear with session count out to 64), not a contention cliff, meaning the
+remaining bottleneck at higher counts is genuine CPU/query cost per search
+against a 20K-node store, not lock serialization. Re-run via
+`cargo bench -p mae-daemon --bench kb_dispatch_concurrency`; figures are
+hardware-dependent and will drift — re-measure before quoting this table in
+anything customer-facing.
 
 ### Tier 2: Multi-Instance (20-100 users, <100K nodes) — PLANNED
 

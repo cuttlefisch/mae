@@ -47,6 +47,19 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # crates/mae/tests/headless_kb_convergence_e2e.rs (L3d, #380) spawns a
+      # real `mae-daemon` via find_daemon_binary()'s daemon/target/release/
+      # candidate path. It's intentionally in the default (non-#[ignore]d)
+      # suite, unlike the daemon workspace itself is only built by the
+      # separate `daemon` job -- making this job `needs: [daemon]` would
+      # serialize every matrix leg (test/clippy/fmt x stable/nightly) behind
+      # daemon's own ~10min job just for one test in one leg, so build only
+      # the daemon binary here instead, scoped to exactly the leg that needs
+      # it. Cheap relative to the full `daemon` job (no test/clippy/fmt).
+      - name: Build mae-daemon (for headless_kb_convergence_e2e)
+        if: matrix.toolchain == 'stable' && matrix.step == 'test'
+        run: cd daemon && cargo build --release --bin mae-daemon
+
       # Stable: release build (reused by e2e job via artifact upload).
       # Nightly: debug build (faster, no artifact needed).
       - name: cargo test
@@ -384,6 +397,15 @@ jobs:
         run: make docker-collab-test
         timeout-minutes: 15
 
+  headless-e2e:
+    name: headless / docker e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run headless MAE service-mode E2E
+        run: make docker-headless-e2e
+        timeout-minutes: 15
+
   install-test:
     name: install / script validation
     runs-on: ubuntu-latest
@@ -513,6 +535,45 @@ jobs:
           ! test -f "$HOME/.local/bin/mae"         && echo "OK: mae removed"
           ! test -f "$HOME/.local/bin/mae-daemon"  && echo "OK: mae-daemon removed"
           echo "OK: Makefile uninstall clean"
+
+  vscode-extension:
+    name: vscode-extension / lint + unit + integration + real-binary e2e
+    runs-on: ubuntu-latest
+    needs: [check]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: editors/vscode/package-lock.json
+      - name: npm ci
+        working-directory: editors/vscode
+        run: npm ci
+      - name: Typecheck (compile)
+        working-directory: editors/vscode
+        run: npm run compile
+      - name: lint (tsc --noEmit)
+        working-directory: editors/vscode
+        run: npm run lint
+      - name: Unit tests (incl. capability-declaration-abuse adversarial tests)
+        working-directory: editors/vscode
+        run: npm run test:unit
+      - name: Install Xvfb (real VS Code extension host needs a display on Linux CI)
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+      - name: Integration smoke test (real VS Code extension host)
+        working-directory: editors/vscode
+        run: xvfb-run -a npm run test:integration
+      - name: Download real mae/mae-mcp-shim binaries
+        uses: actions/download-artifact@v8
+        with:
+          name: mae-binary
+          path: /tmp/mae-dl
+      - name: Real-binary round trip (real mae --headless + real mae-mcp-shim MCP call)
+        working-directory: editors/vscode
+        run: |
+          chmod +x /tmp/mae-dl/mae /tmp/mae-dl/mae-mcp-shim
+          MAE_BIN=/tmp/mae-dl/mae MAE_SHIM_BIN=/tmp/mae-dl/mae-mcp-shim npm run test:real-binaries
 
   code-map:
     name: code-map freshness

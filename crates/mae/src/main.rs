@@ -24,6 +24,7 @@ mod graph_layout_bridge;
 mod gui_app;
 #[cfg(feature = "gui")]
 mod gui_event;
+mod headless_loop;
 mod key_handling;
 mod lsp_bridge;
 mod manual_kb;
@@ -382,6 +383,9 @@ fn main() -> io::Result<()> {
     if let Some(result) = cli::handle_print_config_template(&args) {
         return result;
     }
+    if let Some(result) = cli::handle_print_socket_path(&args) {
+        return result;
+    }
     if let Some(result) = cli::handle_collab_identity(&args) {
         return result;
     }
@@ -397,6 +401,9 @@ fn main() -> io::Result<()> {
         return result;
     }
     if let Some(result) = cli::handle_check_config(&args) {
+        return result;
+    }
+    if let Some(result) = cli::handle_ensure_guidance_config(&args) {
         return result;
     }
     cli::handle_test_mode(&args)?;
@@ -697,13 +704,63 @@ fn main() -> io::Result<()> {
         let sync_broadcaster: mae_mcp::broadcast::SharedBroadcaster =
             std::sync::Arc::new(std::sync::Mutex::new(mae_mcp::broadcast::EventBroadcaster::new()));
         {
-            let mcp_tools: Vec<mae_mcp::protocol::ToolInfo> = all_tools
+            // K2 (post-ship quality pass): a flat ~758-tool tools/list
+            // measurably degrades external MCP clients' tool-selection
+            // accuracy (docs/MODEL_SUPPORT.md's cited finding; live-observed
+            // this session as an external agent repeatedly calling the wrong
+            // tool with empty arguments instead of a well-named Core one).
+            // The built-in agent already solves this for itself
+            // (AgentSession::new, crates/ai/src/session/mod.rs) via
+            // classify_tool_tier's Core/Extended split + request_tools --
+            // apply the same split to the MCP server's own tools/list by
+            // default. This only narrows what's *advertised*; tools/call
+            // dispatch (crates/ai/src/executor/tool_dispatch.rs,
+            // reached via ai_event_handler.rs's mcp_tool_rx handler) is
+            // always given the FULL `all_tools`, so any Extended-tier tool
+            // discovered via search_tools/request_tools remains directly
+            // callable by name even though it wasn't listed.
+            let mcp_tools_tiered = editor
+                .get_option("mcp_tools_tiered_by_default")
+                .map(|(v, _)| v == "true")
+                .unwrap_or(true);
+            let mcp_tool_defs: Vec<mae_ai::ToolDefinition> = if mcp_tools_tiered {
+                let mut core: Vec<mae_ai::ToolDefinition> = all_tools
+                    .iter()
+                    .filter(|t| mae_ai::classify_tool_tier(&t.name) == mae_ai::ToolTier::Core)
+                    .cloned()
+                    .collect();
+                if !core.iter().any(|t| t.name == "request_tools") {
+                    core.push(mae_ai::request_tools_definition());
+                }
+                core
+            } else {
+                all_tools.clone()
+            };
+            let mcp_tools: Vec<mae_mcp::protocol::ToolInfo> = mcp_tool_defs
                 .iter()
-                .map(|t| mae_mcp::protocol::ToolInfo {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    input_schema: serde_json::to_value(&t.parameters).unwrap_or_default(),
-                    permission: t.permission.map(|p| format!("{p:?}")),
+                .map(|t| {
+                    // ADR-050 D2: annotations are mechanically derived from
+                    // the tool's own PermissionTier, never hand-authored --
+                    // see mae_ai::annotations_for_tier for the single source
+                    // of truth. A tool with no declared tier gets no
+                    // annotations at all (never guess readOnlyHint: true).
+                    let annotations = t.permission.map(|tier| {
+                        let (read_only_hint, destructive_hint, idempotent_hint) =
+                            mae_ai::annotations_for_tier(tier);
+                        mae_mcp::protocol::ToolAnnotations {
+                            title: None,
+                            read_only_hint: Some(read_only_hint),
+                            destructive_hint: Some(destructive_hint),
+                            idempotent_hint: Some(idempotent_hint),
+                        }
+                    });
+                    mae_mcp::protocol::ToolInfo {
+                        name: t.name.clone(),
+                        description: t.description.clone(),
+                        input_schema: serde_json::to_value(&t.parameters).unwrap_or_default(),
+                        permission: t.permission.map(|p| format!("{p:?}")),
+                        annotations,
+                    }
                 })
                 .collect();
             // Always-on AI guidance (gap closed alongside mae-agent-cli's
@@ -726,7 +783,7 @@ fn main() -> io::Result<()> {
                     .iter()
                     .map(|i| i.name.clone())
                     .collect();
-                if guidance_kb.is_empty() && registered.is_empty() {
+                if guidance_kb.is_empty() && registered.is_empty() && !mcp_tools_tiered {
                     None
                 } else {
                     let mut s = String::new();
@@ -736,11 +793,55 @@ fn main() -> io::Result<()> {
                         ));
                     }
                     if !registered.is_empty() {
-                        s.push_str(&format!("Registered KBs: {}.", registered.join(", ")));
+                        s.push_str(&format!("Registered KBs: {}. ", registered.join(", ")));
+                    }
+                    if mcp_tools_tiered {
+                        // K2 (post-ship quality pass): a fresh client only
+                        // sees this Core-tier tools/list, never the full
+                        // catalog, unless it already knew search_tools/
+                        // request_tools existed -- name both explicitly here
+                        // so the escalation path is discoverable from the
+                        // very first handshake, not just from
+                        // request_tools' own tool description.
+                        s.push_str(
+                            "Only a curated core set of tools is listed here. Call \
+                             search_tools to find additional tools by keyword, then \
+                             request_tools (by category or exact name) to get full \
+                             definitions for tools not shown above -- once you have a \
+                             tool's name you can call it directly, whether or not it \
+                             appeared in this list.",
+                        );
                     }
                     Some(s)
                 }
             };
+
+            // ADR-050 D4 (Phase H): ai_guidance_export_live_sync -- if the
+            // user has opted in, keep AGENTS.md in sync with the guidance KB
+            // automatically each session start, so external editors that
+            // read AGENTS.md unconditionally (rather than via MCP
+            // initialize.instructions, whose forwarding is host-dependent
+            // and unverified) see current content without a manual export.
+            // Best-effort: never blocks startup on a missing project root or
+            // a write failure, matching ai_guidance_kb's own read path.
+            let guidance_live_sync = editor
+                .get_option("ai_guidance_export_live_sync")
+                .map(|(v, _)| v == "true")
+                .unwrap_or(false);
+            if guidance_live_sync {
+                let guidance_kb = editor
+                    .get_option("ai_guidance_kb")
+                    .map(|(v, _)| v)
+                    .unwrap_or_default();
+                if !guidance_kb.is_empty() {
+                    match mae_ai::execute_kb_export_guidance(&editor, &serde_json::json!({})) {
+                        Ok(msg) => info!(message = %msg, "guidance export (live-sync) complete"),
+                        Err(e) => {
+                            warn!(error = %e, "guidance export (live-sync) skipped")
+                        }
+                    }
+                }
+            }
 
             let mut server = mae_mcp::McpServer::new(
                 &mcp_socket_path,
@@ -769,18 +870,57 @@ fn main() -> io::Result<()> {
                 Ok(()) => {
                     let mut agent_server = mae_mcp::McpServer::new(
                         &agent_socket_path,
-                        mcp_tool_tx,
+                        mcp_tool_tx.clone(),
                         sync_broadcaster.clone(),
                     )
                     .with_psk_auth(mae_mcp::auth::PskAuth::new(&psk));
                     if let Some(ref instructions) = mcp_instructions {
                         agent_server = agent_server.with_instructions(instructions.clone());
                     }
-                    tokio::spawn(agent_server.run(mcp_tools));
+                    tokio::spawn(agent_server.run(mcp_tools.clone()));
                     info!(socket = %agent_socket_path, psk_file = %psk_path, "MCP agent (PSK-required) server started");
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, path = %psk_path, "failed to write PSK file — agent socket not started");
+                }
+            }
+
+            // --headless (ADR-055): an additional stable, project-keyed
+            // socket for long-lived instances, alongside the ephemeral
+            // PID-based ones above. Gated strictly on the flag — interactive
+            // GUI/TUI sessions never bind this extra listener.
+            if args.iter().any(|a| a == "--headless") {
+                match headless_loop::claim_stable_socket(editor.active_project_root()).await {
+                    Ok(headless_loop::StableSocketClaim::NoProjectRoot) => {
+                        info!("headless: no project root detected — stable socket not bound (PID-based socket only)");
+                    }
+                    Ok(headless_loop::StableSocketClaim::Claimed(stable_path)) => {
+                        let stable_path_str = stable_path.to_string_lossy().to_string();
+                        let mut stable_server = mae_mcp::McpServer::new(
+                            &stable_path_str,
+                            mcp_tool_tx.clone(),
+                            sync_broadcaster.clone(),
+                        );
+                        if let Some(ref instructions) = mcp_instructions {
+                            stable_server = stable_server.with_instructions(instructions.clone());
+                        }
+                        tokio::spawn(stable_server.run(mcp_tools.clone()));
+                        info!(socket = %stable_path_str, "MCP headless stable socket started");
+                    }
+                    Ok(headless_loop::StableSocketClaim::AlreadyRunning(stable_path)) => {
+                        // ADR-055's required adversarial test: a second
+                        // headless instance for the same project must fail
+                        // loudly, never silently share or overwrite the
+                        // first instance's stable socket.
+                        eprintln!(
+                            "mae --headless: another instance is already running for this project (stable socket: {})",
+                            stable_path.display()
+                        );
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to claim stable headless socket — continuing with PID-based socket only");
+                    }
                 }
             }
         }
@@ -831,6 +971,44 @@ fn main() -> io::Result<()> {
 
         let _ = std::fs::remove_file(&mcp_socket_path);
         std::process::exit(exit_code);
+    }
+
+    // --headless (ADR-055): long-running full engine, no Renderer, MCP-only.
+    // Reuses the same buffers/windows/KB/AI/LSP/DAP/MCP bootstrap every mode
+    // shares — the only difference from the interactive paths below is which
+    // event loop it enters (headless_loop::run_headless_loop instead of
+    // run_terminal_loop/gui_app::run_gui). Runs until SIGTERM/Ctrl-C.
+    if args.iter().any(|a| a == "--headless") {
+        info!("entering headless event loop");
+        let (mut collab_event_rx, collab_command_tx, collab_spawn) =
+            collab_bridge::setup_collab_channels(&editor);
+        let result = rt.block_on(async {
+            collab_bridge::spawn_collab_task(collab_spawn);
+            headless_loop::run_headless_loop(
+                &mut editor,
+                &mut scheme,
+                &mut ai_event_rx,
+                &ai_event_tx,
+                &ai_command_tx,
+                &mut lsp_event_rx,
+                &lsp_command_tx,
+                &mut dap_event_rx,
+                &dap_command_tx,
+                &mut mcp_tool_rx,
+                &mut collab_event_rx,
+                &collab_command_tx,
+                &mcp_socket_path,
+                &all_tools,
+                &permission_policy,
+                &app_config,
+                &mcp_client_mgr,
+                &sync_broadcaster,
+            )
+            .await
+        });
+        let _ = std::fs::remove_file(&mcp_socket_path);
+        info!("mae --headless exited cleanly");
+        return result;
     }
 
     if use_gui {

@@ -810,6 +810,8 @@ pub(crate) async fn run_headless_self_test(
                     all_tools,
                     permission_policy,
                     Some(provider.as_str()),
+                    // No MCP session -- this is the --self-test path.
+                    None,
                 );
 
                 match exec_result {

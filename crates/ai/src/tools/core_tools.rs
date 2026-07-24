@@ -245,7 +245,15 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             "propose_changes",
             "Propose a set of file changes for user approval. Displays a diff and waits for user to accept or reject. Use this for potentially destructive or large changes to ensure safety.",
         )
-        .prop("changes", "array", "List of changes, each with file_path and new_content.")
+        .prop_array_of_objects(
+            "changes",
+            "List of changes, each with file_path and new_content.",
+            [
+                ("file_path", "string", "Path to the file to change"),
+                ("new_content", "string", "The file's full new content"),
+            ],
+            ["file_path", "new_content"],
+        )
         .required(["changes"])
         .permission(PermissionTier::Write)
         .build(),

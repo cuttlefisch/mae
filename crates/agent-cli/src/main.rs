@@ -876,6 +876,7 @@ mod tests {
             description: format!("{name} description"),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
             permission: None,
+            annotations: None,
         }
     }
 

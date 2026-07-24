@@ -1,0 +1,251 @@
+/**
+ * Ensures a headless MAE instance (ADR-055) is running for the current
+ * workspace, spawning one if necessary — the "auto-spawn... when none is
+ * running" half of ADR-050 D1/Phase I's design. Never touches
+ * `.vscode/mcp.json`: discovery and lifecycle here are entirely in-memory,
+ * via VS Code's dynamic `McpServerDefinitionProvider` API, which structurally
+ * sidesteps the JSONC-mutation-safety concerns a file-editing approach would
+ * carry.
+ */
+
+import * as cp from 'child_process';
+import * as net from 'net';
+
+import { resolveExecutable } from './shimCommand';
+
+/** Injectable so tests can assert on exact spawn arguments without spawning
+ * a real process — defaults to the real `child_process.spawn`. */
+export type SpawnFn = (
+  command: string,
+  args: string[],
+  options: cp.SpawnOptions
+) => cp.ChildProcess;
+
+const PROBE_TIMEOUT_MS = 500;
+const SPAWN_POLL_INTERVAL_MS = 250;
+
+/**
+ * Default budget (ms) for `mae --headless --print-socket-path` to complete,
+ * and (scaled up) for a freshly-spawned instance to start accepting
+ * connections. 3s was the original default -- too tight in practice: on a
+ * remote/WSL session where the workspace folder is a cross-boundary mount
+ * (e.g. a Windows drive mounted into WSL2 via 9p, especially under active
+ * antivirus real-time scanning), even a handful of directory stat calls can
+ * take multiple seconds, well past what's typical on a native filesystem.
+ * Both `ensureHeadlessRunning` call sites accept an override (wired to the
+ * `mae.headlessTimeoutMs` setting in `extension.ts`) rather than forcing
+ * every environment to accept one hardcoded value.
+ */
+export const DEFAULT_HEADLESS_TIMEOUT_MS = 15000;
+
+export class HeadlessEnsureError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'HeadlessEnsureError';
+  }
+}
+
+function runCapture(
+  command: string,
+  args: string[],
+  cwd: string,
+  timeoutMs: number,
+  spawnFn: SpawnFn,
+  env?: NodeJS.ProcessEnv
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawnFn(command, args, { cwd, shell: false, ...(env ? { env } : {}) });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      child.kill?.();
+      reject(new HeadlessEnsureError(`'${command} ${args.join(' ')}' timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+    child.stdout?.on('data', (d: Buffer) => (stdout += d.toString()));
+    child.stderr?.on('data', (d: Buffer) => (stderr += d.toString()));
+    child.on('error', (err: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.on('close', (code: number | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ code, stdout, stderr });
+    });
+  });
+}
+
+/**
+ * K3 (post-ship quality pass): deterministic, non-AI-dependent guidance-KB
+ * setup for a fresh workspace — runs the real `mae --ensure-guidance-config`
+ * once (reuses the proven `set_option`/`save_option_to_init` persistence
+ * path server-side, `crates/mae/src/cli.rs::handle_ensure_guidance_config`,
+ * rather than an LLM having to correctly guess which of many MCP tools to
+ * call for a one-shot setup step). Best-effort by design, mirroring the CLI
+ * flag's own "nothing here is a hard error" contract — never throws on a
+ * non-zero exit; the caller should log a failure, not block MCP pairing on
+ * it. Set-if-unset on the server side, so calling this on every activation
+ * (guarded by the caller's own per-workspace `globalState` check) is safe
+ * either way — this function itself has no idempotency logic of its own.
+ */
+export async function ensureGuidanceConfigured(
+  maeBinary: string,
+  workspaceRoot: string,
+  spawnFn: SpawnFn = cp.spawn,
+  timeoutMs: number = DEFAULT_HEADLESS_TIMEOUT_MS,
+  env?: NodeJS.ProcessEnv
+): Promise<{ code: number | null; stdout: string; stderr: string }> {
+  const resolved = resolveExecutable(maeBinary);
+  return runCapture(resolved, ['--ensure-guidance-config'], workspaceRoot, timeoutMs, spawnFn, env);
+}
+
+/**
+ * Resolve the stable, project-keyed headless socket path by asking the real
+ * `mae` binary (`mae --headless --print-socket-path`) rather than
+ * reimplementing its hashing scheme in TypeScript — the single source of
+ * truth `crates/mae/src/cli.rs::resolve_print_socket_path` guarantees this
+ * always matches exactly what `mae --headless` itself would claim.
+ */
+export async function resolveStableSocketPath(
+  maeBinary: string,
+  workspaceRoot: string,
+  spawnFn: SpawnFn = cp.spawn,
+  timeoutMs: number = DEFAULT_HEADLESS_TIMEOUT_MS
+): Promise<string> {
+  const resolved = resolveExecutable(maeBinary);
+  const { code, stdout, stderr } = await runCapture(
+    resolved,
+    ['--headless', '--print-socket-path'],
+    workspaceRoot,
+    timeoutMs,
+    spawnFn
+  );
+  const socketPath = stdout.trim();
+  if (code !== 0 || !socketPath) {
+    throw new HeadlessEnsureError(
+      `mae --headless --print-socket-path failed (exit ${code}): ${stderr.trim() || 'no output'}`
+    );
+  }
+  return socketPath;
+}
+
+/**
+ * Whether something is currently listening on `socketPath`. Deliberately
+ * does no peer-identity verification beyond "did a connection succeed" —
+ * that's `mae-mcp-shim`'s job (its own `initialize` -> `notifications/
+ * initialized` -> `$/ping` handshake, already proven in Phase B), not
+ * something worth duplicating here. A same-machine attacker pre-binding this
+ * path is the same pre-existing Unix-socket trust boundary every MAE
+ * listener already has (SECURITY.md: filesystem-permissions-only) — not a
+ * new gap this extension introduces.
+ */
+export function probeSocket(socketPath: string, timeoutMs = PROBE_TIMEOUT_MS): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const socket = net.createConnection({ path: socketPath });
+    const finish = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(result);
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    socket.once('connect', () => finish(true));
+    socket.once('error', () => finish(false));
+  });
+}
+
+async function pollUntilListening(socketPath: string, totalTimeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + totalTimeoutMs;
+  do {
+    if (await probeSocket(socketPath)) {
+      return true;
+    }
+    await new Promise((r) => setTimeout(r, SPAWN_POLL_INTERVAL_MS));
+  } while (Date.now() < deadline);
+  return false;
+}
+
+/**
+ * Spawn `mae --headless` for `workspaceRoot`, detached so it outlives this
+ * extension host process (survives VS Code window reload). Always
+ * `shell: false` with an argv array — the adversarial "capability
+ * declaration abuse" test (a hostile workspace's `mae.headlessBinaryPath`)
+ * targets exactly this call.
+ *
+ * `onSpawnError`, if given, is called if the child emits an `'error'` event
+ * (EACCES, a post-validation-race ENOENT if the binary vanishes between
+ * `resolveExecutable`'s check and the actual spawn, etc.). Attaching a
+ * listener here is the load-bearing part, independent of what the callback
+ * does: an unhandled `'error'` event on a `ChildProcess` is fatal (Node
+ * throws it as an uncaught exception outside any caller's try/catch) —
+ * QA-pass finding, this was previously unguarded.
+ */
+export function spawnHeadlessInstance(
+  maeBinary: string,
+  workspaceRoot: string,
+  spawnFn: SpawnFn = cp.spawn,
+  onSpawnError?: (err: Error) => void
+): cp.ChildProcess {
+  const resolvedBinary = resolveExecutable(maeBinary);
+  const child = spawnFn(resolvedBinary, ['--headless'], {
+    cwd: workspaceRoot,
+    detached: true,
+    stdio: 'ignore',
+    shell: false,
+  });
+  child.on('error', (err: Error) => {
+    onSpawnError?.(err);
+  });
+  child.unref?.();
+  return child;
+}
+
+export interface EnsureHeadlessResult {
+  socketPath: string;
+  spawnedNewInstance: boolean;
+}
+
+/**
+ * Ensure a headless MAE instance is running for `workspaceRoot`: probe the
+ * stable socket path; if nothing answers, spawn one and poll-confirm it came
+ * up. Never silently pretends success — throws `HeadlessEnsureError` if a
+ * freshly spawned instance never starts accepting connections, so the caller
+ * can surface a visible error rather than handing VS Code a definition that
+ * silently never works (gate G1).
+ */
+export async function ensureHeadlessRunning(
+  maeBinary: string,
+  workspaceRoot: string,
+  spawnFn: SpawnFn = cp.spawn,
+  timeoutMs: number = DEFAULT_HEADLESS_TIMEOUT_MS
+): Promise<EnsureHeadlessResult> {
+  const socketPath = await resolveStableSocketPath(maeBinary, workspaceRoot, spawnFn, timeoutMs);
+
+  if (await probeSocket(socketPath)) {
+    return { socketPath, spawnedNewInstance: false };
+  }
+
+  let spawnError: Error | undefined;
+  spawnHeadlessInstance(maeBinary, workspaceRoot, spawnFn, (err) => {
+    spawnError = err;
+  });
+
+  const started = await pollUntilListening(socketPath, timeoutMs);
+  if (!started) {
+    const detail = spawnError ? ` (spawn error: ${spawnError.message})` : '';
+    throw new HeadlessEnsureError(
+      `spawned 'mae --headless' for ${workspaceRoot} but it never accepted connections on ` +
+        `${socketPath} within ${timeoutMs}ms${detail}`
+    );
+  }
+  return { socketPath, spawnedNewInstance: true };
+}

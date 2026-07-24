@@ -639,6 +639,127 @@ fn with_ai_dispatch_scope_handles_split_failure_gracefully() {
     editor.with_ai_dispatch_scope(|e| e.dispatch_builtin("git-status"));
 }
 
+// --- ADR-051: per-session DrivenWindow isolation ---
+
+/// Adversarial N>=3-session isolation test (ADR-051's explicit requirement,
+/// not just a happy-path 2-client check): three distinct MCP sessions
+/// dispatching through the same `Editor` must each get their own companion
+/// window, and none may ever observe or steal another's.
+#[test]
+fn with_ai_dispatch_scope_for_session_isolates_three_concurrent_sessions() {
+    let mut editor = Editor::new();
+    editor.buffers[0].name = "*AI:claude*".to_string();
+    editor.buffers[0].agent_shell = true;
+    let original_id = editor.window_mgr.focused_id();
+
+    editor.with_ai_dispatch_scope_for_session(Some(1), |e| e.dispatch_builtin("git-status"));
+    let target_1 = editor
+        .ai
+        .mcp_session_windows
+        .get(&1)
+        .and_then(|s| s.target_window_id)
+        .expect("session 1 should have an established target");
+
+    editor.with_ai_dispatch_scope_for_session(Some(2), |e| e.dispatch_builtin("git-diff"));
+    let target_2 = editor
+        .ai
+        .mcp_session_windows
+        .get(&2)
+        .and_then(|s| s.target_window_id)
+        .expect("session 2 should have an established target");
+
+    editor.with_ai_dispatch_scope_for_session(Some(3), |e| e.dispatch_builtin("git-log"));
+    let target_3 = editor
+        .ai
+        .mcp_session_windows
+        .get(&3)
+        .and_then(|s| s.target_window_id)
+        .expect("session 3 should have an established target");
+
+    assert_ne!(
+        target_1, target_2,
+        "session 1 and 2 must not share a window"
+    );
+    assert_ne!(
+        target_2, target_3,
+        "session 2 and 3 must not share a window"
+    );
+    assert_ne!(
+        target_1, target_3,
+        "session 1 and 3 must not share a window"
+    );
+    assert_ne!(target_1, original_id);
+    assert_ne!(target_2, original_id);
+    assert_ne!(target_3, original_id);
+
+    // Re-dispatching for session 1 must reuse its OWN window, not session 2's
+    // or 3's most-recently-established one (the confused-deputy case this
+    // test exists to rule out).
+    editor.with_ai_dispatch_scope_for_session(Some(1), |e| e.dispatch_builtin("git-status"));
+    assert_eq!(
+        editor
+            .ai
+            .mcp_session_windows
+            .get(&1)
+            .and_then(|s| s.target_window_id),
+        Some(target_1),
+        "session 1 must keep reusing its own window across repeated dispatch"
+    );
+
+    // The no-session (interactive human) global fields are never touched by
+    // any of the session-scoped dispatch above.
+    assert!(
+        editor.ai.target_window_id.is_none(),
+        "session-scoped dispatch must not leak into the global no-session target"
+    );
+}
+
+/// `session_id: None` must behave identically to `with_ai_dispatch_scope`
+/// (the pre-ADR-051 embedded-human/self-test path) — this is the fallback
+/// every caller that predates per-session dispatch keeps using unchanged.
+#[test]
+fn with_ai_dispatch_scope_for_session_none_matches_unscoped_behavior() {
+    let mut editor = Editor::new();
+    editor.buffers[0].name = "*AI:claude*".to_string();
+    editor.buffers[0].agent_shell = true;
+
+    editor.with_ai_dispatch_scope_for_session(None, |e| e.dispatch_builtin("git-status"));
+
+    assert_eq!(editor.window_mgr.iter_windows().count(), 2);
+    assert!(editor.ai.target_window_id.is_some());
+    assert!(
+        editor.ai.mcp_session_windows.is_empty(),
+        "session_id: None must never populate the per-session map"
+    );
+}
+
+/// A session evicted from the size-bounded map (`MAX_TRACKED_MCP_SESSION_WINDOWS`)
+/// must self-heal rather than error or panic — it simply establishes a fresh
+/// companion window on its next dispatch, same as any session dispatching
+/// for the first time.
+#[test]
+fn evicted_session_self_heals_on_next_dispatch() {
+    let mut editor = Editor::new();
+    editor.buffers[0].name = "*AI:claude*".to_string();
+    editor.buffers[0].agent_shell = true;
+
+    // Simulate session 1 having a window, then being evicted (as the size
+    // bound would do to some session under real long-running load).
+    editor.with_ai_dispatch_scope_for_session(Some(1), |e| e.dispatch_builtin("git-status"));
+    assert!(editor.ai.mcp_session_windows.contains_key(&1));
+    editor.ai.mcp_session_windows.remove(&1);
+
+    // Must not panic; must establish a (possibly new) valid window.
+    editor.with_ai_dispatch_scope_for_session(Some(1), |e| e.dispatch_builtin("git-diff"));
+    let target = editor
+        .ai
+        .mcp_session_windows
+        .get(&1)
+        .and_then(|s| s.target_window_id);
+    assert!(target.is_some());
+    assert!(editor.window_mgr.window(target.unwrap()).is_some());
+}
+
 // --- Async git diff tests ---
 
 #[test]

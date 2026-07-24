@@ -351,6 +351,7 @@ Source: `shared/mcp/src/lib.rs`
 | `protocol` | mod |
 | `session` | mod |
 | `tls` | mod |
+| `build_shim_initialize_params` | fn |
 | `RequesterContext` | struct |
 | `McpToolRequest` | struct |
 | `McpToolResult` | struct |
@@ -367,6 +368,7 @@ Source: `crates/renderer/src/lib.rs`
 |------|------|
 | `splash_render` | mod |
 | `Renderer` | trait |
+| `NullRenderer` | struct |
 | `TerminalRenderer` | struct |
 
 ## mae-scheme

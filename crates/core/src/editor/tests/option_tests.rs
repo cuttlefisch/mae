@@ -1196,6 +1196,25 @@ mod set_save_tests {
             assert!(content.contains("(set-option! \"ai_chat_enabled\" \"true\")"));
         });
     }
+
+    /// ADR-050 D4 / Phase H's explicit requirement: the live-sync option
+    /// must be `:set-save`-able, default off.
+    #[test]
+    fn set_save_ai_guidance_export_live_sync_applies_value_then_persists() {
+        with_isolated_config_home(|config_home| {
+            let mut editor = Editor::new();
+            assert!(!editor.ai_guidance_export_live_sync, "must default to off");
+
+            editor.execute_command("set-save ai_guidance_export_live_sync true");
+
+            assert!(
+                editor.ai_guidance_export_live_sync,
+                ":set-save must apply the value, not just persist it"
+            );
+            let content = init_scm_contents(config_home);
+            assert!(content.contains("(set-option! \"ai_guidance_export_live_sync\" \"true\")"));
+        });
+    }
 }
 
 // ---------------------------------------------------------------------------

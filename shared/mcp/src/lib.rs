@@ -71,6 +71,32 @@ use tracing::{debug, error, info, warn};
 /// Maximum allowed Content-Length for a single MCP message (10 MB).
 const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
 
+/// Build the `params` object for an `initialize` request declaring
+/// `clientInfo: {name: "mae-mcp-shim", ...}`, optionally including a
+/// `permissionCeiling` (ADR-051) when `permission_ceiling` is `Some` and
+/// non-empty (an empty string is treated identically to `None` — a set-but-
+/// empty `MAE_MCP_PERMISSION_CEILING` env var must not forward an empty-
+/// string ceiling). Used by the `mae-mcp-shim` binary (`src/shim.rs`, a
+/// `[[bin]]` target of this same package) when it reads
+/// `MAE_MCP_PERMISSION_CEILING` from its environment. Lives here rather than
+/// in the bin target specifically so it's testable in the same compilation
+/// unit as the server-side `declared_permission_ceiling` parsing below
+/// (`params.get("permissionCeiling")`) that it must stay wire-compatible
+/// with — a duplicated copy in the bin target could silently drift from what
+/// the server actually reads (principle #8), which would make the ceiling
+/// setting a silent no-op rather than the tightening it promises.
+pub fn build_shim_initialize_params(permission_ceiling: Option<&str>) -> serde_json::Value {
+    let mut params = serde_json::json!({
+        "protocolVersion": "2025-11-25",
+        "capabilities": {},
+        "clientInfo": { "name": "mae-mcp-shim", "version": env!("CARGO_PKG_VERSION") }
+    });
+    if let Some(ceiling) = permission_ceiling.filter(|c| !c.is_empty()) {
+        params["permissionCeiling"] = serde_json::Value::String(ceiling.to_string());
+    }
+    params
+}
+
 /// Identity context for the client that issued a tool call (ADR-048), passed
 /// alongside every [`McpToolRequest`] so the AI-residency gate
 /// (`ai_event_handler::handle_mcp_request`) can decide whether this specific
@@ -89,6 +115,19 @@ pub struct RequesterContext {
     /// (`session.declared_ai_provider`'s own invariant) — a second belt-and-
     /// suspenders check, not the only enforcement of that invariant.
     pub declared_provider: Option<String>,
+    /// The issuing `ClientSession`'s id (ADR-051). `0` is a sentinel meaning
+    /// "no real session" -- used only by internal/test call sites that build
+    /// a `RequesterContext` without a live `ClientSession` (real sessions are
+    /// always >= 1, `session::NEXT_SESSION_ID` starts there). Used to scope
+    /// per-session `DrivenWindow` state and the per-session permission
+    /// ceiling below, so concurrent MCP clients never share or leak each
+    /// other's window-targeting or approval state.
+    pub session_id: u64,
+    /// This session's self-declared permission ceiling (`declared_permission_ceiling`
+    /// on `ClientSession`), if any. See that field's doc comment for why this
+    /// is safe to trust unauthenticated: it can only tighten policy, never
+    /// loosen it.
+    pub declared_permission_ceiling: Option<String>,
 }
 
 /// A tool call request sent from the MCP server to the main editor thread.
@@ -658,6 +697,23 @@ pub async fn handle_request(
                         );
                     }
                 }
+                // ADR-051: a self-declared permission ceiling, unlike
+                // `declaredProvider`, is trusted from ANY client -- it can
+                // only tighten this session's effective policy, never loosen
+                // it (the consuming side takes the minimum of this and the
+                // server's own configured policy), so there's no auth gate
+                // to apply here. An unrecognized/malformed value is stored
+                // as-is; the consuming side (which owns the PermissionTier
+                // type this crate doesn't depend on) is responsible for
+                // validating it and falling back safely on a bad value.
+                if let Some(ceiling) = params.get("permissionCeiling").and_then(|v| v.as_str()) {
+                    session.declared_permission_ceiling = Some(ceiling.to_string());
+                    debug!(
+                        session = session.id,
+                        permission_ceiling = ceiling,
+                        "MCP client declared a permission ceiling"
+                    );
+                }
             }
 
             let negotiated = match client_requested_version {
@@ -751,14 +807,23 @@ pub async fn handle_request(
             JsonRpcResponse::success(id, serde_json::Value::Null)
         }
         "tools/list" => {
+            // Serialize the full `ToolInfo` (via its own `Serialize` impl,
+            // not a hand-picked field list) so every field -- `permission`,
+            // `annotations` (ADR-050 D2), and anything added later --
+            // reaches the wire automatically. A prior version of this
+            // handler hand-rolled `json!({name, description, inputSchema})`
+            // per tool, which silently dropped `permission`/`annotations`
+            // even though `ToolInfo` carried them -- the exact bug
+            // `ToolInfo::permission`'s own doc comment describes as already
+            // fixed once (a client-side permission gate that never actually
+            // saw tier data). Re-deriving field lists by hand is how that
+            // regressed; serializing the struct itself is how it can't.
             let tools: Vec<serde_json::Value> = tool_definitions
                 .iter()
                 .map(|t| {
-                    serde_json::json!({
-                        "name": t.name,
-                        "description": t.description,
-                        "inputSchema": t.input_schema,
-                    })
+                    serde_json::to_value(t).unwrap_or_else(
+                        |_| serde_json::json!({"name": t.name, "description": t.description}),
+                    )
                 })
                 .collect();
             JsonRpcResponse::success(id, serde_json::json!({ "tools": tools }))
@@ -774,6 +839,8 @@ pub async fn handle_request(
                 requester: RequesterContext {
                     psk_authenticated: session.authenticated_principal().is_some(),
                     declared_provider: session.declared_ai_provider.clone(),
+                    session_id: session.id,
+                    declared_permission_ceiling: session.declared_permission_ceiling.clone(),
                 },
             };
             debug!(session = session.id, method = %request.method, "sync method dispatched");
@@ -823,6 +890,8 @@ pub async fn handle_request(
                 requester: RequesterContext {
                     psk_authenticated: session.authenticated_principal().is_some(),
                     declared_provider: session.declared_ai_provider.clone(),
+                    session_id: session.id,
+                    declared_permission_ceiling: session.declared_permission_ceiling.clone(),
                 },
             };
 
@@ -1013,6 +1082,7 @@ mod tests {
             description: "A test tool".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
             permission: None,
+            annotations: None,
         }];
         let msg = r#"{"jsonrpc":"2.0","id":4,"method":"tools/list"}"#;
 
@@ -1021,6 +1091,43 @@ mod tests {
         let tools_arr = result["tools"].as_array().unwrap();
         assert_eq!(tools_arr.len(), 1);
         assert_eq!(tools_arr[0]["name"], "test_tool");
+    }
+
+    /// Regression guard (ADR-050 D2): `tools/list` must transmit `permission`
+    /// AND `annotations` over the wire, not just carry them on the in-process
+    /// `ToolInfo` struct. A prior version of this handler hand-rolled a
+    /// `name`/`description`/`inputSchema`-only JSON object per tool, which
+    /// silently dropped both fields even though `ToolInfo` had them --
+    /// exactly the class of incident `ToolInfo::permission`'s doc comment
+    /// already describes once. Without this, a client like VS Code's Copilot
+    /// gets no `readOnlyHint` and prompts for confirmation on every call,
+    /// including harmless reads.
+    #[tokio::test]
+    async fn handle_request_tools_list_transmits_permission_and_annotations() {
+        let (tx, _rx) = mpsc::channel(1);
+        let mut session = ClientSession::new();
+        let bc = dummy_broadcaster();
+        let tools = vec![ToolInfo {
+            name: "kb_search".to_string(),
+            description: "Search the KB".to_string(),
+            input_schema: serde_json::json!({"type": "object", "properties": {}}),
+            permission: Some("ReadOnly".to_string()),
+            annotations: Some(protocol::ToolAnnotations {
+                title: None,
+                read_only_hint: Some(true),
+                destructive_hint: Some(false),
+                idempotent_hint: Some(true),
+            }),
+        }];
+        let msg = r#"{"jsonrpc":"2.0","id":5,"method":"tools/list"}"#;
+
+        let resp = handle_request(msg, &tools, &tx, &mut session, &bc).await;
+        let result = resp.result.unwrap();
+        let tool = &result["tools"].as_array().unwrap()[0];
+        assert_eq!(tool["permission"], "ReadOnly");
+        assert_eq!(tool["annotations"]["readOnlyHint"], true);
+        assert_eq!(tool["annotations"]["destructiveHint"], false);
+        assert_eq!(tool["annotations"]["idempotentHint"], true);
     }
 
     #[tokio::test]
@@ -1173,6 +1280,7 @@ mod tests {
             description: "Echo tool".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
             permission: None,
+            annotations: None,
         }];
 
         // Spawn the server.
@@ -1290,6 +1398,192 @@ mod tests {
 
         // Clean up.
         drop(client2);
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    // --- build_shim_initialize_params (ADR-051 permission-ceiling forwarding) ---
+
+    #[test]
+    fn build_shim_initialize_params_omits_permission_ceiling_when_unset() {
+        let params = build_shim_initialize_params(None);
+        assert!(
+            params.get("permissionCeiling").is_none(),
+            "no ceiling requested -> field must be entirely absent, not null"
+        );
+    }
+
+    #[test]
+    fn build_shim_initialize_params_omits_permission_ceiling_when_value_is_empty() {
+        // A set-but-empty env var (e.g. `MAE_MCP_PERMISSION_CEILING=`) must
+        // behave identically to unset, not forward an empty-string ceiling.
+        let params = build_shim_initialize_params(Some(""));
+        assert!(params.get("permissionCeiling").is_none());
+    }
+
+    #[test]
+    fn build_shim_initialize_params_forwards_a_set_permission_ceiling_verbatim() {
+        let params = build_shim_initialize_params(Some("ReadOnly"));
+        assert_eq!(params["permissionCeiling"], "ReadOnly");
+        // Forwarding a ceiling is additive -- everything else about
+        // `initialize` params must stay exactly as before.
+        assert_eq!(params["clientInfo"]["name"], "mae-mcp-shim");
+        assert_eq!(params["protocolVersion"], "2025-11-25");
+    }
+
+    /// The shim forwards the value opaquely -- it doesn't validate/parse it
+    /// itself; the editor's `parse_permission_tier` does, and silently
+    /// ignores anything it doesn't recognize (ADR-051). A garbage value must
+    /// still be forwarded verbatim here, never silently dropped, so the
+    /// editor-side "invalid values are ignored" behavior stays the one and
+    /// only validation point -- never duplicated (and potentially
+    /// inconsistently reimplemented) in the shim's construction logic.
+    #[test]
+    fn build_shim_initialize_params_forwards_an_unrecognized_value_without_validating() {
+        let params = build_shim_initialize_params(Some("NotARealTier"));
+        assert_eq!(params["permissionCeiling"], "NotARealTier");
+    }
+
+    /// Adversarial (ADR-050 D1/Phase I, #384 DoD: "capability declaration
+    /// abuse... privilege escalation"). This is the second pathway the "MAE
+    /// for VS Code" extension adds for setting `permissionCeiling` (via
+    /// `MAE_MCP_PERMISSION_CEILING` -> `build_shim_initialize_params` ->
+    /// `initialize` params), alongside the pre-existing direct-client
+    /// pathway ADR-051 already proved is tightening-only
+    /// (`crates/mae/src/ai_event_handler.rs`'s
+    /// `session_declared_ceiling_denies_a_call_the_global_policy_alone_would_allow`
+    /// and `effective_permission_policy_never_loosens_beyond_global`). Since
+    /// `shared/mcp` has no dependency on `mae-ai`'s `PermissionPolicy` types,
+    /// the actual min-operation enforcement can't be re-proven from here --
+    /// what CAN and must be proven here is that the new pathway's wire output
+    /// is faithfully and losslessly threaded through this crate's own
+    /// server-side session/dispatch machinery (real `McpServer`, real
+    /// socket, real `ClientSession` parsing, real `RequesterContext`
+    /// construction) with no silent drop, mutation, or -- the actual
+    /// escalation-shaped bug this guards against -- default/forged value
+    /// appearing when the client declared none. If this test passed while
+    /// the ceiling silently vanished (or a phantom ceiling appeared) between
+    /// `initialize` and the `RequesterContext` a tool call receives, the
+    /// server-side tightening logic downstream would be enforcing against
+    /// the wrong (or a fabricated) value without ever knowing it.
+    #[tokio::test]
+    async fn permission_ceiling_built_by_the_shim_helper_threads_losslessly_to_the_real_requester_context(
+    ) {
+        let socket_path = format!("/tmp/mae-test-ceiling-thread-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        let (tool_tx, mut tool_rx) = mpsc::channel::<McpToolRequest>(16);
+        let server = McpServer::new(&socket_path, tool_tx, dummy_broadcaster());
+        let tools = vec![ToolInfo {
+            name: "echo".to_string(),
+            description: "Echo tool".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+            permission: None,
+            annotations: None,
+        }];
+        tokio::spawn(async move {
+            server.run(tools).await;
+        });
+
+        // A responder task drains tool_rx and replies immediately, capturing
+        // each request's RequesterContext as it goes -- captured[i] is
+        // guaranteed populated by the time the matching send_and_recv(...)
+        // call below returns, since the socket response can't be written
+        // until after `req.reply.send(...)` here resolves it.
+        let captured: std::sync::Arc<std::sync::Mutex<Vec<RequesterContext>>> =
+            std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured_for_responder = captured.clone();
+        tokio::spawn(async move {
+            while let Some(req) = tool_rx.recv().await {
+                captured_for_responder
+                    .lock()
+                    .unwrap()
+                    .push(req.requester.clone());
+                let _ = req.reply.send(McpToolResult {
+                    success: true,
+                    output: "ok".to_string(),
+                });
+            }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // --- Client A: declares a ceiling via the exact same helper the
+        // shim's connect_and_verify() calls, exactly as it would after
+        // reading MAE_MCP_PERMISSION_CEILING=ReadOnly from its environment.
+        let mut client_a = tokio::net::UnixStream::connect(&socket_path)
+            .await
+            .expect("client A connect");
+        let init_params_a = build_shim_initialize_params(Some("ReadOnly"));
+        let resp = send_and_recv(
+            &mut client_a,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": init_params_a
+            }),
+        )
+        .await;
+        assert!(resp.error.is_none(), "client A initialize failed");
+
+        send_and_recv(
+            &mut client_a,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "echo", "arguments": {}}
+            }),
+        )
+        .await;
+        let req_a = captured
+            .lock()
+            .unwrap()
+            .first()
+            .cloned()
+            .expect("client A tool request");
+        assert_eq!(
+            req_a.declared_permission_ceiling.as_deref(),
+            Some("ReadOnly"),
+            "the ceiling built via build_shim_initialize_params must thread through to \
+             the real RequesterContext unchanged"
+        );
+
+        // --- Client B: no ceiling declared (the pre-Phase-I shim's exact
+        // behavior, and any client that never sets the env var) -- must
+        // NEVER observe a ceiling it didn't ask for. This is the actual
+        // escalation-shaped failure mode: a default/forged ceiling leaking
+        // across sessions or appearing from nowhere.
+        let mut client_b = tokio::net::UnixStream::connect(&socket_path)
+            .await
+            .expect("client B connect");
+        let init_params_b = build_shim_initialize_params(None);
+        assert!(init_params_b.get("permissionCeiling").is_none());
+        let resp = send_and_recv(
+            &mut client_b,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": init_params_b
+            }),
+        )
+        .await;
+        assert!(resp.error.is_none(), "client B initialize failed");
+
+        send_and_recv(
+            &mut client_b,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "echo", "arguments": {}}
+            }),
+        )
+        .await;
+        let req_b = captured
+            .lock()
+            .unwrap()
+            .get(1)
+            .cloned()
+            .expect("client B tool request");
+        assert_eq!(
+            req_b.declared_permission_ceiling, None,
+            "a client that declared no ceiling must never be assigned one -- proves no \
+             cross-session leakage and no forged/default value"
+        );
+
+        drop(client_a);
+        drop(client_b);
         let _ = std::fs::remove_file(&socket_path);
     }
 
@@ -1436,6 +1730,7 @@ mod tests {
             description: "Test".to_string(),
             input_schema: serde_json::json!({"type": "object"}),
             permission: None,
+            annotations: None,
         }];
 
         tokio::spawn(async move {
@@ -2374,6 +2669,7 @@ mod tests {
             description: "A test tool".to_string(),
             input_schema: serde_json::json!({"type": "object", "properties": {}}),
             permission: None,
+            annotations: None,
         }];
 
         tokio::spawn(async move {
@@ -2545,12 +2841,14 @@ mod tests {
                 description: "A".to_string(),
                 input_schema: serde_json::json!({"type": "object"}),
                 permission: None,
+                annotations: None,
             },
             ToolInfo {
                 name: "tool_b".to_string(),
                 description: "B".to_string(),
                 input_schema: serde_json::json!({"type": "object"}),
                 permission: None,
+                annotations: None,
             },
         ];
 

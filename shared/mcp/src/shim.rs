@@ -19,6 +19,16 @@
 //! Set `MAE_MCP_SHIM_LOG=/path/to/file.log` to override the default log path.
 //! Default log: `/tmp/mae-shim.log`.
 //!
+//! Set `MAE_MCP_PERMISSION_CEILING=<ReadOnly|Write|Shell|Privileged>` to have
+//! the shim forward a `permissionCeiling` in its `initialize` request params
+//! (ADR-051). This can only ever *tighten* the effective policy on the
+//! editor side (`effective_permission_policy` takes a `min()` against global
+//! config) -- there is no server-side field this env var could set to
+//! *loosen* a session's tier, so it's safe to trust unconditionally, exactly
+//! like any hand-rolled MCP client that set the same field directly. Exists
+//! because the shim itself otherwise has no way to set this (a gap ADR-050
+//! D1/Phase I's "MAE for VS Code" extension needed closed).
+//!
 //! Flags:
 //!   --version   Print version and exit
 //!   --check     Connectivity diagnostic (discover, connect, verify, exit)
@@ -154,15 +164,12 @@ async fn connect_and_verify(socket_path: &str) -> Result<BufReader<UnixStream>, 
         .map_err(|e| format!("connect: {e}"))?;
     let mut stream = BufReader::new(stream);
 
+    let ceiling_env = env::var("MAE_MCP_PERMISSION_CEILING").ok();
     let init_req = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-11-25",
-            "capabilities": {},
-            "clientInfo": { "name": "mae-mcp-shim", "version": VERSION }
-        }
+        "params": mae_mcp::build_shim_initialize_params(ceiling_env.as_deref())
     });
     mae_mcp::write_framed(
         &mut stream,

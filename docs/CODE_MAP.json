@@ -892,6 +892,10 @@
           "kind": "mod"
         },
         {
+          "name": "build_shim_initialize_params",
+          "kind": "fn"
+        },
+        {
           "name": "RequesterContext",
           "kind": "struct"
         },
@@ -935,6 +939,10 @@
         {
           "name": "Renderer",
           "kind": "trait"
+        },
+        {
+          "name": "NullRenderer",
+          "kind": "struct"
         },
         {
           "name": "TerminalRenderer",

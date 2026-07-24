@@ -70,6 +70,7 @@ pub(crate) fn handle_help(args: &[String]) -> Option<io::Result<()>> {
         println!("  --debug-init            Verbose init file loading (show errors in *Messages*)");
         println!("  -q, --clean             Skip config, init.scm, and history (like emacs -q)");
         println!("  --self-test [CATS]      Run AI self-test headless, exit with pass/fail code");
+        println!("  --headless              Run the full engine (KB/AI/LSP/DAP/MCP), no UI, until SIGTERM/Ctrl-C (ADR-055)");
         println!("  --test PATH             Run Scheme tests headless (file or directory)");
         println!("  --test-filter PATTERN   Filter tests by name pattern");
         println!("  --test-output FORMAT    Output format: tap (default) | human");
@@ -145,6 +146,56 @@ pub(crate) fn handle_print_config_template(args: &[String]) -> Option<io::Result
         return Some(Ok(()));
     }
     None
+}
+
+/// Pure resolution behind `--headless --print-socket-path`, split out for
+/// testability without touching `std::env::current_dir()`/`process::exit` —
+/// mirrors `headless_loop.rs`'s own `claim_stable_socket`/
+/// `claim_stable_socket_at` split, same reason (CLAUDE.md per-test-fixture
+/// isolation discipline: no real-process env/cwd dependence in the tested
+/// unit). Reuses `headless_loop::stable_socket_path` verbatim (principle #8)
+/// — this is guaranteed to resolve to exactly the same path `mae --headless`
+/// itself would claim from the same working directory, never a
+/// reimplementation that could silently drift from it.
+fn resolve_print_socket_path(cwd: &std::path::Path) -> Option<std::path::PathBuf> {
+    let project_root = mae_core::detect_project_root(cwd);
+    crate::headless_loop::stable_socket_path(project_root.as_deref())
+}
+
+/// `--headless --print-socket-path`: resolve and print ONLY the stable,
+/// project-keyed headless socket path (ADR-055 decision 2) for the current
+/// working directory's project, then exit — no bind, no editor bootstrap, no
+/// other side effect. This is the single source of truth an external tool
+/// (e.g. the "MAE for VS Code" extension, ADR-050 D1/Phase I/#384) can rely
+/// on instead of reimplementing the project-hashing scheme itself. Requires
+/// `--headless` to also be present, since only the stable-path convention
+/// this resolves has any meaning there — a bare `--print-socket-path` alone
+/// is not a recognized flag.
+pub(crate) fn handle_print_socket_path(args: &[String]) -> Option<io::Result<()>> {
+    if !(args.iter().any(|a| a == "--headless") && args.iter().any(|a| a == "--print-socket-path"))
+    {
+        return None;
+    }
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(e) => {
+            eprintln!("mae: --print-socket-path: failed to read current directory: {e}");
+            std::process::exit(1);
+        }
+    };
+    match resolve_print_socket_path(&cwd) {
+        Some(path) => {
+            println!("{}", path.display());
+            Some(Ok(()))
+        }
+        None => {
+            eprintln!(
+                "mae: --print-socket-path: no project root detected for {}",
+                cwd.display()
+            );
+            std::process::exit(1);
+        }
+    }
 }
 
 /// `--collab-identity`: print this editor's Ed25519 peer identity (generating
@@ -517,6 +568,115 @@ pub(crate) fn handle_check_config(args: &[String]) -> Option<io::Result<()>> {
     Some(Ok(()))
 }
 
+/// `--ensure-guidance-config [--guidance-kb <name>]`: deterministic,
+/// non-AI-dependent one-shot setup for the guidance-KB delivery mechanism
+/// (K3, post-ship quality pass). Mirrors `--print-socket-path`'s shape —
+/// a scriptable primitive an external tool (the "MAE for VS Code"
+/// extension's first-activation hook) can call directly, rather than
+/// depending on an LLM correctly guessing which of N MCP tools to call for
+/// a one-shot setup step (principle #8: reuses the proven `set_option`/
+/// `save_option_to_init` `:set-save` persistence path verbatim, never a
+/// hand-rolled config writer).
+///
+/// Set-if-unset only, for both options independently:
+/// - `ai_guidance_kb`: if already non-empty (e.g. the shipped init.scm
+///   template's default `"MaePractices"`, or a user's own explicit choice),
+///   left untouched. If empty and `--guidance-kb <name>` was given, set to
+///   that name. If empty and no `--guidance-kb` given, left empty (nothing
+///   to default to — printed as a no-op, not an error).
+/// - `ai_guidance_export_live_sync`: if not already `true`, set to `true`
+///   (ADR-050 D4) so a fresh workspace gets automatic per-session AGENTS.md
+///   sync without a manual `kb_export_guidance` call.
+///
+/// Never overwrites an EXISTING explicit value for either option. Exits 0
+/// in every case (nothing here is a hard error worth failing a caller's
+/// script over) except genuine I/O failure persisting to init.scm.
+pub(crate) fn handle_ensure_guidance_config(args: &[String]) -> Option<io::Result<()>> {
+    if !args.iter().any(|a| a == "--ensure-guidance-config") {
+        return None;
+    }
+    let guidance_kb_arg = args
+        .iter()
+        .position(|a| a == "--guidance-kb")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
+
+    let mut editor = Editor::new();
+    let mut scheme = match SchemeRuntime::new() {
+        Ok(rt) => rt,
+        Err(e) => {
+            eprintln!("mae: scheme runtime init failed: {}", e.message);
+            std::process::exit(1);
+        }
+    };
+    let _module_registry = load_init_file(&mut scheme, &mut editor);
+
+    let mut changes: Vec<String> = Vec::new();
+
+    let current_guidance_kb = editor
+        .get_option("ai_guidance_kb")
+        .map(|(v, _)| v)
+        .unwrap_or_default();
+    if current_guidance_kb.is_empty() {
+        match &guidance_kb_arg {
+            Some(name) => {
+                if let Err(e) = editor.set_option("ai_guidance_kb", name) {
+                    eprintln!("mae: --ensure-guidance-config: failed to set ai_guidance_kb: {e}");
+                    std::process::exit(1);
+                }
+                match editor.save_option_to_init("ai_guidance_kb") {
+                    Ok(_) => changes.push(format!("ai_guidance_kb set to '{name}'")),
+                    Err(e) => {
+                        eprintln!(
+                            "mae: --ensure-guidance-config: failed to persist ai_guidance_kb: {e}"
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            }
+            None => println!(
+                "mae: ai_guidance_kb is unset and no --guidance-kb given -- leaving unset \
+                 (a fresh install's shipped init.scm template already defaults to \
+                 \"MaePractices\"; nothing to do for an existing config with no KB chosen)"
+            ),
+        }
+    } else {
+        println!("mae: ai_guidance_kb already set to '{current_guidance_kb}' -- leaving unchanged");
+    }
+
+    let live_sync_already_on = editor
+        .get_option("ai_guidance_export_live_sync")
+        .map(|(v, _)| v == "true")
+        .unwrap_or(false);
+    if !live_sync_already_on {
+        if let Err(e) = editor.set_option("ai_guidance_export_live_sync", "true") {
+            eprintln!(
+                "mae: --ensure-guidance-config: failed to set ai_guidance_export_live_sync: {e}"
+            );
+            std::process::exit(1);
+        }
+        match editor.save_option_to_init("ai_guidance_export_live_sync") {
+            Ok(_) => changes.push("ai_guidance_export_live_sync set to true".to_string()),
+            Err(e) => {
+                eprintln!(
+                    "mae: --ensure-guidance-config: failed to persist \
+                     ai_guidance_export_live_sync: {e}"
+                );
+                std::process::exit(1);
+            }
+        }
+    } else {
+        println!("mae: ai_guidance_export_live_sync already true -- leaving unchanged");
+    }
+
+    if changes.is_empty() {
+        println!("mae: guidance config already fully configured, no changes made");
+    } else {
+        println!("mae: guidance config updated: {}", changes.join(", "));
+    }
+    Some(Ok(()))
+}
+
 /// `--test PATH`: headless Scheme test runner. Always terminates the process
 /// (`std::process::exit`) when triggered; returns `Ok(())` untouched when not.
 pub(crate) fn handle_test_mode(args: &[String]) -> io::Result<()> {
@@ -632,4 +792,51 @@ pub(crate) fn handle_test_mode(args: &[String]) -> io::Result<()> {
     });
 
     std::process::exit(exit_code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The exact property `--print-socket-path`'s whole design rests on
+    /// (principle #8): resolving via `resolve_print_socket_path` must never
+    /// drift from what `mae --headless` itself would claim for the same
+    /// project root — it's a thin wrapper over `headless_loop::
+    /// stable_socket_path`, not a parallel reimplementation.
+    #[test]
+    fn resolve_print_socket_path_matches_headless_loop_stable_path_for_a_real_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".git")).unwrap();
+
+        let resolved = resolve_print_socket_path(tmp.path());
+        let expected = crate::headless_loop::stable_socket_path(Some(tmp.path()));
+
+        assert!(resolved.is_some());
+        assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn resolve_print_socket_path_is_stable_across_repeated_calls() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), "[package]").unwrap();
+
+        let first = resolve_print_socket_path(tmp.path());
+        let second = resolve_print_socket_path(tmp.path());
+        assert_eq!(first, second);
+    }
+
+    /// `handle_print_socket_path` must require BOTH flags together — a bare
+    /// `--print-socket-path` (no `--headless`) is not a recognized flag and
+    /// must fall through as a no-op (`None`), not attempt resolution.
+    #[test]
+    fn handle_print_socket_path_requires_both_flags() {
+        let only_print = vec!["mae".to_string(), "--print-socket-path".to_string()];
+        assert!(handle_print_socket_path(&only_print).is_none());
+
+        let only_headless = vec!["mae".to_string(), "--headless".to_string()];
+        assert!(handle_print_socket_path(&only_headless).is_none());
+
+        let neither = vec!["mae".to_string()];
+        assert!(handle_print_socket_path(&neither).is_none());
+    }
 }

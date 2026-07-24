@@ -78,7 +78,12 @@ fn main() {
             }
         };
         let result = mae_kb::org::parse_org_multi_result(&content);
-        all_nodes.extend(result.nodes);
+        all_nodes.extend(
+            result
+                .nodes
+                .into_iter()
+                .map(|n| n.with_source(mae_kb::NodeSource::Seed, 1)),
+        );
         all_typed_links.extend(result.typed_links);
         all_transclusions.extend(result.transclusions);
     }

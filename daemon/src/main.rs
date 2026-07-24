@@ -12,11 +12,18 @@
 //! collaboration, and services that outlive the editor session.
 
 mod config;
+mod conn_limit;
 mod dialer;
 mod handler;
 pub mod hygiene;
+mod kb_query;
+#[cfg(test)]
+mod lazy_fetch_client;
+mod oauth;
 mod p2p;
 mod scheduler;
+#[cfg(test)]
+mod tests;
 mod ticket;
 
 use config::DaemonConfig;
@@ -216,7 +223,13 @@ async fn main() {
         scheduler.run(scheduler_shutdown).await;
     });
 
-    // --- Collab server (absorbed from mae-state-server) ---
+    // --- Collab doc_store (absorbed from mae-state-server) ---
+    // ADR-053/Phase G (#382): constructed once here (not inside
+    // `spawn_collab_server`) so it can also be shared with the OAuth
+    // listener's `kb/query.*` surface below — that surface needs read
+    // access to the same `DocStore`, independent of whether the TCP
+    // listener's own auth setup succeeds.
+    let mut doc_store_for_query: Option<Arc<doc_store::DocStore>> = None;
     if config.collab.enabled {
         let collab_issues = config.check_collab();
         if !collab_issues.is_empty() {
@@ -225,18 +238,79 @@ async fn main() {
             }
             // Non-fatal: KB service continues, collab disabled
             warn!("collab service disabled due to config errors");
+        } else if let Some((doc_store, broadcaster, server_start_time)) =
+            init_doc_store(&config).await
+        {
+            doc_store_for_query = Some(Arc::clone(&doc_store));
+            spawn_collab_server(
+                &config,
+                Arc::clone(&state),
+                doc_store,
+                broadcaster,
+                server_start_time,
+            )
+            .await;
         } else {
-            spawn_collab_server(&config, Arc::clone(&state)).await;
+            warn!("collab service disabled");
         }
     } else {
         info!("collab service disabled in config");
     }
 
+    // --- OAuth 2.1 resource-server listener (ADR-052); kb/query.* (ADR-053/Phase G) ---
+    if config.oauth.enabled {
+        if config.oauth.canonical_resource_uri.is_empty() || config.oauth.jwks_url.is_empty() {
+            error!("oauth.enabled is true but canonical_resource_uri/jwks_url are not set — OAuth listener disabled");
+        } else {
+            let server_config = oauth::ResourceServerConfig {
+                canonical_resource_uri: config.oauth.canonical_resource_uri.clone(),
+                principal_claim: config.oauth.principal_claim.clone(),
+                jwks_url: config.oauth.jwks_url.clone(),
+                issuer: config.oauth.issuer.clone(),
+                kb_query_enabled: config.oauth.kb_query_enabled,
+                max_request_body_bytes: config.oauth.max_request_body_bytes,
+                kb_query_max_body_bytes: config.oauth.kb_query_max_body_bytes,
+                kb_query_max_scan_nodes: config.oauth.kb_query_max_scan_nodes,
+                kb_query_max_search_results: config.oauth.kb_query_max_search_results,
+            };
+            let bind = config.oauth.bind;
+            let cert_path = config.oauth.cert_path.clone();
+            let key_path = config.oauth.key_path.clone();
+            let doc_store = doc_store_for_query.clone();
+            let oauth_limiter = conn_limit::ConnLimiter::new(config.oauth.max_connections);
+            tokio::spawn(async move {
+                if let Err(e) = oauth::run_oauth_listener(
+                    server_config,
+                    bind,
+                    &cert_path,
+                    &key_path,
+                    doc_store,
+                    oauth_limiter,
+                )
+                .await
+                {
+                    error!(error = %e, "OAuth listener failed to start");
+                }
+            });
+        }
+    } else {
+        info!("OAuth resource-server listener disabled in config (default)");
+    }
+
     // KB accept loop
     let accept_state = Arc::clone(&state);
     let accept_shutdown = shutdown_tx.subscribe();
+    let kb_socket_limiter = conn_limit::ConnLimiter::new(config.kb_socket.max_connections);
+    let kb_socket_idle_timeout = std::time::Duration::from_secs(config.kb_socket.idle_timeout_secs);
     let accept_handle = tokio::spawn(async move {
-        accept_loop(listener, accept_state, accept_shutdown).await;
+        accept_loop(
+            listener,
+            accept_state,
+            accept_shutdown,
+            kb_socket_limiter,
+            kb_socket_idle_timeout,
+        )
+        .await;
     });
 
     // Wait for shutdown signal (Ctrl-C or SIGTERM)
@@ -335,25 +409,36 @@ async fn spawn_p2p_mesh(
         doc_store,
         broadcaster,
         start_time,
+        conn_limit::ConnLimiter::new(p2p.max_connections),
     ));
 }
 
-async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState>>) {
+/// Construct + warm up the collab `DocStore`/`broadcaster` (open storage, hydrate
+/// blocklists, recover documents) — split out from `spawn_collab_server` (ADR-053/
+/// Phase G, #382) so the OAuth listener's `kb/query.*` surface can share the SAME
+/// `DocStore` instance without depending on the TCP listener's own setup/auth/accept
+/// logic. Returns `None` on any construction failure (already logged) — same
+/// disable-collab-non-fatally behavior as before this split, just observable to the
+/// caller instead of an internal early `return`.
+async fn init_doc_store(
+    config: &DaemonConfig,
+) -> Option<(
+    Arc<doc_store::DocStore>,
+    SharedBroadcaster,
+    std::time::Instant,
+)> {
     let collab = &config.collab;
-
-    // Open collab storage
     let collab_data_dir = config.resolve_collab_data_dir();
     let db_path = collab_data_dir.join("state.db");
-    let backend = match storage::SqliteBackend::open(&db_path) {
-        Ok(b) => Arc::new(b),
-        Err(e) => {
-            error!(error = %e, path = %db_path.display(), "failed to open collab SQLite");
-            warn!("collab service disabled");
-            return;
-        }
-    };
+    let backend =
+        match storage::SqliteBackend::open_with_pool_size(&db_path, collab.storage.shard_count) {
+            Ok(b) => Arc::new(b),
+            Err(e) => {
+                error!(error = %e, path = %db_path.display(), "failed to open collab SQLite");
+                return None;
+            }
+        };
 
-    // Create doc store and broadcaster
     let doc_store = Arc::new(
         doc_store::DocStore::new(backend.clone(), collab.storage.compact_threshold)
             .with_max_documents(collab.sync.max_documents)
@@ -386,6 +471,19 @@ async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState
         }
         Err(e) => warn!(error = %e, "failed to list collab documents for recovery"),
     }
+
+    Some((doc_store, broadcaster, server_start_time))
+}
+
+async fn spawn_collab_server(
+    config: &DaemonConfig,
+    state: Arc<Mutex<DaemonState>>,
+    doc_store: Arc<doc_store::DocStore>,
+    broadcaster: SharedBroadcaster,
+    server_start_time: std::time::Instant,
+) {
+    let collab = &config.collab;
+    let collab_data_dir = config.resolve_collab_data_dir();
 
     // Create the auth provider for this listener.
     //   "psk": trust a SET of symmetric keys (keystore + legacy psk/psk_command).
@@ -613,16 +711,17 @@ async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState
     // #342: bound the count of concurrently accepted sockets (authenticated or
     // not) — before this, nothing capped how many stalled/never-authenticating
     // connections could accumulate, each parking a task+socket forever.
+    // ADR-054: the counter/guard itself now lives in conn_limit::ConnLimiter,
+    // shared with the KB Unix-socket and P2P listeners — behavior-identical
+    // to the inline version this replaces (same Relaxed ordering, same
+    // 0-means-unlimited semantics, same panic-safe RAII decrement).
     let max_connections = collab.max_connections;
-    let active_connections = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let limiter = conn_limit::ConnLimiter::new(max_connections);
     tokio::spawn(async move {
         loop {
             match tcp_listener.accept().await {
                 Ok((stream, addr)) => {
-                    if max_connections > 0
-                        && active_connections.load(std::sync::atomic::Ordering::Relaxed)
-                            >= max_connections
-                    {
+                    let Some(guard) = limiter.try_acquire() else {
                         warn!(
                             %addr,
                             max_connections,
@@ -630,24 +729,13 @@ async fn spawn_collab_server(config: &DaemonConfig, state: Arc<Mutex<DaemonState
                         );
                         drop(stream); // closes the socket immediately
                         continue;
-                    }
+                    };
                     info!(addr = %addr, "collab TCP client connected");
                     let store = Arc::clone(&doc_store);
                     let bc = Arc::clone(&broadcaster);
                     let auth = collab_auth.clone();
-                    let active = Arc::clone(&active_connections);
-                    active.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     tokio::spawn(async move {
-                        // RAII: decrements on every exit path (normal return,
-                        // early `return`, or a panic unwinding through here) so
-                        // the count never leaks regardless of how the handler ends.
-                        struct DecrementOnDrop(Arc<std::sync::atomic::AtomicUsize>);
-                        impl Drop for DecrementOnDrop {
-                            fn drop(&mut self) {
-                                self.0.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                            }
-                        }
-                        let _guard = DecrementOnDrop(active);
+                        let _guard = guard;
                         // mTLS path needs the whole stream (cannot pre-split).
                         if let CollabAuth::KeyTls {
                             acceptor,
@@ -1138,8 +1226,15 @@ fn run_doctor() {
         // Check collab storage
         let collab_data_dir = config.resolve_collab_data_dir();
         let db_path = collab_data_dir.join("state.db");
-        match storage::SqliteBackend::open(&db_path) {
-            Ok(_) => println!("  collab sqlite: OK ({})", db_path.display()),
+        match storage::SqliteBackend::open_with_pool_size(
+            &db_path,
+            config.collab.storage.shard_count,
+        ) {
+            Ok(_) => println!(
+                "  collab sqlite: OK ({}, {} shard(s))",
+                db_path.display(),
+                config.collab.storage.shard_count
+            ),
             Err(e) => println!("  collab sqlite: FAILED ({e})"),
         }
 
@@ -1161,10 +1256,17 @@ fn run_doctor() {
 }
 
 /// Accept loop: spawn a task per KB client connection.
+///
+/// `max_connections` is enforced via `limiter` (ADR-054) — this socket is
+/// local/filesystem-permissions-only trust (SECURITY.md), so there is no
+/// per-principal/per-IP identity to sub-limit against, only a total cap,
+/// same shape as the collab TCP listener's own `#342` fix.
 async fn accept_loop(
     listener: UnixListener,
     state: Arc<Mutex<DaemonState>>,
     mut shutdown: tokio::sync::broadcast::Receiver<()>,
+    limiter: conn_limit::ConnLimiter,
+    idle_timeout: std::time::Duration,
 ) {
     loop {
         tokio::select! {
@@ -1172,9 +1274,18 @@ async fn accept_loop(
             result = listener.accept() => {
                 match result {
                     Ok((stream, _addr)) => {
+                        let Some(guard) = limiter.try_acquire() else {
+                            tracing::warn!(
+                                max_connections = limiter.current(),
+                                "KB socket: connection cap reached, rejecting new connection"
+                            );
+                            drop(stream);
+                            continue;
+                        };
                         let client_state = Arc::clone(&state);
                         tokio::spawn(async move {
-                            if let Err(e) = handle_client(stream, client_state).await {
+                            let _guard = guard;
+                            if let Err(e) = handle_client(stream, client_state, idle_timeout).await {
                                 tracing::debug!(error = %e, "Client disconnected");
                             }
                         });
@@ -1189,15 +1300,38 @@ async fn accept_loop(
 }
 
 /// Handle a single KB client connection using Content-Length framed JSON-RPC.
+///
+/// `idle_timeout` (0 = disabled) bounds how long the server waits for the
+/// *next* request on an already-open connection — `DaemonClient` keeps one
+/// persistent connection open for a whole editor session and transparently
+/// reconnects on I/O error, so a server-side idle-close here is self-healing
+/// from the client's perspective, not a hard failure (verified by
+/// `kb_socket_connection_limit_tests.rs`).
 async fn handle_client(
     stream: tokio::net::UnixStream,
     state: Arc<Mutex<DaemonState>>,
+    idle_timeout: std::time::Duration,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (reader, mut writer) = tokio::io::split(stream);
     let mut reader = BufReader::new(reader);
 
     loop {
-        let msg = match mae_mcp::read_message(&mut reader).await? {
+        let read_fut = mae_mcp::read_message(&mut reader);
+        let msg = if idle_timeout.is_zero() {
+            read_fut.await?
+        } else {
+            match tokio::time::timeout(idle_timeout, read_fut).await {
+                Ok(result) => result?,
+                Err(_) => {
+                    tracing::debug!(
+                        idle_timeout_secs = idle_timeout.as_secs(),
+                        "KB socket: closing idle connection"
+                    );
+                    return Ok(());
+                }
+            }
+        };
+        let msg = match msg {
             Some(msg) => msg,
             None => return Ok(()), // Client disconnected
         };
