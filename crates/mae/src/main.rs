@@ -383,6 +383,9 @@ fn main() -> io::Result<()> {
     if let Some(result) = cli::handle_print_config_template(&args) {
         return result;
     }
+    if let Some(result) = cli::handle_print_socket_path(&args) {
+        return result;
+    }
     if let Some(result) = cli::handle_collab_identity(&args) {
         return result;
     }

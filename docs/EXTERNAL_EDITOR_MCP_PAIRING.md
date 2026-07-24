@@ -1,7 +1,8 @@
 # Pairing MAE with VS Code, Copilot, and Other MCP Clients
 
-> Last updated: 2026-07-23 (v0.14.53). Design: [ADR-050](adr/050-external-editor-mcp-pairing.md)
-> (D1, D3 — this doc is that ADR's Verification artifact for Phase B / issue #377).
+> Last updated: 2026-07-24. Design: [ADR-050](adr/050-external-editor-mcp-pairing.md)
+> (D1, D3 — this doc is that ADR's Verification artifact for Phase B / issue #377, updated
+> for Phase I / issue #384's "MAE for VS Code" extension).
 > Related: [MCP_ARCHITECTURE.md](MCP_ARCHITECTURE.md) (wire protocol reference).
 
 MAE can act as a general-purpose MCP backend for **any** MCP-capable editor's AI agent —
@@ -22,8 +23,10 @@ behavior — see "Which MAE config matters" below.
 
 **Scope today:** this pairs with a KB running **locally on the same machine** as your
 editor (the KB an `mae`/`mae --headless` instance has open). Reading a **shared,
-access-controlled hub KB** you haven't fully replicated locally is a separate, later
-capability (ADR-053) — not yet available through this path.
+access-controlled hub KB** you haven't fully replicated locally is a separate capability
+([ADR-053](adr/053-live-scoped-kb-query-surface.md), shipped as `kb/query.*` on the OAuth
+resource-server listener, Phase G/#382) — it's a distinct, bearer-token-authenticated
+network surface, not yet wired into the stdio-shim pairing flow this doc covers.
 
 ## Prerequisites
 
@@ -35,7 +38,19 @@ capability (ADR-053) — not yet available through this path.
   all. Either way, `mae-mcp-shim` auto-discovers it — see "Which instance gets used?"
   below.
 
-## Path 1: VS Code + GitHub Copilot (Agent mode)
+## Recommended for VS Code: the "MAE for VS Code" extension (zero manual config)
+
+`editors/vscode/` in this repo (ADR-050 D1 full, Phase I / #384) is a VS Code extension
+that does everything **Path 1** below does by hand, automatically: it registers a dynamic
+MCP server definition provider, auto-spawns a **headless** MAE instance (never a GUI
+window) for your workspace if none is already running, and points `mae-mcp-shim` at it —
+all without ever reading or writing `.vscode/mcp.json`. Install it (`cd editors/vscode &&
+npm install && npm run package` produces a `.vsix` to install locally — not yet published
+to the Marketplace, see `editors/vscode/README.md`), and there is no step 1 below to do at
+all. Path 1's hand-edited `.vscode/mcp.json` approach remains the right choice for every
+other MCP host (Path 2) and for anyone who'd rather not install an extension.
+
+## Path 1: VS Code + GitHub Copilot (Agent mode), without the extension
 
 1. Create `.vscode/mcp.json` in your project (a real, working example is committed at the
    root of this repo — `.vscode/mcp.json` — open this repo in VS Code to try it against

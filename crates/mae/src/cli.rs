@@ -148,6 +148,56 @@ pub(crate) fn handle_print_config_template(args: &[String]) -> Option<io::Result
     None
 }
 
+/// Pure resolution behind `--headless --print-socket-path`, split out for
+/// testability without touching `std::env::current_dir()`/`process::exit` —
+/// mirrors `headless_loop.rs`'s own `claim_stable_socket`/
+/// `claim_stable_socket_at` split, same reason (CLAUDE.md per-test-fixture
+/// isolation discipline: no real-process env/cwd dependence in the tested
+/// unit). Reuses `headless_loop::stable_socket_path` verbatim (principle #8)
+/// — this is guaranteed to resolve to exactly the same path `mae --headless`
+/// itself would claim from the same working directory, never a
+/// reimplementation that could silently drift from it.
+fn resolve_print_socket_path(cwd: &std::path::Path) -> Option<std::path::PathBuf> {
+    let project_root = mae_core::detect_project_root(cwd);
+    crate::headless_loop::stable_socket_path(project_root.as_deref())
+}
+
+/// `--headless --print-socket-path`: resolve and print ONLY the stable,
+/// project-keyed headless socket path (ADR-055 decision 2) for the current
+/// working directory's project, then exit — no bind, no editor bootstrap, no
+/// other side effect. This is the single source of truth an external tool
+/// (e.g. the "MAE for VS Code" extension, ADR-050 D1/Phase I/#384) can rely
+/// on instead of reimplementing the project-hashing scheme itself. Requires
+/// `--headless` to also be present, since only the stable-path convention
+/// this resolves has any meaning there — a bare `--print-socket-path` alone
+/// is not a recognized flag.
+pub(crate) fn handle_print_socket_path(args: &[String]) -> Option<io::Result<()>> {
+    if !(args.iter().any(|a| a == "--headless") && args.iter().any(|a| a == "--print-socket-path"))
+    {
+        return None;
+    }
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(e) => {
+            eprintln!("mae: --print-socket-path: failed to read current directory: {e}");
+            std::process::exit(1);
+        }
+    };
+    match resolve_print_socket_path(&cwd) {
+        Some(path) => {
+            println!("{}", path.display());
+            Some(Ok(()))
+        }
+        None => {
+            eprintln!(
+                "mae: --print-socket-path: no project root detected for {}",
+                cwd.display()
+            );
+            std::process::exit(1);
+        }
+    }
+}
+
 /// `--collab-identity`: print this editor's Ed25519 peer identity (generating
 /// it on first use) so an admin can authorize it on the daemon.
 pub(crate) fn handle_collab_identity(args: &[String]) -> Option<io::Result<()>> {
@@ -633,4 +683,51 @@ pub(crate) fn handle_test_mode(args: &[String]) -> io::Result<()> {
     });
 
     std::process::exit(exit_code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The exact property `--print-socket-path`'s whole design rests on
+    /// (principle #8): resolving via `resolve_print_socket_path` must never
+    /// drift from what `mae --headless` itself would claim for the same
+    /// project root — it's a thin wrapper over `headless_loop::
+    /// stable_socket_path`, not a parallel reimplementation.
+    #[test]
+    fn resolve_print_socket_path_matches_headless_loop_stable_path_for_a_real_project() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(tmp.path().join(".git")).unwrap();
+
+        let resolved = resolve_print_socket_path(tmp.path());
+        let expected = crate::headless_loop::stable_socket_path(Some(tmp.path()));
+
+        assert!(resolved.is_some());
+        assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn resolve_print_socket_path_is_stable_across_repeated_calls() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("Cargo.toml"), "[package]").unwrap();
+
+        let first = resolve_print_socket_path(tmp.path());
+        let second = resolve_print_socket_path(tmp.path());
+        assert_eq!(first, second);
+    }
+
+    /// `handle_print_socket_path` must require BOTH flags together — a bare
+    /// `--print-socket-path` (no `--headless`) is not a recognized flag and
+    /// must fall through as a no-op (`None`), not attempt resolution.
+    #[test]
+    fn handle_print_socket_path_requires_both_flags() {
+        let only_print = vec!["mae".to_string(), "--print-socket-path".to_string()];
+        assert!(handle_print_socket_path(&only_print).is_none());
+
+        let only_headless = vec!["mae".to_string(), "--headless".to_string()];
+        assert!(handle_print_socket_path(&only_headless).is_none());
+
+        let neither = vec!["mae".to_string()];
+        assert!(handle_print_socket_path(&neither).is_none());
+    }
 }

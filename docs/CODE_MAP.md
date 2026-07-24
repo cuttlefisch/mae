@@ -351,6 +351,7 @@ Source: `shared/mcp/src/lib.rs`
 | `protocol` | mod |
 | `session` | mod |
 | `tls` | mod |
+| `build_shim_initialize_params` | fn |
 | `RequesterContext` | struct |
 | `McpToolRequest` | struct |
 | `McpToolResult` | struct |
