@@ -510,6 +510,21 @@ docker-collab-test:
 	docker compose -f docker-compose.collab-test.yml down --volumes --timeout 10; \
 	exit $${RC:-1}
 
+## docker-headless-e2e: run headless MAE service-mode E2E in Docker containers
+## (ADR-055, Phase J / #385) — real mae --headless, a real two-instance
+## collision race, and a real MCP handshake via mae-mcp-shim --check.
+## Uses `--wait` so compose exits once all client/verifier services complete,
+## then inspects the verifier exit code for pass/fail.
+docker-headless-e2e:
+	@echo "Running headless MAE E2E tests (docker compose)..."
+	@docker compose -f docker-compose.headless-e2e.yml up --build --wait 2>&1; \
+	RC=$$(docker compose -f docker-compose.headless-e2e.yml ps -a verifier --format '{{.ExitCode}}' 2>/dev/null); \
+	echo "--- verifier output ---"; \
+	docker compose -f docker-compose.headless-e2e.yml logs --no-log-prefix verifier; \
+	echo "--- verifier exit code: $${RC:-unknown} ---"; \
+	docker compose -f docker-compose.headless-e2e.yml down --volumes --timeout 10; \
+	exit $${RC:-1}
+
 ## docker-ci: run full CI pipeline in a container (no local toolchain needed)
 docker-ci:
 	docker compose run --rm --build ci

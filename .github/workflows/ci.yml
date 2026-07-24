@@ -384,6 +384,15 @@ jobs:
         run: make docker-collab-test
         timeout-minutes: 15
 
+  headless-e2e:
+    name: headless / docker e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run headless MAE service-mode E2E
+        run: make docker-headless-e2e
+        timeout-minutes: 15
+
   install-test:
     name: install / script validation
     runs-on: ubuntu-latest
