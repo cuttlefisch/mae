@@ -668,12 +668,25 @@ impl Editor {
         idx: usize,
         exclude: Option<crate::window::WindowId>,
     ) -> Option<crate::window::WindowId> {
-        // 1. Is this buffer already visible (other than in `exclude`)?
-        if let Some(w) = self
-            .window_mgr
-            .iter_windows()
-            .find(|w| w.buffer_idx == idx && Some(w.id) != exclude)
-        {
+        // 1. Is this buffer already visible (other than in `exclude`)? Must
+        // also exclude a window dedicated to another live MCP session (same
+        // protection as branches 2/2.5 below) -- without this, two sessions
+        // sharing one agent-shell buffer (the common case: one conversation
+        // buffer, many MCP sessions dispatching against it) whose dispatched
+        // command doesn't change what's on screen (e.g. a plain cursor-move)
+        // would silently make this "already visible" fast path hand the
+        // SECOND session the FIRST session's already-established window --
+        // reintroducing exactly the cross-session window-stealing bug
+        // `is_dedicated_window`'s own doc comment already describes, just
+        // through this earlier branch instead of the ones it actually
+        // guards. Found via the N>=3-sessions-with-varying-permission-
+        // ceilings adversarial test (#378) once a session's call could be
+        // *denied* mid-sequence, interleaving with another session's window
+        // resolution in a way the original 2-session/3-session tests never
+        // exercised together.
+        if let Some(w) = self.window_mgr.iter_windows().find(|w| {
+            w.buffer_idx == idx && Some(w.id) != exclude && !self.is_dedicated_window(w.id)
+        }) {
             let id = w.id;
             self.ai.target_window_id = Some(id);
             return Some(id);

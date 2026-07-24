@@ -72,6 +72,9 @@ pub fn scheme_tools_to_definitions(
                         prop_type: ty.clone(),
                         description: desc.clone(),
                         enum_values: None,
+                        items: None,
+                        properties: None,
+                        object_required: None,
                     },
                 );
             }

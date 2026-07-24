@@ -1940,4 +1940,169 @@ mod tests {
             result2.output
         );
     }
+
+    /// Combined adversarial proof for ADR-051's literal DoD wording (#378):
+    /// N>=3 real MCP sessions, at least 2 with *differing* declared
+    /// permission ceilings, asserted to have BOTH properties hold
+    /// simultaneously -- not just window isolation (already proven at N=3
+    /// with a single shared tier by `with_ai_dispatch_scope_for_session_
+    /// isolates_three_concurrent_sessions`) and not just ceiling enforcement
+    /// (already proven, but only at N=2, by the test just above). A real
+    /// confused-deputy bug could plausibly only reproduce when a permission
+    /// *denial* and a window-isolation dispatch interleave across 3+
+    /// sessions -- this is the literal scenario neither existing test alone
+    /// could catch.
+    #[tokio::test]
+    async fn three_plus_sessions_with_differing_ceilings_stay_isolated_on_both_axes() {
+        let global_policy = PermissionPolicy {
+            auto_approve_up_to: PermissionTier::Write,
+        };
+        let mut editor = Editor::new();
+        editor.buffers[0].name = "*AI:claude*".to_string();
+        editor.buffers[0].agent_shell = true;
+        editor.buffers[0].insert_text_at(0, "line one\nline two\n");
+        let original_id = editor.window_mgr.focused_id();
+        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
+        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
+
+        // Session 1: no declared ceiling -- a Write-tier call is allowed.
+        let (req1, mut rx1) = mcp_request_with_ceiling(
+            "execute_command",
+            serde_json::json!({"command": "move-down"}),
+            101,
+            None,
+        );
+        let mut deferred1 = Vec::new();
+        handle_mcp_request(
+            &mut editor,
+            req1,
+            &[],
+            &global_policy,
+            &lsp_tx,
+            &mut deferred1,
+            &mut scheme,
+        );
+        let result1 = rx1.try_recv().expect("reply must have been sent");
+        assert!(result1.success, "session 101 (no ceiling) must be allowed");
+
+        // Session 2: a stricter ReadOnly ceiling -- the identical Write-tier
+        // call must be denied, even mid-way through other sessions' activity.
+        let (req2, mut rx2) = mcp_request_with_ceiling(
+            "execute_command",
+            serde_json::json!({"command": "move-down"}),
+            102,
+            Some("ReadOnly"),
+        );
+        let mut deferred2 = Vec::new();
+        handle_mcp_request(
+            &mut editor,
+            req2,
+            &[],
+            &global_policy,
+            &lsp_tx,
+            &mut deferred2,
+            &mut scheme,
+        );
+        let result2 = rx2.try_recv().expect("reply must have been sent");
+        assert!(
+            !result2.success,
+            "session 102 (ReadOnly ceiling) must be denied a Write-tier call"
+        );
+
+        // Session 3: no declared ceiling again -- must be allowed exactly
+        // like session 101, unaffected by session 102's denial.
+        let (req3, mut rx3) = mcp_request_with_ceiling(
+            "execute_command",
+            serde_json::json!({"command": "git-status"}),
+            103,
+            None,
+        );
+        let mut deferred3 = Vec::new();
+        handle_mcp_request(
+            &mut editor,
+            req3,
+            &[],
+            &global_policy,
+            &lsp_tx,
+            &mut deferred3,
+            &mut scheme,
+        );
+        let result3 = rx3.try_recv().expect("reply must have been sent");
+        assert!(
+            result3.success,
+            "session 103 (no ceiling) must be unaffected by session 102's denial: {}",
+            result3.output
+        );
+
+        // Window isolation: all three sessions -- including the DENIED
+        // one -- must each have established their own distinct companion
+        // window (window setup wraps the dispatch body, so it happens
+        // before the permission check runs inside it).
+        let target_101 = editor
+            .ai
+            .mcp_session_windows
+            .get(&101)
+            .and_then(|s| s.target_window_id)
+            .expect("session 101 should have an established target");
+        let target_102 = editor
+            .ai
+            .mcp_session_windows
+            .get(&102)
+            .and_then(|s| s.target_window_id)
+            .expect("session 102 (denied) must still have its own established target");
+        let target_103 = editor
+            .ai
+            .mcp_session_windows
+            .get(&103)
+            .and_then(|s| s.target_window_id)
+            .expect("session 103 should have an established target");
+
+        assert_ne!(
+            target_101, target_102,
+            "sessions 101 and 102 must not share a window"
+        );
+        assert_ne!(
+            target_102, target_103,
+            "sessions 102 and 103 must not share a window"
+        );
+        assert_ne!(
+            target_101, target_103,
+            "sessions 101 and 103 must not share a window"
+        );
+        assert_ne!(target_101, original_id);
+        assert_ne!(target_102, original_id);
+        assert_ne!(target_103, original_id);
+
+        // Confused-deputy check: re-dispatching for session 101 must reuse
+        // ITS OWN window, never session 102's or 103's, even after a denial
+        // happened in between.
+        let (req1b, mut rx1b) = mcp_request_with_ceiling(
+            "execute_command",
+            serde_json::json!({"command": "move-down"}),
+            101,
+            None,
+        );
+        let mut deferred1b = Vec::new();
+        handle_mcp_request(
+            &mut editor,
+            req1b,
+            &[],
+            &global_policy,
+            &lsp_tx,
+            &mut deferred1b,
+            &mut scheme,
+        );
+        let result1b = rx1b.try_recv().expect("reply must have been sent");
+        assert!(result1b.success);
+        let target_101_again = editor
+            .ai
+            .mcp_session_windows
+            .get(&101)
+            .and_then(|s| s.target_window_id)
+            .expect("session 101 should still have a target");
+        assert_eq!(
+            target_101_again, target_101,
+            "session 101 must reuse its own window on a second dispatch, not session 102's or 103's"
+        );
+    }
 }

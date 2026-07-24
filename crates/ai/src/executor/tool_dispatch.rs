@@ -768,6 +768,9 @@ mod tests {
                     prop_type: ptype.to_string(),
                     description: String::new(),
                     enum_values: None,
+                    items: None,
+                    properties: None,
+                    object_required: None,
                 },
             );
         }

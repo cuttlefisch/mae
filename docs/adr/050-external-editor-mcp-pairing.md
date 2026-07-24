@@ -178,8 +178,11 @@ anticipate, recorded here rather than left as undocumented drift:
   round-trip.
 - The same setup steps, written generically, are smoke-tested against at least one
   non-VS-Code MCP client to prove D3 isn't VS-Code-only in practice. **Done** — Phase B
-  (#377): `scripts/mcp-shim-stdio-smoke.{sh,py}`, a generic "any MCP client" doc, verified
-  live against a freshly built, isolated headless instance.
+  (#377): `scripts/mcp-shim-stdio-smoke.{sh,py}` IS "a raw MCP test client," one of this
+  decision's own three explicitly-acceptable proof options (alongside Zed/Cursor) — see
+  `docs/EXTERNAL_EDITOR_MCP_PAIRING.md`'s "Host compatibility matrix" for the current,
+  living per-host verification status (VS Code + the generic/raw-client path verified;
+  Zed/Cursor/JetBrains explicitly marked not-yet-verified, not silently assumed working).
 - A CI audit test enumerates every registered tool's `PermissionTier` against its derived
   `readOnlyHint` and fails the build on any inconsistency. **Done** — Phase A (#376):
   `every_registered_tool_annotation_matches_its_permission_tier`,

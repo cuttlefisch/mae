@@ -43,6 +43,61 @@ impl ToolDefBuilder {
                 prop_type: prop_type.into(),
                 description: description.into(),
                 enum_values: None,
+                items: None,
+                properties: None,
+                object_required: None,
+            },
+        );
+        self
+    }
+
+    /// Add an array-of-objects property (JSON Schema `items: {type: "object",
+    /// properties: {...}, required: [...]}`) — for a param that's genuinely
+    /// structured, not a flat list of scalars. `item_fields` is
+    /// `(field_name, field_type, field_description)` triples describing the
+    /// shape each array element must have; `item_required` names which of
+    /// those fields are mandatory per element.
+    pub(super) fn prop_array_of_objects(
+        mut self,
+        name: impl Into<String>,
+        description: impl Into<String>,
+        item_fields: impl IntoIterator<Item = (&'static str, &'static str, &'static str)>,
+        item_required: impl IntoIterator<Item = &'static str>,
+    ) -> Self {
+        let item_properties: HashMap<String, ToolProperty> = item_fields
+            .into_iter()
+            .map(|(field_name, field_type, field_description)| {
+                (
+                    field_name.to_string(),
+                    ToolProperty {
+                        prop_type: field_type.to_string(),
+                        description: field_description.to_string(),
+                        enum_values: None,
+                        items: None,
+                        properties: None,
+                        object_required: None,
+                    },
+                )
+            })
+            .collect();
+        self.properties.insert(
+            name.into(),
+            ToolProperty {
+                prop_type: "array".to_string(),
+                description: description.into(),
+                enum_values: None,
+                items: Some(Box::new(ToolProperty {
+                    prop_type: "object".to_string(),
+                    description: String::new(),
+                    enum_values: None,
+                    items: None,
+                    properties: Some(item_properties),
+                    object_required: Some(
+                        item_required.into_iter().map(|s| s.to_string()).collect(),
+                    ),
+                })),
+                properties: None,
+                object_required: None,
             },
         );
         self
@@ -62,6 +117,9 @@ impl ToolDefBuilder {
                 prop_type: prop_type.into(),
                 description: description.into(),
                 enum_values: Some(enum_values.into_iter().map(Into::into).collect()),
+                items: None,
+                properties: None,
+                object_required: None,
             },
         );
         self

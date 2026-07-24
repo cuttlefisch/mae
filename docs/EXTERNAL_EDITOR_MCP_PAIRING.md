@@ -141,6 +141,27 @@ wire protocol contract every host depends on is fully exercised by this script; 
 specific third-party host's own chat UI/approval behavior is out of scope for an
 automated check and is instead verified per-host as in Path 1 above.
 
+## Host compatibility matrix
+
+A living record of what's actually been verified per host, not point-in-time prose —
+update this table when a host's status changes, don't leave it stale. "Verified" means a
+real session/script actually exercised the claim; "not yet verified" is stated plainly,
+never implied to be fine by omission (P1's config-fragmentation mitigation, ADR-050 D3).
+
+| Host | Tool discovery + `tools/call` | Annotations (`readOnlyHint` etc.) | `initialize.instructions` forwarded? | Notes |
+|---|---|---|---|---|
+| VS Code + GitHub Copilot (Agent mode) | ✅ Live-tested this session (real Copilot session, K1-K5 found via exactly this) | ✅ Live-tested | See L5 below — being checked | Requires the chat settings (⚙️) checkbox, not just the 🔧 picker — see Troubleshooting |
+| Generic/raw MCP client (`scripts/mcp-shim-stdio-smoke.sh`) | ✅ Automated, runs in CI | ✅ Automated, runs in CI | N/A — this script doesn't have model context to forward into | This IS "a raw MCP test client," one of ADR-050 D3's three explicitly-acceptable proof options (alongside Zed/Cursor) — not a lesser substitute for a named host |
+| Zed | ⬜ Not yet verified | ⬜ Not yet verified | ⬜ Not yet verified | `mae-mcp-shim`'s stdio surface has nothing Zed-specific to block this (same protocol as every other Path 2 host) — untested, not unsupported |
+| Cursor | ⬜ Not yet verified | ⬜ Not yet verified | ⬜ Not yet verified | Same as Zed |
+| JetBrains (any IDE with MCP support) | ⬜ Not yet verified | ⬜ Not yet verified | ⬜ Not yet verified | Same as Zed |
+
+**Minimum verified versions:** VS Code 1.130.0 (the version this session's live testing
+actually ran against — see `editors/vscode/README.md`'s own note on the `@types/vscode`
+floor). ADR-050's broader "MCP support landing around 1.99" claim is from release-notes
+research, not a live-tested floor — treat 1.130.0 as the actually-proven version and
+1.99 as an unverified lower bound.
+
 ## Which instance gets used?
 
 `mae-mcp-shim` auto-discovers a live MAE socket by scanning `/tmp/mae-*.sock` for one
