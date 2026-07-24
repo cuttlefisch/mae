@@ -65,6 +65,7 @@
     "lint": "tsc --noEmit -p ./",
     "test:unit": "mocha --require source-map-support/register out/test/unit/**/*.test.js",
     "test:integration": "node ./out/test/integration/runTest.js",
+    "test:real-binaries": "mocha --require source-map-support/register --timeout 30000 out/test/real-binaries/**/*.test.js",
     "test": "npm run test:unit",
     "package": "vsce package --no-dependencies"
   },

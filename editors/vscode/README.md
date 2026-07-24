@@ -57,6 +57,10 @@ npm run compile        # tsc typecheck + build to out/
 npm run test:unit       # fast unit suite (no real VS Code host)
 npm run test:integration  # real VS Code extension host smoke test (needs a display;
                            # use `xvfb-run -a npm run test:integration` headless on Linux)
+MAE_BIN=/path/to/mae MAE_SHIM_BIN=/path/to/mae-mcp-shim npm run test:real-binaries
+                          # real mae --headless + real mae-mcp-shim MCP round trip
+                          # (skips cleanly if MAE_BIN/MAE_SHIM_BIN aren't resolvable —
+                          # build the Rust workspace first: `make build` from the repo root)
 npm run package          # produces a .vsix via vsce (not published to the Marketplace
                           # by this repo — that's a separate, human-driven step)
 ```

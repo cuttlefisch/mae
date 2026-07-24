@@ -515,8 +515,9 @@ jobs:
           echo "OK: Makefile uninstall clean"
 
   vscode-extension:
-    name: vscode-extension / lint + unit + integration
+    name: vscode-extension / lint + unit + integration + real-binary e2e
     runs-on: ubuntu-latest
+    needs: [check]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v4
@@ -541,6 +542,16 @@ jobs:
       - name: Integration smoke test (real VS Code extension host)
         working-directory: editors/vscode
         run: xvfb-run -a npm run test:integration
+      - name: Download real mae/mae-mcp-shim binaries
+        uses: actions/download-artifact@v8
+        with:
+          name: mae-binary
+          path: /tmp/mae-dl
+      - name: Real-binary round trip (real mae --headless + real mae-mcp-shim MCP call)
+        working-directory: editors/vscode
+        run: |
+          chmod +x /tmp/mae-dl/mae /tmp/mae-dl/mae-mcp-shim
+          MAE_BIN=/tmp/mae-dl/mae MAE_SHIM_BIN=/tmp/mae-dl/mae-mcp-shim npm run test:real-binaries
 
   code-map:
     name: code-map freshness
