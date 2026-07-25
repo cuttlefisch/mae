@@ -46,7 +46,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::io::{split as io_split, AsyncBufReadExt, AsyncWriteExt, BufReader};
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 
@@ -473,6 +473,7 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use tokio::net::UnixListener;
 
     fn test_socket_path(dir: &tempfile::TempDir, name: &str) -> String {
@@ -482,6 +483,7 @@ mod tests {
     /// A minimal fake MAE server: accepts one connection, replies to
     /// `initialize` and `$/ping` with a bare JSON-RPC result (ignores
     /// `notifications/initialized`, which has no response).
+    #[cfg(unix)]
     async fn serve_one_handshake(path: String) {
         let listener = UnixListener::bind(&path).unwrap();
         let (stream, _) = listener.accept().await.unwrap();
@@ -505,6 +507,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn connect_and_verify_succeeds_against_a_healthy_handshake() {
         let dir = tempfile::tempdir().unwrap();
@@ -524,6 +527,7 @@ mod tests {
     /// Adversarial: a socket that merely *accepts* the connection but never
     /// answers isn't sufficient proof of a healthy MAE process behind it --
     /// `connect_and_verify` must time out, not hang forever or report success.
+    #[cfg(unix)]
     #[tokio::test]
     async fn connect_and_verify_times_out_against_a_silent_acceptor() {
         let dir = tempfile::tempdir().unwrap();
@@ -562,6 +566,7 @@ mod tests {
     /// (`StdinClosed`) even while the socket side would otherwise keep
     /// waiting for data -- this is what lets `main()` distinguish "the MCP
     /// host is gone, exit for good" from "the editor dropped, reconnect".
+    #[cfg(unix)]
     #[tokio::test]
     async fn run_session_ends_stdin_closed_when_stdin_channel_closes() {
         let dir = tempfile::tempdir().unwrap();
@@ -600,6 +605,7 @@ mod tests {
     /// The mirror case: a live stdin channel (never closed) but a dropped
     /// socket must end the session as `SocketDropped`, driving a reconnect
     /// rather than a shutdown.
+    #[cfg(unix)]
     #[tokio::test]
     async fn run_session_ends_socket_dropped_on_socket_eof() {
         let dir = tempfile::tempdir().unwrap();

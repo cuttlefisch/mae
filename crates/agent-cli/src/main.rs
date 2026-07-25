@@ -1112,6 +1112,7 @@ mod tests {
     /// `kb_instances` (so `fetch_kb_residency` doesn't error) with an empty
     /// list, and to anything else with `{}` -- good enough since a denied
     /// call must never actually reach the wire in the first place.
+    #[cfg(unix)]
     async fn run_minimal_fake_server(
         mut reader: tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>,
         mut writer: tokio::net::unix::OwnedWriteHalf,
@@ -1137,6 +1138,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     fn shell_tool(name: &str) -> ToolDefinition {
         ToolDefinition {
             name: name.to_string(),
@@ -1150,6 +1152,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn non_interactive_executor_denies_a_call_exceeding_the_permission_ceiling() {
         let (client_stream, server_stream) = tokio::net::UnixStream::pair().unwrap();
@@ -1188,6 +1191,7 @@ mod tests {
         server.abort();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn non_interactive_executor_allows_a_call_within_the_permission_ceiling() {
         let (client_stream, server_stream) = tokio::net::UnixStream::pair().unwrap();
@@ -1227,6 +1231,7 @@ mod tests {
     /// Fake server that answers `get_option` with a fixed `ai_guidance_kb`
     /// value (mirroring `execute_get_option`'s real JSON shape) and
     /// anything else with `{}`.
+    #[cfg(unix)]
     async fn run_get_option_fake_server(
         mut reader: tokio::io::BufReader<tokio::net::unix::OwnedReadHalf>,
         mut writer: tokio::net::unix::OwnedWriteHalf,
@@ -1263,6 +1268,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn build_agent_system_prompt_unset_option_returns_base_prompt_unchanged() {
         // Adversarial per principle #14: the no-op default (no guidance
@@ -1288,6 +1294,7 @@ mod tests {
         server.abort();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn build_agent_system_prompt_unknown_guidance_kb_falls_back_to_base_prompt() {
         // A configured-but-unregistered KB name must degrade gracefully

@@ -16,7 +16,7 @@ use mae_mcp::auth::{AuthProvider, PskAuth};
 use mae_mcp::local_ipc::LocalStream;
 use mae_mcp::protocol::{JsonRpcRequest, JsonRpcResponse, ToolInfo};
 use tokio::io::{BufReader, ReadHalf, WriteHalf};
-#[cfg(test)]
+#[cfg(all(test, unix))]
 use tokio::net::UnixStream;
 
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -268,6 +268,7 @@ impl McpClient {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+    #[cfg(unix)]
     use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
     // ---- pure logic: is_pid_alive / parse_tool_call_result ----
@@ -422,6 +423,7 @@ mod tests {
     /// every message it saw (including notifications, which get no reply).
     /// Returns once the connection closes — real `McpClient`s never close
     /// proactively, so tests must `drop` their client to end this loop.
+    #[cfg(unix)]
     async fn run_fake_server(
         mut reader: BufReader<OwnedReadHalf>,
         mut writer: OwnedWriteHalf,
@@ -461,6 +463,7 @@ mod tests {
     /// `"result"` — lets tests drive `McpClient::request`'s error-handling
     /// branches (`resp.error` set, or neither `result` nor `error` present)
     /// that `run_fake_server` above has no way to produce.
+    #[cfg(unix)]
     async fn run_fake_server_with_raw_response(
         mut reader: BufReader<OwnedReadHalf>,
         mut writer: OwnedWriteHalf,
@@ -491,6 +494,7 @@ mod tests {
         seen
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn request_error_response_surfaces_code_and_message() {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
@@ -524,6 +528,7 @@ mod tests {
         server.await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn request_with_neither_result_nor_error_is_reported_as_such() {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
@@ -558,6 +563,7 @@ mod tests {
         server.await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn client_connects_lists_tools_and_calls_one_over_a_paired_socket() {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
@@ -620,6 +626,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn full_turn_round_trips_through_the_real_socket_transport() {
         use mae_ai::{

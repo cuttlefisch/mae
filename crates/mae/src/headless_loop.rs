@@ -517,6 +517,7 @@ mod tests {
     /// to bind the same stable socket path" case): a REAL listener already
     /// bound at the computed path must cause the second claim attempt to
     /// report `AlreadyRunning`, never silently succeed.
+    #[cfg(unix)]
     #[tokio::test]
     async fn claim_stable_socket_refuses_when_a_real_listener_is_already_bound() {
         let tmp = tempfile::tempdir().unwrap();
@@ -545,6 +546,7 @@ mod tests {
     /// behind by an ungracefully-terminated previous instance (kill -9) —
     /// present on disk but nothing listening — must be cleared and claimed
     /// by the next instance, not mistaken for a live one.
+    #[cfg(unix)]
     #[tokio::test]
     async fn claim_stable_socket_clears_a_stale_file_with_no_live_listener() {
         let tmp = tempfile::tempdir().unwrap();
