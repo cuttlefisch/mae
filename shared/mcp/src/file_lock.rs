@@ -166,12 +166,28 @@ fn read_lock(path: &Path) -> Option<LockInfo> {
     serde_json::from_str(&content).ok()
 }
 
-/// Check if a process with the given PID is alive.
-fn is_process_alive(pid: u32) -> bool {
+/// Check if a process with the given PID is alive. `pub` because this is the one
+/// correct cross-platform liveness check in the workspace -- other call sites (e.g.
+/// `mae-agent-cli`'s connection discovery) should use this rather than growing their
+/// own platform-specific implementation (principle #8: no duplicated logic).
+pub fn is_process_alive(pid: u32) -> bool {
     #[cfg(unix)]
     {
-        // kill(pid, 0) checks if the process exists without sending a signal.
-        unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+        // `pid` may not fit `pid_t` (e.g. u32::MAX) -- a bare `as` cast would wrap
+        // around to a small negative value (`-1` has its own special "every process
+        // I can signal" meaning to `kill(2)`, not "PID 4294967295"), so reject
+        // out-of-range values up front rather than letting the cast silently lie.
+        let Ok(pid_t) = libc::pid_t::try_from(pid) else {
+            return false;
+        };
+        // kill(pid, 0) checks if the process exists without sending a signal. A
+        // `-1` return alone is not enough: EPERM means the process exists but we
+        // lack permission to signal it (e.g. PID 1, owned by root) -- still alive.
+        // Only ESRCH (or any other errno) means no such process.
+        if unsafe { libc::kill(pid_t, 0) } == 0 {
+            return true;
+        }
+        std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
     #[cfg(not(unix))]
     {

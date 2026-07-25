@@ -88,7 +88,7 @@ fn discover_connection_in(base: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
 
         if let Some(pid_str) = rest.strip_suffix("-agent.sock") {
             if let Ok(pid) = pid_str.parse::<u32>() {
-                if is_pid_alive(pid) {
+                if mae_mcp::file_lock::is_process_alive(pid) {
                     let psk_path = base.join(format!("mae-{pid}.psk"));
                     let is_newer = agent_candidate.as_ref().is_none_or(|(t, ..)| modified > *t);
                     if is_newer {
@@ -98,7 +98,7 @@ fn discover_connection_in(base: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
             }
         } else if let Some(pid_str) = rest.strip_suffix(".sock") {
             if let Ok(pid) = pid_str.parse::<u32>() {
-                if is_pid_alive(pid) {
+                if mae_mcp::file_lock::is_process_alive(pid) {
                     let is_newer = plain_candidate.as_ref().is_none_or(|(t, _)| modified > *t);
                     if is_newer {
                         plain_candidate = Some((modified, path.clone()));
@@ -113,10 +113,6 @@ fn discover_connection_in(base: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
         return Some((sock, psk));
     }
     plain_candidate.map(|(_, sock)| (sock, None))
-}
-
-fn is_pid_alive(pid: u32) -> bool {
-    Path::new(&format!("/proc/{pid}")).exists()
 }
 
 /// Extract a `tools/call` outcome from its raw JSON-RPC `result` value:
@@ -275,12 +271,12 @@ mod tests {
 
     #[test]
     fn is_pid_alive_true_for_own_process() {
-        assert!(is_pid_alive(std::process::id()));
+        assert!(mae_mcp::file_lock::is_process_alive(std::process::id()));
     }
 
     #[test]
     fn is_pid_alive_false_for_implausible_pid() {
-        assert!(!is_pid_alive(u32::MAX));
+        assert!(!mae_mcp::file_lock::is_process_alive(u32::MAX));
     }
 
     #[test]
