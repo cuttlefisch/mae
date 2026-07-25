@@ -104,31 +104,32 @@ fn open_log_file() -> Option<(PathBuf, Mutex<std::fs::File>)> {
     std::fs::create_dir_all(&dir).ok()?;
 
     // Timestamped log file per session — no cross-session contamination.
-    // Use libc gmtime_r for UTC formatting without adding a crate dependency.
+    // ADR-066 Phase C (Windows CI): this used to call libc::gmtime_r directly to avoid
+    // a new dependency, but that function doesn't exist on Windows at all (its
+    // gmtime_s equivalent takes (dest, src) instead of gmtime_r's (src, dest) -- not a
+    // simple rename). chrono is already fully resolved in the lockfile as a transitive
+    // dependency, so this adds no new external dependency to actually build.
     let filename = {
-        let secs = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as libc::time_t;
-        let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-        unsafe { libc::gmtime_r(&secs, &mut tm) };
+        let now = chrono::Utc::now();
         format!(
-            "mae_{:04}-{:02}-{:02}_{:02}-{:02}-{:02}_{}.log",
-            tm.tm_year + 1900,
-            tm.tm_mon + 1,
-            tm.tm_mday,
-            tm.tm_hour,
-            tm.tm_min,
-            tm.tm_sec,
+            "mae_{}_{}.log",
+            now.format("%Y-%m-%d_%H-%M-%S"),
             std::process::id(),
         )
     };
     let path = dir.join(&filename);
 
-    // Symlink mae.log → current session for easy `tail -f`.
-    let symlink = dir.parent()?.join("mae.log");
-    let _ = std::fs::remove_file(&symlink);
-    let _ = std::os::unix::fs::symlink(&path, &symlink);
+    // Symlink mae.log → current session for easy `tail -f`. Unix-only convenience
+    // feature (ADR-066 Gate W) -- Windows symlink creation requires elevated
+    // privileges (Developer Mode or admin) by default, so even a best-effort attempt
+    // would silently no-op for most users there; simply not attempted rather than
+    // pretending it's cross-platform.
+    #[cfg(unix)]
+    {
+        let symlink = dir.parent()?.join("mae.log");
+        let _ = std::fs::remove_file(&symlink);
+        let _ = std::os::unix::fs::symlink(&path, &symlink);
+    }
 
     // Prune old logs — keep the 10 most recent.
     prune_old_logs(&dir, 10);

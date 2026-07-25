@@ -351,6 +351,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn lock_contention_different_pid() {
         let tmp = TempDir::new().unwrap();
         let file = tmp.path().join("test.txt");
@@ -374,6 +375,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn lock_release_only_own() {
         let tmp = TempDir::new().unwrap();
         let file = tmp.path().join("test.txt");
@@ -443,6 +445,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn lock_guard_retry_gives_up_on_live_contention() {
         let tmp = TempDir::new().unwrap();
         let file = tmp.path().join("test.txt");
