@@ -175,9 +175,16 @@ fn is_process_alive(pid: u32) -> bool {
     }
     #[cfg(not(unix))]
     {
-        // On non-Unix, assume alive (conservative).
-        let _ = pid;
-        true
+        // No libc::kill equivalent on Windows -- ask sysinfo (already a proven
+        // dependency elsewhere in this workspace) whether the PID is a live process.
+        // A stale-lock left by a dead process must be detected here too, not treated
+        // as permanently alive -- see this fn's Cargo.toml dependency comment.
+        let mut sys = sysinfo::System::new();
+        sys.refresh_processes(
+            sysinfo::ProcessesToUpdate::Some(&[sysinfo::Pid::from_u32(pid)]),
+            true,
+        );
+        sys.process(sysinfo::Pid::from_u32(pid)).is_some()
     }
 }
 
