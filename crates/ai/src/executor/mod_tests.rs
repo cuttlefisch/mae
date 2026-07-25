@@ -806,6 +806,7 @@ fn switch_to_buffer_sets_alternate() {
 fn privileged_policy() -> PermissionPolicy {
     PermissionPolicy {
         auto_approve_up_to: PermissionTier::Privileged,
+        allowed_categories: None,
     }
 }
 
@@ -1022,6 +1023,7 @@ fn ai_permissions_tool_reflects_policy() {
     let call = make_call("ai_permissions", serde_json::json!({}));
     let policy = PermissionPolicy {
         auto_approve_up_to: PermissionTier::ReadOnly,
+        allowed_categories: None,
     };
     let result = unwrap_immediate(execute_tool(&mut editor, &call, &all_tools(), &policy));
     assert!(result.success);
@@ -1470,4 +1472,88 @@ fn every_registered_tool_annotation_matches_its_permission_tier() {
         audited > 100,
         "sanity check: expected hundreds of tiered tools to be audited, got {audited}"
     );
+}
+
+// ---- A3 hardening: readOnlyHint accuracy for real, high-value tools ----
+//
+// `every_registered_tool_annotation_matches_its_permission_tier` above proves
+// the *mechanical* consistency between a tool's declared `PermissionTier` and
+// its derived `readOnlyHint` -- it cannot catch a tool whose declared tier is
+// itself WRONG for what the tool actually does. VS Code specifically reads
+// `readOnlyHint` to decide whether to skip its confirmation dialog (found via
+// research into VS Code's own MCP client behavior), so a tool that genuinely
+// mutates buffer/file/git/process/identity state but is (today, or by a
+// future accidental edit) declared `ReadOnly` would let an external client
+// silently skip user confirmation on a real mutation -- the exact "trust
+// regression" ADR-050 already names, just for the half the mechanical test
+// structurally cannot see. This test names the highest-value real targets
+// explicitly (the tools an attacker would most want auto-approved) rather
+// than a generic name-pattern heuristic, which would be fragile against
+// MAE's own deliberate design choice to treat UI/view-navigation state
+// (`kb_graph_view_close`, `switch_buffer`, `command_move_*`, etc.) as
+// legitimately ReadOnly.
+#[test]
+fn known_mutating_tools_are_never_declared_read_only() {
+    use crate::tools::annotations_for_tier;
+
+    let tools = all_tools();
+    let by_name: std::collections::HashMap<&str, PermissionTier> = tools
+        .iter()
+        .filter_map(|t| t.permission.map(|p| (t.name.as_str(), p)))
+        .collect();
+
+    // Real, currently-registered tools spanning every category with a
+    // genuine external/persistent effect -- buffer/file content, KB
+    // membership/encryption/deletion, git history, arbitrary shell/process
+    // execution, and identity/key rotation. If any of these is ever missing
+    // from the registry the test fails loudly (via the unwrap) rather than
+    // silently skipping -- a renamed/removed tool from this list is itself
+    // worth noticing, not something to tolerate quietly.
+    const MUST_NOT_BE_READ_ONLY: &[&str] = &[
+        "buffer_write",
+        "close_buffer",
+        "create_file",
+        "rename_file",
+        "execute_command",
+        "eval_scheme",
+        "kb_delete",
+        "kb_unregister",
+        "kb_remove_member",
+        "kb_block_member",
+        "kb_set_encryption",
+        "kb_set_policy",
+        "kb_set_role",
+        "git_commit",
+        "git_push",
+        "git_checkout",
+        "git_merge",
+        "git_branch_delete",
+        "shell_exec",
+        "shell_send_input",
+        "collab_rotate_identity",
+        "collab_recover_identity",
+        "collab_register_recovery_key",
+        "terminal_spawn",
+        "terminal_send",
+        "set_option",
+        "propose_changes",
+        "web_fetch",
+    ];
+
+    for name in MUST_NOT_BE_READ_ONLY {
+        let tier = *by_name.get(name).unwrap_or_else(|| {
+            panic!("expected tool {name:?} to be registered with a declared PermissionTier")
+        });
+        assert_ne!(
+            tier,
+            PermissionTier::ReadOnly,
+            "trust regression: {name:?} is declared ReadOnly -- a client like VS Code \
+             would skip its confirmation dialog on this real mutation"
+        );
+        let (read_only_hint, _, _) = annotations_for_tier(tier);
+        assert!(
+            !read_only_hint,
+            "trust regression: {name:?} (tier {tier:?}) derives readOnlyHint: true"
+        );
+    }
 }

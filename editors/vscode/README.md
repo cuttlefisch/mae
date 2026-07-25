@@ -43,6 +43,13 @@ picker under this default, but remains directly callable once an agent discovers
 via `search_tools`/`request_tools`. This is server-side config (`mcp_tools_tiered_by_default`),
 not something this extension controls.
 
+**Known constraint: per-host tool-count ceilings.** VS Code Copilot Agent mode hard-caps at
+128 *enabled* tools (auto-grouping excess into expandable "virtual tools" above that) — MAE's
+~85-tool Core tier fits comfortably under this. Some other MCP hosts are stricter: Cursor
+caps total MCP tools at 40, which the Core tier alone would exceed if paired there. If MAE
+is unexpectedly missing tools in a non-VS-Code MCP host, check that host's own tool-count
+limit first — this is a client-side cap, not a MAE bug.
+
 ## Requirements
 
 - `mae` and `mae-mcp-shim` on `PATH` (`make install` from the MAE repo root, or your package

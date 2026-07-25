@@ -25,8 +25,29 @@ function firstWorkspaceFolder(): vscode.WorkspaceFolder | undefined {
   return vscode.workspace.workspaceFolders?.[0];
 }
 
-class MaeMcpServerDefinitionProvider implements vscode.McpServerDefinitionProvider {
-  constructor(private readonly context: vscode.ExtensionContext) {}
+class MaeMcpServerDefinitionProvider implements vscode.McpServerDefinitionProvider, vscode.Disposable {
+  // A6 hardening: VS Code's own re-invocation of `provideMcpServerDefinitions`
+  // on a config change is undocumented/lazy (research found no documented
+  // firing discipline beyond "by default... when a chat message is
+  // submitted"). Firing this explicitly on every `mae.*` setting change
+  // means an edited `mae.shimPath`/`mae.permissionCeiling` takes effect
+  // deterministically, not opportunistically on the next chat message.
+  private readonly didChangeEmitter = new vscode.EventEmitter<void>();
+  readonly onDidChangeMcpServerDefinitions = this.didChangeEmitter.event;
+
+  constructor(
+    private readonly context: vscode.ExtensionContext,
+    private readonly log: vscode.LogOutputChannel
+  ) {}
+
+  dispose(): void {
+    this.didChangeEmitter.dispose();
+  }
+
+  /** Called by `activate()`'s `onDidChangeConfiguration` listener. */
+  notifyDefinitionsChanged(): void {
+    this.didChangeEmitter.fire();
+  }
 
   provideMcpServerDefinitions(): vscode.McpServerDefinition[] {
     const folder = firstWorkspaceFolder();
@@ -63,8 +84,14 @@ class MaeMcpServerDefinitionProvider implements vscode.McpServerDefinitionProvid
     let ensured;
     try {
       ensured = await ensureHeadlessRunning(headlessBinary, workspaceRoot, undefined, timeoutMs);
+      this.log.info(
+        ensured.spawnedNewInstance
+          ? `spawned a new headless instance for ${workspaceRoot} at ${ensured.socketPath}`
+          : `reusing an already-running headless instance for ${workspaceRoot} at ${ensured.socketPath}`
+      );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
+      this.log.error(`failed to start a headless instance: ${message}`);
       void vscode.window.showErrorMessage(`MAE: failed to start a headless instance — ${message}`);
       return undefined;
     }
@@ -83,11 +110,11 @@ class MaeMcpServerDefinitionProvider implements vscode.McpServerDefinitionProvid
         try {
           const result = await ensureGuidanceConfigured(headlessBinary, workspaceRoot, undefined, timeoutMs);
           if (result.code !== 0) {
-            console.warn(`MAE: --ensure-guidance-config exited ${result.code}: ${result.stderr}`);
+            this.log.warn(`--ensure-guidance-config exited ${result.code}: ${result.stderr}`);
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err);
-          console.warn(`MAE: --ensure-guidance-config failed: ${message}`);
+          this.log.warn(`--ensure-guidance-config failed: ${message}`);
         }
         // Mark attempted regardless of outcome: this is a best-effort,
         // set-if-unset server-side operation (K3's CLI flag never
@@ -103,6 +130,7 @@ class MaeMcpServerDefinitionProvider implements vscode.McpServerDefinitionProvid
       plan = resolveShimCommand(shimPath);
     } catch (err) {
       const message = err instanceof InvalidExecutableError ? err.message : String(err);
+      this.log.error(`invalid "mae.shimPath" setting: ${message}`);
       void vscode.window.showErrorMessage(`MAE: invalid "mae.shimPath" setting — ${message}`);
       return undefined;
     }
@@ -119,11 +147,26 @@ class MaeMcpServerDefinitionProvider implements vscode.McpServerDefinitionProvid
 }
 
 export function activate(context: vscode.ExtensionContext): void {
+  // A2 hardening: previously, best-effort failures (e.g.
+  // --ensure-guidance-config) went only to `console.warn`, invisible to a
+  // normal user without opening Help > Toggle Developer Tools. This is the
+  // one discoverable place ("MAE" in the Output panel) users troubleshooting
+  // a first-run failure can find and paste, without a support channel yet
+  // built out for an extension expecting adoption immediately.
+  const log = vscode.window.createOutputChannel('MAE', { log: true });
+  context.subscriptions.push(log);
+
+  const provider = new MaeMcpServerDefinitionProvider(context, log);
+  context.subscriptions.push(provider);
   context.subscriptions.push(
-    vscode.lm.registerMcpServerDefinitionProvider(
-      PROVIDER_ID,
-      new MaeMcpServerDefinitionProvider(context)
-    )
+    vscode.lm.registerMcpServerDefinitionProvider(PROVIDER_ID, provider)
+  );
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration('mae')) {
+        provider.notifyDefinitionsChanged();
+      }
+    })
   );
 }
 

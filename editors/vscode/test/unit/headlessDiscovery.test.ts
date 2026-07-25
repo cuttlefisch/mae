@@ -8,6 +8,7 @@ import * as path from 'path';
 import { InvalidExecutableError } from '../../src/shimCommand';
 import {
   ensureGuidanceConfigured,
+  ensureHeadlessRunning,
   HeadlessEnsureError,
   probeSocket,
   resolveStableSocketPath,
@@ -268,6 +269,124 @@ describe('headlessDiscovery', () => {
       const result = await resultPromise;
       assert.strictEqual(result.code, 1);
       assert.ok(result.stderr.includes('failed to persist'));
+    });
+  });
+
+  // --- A1 hardening: TOCTOU race in probe-then-spawn (found via research
+  // into real-world MCP extensions -- matches the exact bug class documented
+  // in openai/codex#25742, three duplicate stdio server trees spawned within
+  // five minutes from uncoordinated hosts). ---
+  describe('ensureHeadlessRunning — spawn coordination', () => {
+    it('dedupes two concurrent calls for the same workspace: at most one --headless spawn happens', async function () {
+      this.timeout(5000);
+      const exe = makeTempExecutable(tmpDir, 'mae');
+      const { spawnFn, calls } = createSpawnSpy();
+      const socketPath = path.join(tmpDir, 'engine.sock');
+
+      // Two "concurrent" callers -- neither awaited before the other starts.
+      const p1 = ensureHeadlessRunning(exe, tmpDir, spawnFn, 2000);
+      const p2 = ensureHeadlessRunning(exe, tmpDir, spawnFn, 2000);
+
+      // In-process dedup means only ONE `--print-socket-path` invocation
+      // happens for both callers, not two.
+      assert.strictEqual(
+        calls.length,
+        1,
+        'expected exactly one --print-socket-path spawn for two concurrent ensures'
+      );
+      calls[0].child.emitStdout(socketPath + '\n');
+      calls[0].child.emitClose(0);
+
+      // Let the real (failing, nothing listening yet) probeSocket connection
+      // attempt settle, then the single in-flight ensure spawns --headless.
+      await new Promise((r) => setTimeout(r, 300));
+      assert.strictEqual(
+        calls.length,
+        2,
+        'expected exactly one --headless spawn (not two) for two concurrent ensures -- ' +
+          'without the fix, each caller races its own independent probe-then-spawn'
+      );
+      assert.deepStrictEqual(calls[1].args, ['--headless']);
+
+      const server = net.createServer();
+      await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+      try {
+        const [r1, r2] = await Promise.all([p1, p2]);
+        assert.strictEqual(r1.socketPath, socketPath);
+        assert.strictEqual(r2.socketPath, socketPath);
+        assert.strictEqual(
+          r1.spawnedNewInstance,
+          r2.spawnedNewInstance,
+          'both callers share the single in-flight ensure, so they must report the identical outcome'
+        );
+        assert.strictEqual(r1.spawnedNewInstance, true);
+      } finally {
+        server.close();
+      }
+    });
+
+    it('does not spawn when a lock file shows another live process is already spawning', async function () {
+      this.timeout(5000);
+      const exe = makeTempExecutable(tmpDir, 'mae');
+      const { spawnFn, calls } = createSpawnSpy();
+      const socketPath = path.join(tmpDir, 'engine.sock');
+      const lockPath = `${socketPath}.spawn-lock`;
+      // Simulate a genuinely separate process (this test process itself,
+      // which is certainly alive) already holding the cross-process lock.
+      fs.writeFileSync(lockPath, String(process.pid));
+
+      const resultPromise = ensureHeadlessRunning(exe, tmpDir, spawnFn, 300);
+      await Promise.resolve();
+      calls[0].child.emitStdout(socketPath + '\n');
+      calls[0].child.emitClose(0);
+
+      await new Promise((r) => setTimeout(r, 500));
+      assert.strictEqual(
+        calls.length,
+        1,
+        'must never spawn --headless while a live process already holds the lock'
+      );
+
+      // Nobody in this test ever actually spawned the instance, so the
+      // ensure must time out honestly rather than pretend success.
+      await assert.rejects(resultPromise, HeadlessEnsureError);
+      assert.ok(fs.existsSync(lockPath), 'a lock this call never acquired must be left alone');
+      fs.unlinkSync(lockPath);
+    });
+
+    it('reclaims a stale lock file (dead PID) and spawns normally', async function () {
+      this.timeout(5000);
+      const exe = makeTempExecutable(tmpDir, 'mae');
+      const { spawnFn, calls } = createSpawnSpy();
+      const socketPath = path.join(tmpDir, 'engine.sock');
+      const lockPath = `${socketPath}.spawn-lock`;
+      // A PID essentially guaranteed not to correspond to a live process.
+      fs.writeFileSync(lockPath, '999999');
+
+      const resultPromise = ensureHeadlessRunning(exe, tmpDir, spawnFn, 2000);
+      await Promise.resolve();
+      calls[0].child.emitStdout(socketPath + '\n');
+      calls[0].child.emitClose(0);
+      await new Promise((r) => setTimeout(r, 300));
+
+      assert.strictEqual(
+        calls.length,
+        2,
+        'a stale lock (dead PID) must be reclaimed, letting this call spawn --headless itself'
+      );
+
+      const server = net.createServer();
+      await new Promise<void>((resolve) => server.listen(socketPath, resolve));
+      try {
+        const result = await resultPromise;
+        assert.strictEqual(result.spawnedNewInstance, true);
+      } finally {
+        server.close();
+      }
+      assert.ok(
+        !fs.existsSync(lockPath),
+        'the lock file must be released after a successful spawn+confirm'
+      );
     });
   });
 });

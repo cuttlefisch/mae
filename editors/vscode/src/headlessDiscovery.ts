@@ -9,6 +9,7 @@
  */
 
 import * as cp from 'child_process';
+import * as fs from 'fs';
 import * as net from 'net';
 
 import { resolveExecutable } from './shimCommand';
@@ -214,6 +215,132 @@ export interface EnsureHeadlessResult {
   spawnedNewInstance: boolean;
 }
 
+function isProcessAlive(pid: number): boolean {
+  try {
+    // Signal 0 sends nothing -- it only tests whether the process exists
+    // and is signalable by us. Throws ESRCH (no such process) or EPERM
+    // (exists but owned by someone else, which still means "alive").
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+/**
+ * Cross-process spawn coordination (A1 hardening finding): the in-process
+ * lock in `ensureHeadlessRunning` below only dedupes concurrent callers
+ * within ONE extension host process. Two separate VS Code windows on the
+ * same project each run their own extension host, so a real TOCTOU race
+ * remains between processes -- exactly the bug class documented in a real
+ * Codex Desktop + VS Code extension issue (openai/codex#25742): three
+ * duplicate stdio server trees spawned within five minutes from
+ * uncoordinated hosts. `fs`'s `wx` open flag gives an OS-level atomic
+ * exclusive-create, so this is a genuine cross-process mutex, not a
+ * best-effort heuristic. Returns `true` if THIS call acquired the lock (and
+ * is therefore responsible for both spawning and eventually releasing it).
+ */
+function tryAcquireSpawnLock(lockPath: string): boolean {
+  try {
+    fs.writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
+    return true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') {
+      // An unexpected I/O error (e.g. permissions) -- fail OPEN rather than
+      // silently refusing to ever spawn again. The in-process lock already
+      // covers the common same-process race; a same-machine attacker
+      // pre-creating this file is the same pre-existing filesystem-trust
+      // boundary every MAE listener already documents (SECURITY.md).
+      return true;
+    }
+  }
+
+  let holderPid: number | undefined;
+  try {
+    holderPid = parseInt(fs.readFileSync(lockPath, 'utf8').trim(), 10);
+  } catch {
+    holderPid = undefined;
+  }
+  if (holderPid !== undefined && !Number.isNaN(holderPid) && isProcessAlive(holderPid)) {
+    return false; // a live process holds the lock -- let it do the spawning
+  }
+
+  // A stale lock: its holder process is gone (crashed/killed before it
+  // could clean up), or the file was unreadable/corrupt. Reclaim it.
+  try {
+    fs.unlinkSync(lockPath);
+  } catch {
+    // Lost a cleanup race with another reclaimer -- fine, retry below.
+  }
+  try {
+    fs.writeFileSync(lockPath, String(process.pid), { flag: 'wx' });
+    return true;
+  } catch {
+    return false; // someone else won the reclaim race -- let them spawn
+  }
+}
+
+function releaseSpawnLock(lockPath: string): void {
+  try {
+    fs.unlinkSync(lockPath);
+  } catch {
+    // Already gone -- fine.
+  }
+}
+
+async function ensureHeadlessRunningUncached(
+  maeBinary: string,
+  workspaceRoot: string,
+  spawnFn: SpawnFn,
+  timeoutMs: number
+): Promise<EnsureHeadlessResult> {
+  const socketPath = await resolveStableSocketPath(maeBinary, workspaceRoot, spawnFn, timeoutMs);
+
+  if (await probeSocket(socketPath)) {
+    return { socketPath, spawnedNewInstance: false };
+  }
+
+  const lockPath = `${socketPath}.spawn-lock`;
+  const acquiredLock = tryAcquireSpawnLock(lockPath);
+
+  let spawnError: Error | undefined;
+  if (acquiredLock) {
+    spawnHeadlessInstance(maeBinary, workspaceRoot, spawnFn, (err) => {
+      spawnError = err;
+    });
+  }
+
+  try {
+    const started = await pollUntilListening(socketPath, timeoutMs);
+    if (!started) {
+      const detail = spawnError ? ` (spawn error: ${spawnError.message})` : '';
+      const who = acquiredLock ? 'spawned' : 'waited for another process to spawn';
+      throw new HeadlessEnsureError(
+        `${who} 'mae --headless' for ${workspaceRoot} but it never accepted connections on ` +
+          `${socketPath} within ${timeoutMs}ms${detail}`
+      );
+    }
+    return { socketPath, spawnedNewInstance: acquiredLock };
+  } finally {
+    if (acquiredLock) {
+      releaseSpawnLock(lockPath);
+    }
+  }
+}
+
+/**
+ * In-process dedup: two `resolveMcpServerDefinition` calls that race within
+ * the SAME extension host (e.g. VS Code re-resolving while a first ensure is
+ * still in flight) must share one ensure operation, not each independently
+ * probe-then-spawn -- the other half of the A1 TOCTOU fix, complementing the
+ * cross-process lock file above. Keyed by (binary, workspaceRoot): the pair
+ * that actually determines the target socket path. Entries are removed once
+ * the in-flight ensure settles (success or failure) so a later, genuinely
+ * separate call (e.g. after the instance later crashes) starts fresh rather
+ * than replaying a stale cached outcome forever.
+ */
+const inFlightEnsures = new Map<string, Promise<EnsureHeadlessResult>>();
+
 /**
  * Ensure a headless MAE instance is running for `workspaceRoot`: probe the
  * stable socket path; if nothing answers, spawn one and poll-confirm it came
@@ -228,24 +355,18 @@ export async function ensureHeadlessRunning(
   spawnFn: SpawnFn = cp.spawn,
   timeoutMs: number = DEFAULT_HEADLESS_TIMEOUT_MS
 ): Promise<EnsureHeadlessResult> {
-  const socketPath = await resolveStableSocketPath(maeBinary, workspaceRoot, spawnFn, timeoutMs);
-
-  if (await probeSocket(socketPath)) {
-    return { socketPath, spawnedNewInstance: false };
+  const lockKey = `${maeBinary} ${workspaceRoot}`;
+  const existing = inFlightEnsures.get(lockKey);
+  if (existing) {
+    return existing;
   }
-
-  let spawnError: Error | undefined;
-  spawnHeadlessInstance(maeBinary, workspaceRoot, spawnFn, (err) => {
-    spawnError = err;
-  });
-
-  const started = await pollUntilListening(socketPath, timeoutMs);
-  if (!started) {
-    const detail = spawnError ? ` (spawn error: ${spawnError.message})` : '';
-    throw new HeadlessEnsureError(
-      `spawned 'mae --headless' for ${workspaceRoot} but it never accepted connections on ` +
-        `${socketPath} within ${timeoutMs}ms${detail}`
-    );
-  }
-  return { socketPath, spawnedNewInstance: true };
+  const promise = ensureHeadlessRunningUncached(maeBinary, workspaceRoot, spawnFn, timeoutMs);
+  inFlightEnsures.set(lockKey, promise);
+  // The caller of `ensureHeadlessRunning` (via the `promise` we return
+  // below) is what actually observes/handles a rejection -- this `.finally`
+  // is purely a bookkeeping side effect. `.catch` on ITS OWN derived promise
+  // here so a rejection doesn't also surface as a second, spurious
+  // "unhandled rejection" from this chain alone.
+  promise.finally(() => inFlightEnsures.delete(lockKey)).catch(() => {});
+  return promise;
 }
