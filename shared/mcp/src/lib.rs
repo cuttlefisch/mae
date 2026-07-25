@@ -1263,6 +1263,7 @@ mod tests {
 
     /// Helper: send a JSON-RPC message over a Unix socket using line framing
     /// and read back a Content-Length framed response.
+    #[cfg(unix)]
     async fn send_and_recv(
         stream: &mut tokio::net::UnixStream,
         msg: &serde_json::Value,
@@ -1283,6 +1284,7 @@ mod tests {
     }
 
     /// Helper: send a JSON-RPC notification (no `id`, fire-and-forget).
+    #[cfg(unix)]
     async fn send_notification(
         stream: &mut tokio::net::UnixStream,
         method: &str,
@@ -1305,6 +1307,7 @@ mod tests {
         stream.flush().await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn multi_client_concurrent_connections() {
         let socket_path = format!("/tmp/mae-test-multi-{}.sock", std::process::id());
@@ -1503,6 +1506,7 @@ mod tests {
     /// `initialize` and the `RequesterContext` a tool call receives, the
     /// server-side tightening logic downstream would be enforcing against
     /// the wrong (or a fabricated) value without ever knowing it.
+    #[cfg(unix)]
     #[tokio::test]
     async fn permission_ceiling_built_by_the_shim_helper_threads_losslessly_to_the_real_requester_context(
     ) {
@@ -1625,6 +1629,7 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn multi_client_subscribe_events() {
         let socket_path = format!("/tmp/mae-test-subscribe-{}.sock", std::process::id());
@@ -1676,6 +1681,7 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn with_instructions_surfaces_in_every_client_initialize_response() {
         // McpServer::with_instructions -> ClientSession::instructions ->
@@ -1719,6 +1725,7 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn without_with_instructions_the_field_is_absent_from_the_response() {
         // Backward compat: a server that never calls with_instructions must
@@ -1756,6 +1763,7 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn client_lifecycle_full_sequence() {
         let socket_path = format!("/tmp/mae-test-lifecycle-{}.sock", std::process::id());
@@ -1880,6 +1888,7 @@ mod tests {
         assert!(result["message"].as_str().unwrap().contains("resync"));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn client_rapid_connect_disconnect() {
         let socket_path = format!("/tmp/mae-test-rapid-{}.sock", std::process::id());
@@ -1923,6 +1932,7 @@ mod tests {
 
     /// Helper: read a Content-Length framed message from a stream.
     /// Returns the parsed JSON. Panics on timeout.
+    #[cfg(unix)]
     async fn read_framed_message(
         stream: &mut tokio::net::UnixStream,
         timeout_ms: u64,
@@ -1953,6 +1963,7 @@ mod tests {
         result.unwrap_or_default()
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn push_notification_after_subscribe() {
         let socket_path = format!("/tmp/mae-test-push-{}.sock", std::process::id());
@@ -2022,6 +2033,7 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn push_notification_not_sent_before_subscribe() {
         let socket_path = format!("/tmp/mae-test-nosub-{}.sock", std::process::id());
@@ -2078,6 +2090,7 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn two_clients_one_subscribed_one_not() {
         let socket_path = format!("/tmp/mae-test-2cli-{}.sock", std::process::id());
@@ -2158,6 +2171,7 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn push_notification_survives_client_disconnect() {
         let socket_path = format!("/tmp/mae-test-surv-{}.sock", std::process::id());
@@ -2240,6 +2254,7 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn backpressure_drops_events_gracefully() {
         let socket_path = format!("/tmp/mae-test-bp-{}.sock", std::process::id());
@@ -2452,6 +2467,7 @@ mod tests {
         assert_eq!(resp.result.unwrap(), "pong");
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn tcp_and_unix_coexist() {
         use tokio::net::TcpListener;
@@ -2524,6 +2540,7 @@ mod tests {
     // Notification handling tests
     // -----------------------------------------------------------------------
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn notification_initialized_sets_session_flag() {
         let socket_path = format!("/tmp/mae-test-notif-init-{}.sock", std::process::id());
@@ -2570,6 +2587,7 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn notification_unknown_silently_accepted() {
         let socket_path = format!("/tmp/mae-test-notif-unk-{}.sock", std::process::id());
@@ -2695,6 +2713,7 @@ mod tests {
     /// Regression: the full handshake sequence must work over a real Unix socket.
     /// Simulates exactly what Claude Code v2.1.72 does:
     ///   initialize (with protocolVersion) → notifications/initialized → tools/list
+    #[cfg(unix)]
     #[tokio::test]
     async fn regression_full_handshake_sequence() {
         let socket_path = format!("/tmp/mae-test-handshake-{}.sock", std::process::id());

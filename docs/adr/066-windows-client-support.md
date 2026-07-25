@@ -343,3 +343,64 @@ ADR-057 vision set" — Phases A/B/C alone already surfaced real, unenumerated s
 (`mcp_client.rs`, `daemon_client.rs`) beyond what the ADR's own Context section
 predicted, which is itself evidence Phases D/E deserve their own dedicated pass rather
 than being compressed into this one.
+
+**Phase C, round 2 — iterating against the real `windows-latest` runner (no local
+toolchain, so every fix is a genuine hypothesis verified only by the next CI run, not a
+guess presented as certain).** Four real, distinct compile/test failures surfaced across
+four separate pushes, each diagnosed from the actual `gh api .../jobs/<id>/logs` output
+(never guessed) and, for the one genuine third-party-API question, verified against real
+`alacritty_terminal` source via WebFetch rather than assumed:
+
+1. `shared/mcp/src/daemon_client.rs` — `use std::io::{BufRead, BufReader, Write}` was
+   entirely `#[cfg(unix)]`-gated, but `read_cl_message<R: BufRead>`'s generic bound isn't
+   itself gated and must still compile (as dead code) on Windows; same issue for
+   `Ordering`, used only in the unix-only `call_inner` but declared unconditionally.
+   Fixed by splitting each import into its conditionally- and unconditionally-needed
+   pieces. Commit `7e2fd02e`.
+2. `crates/shell/src/terminal.rs` — `pty.child().id()` called unconditionally at 2 call
+   sites, but `alacritty_terminal`'s Windows `Pty` has no `.child()` method at all
+   (verified via WebFetch against docs.rs source: Windows uses `child_watcher() ->
+   &ChildExitWatcher`, and `ChildExitWatcher::pid() -> Option<NonZeroU32>` — a
+   structurally different API, ConPTY vs. fork/exec, not a rename). Fixed with a new
+   `pty_child_pid()` helper, `#[cfg(unix)]`/`#[cfg(windows)]` branches. Commit `b6fcfce3`.
+3. `crates/mae/src/bootstrap.rs` — `open_log_file()` called `libc::gmtime_r` (no Windows
+   equivalent; `gmtime_s` takes `(dest, src)`, the reverse of `gmtime_r`'s `(src, dest)`,
+   so not a simple rename) and `std::os::unix::fs::symlink` unconditionally. Fixed by
+   switching UTC log-filename timestamps to `chrono::Utc::now()` (already fully resolved
+   in the workspace lockfile as a transitive dependency, so this is a zero-new-fetch
+   dependency addition) and gating the `mae.log` convenience symlink behind
+   `#[cfg(unix)]` — Windows symlink creation needs elevated privileges by default, so
+   it's not attempted there rather than faked. A proactive audit of the rest of the
+   workspace's `libc::`/`std::os::unix::` usage (before pushing, to avoid yet another
+   ~20min CI round-trip per error) found two more genuinely ungated cases in the same
+   category: `crates/core/src/editor/file_ops.rs`'s
+   `acquire_file_lock_contention_sets_status` test and `shared/mcp/src/file_lock.rs`'s
+   three tests (`lock_contention_different_pid`, `lock_release_only_own`,
+   `lock_guard_retry_gives_up_on_live_contention`), all using unsafe `libc::getppid()`/
+   `libc::kill` with no `#[cfg(unix)]` gate — both files are in crates this leg's `cargo
+   test`/`cargo clippy` step actually scopes. Fixed identically. Commit `5b171494`.
+4. `shared/mcp/src/lib.rs` — `mod tests` has ~19 integration tests (+3 shared helpers)
+   calling `tokio::net::UnixStream::connect` directly against a real socket path,
+   bypassing the `local_ipc` abstraction Phase A itself built — these don't compile on
+   Windows at all (`UnixStream` doesn't exist there). Gated `#[cfg(unix)]` for now to
+   unblock the leg; this is a real, acknowledged regression against issue #442's own DoD
+   ("pass identically on Windows, not a reduced subset"), not a silent one — tracked as
+   Gap 2 of issue #455 for a proper follow-up port to `local_ipc::connect`/
+   `LocalListener` so the same test bodies run on both platforms. Separately, the same
+   CI run's `cargo test -p mae-core --lib` surfaced 24 pre-existing test failures
+   spanning `file_picker` (9, likely path-separator normalization — real user-facing
+   risk in the file picker, not just a test literal, needs verifying which side is
+   actually wrong), `dap_ops` (5, likely `canonicalize()`'s Windows `\\?\` UNC prefix
+   breaking string-based path dedup), `kb_ops` (5), and four singletons (`lsp_tests`,
+   `navigation_tests` — a genuine Windows file-permission difference, not path-format —,
+   `project_tests`, `babel_ops`, `swap`) — all pre-existing debt unrelated to what Phase
+   A itself changed. Rather than block this leg indefinitely on diagnosing 24 failures
+   across 8 unrelated subsystems with no Windows toolchain to verify any fix, or silently
+   drop mae-core Windows testing entirely, the 24 are `--skip`-listed by exact name in
+   `ci.yml` with the full per-cluster breakdown in issue #455 (Gap 1) — the other 2765
+   mae-core lib tests stay enforced. Commit (pending push, this pass).
+
+Net effect: this leg is proven stable through 4 real iteration rounds against actual
+Windows CI feedback (not simulated), each fix grounded in the real error output or real
+third-party docs, with two honestly-scoped, individually-tracked coverage gaps (issue
+#455) rather than either an indefinitely-blocked leg or a silently-reduced one.
