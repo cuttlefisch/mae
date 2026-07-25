@@ -492,6 +492,18 @@ impl OptionRegistry {
                      tool via request_tools/search_tools. Set false to send every tool \
                      unfiltered, e.g. for a deployment already tuned around the full flat list.",
                     OptionKind::Bool, "true", Some("mcp.tools_tiered_by_default"), &[]),
+                opt!("mcp_tool_category_allowlist", &["mcp-tool-category-allowlist"],
+                    "Comma-separated ToolCategory names (knowledge, lsp, dap, shell, commands, \
+                     git, web, ai, visual, debug, mcp — same taxonomy as request_tools) that \
+                     this MAE instance restricts MCP tool DISPATCH to, not just advertisement \
+                     (ADR-056). Empty (default) = unrestricted. Composes with (never overrides) \
+                     any per-session declaration a client makes at initialize (permissionCeiling's \
+                     toolCategoryAllowlist analogue) — the effective policy is always the \
+                     intersection of both, so this can only ever tighten what a session can do, \
+                     never grant more than a session already declared for itself. Intended for a \
+                     `mae --headless` engine instance scoped specifically to serve external \
+                     editors' AI agents KB+guidance operations only.",
+                    OptionKind::String, "", Some("mcp.tool_category_allowlist"), &[]),
                 // --- Which-key ---
                 opt!("which_key_idle_delay", &["which-key-idle-delay"],
                     "Milliseconds of idle time (no input) after the leader keypad activates \

@@ -271,6 +271,32 @@ connecting client can *further restrict*, never loosen, its own ceiling via
 see [ADR-051](adr/051-per-session-permission-driven-window-isolation.md). VS Code's own MCP client doesn't
 expose a way to set this today, but a hand-rolled or scripted client can.)
 
+## Restricting an instance to KB + guidance operations only (ADR-056)
+
+`permissionCeiling` (above) restricts *how mutating* a session's calls may be; it does
+**not** restrict *which subsystems* it can touch — a `ReadOnly`-ceilinged session can
+still call any read-only tool across every category (LSP, DAP, shell inspection, git
+history, etc.). If you're running `mae --headless` specifically as a KB+guidance "engine"
+for an external editor's AI agent — never intending it to touch buffers, git, shell, or
+LSP/DAP at all — use the tool-category allowlist instead:
+
+- **Instance-wide (config-driven, applies to every connecting session):** set
+  `mcp_tool_category_allowlist = "knowledge"` in `init.scm`/`config.toml`
+  (`:set-save mcp_tool_category_allowlist knowledge`), or the equivalent
+  `mcp.tool_category_allowlist` TOML key. Comma-separated; valid categories are
+  `knowledge, lsp, dap, shell, commands, git, web, ai, visual, debug, mcp` (same taxonomy
+  `request_tools` already uses).
+- **Per-session (a connecting client declares its own, narrower restriction):**
+  `initialize`'s `toolCategoryAllowlist` param, or `mae-mcp-shim`'s
+  `MAE_MCP_TOOL_CATEGORY_ALLOWLIST` env var (mirrors `MAE_MCP_PERMISSION_CEILING` exactly).
+
+Composition: the effective restriction is always the **intersection** of the instance-wide
+and per-session values — a session can only narrow further, never escalate past what the
+instance already restricts. Dispatch, not just advertisement, is enforced: an
+uncategorized tool (`execute_command`, `shell_exec`) is denied under any active
+restriction, fail-closed. See
+[ADR-056](adr/056-tool-category-session-scoping.md) for the full design.
+
 ## Troubleshooting
 
 - **No tools listed / `mae-editor` shows disconnected**: confirm a MAE instance is

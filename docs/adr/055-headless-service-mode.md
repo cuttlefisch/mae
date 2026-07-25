@@ -1,6 +1,6 @@
 # ADR-055: Headless MAE as a first-class release/service target
 
-**Status:** Proposed.
+**Status:** Accepted.
 **Extends:** ADR-014 (binary architecture, editor vs. daemon workspaces — this ADR adds a
 third *mode* of the *editor* binary; the daemon workspace structurally cannot host it,
 since `daemon/Cargo.toml` has no `mae-core` dependency at all), ADR-035 (editor↔daemon
@@ -139,3 +139,15 @@ both must be measured, not assumed away by "no `Renderer` is constructed").
   `shutdown`) is cleaned up on the next launch — extends the existing
   `cleanup_stale_mcp_sockets` (`crates/mae/src/terminal_loop.rs:727`) to the new stable-path
   convention.
+
+## Status note (drift correction, principle #15)
+
+This ADR's `Status` field was left at `Proposed` after the design was already fully
+implemented and dogfooded — a documentation/process gap independent of any code gap,
+found via an independent review ahead of extracting the VS Code extension into its own
+repository. Corrected to `Accepted` on the evidence already on hand: `mae --headless` is
+production-shipped (Phase E, issue #380, closed), exercised in default CI by the "MAE for
+VS Code" extension's real-binary e2e job (`editors/vscode/test/real-binaries/`), reused
+directly by `crates/agent-cli` as its host process, and covered by the idle-CPU
+(`crates/mae/tests/headless_idle_cpu_e2e.rs`) and headless-KB-convergence
+(`crates/mae/tests/headless_kb_convergence_e2e.rs`) tests referenced above.

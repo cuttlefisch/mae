@@ -1037,6 +1037,11 @@ pub struct Editor {
     /// construction (K2, post-ship quality pass). Read at MCP-server-startup
     /// time, not live-reloadable mid-session.
     pub mcp_tools_tiered_by_default: bool,
+    /// Comma-separated `ToolCategory` names this MAE instance restricts MCP
+    /// tool DISPATCH to (ADR-056), not just advertisement. Empty (default) =
+    /// unrestricted. Read at MCP-server-startup time, same as
+    /// `mcp_tools_tiered_by_default` above — see `crates/mae/src/main.rs`.
+    pub mcp_tool_category_allowlist: String,
     /// Saved help view state from the last `help_close`. `help-reopen`
     /// restores this to resume exactly where the user left off.
     pub last_kb_state: Option<crate::kb_view::KbView>,
@@ -1471,6 +1476,7 @@ impl Editor {
             ai_guidance_kb: String::new(),
             ai_guidance_export_live_sync: false,
             mcp_tools_tiered_by_default: true,
+            mcp_tool_category_allowlist: String::new(),
             ai: AiState::new(),
             bell_until: None,
             project: None,

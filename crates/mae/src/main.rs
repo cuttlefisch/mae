@@ -658,7 +658,26 @@ fn main() -> io::Result<()> {
             tools.extend(mae_ai::scheme_tools_to_definitions(&editor.ai.scheme_tools));
             tools
         };
-        let permission_policy = config::resolve_permission_policy(&app_config);
+        let mut permission_policy = config::resolve_permission_policy(&app_config);
+        // ADR-056: seed the server's global tool-category restriction from
+        // config/init.scm before any MCP session connects, same pattern as
+        // `mcp_tools_tiered` below. Empty (default) leaves the policy
+        // unrestricted, identical to every deployment that predates this
+        // option. Intended for a `mae --headless` engine instance scoped to
+        // serve external editors' AI agents KB+guidance operations only.
+        {
+            let allowlist_raw = editor
+                .get_option("mcp_tool_category_allowlist")
+                .map(|(v, _)| v)
+                .unwrap_or_default();
+            if !allowlist_raw.is_empty() {
+                let categories: std::collections::HashSet<_> =
+                    mae_ai::parse_categories(&allowlist_raw).into_iter().collect();
+                if !categories.is_empty() {
+                    permission_policy.allowed_categories = Some(categories);
+                }
+            }
+        }
 
         // MCP client: connect to external MCP servers configured in config.toml
         let mcp_client_configs = {

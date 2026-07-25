@@ -813,23 +813,40 @@ fn parse_permission_tier(s: &str) -> Option<PermissionTier> {
     }
 }
 
-/// Compute a session's effective permission policy (ADR-051): the minimum
-/// of the server's global policy and the session's own self-declared
-/// ceiling (`initialize`'s `permissionCeiling` param, threaded via
-/// `RequesterContext::declared_permission_ceiling`), if any. A self-declared
-/// ceiling can only ever TIGHTEN the effective policy -- an unrecognized
-/// value, or one requesting a HIGHER tier than the server's own global
-/// policy already allows, is never treated as an escalation request; it
-/// simply has no effect, leaving the global policy unchanged either way.
+/// Compute a session's effective permission policy (ADR-051 tier +
+/// ADR-056 category): the minimum tier and the intersected category set of
+/// the server's global policy and the session's own self-declared values
+/// (`initialize`'s `permissionCeiling`/`toolCategoryAllowlist` params,
+/// threaded via `RequesterContext`), if any. A self-declared value can only
+/// ever TIGHTEN the effective policy on either axis -- an unrecognized tier
+/// value, or a category list intersecting to the empty set only because the
+/// session declared something the global policy doesn't already allow, is
+/// never treated as an escalation request. `allowed_categories` composition:
+/// `None ∩ X = X`, `Some(a) ∩ Some(b) = Some(a ∩ b)` -- a session can only
+/// narrow an already-unrestricted global policy, or further narrow an
+/// already-restricted one, never widen it.
 fn effective_permission_policy(
     global: &PermissionPolicy,
     declared_ceiling: Option<&str>,
+    declared_categories: Option<&str>,
 ) -> PermissionPolicy {
-    match declared_ceiling.and_then(parse_permission_tier) {
-        Some(declared) => PermissionPolicy {
-            auto_approve_up_to: global.auto_approve_up_to.min(declared),
-        },
-        None => global.clone(),
+    let auto_approve_up_to = match declared_ceiling.and_then(parse_permission_tier) {
+        Some(declared) => global.auto_approve_up_to.min(declared),
+        None => global.auto_approve_up_to,
+    };
+    let allowed_categories = match declared_categories.map(mae_ai::parse_categories) {
+        Some(declared) if !declared.is_empty() => {
+            let declared: std::collections::HashSet<_> = declared.into_iter().collect();
+            match &global.allowed_categories {
+                Some(global_set) => Some(global_set.intersection(&declared).copied().collect()),
+                None => Some(declared),
+            }
+        }
+        _ => global.allowed_categories.clone(),
+    };
+    PermissionPolicy {
+        auto_approve_up_to,
+        allowed_categories,
     }
 }
 
@@ -859,6 +876,7 @@ pub fn handle_mcp_request(
     let effective_policy = effective_permission_policy(
         permission_policy,
         mcp_req.requester.declared_permission_ceiling.as_deref(),
+        mcp_req.requester.declared_tool_categories.as_deref(),
     );
     let fake_call = mae_ai::ToolCall {
         id: "mcp".to_string(),
@@ -931,6 +949,16 @@ pub fn handle_mcp_request(
                     // check beyond that tool's own registered `Write` tier)
                     // -- this bridge must never be a strictly weaker path
                     // than the one it's standing in for.
+                    //
+                    // ADR-056 correction found while writing this bridge's
+                    // own adversarial test: `execute_tool_dispatch_body`'s
+                    // new category check (step 2b) does NOT cover this
+                    // branch either -- `scheme_command` is matched BEFORE
+                    // ever falling through to `execute_tool_with_requester`
+                    // below, so this is a second, independent chokepoint,
+                    // exactly like the tier check already is. Check it here
+                    // too, same fail-closed semantics (`execute_command` is
+                    // itself uncategorized).
                     if !effective_policy.is_allowed(PermissionTier::Write) {
                         ExecuteResult::Immediate(ToolResult {
                             tool_call_id: fake_call.id.clone(),
@@ -940,6 +968,16 @@ pub fn handle_mcp_request(
                                 "Permission denied: {} requires {:?} tier",
                                 fake_call.name,
                                 PermissionTier::Write
+                            ),
+                        })
+                    } else if !effective_policy.is_category_allowed(&fake_call.name) {
+                        ExecuteResult::Immediate(ToolResult {
+                            tool_call_id: fake_call.id.clone(),
+                            tool_name: fake_call.name.clone(),
+                            success: false,
+                            output: format!(
+                                "Category denied: {} is not in this session's allowed tool categories",
+                                fake_call.name
                             ),
                         })
                     } else {
@@ -1728,6 +1766,7 @@ mod tests {
 
         let global_policy = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Shell,
+            allowed_categories: None,
         };
         let (req, mut rx) = mcp_request_with_ceiling(
             "execute_command",
@@ -1908,8 +1947,9 @@ mod tests {
     fn effective_permission_policy_with_no_declared_ceiling_is_unchanged() {
         let global = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Shell,
+            allowed_categories: None,
         };
-        let effective = effective_permission_policy(&global, None);
+        let effective = effective_permission_policy(&global, None, None);
         assert_eq!(effective.auto_approve_up_to, PermissionTier::Shell);
     }
 
@@ -1917,8 +1957,9 @@ mod tests {
     fn effective_permission_policy_tightens_when_declared_ceiling_is_lower() {
         let global = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Shell,
+            allowed_categories: None,
         };
-        let effective = effective_permission_policy(&global, Some("ReadOnly"));
+        let effective = effective_permission_policy(&global, Some("ReadOnly"), None);
         assert_eq!(effective.auto_approve_up_to, PermissionTier::ReadOnly);
     }
 
@@ -1929,8 +1970,9 @@ mod tests {
         // ADR-051 requires: a self-declared ceiling can only ever tighten.
         let global = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Write,
+            allowed_categories: None,
         };
-        let effective = effective_permission_policy(&global, Some("Privileged"));
+        let effective = effective_permission_policy(&global, Some("Privileged"), None);
         assert_eq!(
             effective.auto_approve_up_to,
             PermissionTier::Write,
@@ -1942,8 +1984,9 @@ mod tests {
     fn effective_permission_policy_ignores_unrecognized_declared_value() {
         let global = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Shell,
+            allowed_categories: None,
         };
-        let effective = effective_permission_policy(&global, Some("not-a-real-tier"));
+        let effective = effective_permission_policy(&global, Some("not-a-real-tier"), None);
         assert_eq!(
             effective.auto_approve_up_to,
             PermissionTier::Shell,
@@ -1976,6 +2019,253 @@ mod tests {
         )
     }
 
+    /// ADR-056 analogue of `mcp_request_with_ceiling` above, for a
+    /// session-declared tool-category allowlist.
+    fn mcp_request_with_categories(
+        tool_name: &str,
+        arguments: serde_json::Value,
+        session_id: u64,
+        declared_tool_categories: Option<&str>,
+    ) -> (
+        mae_mcp::McpToolRequest,
+        tokio::sync::oneshot::Receiver<mae_mcp::McpToolResult>,
+    ) {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        (
+            mae_mcp::McpToolRequest {
+                tool_name: tool_name.to_string(),
+                arguments,
+                reply: tx,
+                requester: mae_mcp::RequesterContext {
+                    session_id,
+                    declared_tool_categories: declared_tool_categories.map(|s| s.to_string()),
+                    ..Default::default()
+                },
+            },
+            rx,
+        )
+    }
+
+    /// ADR-056, primary adversarial target: `execute_command` is itself
+    /// uncategorized (`classify_tool_category` returns `None` for it), so a
+    /// Knowledge-only session must be denied calling it -- the highest-value
+    /// bypass a restricted session would try first, since it can indirectly
+    /// reach almost anything else via a registered command.
+    #[tokio::test]
+    async fn knowledge_only_session_denies_execute_command() {
+        let global_policy = PermissionPolicy {
+            auto_approve_up_to: PermissionTier::Shell,
+            allowed_categories: None,
+        };
+        let mut editor = Editor::new();
+        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
+        let (req, mut rx) = mcp_request_with_categories(
+            "execute_command",
+            serde_json::json!({"command": "move-down"}),
+            1,
+            Some("knowledge"),
+        );
+        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
+        let mut deferred = Vec::new();
+        handle_mcp_request(
+            &mut editor,
+            req,
+            &[],
+            &global_policy,
+            &lsp_tx,
+            &mut deferred,
+            &mut scheme,
+        );
+        let result = rx.try_recv().expect("reply must have been sent");
+        assert!(
+            !result.success,
+            "a Knowledge-only session must be denied execute_command (uncategorized, fail-closed)"
+        );
+        assert!(
+            result.output.contains("Category denied"),
+            "expected a category-denial message, got: {}",
+            result.output
+        );
+    }
+
+    /// A Knowledge-only session must also be denied real mutating tools in
+    /// OTHER wrong categories -- proves the restriction isn't scoped just to
+    /// `execute_command`.
+    #[tokio::test]
+    async fn knowledge_only_session_denies_shell_exec_git_push_buffer_write() {
+        let global_policy = PermissionPolicy {
+            auto_approve_up_to: PermissionTier::Shell,
+            allowed_categories: None,
+        };
+        for tool in ["shell_exec", "git_push", "buffer_write"] {
+            let mut editor = Editor::new();
+            let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
+            let (req, mut rx) =
+                mcp_request_with_categories(tool, serde_json::json!({}), 1, Some("knowledge"));
+            let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
+            let mut deferred = Vec::new();
+            handle_mcp_request(
+                &mut editor,
+                req,
+                &[],
+                &global_policy,
+                &lsp_tx,
+                &mut deferred,
+                &mut scheme,
+            );
+            let result = rx.try_recv().expect("reply must have been sent");
+            assert!(
+                !result.success,
+                "a Knowledge-only session must be denied {tool}, got success: {}",
+                result.output
+            );
+            assert!(
+                result.output.contains("Category denied"),
+                "expected a category-denial message for {tool}, got: {}",
+                result.output
+            );
+        }
+    }
+
+    /// The allowlist must not be accidentally denying everything: real
+    /// Knowledge-category tools must still be reachable (not blocked by the
+    /// category gate -- functional success/failure on a fresh, unconfigured
+    /// `Editor` is a separate concern from whether the PERMISSION gate let
+    /// the call through, which is what this test verifies).
+    #[tokio::test]
+    async fn knowledge_only_session_allows_knowledge_tools_through_the_gate() {
+        let global_policy = PermissionPolicy {
+            auto_approve_up_to: PermissionTier::Shell,
+            allowed_categories: None,
+        };
+        for tool in ["kb_search", "kb_export_guidance", "help_open"] {
+            let mut editor = Editor::new();
+            let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
+            let (req, mut rx) = mcp_request_with_categories(
+                tool,
+                serde_json::json!({"query": "x", "topic": "x"}),
+                1,
+                Some("knowledge"),
+            );
+            let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
+            let mut deferred = Vec::new();
+            handle_mcp_request(
+                &mut editor,
+                req,
+                &[],
+                &global_policy,
+                &lsp_tx,
+                &mut deferred,
+                &mut scheme,
+            );
+            let result = rx.try_recv().expect("reply must have been sent");
+            assert!(
+                !result.output.contains("Category denied"),
+                "a Knowledge-only session must NOT be denied {tool} by the category gate, got: {}",
+                result.output
+            );
+            assert!(
+                !result.output.contains("Permission denied"),
+                "unexpected permission denial for {tool} (tier, not category): {}",
+                result.output
+            );
+        }
+    }
+
+    /// Global-instance restriction composes with a looser (or absent)
+    /// per-session declaration as an INTERSECTION, never an override -- a
+    /// session cannot escalate past what the instance-wide config already
+    /// restricts just by declaring (or not declaring) something looser.
+    #[tokio::test]
+    async fn global_category_restriction_is_not_widened_by_a_looser_session_declaration() {
+        let global_policy = PermissionPolicy {
+            auto_approve_up_to: PermissionTier::Shell,
+            allowed_categories: Some([mae_ai::ToolCategory::Knowledge].into_iter().collect()),
+        };
+        let mut editor = Editor::new();
+        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
+        // Session declares NO restriction of its own -- the instance-wide
+        // Knowledge-only restriction must still apply.
+        let (req, mut rx) =
+            mcp_request_with_categories("shell_exec", serde_json::json!({}), 1, None);
+        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
+        let mut deferred = Vec::new();
+        handle_mcp_request(
+            &mut editor,
+            req,
+            &[],
+            &global_policy,
+            &lsp_tx,
+            &mut deferred,
+            &mut scheme,
+        );
+        let result = rx.try_recv().expect("reply must have been sent");
+        assert!(
+            !result.success,
+            "a session with no declared restriction must still be bound by the instance-wide \
+             Knowledge-only config, not escalate past it"
+        );
+        assert!(result.output.contains("Category denied"));
+    }
+
+    /// ADR-056 correction, discovered writing this test (principle #15): the
+    /// Scheme-sourced-command bridge below matches BEFORE ever reaching
+    /// `execute_tool_dispatch_body`'s category check, so it needs (and now
+    /// has) its own independent category check -- this proves that fix, not
+    /// the generic-tool-dispatch path.
+    #[tokio::test]
+    async fn knowledge_only_session_denies_execute_command_naming_a_scheme_sourced_command() {
+        let mut editor = Editor::new();
+        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
+        scheme
+            .eval(r#"(define (my-greet) (buffer-insert "hi")) (define-command "my-greet" "test" "my-greet")"#)
+            .unwrap();
+        scheme.apply_to_editor(&mut editor);
+        assert_eq!(
+            editor.commands.get("my-greet").map(|c| &c.source),
+            Some(&mae_core::CommandSource::Scheme("my-greet".into())),
+            "sanity: registration must have landed before dispatch is exercised"
+        );
+
+        let global_policy = PermissionPolicy {
+            auto_approve_up_to: PermissionTier::Shell,
+            allowed_categories: None,
+        };
+        let (req, mut rx) = mcp_request_with_categories(
+            "execute_command",
+            serde_json::json!({"command": "my-greet"}),
+            1,
+            Some("knowledge"),
+        );
+        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
+        let mut deferred = Vec::new();
+        handle_mcp_request(
+            &mut editor,
+            req,
+            &[],
+            &global_policy,
+            &lsp_tx,
+            &mut deferred,
+            &mut scheme,
+        );
+        let result = rx.try_recv().expect("reply must have been sent");
+        assert!(
+            !result.success,
+            "a Knowledge-only session must be denied a Scheme-sourced command via execute_command"
+        );
+        assert!(
+            result.output.contains("Category denied"),
+            "expected a category-denial message, got: {}",
+            result.output
+        );
+        let idx = editor.active_buffer_idx();
+        assert_eq!(
+            editor.buffers[idx].rope().to_string(),
+            "",
+            "the Scheme command's body must NOT have run -- a denied call must have zero side effects"
+        );
+    }
+
     /// Adversarial end-to-end proof (ADR-051's own required test): simulate
     /// two sessions against the SAME global policy and the SAME (untiered,
     /// so it defaults to `Write`) tool -- one with no declared ceiling
@@ -1989,6 +2279,7 @@ mod tests {
     async fn session_declared_ceiling_denies_a_call_the_global_policy_alone_would_allow() {
         let global_policy = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Write,
+            allowed_categories: None,
         };
 
         // Session 1: no declared ceiling -- Write-tier (untiered default)
@@ -2066,6 +2357,7 @@ mod tests {
     async fn three_plus_sessions_with_differing_ceilings_stay_isolated_on_both_axes() {
         let global_policy = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Write,
+            allowed_categories: None,
         };
         let mut editor = Editor::new();
         editor.buffers[0].name = "*AI:claude*".to_string();

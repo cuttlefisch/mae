@@ -107,6 +107,22 @@ fn execute_tool_dispatch_body(
         });
     }
 
+    // 2b. Check tool-category restriction (ADR-056) -- orthogonal to the
+    // tier check above: tier answers "how mutating," category answers
+    // "which subsystem." An engine instance/session scoped to e.g.
+    // Knowledge-only tools is enforced here, not just at advertisement time.
+    if !policy.is_category_allowed(&call.name) {
+        return ExecuteResult::Immediate(ToolResult {
+            tool_call_id: call.id.clone(),
+            tool_name: call.name.clone(),
+            success: false,
+            output: format!(
+                "Category denied: {} is not in this session's allowed tool categories",
+                call.name
+            ),
+        });
+    }
+
     // 3. Check for deferred (async) tools first -- LSP and DAP
     let deferred_kind = match call.name.as_str() {
         "lsp_definition" => Some(DeferredKind::LspDefinition),

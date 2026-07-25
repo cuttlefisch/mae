@@ -29,6 +29,12 @@
 //! because the shim itself otherwise has no way to set this (a gap ADR-050
 //! D1/Phase I's "MAE for VS Code" extension needed closed).
 //!
+//! Set `MAE_MCP_TOOL_CATEGORY_ALLOWLIST=<comma-separated categories>` (e.g.
+//! `knowledge`) to have the shim forward a `toolCategoryAllowlist` in its
+//! `initialize` request params (ADR-056) -- the tool-category analogue of
+//! `MAE_MCP_PERMISSION_CEILING` above, same trust shape (can only narrow,
+//! never widen, this session's effective category restriction).
+//!
 //! Flags:
 //!   --version   Print version and exit
 //!   --check     Connectivity diagnostic (discover, connect, verify, exit)
@@ -165,11 +171,15 @@ async fn connect_and_verify(socket_path: &str) -> Result<BufReader<UnixStream>, 
     let mut stream = BufReader::new(stream);
 
     let ceiling_env = env::var("MAE_MCP_PERMISSION_CEILING").ok();
+    let categories_env = env::var("MAE_MCP_TOOL_CATEGORY_ALLOWLIST").ok();
     let init_req = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "initialize",
-        "params": mae_mcp::build_shim_initialize_params(ceiling_env.as_deref())
+        "params": mae_mcp::build_shim_initialize_params(
+            ceiling_env.as_deref(),
+            categories_env.as_deref(),
+        )
     });
     mae_mcp::write_framed(
         &mut stream,

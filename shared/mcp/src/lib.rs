@@ -85,7 +85,14 @@ const MAX_MESSAGE_SIZE: usize = 10 * 1024 * 1024;
 /// with — a duplicated copy in the bin target could silently drift from what
 /// the server actually reads (principle #8), which would make the ceiling
 /// setting a silent no-op rather than the tightening it promises.
-pub fn build_shim_initialize_params(permission_ceiling: Option<&str>) -> serde_json::Value {
+/// `tool_category_allowlist` (ADR-056) is the comma-separated-category
+/// analogue of `permission_ceiling`: forwarded as `toolCategoryAllowlist`
+/// under the identical `Some`-and-non-empty rule, from `mae-mcp-shim`
+/// reading `MAE_MCP_TOOL_CATEGORY_ALLOWLIST` from its environment.
+pub fn build_shim_initialize_params(
+    permission_ceiling: Option<&str>,
+    tool_category_allowlist: Option<&str>,
+) -> serde_json::Value {
     let mut params = serde_json::json!({
         "protocolVersion": "2025-11-25",
         "capabilities": {},
@@ -93,6 +100,9 @@ pub fn build_shim_initialize_params(permission_ceiling: Option<&str>) -> serde_j
     });
     if let Some(ceiling) = permission_ceiling.filter(|c| !c.is_empty()) {
         params["permissionCeiling"] = serde_json::Value::String(ceiling.to_string());
+    }
+    if let Some(categories) = tool_category_allowlist.filter(|c| !c.is_empty()) {
+        params["toolCategoryAllowlist"] = serde_json::Value::String(categories.to_string());
     }
     params
 }
@@ -128,6 +138,10 @@ pub struct RequesterContext {
     /// is safe to trust unauthenticated: it can only tighten policy, never
     /// loosen it.
     pub declared_permission_ceiling: Option<String>,
+    /// This session's self-declared tool-category allowlist
+    /// (`declared_tool_categories` on `ClientSession`), if any (ADR-056).
+    /// Same trust shape as `declared_permission_ceiling`.
+    pub declared_tool_categories: Option<String>,
 }
 
 /// A tool call request sent from the MCP server to the main editor thread.
@@ -714,6 +728,19 @@ pub async fn handle_request(
                         "MCP client declared a permission ceiling"
                     );
                 }
+                // ADR-056: same trust shape as permissionCeiling above -- a
+                // self-declared tool-category allowlist can only narrow this
+                // session's effective category restriction, never widen it.
+                if let Some(categories) =
+                    params.get("toolCategoryAllowlist").and_then(|v| v.as_str())
+                {
+                    session.declared_tool_categories = Some(categories.to_string());
+                    debug!(
+                        session = session.id,
+                        tool_category_allowlist = categories,
+                        "MCP client declared a tool-category allowlist"
+                    );
+                }
             }
 
             let negotiated = match client_requested_version {
@@ -841,6 +868,7 @@ pub async fn handle_request(
                     declared_provider: session.declared_ai_provider.clone(),
                     session_id: session.id,
                     declared_permission_ceiling: session.declared_permission_ceiling.clone(),
+                    declared_tool_categories: session.declared_tool_categories.clone(),
                 },
             };
             debug!(session = session.id, method = %request.method, "sync method dispatched");
@@ -892,6 +920,7 @@ pub async fn handle_request(
                     declared_provider: session.declared_ai_provider.clone(),
                     session_id: session.id,
                     declared_permission_ceiling: session.declared_permission_ceiling.clone(),
+                    declared_tool_categories: session.declared_tool_categories.clone(),
                 },
             };
 
@@ -1405,7 +1434,7 @@ mod tests {
 
     #[test]
     fn build_shim_initialize_params_omits_permission_ceiling_when_unset() {
-        let params = build_shim_initialize_params(None);
+        let params = build_shim_initialize_params(None, None);
         assert!(
             params.get("permissionCeiling").is_none(),
             "no ceiling requested -> field must be entirely absent, not null"
@@ -1416,13 +1445,13 @@ mod tests {
     fn build_shim_initialize_params_omits_permission_ceiling_when_value_is_empty() {
         // A set-but-empty env var (e.g. `MAE_MCP_PERMISSION_CEILING=`) must
         // behave identically to unset, not forward an empty-string ceiling.
-        let params = build_shim_initialize_params(Some(""));
+        let params = build_shim_initialize_params(Some(""), None);
         assert!(params.get("permissionCeiling").is_none());
     }
 
     #[test]
     fn build_shim_initialize_params_forwards_a_set_permission_ceiling_verbatim() {
-        let params = build_shim_initialize_params(Some("ReadOnly"));
+        let params = build_shim_initialize_params(Some("ReadOnly"), None);
         assert_eq!(params["permissionCeiling"], "ReadOnly");
         // Forwarding a ceiling is additive -- everything else about
         // `initialize` params must stay exactly as before.
@@ -1439,7 +1468,7 @@ mod tests {
     /// inconsistently reimplemented) in the shim's construction logic.
     #[test]
     fn build_shim_initialize_params_forwards_an_unrecognized_value_without_validating() {
-        let params = build_shim_initialize_params(Some("NotARealTier"));
+        let params = build_shim_initialize_params(Some("NotARealTier"), None);
         assert_eq!(params["permissionCeiling"], "NotARealTier");
     }
 
@@ -1512,7 +1541,7 @@ mod tests {
         let mut client_a = tokio::net::UnixStream::connect(&socket_path)
             .await
             .expect("client A connect");
-        let init_params_a = build_shim_initialize_params(Some("ReadOnly"));
+        let init_params_a = build_shim_initialize_params(Some("ReadOnly"), None);
         let resp = send_and_recv(
             &mut client_a,
             &serde_json::json!({
@@ -1551,7 +1580,7 @@ mod tests {
         let mut client_b = tokio::net::UnixStream::connect(&socket_path)
             .await
             .expect("client B connect");
-        let init_params_b = build_shim_initialize_params(None);
+        let init_params_b = build_shim_initialize_params(None, None);
         assert!(init_params_b.get("permissionCeiling").is_none());
         let resp = send_and_recv(
             &mut client_b,
