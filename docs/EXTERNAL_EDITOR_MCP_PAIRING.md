@@ -40,15 +40,18 @@ network surface, not yet wired into the stdio-shim pairing flow this doc covers.
 
 ## Recommended for VS Code: the "MAE for VS Code" extension (zero manual config)
 
-`editors/vscode/` in this repo (ADR-050 D1 full, Phase I / #384) is a VS Code extension
-that does everything **Path 1** below does by hand, automatically: it registers a dynamic
-MCP server definition provider, auto-spawns a **headless** MAE instance (never a GUI
-window) for your workspace if none is already running, and points `mae-mcp-shim` at it —
-all without ever reading or writing `.vscode/mcp.json`. Install it (`cd editors/vscode &&
-npm install && npm run package` produces a `.vsix` to install locally — not yet published
-to the Marketplace, see `editors/vscode/README.md`), and there is no step 1 below to do at
-all. Path 1's hand-edited `.vscode/mcp.json` approach remains the right choice for every
-other MCP host (Path 2) and for anyone who'd rather not install an extension.
+[`cuttlefisch/mae-vscode`](https://github.com/cuttlefisch/mae-vscode) (originally built as
+`editors/vscode/` in this repo, ADR-050 D1 full / Phase I / #384, extracted into its own
+repository with an independent release cadence — see that repo's `CHANGELOG.md` for the
+extraction date) is a VS Code extension that does everything **Path 1** below does by
+hand, automatically: it registers a dynamic MCP server definition provider, auto-spawns a
+**headless** MAE instance (never a GUI window) for your workspace if none is already
+running, and points `mae-mcp-shim` at it — all without ever reading or writing
+`.vscode/mcp.json`. Install it from the Marketplace, or clone that repo and run `npm
+install && npm run package` to produce a local `.vsix` (see its own README), and there is
+no step 1 below to do at all. Path 1's hand-edited `.vscode/mcp.json` approach remains the
+right choice for every other MCP host (Path 2) and for anyone who'd rather not install an
+extension.
 
 ## Path 1: VS Code + GitHub Copilot (Agent mode), without the extension
 
@@ -156,9 +159,10 @@ never implied to be fine by omission (P1's config-fragmentation mitigation, ADR-
 | Cursor | ⬜ Not yet verified | ⬜ Not yet verified | ⬜ Not yet verified | Same as Zed |
 | JetBrains (any IDE with MCP support) | ⬜ Not yet verified | ⬜ Not yet verified | ⬜ Not yet verified | Same as Zed |
 
-**Minimum verified versions:** VS Code `^1.104.0` (`editors/vscode/package.json`'s
+**Minimum verified versions:** VS Code `^1.104.0` ([`cuttlefisch/mae-vscode`'s
+`package.json`](https://github.com/cuttlefisch/mae-vscode/blob/main/package.json)'s
 `engines.vscode` floor, mechanically checked against the installed `@types/vscode` `.d.ts`
-per Phase I's build-time self-check — see `editors/vscode/README.md`). The exact build
+per Phase I's build-time self-check — see that repo's README). The exact build
 used during this session's live human testing was not recorded, so 1.104.0 is the
 proven floor, not a claim about a specific tested version above it. ADR-050's broader
 "MCP support landing around 1.99" claim is from release-notes research, not a live-tested

@@ -212,3 +212,26 @@ anticipate, recorded here rather than left as undocumented drift:
 
   Live interactive VS Code+Copilot verification remains the one open item, per the first
   bullet above.
+
+## Implementation note: extension repo extraction (principle #15)
+
+The "MAE for VS Code" extension described throughout this ADR (previously `editors/vscode/`
+in this repo) was extracted into its own repository,
+[`cuttlefisch/mae-vscode`](https://github.com/cuttlefisch/mae-vscode), at a clean
+pre-release boundary — released independently, with a compatible-MAE-version note in its
+own README rather than a lockstep version number (see that repo's `CHANGELOG.md` for the
+extraction date). This closes the "carrying Node.js/npm tooling in the main Rust monorepo"
+cost that decision didn't need to be paid indefinitely, and lets the extension iterate on
+its own cadence once real users depend on it. Every citation above to `editors/vscode/...`
+(test files, the `vscode-extension` CI job) should be read as historical — the equivalent
+files/CI now live in the new repo (`.github/workflows/ci.yml`'s `lint-unit-integration`/
+`pinned-floor-version`/`package-validate`/`real-binaries` jobs; a separate `publish.yml`
+gated behind a human-typed `workflow_dispatch` confirmation). `docs/EXTERNAL_EDITOR_MCP_PAIRING.md`
+and the root `README.md` were updated to point at the new location; `mae`'s own CI no
+longer has any Node.js/npm footprint. The extraction itself was hardened first (see that
+repo's `CHANGELOG.md`'s "Unreleased" entry): a real TOCTOU race in headless-instance
+auto-spawn (found via research into comparable MCP-pairing extensions, matching a
+documented bug in a different tool), a discoverable output channel, and explicit
+`onDidChangeMcpServerDefinitions` firing on config changes — landed as commits in this
+repo before the filter-repo extraction, so the new repo's history starts from a hardened
+baseline, not silently dropped fixes.

@@ -146,8 +146,10 @@ This ADR's `Status` field was left at `Proposed` after the design was already fu
 implemented and dogfooded — a documentation/process gap independent of any code gap,
 found via an independent review ahead of extracting the VS Code extension into its own
 repository. Corrected to `Accepted` on the evidence already on hand: `mae --headless` is
-production-shipped (Phase E, issue #380, closed), exercised in default CI by the "MAE for
-VS Code" extension's real-binary e2e job (`editors/vscode/test/real-binaries/`), reused
-directly by `crates/agent-cli` as its host process, and covered by the idle-CPU
+production-shipped (Phase E, issue #380, closed), exercised in CI by the ["MAE for VS
+Code"](https://github.com/cuttlefisch/mae-vscode) extension's real-binary e2e job
+(originally `editors/vscode/test/real-binaries/` in this repo, since extracted into that
+extension's own repository — see ADR-050's implementation note), reused directly by
+`crates/agent-cli` as its host process, and covered by the idle-CPU
 (`crates/mae/tests/headless_idle_cpu_e2e.rs`) and headless-KB-convergence
 (`crates/mae/tests/headless_kb_convergence_e2e.rs`) tests referenced above.
