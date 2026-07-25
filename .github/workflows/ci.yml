@@ -133,6 +133,47 @@ jobs:
           path: /tmp/mae-artifacts/
           retention-days: 1
 
+  windows:
+    name: stable / test (windows)
+    runs-on: windows-latest
+    # ADR-066 Phase C: the editor workspace's Windows CI leg. Hard-blocking from day
+    # one, deliberately NOT `continue-on-error` (unlike mae-vscode's own interim
+    # posture for its separate, smaller-scope CI) -- an unenforced leg proves nothing
+    # about whether the gap this ADR closes was real. Explicitly does NOT cover the
+    # daemon workspace (stays Linux-only by design, Gate W) or the GUI feature
+    # (ADR-066 Phase D's own dedicated leg, not yet landed).
+    #
+    # Scope, honestly: `cargo build --workspace` (TUI-only, no GUI feature) proves the
+    # WHOLE editor workspace at least compiles on Windows -- catching real portability
+    # gaps (path-separator/line-ending/filesystem-permission assumptions) anywhere in
+    # the tree, not just where Phase A touched. `cargo test` is scoped to the crates
+    # Phase A's local-IPC work actually changed (mae-mcp, mae-core, the `mae` binary,
+    # mae-agent-cli) rather than `--workspace` -- this was authored with no Windows
+    # toolchain available to verify locally (see `shared/mcp/src/local_ipc.rs`'s own
+    # doc comment), so betting the ENTIRE workspace's test suite (including crates
+    # with their own, unrelated Unix-specific assumptions this ADR's Phase A never
+    # touched -- e.g. shell/PTY handling) on one untested leg would risk blocking
+    # every future PR on failures with no efficient way to iterate against them.
+    # Broadening to `--workspace` is real, tracked follow-up work once this leg is
+    # proven stable, not a silently-accepted permanent gap -- see ADR-066's Status
+    # note for the explicit tracking issue.
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo build --workspace (compile-only, catches portability gaps everywhere)
+        run: cargo build --workspace
+      - name: cargo test (crates ADR-066 Phase A actually changed)
+        timeout-minutes: 20
+        run: |
+          cargo test -p mae-mcp --all-targets
+          cargo test -p mae-core --lib
+          cargo test -p mae --bin mae
+          cargo test -p mae-agent-cli
+      - name: cargo clippy (crates ADR-066 Phase A actually changed)
+        run: |
+          cargo clippy -p mae-mcp -p mae-core -p mae --bin mae -p mae-agent-cli --all-targets -- -D warnings
+
   daemon:
     name: daemon / check + test
     runs-on: ubuntu-latest

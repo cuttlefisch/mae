@@ -1,6 +1,7 @@
 # ADR-066: Native Windows Support for MAE Clients
 
-**Status:** Proposed.
+**Status:** In progress (Phases A/B/C landed — see "Status note" at the end of this
+document; Phases D/E remain, tracked as real follow-on work, not silently deferred).
 **Extends:** ADR-014, ADR-055, ADR-057.
 **Relates to:** issue #386 (existing Windows/WSL scoping issue in cuttlefisch/mae, resolved
 by this ADR rather than left open-ended), cuttlefisch/mae-vscode issue #1 (concrete,
@@ -238,3 +239,107 @@ path, end to end, with the test explicitly confirming there is no Unix-socket de
 anywhere in either code path exercised. A regression here would mean Phase A's local-socket
 abstraction accidentally leaked into a code path that was supposed to be fully socket-agnostic
 — this phase's job is to catch that leak, not merely to confirm the happy path connects.
+
+---
+
+## Status note (added on implementation, Phases A/B/C)
+
+**Real, honest constraint this pass was authored under:** no Windows machine, no
+`rustup`, no local Windows cross-compilation toolchain, and no passwordless `sudo` to
+install one (`mingw64-gcc`/`rust-std-static-x86_64-pc-windows-gnu` are available via
+`dnf` but require a password this environment can't supply). Every Windows-specific line
+of code below was written against tokio's documented `named_pipe` API and verified only
+by local reasoning plus keeping the Unix path completely unchanged and fully covered by
+the existing test suite — real verification comes from Phase C's new `windows-latest` CI
+leg once it runs on a real GitHub-hosted Windows runner, not from this pass's own local
+testing. This is stated explicitly rather than implied, matching this session's
+established discipline of not overclaiming what wasn't actually verified.
+
+**Phase A — larger real scope than this ADR's own Context section enumerated.**
+Implemented `shared/mcp/src/local_ipc.rs`: `LocalStream`/`LocalListener`/`connect`,
+dispatching to a real `UnixListener`/`UnixStream` on Unix (unchanged) and
+`tokio::net::windows::named_pipe::{NamedPipeServer, NamedPipeClient, ServerOptions,
+ClientOptions}` on Windows, with `pipe_name_for` deriving a stable SHA-256-based pipe
+name from the same logical path every call site already constructs. Wired into
+`McpServer::run`/`Drop` (`shared/mcp/src/lib.rs`) — `handle_client` is now generic over
+`LocalStream` via `tokio::io::split` (the framing/session logic in `read_message`/
+`write_framed` was already generic over `AsyncRead`/`AsyncWrite`, so this needed zero
+changes beyond the stream type itself). Fixed a real, independently-found correctness
+bug while doing this: `headless_loop.rs`'s `claim_stable_socket_at` gated its live-
+listener probe behind `path.exists()` — a Unix-only optimization that would have been
+silently WRONG on Windows (a named pipe has no filesystem entry `Path::exists()` could
+ever see, so every stable-socket slot would have falsely reported as free even when a
+live instance owned it). Fixed by always attempting the bounded probe.
+
+**Beyond the ADR's own stated 3 call sites** (`main.rs`, `headless_loop.rs`, `shim.rs`),
+investigation found real, additional Windows-incompatible code that would have kept the
+editor workspace from compiling on Windows at all if left untouched:
+- `crates/agent-cli/src/mcp_client.rs` — `mae-agent-cli`'s own real connection logic
+  (not just its tests) hardcoded `tokio::net::UnixStream`. This is a genuine Gate W gap
+  in the ADR's own Context enumeration: `mae-agent-cli` is exactly the kind of
+  client-facing binary Gate W requires to work on Windows (per CLAUDE.md, it's "the
+  default `SPC a a`/`SPC a p` surface"), just not named in the ADR text. Fixed with the
+  same `local_ipc` pattern as `shim.rs`; `McpClient`'s struct fields (`OwnedReadHalf`/
+  `OwnedWriteHalf`) generalized to `ReadHalf<LocalStream>`/`WriteHalf<LocalStream>`.
+- `shared/mcp/src/daemon_client.rs` — uses `std::os::unix::net::UnixStream` (a type with
+  no Windows existence at all, unlike `tokio::net::UnixStream` which at least has a
+  named-pipe analog) to reach `mae-daemon`'s LOCAL control socket. Correctly, per Gate
+  W, this connection mechanism itself stays Unix-only forever (the daemon never runs on
+  Windows, so there is never a local daemon for a Windows client to reach this way) —
+  but the surrounding crate still needs to COMPILE on Windows since `mae-mcp` is a
+  dependency of both `mae` and `mae-mcp-shim`. Fixed by `#[cfg(unix)]`-gating the
+  connection internals while keeping the same public API surface present on Windows,
+  returning a clean, explicit "not supported on this platform, reach a daemon over the
+  network instead" error rather than a compile failure — so the 5 call sites across
+  `crates/core`/`crates/mae` that use `DaemonClient` needed zero changes.
+
+All of the above is confirmed compiling clean (`cargo check --workspace --all-targets`)
+and passing the full existing Unix test suite unchanged (mae-mcp: 172+7+5 new local_ipc
+tests; mae-core: 2790; mae bin: 439; mae-agent-cli: 72 including 16 mcp_client tests) —
+proving the Unix path is provably unaffected by construction, which is the strongest
+verification available without a real Windows runner.
+
+**Phase B — TUI-only for this pass, GUI deferred.** Added a `build-windows` job to
+`release.yml` building `mae` (TUI-only, not `--features gui`) + `mae-mcp-shim`, with a
+real launch smoke test (`mae.exe --version`, `mae-mcp-shim.exe --help`) on the actual
+`windows-latest` runner — not just a successful `cargo build`. Deliberately does NOT
+include the GUI build yet: Phase D's own dedicated GUI-on-Windows verification (real
+simulated input, not absence-of-crash) hasn't landed, and shipping an unverified
+`skia-safe`-based GUI artifact would be a bigger claim than this pass can back up.
+Deliberately NOT wired into the `release`/`update-homebrew` jobs' `needs`/artifact list
+yet — that integration (checksums, download guide, Homebrew/winget-equivalent
+packaging) is real follow-on work once this artifact is proven stable, not assumed
+correct on day one. **Also not yet exercised by any real CI run** — `release.yml` only
+triggers on `v*` tags, not on this PR, so this job's first real execution will be
+whenever this branch's work is actually tagged for release; its YAML is written to the
+same pattern as the three already-working platform jobs but is unverified until then.
+
+**Phase C — scoped down from "the editor-workspace test matrix" to a narrower,
+evidence-based first leg.** Added a `windows-latest` job to `ci.yml`: `cargo build
+--workspace` (compile-only, TUI-only — catches real portability gaps anywhere in the
+tree, not just where Phase A touched) plus `cargo test`/`cargo clippy` scoped to exactly
+the crates Phase A's local-IPC work changed (`mae-mcp`, `mae-core`, the `mae` binary,
+`mae-agent-cli`) rather than the full `--workspace` test suite. Hard-blocking (no
+`continue-on-error`), matching the ADR's own explicit requirement. This is a deliberate,
+documented scope reduction from the ADR's own Decision text, not a silent one: a repo
+grep found several OTHER crates with unconditional `std::os::unix`/`libc`/`nix` usage
+(`mae-shell`'s PTY layer, `mae-babel`, `crates/core/src/swap.rs`, `crates/scheme/src/
+stdlib/io.rs`, several more `shared/mcp` modules) that are genuinely out of THIS ADR's
+Phase A scope to fix — betting the entire workspace's test suite (including crates with
+their own, unrelated Unix-specific assumptions) on one untested Windows leg, authored
+with zero local ability to verify any of it, risked blocking every future PR on failures
+with no efficient way to iterate against them. Broadening this leg to full
+`--workspace` coverage is real, tracked follow-up (issue #444, left open rather than
+closed, with this scope note as a comment) once the narrower leg is proven stable
+against real CI feedback — not a permanent, silently-accepted gap.
+
+**Deferred, not silently dropped: Phases D and E.** Both remain real, substantial,
+separate undertakings — Phase D needs Phase C's CI leg proven stable first (to build
+GPU/input-handling verification on top of a working Windows toolchain setup), and Phase
+E needs a working Windows client build (Phase B) to actually round-trip against a real
+daemon. Tracked as issues #445/#446, left open. Consistent with this ADR's own honest
+"Costs" section calling Windows support "one of the three largest children in the
+ADR-057 vision set" — Phases A/B/C alone already surfaced real, unenumerated scope
+(`mcp_client.rs`, `daemon_client.rs`) beyond what the ADR's own Context section
+predicted, which is itself evidence Phases D/E deserve their own dedicated pass rather
+than being compressed into this one.

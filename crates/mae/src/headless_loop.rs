@@ -136,24 +136,35 @@ async fn claim_stable_socket_at(path: std::path::PathBuf) -> io::Result<StableSo
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    if path.exists() {
-        let probe = tokio::time::timeout(
-            STABLE_SOCKET_PROBE_TIMEOUT,
-            tokio::net::UnixStream::connect(&path),
-        )
-        .await;
-        match probe {
-            Ok(Ok(_stream)) => {
-                // Something answered -- a live instance owns this path.
-                return Ok(StableSocketClaim::AlreadyRunning(path));
-            }
-            _ => {
-                // Connection refused/timed out/errored: a stale file from an
-                // ungracefully-terminated previous instance (kill -9, power
-                // loss). Safe to clear and rebind -- extends the existing
-                // `cleanup_stale_mcp_sockets` philosophy to this convention.
-                let _ = std::fs::remove_file(&path);
-            }
+    // ADR-066 Phase A: always attempt the probe rather than gating it behind
+    // `path.exists()` first. That gate was a Unix-only optimization (skip the probe
+    // entirely when there's clearly no socket file) that would be silently WRONG on
+    // Windows -- a named pipe has no filesystem entry `Path::exists()` could ever see,
+    // so the gate would always evaluate false there and this function would report
+    // every stable-socket slot as free even when a live instance owns it. The probe
+    // itself (a 300ms-bounded connect attempt) is cheap and already fails fast when
+    // nothing is listening, so removing the gate costs one extra fast local connect
+    // attempt on Unix in the common case and is the only version that's correct on
+    // both platforms.
+    let probe = tokio::time::timeout(
+        STABLE_SOCKET_PROBE_TIMEOUT,
+        mae_mcp::local_ipc::connect(&path),
+    )
+    .await;
+    match probe {
+        Ok(Ok(_stream)) => {
+            // Something answered -- a live instance owns this path.
+            return Ok(StableSocketClaim::AlreadyRunning(path));
+        }
+        _ => {
+            // Connection refused/timed out/errored: a stale file from an
+            // ungracefully-terminated previous instance (kill -9, power
+            // loss), or nothing was ever there. Safe to clear and rebind --
+            // extends the existing `cleanup_stale_mcp_sockets` philosophy to
+            // this convention. `remove_file` is a harmless no-op error on
+            // Windows (a named pipe isn't a filesystem entry); the result is
+            // already ignored.
+            let _ = std::fs::remove_file(&path);
         }
     }
     Ok(StableSocketClaim::Claimed(path))

@@ -46,6 +46,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::io::{split as io_split, AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(test)]
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 
@@ -164,8 +165,10 @@ async fn write_jsonl<W: AsyncWriteExt + Unpin>(
 /// connect path did zero handshake verification: a freshly discovered but
 /// stale socket file could be "connected" to and then silently relay
 /// nothing.
-async fn connect_and_verify(socket_path: &str) -> Result<BufReader<UnixStream>, String> {
-    let stream = UnixStream::connect(socket_path)
+async fn connect_and_verify(
+    socket_path: &str,
+) -> Result<BufReader<mae_mcp::local_ipc::LocalStream>, String> {
+    let stream = mae_mcp::local_ipc::connect(std::path::Path::new(socket_path))
         .await
         .map_err(|e| format!("connect: {e}"))?;
     let mut stream = BufReader::new(stream);

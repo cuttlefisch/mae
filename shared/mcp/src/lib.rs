@@ -50,6 +50,7 @@ pub mod daemon_client;
 pub mod file_lock;
 pub mod identity;
 pub mod keystore;
+pub mod local_ipc;
 pub mod protocol;
 pub mod session;
 pub mod tls;
@@ -64,7 +65,6 @@ use protocol::{
 };
 use session::{ClientInfo, ClientSession};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixListener;
 use tokio::sync::{mpsc, oneshot};
 use tracing::{debug, error, info, warn};
 
@@ -232,10 +232,13 @@ impl McpServer {
     /// session and tokio task. Content-Length framing is used for responses;
     /// reads auto-detect Content-Length vs line-based framing.
     pub async fn run(self, tool_definitions: Vec<ToolInfo>) {
-        // Clean up stale socket file
+        // Clean up stale socket file (Unix only -- a Windows named pipe has no
+        // filesystem entry to remove; `local_ipc::LocalListener::bind` needs no
+        // pre-cleanup step there).
+        #[cfg(unix)]
         let _ = std::fs::remove_file(&self.socket_path);
 
-        let listener = match UnixListener::bind(&self.socket_path) {
+        let mut listener = match local_ipc::LocalListener::bind(&self.socket_path) {
             Ok(l) => l,
             Err(e) => {
                 error!(path = %self.socket_path.display(), error = %e, "failed to bind MCP socket");
@@ -249,7 +252,7 @@ impl McpServer {
 
         loop {
             match listener.accept().await {
-                Ok((stream, _addr)) => {
+                Ok(stream) => {
                     let mut session = ClientSession::new();
                     session.instructions = self.instructions.clone();
                     let session_id = session.id;
@@ -281,6 +284,9 @@ impl McpServer {
 
 impl Drop for McpServer {
     fn drop(&mut self) {
+        // Unix only -- a Windows named pipe has no filesystem entry to remove; the
+        // pipe namespace is cleaned up automatically when the last handle closes.
+        #[cfg(unix)]
         let _ = std::fs::remove_file(&self.socket_path);
     }
 }
@@ -302,14 +308,17 @@ impl Drop for McpServer {
 /// `read_message` always runs to completion and `select!` only receives from
 /// the channel (which is cancel-safe).
 async fn handle_client(
-    stream: tokio::net::UnixStream,
+    stream: local_ipc::LocalStream,
     tool_tx: mpsc::Sender<McpToolRequest>,
     tool_definitions: &[ToolInfo],
     mut session: ClientSession,
     broadcaster: broadcast::SharedBroadcaster,
     psk_auth: Option<Arc<auth::PskAuth>>,
 ) {
-    let (reader, writer) = stream.into_split();
+    // `tokio::io::split` (not `.into_split()`, which only exists on the concrete
+    // `UnixStream`/`TcpStream` types) -- works generically for any `AsyncRead +
+    // AsyncWrite + Unpin` type, which `LocalStream` is regardless of platform.
+    let (reader, writer) = tokio::io::split(stream);
     let mut reader = BufReader::new(reader);
     let mut writer = writer;
 

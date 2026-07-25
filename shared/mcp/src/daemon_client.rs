@@ -6,9 +6,24 @@
 //! Uses blocking I/O (`std::os::unix::net::UnixStream`) so it can be
 //! called from synchronous `KbQueryLayer` trait methods without requiring
 //! a tokio runtime in the calling context.
+//!
+//! **ADR-066 Gate W: intentionally Unix-only, on both sides of the connection.**
+//! `mae-daemon` itself never runs on Windows (confirmed Linux/macOS-server-only —
+//! ADR-066's own explicit out-of-scope note), so there is no local daemon a Windows
+//! editor could ever connect to via this mechanism; a Windows client only reaches a
+//! daemon over the network (ADR-066 Phase E: TCP/mTLS or OAuth/HTTPS), never through
+//! this same-machine control socket. The connection logic below stays genuinely
+//! Unix-only (`std::os::unix::net::UnixStream` has no Windows equivalent to abstract
+//! over, unlike `local_ipc`'s editor-MCP-socket case, which DOES need to exist on
+//! Windows) — but the public API surface stays present on Windows too, returning a
+//! clean, explicit "not supported on this platform" error, so the ~5 call sites across
+//! `crates/core`/`crates/mae` that use `DaemonClient` don't each need their own
+//! `#[cfg(unix)]` branching just to keep compiling there.
 
 use serde_json::{json, Value};
+#[cfg(unix)]
 use std::io::{BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -62,6 +77,7 @@ impl From<std::io::Error> for DaemonClientError {
 /// Synchronous JSON-RPC client for communicating with `mae-daemon`.
 pub struct DaemonClient {
     socket_path: PathBuf,
+    #[cfg(unix)]
     stream: Option<BufReader<UnixStream>>,
     next_id: AtomicU64,
     timeout: Duration,
@@ -73,6 +89,7 @@ impl DaemonClient {
     pub fn new(socket_path: impl Into<PathBuf>) -> Self {
         Self {
             socket_path: socket_path.into(),
+            #[cfg(unix)]
             stream: None,
             next_id: AtomicU64::new(1),
             timeout: Duration::from_secs(10),
@@ -84,9 +101,17 @@ impl DaemonClient {
         self.timeout = timeout;
     }
 
-    /// Check if currently connected.
+    /// Check if currently connected. Always `false` on Windows (see module doc
+    /// comment — there is never a local daemon to connect to there).
     pub fn is_connected(&self) -> bool {
-        self.stream.is_some()
+        #[cfg(unix)]
+        {
+            self.stream.is_some()
+        }
+        #[cfg(windows)]
+        {
+            false
+        }
     }
 
     /// Socket path this client targets.
@@ -94,31 +119,54 @@ impl DaemonClient {
         &self.socket_path
     }
 
-    /// Connect to the daemon socket.
+    /// Connect to the daemon socket. Always fails with a clean, explicit error on
+    /// Windows (see module doc comment).
     pub fn connect(&mut self) -> Result<(), DaemonClientError> {
-        let stream = UnixStream::connect(&self.socket_path).map_err(|e| {
-            DaemonClientError::ConnectionError(format!(
-                "Failed to connect to {}: {e}",
-                self.socket_path.display()
+        #[cfg(unix)]
+        {
+            let stream = UnixStream::connect(&self.socket_path).map_err(|e| {
+                DaemonClientError::ConnectionError(format!(
+                    "Failed to connect to {}: {e}",
+                    self.socket_path.display()
+                ))
+            })?;
+            stream.set_read_timeout(Some(self.timeout))?;
+            stream.set_write_timeout(Some(self.timeout))?;
+            self.stream = Some(BufReader::new(stream));
+            Ok(())
+        }
+        #[cfg(windows)]
+        {
+            Err(DaemonClientError::ConnectionError(
+                "mae-daemon has no local (same-machine) connection on Windows -- it is \
+                 Linux/macOS-server-only by design (ADR-066 Gate W). Reach a daemon over \
+                 the network instead (collab TCP/mTLS or the OAuth/HTTPS kb/query.* surface)."
+                    .to_string(),
             ))
-        })?;
-        stream.set_read_timeout(Some(self.timeout))?;
-        stream.set_write_timeout(Some(self.timeout))?;
-        self.stream = Some(BufReader::new(stream));
-        Ok(())
+        }
     }
 
     /// Disconnect from the daemon.
     pub fn disconnect(&mut self) {
-        self.stream = None;
+        #[cfg(unix)]
+        {
+            self.stream = None;
+        }
     }
 
     /// Ensure connected, reconnecting if needed.
     fn ensure_connected(&mut self) -> Result<(), DaemonClientError> {
-        if self.stream.is_none() {
-            self.connect()?;
+        #[cfg(unix)]
+        {
+            if self.stream.is_none() {
+                self.connect()?;
+            }
+            Ok(())
         }
-        Ok(())
+        #[cfg(windows)]
+        {
+            self.connect()
+        }
     }
 
     /// Send a JSON-RPC request and return the result value.
@@ -199,6 +247,18 @@ impl DaemonClient {
         Ok(format!("KB '{kb_id}' shared over the P2P mesh."))
     }
 
+    #[cfg(windows)]
+    fn call_inner(&mut self, _method: &str, _params: &Value) -> Result<Value, DaemonClientError> {
+        // Never actually reached in practice -- `ensure_connected` above always fails
+        // first on Windows (see `connect`'s doc comment) -- but this still needs a real
+        // body to compile, and returning the same clean error rather than
+        // `unreachable!()` keeps the behavior correct even if `ensure_connected`'s
+        // internals ever change.
+        self.ensure_connected()?;
+        unreachable!("ensure_connected always errors on Windows before reaching here")
+    }
+
+    #[cfg(unix)]
     fn call_inner(&mut self, method: &str, params: &Value) -> Result<Value, DaemonClientError> {
         self.ensure_connected()?;
 

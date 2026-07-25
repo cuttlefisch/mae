@@ -351,6 +351,7 @@ Source: `shared/mcp/src/lib.rs`
 | `file_lock` | mod |
 | `identity` | mod |
 | `keystore` | mod |
+| `local_ipc` | mod |
 | `protocol` | mod |
 | `session` | mod |
 | `tls` | mod |

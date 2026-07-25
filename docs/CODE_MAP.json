@@ -892,6 +892,10 @@
           "kind": "mod"
         },
         {
+          "name": "local_ipc",
+          "kind": "mod"
+        },
+        {
           "name": "protocol",
           "kind": "mod"
         },

@@ -1153,6 +1153,7 @@ mod tests {
     #[tokio::test]
     async fn non_interactive_executor_denies_a_call_exceeding_the_permission_ceiling() {
         let (client_stream, server_stream) = tokio::net::UnixStream::pair().unwrap();
+        let client_stream = mae_mcp::local_ipc::LocalStream::Unix(client_stream);
         let (server_read, server_write) = server_stream.into_split();
         let server_reader = tokio::io::BufReader::new(server_read);
         let server = tokio::spawn(run_minimal_fake_server(server_reader, server_write));
@@ -1190,6 +1191,7 @@ mod tests {
     #[tokio::test]
     async fn non_interactive_executor_allows_a_call_within_the_permission_ceiling() {
         let (client_stream, server_stream) = tokio::net::UnixStream::pair().unwrap();
+        let client_stream = mae_mcp::local_ipc::LocalStream::Unix(client_stream);
         let (server_read, server_write) = server_stream.into_split();
         let server_reader = tokio::io::BufReader::new(server_read);
         let server = tokio::spawn(run_minimal_fake_server(server_reader, server_write));
@@ -1267,6 +1269,7 @@ mod tests {
         // configured) must produce output byte-identical to today's
         // hardcoded prompt -- no regression for users who haven't opted in.
         let (client_stream, server_stream) = tokio::net::UnixStream::pair().unwrap();
+        let client_stream = mae_mcp::local_ipc::LocalStream::Unix(client_stream);
         let (server_read, server_write) = server_stream.into_split();
         let server_reader = tokio::io::BufReader::new(server_read);
         let server = tokio::spawn(run_get_option_fake_server(server_reader, server_write, ""));
@@ -1292,6 +1295,7 @@ mod tests {
         // startup -- read_guidance_kb_context returns None for it, and
         // there's no project-context file in this crate's test cwd either.
         let (client_stream, server_stream) = tokio::net::UnixStream::pair().unwrap();
+        let client_stream = mae_mcp::local_ipc::LocalStream::Unix(client_stream);
         let (server_read, server_write) = server_stream.into_split();
         let server_reader = tokio::io::BufReader::new(server_read);
         let server = tokio::spawn(run_get_option_fake_server(

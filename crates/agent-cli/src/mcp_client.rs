@@ -13,9 +13,10 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use mae_mcp::auth::{AuthProvider, PskAuth};
+use mae_mcp::local_ipc::LocalStream;
 use mae_mcp::protocol::{JsonRpcRequest, JsonRpcResponse, ToolInfo};
-use tokio::io::BufReader;
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::io::{BufReader, ReadHalf, WriteHalf};
+#[cfg(test)]
 use tokio::net::UnixStream;
 
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -28,8 +29,8 @@ pub struct ToolCallOutcome {
 }
 
 pub struct McpClient {
-    reader: BufReader<OwnedReadHalf>,
-    writer: OwnedWriteHalf,
+    reader: BufReader<ReadHalf<LocalStream>>,
+    writer: WriteHalf<LocalStream>,
     next_id: u64,
 }
 
@@ -150,7 +151,7 @@ impl McpClient {
         psk: Option<&str>,
         declared_provider: Option<&str>,
     ) -> Result<Self> {
-        let stream = UnixStream::connect(socket_path)
+        let stream = mae_mcp::local_ipc::connect(socket_path)
             .await
             .with_context(|| format!("connecting to {}", socket_path.display()))?;
         Self::from_stream(stream, psk, declared_provider).await
@@ -158,15 +159,16 @@ impl McpClient {
 
     /// Shared post-connect logic: split, optionally PSK-handshake, initialize.
     /// Split out from `connect` so tests can drive it over an in-process
-    /// `UnixStream::pair()` instead of a real filesystem socket. `pub(crate)`
-    /// so `main.rs`'s own test module (a sibling, not a descendant, of this
-    /// one) can build a real `McpClient` for its own executor-level tests.
+    /// `UnixStream::pair()` (wrapped in `LocalStream::Unix`) instead of a real
+    /// filesystem socket. `pub(crate)` so `main.rs`'s own test module (a sibling, not a
+    /// descendant, of this one) can build a real `McpClient` for its own
+    /// executor-level tests.
     pub(crate) async fn from_stream(
-        stream: UnixStream,
+        stream: mae_mcp::local_ipc::LocalStream,
         psk: Option<&str>,
         declared_provider: Option<&str>,
     ) -> Result<Self> {
-        let (read_half, write_half) = stream.into_split();
+        let (read_half, write_half) = tokio::io::split(stream);
         let mut reader = BufReader::new(read_half);
         let mut writer = write_half;
 
@@ -266,6 +268,7 @@ impl McpClient {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+    use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
     // ---- pure logic: is_pid_alive / parse_tool_call_result ----
 
@@ -491,6 +494,7 @@ mod tests {
     #[tokio::test]
     async fn request_error_response_surfaces_code_and_message() {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let client_stream = mae_mcp::local_ipc::LocalStream::Unix(client_stream);
         let (server_read, server_write) = server_stream.into_split();
         let server_reader = BufReader::new(server_read);
 
@@ -523,6 +527,7 @@ mod tests {
     #[tokio::test]
     async fn request_with_neither_result_nor_error_is_reported_as_such() {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let client_stream = mae_mcp::local_ipc::LocalStream::Unix(client_stream);
         let (server_read, server_write) = server_stream.into_split();
         let server_reader = BufReader::new(server_read);
 
@@ -556,6 +561,7 @@ mod tests {
     #[tokio::test]
     async fn client_connects_lists_tools_and_calls_one_over_a_paired_socket() {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let client_stream = mae_mcp::local_ipc::LocalStream::Unix(client_stream);
         let (server_read, server_write) = server_stream.into_split();
         let server_reader = BufReader::new(server_read);
 
@@ -643,6 +649,7 @@ mod tests {
         }
 
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let client_stream = mae_mcp::local_ipc::LocalStream::Unix(client_stream);
         let (server_read, server_write) = server_stream.into_split();
         let server_reader = BufReader::new(server_read);
         let server = tokio::spawn(run_fake_server(
