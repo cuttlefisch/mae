@@ -21,18 +21,18 @@
 //! `#[cfg(unix)]` branching just to keep compiling there.
 
 use serde_json::{json, Value};
-// `BufRead` is used unconditionally (`read_cl_message`'s generic bound, below, is not
-// itself `#[cfg(unix)]`-gated); `BufReader`/`Write` are only used inside the
-// Unix-specific `connect`/`call_inner` bodies.
-use std::io::BufRead;
+// `BufRead`/`BufReader`/`Write` are only used inside the Unix-specific `connect`/
+// `call_inner`/`read_cl_message` bodies -- all `#[cfg(unix)]`-gated below, so these
+// stay together rather than the previous split (which left `read_cl_message` itself
+// ungated, making it genuinely dead code -- and therefore a `-D warnings` clippy
+// error -- on Windows, since its only caller is `call_inner`'s unix-only branch).
 #[cfg(unix)]
-use std::io::{BufReader, Write};
+use std::io::{BufRead, BufReader, Write};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicU64;
 #[cfg(unix)]
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// The default `mae-daemon` control-socket path — the **single source of truth**
@@ -85,6 +85,7 @@ pub struct DaemonClient {
     socket_path: PathBuf,
     #[cfg(unix)]
     stream: Option<BufReader<UnixStream>>,
+    #[cfg(unix)]
     next_id: AtomicU64,
     timeout: Duration,
 }
@@ -97,6 +98,7 @@ impl DaemonClient {
             socket_path: socket_path.into(),
             #[cfg(unix)]
             stream: None,
+            #[cfg(unix)]
             next_id: AtomicU64::new(1),
             timeout: Duration::from_secs(10),
         }
@@ -308,6 +310,7 @@ impl DaemonClient {
 }
 
 /// Read a single Content-Length framed message from a buffered reader.
+#[cfg(unix)]
 fn read_cl_message<R: BufRead>(reader: &mut R) -> Result<String, DaemonClientError> {
     let mut content_length: Option<usize> = None;
 
