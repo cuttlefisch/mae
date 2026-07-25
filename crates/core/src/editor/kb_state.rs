@@ -301,7 +301,8 @@ impl KbContext {
     /// Whether a node id belongs to the given scope's participating KB(s).
     /// Mirrors `Editor::kb_federated_search_scoped`'s per-scope inclusion
     /// rules (primary participates for All/LocalOnly, a specific instance
-    /// for Named, any non-primary federated instance for RemoteOnly) but
+    /// for Named, any non-primary federated instance for RemoteOnly, any
+    /// matching `Project`-kind instance for Project — ADR-058 Phase C) but
     /// checks a single already-known id rather than performing a fresh
     /// search. Used to post-filter `kb_health`/`kb_agenda`, whose underlying
     /// queries (`agenda_query`, the per-instance health loop) aren't scope-
@@ -342,6 +343,17 @@ impl KbContext {
                     .and_then(|inst| self.instances.get(&inst.uuid))
                     .is_some_and(|kb| kb.contains(id))
             }
+            // Excludes the primary, mirroring RemoteOnly above (ADR-058 Phase C/D).
+            KbScope::Project(root) => self
+                .registry
+                .instances
+                .iter()
+                .filter(|inst| inst.matches_project_root(root))
+                .any(|inst| {
+                    self.instances
+                        .get(&inst.uuid)
+                        .is_some_and(|kb| kb.contains(id))
+                }),
         }
     }
 

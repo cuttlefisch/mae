@@ -110,8 +110,8 @@ pub fn execute_kb_search(
     let scope = args
         .get("scope")
         .and_then(|v| v.as_str())
-        .map(mae_kb::KbScope::parse)
-        .unwrap_or_else(|| mae_kb::KbScope::parse(&editor.kb.search_scope));
+        .map(|s| editor.resolve_kb_scope(s))
+        .unwrap_or_else(|| editor.resolve_kb_scope(&editor.kb.search_scope));
     let limit = args
         .get("limit")
         .and_then(|v| v.as_u64())
@@ -469,8 +469,8 @@ pub fn execute_kb_health(
     let scope = args
         .get("scope")
         .and_then(|v| v.as_str())
-        .map(mae_kb::KbScope::parse)
-        .unwrap_or_else(|| mae_kb::KbScope::parse(&editor.kb.search_scope));
+        .map(|s| editor.resolve_kb_scope(s))
+        .unwrap_or_else(|| editor.resolve_kb_scope(&editor.kb.search_scope));
     let primary_name = editor
         .kb
         .registry
@@ -482,6 +482,7 @@ pub fn execute_kb_health(
         mae_kb::KbScope::All | mae_kb::KbScope::LocalOnly => true,
         mae_kb::KbScope::RemoteOnly => false,
         mae_kb::KbScope::Named(n) => primary_name == Some(n.as_str()),
+        mae_kb::KbScope::Project(_) => false,
     };
 
     let local_bypass = requester_provider.is_some_and(mae_core::ai_residency::is_local_provider);
@@ -516,6 +517,7 @@ pub fn execute_kb_health(
             mae_kb::KbScope::All | mae_kb::KbScope::RemoteOnly => !inst.primary,
             mae_kb::KbScope::LocalOnly => false,
             mae_kb::KbScope::Named(n) => &inst.name == n,
+            mae_kb::KbScope::Project(root) => inst.matches_project_root(root),
         })
         .map(|inst| {
             let inst_restricted = !local_bypass
@@ -1071,6 +1073,36 @@ pub fn execute_kb_promote(editor: &mut Editor, args: &serde_json::Value) -> Resu
     .map_err(|e| e.to_string())
 }
 
+pub fn execute_kb_init_project(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let root = args
+        .get("root")
+        .and_then(|v| v.as_str())
+        .map(std::path::PathBuf::from);
+    let result = editor.kb_init_project(root)?;
+    serde_json::to_string_pretty(&serde_json::json!({
+        "status": "registered",
+        "name": result.name,
+        "uuid": result.uuid,
+        "imported": result.report.nodes_imported,
+    }))
+    .map_err(|e| e.to_string())
+}
+
+pub fn execute_kb_decline_project_provisioning(
+    editor: &mut Editor,
+    args: &serde_json::Value,
+) -> Result<String, String> {
+    let root = args
+        .get("root")
+        .and_then(|v| v.as_str())
+        .map(std::path::PathBuf::from);
+    editor.kb_decline_project_provisioning(root)?;
+    Ok("Won't ask again for this project's KB".to_string())
+}
+
 pub fn execute_kb_register(
     editor: &mut Editor,
     args: &serde_json::Value,
@@ -1312,8 +1344,8 @@ pub fn execute_kb_search_context(
     let scope = args
         .get("scope")
         .and_then(|v| v.as_str())
-        .map(mae_kb::KbScope::parse)
-        .unwrap_or_else(|| mae_kb::KbScope::parse(&editor.kb.search_scope));
+        .map(|s| editor.resolve_kb_scope(s))
+        .unwrap_or_else(|| editor.resolve_kb_scope(&editor.kb.search_scope));
     let configured_limit = editor.kb.search_max_results;
     let limit = args
         .get("limit")
@@ -1578,8 +1610,8 @@ pub fn execute_kb_agenda(
     let scope = args
         .get("scope")
         .and_then(|v| v.as_str())
-        .map(mae_kb::KbScope::parse)
-        .unwrap_or_else(|| mae_kb::KbScope::parse(&editor.kb.search_scope));
+        .map(|s| editor.resolve_kb_scope(s))
+        .unwrap_or_else(|| editor.resolve_kb_scope(&editor.kb.search_scope));
 
     let filter = match filter_type {
         "todo" => {
@@ -1787,8 +1819,8 @@ pub fn execute_kb_vector_search(
     let _scope = args
         .get("scope")
         .and_then(|v| v.as_str())
-        .map(mae_kb::KbScope::parse)
-        .unwrap_or_else(|| mae_kb::KbScope::parse(&editor.kb.search_scope));
+        .map(|s| editor.resolve_kb_scope(s))
+        .unwrap_or_else(|| editor.resolve_kb_scope(&editor.kb.search_scope));
     let _limit = args
         .get("limit")
         .and_then(|v| v.as_u64())
@@ -1823,6 +1855,8 @@ mod tests {
             remote_peers: Vec::new(),
             last_sync: None,
             ai_residency: mae_kb::federation::AiResidency::default(),
+            project_root: None,
+            kind: mae_kb::federation::KbInstanceKind::default(),
         }
     }
 
@@ -3116,7 +3150,7 @@ mod tests {
             )
             .unwrap();
 
-        let scope = mae_kb::KbScope::parse(&editor.kb.search_scope);
+        let scope = editor.resolve_kb_scope(&editor.kb.search_scope);
         let upstream: Vec<String> = editor
             .kb_federated_search_scoped("tiebreaktermxyz", &scope)
             .into_iter()
@@ -3266,6 +3300,8 @@ mod tests {
                 remote_peers: Vec::new(),
                 last_sync: None,
                 ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
             });
 
         // Unscoped: the federated node is included.
@@ -4003,6 +4039,8 @@ mod tests {
                 remote_peers: Vec::new(),
                 last_sync: None,
                 ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
             });
 
         let mut kb_b = mae_core::KnowledgeBase::new();
@@ -4028,6 +4066,8 @@ mod tests {
                 remote_peers: Vec::new(),
                 last_sync: None,
                 ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
             });
 
         let result = execute_kb_agenda(
@@ -4193,6 +4233,8 @@ mod tests {
                 remote_peers: Vec::new(),
                 last_sync: None,
                 ai_residency: mae_kb::federation::AiResidency::LocalModelsOnly,
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
             });
 
         let result =
@@ -4243,6 +4285,8 @@ mod tests {
                 remote_peers: Vec::new(),
                 last_sync: None,
                 ai_residency: mae_kb::federation::AiResidency::LocalModelsOnly,
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
             });
 
         let result =
@@ -4413,6 +4457,8 @@ mod tests {
                 remote_peers: Vec::new(),
                 last_sync: None,
                 ai_residency: mae_kb::federation::AiResidency::LocalModelsOnly,
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
             });
 
         let result = execute_kb_health(&editor, &serde_json::json!({}), Some("claude")).unwrap();
@@ -4472,6 +4518,8 @@ mod tests {
                 remote_peers: Vec::new(),
                 last_sync: None,
                 ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
             });
 
         let mut kb_other = mae_core::KnowledgeBase::new();
@@ -4500,6 +4548,8 @@ mod tests {
                 remote_peers: Vec::new(),
                 last_sync: None,
                 ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
             });
 
         let result = execute_kb_health(
@@ -4638,6 +4688,8 @@ mod tests {
                 remote_peers: Vec::new(),
                 last_sync: None,
                 ai_residency: mae_kb::federation::AiResidency::LocalModelsOnly,
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
             });
 
         execute_kb_graph_view_open(

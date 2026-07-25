@@ -232,6 +232,167 @@ impl Editor {
         Some(result)
     }
 
+    /// Register a `Project`-kind KB instance scoped to `root` (or the current project root
+    /// if `root` is `None`) — ADR-058 Phase B, the always-available explicit path
+    /// (`:kb-init-project` / `kb_init_project` MCP tool) that `maybe_suggest_project_kb_provisioning`'s
+    /// notification action also invokes. A thin wrapper around `kb_register`, reusing its
+    /// full registration/import/adoption logic (principle #8) rather than reimplementing it —
+    /// the only addition is deriving a deterministic, project-scoped `org_dir`
+    /// (`<project_root>/.mae-kb`) and patching the newly-registered instance's `kind`/
+    /// `project_root` fields (Phase A), which `kb_register` predates and doesn't set.
+    ///
+    /// Idempotent: if a `Project`-kind instance already covers `root`, returns it rather than
+    /// erroring or creating a duplicate — this, combined with `org_dir` being deterministically
+    /// derived from `root` (so two concurrent callers for the same root compute the identical
+    /// path) and `kb_register`'s own org_dir-based dedup running inside `KbRegistry::update`'s
+    /// file-lock-serialized critical section, is what makes a race between multiple sessions
+    /// provisioning the same project converge to exactly one instance rather than duplicates.
+    pub fn kb_init_project(&mut self, root: Option<PathBuf>) -> Result<KbImportResult, String> {
+        let root = root
+            .or_else(|| self.active_project_root().map(|p| p.to_path_buf()))
+            .ok_or_else(|| {
+                "No project root detected — pass an explicit path or open a file inside a project"
+                    .to_string()
+            })?;
+        let canonical_root = root
+            .canonicalize()
+            .map_err(|e| format!("cannot resolve project root {}: {e}", root.display()))?;
+
+        if let Some(existing) = self
+            .kb
+            .registry
+            .instances
+            .iter()
+            .find(|i| i.matches_project_root(&canonical_root))
+        {
+            return Ok(KbImportResult {
+                name: existing.name.clone(),
+                uuid: existing.uuid.clone(),
+                report: ImportReport::default(),
+                health: ImportHealth::default(),
+            });
+        }
+
+        let project_name = canonical_root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("project")
+            .to_string();
+        let org_dir = canonical_root.join(".mae-kb");
+        std::fs::create_dir_all(&org_dir)
+            .map_err(|e| format!("failed to create {}: {e}", org_dir.display()))?;
+
+        let result = self.kb_register(&project_name, &org_dir).ok_or_else(|| {
+            "kb_register failed — see status line for the specific error".to_string()
+        })?;
+
+        let Some(data_dir) = self.mae_data_dir() else {
+            return Err("cannot determine data directory".to_string());
+        };
+        let uuid = result.uuid.clone();
+        let (registry, _, saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+            if let Some(inst) = reg.instances.iter_mut().find(|i| i.uuid == uuid) {
+                inst.kind = mae_kb::federation::KbInstanceKind::Project;
+                inst.project_root = Some(canonical_root.clone());
+            }
+        });
+        if let Err(e) = saved {
+            tracing::warn!(error = %e, "failed to persist KB registry (kind/project_root patch)");
+        }
+        self.kb.registry = registry;
+
+        Ok(result)
+    }
+
+    /// Record a decline of project-KB provisioning for `root` (or the current project root)
+    /// — ADR-058 Phase E. Persisted via the same concurrent-safe `KbRegistry::update` every
+    /// other registry mutation uses, so it survives a restart and a decline recorded by one
+    /// session is visible to another.
+    pub fn kb_decline_project_provisioning(&mut self, root: Option<PathBuf>) -> Result<(), String> {
+        let root = root
+            .or_else(|| self.active_project_root().map(|p| p.to_path_buf()))
+            .ok_or_else(|| "No project root detected".to_string())?;
+        let canonical_root = root
+            .canonicalize()
+            .map_err(|e| format!("cannot resolve project root {}: {e}", root.display()))?;
+        let Some(data_dir) = self.mae_data_dir() else {
+            return Err("cannot determine data directory".to_string());
+        };
+        let (registry, _, saved) = mae_kb::federation::KbRegistry::update(&data_dir, |reg| {
+            reg.decline_project(canonical_root.clone());
+        });
+        if let Err(e) = saved {
+            tracing::warn!(error = %e, "failed to persist declined-project-provisioning marker");
+        }
+        self.kb.registry = registry;
+        Ok(())
+    }
+
+    /// The opt-in-by-default provisioning trigger (ADR-058 Phase B). Call from a KB-touching
+    /// entry point (wired into `kb_exec::dispatch`, the AI/MCP tool-dispatch chokepoint) to
+    /// check whether the current project should be offered its own KB instance, and raise a
+    /// deduped, non-blocking notification if so. Cheap no-op in the common case (no
+    /// detectable project root, already provisioned, or already declined) — every check here
+    /// is an in-memory comparison against already-loaded state, no filesystem/network I/O
+    /// beyond the one `canonicalize()` call.
+    ///
+    /// Never silently auto-creates by default — the notification's "Register" action still
+    /// requires an explicit user/agent act — **unless** `kb_auto_register` is explicitly set
+    /// (wiring up that previously-dead option, per CLAUDE.md principle #15: a registered,
+    /// gettable/settable option with no consumer is drift, not a feature). Even then, a
+    /// failure is logged, not surfaced as a nagging notification on every subsequent call.
+    pub fn maybe_suggest_project_kb_provisioning(&mut self) {
+        let Some(root) = self.active_project_root().map(|p| p.to_path_buf()) else {
+            return;
+        };
+        let Ok(canonical_root) = root.canonicalize() else {
+            return;
+        };
+        if self
+            .kb
+            .registry
+            .instances
+            .iter()
+            .any(|i| i.matches_project_root(&canonical_root))
+        {
+            return;
+        }
+        if self.kb.registry.has_declined_project(&canonical_root) {
+            return;
+        }
+
+        if self.kb.auto_register {
+            if let Err(e) = self.kb_init_project(Some(canonical_root)) {
+                tracing::warn!(error = %e, "kb_auto_register: failed to auto-provision project KB");
+            }
+            return;
+        }
+
+        let key = format!("kb-init-project:{}", canonical_root.display());
+        self.notify(
+            crate::notifications::Notification::action_required(
+                "kb",
+                "Register a KB for this project?",
+            )
+            .key(key)
+            .body(format!(
+                "No knowledge base is registered for {}. MAE can maintain one automatically, \
+                 kept separate from your other KBs.",
+                canonical_root.display()
+            ))
+            .action(
+                "Register project KB",
+                crate::notifications::NotifCommand::Command("kb-init-project".to_string()),
+            )
+            .action(
+                "Don't ask again",
+                crate::notifications::NotifCommand::Command(
+                    "kb-decline-project-provisioning".to_string(),
+                ),
+            ),
+        );
+    }
+
     /// Unregister a KB instance by name or UUID.
     pub fn kb_unregister(&mut self, name_or_uuid: &str) {
         let found = self.kb.registry.find(name_or_uuid).map(|i| i.uuid.clone());
@@ -711,6 +872,8 @@ mod scoped_owner_tests {
                 remote_peers: Vec::new(),
                 last_sync: None,
                 ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
             });
         editor
     }

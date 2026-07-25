@@ -42,6 +42,18 @@ impl Editor {
                     None => self.set_status("Not in a help buffer"),
                 }
             }
+            "kb-init-project" => {
+                // ADR-058 Phase B: the explicit path, and also what the
+                // provisioning-suggestion notification's "Register" action invokes.
+                match self.kb_init_project(None) {
+                    Ok(result) => self.set_status(result.status_summary()),
+                    Err(e) => self.set_status(format!("KB init-project error: {e}")),
+                }
+            }
+            "kb-decline-project-provisioning" => match self.kb_decline_project_provisioning(None) {
+                Ok(()) => self.set_status("Won't ask again for this project's KB"),
+                Err(e) => self.set_status(format!("KB decline-provisioning error: {e}")),
+            },
             "kb-insert-link" => {
                 let nodes = self.kb_all_node_pairs();
                 self.command_palette = Some(

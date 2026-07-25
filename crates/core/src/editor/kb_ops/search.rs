@@ -260,6 +260,41 @@ impl Editor {
             .any(|i| path.starts_with(&i.org_dir))
     }
 
+    /// Resolve a `kb_search_scope` option value / AI-tool `scope` argument to a `KbScope`
+    /// (ADR-058 Phase C). Handles the `"project"`/`"project-only"` token specially: resolves
+    /// the *current* project root fresh via `active_project_root()` (itself built on
+    /// `detect_project_root`, the same detector Phase B's provisioning flow uses to register
+    /// a `Project`-kind instance's `project_root` — using the identical accessor on both sides
+    /// is what keeps registration and resolution from silently drifting apart) and constructs
+    /// `KbScope::Project(root)`. Falls back to `KbScope::parse` for every other token.
+    ///
+    /// **Canonicalized, matching `KbRegistry::register`'s own established discipline for
+    /// `org_dir` (#303)** — falls back to the raw path if canonicalization fails (e.g. the
+    /// directory was removed since detection) rather than hard-failing the whole scope
+    /// resolution. Without this, a symlinked or non-normalized path could textually differ
+    /// from the canonical form `KbInstance.project_root` was registered with (Phase B applies
+    /// the identical canonicalization), silently failing to match a real, correctly-registered
+    /// project instance — Phase D's negative test (`kb_scope_project_path_identity_tests`)
+    /// exercises exactly this.
+    ///
+    /// Graceful degrade (Phase E): if `"project"` is requested but no project root can be
+    /// detected (e.g. editing a scratch buffer with no file), this returns `KbScope::All`
+    /// rather than an empty/unusable scope — the caller still gets a working search, just not
+    /// narrowed, and nothing panics or silently returns zero results with no explanation.
+    pub fn resolve_kb_scope(&self, token: &str) -> mae_kb::KbScope {
+        let normalized = token.trim().to_ascii_lowercase();
+        if normalized == "project" || normalized == "project-only" {
+            return match self.active_project_root() {
+                Some(root) => {
+                    let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+                    mae_kb::KbScope::Project(canonical)
+                }
+                None => mae_kb::KbScope::All,
+            };
+        }
+        mae_kb::KbScope::parse(token)
+    }
+
     /// Search across local KB and all federated instances.
     /// Returns (instance_name_or_none, node) pairs, deduplicated by node ID.
     /// Local results take priority over federated.
@@ -320,6 +355,10 @@ impl Editor {
             KbScope::All | KbScope::LocalOnly => true,
             KbScope::RemoteOnly => false,
             KbScope::Named(n) => primary_name == Some(n.as_str()),
+            // Project scope excludes the primary (ADR-058 Phase C/D) — narrowing to "just
+            // this project's registered instance(s)" is the point, mirroring RemoteOnly's
+            // existing precedent for scopes orthogonal to the machine-global primary.
+            KbScope::Project(_) => false,
         };
 
         if include_primary {
@@ -357,6 +396,7 @@ impl Editor {
                 KbScope::LocalOnly => false,
                 KbScope::RemoteOnly => inst.is_some_and(|i| i.is_remote()),
                 KbScope::Named(n) => inst.is_some_and(|i| &i.name == n),
+                KbScope::Project(root) => inst.is_some_and(|i| i.matches_project_root(root)),
             };
             if !include {
                 continue;

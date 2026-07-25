@@ -828,6 +828,8 @@ mod tests {
                 remote_peers: Vec::new(),
                 last_sync: None,
                 ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
             });
         editor.kb.rebuild_query_layer();
         assert!(

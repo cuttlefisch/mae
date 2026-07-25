@@ -864,6 +864,14 @@ impl CommandRegistry {
         reg.register_builtin("kb-reimport", "Re-import KB instance from org files");
         reg.register_builtin("kb-instances", "List all registered KB instances");
         reg.register_builtin(
+            "kb-init-project",
+            "Register a Project-kind KB instance for the current project (ADR-058)",
+        );
+        reg.register_builtin(
+            "kb-decline-project-provisioning",
+            "Don't ask again to register a KB for the current project (ADR-058)",
+        );
+        reg.register_builtin(
             "kb-promote",
             "Promote the current KB-view node from a federated instance into the primary KB (#303)",
         );

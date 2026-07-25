@@ -2522,6 +2522,8 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
                         remote_peers: Vec::new(),
                         last_sync,
                         ai_residency: mae_kb::federation::AiResidency::default(),
+                        project_root: None,
+                        kind: mae_kb::federation::KbInstanceKind::default(),
                     });
                     info!(kb = %collab_id, nodes = count, "recovered shared KB instance from disk (registry rescan)");
                 }

@@ -59,25 +59,77 @@ pub fn lock_path(file_path: &Path) -> PathBuf {
 /// Acquire an advisory lock for the given file.
 /// Returns `Ok(())` if the lock was acquired, or `Err` with info about
 /// the existing lock holder.
+///
+/// **Atomic exclusive-create, not read-then-write (ADR-058 Phase B fix).** The original
+/// implementation checked "does a lock file exist" via a separate read, then wrote its own
+/// lock file — a classic TOCTOU window between the check and the write that two contenders
+/// arriving within microseconds of each other can both slip through, each concluding it
+/// acquired the lock. A real 3-way-concurrent adversarial test
+/// (`kb_init_project_converges_to_one_instance_under_a_three_way_race`) caught this directly:
+/// widening the retry *budget* alone (a separate fix, see `with_locked_update`) did not help,
+/// because the bug isn't about retrying long enough — it's that the acquisition itself could
+/// succeed for more than one caller at once. `OpenOptions::create_new(true)` maps to
+/// `O_CREAT|O_EXCL` on Unix — the OS guarantees this fails if the file already exists, with
+/// no window for two callers to both "win" — closing the race at its actual root rather than
+/// papering over the symptom with more retries.
 pub fn acquire_lock(file_path: &Path) -> Result<(), LockInfo> {
     let lpath = lock_path(file_path);
-
-    // Check for existing lock.
-    if let Some(existing) = read_lock(&lpath) {
-        // Check if the owning process is still alive.
-        if is_process_alive(existing.pid) {
-            return Err(existing);
-        }
-        // Stale lock — remove it.
-        let _ = std::fs::remove_file(&lpath);
+    // Ensure the parent directory exists before the atomic create below — otherwise a
+    // missing directory (e.g. the very first write on a fresh machine/container, or a
+    // test that creates its data_dir lazily) surfaces as a generic I/O error that the
+    // loop below treats as "proceed without a lock" (reserved for genuinely exceptional
+    // errors), silently skipping real exclusion for what's actually the common,
+    // first-ever-write case — exactly when multiple simultaneously-starting processes
+    // racing to create that same directory need the lock most.
+    if let Some(parent) = lpath.parent() {
+        let _ = std::fs::create_dir_all(parent);
     }
-
-    // Write our lock.
     let info = LockInfo::current();
-    if let Ok(json) = serde_json::to_string_pretty(&info) {
-        let _ = std::fs::write(&lpath, json);
+    let json = serde_json::to_string_pretty(&info).unwrap_or_default();
+
+    loop {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lpath)
+        {
+            Ok(mut f) => {
+                use std::io::Write;
+                let _ = f.write_all(json.as_bytes());
+                return Ok(());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                match read_lock(&lpath) {
+                    Some(existing) => {
+                        if is_process_alive(existing.pid) {
+                            return Err(existing);
+                        }
+                        // Stale lock (owning process is gone) — reclaim it and retry the
+                        // atomic create. Another contender could win this same race, in
+                        // which case our own retry will correctly see THEIR fresh lock
+                        // and back off via the `is_process_alive` branch above.
+                        let _ = std::fs::remove_file(&lpath);
+                    }
+                    None => {
+                        // The file exists but isn't readable as a valid lock yet — another
+                        // caller's create_new just won and hasn't finished writing.
+                        // Genuinely contended; do not busy-loop indefinitely on it.
+                        return Err(LockInfo {
+                            pid: 0,
+                            hostname: "unknown".to_string(),
+                            timestamp: 0,
+                        });
+                    }
+                }
+            }
+            Err(_) => {
+                // Some other I/O error (e.g. parent directory missing/permissions) —
+                // best-effort fall through rather than hard-failing the caller, matching
+                // this module's existing best-effort persistence semantics elsewhere.
+                return Ok(());
+            }
+        }
     }
-    Ok(())
 }
 
 /// Release the advisory lock for the given file.
@@ -192,13 +244,30 @@ impl Drop for LockGuard {
 /// caller's mutation, so a save reflects "current disk state + my change"
 /// rather than "my possibly-stale snapshot + my change".
 ///
-/// If the advisory lock can't be acquired after a short bounded retry (the
-/// realistic contention window here is milliseconds — another process
-/// reloading+saving the same small file), this proceeds anyway with a
-/// warning rather than failing the caller's operation outright: these are
-/// command-triggered metadata saves, not interactive buffer edits, and the
-/// reload-before-mutate step already closes most of the race even without
-/// the lock — the lock only tightens the last few-millisecond gap.
+/// If the advisory lock still can't be acquired after a bounded retry, this
+/// proceeds anyway with a warning rather than failing the caller's operation
+/// outright — these are command-triggered metadata saves, not interactive
+/// buffer edits, and it's better to risk a rare lost update than to hang or
+/// error out a user-visible action over a lock that (per `acquire_lock`'s own
+/// `is_process_alive` check) can only be genuinely held by a live process.
+///
+/// **The retry budget was widened (ADR-058 Phase B) from an original
+/// `3 × 15ms` (≈45ms total) after a real 3-way-concurrent adversarial test
+/// (`kb_init_project_converges_to_one_instance_under_a_three_way_race`)
+/// caught it silently losing/duplicating a registration under genuine tight
+/// contention: the original budget's doc comment reasoned "the reload-before-
+/// mutate step already closes most of the race even without the lock," but
+/// that reasoning only holds when one caller's `load()` happens after
+/// another's `save()` completes — under real concurrent starts (e.g. a GUI
+/// session, a headless instance, and a paired external editor all
+/// provisioning the same project within the same second) multiple callers
+/// can `load()` before any of them `save()`, and the loser's save then
+/// silently overwrites the winner's rather than merging with it.** `30 ×
+/// 20ms` (≈600ms worst case) comfortably outlasts a small-TOML-file
+/// load+mutate+save cycle for every current caller (`kb-registry.toml`,
+/// `projects.toml`, package-lockfile, config known-set) while staying well
+/// under user-noticeable latency for what's already a discrete,
+/// explicitly-triggered action, not a hot path.
 ///
 /// Returns the mutated (freshest-plus-my-change) value, whatever `mutate`
 /// returned, and the outcome of `save` as a separate `Result` — a `save`
@@ -213,7 +282,7 @@ pub fn with_locked_update<T, R>(
     mutate: impl FnOnce(&mut T) -> R,
     save: impl FnOnce(&T) -> io::Result<()>,
 ) -> (T, R, io::Result<()>) {
-    let guard = LockGuard::try_acquire_with_retry(lock_target, 3, Duration::from_millis(15));
+    let guard = LockGuard::try_acquire_with_retry(lock_target, 30, Duration::from_millis(20));
     if !guard.acquired() {
         tracing::warn!(
             path = %lock_target.display(),

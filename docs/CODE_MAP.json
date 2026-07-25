@@ -2445,6 +2445,14 @@
       "doc": "List all registered KB instances"
     },
     {
+      "name": "kb-init-project",
+      "doc": "Register a Project-kind KB instance for the current project (ADR-058)"
+    },
+    {
+      "name": "kb-decline-project-provisioning",
+      "doc": "Don't ask again to register a KB for the current project (ADR-058)"
+    },
+    {
       "name": "kb-promote",
       "doc": "Promote the current KB-view node from a federated instance into the primary KB (#303)"
     },

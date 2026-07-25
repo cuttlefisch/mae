@@ -1,5 +1,89 @@
 use super::*;
 
+/// ADR-058 Phase B adversarial test: a project root that doesn't exist (deleted, or a
+/// TOCTOU window where it vanished between detection and provisioning) must fail cleanly
+/// with an `Err`, never panic.
+#[test]
+fn kb_init_project_fails_cleanly_on_nonexistent_root_no_panic() {
+    let mut editor = Editor::new();
+    let _test_dirs = with_test_dirs(&mut editor);
+    let nonexistent = std::path::PathBuf::from("/tmp/mae-adr058-does-not-exist-xyz-12345");
+    let result = editor.kb_init_project(Some(nonexistent));
+    assert!(
+        result.is_err(),
+        "a nonexistent project root must fail cleanly with Err, not panic"
+    );
+}
+
+/// ADR-058 Phase E adversarial test: once a user declines project-KB provisioning, the
+/// decline must survive both repeated triggering (50 subsequent KB actions in the same
+/// session) and a process restart (a fresh `Editor` reloading the same on-disk registry) —
+/// never re-prompting either way.
+#[test]
+fn kb_decline_project_provisioning_persists_across_actions_and_restart() {
+    let shared_tmp = tempfile::tempdir().unwrap();
+    let data_dir = shared_tmp.path().join("data");
+    let project_root = shared_tmp.path().join("project");
+    std::fs::create_dir_all(&project_root).unwrap();
+
+    let mut editor = Editor::new();
+    editor.data_dir_override = Some(data_dir.clone());
+    editor.project = Some(crate::project::Project::from_root(project_root.clone()));
+
+    // Trigger once to raise the suggestion, then decline it.
+    editor.maybe_suggest_project_kb_provisioning();
+    assert!(
+        editor.notifications.active_sorted().iter().any(|n| n
+            .key
+            .as_deref()
+            .is_some_and(|k| k.starts_with("kb-init-project:"))),
+        "the suggestion notification must be raised before any decline"
+    );
+    editor
+        .kb_decline_project_provisioning(Some(project_root.clone()))
+        .unwrap();
+
+    // 50 subsequent triggers in the same session: no re-prompt.
+    for _ in 0..50 {
+        editor.maybe_suggest_project_kb_provisioning();
+    }
+    let still_registered_project = editor
+        .kb
+        .registry
+        .instances
+        .iter()
+        .any(|i| i.effective_kind() == mae_kb::federation::KbInstanceKind::Project);
+    assert!(
+        !still_registered_project,
+        "sanity: this test declines, it must not have actually provisioned anything"
+    );
+
+    // Fresh Editor (simulated restart) pointed at the same data_dir: still no re-prompt.
+    let mut restarted = Editor::new();
+    restarted.data_dir_override = Some(data_dir);
+    restarted.project = Some(crate::project::Project::from_root(project_root));
+    restarted.kb.registry =
+        mae_kb::federation::KbRegistry::load(restarted.data_dir_override.as_ref().unwrap());
+    restarted.maybe_suggest_project_kb_provisioning();
+    assert!(
+        !restarted.notifications.active_sorted().iter().any(|n| n
+            .key
+            .as_deref()
+            .is_some_and(|k| k.starts_with("kb-init-project:"))),
+        "a decline recorded before restart must suppress the suggestion after restart too"
+    );
+}
+
+// The genuine 3-way-concurrent registry-convergence adversarial test lives in
+// `shared/kb/src/federation.rs` (`kb_registry_register_converges_under_a_three_way_race`),
+// exercising `KbRegistry::register`/`KbRegistry::update` directly rather than through
+// `Editor::kb_init_project`. Deliberately scoped there and not here: routing all 3 threads
+// through the full `kb_init_project` (which also opens/imports into a real CozoDB store per
+// call via `kb_adopt_instance`) hit a separate, pre-existing concurrent-store-open bug in
+// `shared/kb/src/cozo_store/source_files.rs` unrelated to ADR-058's own registry-dedup
+// contract — found while writing this test, tracked separately rather than silently masked
+// by weakening the adversarial coverage down to non-concurrent calls.
+
 #[test]
 fn kb_open_instance_store_defaults_to_sqlite_not_sled() {
     // Regression: kb_register/kb_reimport/the federation loader used the bare
@@ -134,6 +218,247 @@ fn kb_federated_search_scope_filters_instances() {
         count_federated(&remote),
         0,
         "RemoteOnly excludes non-shared local imports"
+    );
+}
+
+#[test]
+fn resolve_kb_scope_project_token_resolves_current_root_or_falls_back_to_all() {
+    let mut editor = Editor::new();
+
+    // No project detectable at all: "project" gracefully degrades to All (Phase E) —
+    // never an unusable/empty scope, and never a panic.
+    assert_eq!(editor.resolve_kb_scope("project"), mae_kb::KbScope::All);
+
+    // A project IS set: "project"/"project-only" resolve to Project(root).
+    let root = std::path::PathBuf::from("/tmp/mae-adr058-resolve-test");
+    editor.project = Some(crate::project::Project::from_root(root.clone()));
+    assert_eq!(
+        editor.resolve_kb_scope("project"),
+        mae_kb::KbScope::Project(root.clone())
+    );
+    assert_eq!(
+        editor.resolve_kb_scope("PROJECT-ONLY"),
+        mae_kb::KbScope::Project(root)
+    );
+
+    // Every other token still delegates to KbScope::parse unaffected.
+    assert_eq!(editor.resolve_kb_scope("all"), mae_kb::KbScope::All);
+    assert_eq!(editor.resolve_kb_scope("local"), mae_kb::KbScope::LocalOnly);
+    assert_eq!(
+        editor.resolve_kb_scope("SomeInstance"),
+        mae_kb::KbScope::Named("SomeInstance".into())
+    );
+}
+
+/// ADR-058 Phase C adversarial test: register a varied mix of instances (multiple distinct
+/// project roots, one non-project instance, deliberately overlapping/shared vocabulary in
+/// bodies so a naive substring-only bug would leak across projects) and, for every project
+/// root in the mix, assert `KbScope::Project(root)` results are (a) always a non-strict
+/// subset of `KbScope::All` results and (b) contain zero nodes from any *other* project or
+/// the non-project instance. A single hand-picked pair of projects could pass by accident
+/// (e.g. if the filter only happened to work for exactly two); this exercises several.
+#[test]
+fn kb_federated_search_scope_project_never_leaks_across_projects() {
+    use mae_kb::federation::{KbInstance, KbInstanceKind};
+    use mae_kb::KbScope;
+
+    let mut editor = Editor::new();
+
+    struct Fixture {
+        uuid: &'static str,
+        name: &'static str,
+        root: Option<&'static str>,
+        kind: KbInstanceKind,
+        node_id: &'static str,
+    }
+    let fixtures = [
+        Fixture {
+            uuid: "u-alpha",
+            name: "alpha",
+            root: Some("/tmp/mae-adr058-fixture/project-alpha"),
+            kind: KbInstanceKind::Project,
+            node_id: "proj:alpha-note",
+        },
+        Fixture {
+            uuid: "u-beta",
+            name: "beta",
+            root: Some("/tmp/mae-adr058-fixture/project-beta"),
+            kind: KbInstanceKind::Project,
+            node_id: "proj:beta-note",
+        },
+        Fixture {
+            uuid: "u-gamma",
+            name: "gamma",
+            root: Some("/tmp/mae-adr058-fixture/project-gamma"),
+            kind: KbInstanceKind::Project,
+            node_id: "proj:gamma-note",
+        },
+        Fixture {
+            uuid: "u-unscoped",
+            name: "unscoped",
+            root: None,
+            kind: KbInstanceKind::UserRegistered,
+            node_id: "proj:unscoped-note",
+        },
+    ];
+
+    for f in &fixtures {
+        let mut kb = mae_kb::KnowledgeBase::new();
+        // Shared "widget" vocabulary across every fixture's body — a substring-only or
+        // relevance-only filter bug would leak these across projects; only the scope filter
+        // (by instance, not by content) should prevent that.
+        kb.insert(mae_kb::Node::new(
+            f.node_id,
+            "Widget notes",
+            mae_kb::NodeKind::Note,
+            "shared widget vocabulary present in every fixture",
+        ));
+        editor.kb.instances.insert(f.uuid.to_string(), kb);
+        editor.kb.registry.instances.push(KbInstance {
+            uuid: f.uuid.to_string(),
+            name: f.name.to_string(),
+            org_dir: std::path::PathBuf::from(format!("/tmp/mae-adr058-fixture/{}", f.name)),
+            db_path: std::path::PathBuf::from(format!("/tmp/mae-adr058-fixture/{}.db", f.name)),
+            primary: false,
+            enabled: true,
+            last_import: None,
+            collab_id: None,
+            shared: false,
+            remote_peers: Vec::new(),
+            last_sync: None,
+            ai_residency: mae_kb::federation::AiResidency::default(),
+            project_root: f.root.map(std::path::PathBuf::from),
+            kind: f.kind,
+        });
+    }
+
+    let all = editor.kb_federated_search_scoped("widget", &KbScope::All);
+    let all_ids: std::collections::HashSet<&str> = all.iter().map(|(_, n)| n.id.as_str()).collect();
+    for f in &fixtures {
+        assert!(
+            all_ids.contains(f.node_id),
+            "sanity: All scope must see fixture {}'s node {}, got {all_ids:?}",
+            f.name,
+            f.node_id
+        );
+    }
+
+    for f in fixtures.iter().filter(|f| f.root.is_some()) {
+        let root = std::path::PathBuf::from(f.root.unwrap());
+        let scoped = editor.kb_federated_search_scoped("widget", &KbScope::Project(root));
+        let scoped_ids: std::collections::HashSet<&str> =
+            scoped.iter().map(|(_, n)| n.id.as_str()).collect();
+
+        assert!(
+            scoped_ids.contains(f.node_id),
+            "Project scope for {} must include its own node",
+            f.name
+        );
+        assert!(
+            scoped_ids.is_subset(&all_ids),
+            "Project scope for {} must be a subset of All: {scoped_ids:?} vs {all_ids:?}",
+            f.name
+        );
+        for other in fixtures.iter().filter(|o| o.node_id != f.node_id) {
+            assert!(
+                !scoped_ids.contains(other.node_id),
+                "Project scope for {} must NOT leak {}'s node {}",
+                f.name,
+                other.name,
+                other.node_id
+            );
+        }
+    }
+}
+
+/// ADR-058 Phase D adversarial test (the negative case the ADR names verbatim): path
+/// *identity*, not raw string equality, must govern whether the current project matches a
+/// registered `Project`-kind instance. Two sub-cases, both against real directories on disk
+/// (not synthetic path strings — a canonicalization bug can hide behind a path that was never
+/// actually resolved against the filesystem):
+/// 1. A symlink-aliased path (differently *spelled*, same real directory) must still match —
+///    proving canonicalization doesn't produce false negatives.
+/// 2. A genuinely different real directory (even one an uncanonicalized comparison might
+///    confuse, e.g. via a same-named symlink) must NOT match — proving it doesn't produce
+///    false positives / silent collisions either, which is the specific failure mode the ADR
+///    names: two projects "colliding by string path but differing by canonicalized path" must
+///    not silently merge.
+#[test]
+fn kb_scope_project_path_identity_not_string_equality() {
+    use mae_kb::federation::{KbInstance, KbInstanceKind};
+    use mae_kb::KbScope;
+
+    let tmp = tempfile::tempdir().unwrap();
+    let real_a = tmp.path().join("real-project-a");
+    let real_b = tmp.path().join("real-project-b");
+    std::fs::create_dir_all(&real_a).unwrap();
+    std::fs::create_dir_all(&real_b).unwrap();
+    let link_to_a = tmp.path().join("alias-to-a");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&real_a, &link_to_a).unwrap();
+    #[cfg(not(unix))]
+    panic!("this test requires symlink support (unix); skip/port for other platforms");
+
+    let canonical_a = real_a.canonicalize().unwrap();
+
+    let mut editor = Editor::new();
+    let mut kb = mae_kb::KnowledgeBase::new();
+    kb.insert(mae_kb::Node::new(
+        "proj:a-note",
+        "A note",
+        mae_kb::NodeKind::Note,
+        "widget content in project a",
+    ));
+    editor.kb.instances.insert("uuid-a".into(), kb);
+    editor.kb.registry.instances.push(KbInstance {
+        uuid: "uuid-a".into(),
+        name: "project-a".into(),
+        org_dir: real_a.clone(),
+        db_path: tmp.path().join("a.db"),
+        primary: false,
+        enabled: true,
+        last_import: None,
+        collab_id: None,
+        shared: false,
+        remote_peers: Vec::new(),
+        last_sync: None,
+        ai_residency: mae_kb::federation::AiResidency::default(),
+        project_root: Some(canonical_a.clone()),
+        kind: KbInstanceKind::Project,
+    });
+
+    // Case 1 (must match): resolve via the symlink alias — a differently-*spelled* path to
+    // the SAME real directory. `resolve_kb_scope` canonicalizes before constructing the
+    // scope, so this must still find project-a's node.
+    editor.project = Some(crate::project::Project::from_root(link_to_a));
+    let scope = editor.resolve_kb_scope("project");
+    assert_eq!(
+        scope,
+        KbScope::Project(canonical_a.clone()),
+        "a symlink-aliased path to the same real directory must canonicalize to an \
+         identical KbScope::Project, not a textually-different one"
+    );
+    let results = editor.kb_federated_search_scoped("widget", &scope);
+    assert!(
+        results.iter().any(|(_, n)| n.id == "proj:a-note"),
+        "resolving through a symlink alias must still find the registered project's node"
+    );
+
+    // Case 2 (must NOT match): a genuinely different real directory. Even though nothing
+    // here makes its *string* collide with project-a's, this is the actual negative
+    // property under test — canonical identity governs matching, so an unrelated directory
+    // must never be treated as project-a no matter how its path is spelled.
+    editor.project = Some(crate::project::Project::from_root(real_b.clone()));
+    let scope_b = editor.resolve_kb_scope("project");
+    assert_ne!(
+        scope_b,
+        KbScope::Project(canonical_a),
+        "a genuinely different real directory must not resolve to the same KbScope::Project"
+    );
+    let results_b = editor.kb_federated_search_scoped("widget", &scope_b);
+    assert!(
+        results_b.iter().all(|(_, n)| n.id != "proj:a-note"),
+        "an unrelated project's scope must never silently include project-a's node: {results_b:?}"
     );
 }
 

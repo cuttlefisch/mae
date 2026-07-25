@@ -602,6 +602,28 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .permission(PermissionTier::Write)
         .build(),
         ToolDefBuilder::new(
+            "kb_init_project",
+            "Register a Project-kind KB instance scoped to the current project (or an explicit root path) — ADR-058. The always-available explicit path for provisioning a per-project KB; idempotent — calling it again for an already-registered project returns the existing instance rather than erroring or duplicating.",
+        )
+        .prop(
+            "root",
+            "string",
+            "Project root path (optional — defaults to the current detected project root)",
+        )
+        .permission(PermissionTier::Write)
+        .build(),
+        ToolDefBuilder::new(
+            "kb_decline_project_provisioning",
+            "Record that the user declined project-KB provisioning for the current project (or an explicit root path) — ADR-058. Suppresses the provisioning-suggestion notification for that project going forward.",
+        )
+        .prop(
+            "root",
+            "string",
+            "Project root path (optional — defaults to the current detected project root)",
+        )
+        .permission(PermissionTier::Write)
+        .build(),
+        ToolDefBuilder::new(
             "kb_view_query",
             "Execute a pre-defined KB view by ID (e.g. view:kanban, view:backlog, view:sprint, view:timeline, view:agenda, view:orphans). Runs the view's stored Datalog query and returns results.",
         )

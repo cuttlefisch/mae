@@ -236,6 +236,8 @@ impl Editor {
                             remote_peers: Vec::new(),
                             last_sync: Some(now),
                             ai_residency: mae_kb::federation::AiResidency::default(),
+                            project_root: None,
+                            kind: mae_kb::federation::KbInstanceKind::default(),
                         });
                     }
                 }

@@ -499,8 +499,8 @@ fn any_restricted_kb_label(editor: &Editor) -> Option<String> {
 fn any_restricted_kb_label_in_scope(editor: &Editor, scope_arg: Option<&str>) -> Option<String> {
     let scope = scope_arg
         .filter(|s| !s.is_empty())
-        .map(mae_kb::KbScope::parse)
-        .unwrap_or_else(|| mae_kb::KbScope::parse(&editor.kb.search_scope));
+        .map(|s| editor.resolve_kb_scope(s))
+        .unwrap_or_else(|| editor.resolve_kb_scope(&editor.kb.search_scope));
 
     let is_restricted = |ai_residency: mae_kb::federation::AiResidency| {
         ai_residency == mae_kb::federation::AiResidency::LocalModelsOnly
@@ -532,6 +532,14 @@ fn any_restricted_kb_label_in_scope(editor: &Editor, scope_arg: Option<&str>) ->
                     .map(|inst| inst.name.clone())
             }
         }
+        mae_kb::KbScope::Project(root) => editor
+            .kb
+            .registry
+            .instances
+            .iter()
+            .filter(|inst| inst.matches_project_root(&root))
+            .find(|inst| is_restricted(inst.ai_residency))
+            .map(|inst| inst.name.clone()),
     }
 }
 
@@ -560,6 +568,8 @@ mod tests {
             remote_peers: Vec::new(),
             last_sync: None,
             ai_residency: mae_kb::federation::AiResidency::Open,
+            project_root: None,
+            kind: mae_kb::federation::KbInstanceKind::default(),
         }
     }
 

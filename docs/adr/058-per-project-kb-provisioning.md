@@ -1,6 +1,6 @@
 # ADR-058: Per-project KB provisioning
 
-**Status:** Proposed.
+**Status:** Accepted.
 **Extends:** ADR-057.
 **Relates to:** ADR-062, ADR-004, ADR-011.
 **Closes:** ROADMAP #82.
@@ -292,3 +292,48 @@ fixed order.
   restart, proving the decline record lives in durable config storage via
   the same `:set-save` mechanism other durable per-scope settings already
   use, not merely a runtime flag that resets when the process exits.
+
+## Status note (implementation, principle #15's "not just a symptom patch")
+
+All five phases are implemented and tested, verified in both directions where the
+adversarial test targets a specific fix (confirmed to genuinely fail against the pre-fix
+code). `cargo fmt --check`/`cargo clippy --workspace --all-targets -- -D warnings`/`cargo
+test --workspace` clean across both the editor and daemon workspaces.
+
+**Design corrections made during implementation, on evidence, not assumption:**
+
+- **`KbInstance::effective_kind()` originally special-cased `primary: bool` as an alias for
+  `KbInstanceKind::Primary`.** A real 3-way-concurrent adversarial test
+  (`kb_registry_register_converges_under_a_three_way_race`, mae-kb) caught this as wrong:
+  `primary` (set by `register()` as `self.instances.is_empty()`) means "the first
+  `KbInstance` row ever registered on this machine" — an artifact of registration order,
+  not an alias for the machine-global primary KB, which structurally has no `KbInstance`
+  row at all. The original logic silently reclassified the very first project a user ever
+  provisions back to `Primary`, defeating `KbScope::Project` for exactly that instance.
+  `effective_kind()` now simply returns the stored `kind` field.
+- **Two genuine, previously-undiscovered concurrency bugs in the shared
+  `mae_mcp::file_lock` primitive** (used by `KbRegistry::update` and by `projects.toml`/
+  package-lockfile/config-known-set persistence elsewhere in the codebase — not
+  ADR-058-specific), both found by the same adversarial test and both fixed at the
+  primitive level rather than worked around locally:
+  1. `acquire_lock` used a non-atomic read-then-write check — a TOCTOU window two
+     contenders arriving within microseconds of each other could both slip through, each
+     believing it acquired the lock. Fixed with `OpenOptions::create_new` (atomic
+     `O_CREAT|O_EXCL`).
+  2. The retry budget (`3 × 15ms`) was based on the pre-existing, over-optimistic
+     assumption that a reload-before-mutate step "already closes most of the race even
+     without the lock" — true only when one caller's `load()` happens after another's
+     `save()` completes, not under genuine simultaneous starts. Widened to `30 × 20ms`.
+  3. (Found alongside, same test): `acquire_lock` didn't ensure its lock file's parent
+     directory existed first, so the very first write on a fresh data dir hit a generic
+     I/O error that fell through to "proceed without a lock" — exactly when multiple
+     simultaneously-starting processes most need it. Fixed by creating the parent
+     directory before the atomic create.
+- **A separate, deeper concurrency bug was found and deliberately NOT fixed here**: routing
+  a genuine 3-way race through the *full* `Editor::kb_init_project` (which also opens/
+  imports into a real CozoDB store per call via `kb_adopt_instance`) intermittently panics
+  in `shared/kb/src/cozo_store/source_files.rs` — a pre-existing gap in concurrent-store-
+  open safety unrelated to ADR-058's own registry-dedup contract. The adversarial test was
+  scoped to exercise `KbRegistry::register`/`update` directly (what ADR-058 actually owns)
+  rather than silently weakening coverage down to a non-concurrent call to route around it;
+  the store-level bug is tracked as separate follow-up work, not hidden.

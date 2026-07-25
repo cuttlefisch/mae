@@ -223,6 +223,8 @@ mod tests {
                 remote_peers: Vec::new(),
                 last_sync: None,
                 ai_residency: AiResidency::LocalModelsOnly,
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
             });
         let results = vec![
             (

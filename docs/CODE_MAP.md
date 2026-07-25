@@ -443,7 +443,7 @@ Source: `shared/sync/src/lib.rs`
 | `compare_state_vectors` | fn |
 | `compute_project_identity` | fn |
 
-## Commands (555 built-in)
+## Commands (557 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -774,6 +774,8 @@ Source: `shared/sync/src/lib.rs`
 | `kb-unregister` | Remove a registered KB instance |
 | `kb-reimport` | Re-import KB instance from org files |
 | `kb-instances` | List all registered KB instances |
+| `kb-init-project` | Register a Project-kind KB instance for the current project (ADR-058) |
+| `kb-decline-project-provisioning` | Don't ask again to register a KB for the current project (ADR-058) |
 | `kb-promote` | Promote the current KB-view node from a federated instance into the primary KB (#303) |
 | `insert-newline-smart` | Insert newline with list continuation |
 | `table-next-cell` | Move to next table cell (Tab) |
