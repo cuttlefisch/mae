@@ -175,6 +175,12 @@ jobs:
         run: cargo build --workspace
       - name: cargo test (crates ADR-066 Phase A actually changed)
         timeout-minutes: 20
+        # windows-latest runners default `run:` to PowerShell, which doesn't support
+        # `\` line continuation (backtick is its continuation char) -- the `--skip`
+        # list below needs bash explicitly, matching every other multi-line run block
+        # in this file (which happen to be shell-agnostic single-line-per-command and
+        # so never surfaced this).
+        shell: bash
         run: |
           cargo test -p mae-mcp --all-targets
           cargo test -p mae-core --lib -- \
