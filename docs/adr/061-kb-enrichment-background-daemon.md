@@ -1,0 +1,249 @@
+# ADR-061: KB enrichment as a background daemon responsibility
+
+**Status:** Proposed.
+**Extends:** ADR-031, ADR-033, ADR-034, ADR-057.
+**Depends on:** ADR-045, ADR-060.
+
+## Context
+
+ADR-057 row 4 names the gap this ADR closes precisely: "KB enrichment (AI-driven derivation of
+new KB content, not just storage)" is part of the vision's 5-layer model — `mae-daemon` is
+described there as "a genuine server ... handling KB maintenance, enrichment, and optimization"
+— but today's reality, confirmed with fresh research rather than carried forward from an earlier
+draft, is that **zero AI-driven enrichment exists anywhere in the codebase**. `store_embedding`
+(`shared/kb/src/cozo_store/vector.rs:10`) is fully implemented — it writes a per-node+model
+vector into the `embeddings` relation and its HNSW index — but a repository-wide search for its
+callers turns up nothing outside test modules (`kb_graph_validation_embeddings.rs`,
+`cozo_store/tests/vector_tests.rs`, and the trait-forwarding shim in `kb_store_impl.rs`). The
+write path exists; nothing calls it in production. The read side is symmetric evidence of the
+same gap: `kb_vector_search`'s executor (`crates/ai/src/tool_impls/kb.rs:1776`) already has a
+dedicated regression test asserting it "fails gracefully and points to alternatives" — because
+today the HNSW index it queries is permanently empty, and the tool's only honest behavior is to
+say so and redirect the caller to full-text search. The vector-search infrastructure is wired
+end-to-end for reads; it has simply never been fed.
+
+This is not a new problem statement invented for this ADR. ADR-031 §5 (decision item 5,
+"Enrichment is a local projection; multi-peer enrichment is coordinated") already named the exact
+shape of the eventual mechanism — a single-user, daemon-less editor computes its own
+vectors/enrichment in-process, while multi-peer enrichment is a **deduplication** optimization
+coordinated by a lease — and explicitly flagged the reason it wasn't built yet: "the prerequisite
+for *any* of this is an embedding provider, which MAE does not yet ship... so enrichment is future
+work regardless of daemon mode." That prerequisite is what changes with ADR-045 (AI provider
+parity & local-model harness), which formalizes `crates/ai/src/`'s already-provider-agnostic
+`AgentProvider` trait across Claude/OpenAI/Gemini/DeepSeek/Ollama and brings the Ollama path to
+genuine parity rather than a narrow bugfix. Once that abstraction is solid, the blocking
+prerequisite ADR-031 named is resolved, and KB enrichment moves from "future work, blocked" to
+"future work, ready to phase in" — which is what this ADR does.
+
+The coordination mechanism this ADR needs was also already designed, and designed with
+enrichment specifically in mind. ADR-033 (coordinating KB-wide operations — advisory lease +
+epoch fencing) states in its own metadata block, verbatim: "**Feeds:** ADR-034 (the coordinator
+that the lease elects performs the compute-once enrichment)." That line has sat unactioned since
+ADR-033 was accepted — the lease/fence primitive it designed for "KB-wide AI enrichment,
+rebuilding embeddings" as a named example was built and tested against no real enrichment
+workload, because no enrichment workload existed. ADR-034 (cross-peer sharing of derived
+intelligence) is the companion half: it already specifies the exact cache key
+(`content_hash, embedding_model_id, chunk_version`) and the trust model (membership-gated,
+opt-in verify) for sharing the *results* of that compute-once run across peers on the same KB.
+Both ADRs are "Accepted (design); implemented" for their general mechanism, but neither has ever
+been exercised end-to-end by a real caller, because the one caller they were designed for —
+enrichment — was never built. This ADR is that caller.
+
+Two more pieces of standing design bound this ADR's scope. First, ADR-048 (AI residency policy
+for sensitive KBs) already gates every `kb_*`/`help_open` tool that could expose content to a
+non-local provider through a single enforcement point (`check_kb_residency`,
+`crates/mae/src/ai_residency.rs`) keyed on `editor.ai.provider`/`primary_ai_residency`; a KB
+flagged `LocalModelsOnly` must never have its content routed to a hosted embedding API, and this
+ADR's Ollama-first embedding path exists specifically so that guarantee holds for enrichment too,
+not only for chat/completion calls. Second, ADR-057 row 5 documents that the daemon's own
+scheduler is only two-thirds wired: `maintenance_tick` and `watcher_tick`
+(`daemon/src/scheduler.rs:60-70`) are literal `// TODO` stubs that increment a counter and do
+nothing else, while `health_tick` (`daemon/src/scheduler.rs:72-108`) is genuinely wired to the
+hygiene scan via `tokio::task::spawn_blocking`, kept off the async executor per ADR-054's
+concurrency-hardening rationale. ADR-065 item 2 is the tracked owner of unstubbing
+`maintenance_tick` in general (integrity check, statistics, compaction); this ADR claims only the
+AI-enrichment half of that same tick's eventual responsibility, so the two pieces of work must be
+sequenced against the same function without either silently reimplementing the other's half.
+
+Finally, Phase D of this ADR (lease-coordinated dedup across daemon peers sharing a KB) is more
+than a design nicety once more than one daemon process can legitimately be running against the
+same KB at once — which is exactly the condition ADR-060's genuine multi-tenant daemon work
+establishes as a first-class, supported topology rather than an edge case. This ADR's Phase D is
+written against that eventual topology and depends on it landing to be meaningfully tested at
+its intended N-way scale (see Verification, item D), though the lease/fence mechanism itself
+(ADR-033) already works correctly today for the smaller number of independent daemon processes a
+user can already run by hand.
+
+## Decision
+
+Build KB enrichment in six phases, each reusing an already-designed mechanism rather than
+inventing a parallel one, per CLAUDE.md principle #8.
+
+**A — a pluggable embedding provider, reusing the existing chat/completion provider
+abstraction.** Embedding generation is added as a capability on the same `AgentProvider` trait
+family `crates/ai/src/` already uses for Claude/OpenAI/Gemini/DeepSeek/Ollama (ADR-045), not a
+new, separately-configured provider interface. Ollama is a genuine day-one option, not a
+follow-on: KBs flagged `LocalModelsOnly` under ADR-048 must be able to enrich their own content
+without a single byte of it ever reaching a hosted provider, and that is a hard requirement, not
+a nice-to-have — ADR-048 exists specifically to guarantee sensitive KBs never leave the local
+machine, and an enrichment feature that silently routed content to a hosted embedding API on a
+residency-restricted KB would violate that guarantee exactly as seriously as a chat call would.
+The residency check for enrichment reuses `check_kb_residency` — the same single enforcement
+point ADR-048 already gates chat/completion calls at — rather than adding a second, potentially
+inconsistent check.
+
+**B — a content-addressed cache/queue keyed on `(content_hash, model_id, chunk_version)`.** This
+matches ADR-031's own original spec exactly (decision item 2: "the cache key is `(content_hash,
+embedding_model_id, chunk_version)` — not content alone, because a model or chunking change must
+invalidate"). The cache is persisted to disk across daemon restarts, not held only in memory: an
+in-memory-only cache would silently re-embed every node on every daemon restart, discarding real
+compute and, for hosted models, real paid API spend, on every routine restart — a cost regression
+this ADR must not introduce even accidentally.
+
+**C — scheduler wiring off the existing `maintenance_tick`.** Enrichment is dispatched from
+`daemon/src/scheduler.rs`'s `maintenance_tick`, coordinated explicitly with ADR-065 item 2 so the
+two pieces of work do not collide implementing the same function: this ADR claims the AI-driven
+enrichment half of `maintenance_tick`'s eventual responsibility, ADR-065 claims the deterministic
+integrity-check/compaction half. The enrichment sweep uses `spawn_blocking`, matching the
+already-proven pattern the sibling `health_tick` hygiene scan already uses
+(`daemon/src/scheduler.rs:72-108`) to keep a synchronous CozoDB scan (and, here, a synchronous or
+long-polling embedding-provider call) off the async executor per ADR-054 — this ADR does not
+invent a new async-dispatch pattern for the tick two lines away from one that already works.
+
+**D — lease-coordinated dedup across multiple daemon peers sharing a KB.** When more than one
+daemon is capable of enriching the same KB (the multi-tenant topology ADR-060 makes routine),
+enrichment claims the ADR-033 advisory lease using exactly its "bulk sweep pattern" (§3): one
+writer runs the sweep under the lease, applies the whole batch as a single atomic CRDT
+transaction so no peer ever observes half-applied enrichment state, and the ADR-023 epoch fence
+(the correctness primitive ADR-033 reuses, not a new one) rejects any late write from a holder
+that has since been superseded. This ADR adds zero new coordination primitives — it is purely a
+new *consumer* of the existing lease/fence pair, which is principle #8 in its most literal form:
+ADR-033 was designed with this exact caller in mind (its own "Feeds: ADR-034 ... compute-once
+enrichment" line), and this phase is that caller finally showing up. Once a peer's sweep
+completes, ADR-034's compute-once sharing takes over: the AI-generated relationships/metadata are
+baked into node text as ordinary CRDT content (free sync, no peer re-runs the enrichment), and
+the resulting vectors are shared peer-to-peer via the content-addressed artifact cache keyed
+identically to phase B's local cache, gated on KB membership per ADR-034's trust model.
+
+**E — a `daemon_mode=off` contract: enrich-now, never automatic.** Per CLAUDE.md principle #12,
+the in-process embedded KB is the floor, not a fallback, and enrichment must not silently become
+a feature class that only exists for users who run a daemon. When `daemon_mode=off` (ADR-035),
+there is no scheduler process to run a background sweep, so enrichment is exposed instead as an
+explicit, low-priority, user-invoked "enrich now" command/tool that runs the same embedding
+provider and cache logic in-process, synchronously with respect to the invoking command but never
+automatically and never on the interactive editing hot path. This is what keeps the no-daemon
+floor genuinely fully usable rather than silently missing a whole feature class for users who have
+deliberately chosen not to run a daemon — exactly the guarantee principle #12 requires.
+
+**F — wire `kb_vector_search` to the now-populated cache and blend it into
+`kb_federated_search_scoped`.** `kb_vector_search`'s executor
+(`crates/ai/src/tool_impls/kb.rs:1776`) today queries an always-empty HNSW index and degrades
+gracefully by design (its own regression test, `kb_vector_search_fails_gracefully_and_points_to_
+alternatives`, exists precisely because there was previously nothing to query). Once phases A–D
+populate the index, this phase removes the "always empty" condition and additionally blends
+vector-similarity hits into `kb_federated_search_scoped`
+(`crates/core/src/editor/kb_ops/search.rs:278`) alongside its existing full-text-search results,
+rather than shipping vector search as a second, disconnected search mode a caller has to remember
+to invoke separately. This mirrors ADR-057's "one search experience" framing: a caller asking
+`kb_search`/`kb_search_context` a question should get the benefit of both signal types without
+needing to know the KB has an embeddings cache at all.
+
+## Consequences
+
+**Positive.** MAE ships a real answer to the one KB-substrate capability ADR-057's evidence table
+flags as entirely unbuilt (row 4), closing the gap between the stated vision and the shipped
+product. The implementation reuses four already-designed, already-partially-implemented
+mechanisms end-to-end for the first time — ADR-031's local-projection/cache-key design, ADR-033's
+lease/fence coordinator, ADR-034's compute-once sharing protocol, and ADR-045's provider
+abstraction — rather than adding a fifth, parallel one, which is the clearest possible validation
+that those four ADRs' designs were sound: this ADR is the first real exercise of ADR-033/034
+against a genuine workload rather than a synthetic placeholder. `kb_vector_search` and the vector
+half of RAG-style `kb_search_context` queries go from permanently-empty to genuinely useful with
+no new tool surface a caller has to learn. Sensitive KBs get enrichment without compromising
+ADR-048's residency guarantee, and users who never run a daemon do not lose the feature class
+entirely.
+
+**Costs (honest).** A persistent, content-addressed cache is new on-disk state the daemon (and,
+for `daemon_mode=off`, the editor process) must manage, migrate, and account for in size/storage
+docs. Embedding generation is the first daemon workload that spends real external API cost/time
+on a background tick, which means `maintenance_interval_secs` tuning now has a cost dimension it
+did not have before (a `health_tick`-style hygiene scan is free; an enrichment sweep against a
+hosted provider is not) — operators running against hosted models need visibility into that cost,
+which this ADR's scope does not itself design a dashboard for but must not make impossible to add
+later. Phase D's lease-coordinated dedup is only exercised at its intended multi-daemon scale once
+ADR-060 lands; until then it is correct but under-loaded, a known and named limitation rather than
+a silent gap. The `daemon_mode=off` enrich-now path duplicates none of the daemon's coordination
+logic (there is nothing to coordinate with a single process) but does mean the in-process editor
+briefly does synchronous provider I/O when a user explicitly invokes it — an accepted, opt-in
+cost, not a hot-path regression, since principle #12's "editor must not depend on the daemon" is
+exactly what E is designed to preserve.
+
+## Alternatives rejected
+
+- **Synchronous embedding generation on every `kb_create`/`kb_update` call inside the interactive
+  editor process.** Rejected — this would block the interactive editor on a slow external API
+  call on every single edit, directly contradicting CLAUDE.md principle #12, which requires the
+  daemon (and any background-compute feature) to be an optimization the editor can live without,
+  never a requirement sitting on the interactive editing hot path. A user typing into a buffer
+  must never wait on a network round-trip to a hosted embedding API before their keystroke lands.
+- **Building a new coordination primitive specific to enrichment instead of reusing ADR-033/034.**
+  Rejected — ADR-033/034 already solved the general "N daemons, one job, don't duplicate work"
+  problem, including naming enrichment as their own intended first consumer. Reinventing that
+  coordination logic here would be exactly the duplicated-logic anti-pattern CLAUDE.md principle
+  #8 exists to prevent, and would leave two independently-maintained lease/fence implementations
+  to keep in sync for no benefit.
+- **Treating vector search as a permanently separate tool/mode from `kb_federated_search_scoped`
+  and `kb_search_context`.** Rejected — this would ship enrichment's benefit behind a second
+  surface a caller has to know to reach for, contradicting ADR-057's "one search experience"
+  framing of the vision and adding an unnecessary decision point ("did I mean FTS or vector
+  search?") to every RAG-style query.
+
+## Verification
+
+Per CLAUDE.md principle #14, verification is adversarial and phased against each Decision item,
+not a single happy-path pass, and — for Phase D specifically — exercised **N-way (≥3 daemons)**,
+not the 2-way case that can hide a coordination bug a 3-way race exposes.
+
+- **A.** A provider failure (timeout, malformed response, provider unavailable) must degrade the
+  affected content to a "not yet enriched" state that remains fully FTS-searchable via the
+  existing text-search path — never corrupt the enrichment cache, and never block unrelated KB
+  operations on the same or a different KB. A hosted-provider configuration pointed at a
+  `LocalModelsOnly`-residency KB must be rejected at the exact same enforcement point ADR-048
+  already gates chat/completion calls at (`check_kb_residency`) — verified by a real call that
+  is denied, not documented intent, and specifically *not* a second, independently-implemented
+  check that could drift out of sync with the first.
+- **B.** Re-embedding identical content must be a guaranteed cache hit **across a daemon
+  restart** — this specifically tests on-disk persistence, not just in-memory memoization within
+  one process lifetime; a naive in-memory-only cache would pass a same-process test but fail this
+  one, and the test must be structured so it can only pass with genuine persistence. A `model_id`
+  or `chunk_version` bump must force re-embedding of exactly the affected cache entries — verified
+  by asserting entries under the old key remain untouched and only entries under the new key are
+  recomputed, not the whole cache and not zero entries.
+- **C.** Kill the daemon process mid-sweep and restart it; resumption must not double-process
+  nodes that were already completed before the kill (verified by asserting no duplicate
+  provider calls for already-cached content-hashes), and must not silently lose nodes that were
+  still pending (verified by asserting every node in the original sweep's scope is eventually
+  enriched after resumption, not just the ones completed before the kill).
+- **D.** **At least three daemons** racing to claim the enrichment lease simultaneously on the
+  same KB — exactly one must actually perform the sweep, and the other two must back off cleanly
+  with no duplicate provider calls and no duplicate cache writes. Kill the lease holder mid-sweep:
+  TTL expiry must let another daemon resume the work, and epoch-fencing must reject a late write
+  arriving from the crashed original holder after it has already been superseded by the new
+  holder — this is the specific "paused/slow lease holder comes back and tries to write stale
+  data" attack ADR-033 already names as a threat in its own Consequences section ("a paused/slow
+  lease holder's late bulk write... is rejected"); this test exercises it against a real
+  enrichment payload (actual node content, actual generated vectors), not a synthetic placeholder
+  sweep that could pass without ever exercising the fence's real write path.
+- **E.** Verify **zero background timer or thread exists at all** when `daemon_mode=off` — not
+  merely that the enrich-now path works when invoked, but that nothing runs automatically in the
+  absence of a daemon (verified by asserting no scheduled task, timer, or background thread is
+  spawned anywhere in the `daemon_mode=off` boot path, so a user who never touches the enrich-now
+  command incurs zero background cost, not just zero *automatic* enrichment cost).
+- **F.** `kb_vector_search` against a populated cache must return real, ranked hits (not the
+  graceful-degradation message its current test asserts) once content has been enriched, and its
+  existing degrade-gracefully behavior must still hold for content that has not yet been enriched
+  — both paths verified, not just the newly-working one. `kb_federated_search_scoped` must show a
+  measurable blend of FTS and vector-similarity results for a query where the two signal types
+  would otherwise disagree (a query whose best FTS match and best vector match are different
+  nodes), proving the blend is real composition and not one signal type silently shadowing the
+  other.

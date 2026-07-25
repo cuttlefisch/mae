@@ -1,0 +1,485 @@
+# ADR-060: Daemon multi-tenancy
+
+**Status:** Proposed.
+**Extends:** ADR-035, ADR-054, ADR-057.
+**Relates to:** ADR-017, ADR-018, ADR-025.
+**Tracking:** issue #375 (epic tracker).
+
+## Context
+
+### Scoping call — state this up front, it bounds every phase below
+
+MAE is GPL-3.0-or-later and local-first (CLAUDE.md principle #12). `mae-daemon` is
+described in this project's own vision as running on "a dedicated server or the client
+machine" — never as a hosted, multi-region SaaS control plane serving mutually
+adversarial paying customers. This ADR's bar is therefore **trusted-org-scale
+multi-tenancy**: one operator (a team, a lab, a household, a single company's internal
+tooling) running one `mae-daemon` process on behalf of several independent users or teams
+who trust the *operator* but not necessarily each other's KB contents. It is explicitly
+**not** adversarial-tenant cloud isolation. That means: no container- or cgroup-per-tenant
+sandboxing, no billing/usage metering, no multi-region control plane, no tenant
+self-service provisioning API. Every decision below is sized to that bar. Where a design
+choice would only make sense at cloud-hosting scale (Phase E's process-isolation escape
+hatch is the closest this ADR comes, and even that is a systemd unit, not a container
+runtime), it is called out explicitly as staying inside the trusted-org bound rather than
+reaching past it. Readers evaluating this ADR against a cloud-multi-tenancy threat model
+are evaluating it against the wrong bar — see "Alternatives rejected" for why that bar was
+deliberately not chosen.
+
+### Today's reality: one global lock hiding behind already-partitioned storage
+
+The daemon's KB Unix-socket path already stores data per-instance —
+`DaemonState.instance_stores: HashMap<String, Arc<CozoKbStore>>`
+(`daemon/src/handler.rs:22-23`) keys each registered KB's `CozoKbStore` handle separately.
+On paper this looks like the storage layer is already tenant-partitioned. It is not,
+because the *lock* around that map doesn't respect the partition it guards: the entire
+`DaemonState` — the map, the query layer, everything — is wrapped exactly once in
+`Arc<tokio::sync::Mutex<DaemonState>>` (`daemon/src/main.rs:155`), and essentially every
+`handler::dispatch` arm takes `state.lock().await` and runs inside that single global
+critical section. ADR-054 already diagnosed and partially closed this for the
+*single-tenant, single-operator* case — via the snapshot-then-drop +
+`tokio::task::spawn_blocking` pattern documented in that ADR's "Implementation note" — but
+that fix operates entirely inside the existing single global `DaemonState`. It makes
+concurrent reads against different KBs *within one tenant's session* not serialize behind
+each other at the query-execution level; it does nothing about the fact that there is no
+tenant concept in the daemon's addressing, authorization, or resource-accounting model at
+all. Two independent teams pointing their respective MCP clients at the same daemon today
+get exactly the same shared, unscoped resource pool, the same shared connection cap, and
+the same shared failure domain as two sessions belonging to the same person. There is no
+notion of "tenant" anywhere in `DaemonState`, `handler.rs`, or `daemon.toml` — only
+"instance" (a KB) and "principal" (an authenticated Ed25519 key), and nothing today groups
+principals or instances into an operator-meaningful tenant boundary with its own quota,
+addressing, or blast-radius semantics.
+
+Deployment tooling reflects the same single-tenant assumption. `assets/mae-daemon.service`
+is a fixed, non-templated systemd unit — one process, one `%h/.local/share/mae` data
+directory, one `~/.config/mae/daemon.toml`, started with `systemctl --user enable --now
+mae-daemon`. There is no way to run two independently-configured daemon instances for two
+tenants on the same host without hand-editing unit files or duplicating the whole
+`assets/` directory per tenant. Contrast this with `assets/mae-headless@.service`, which
+*is* already a proven systemd **template unit** in this same codebase: "This is a systemd
+TEMPLATE unit: one instance per project, instantiated with the project's absolute path as
+the instance name, systemd-escaped" (`assets/mae-headless@.service:5-6`), giving each
+`mae --headless` instance its own `WorkingDirectory=%i`, its own process, its own failure
+domain, activated per-project via `systemctl --user enable --now
+'mae-headless@'"$(systemd-escape /path/to/project)"'.service'`. That pattern already
+exists, is already shipped, and already solves "one systemd unit definition, many
+independently-addressable running instances" for the headless engine. `mae-daemon` has no
+equivalent.
+
+Finally, ADR-054's own benchmark — the daemon's only existing published capacity number —
+never asked the multi-tenant question at all. Its criterion bench
+(`daemon/benches/kb_dispatch_concurrency.rs`) measured "~8 concurrent MCP sessions before
+p99 latency exceeds 2x the single-client baseline" against **one** 20,000-node store with
+**one** implicit tenant. It is a real, honestly-measured number for the question it asked
+("how many concurrent sessions can hammer one KB before it degrades"), but it says nothing
+about what happens when those sessions belong to N independent tenants each with their own
+KBs, quotas, and expectations of isolation from each other's load. Treating that number as
+"the daemon's multi-tenant capacity" would be a misapplication of a single-tenant
+benchmark to a question it was never designed to answer — exactly the kind of unverified
+capacity claim CLAUDE.md principle #15 says should be closed with evidence, not assumed
+by extrapolation.
+
+### Grounded in real-world evidence — why the adversarial-testing bar is raised, not lowered, here
+
+No tool in MAE's own Emacs lineage has ever attempted multi-tenancy. `org-roam-server` and
+`org-roam-ui` are explicitly single-user local tools; no hosted, multi-tenant Emacs service
+of any kind was found during research for this ADR. That absence matters: this is a
+genuinely novel direction for MAE, with no directly-inherited MAE-lineage precedent to lean
+on for "here's how we already know this class of bug shows up in our own codebase." Per
+CLAUDE.md principle #14, novelty is a reason to raise the adversarial-testing bar, not an
+excuse to lower it because "nothing like this has broken before" — nothing like this has
+been *tried* before, which is different.
+
+What MAE does inherit, directly, is Emacs's own daemon architecture — `mae-daemon` and
+`mae --headless` are this project's answer to the same "one long-running process, many
+connecting clients" shape Emacs's `emacs --daemon` pioneered. Emacs's daemon has two real,
+sourced bug histories directly on point:
+
+1. **A single misbehaving client can hang the entire daemon for every other client.**
+   GNU bug#11639 (lists.gnu.org/archive/html/bug-gnu-emacs/2012-06/msg00161.html) and
+   bug#23499 (lists.gnu.org/archive/html/bug-gnu-emacs/2016-05/msg00554.html) both document
+   this failure shape recurring years apart in the same codebase. This is direct, concrete
+   precedent — not speculation — for why Phase B's lock-split below is closing a
+   documented, *recurring* bug class in this project's own architectural lineage, per
+   CLAUDE.md principle #15 ("bugs are drift signals... fix the drift for that whole feature
+   area"). A daemon that serializes unrelated clients behind one lock will eventually
+   reproduce this bug shape; it is not a hypothetical risk being hardened against out of
+   excessive caution.
+2. **Unbounded memory growth over long-running daemon sessions**, severe enough that real
+   users report needing weekly forced restarts to keep a daemon usable (GNU bug#38345,
+   lists.gnu.org/archive/html/bug-gnu-emacs/2019-12/msg00181.html). This is direct
+   precedent for why Phase C below treats per-tenant restart/eviction as a *distinct*
+   mechanism from resource quotas, not an optional refinement of them.
+
+The closest real production analog to this ADR's overall shape is **gopls's `-remote`
+daemon mode** (go.dev/gopls/daemon) — a shared Go-tooling daemon serving multiple editor
+sessions from a shared cache with a per-session view/state split. Its existence and
+continued use validates that this ADR's general shape (one shared long-running process,
+many logically-separated sessions, shared cache where safe) is a proven pattern in
+production tooling, not a speculative architecture. But gopls's own documentation is
+candid about two constraints this ADR should adopt rather than assume away:
+
+- Memory/resource savings from a shared daemon are **limited to cache overlap between
+  sessions** — it is not a blanket claim that multi-tenancy saves "most" resources across
+  unrelated tenants with no shared data. Phase F's published capacity numbers must be
+  worded to match this reality, not overstate savings a genuinely independent-KB tenant
+  workload would never realize.
+- **A live gopls daemon cannot be reconfigured — a config change requires a restart.**
+  Phase G below adopts this same discipline explicitly for `mae-daemon`: state plainly
+  whether a given class of config change (new tenant registered, quota adjusted) applies
+  live or requires a restart, rather than leaving that contract implicit or assumed.
+
+Finally, **rust-analyzer's own still-open, multi-year issue trail of unbounded memory
+growth ending in OOM** — github.com/rust-lang/rust-analyzer/issues/20949, /18127, and
+/13673 — with "restart the server" as the only documented user-facing workaround, is a
+direct, current-day warning of exactly the failure mode this ADR must not let a
+multi-tenant `mae-daemon` inherit *multiplied*. In a single-tenant LSP server, one leaking
+process affects one user. In a multi-tenant daemon serving many tenants from one process,
+the same unbounded-growth bug affects every co-resident tenant at once — and worse, a
+daemon operator who restarts the whole process to reclaim memory (rust-analyzer's only
+workaround) evicts every *other* tenant's live session along with the one that actually
+leaked. This is precisely why Phase C's per-tenant restart/eviction mechanism is not
+optional polish layered on top of resource caps — it is the difference between "a daemon
+that degrades gracefully per-tenant when one tenant misbehaves" and "a daemon that
+inherits rust-analyzer's known failure mode, but now with a wider blast radius."
+
+## Decision
+
+This ADR proceeds in seven phases (A–G). Phases A–D are the core multi-tenancy mechanism
+inside a single daemon process; Phase E is the process-isolation escape hatch for tenants
+that must not share a process at all; Phases F–G are measurement and documentation.
+
+### Phase A — per-tenant RPC addressing
+
+Every daemon RPC gains an explicit tenant/instance address, reusing the
+already-partitioned `instance_stores: HashMap<String, Arc<CozoKbStore>>` keys
+(`daemon/src/handler.rs:22-23`) as the address space rather than inventing a new
+identifier scheme (principle #8 — no ad-hoc solutions, no duplicated addressing concept
+next to one that already exists). This is deliberately the smallest possible first step:
+it adds a field to the RPC envelope, it does not yet change locking or resource
+accounting. **Backward compatibility is load-bearing, not incidental**: an RPC that omits
+the address resolves to today's single primary instance exactly as it does now, so every
+existing single-tenant deployment — which is the overwhelming majority of deployments
+today and will remain common — sees zero behavior change from this phase alone. Phase A is
+purely additive plumbing that the later phases build on; it introduces no new
+authorization surface and no new failure mode by itself.
+
+### Phase B — split the global lock into a directory plus per-instance state
+
+This is the actual fix, and the one ADR-054 did not attempt because ADR-054 was scoped to
+single-tenant concurrency inside the existing single `DaemonState`. Replace the single
+`Arc<Mutex<DaemonState>>` with two things: a small, always-cheap-to-lock top-level
+"directory" structure mapping tenant → instance-state handle, and a genuinely separate
+`Arc<Mutex<InstanceState>>` (or an equivalent finer-grained construct — see ADR-054's own
+"Implementation note" for the precedent of resolving a decision's literal mechanism
+against what Cozo's own concurrency control already provides, which applies here too and
+should be re-checked during implementation rather than assumed) per tenant. The directory
+lock is held only long enough to look up or register a tenant's handle — never held across
+an actual query or mutation. Two tenants' concurrent operations must stop serializing on
+each other's lock entirely; this is the specific, measurable property that distinguishes a
+real fix from a superficial per-tenant API sitting on top of the same shared critical
+section (see Verification below for the test that falsifies exactly this shortcut).
+
+### Phase C — per-tenant quotas and independent restart/eviction
+
+Two distinct mechanisms, not one:
+
+- **Quotas.** Per-tenant limits on connection count, query rate, result size, and
+  background-job priority, extending ADR-054's already-existing per-principal/per-IP soft
+  throttle mechanism rather than building a parallel accounting system (principle #8).
+  Quotas are keyed on the existing Ed25519 principal identity already established by
+  ADR-017's asymmetric peer authentication — no new identity system is needed; a tenant is,
+  for accounting purposes, the set of principals the operator has assigned to it, reusing
+  identity infrastructure that already exists and is already trusted.
+- **Independent restart/eviction**, added as a genuinely separate mechanism because quotas
+  alone do not solve the problem the Emacs bug#38345 / rust-analyzer precedent describes.
+  Resource caps prevent a tenant from *starting* to consume unboundedly, but they do
+  nothing to help once a tenant's in-process state has already grown pathologically inside
+  its cap-respecting steady-state footprint (a slow leak inside otherwise-legal usage, a
+  pathological query plan cached and reused, accumulated background-job state). The daemon
+  must provide a way to individually reset one tenant's in-process state — evict its
+  cached handles, drop its `InstanceState`, force its connections to reconnect against
+  fresh state — **without restarting the whole daemon process** and without observably
+  affecting any co-resident tenant's live session. This is the direct, named lesson from
+  both precedents cited in Context: Emacs's daemon has no per-client reset short of a full
+  restart, and rust-analyzer's only workaround is the same blunt instrument. A multi-tenant
+  `mae-daemon` that also has no better answer than "restart the whole process" inherits
+  that exact failure mode, but multiplies its cost by every co-resident tenant forced to
+  restart along with the one that actually leaked.
+
+### Phase D — tenant-boundary role composition and the IDOR-shaped adversarial case
+
+Per-KB roles (ADR-017/ADR-018's Owner/Editor/Viewer model) continue to compose normally
+across tenants a given principal happens to be a member of — a principal that is Owner on
+one tenant's KB and Viewer on another's is still exactly that, unchanged by this ADR.
+Tenant-level quotas apply regardless of role; quota headroom is never a substitute for
+authorization. **Explicit non-goal, stated plainly**: this ADR creates no new cross-tenant
+trust relationship. Federation and collaboration membership (ADR-018's join
+policy/roles, the existing sharing mechanism described in `docs/KB_SHARING.md`) remain the
+*only* path by which a principal gains visibility into another tenant's KB content;
+multi-tenancy on the daemon is purely an operational/resource-isolation boundary layered
+underneath the existing authorization model, not a new authorization primitive that
+bypasses it.
+
+The single most important adversarial case this phase must close was found via real,
+sourced precedent from outside this project — two independent, recent CVEs both
+root-caused to the same shape of bug: authorization checked correctly at the *outer*
+request-routing layer, but not re-checked at the point an inner, request-supplied
+identifier is actually resolved against data. Gitea's container-registry authorization
+bypass (CVE-2026-27771, corgea.com/research/gitea-forgejo-private-container-registry-bypass)
+and the related CVE-2026-58444 (advisories.gitlab.com/golang/code.gitea.io/gitea/CVE-2026-58444/),
+alongside Vaultwarden's CVE-2026-27898 (sentinelone.com/vulnerability-database/cve-2026-27898/),
+each involve a request that is *correctly addressed* at the resource the requester is
+entitled to, but whose payload references a raw internal identifier that actually belongs
+to someone else's data — and that inner identifier gets resolved and served without a
+second, independent authorization check at resolution time.
+
+Applied directly to this ADR's Phase A addressing scheme: a request correctly addressed
+at tenant A's own instance (Phase A's outer address is valid, the principal is genuinely
+authorized for tenant A) whose payload separately references a raw KB node/resource ID
+that actually belongs to a *different* tenant's data must be **rejected at the point that
+inner ID is resolved against tenant A's own scope** — not silently served just because the
+outer RPC address checked out. This is a distinct, IDOR-shaped (Insecure Direct Object
+Reference) failure mode from "wrong instance addressed" (which Phase A's addressing
+already prevents structurally by construction). It is a failure mode only Phase D's
+resolution-time check closes, and the two cited CVEs demonstrate concretely that this
+exact bug shape survives in real, security-conscious codebases when only the outer
+addressing/routing layer is checked and every downstream identifier resolution is assumed
+safe by association. This is named as the primary adversarial test for this entire ADR in
+Verification below, not a secondary item in a longer list.
+
+### Phase E — a `mae-daemon@.service` systemd template unit for process-level isolation
+
+For tenants that must not share a process or failure domain at all — the case where
+Phases A–D's in-process isolation, however correct, is still one crash or one resource
+exhaustion event away from affecting a co-resident tenant — this phase adds a
+`mae-daemon@.service` systemd **template** unit, directly mirroring the already-shipped,
+already-proven `assets/mae-headless@.service` pattern cited in Context. Each template
+instantiation gets its own process, its own PID, its own `daemon.toml`, its own data
+directory (parameterized the same way `mae-headless@.service` parameterizes
+`WorkingDirectory=%i` off the systemd-escaped instance name), and its own systemd
+lifecycle (`systemctl --user enable --now 'mae-daemon@'"$(systemd-escape
+tenant-name)"'.service'`). Phases A–D remain the recommended default — they let multiple
+*related* tenants (e.g. several teams inside the same trusted organization) share one
+process efficiently, with real isolation guarantees enforced in software. Phase E is the
+escape hatch for when process-level separation is the actual requirement: a tenant whose
+operator wants "if this tenant's daemon crashes or gets OOM-killed, it must not take any
+other tenant down with it" gets that guarantee for free from the OS process boundary,
+exactly as `mae-headless@.service` already gives per-project process isolation for the
+headless engine today.
+
+State explicitly, because it bounds this phase and closes off a question that might
+otherwise be read as an open gap: **this phase is Linux-only, per the project's Gate W
+cross-platform scoping.** `mae-daemon` is confirmed never expected to run on macOS or
+Windows as a deployed service — CLAUDE.md principle #13's cross-platform-parity
+requirement governs the *editor* (`mae`, run on both macOS and Linux by the same
+developers on the same day) and explicitly does not extend to a systemd-templated
+background service with no macOS (`launchd`) or Windows (Service Control Manager)
+equivalent shipped or planned. systemd is therefore the complete, sufficient design for
+this phase, not a partial solution awaiting a cross-platform follow-up.
+
+### Phase F — re-benchmark with an explicit N-tenant dimension
+
+Re-run ADR-054's own benchmark methodology (`daemon/benches/kb_dispatch_concurrency.rs`'s
+criterion harness against the real `mae-daemon` binary) with an explicit tenant-count
+dimension added — not just "N concurrent sessions against one store," but "N tenants, each
+with M concurrent sessions against their own store(s), running simultaneously" — and
+publish the resulting capacity ceiling as the daemon's documented multi-tenant claim,
+distinct from and cross-referenced against ADR-054's existing single-tenant number rather
+than silently replacing it (a single-tenant number and a multi-tenant number answer
+different questions and both remain useful). Per gopls's own documented caveat cited in
+Context, the published claim must not overstate resource *savings* attributable to
+multi-tenancy — real, independent-KB tenants with no data overlap should not be promised
+savings the architecture cannot actually deliver for that workload shape; any savings
+claim must be scoped to the cache-overlap case where it is actually true.
+
+### Phase G — document `daemon_mode` and multi-tenant deployment in the pairing doc
+
+`docs/EXTERNAL_EDITOR_MCP_PAIRING.md` currently contains zero mentions of `daemon_mode`
+(verified directly against the file) despite `daemon_mode` (`off`/`on-demand`/`shared`,
+ADR-035) being exactly the option an operator setting up a shared multi-tenant daemon for
+several paired external editors needs to understand first. This phase adds that
+documentation, including how multi-tenant deployment (Phases A–E) interacts with
+`daemon_mode`'s existing three-way behavior set. This addition must be cross-linked with
+ADR-057 item 3 so the two documentation efforts — this ADR's deployment-facing
+documentation and ADR-057's own scope — do not diverge or silently duplicate coverage of
+the same option over time.
+
+This phase also closes an ambiguity this ADR would otherwise leave implicit: **document
+the config-change contract explicitly**, per gopls's own "cannot be reconfigured live,
+requires a restart" constraint cited in Context. State plainly, for each class of
+multi-tenant-relevant config change (a new tenant registered, a quota adjusted, a
+per-tenant limit changed), whether `mae-daemon` applies it live or requires a restart to
+take effect. Leaving this ambiguous is itself a failure mode — an operator who believes a
+quota change took effect live when it actually didn't (or vice versa) is exactly the
+untested middle ground Verification's Phase G test below is designed to falsify.
+
+## Consequences
+
+**Positive.** Closes a documented, recurring bug class inherited directly from Emacs's own
+daemon lineage (bug#11639/#23499's single-client-hangs-everyone shape) before it has a
+chance to reproduce in `mae-daemon`, rather than discovering it after a real multi-tenant
+deployment hits it in production. Gives operators a real choice along a genuine spectrum —
+shared-process efficiency (Phases A–D) versus process-level isolation (Phase E) — matched
+to their actual trust and blast-radius requirements, instead of forcing every deployment
+into one-process-per-tenant (wasteful for closely-related teams) or one-shared-process-with-
+no-isolation (unsafe once tenants are genuinely independent). Reuses 100% of existing
+identity (ADR-017's Ed25519 principals), authorization (ADR-018's roles/policy), and
+concurrency-hardening (ADR-054's per-principal throttle, connection-cap pattern)
+infrastructure — no parallel tenant-identity system, no parallel authorization model, no
+parallel quota mechanism invented from scratch. Extends a systemd deployment pattern
+(`mae-headless@.service`) already shipped and already proven in this exact codebase to a
+second service, rather than inventing a new deployment shape.
+
+**Costs (honest).** Phase B's lock split is a non-trivial refactor of `handler.rs`'s
+dispatch structure and `DaemonState`'s ownership shape — larger in scope than ADR-054's
+own snapshot-then-drop change, because it must introduce a genuinely new per-tenant
+locking unit rather than restructure locking within a single existing state struct;
+regressions here risk affecting every existing single-tenant deployment (the majority of
+deployments today), not just new multi-tenant adopters, so this phase carries the same
+elevated-scrutiny weight ADR-054 assigned its own lock work. Phase D's resolution-time
+authorization check adds a mandatory check at every place a daemon RPC resolves a
+request-supplied identifier against tenant-scoped data — every current and future RPC
+handler that resolves such an identifier must remember to add this check, which is
+friction future contributors must carry, the same way ADR-056's fail-closed
+category-classification discipline is friction its own contributors must carry. Phase E's
+process-per-tenant option, while real isolation, gives up Phase A–D's cache-and-resource
+sharing entirely for any tenant deployed that way — an operator choosing Phase E for every
+tenant gets none of the efficiency this ADR's shared-process phases were built to provide,
+which is the expected, disclosed trade-off, not a hidden cost, but worth stating plainly
+so it is chosen deliberately rather than defaulted into. Phase F's benchmark work is
+genuinely harder to make reproducible than ADR-054's single-tenant version — an N-tenant,
+M-session-per-tenant load test has a much larger parameter space than a flat N-session
+test, and picking a small, defensible, representative slice of that space (rather than
+attempting exhaustive coverage) is left to implementation.
+
+## Alternatives rejected
+
+- **Container- or cgroup-per-tenant sandboxing.** Rejected as foreign to MAE's deployment
+  model (a plain binary plus systemd units, not a container-orchestrated service) and as
+  solving a threat model — adversarial co-tenants who might attempt to break out of a
+  shared kernel namespace — that this ADR's trusted-org-scale scoping call explicitly
+  excludes. Phase E's systemd-template process isolation already gives real,
+  OS-process-level blast-radius containment (a crash or OOM in one process cannot touch
+  another process's memory) without the operational weight of a container runtime, which
+  is the right level of isolation for the actual threat model this ADR targets: an
+  operator's own misbehaving or resource-heavy tenant, not a hostile co-tenant actively
+  trying to escape a sandbox.
+- **In-process-only multi-tenancy with no process-level option at all (Phases A–D, no
+  Phase E).** Rejected as insufficient on its own — even a perfectly correct in-process
+  lock split and quota system still leaves every tenant sharing one crash domain and one
+  address space. A daemon process that segfaults, panics, or gets OOM-killed takes every
+  co-resident tenant down with it regardless of how well-isolated their locks and quotas
+  were logically. "A dedicated server for many independent users," this ADR's own framing
+  from Context, implies at least the *option* of real process separation for tenants that
+  need it; shipping only the in-process mechanism would leave that option missing
+  entirely rather than available and simply not the default.
+- **A hosted, adversarial-tenant cloud multi-tenancy model** (per-tenant billing/metering,
+  a provisioning control plane, container-per-tenant as the *default* rather than an
+  opt-in escape hatch). Rejected per this ADR's own scoping call in Context — MAE's stated
+  vision is a dedicated server or the client machine for a trusted operator, not a
+  multi-region hosted SaaS product with mutually adversarial paying tenants. Building for
+  that bar here would add substantial, unused complexity (billing hooks, a provisioning
+  API, mandatory container isolation for every tenant regardless of trust level) in
+  service of a threat model this project has not adopted and gives no present indication
+  of adopting.
+
+## Verification
+
+Per CLAUDE.md principle #14, these tests are N-way (≥3 tenants, not 2) wherever tenant
+isolation is the property under test — a 2-tenant test cannot distinguish "isolated" from
+"coincidentally didn't collide this run," while a ≥3-tenant test with asymmetric load
+profiles makes cross-tenant interference structurally visible. They use real, varied
+tenant/principal identities freshly generated per test run, not fixed unicorn values
+chosen to dodge an edge case.
+
+**Phases A/B — the primary concurrency-isolation tests, and the highest-priority tests in
+this ADR alongside Phase D's IDOR case:**
+
+- A **≥3-tenant** stress test: tenant A runs a slow bulk query (deliberately long-running,
+  e.g. a full-KB scan) concurrently with tenant B's and tenant C's latency-sensitive
+  single-node reads. B's and C's measured p99 latency must **not** measurably degrade
+  versus their own single-tenant baseline. This is the test that falsifies "a per-tenant
+  API sitting on top of one shared lock underneath" — a superficial Phase A/B
+  implementation that only changed the RPC envelope but left one directory-lock-held-too-
+  long or one accidentally-shared `Mutex` in the critical path would show B/C's latency
+  rising in lockstep with A's slow query, and this test is built specifically to catch
+  that.
+- A malformed or oversized RPC addressed at tenant A's instance must not starve or crash
+  tenant B's connection or session state.
+- **Named reproduction of the Emacs bug#11639/bug#23499 shape**, as a specific test, not a
+  general property: a client that disconnects mid-request, or sends a malformed follow-up
+  message after a valid handshake, must not hang the shared directory lock (Phase B) for
+  other tenants' unrelated RPCs. This test exists because the precedent it reproduces is
+  real and documented, not hypothetical.
+
+**Phase C:**
+
+- A quota-exceeding principal must be rejected or throttled **before** consuming another
+  tenant's capacity, tested against a **≥3-tenant** baseline specifically — a single-tenant
+  quota test proves the quota mechanism exists but proves nothing about tenant isolation,
+  which is the property actually at stake here.
+- A synthetic unbounded-growth harness, modeling the rust-analyzer / Emacs-daemon
+  memory-growth precedent cited in Context (a tenant whose in-process state — cached query
+  plans, accumulated background-job state — grows pathologically over a long-running
+  session while staying within its per-request quota at every individual step), must be
+  individually resettable via Phase C's per-tenant restart/eviction mechanism, with **zero
+  observable impact on co-resident tenants'** live sessions during and after the reset.
+  The whole daemon process must never need restarting just to reclaim one tenant's leaked
+  state — that is the specific claim this test exists to prove, not merely "restart works."
+
+**Phase D — the named IDOR-shaped test, called out explicitly as the single highest-
+priority adversarial test in this entire ADR, per the Gitea/Vaultwarden CVE precedent in
+Context:**
+
+- A principal correctly, validly addressed at tenant A's own instance (Phase A's outer
+  address checks out; the principal is genuinely a member of tenant A) whose request
+  payload separately references a raw node ID that actually belongs to tenant B's data
+  must be **rejected at ID-resolution time** — not served just because the outer RPC
+  address was correct. This must be tested as its own distinct case from "wrong instance
+  addressed" (which Phase A already prevents structurally), because it is a different bug
+  shape that survives exactly the kind of check Phase A alone provides.
+- A principal that is Owner on tenant A's KB1 and merely a Guest/Viewer on tenant B's KB2
+  must be rejected when attempting a mutating action on KB2, regardless of tenant B's
+  quota headroom — proving quota availability is never mistaken for authorization.
+- A forged or rotated-key signature must be rejected identically to this daemon's
+  pre-multi-tenancy behavior — a direct regression check that Phase A's addressing
+  plumbing did not accidentally create a bypass path around ADR-017's existing signature
+  verification.
+
+**Phase E:**
+
+- `kill -9` tenant A's isolated process (started via the `mae-daemon@.service` template
+  instantiation). Tenant B's separately-instantiated, separately-running process must show
+  **zero observable impact** — no dropped connections, no elevated latency, no shared
+  state corruption. This proves genuine OS-level process isolation, not merely "logically
+  separated within one process," which Phases A–D alone cannot prove regardless of how
+  correct their in-process locking is.
+
+**Phase F:**
+
+- ADR-054's original single-tenant benchmark (`daemon/benches/kb_dispatch_concurrency.rs`,
+  the existing "~8 concurrent MCP sessions" measurement) must be re-run and reproduce as a
+  **regression baseline before** the new N-tenant numbers are published alongside it — this
+  proves the multi-tenancy work in Phases A–D did not regress the existing single-tenant
+  case it extends.
+- The published multi-tenant capacity claim must be checked against gopls's own documented
+  caveat: it must not claim resource *savings* from multi-tenancy beyond what genuine
+  cache overlap between tenants' workloads can actually deliver. A claim written for
+  independent-KB tenants with no data overlap must not borrow numbers measured under a
+  cache-overlap-favorable test setup.
+
+**Phase G:**
+
+- The daemon's config-change contract must be tested, not merely documented: for a
+  representative config change relevant to multi-tenancy (e.g. registering a new tenant,
+  adjusting an existing tenant's quota), either (a) the change is shown to apply live via a
+  test that connects before the change, makes the change, and observes the new behavior
+  take effect without a restart — a genuine positive proof, not an assumption — or (b) the
+  test confirms the daemon surfaces an explicit signal (a log line, a rejected
+  live-reconfiguration attempt with a clear error, documented behavior) that a restart is
+  required, per gopls's own "cannot be reconfigured live" precedent. The specific failure
+  mode this test is built to falsify is the untested middle ground: a config change that
+  silently fails to take effect with no error surfaced anywhere, leaving an operator
+  believing a quota or tenant registration is active when it is not.
