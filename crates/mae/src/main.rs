@@ -325,6 +325,49 @@ fn enable_daemon_p2p(relay: &str) -> io::Result<std::path::PathBuf> {
     Ok(path)
 }
 
+/// ADR-063 Phase A: the guidance-KB portion of MCP `initialize.instructions`. Pure and
+/// free of `Editor`/MCP state so the budget boundary (at/under vs. over) is directly
+/// unit-testable without a full handshake. When `guidance_content` fits within
+/// `budget_chars` (character count, not bytes -- matches the option's own documented
+/// "character budget"), inlines it byte-identical to what `build_guidance_context()`
+/// produced -- no re-encoding, no truncation. Otherwise falls back to today's bare
+/// pointer sentence, never a truncated partial inline (a cut-off guidance payload could
+/// mislead an agent worse than no guidance at all).
+fn guidance_instructions_fragment(
+    guidance_kb: &str,
+    guidance_content: Option<&str>,
+    budget_chars: usize,
+) -> String {
+    if guidance_kb.is_empty() {
+        return String::new();
+    }
+    match guidance_content {
+        Some(content) if content.chars().count() <= budget_chars => {
+            format!(
+                "The following are required practices from KB '{guidance_kb}' -- read \
+                 them before acting:\n\n{content}\n\n"
+            )
+        }
+        _ => format!("Before acting, consult KB '{guidance_kb}' for required practices. "),
+    }
+}
+
+/// ADR-063 Phase B: the effective `ai_guidance_export_live_sync` value for this
+/// session. `explicit` is `Some(value)` when the user has explicitly set this option
+/// (tracked via `Editor::explicitly_set_options`) -- an explicit choice, `true` or
+/// `false`, always wins over the computed default. `None` (never touched) applies the
+/// conditional default: `true` exactly for a paired external session that benefits
+/// from it (`daemon_connects && is_headless`, ADR-055's stable-socket external-editor-
+/// pairing mode), `false` otherwise -- so a plain interactive GUI/TUI user sees no
+/// behavior change. Pure and directly testable without a full CLI/session simulation.
+fn effective_guidance_live_sync(
+    explicit: Option<bool>,
+    daemon_connects: bool,
+    is_headless: bool,
+) -> bool {
+    explicit.unwrap_or(daemon_connects && is_headless)
+}
+
 /// Emacs lesson: Emacs's event loop is synchronous and single-threaded.
 /// Retrofitting concurrency required 23,901 commits across 3 GC branches.
 /// We use async from day one so the AI agent can operate as a peer.
@@ -807,8 +850,30 @@ fn main() -> io::Result<()> {
                 } else {
                     let mut s = String::new();
                     if !guidance_kb.is_empty() {
-                        s.push_str(&format!(
-                            "Before acting, consult KB '{guidance_kb}' for required practices. "
+                        // ADR-063 Phase A: inline the guidance KB's actual rendered
+                        // content (the SAME build_guidance_context() output
+                        // mae-agent-cli already inlines into its system prompt --
+                        // crates/agent-cli/src/main.rs's build_agent_system_prompt)
+                        // instead of a bare pointer, so an external MCP client gets
+                        // the guidance content itself by default. Size-budgeted:
+                        // falls back to the pointer when the content doesn't fit,
+                        // never truncates mid-content (a truncated instructions
+                        // payload could be worse than no guidance at all).
+                        let cwd = std::env::current_dir().unwrap_or_default();
+                        let data_dir = mae_ai::guidance::default_data_dir();
+                        let guidance_content = mae_ai::guidance::build_guidance_context(
+                            &cwd,
+                            data_dir.as_deref(),
+                            &guidance_kb,
+                        );
+                        let budget: usize = editor
+                            .get_option("ai_guidance_inline_budget_chars")
+                            .and_then(|(v, _)| v.parse().ok())
+                            .unwrap_or(8000);
+                        s.push_str(&guidance_instructions_fragment(
+                            &guidance_kb,
+                            guidance_content.as_deref(),
+                            budget,
                         ));
                     }
                     if !registered.is_empty() {
@@ -835,18 +900,41 @@ fn main() -> io::Result<()> {
                 }
             };
 
-            // ADR-050 D4 (Phase H): ai_guidance_export_live_sync -- if the
-            // user has opted in, keep AGENTS.md in sync with the guidance KB
+            // ADR-050 D4 (Phase H) / ADR-063 Phase B: ai_guidance_export_live_sync --
+            // if the user has opted in, keep AGENTS.md in sync with the guidance KB
             // automatically each session start, so external editors that
             // read AGENTS.md unconditionally (rather than via MCP
             // initialize.instructions, whose forwarding is host-dependent
             // and unverified) see current content without a manual export.
             // Best-effort: never blocks startup on a missing project root or
             // a write failure, matching ai_guidance_kb's own read path.
-            let guidance_live_sync = editor
-                .get_option("ai_guidance_export_live_sync")
-                .map(|(v, _)| v == "true")
-                .unwrap_or(false);
+            //
+            // Conditional default (ADR-063 Phase B): when the user has never
+            // explicitly set this option (`init.scm`/`:set`/`set-option!` --
+            // tracked via `explicitly_set_options`, ADR-063 Phase B), the
+            // effective value is `true` exactly when this is a paired external
+            // session that actually benefits from it (`daemon_mode != off` AND
+            // `--headless`, ADR-055's stable-socket external-editor-pairing
+            // mode) and `false` otherwise -- so the one delivery path proven to
+            // work end-to-end (a file Copilot's agent mode reads directly)
+            // engages by default for the population it was built for, without
+            // a surprise AGENTS.md write for a plain interactive GUI/TUI user
+            // who never asked for external pairing. An explicit user choice
+            // (`true` or `false`) always wins over this computed default.
+            let guidance_live_sync = {
+                let is_headless = args.iter().any(|a| a == "--headless");
+                let explicit = if editor
+                    .explicitly_set_options
+                    .contains("ai_guidance_export_live_sync")
+                {
+                    editor
+                        .get_option("ai_guidance_export_live_sync")
+                        .map(|(v, _)| v == "true")
+                } else {
+                    None
+                };
+                effective_guidance_live_sync(explicit, editor.kb.daemon_mode.connects(), is_headless)
+            };
             if guidance_live_sync {
                 let guidance_kb = editor
                     .get_option("ai_guidance_kb")
@@ -1099,7 +1187,10 @@ fn main() -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{daemon_version_skew, display_available_from_env, parse_truthy, should_use_gui};
+    use super::{
+        daemon_version_skew, display_available_from_env, effective_guidance_live_sync,
+        guidance_instructions_fragment, parse_truthy, should_use_gui,
+    };
 
     // --- daemon_version_skew (ADR-035 version-pin) ------------------------
 
@@ -1122,6 +1213,91 @@ mod tests {
         // An older daemon predating the version field — nothing to compare.
         let status = serde_json::json!({"uptime_secs": 1});
         assert_eq!(daemon_version_skew("0.14.2", &status), None);
+    }
+
+    // --- guidance_instructions_fragment (ADR-063 Phase A budget boundary) --
+
+    #[test]
+    fn guidance_fragment_empty_kb_is_empty_regardless_of_content() {
+        assert_eq!(
+            guidance_instructions_fragment("", Some("some content"), 8000),
+            ""
+        );
+    }
+
+    #[test]
+    fn guidance_fragment_no_content_falls_back_to_pointer() {
+        let frag = guidance_instructions_fragment("MaePractices", None, 8000);
+        assert!(frag.contains("consult KB 'MaePractices'"));
+        assert!(!frag.contains("required practices from KB"));
+    }
+
+    #[test]
+    fn guidance_fragment_at_budget_inlines_byte_identical_content() {
+        // Exactly at the budget (character count, not bytes -- includes a multi-byte
+        // char to prove this isn't silently measuring UTF-8 byte length instead).
+        let content = "é".repeat(10);
+        assert_eq!(content.chars().count(), 10);
+        let frag = guidance_instructions_fragment("MaePractices", Some(&content), 10);
+        assert!(
+            frag.contains(&content),
+            "at-budget content must be inlined byte-identical to build_guidance_context()'s \
+             own output, not re-encoded or reformatted: {frag}"
+        );
+        assert!(
+            !frag.contains("consult KB 'MaePractices'"),
+            "must not also show the pointer"
+        );
+    }
+
+    #[test]
+    fn guidance_fragment_one_under_budget_inlines() {
+        let content = "x".repeat(9);
+        let frag = guidance_instructions_fragment("MaePractices", Some(&content), 10);
+        assert!(frag.contains(&content));
+    }
+
+    #[test]
+    fn guidance_fragment_one_over_budget_falls_back_cleanly_never_truncates() {
+        let content = "x".repeat(11);
+        let frag = guidance_instructions_fragment("MaePractices", Some(&content), 10);
+        assert!(
+            !frag.contains('x'),
+            "over-budget content must never appear even partially/truncated: {frag}"
+        );
+        assert!(frag.contains("consult KB 'MaePractices'"));
+    }
+
+    // --- effective_guidance_live_sync (ADR-063 Phase B conditional default) --
+
+    /// The single test asserting both outcomes side by side, per the ADR's own
+    /// Phase B verification bar: a non-paired interactive session sees no behavior
+    /// change (stays false), while a headless, daemon-connected (paired) session
+    /// gets the sync enabled automatically with zero manual option-setting.
+    #[test]
+    fn conditional_default_fires_only_for_headless_daemon_connected_sessions() {
+        // Non-paired interactive GUI/TUI: no daemon, not headless -> unchanged (false).
+        assert!(!effective_guidance_live_sync(None, false, false));
+        // Headless but daemon_mode == off: still false (not truly "paired" without a
+        // daemon to actually coordinate the external editor session through).
+        assert!(!effective_guidance_live_sync(None, false, true));
+        // Daemon-connected but NOT headless (a plain interactive session that happens
+        // to use on-demand/shared daemon_mode): still false -- headless is the actual
+        // external-pairing signal, daemon_mode alone isn't sufficient.
+        assert!(!effective_guidance_live_sync(None, true, false));
+        // The actual target case: headless AND daemon-connected -> true, automatically,
+        // with no explicit option set.
+        assert!(effective_guidance_live_sync(None, true, true));
+    }
+
+    #[test]
+    fn explicit_user_choice_always_wins_over_the_conditional_default() {
+        // Explicit `false` must stay false even in the paired case that would
+        // otherwise compute `true` -- an explicit choice is never silently overridden.
+        assert!(!effective_guidance_live_sync(Some(false), true, true));
+        // Explicit `true` must stay true even in the plain interactive case that would
+        // otherwise compute `false`.
+        assert!(effective_guidance_live_sync(Some(true), false, false));
     }
 
     // --- gui_display_available policy -------------------------------------

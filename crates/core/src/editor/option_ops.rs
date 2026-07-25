@@ -181,6 +181,7 @@ impl super::Editor {
             "ai_chat_enabled" => self.ai_chat_enabled.to_string(),
             "ai_guidance_kb" => self.ai_guidance_kb.clone(),
             "ai_guidance_export_live_sync" => self.ai_guidance_export_live_sync.to_string(),
+            "ai_guidance_inline_budget_chars" => self.ai_guidance_inline_budget_chars.to_string(),
             "mcp_tools_tiered_by_default" => self.mcp_tools_tiered_by_default.to_string(),
             "mcp_tool_category_allowlist" => self.mcp_tool_category_allowlist.clone(),
             "file_tree_focus_on_open" => self.file_tree_focus_on_open.to_string(),
@@ -891,6 +892,12 @@ impl super::Editor {
             "ai_guidance_export_live_sync" => {
                 self.ai_guidance_export_live_sync = parse_option_bool(value)?;
             }
+            "ai_guidance_inline_budget_chars" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.ai_guidance_inline_budget_chars = v.clamp(0, 1_000_000);
+            }
             "mcp_tools_tiered_by_default" => {
                 self.mcp_tools_tiered_by_default = parse_option_bool(value)?;
             }
@@ -1318,6 +1325,13 @@ impl super::Editor {
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }
+        // ADR-063 Phase B: record that this option was explicitly set (by init.scm,
+        // `:set`, or an MCP/Scheme `set-option!` call) — distinct from "still at its
+        // Rust-level initial value by coincidence". This is the single chokepoint every
+        // explicit set already passes through, so tracking it here is reusable for any
+        // future option wanting a runtime-computed conditional default (not just
+        // `ai_guidance_export_live_sync`) without re-deriving this per-option.
+        self.explicitly_set_options.insert(def_name.to_string());
         let (current, _) = self
             .get_option(&def_name)
             .ok_or_else(|| format!("internal: option '{}' not found after set", def_name))?;

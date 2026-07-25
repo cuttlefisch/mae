@@ -474,6 +474,15 @@ impl OptionRegistry {
                      but not yet wired in `crates/ai/src/guidance.rs`'s reader — setting it \
                      currently surfaces no content; use a registered instance name instead.",
                     OptionKind::String, "", Some("ai.guidance_kb"), &[]),
+                opt!("ai_guidance_inline_budget_chars", &["ai-guidance-inline-budget-chars"],
+                    "Max characters of ai_guidance_kb's rendered content (mae_ai::guidance::build_guidance_context \
+                     — the same content mae-agent-cli inlines into its system prompt) to inline \
+                     directly into the MCP initialize response's instructions field (ADR-063 Phase A), \
+                     so an external MCP client gets the guidance content itself by default instead of \
+                     a bare pointer it must separately fetch. When the rendered content exceeds this \
+                     budget, falls back cleanly to the pointer-only behavior (never truncates content \
+                     mid-stream) to avoid a pathologically large initialize handshake payload.",
+                    OptionKind::Int, "8000", Some("ai.guidance_inline_budget_chars"), &[]),
                 opt!("ai_guidance_export_live_sync", &["ai-guidance-export-live-sync"],
                     "When true, re-run kb-export-guidance/kb_export_guidance once automatically \
                      at session start whenever ai_guidance_kb is set (ADR-050 D4) — kept in sync \

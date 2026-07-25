@@ -1031,6 +1031,15 @@ pub struct Editor {
     /// session start (ADR-050 D4). Default false — one-time/on-demand export
     /// only, matching `ai_guidance_kb`'s own opt-in philosophy.
     pub ai_guidance_export_live_sync: bool,
+    /// Max characters of the guidance KB's rendered content to inline
+    /// directly into the MCP `initialize` response's `instructions` field
+    /// (ADR-063 Phase A) before falling back to pointer-only behavior.
+    pub ai_guidance_inline_budget_chars: usize,
+    /// Option names explicitly set via `set_option` (init.scm, `:set`, or an
+    /// MCP/Scheme `set-option!` call) this session — ADR-063 Phase B's mechanism for
+    /// letting a conditional runtime-computed default apply only when the user hasn't
+    /// made an explicit choice, without re-deriving this per option.
+    pub explicitly_set_options: std::collections::HashSet<String>,
     /// When true (default), the MCP server's `tools/list` response is
     /// tiered (Core + `request_tools`/`search_tools` only) instead of the
     /// full flat tool set — see `crates/mae/src/main.rs`'s `mcp_tools`
@@ -1475,6 +1484,8 @@ impl Editor {
             ai_chat_enabled: false,
             ai_guidance_kb: String::new(),
             ai_guidance_export_live_sync: false,
+            ai_guidance_inline_budget_chars: 8000,
+            explicitly_set_options: std::collections::HashSet::new(),
             mcp_tools_tiered_by_default: true,
             mcp_tool_category_allowlist: String::new(),
             ai: AiState::new(),

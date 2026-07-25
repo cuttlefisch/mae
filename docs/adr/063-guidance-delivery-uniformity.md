@@ -1,6 +1,6 @@
 # ADR-063: Guidance-delivery uniformity across MCP clients
 
-**Status:** Proposed.
+**Status:** Accepted (implemented — see "Status note" at the end of this document).
 **Extends:** ADR-050, ADR-057.
 **Relates to:** ADR-049.
 
@@ -213,3 +213,75 @@ current VS Code/Copilot behavior, not a one-time pass assumed to hold forever.
   (or lack thereof) is completely unchanged by this ADR's work — no accidental partial backport of
   the size-budgeted inlining or the conditional live-sync default into a path this ADR explicitly
   and deliberately declines to touch.
+
+---
+
+## Status note (added on implementation)
+
+All four phases are implemented, tested, and shipped.
+
+**Phase A — shipped as designed.** `crates/mae/src/main.rs`'s MCP `initialize` handler
+now calls `mae_ai::guidance::build_guidance_context` (the exact same function
+`mae-agent-cli` already inlines into its system prompt) and inlines its output into
+`instructions` whenever it fits within a new `ai_guidance_inline_budget_chars` option
+(OptionRegistry-registered per principle #7, default 8000 characters), falling back to
+today's pointer-only sentence otherwise — never a truncated partial inline. The
+budget/fallback logic was extracted into a pure `guidance_instructions_fragment` helper
+specifically so the exact-boundary cases (at budget, one under, one over) are directly
+unit-testable without a full MCP handshake — 5 tests, including a multi-byte-character
+case proving the budget is measured in characters, not UTF-8 bytes, and proving at-budget
+content is inlined byte-identical to `build_guidance_context()`'s own output. Beyond the
+pure-function tests, a real subprocess e2e suite (`crates/mae/tests/guidance_delivery_e2e.rs`,
+3 tests) spawns a genuine `mae --headless` instance with a real seeded guidance KB and
+does a real MCP `initialize` handshake over a real Unix socket, confirming the content
+actually reaches the wire correctly in both the within-budget and over-budget cases, plus
+a negative control (no guidance KB configured → the distinctive test marker is genuinely
+absent) proving the positive tests aren't passing vacuously.
+
+**Phase B — shipped, with an explicit-choice-always-wins mechanism the ADR text didn't
+fully specify.** The ADR's Decision B describes a "conditional default" but doesn't say
+how to avoid silently overriding a user who explicitly set `ai_guidance_export_live_sync`
+to `false` (which is indistinguishable from "never touched, still at the unconditional
+`false` default" by value alone). Added `Editor::explicitly_set_options: HashSet<String>`,
+populated at `set_option`'s single chokepoint for every option (not just this one — a
+small, deliberately reusable mechanism for any future option wanting a runtime-computed
+conditional default, per principle #8, rather than a narrow one-off hack). The effective
+value is computed via a new pure `effective_guidance_live_sync(explicit, daemon_connects,
+is_headless)` helper: an explicit user choice (`true` or `false`) always wins; only when
+never explicitly set does the conditional default (`daemon_mode != off && --headless`)
+apply. Verified: one test asserting all four quadrants of `(daemon_connects, is_headless)`
+side by side (per the ADR's own "both outcomes in one test run" bar), and one confirming
+explicit `true`/`false` both override the computed default in the direction that would
+otherwise flip.
+
+**Phase C — shipped as an honest split, not silently claimed complete.** Per this ADR's
+own Decision C and Verification text, the real bar is "observably used by the agent," not
+"present on the wire" — but a live VS Code + Copilot agent-mode round-trip requires a
+real GUI session and a real model backend this headless environment has no way to drive
+(the same constraint ADR-050's own D4 item already documented and never closed). Rather
+than declare this satisfied by wire-presence testing (the exact failure mode Decision C
+names and rejects, citing the AWS `cursorState` incident), this phase ships two distinct
+things: (1) the real, automated e2e proof that MAE's own side of the mechanism is correct
+(`guidance_delivery_e2e.rs`, described under Phase A above — this is the necessary but
+not sufficient half), and (2) `docs/verification/adr-063-copilot-live-check.md`, a
+concrete, human-executable script using the identical distinctive-marker fixture the
+automated tests use, so both halves of the verification target the same claim. The
+document's Status is explicitly "not yet run" — an honest, visible open item, not a
+silently-assumed-satisfied box-check.
+
+**Phase D — shipped, and confirmed structurally, not just by assertion.** Investigated
+the legacy embedded `ai_chat` path (`crates/mae/src/key_handling/conversation.rs`) before
+writing the regression test: `submit_conversation_prompt` sends the raw input buffer text
+via `AiCommand::Prompt(String)` with zero guidance-context concatenation anywhere in that
+code path — it doesn't call `build_guidance_context`, doesn't go through the MCP
+`initialize` handshake Phase A touched (that path is same-process, not MCP at all), and
+never did. The regression test
+(`legacy_ai_chat_prompt_is_unaffected_by_guidance_kb_options`) sets both new/changed
+guidance options and asserts the sent prompt is exactly the user's typed text — proving
+the won't-fix by exhibiting zero effect, not merely documenting an intention. Cross-linked
+from ADR-049's own Consequences section per the ADR's own instruction.
+
+**Verification recap:** `cargo fmt`/`clippy -D warnings`/`cargo test` clean across the
+whole editor workspace (2790 mae-core + 439 mae-bin + 602 mae-ai + 72 mae-agent-cli tests,
+plus the 3 new real subprocess e2e tests) — no code changes touched the daemon workspace
+for this ADR.

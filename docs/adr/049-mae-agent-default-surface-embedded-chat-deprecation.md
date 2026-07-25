@@ -59,6 +59,14 @@ making `mae-agent` the default required no new terminal-spawning infrastructure 
    chat's *entry point* is gated; the buffer type and its renderer are not deprecated in the sense
    of being removed or frozen further than ADR-046 already froze them.
 
+**Cross-link (ADR-063 Decision D):** ADR-063's guidance-delivery uniformity work
+(MCP `initialize.instructions` inlining, conditional `ai_guidance_export_live_sync`
+default) is explicitly and deliberately NOT backported to the legacy embedded `ai_chat`
+path this ADR already put on a deprecation trajectory — a documented won't-fix, not
+silent ambiguity for a future contributor to re-raise. See ADR-063's Decision D and its
+own regression test
+(`crates/mae/src/key_handling/conversation.rs::legacy_ai_chat_prompt_is_unaffected_by_guidance_kb_options`).
+
 ## Consequences
 
 **Positive.** New users get the more reliable, model-agnostic, actively-developed surface by
