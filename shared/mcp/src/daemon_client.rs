@@ -21,12 +21,18 @@
 //! `#[cfg(unix)]` branching just to keep compiling there.
 
 use serde_json::{json, Value};
+// `BufRead` is used unconditionally (`read_cl_message`'s generic bound, below, is not
+// itself `#[cfg(unix)]`-gated); `BufReader`/`Write` are only used inside the
+// Unix-specific `connect`/`call_inner` bodies.
+use std::io::BufRead;
 #[cfg(unix)]
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 #[cfg(unix)]
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
+#[cfg(unix)]
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 /// The default `mae-daemon` control-socket path — the **single source of truth**
