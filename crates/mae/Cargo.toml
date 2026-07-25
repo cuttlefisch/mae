@@ -17,6 +17,14 @@ path = "src/bin/build_manual_kb.rs"
 name = "build-practices-kb"
 path = "src/bin/build_practices_kb.rs"
 
+[[bin]]
+name = "build-adr-kb"
+path = "src/bin/build_adr_kb.rs"
+
+[[bin]]
+name = "verify-adr-kb-sync"
+path = "src/bin/verify_adr_kb_sync.rs"
+
 [dependencies]
 mae-core = { path = "../core" }
 mae-canvas = { path = "../canvas" }

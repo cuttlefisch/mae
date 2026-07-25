@@ -268,6 +268,8 @@ Source: `shared/kb/src/lib.rs`
 | Item | Kind |
 |------|------|
 | `activity` | mod |
+| `adr_kb` | mod |
+| `adr_parse` | mod |
 | `backup` | mod |
 | `data_dir` | mod |
 | `export` | mod |

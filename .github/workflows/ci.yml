@@ -555,3 +555,17 @@ jobs:
             git diff --stat docs/CODE_MAP.md docs/CODE_MAP.json
             exit 1
           fi
+
+  adr-kb-sync:
+    name: ADR KB staleness gate (ADR-059 Phase E)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Verify ADR-header-only changes ship a regenerated ADR KB
+        run: ./scripts/verify-adr-kb-sync.sh

@@ -1,6 +1,6 @@
 # ADR-059: ADR-as-KB-node generalization
 
-**Status:** Proposed.
+**Status:** Accepted.
 **Extends:** ADR-029, ADR-030, ADR-057.
 
 ## Context
@@ -221,3 +221,65 @@ happy path and stops.
   ran without crashing." A failure here is resolved by extending Phase A's header/body
   parsing vocabulary to capture the missing structure, then re-running the diff, never by
   narrowing the test's assertions to accept the loss.
+
+## Status note (implementation, principle #15's "not just a symptom patch")
+
+Phases A, B, C, and E are implemented and tested against the full real corpus (66 ADR
+files at time of writing — grown from 57 as ADR-057 through ADR-066 were added during the
+same session this ADR itself was drafted in), not synthetic fixtures:
+
+- **Phase A** (`shared/kb/src/adr_parse.rs`): the header parser cleanly parses all 66 real
+  files. Real-world header diversity was grepped from the corpus before writing the parser
+  (colon-inside-bold vs. colon-outside-bold, compound labels like `Extends / clarifies`, an
+  inverse-direction `Feeds` label, and many one-off labels like `Prior art`/`Builds on` this
+  module deliberately does not model as first-class relationship types).
+- **Phase B** (`shared/kb/src/adr_kb.rs`): the generator embeds reciprocal typed links by
+  reusing ADR-030's existing link grammar and write path — no separate "inbound edge"
+  writer was needed or built; `kb_links_to`/`links_to` already provide the reciprocal view
+  structurally, once each node's forward links are inserted via the standard
+  `KbStore::insert_node` → `update_links_for_node` path. Verified via a real in-memory
+  `CozoKbStore` round-trip over every real Extends pair in the corpus (60+ pairs checked).
+- **Phase C** (`crates/mae/src/bin/build_adr_kb.rs`, `make adr-kb`, `assets/mae-adr.cozo`):
+  wired into the same build/install pipeline `manual-kb`/`practices-kb` already use.
+  Structurally CRDT-write-path-safe by construction — this build-time tool always writes a
+  fresh, standalone output file (removed and recreated on every run, same as its siblings)
+  and never attaches to an already-registered/live KB instance, so the Obsidian-style
+  generator-races-live-sync failure class named in this ADR's Context cannot occur for this
+  specific tool; every node write still goes through `KbStore::insert_node`, never a raw
+  file/DB write.
+- **Phase E** (`crates/mae/src/bin/verify_adr_kb_sync.rs`, `.github/workflows/ci.yml`'s
+  `adr-kb-sync` job): compares *parsed metadata* (not raw diffs) between a base ref and the
+  working tree, so it can precisely distinguish a structured-header change from a
+  prose-only edit — verified against three real, constructed scenarios during
+  implementation: a header change with no regen (fails), the same change with
+  `assets/mae-adr.cozo.sha256` regenerated (passes), and a prose-only Context-section edit
+  with no header change (passes without requiring a regen).
+
+**Phase D was scoped down, on evidence, not skipped silently.** Diffing the 4 hand-authored
+`kb_seed/concepts.rs` nodes against generator output (test:
+`phase_d_diff_against_hand_authored_nodes_finds_no_substantive_content_loss`) confirms no
+substantive technical content is lost — every distinctive term the hand-authored summaries
+highlight (e.g. `automerge-rs`/`diamond-types` for ADR-002, `KeymapRegistry` for ADR-015)
+is present in the generated body, which embeds the ADR's full prose rather than a condensed
+summary. One real, confirmed, and *not* silently dropped gap: the hand-authored nodes'
+"See also: `[[concept:sync-engine]]`, ..." cross-references to **non-ADR** concept nodes are
+editorial curation that isn't part of any ADR file's own structure — nothing in Phase A's
+header vocabulary could derive them, because they don't exist in the source document. The
+concrete resolution path, if this curation is still wanted going forward, is to add those
+cross-references as real `[[concept:X]]` links inside the ADR file's own body (making them
+source-controlled and generator-visible), not to have the generator guess at them.
+
+The 4 hand-authored constants themselves were **not** physically removed from
+`kb_seed/concepts.rs` in this pass: they seed the always-baked-in-the-binary default KB
+(`crates/core/src/kb_seed/mod.rs`, consumed by `:kb-rebuild`/`self_test_suite`/other
+existing tests under their own established node IDs — `concept:adr-text-sync`,
+`concept:adr-kb-crdt`, etc.), a structurally different mechanism from the new, separate,
+opt-in `assets/mae-adr.cozo` federated KB asset this ADR builds (same category as
+`assets/mae-manual.cozo`/`assets/mae-practices.cozo`) under a different, systematic ID
+scheme (`concept:adr-NNN-slug`). Swapping the baked-in seed's 4 constants for generator
+output would change node IDs other code/tests reference by their current, hand-picked
+names — a real, cross-cutting change deserving its own dedicated review of that blast
+radius, not a rushed side effect of this ADR. Both mechanisms coexist correctly today: a
+user who registers `assets/mae-adr.cozo` as a federated instance gets full, systematic
+coverage of all 66 ADRs (including 002/005/015/016 under their new IDs) alongside the
+always-present, hand-curated 4-node summary in the primary KB.

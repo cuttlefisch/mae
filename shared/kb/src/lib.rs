@@ -34,6 +34,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 pub mod activity;
+pub mod adr_kb;
+pub mod adr_parse;
 pub mod backup;
 pub mod data_dir;
 pub mod export;

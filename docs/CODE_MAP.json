@@ -648,6 +648,14 @@
           "kind": "mod"
         },
         {
+          "name": "adr_kb",
+          "kind": "mod"
+        },
+        {
+          "name": "adr_parse",
+          "kind": "mod"
+        },
+        {
           "name": "backup",
           "kind": "mod"
         },
