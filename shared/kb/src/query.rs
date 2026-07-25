@@ -107,6 +107,17 @@ pub trait KbQueryLayer: Send + Sync {
         Vec::new()
     }
 
+    /// Whether the MOST RECENT call on this layer was degraded (e.g. a `RemoteHubQueryLayer`
+    /// whose last HTTP call timed out, hit an auth failure, or hit an unreachable host —
+    /// ADR-062 Phase E). Default `false` for every layer with nothing to degrade (local
+    /// Cozo reads don't have a network failure mode). `FederatedQuery` polls this after a
+    /// fan-out round to set its own aggregate `last_query_was_partial()` flag — the
+    /// "timeout-and-continue degradation contract" Phase E's Decision text calls for,
+    /// without widening every `KbQueryLayer` method's return type to carry a `Result`.
+    fn degraded(&self) -> bool {
+        false
+    }
+
     /// Return all known namespace prefixes (e.g., "cmd:", "concept:").
     fn namespace_prefixes(&self) -> Vec<String> {
         let mut prefixes = std::collections::HashSet::new();
@@ -204,11 +215,34 @@ impl KbQueryLayer for CozoQueryLayer {
     }
 }
 
+/// Default ceiling on how many federated instances participate in a single query's
+/// fan-out (ADR-062 Phase B) when no caller-supplied override applies. Every
+/// participating instance costs a full store query, so fan-out work scales with instance
+/// count, not with the caller's `limit` — unlike the registry lookup itself (ADR-062
+/// Phase A found that lookup to already be cheap at realistic scale; the org-roam-style
+/// scaling risk this ADR is actually guarding against lives here, in per-query fan-out
+/// cost). 128 comfortably covers "trusted-org scale" federation (see ADR-060's own
+/// scoping language) while still bounding worst-case per-query cost for anyone who
+/// registers far more instances than that.
+const DEFAULT_MAX_FANOUT_INSTANCES: usize = 128;
+
 /// Multi-store query layer that fans out reads across primary + instances.
 /// Primary is checked first; search results are merged by score.
 pub struct FederatedQuery {
     primary: Arc<dyn KbQueryLayer>,
-    instances: Vec<(String, Arc<dyn KbQueryLayer>)>,
+    /// `(name, priority, layer)`. Priority (ADR-062 Phase B) decides which instance's
+    /// copy wins when two instances' results collide on the same node id — see
+    /// `priority_ordered_instances`. Higher priority wins; equal priority (the default —
+    /// every instance is `priority: 0` unless a user raises it) falls back to
+    /// registration order, matching pre-062 behavior exactly for anyone who never touches
+    /// the new field.
+    instances: Vec<(String, u32, Arc<dyn KbQueryLayer>)>,
+    max_fanout_instances: usize,
+    /// Whether the most recent `search()` call included a degraded source (ADR-062 Phase
+    /// E's "timeout-and-continue" contract). Set fresh on every `search()` call — never
+    /// sticky across calls, so a subsequent successful query correctly clears it (no
+    /// stuck-degraded state).
+    last_query_partial: std::sync::atomic::AtomicBool,
 }
 
 impl FederatedQuery {
@@ -216,11 +250,56 @@ impl FederatedQuery {
         Self {
             primary,
             instances: Vec::new(),
+            max_fanout_instances: DEFAULT_MAX_FANOUT_INSTANCES,
+            last_query_partial: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
-    pub fn add_instance(&mut self, name: String, layer: Arc<dyn KbQueryLayer>) {
-        self.instances.push((name, layer));
+    /// Whether the most recent `search()` call's result set is missing content from one
+    /// or more degraded sources (a timed-out/unreachable/auth-failed `RemoteHub` instance
+    /// — ADR-062 Phase E). Local-only federations (no `RemoteHub` instances registered)
+    /// never set this; it exists specifically for the new failure mode a live network
+    /// source introduces that a purely local fan-out never had.
+    pub fn last_query_was_partial(&self) -> bool {
+        self.last_query_partial
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn add_instance(&mut self, name: String, priority: u32, layer: Arc<dyn KbQueryLayer>) {
+        self.instances.push((name, priority, layer));
+    }
+
+    /// Override the fan-out cap (ADR-062 Phase B). Callers with a config surface for it
+    /// (the editor's `OptionRegistry`; the daemon may in future) can raise or lower this;
+    /// unset, `DEFAULT_MAX_FANOUT_INSTANCES` applies.
+    pub fn set_max_fanout_instances(&mut self, max: usize) {
+        self.max_fanout_instances = max;
+    }
+
+    /// Instances ordered by priority descending, ties broken by registration order (a
+    /// *stable* sort — `Vec::sort_by` never reorders equal elements — so two instances at
+    /// the same priority always resolve the same way run over run, which is exactly what
+    /// the "20 repeated identical queries must produce identical ordering" adversarial
+    /// test (ADR-062 Phase B) requires), then truncated to `max_fanout_instances` — so if
+    /// a registry genuinely exceeds the cap, it's always the *lowest*-priority instances
+    /// that are dropped from a given query's fan-out, never an arbitrary subset. Ownership
+    /// lookups (`get`/`links_from`/etc.) and merge-dedup lookups (`search`/`agenda`/etc.)
+    /// both use this instead of raw registration order, so a higher-priority instance's
+    /// copy of a node also wins whenever the same id exists in more than one federated
+    /// instance (the org-roam #1480/#1496 duplicate-id failure class this ADR names).
+    fn priority_ordered_instances(&self) -> Vec<&(String, u32, Arc<dyn KbQueryLayer>)> {
+        let mut ordered: Vec<&(String, u32, Arc<dyn KbQueryLayer>)> =
+            self.instances.iter().collect();
+        ordered.sort_by_key(|(_, priority, _)| std::cmp::Reverse(*priority));
+        if ordered.len() > self.max_fanout_instances {
+            tracing::warn!(
+                total = ordered.len(),
+                cap = self.max_fanout_instances,
+                "federated query fan-out capped; lowest-priority instances excluded from this query"
+            );
+            ordered.truncate(self.max_fanout_instances);
+        }
+        ordered
     }
 }
 
@@ -229,7 +308,7 @@ impl KbQueryLayer for FederatedQuery {
         if let Some(node) = self.primary.get(id) {
             return Some(node);
         }
-        for (_, inst) in &self.instances {
+        for (_, _, inst) in self.priority_ordered_instances() {
             if let Some(node) = inst.get(id) {
                 return Some(node);
             }
@@ -238,24 +317,85 @@ impl KbQueryLayer for FederatedQuery {
     }
 
     fn contains(&self, id: &str) -> bool {
-        self.primary.contains(id) || self.instances.iter().any(|(_, i)| i.contains(id))
+        self.primary.contains(id) || self.instances.iter().any(|(_, _, i)| i.contains(id))
     }
 
     fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
-        let mut hits = self.primary.search(query, limit);
-        let mut seen: std::collections::HashSet<String> =
-            hits.iter().map(|h| h.id.clone()).collect();
-        for (_, inst) in &self.instances {
-            for hit in inst.search(query, limit) {
-                if seen.insert(hit.id.clone()) {
-                    hits.push(hit);
+        // ADR-062 Phase E: every participating source (primary + each federated instance)
+        // is queried on its OWN thread via `std::thread::scope`, not a sequential loop.
+        // A sequential fan-out would let one slow/hung `RemoteHubQueryLayer` (bounded by
+        // its own internal HTTP timeout, but still up to ~1.5s by default) serialize with
+        // every other instance's latency, turning "the other 3 sources return within the
+        // local-only latency budget" into a false promise — the whole call would wait for
+        // the slow one regardless of where the fast local sources sit in iteration order.
+        // Running each source's `search()` concurrently instead means total latency is
+        // bounded by the SLOWEST single source, not the SUM of all of them — and that
+        // slowest source is itself bounded by its own timeout, so the whole call has a
+        // real, predictable worst case.
+        // (priority, hits, degraded) per participating instance.
+        type InstanceSearchResult = (u32, Vec<SearchHit>, bool);
+        let ordered = self.priority_ordered_instances();
+        let (primary_hits, instance_results): (Vec<SearchHit>, Vec<InstanceSearchResult>) =
+            std::thread::scope(|scope| {
+                let primary_handle = scope.spawn(|| self.primary.search(query, limit));
+                let instance_handles: Vec<_> = ordered
+                    .iter()
+                    .map(|(_, priority, inst)| {
+                        scope.spawn(move || {
+                            let hits = inst.search(query, limit);
+                            (*priority, hits, inst.degraded())
+                        })
+                    })
+                    .collect();
+                let primary_hits = primary_handle.join().unwrap_or_default();
+                let instance_results = instance_handles
+                    .into_iter()
+                    .map(|h| h.join().unwrap_or((0, Vec::new(), true)))
+                    .collect();
+                (primary_hits, instance_results)
+            });
+
+        let any_degraded = instance_results.iter().any(|(_, _, degraded)| *degraded);
+        self.last_query_partial
+            .store(any_degraded, std::sync::atomic::Ordering::Relaxed);
+
+        // Priority-aware dedup (ADR-062 Phase B): on an id collision, the highest-priority
+        // source's hit wins (primary is implicitly highest — never overridden by an
+        // instance's priority). `by_id` tracks the winning priority alongside the hit so a
+        // lower-priority instance can't clobber a higher-priority one regardless of thread
+        // completion order.
+        let mut by_id: std::collections::HashMap<String, (i64, SearchHit)> =
+            std::collections::HashMap::new();
+        for hit in primary_hits {
+            by_id.insert(hit.id.clone(), (i64::MAX, hit));
+        }
+        for (priority, hits, _) in instance_results {
+            for hit in hits {
+                let candidate_priority = priority as i64;
+                let replace = match by_id.get(&hit.id) {
+                    Some((existing_priority, _)) => candidate_priority > *existing_priority,
+                    None => true,
+                };
+                if replace {
+                    by_id.insert(hit.id.clone(), (candidate_priority, hit));
                 }
             }
         }
+        let mut hits: Vec<SearchHit> = by_id.into_values().map(|(_, hit)| hit).collect();
+        // Deterministic final order: score descending, id ascending as an explicit
+        // tiebreak. `by_id` is a `HashMap`, whose iteration order is process-randomized —
+        // without this explicit secondary key, two hits tied on score could come out in a
+        // different order on different runs even for byte-identical input (the exact
+        // nondeterminism the ADR-062 Phase B adversarial test — 20 repeated identical
+        // queries must produce identical ordering — exists to catch). Thread completion
+        // order (now that fan-out is concurrent) is an ADDITIONAL source of nondeterminism
+        // this same explicit sort neutralizes — it was already required before
+        // parallelizing, and remains sufficient after.
         hits.sort_by(|a, b| {
             b.score
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.id.cmp(&b.id))
         });
         hits.truncate(limit);
         hits
@@ -266,7 +406,7 @@ impl KbQueryLayer for FederatedQuery {
         if self.primary.contains(id) {
             return self.primary.links_from(id);
         }
-        for (_, inst) in &self.instances {
+        for (_, _, inst) in self.priority_ordered_instances() {
             if inst.contains(id) {
                 return inst.links_from(id);
             }
@@ -275,20 +415,25 @@ impl KbQueryLayer for FederatedQuery {
     }
 
     fn links_to(&self, id: &str) -> Vec<Link> {
-        // Merge incoming links from all stores
+        // Merge incoming links from all stores — every instance's incoming edges are real,
+        // distinct edges (not competing copies of the same fact), so there's nothing to
+        // dedup-by-priority here; this deliberately stays priority-agnostic.
         let mut links = self.primary.links_to(id);
-        for (_, inst) in &self.instances {
+        for (_, _, inst) in &self.instances {
             links.extend(inst.links_to(id));
         }
         links
     }
 
     fn agenda(&self, filter: &crate::AgendaFilter) -> Vec<Node> {
-        // Merge agenda matches across primary + instances, de-duped by id.
+        // Merge agenda matches across primary + instances, de-duped by id. Priority
+        // decides which instance's copy of a colliding node is kept — same rule as
+        // `search`, without imposing `search`'s score-based reordering (agenda order is
+        // meaningful on its own and untouched here).
         let mut nodes = self.primary.agenda(filter);
         let mut seen: std::collections::HashSet<String> =
             nodes.iter().map(|n| n.id.clone()).collect();
-        for (_, inst) in &self.instances {
+        for (_, _, inst) in self.priority_ordered_instances() {
             for n in inst.agenda(filter) {
                 if seen.insert(n.id.clone()) {
                     nodes.push(n);
@@ -303,7 +448,7 @@ impl KbQueryLayer for FederatedQuery {
         if self.primary.contains(id) {
             return self.primary.history(id, limit);
         }
-        for (_, inst) in &self.instances {
+        for (_, _, inst) in self.priority_ordered_instances() {
             if inst.contains(id) {
                 return inst.history(id, limit);
             }
@@ -314,7 +459,7 @@ impl KbQueryLayer for FederatedQuery {
     fn list_ids(&self, prefix: Option<&str>) -> Vec<String> {
         let mut ids = self.primary.list_ids(prefix);
         let mut seen: std::collections::HashSet<String> = ids.iter().cloned().collect();
-        for (_, inst) in &self.instances {
+        for (_, _, inst) in self.priority_ordered_instances() {
             for id in inst.list_ids(prefix) {
                 if seen.insert(id.clone()) {
                     ids.push(id);
@@ -328,7 +473,7 @@ impl KbQueryLayer for FederatedQuery {
         let mut pairs = self.primary.id_title_pairs(prefix);
         let mut seen: std::collections::HashSet<String> =
             pairs.iter().map(|(id, _)| id.clone()).collect();
-        for (_, inst) in &self.instances {
+        for (_, _, inst) in self.priority_ordered_instances() {
             for pair in inst.id_title_pairs(prefix) {
                 if seen.insert(pair.0.clone()) {
                     pairs.push(pair);
@@ -346,7 +491,7 @@ impl KbQueryLayer for FederatedQuery {
         let mut triples = self.primary.id_title_body_triples(prefix, body_limit);
         let mut seen: std::collections::HashSet<String> =
             triples.iter().map(|(id, _, _)| id.clone()).collect();
-        for (_, inst) in &self.instances {
+        for (_, _, inst) in self.priority_ordered_instances() {
             for triple in inst.id_title_body_triples(prefix, body_limit) {
                 if seen.insert(triple.0.clone()) {
                     triples.push(triple);
@@ -376,7 +521,7 @@ impl KbQueryLayer for FederatedQuery {
             },
         );
 
-        for (name, inst) in &self.instances {
+        for (name, _, inst) in &self.instances {
             match inst.health_report() {
                 Some(report) => {
                     by_instance.insert(
@@ -432,7 +577,7 @@ impl KbQueryLayer for FederatedQuery {
         if self.primary.contains(id) {
             return self.primary.neighborhood(id, depth);
         }
-        for (_, inst) in &self.instances {
+        for (_, _, inst) in self.priority_ordered_instances() {
             if inst.contains(id) {
                 return inst.neighborhood(id, depth);
             }
@@ -446,7 +591,7 @@ impl KbQueryLayer for FederatedQuery {
         if self.primary.contains(id) {
             return self.primary.related(id, limit);
         }
-        for (_, inst) in &self.instances {
+        for (_, _, inst) in self.priority_ordered_instances() {
             if inst.contains(id) {
                 return inst.related(id, limit);
             }
@@ -458,7 +603,7 @@ impl KbQueryLayer for FederatedQuery {
         let mut out = self.primary.todo_nodes();
         let mut seen: std::collections::HashSet<String> =
             out.iter().map(|n| n.id.clone()).collect();
-        for (_, inst) in &self.instances {
+        for (_, _, inst) in self.priority_ordered_instances() {
             for n in inst.todo_nodes() {
                 if seen.insert(n.id.clone()) {
                     out.push(n);
@@ -641,7 +786,7 @@ mod tests {
         let primary = Arc::new(CozoQueryLayer::new(store1));
         let inst = Arc::new(CozoQueryLayer::new(store2));
         let mut federated = FederatedQuery::new(primary);
-        federated.add_instance("test".into(), inst);
+        federated.add_instance("test".into(), 0, inst);
 
         // Primary wins for shared IDs
         let node = federated.get("shared").unwrap();
@@ -651,6 +796,179 @@ mod tests {
         assert!(federated.contains("only:inst"));
         let node = federated.get("only:inst").unwrap();
         assert_eq!(node.title, "Instance Only");
+    }
+
+    /// ADR-062 Phase B: two *non-primary* instances that happen to register the same node
+    /// id (the org-roam #1480/#1496 duplicate-id failure class — an uncoordinated,
+    /// independently-populated pair of federated instances, not a hand-picked convenient
+    /// case) must resolve the collision by priority, not by registration order. Proven
+    /// both ways (A-then-B and B-then-A registration) so the result is provably
+    /// priority-driven, not an accident of iteration order that priority happens to agree
+    /// with in only one direction.
+    #[test]
+    fn federated_query_priority_decides_colliding_instance_ids_regardless_of_registration_order() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary_store = Arc::new(CozoKbStore::open(tmp.path().join("primary.cozo")).unwrap());
+        let store_a = Arc::new(CozoKbStore::open(tmp.path().join("a.cozo")).unwrap());
+        let store_b = Arc::new(CozoKbStore::open(tmp.path().join("b.cozo")).unwrap());
+        store_a
+            .insert_node(&Node::new(
+                "dup:node",
+                "From A (high priority)",
+                NodeKind::Note,
+                "",
+            ))
+            .unwrap();
+        store_b
+            .insert_node(&Node::new(
+                "dup:node",
+                "From B (low priority)",
+                NodeKind::Note,
+                "",
+            ))
+            .unwrap();
+
+        // Order 1: A registered first.
+        let primary = Arc::new(CozoQueryLayer::new(Arc::clone(&primary_store)));
+        let mut federated = FederatedQuery::new(primary);
+        federated.add_instance(
+            "a".into(),
+            5,
+            Arc::new(CozoQueryLayer::new(Arc::clone(&store_a))),
+        );
+        federated.add_instance(
+            "b".into(),
+            1,
+            Arc::new(CozoQueryLayer::new(Arc::clone(&store_b))),
+        );
+        assert_eq!(
+            federated.get("dup:node").unwrap().title,
+            "From A (high priority)"
+        );
+
+        // Order 2: B registered first — same outcome must hold; if it flipped, the
+        // collision was being resolved by iteration order, not priority.
+        let primary2 = Arc::new(CozoQueryLayer::new(primary_store));
+        let mut federated2 = FederatedQuery::new(primary2);
+        federated2.add_instance("b".into(), 1, Arc::new(CozoQueryLayer::new(store_b)));
+        federated2.add_instance("a".into(), 5, Arc::new(CozoQueryLayer::new(store_a)));
+        assert_eq!(
+            federated2.get("dup:node").unwrap().title,
+            "From A (high priority)"
+        );
+    }
+
+    /// ADR-062 Phase B adversarial verification (the ADR's own named test): 20 repeated
+    /// identical queries against a fixed fixture must produce byte-identical ordering
+    /// every time. Uses several instances with genuinely tied scores (identical title +
+    /// body content, so CozoDB's own BM25-style ranking has no basis to distinguish them)
+    /// specifically to stress the tie-breaking path — a `HashMap`-based merge (Rust's
+    /// `HashMap` iterates in a process-randomized order) without an explicit deterministic
+    /// tiebreak would be the exact bug this test exists to catch, and it wouldn't
+    /// necessarily show up on a single run, only across repeats.
+    #[test]
+    fn federated_search_ordering_is_stable_across_twenty_repeated_identical_queries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary_store = Arc::new(CozoKbStore::open(tmp.path().join("primary.cozo")).unwrap());
+        primary_store
+            .insert_node(&Node::new(
+                "tie:primary",
+                "Widget Report",
+                NodeKind::Note,
+                "widget widget widget",
+            ))
+            .unwrap();
+        let primary = Arc::new(CozoQueryLayer::new(primary_store));
+        let mut federated = FederatedQuery::new(primary);
+
+        for i in 0..5 {
+            let store =
+                Arc::new(CozoKbStore::open(tmp.path().join(format!("tie-{i}.cozo"))).unwrap());
+            store
+                .insert_node(&Node::new(
+                    format!("tie:inst-{i}"),
+                    "Widget Report",
+                    NodeKind::Note,
+                    "widget widget widget",
+                ))
+                .unwrap();
+            federated.add_instance(format!("inst-{i}"), 0, Arc::new(CozoQueryLayer::new(store)));
+        }
+
+        let baseline = federated.search("widget", 10);
+        assert!(
+            baseline.len() >= 3,
+            "fixture sanity: expected several tied-score hits, got {baseline:?}"
+        );
+        for _ in 0..20 {
+            let repeat = federated.search("widget", 10);
+            assert_eq!(
+                repeat, baseline,
+                "search() must return byte-identical ordering across repeated identical \
+                 queries — nondeterministic tie-breaking regressed"
+            );
+        }
+    }
+
+    /// ADR-062 Phase B: when a registry exceeds `max_fanout_instances`, the excluded
+    /// instances must always be the *lowest*-priority ones, never an arbitrary subset
+    /// (e.g. one determined by `HashMap`/registration-order accident). Registers 5
+    /// instances with a cap of 3 and distinct, non-monotonic-with-registration-order
+    /// priorities, then asserts exactly the 3 highest-priority instances' nodes are
+    /// reachable and the 2 lowest-priority instances' nodes are not.
+    #[test]
+    fn federated_query_fanout_cap_excludes_only_the_lowest_priority_instances() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary_store = Arc::new(CozoKbStore::open(tmp.path().join("primary.cozo")).unwrap());
+        let primary = Arc::new(CozoQueryLayer::new(primary_store));
+        let mut federated = FederatedQuery::new(primary);
+        federated.set_max_fanout_instances(3);
+
+        // (name, priority) — deliberately registered in an order that doesn't match
+        // priority order, so a bug that used registration order instead of priority
+        // would be caught.
+        let specs = [("c", 10), ("a", 50), ("e", 1), ("b", 40), ("d", 5)];
+        for (name, priority) in specs {
+            let store =
+                Arc::new(CozoKbStore::open(tmp.path().join(format!("{name}.cozo"))).unwrap());
+            store
+                .insert_node(&Node::new(
+                    format!("only:{name}"),
+                    format!("Node {name}"),
+                    NodeKind::Note,
+                    "",
+                ))
+                .unwrap();
+            federated.add_instance(
+                name.to_string(),
+                priority,
+                Arc::new(CozoQueryLayer::new(store)),
+            );
+        }
+
+        // Top 3 by priority: a(50), b(40), c(10).
+        assert!(
+            federated.contains("only:a"),
+            "highest-priority instance must survive the cap"
+        );
+        assert!(federated.get("only:a").is_some());
+        assert!(federated.contains("only:b"));
+        assert!(federated.get("only:b").is_some());
+        assert!(federated.contains("only:c"));
+        assert!(federated.get("only:c").is_some());
+
+        // Bottom 2 by priority: d(5), e(1) — excluded from this query's fan-out.
+        // `contains` deliberately stays uncapped (a correctness-sensitive membership
+        // check must not silently say "no" for real data), so check via `get` through
+        // the capped ownership-lookup path instead, which is what a caller doing
+        // `federated.search(...)` would actually observe missing.
+        let ordered = federated.priority_ordered_instances();
+        let capped_names: Vec<&str> = ordered.iter().map(|(n, _, _)| n.as_str()).collect();
+        assert_eq!(
+            capped_names,
+            vec!["a", "b", "c"],
+            "cap must keep exactly the top-3 by priority"
+        );
     }
 
     #[test]
@@ -684,8 +1002,8 @@ mod tests {
         let corrupted_inst = Arc::new(InMemoryQueryLayer::new(crate::KnowledgeBase::new()));
 
         let mut federated = FederatedQuery::new(primary);
-        federated.add_instance("healthy".into(), healthy_inst);
-        federated.add_instance("corrupted".into(), corrupted_inst);
+        federated.add_instance("healthy".into(), 0, healthy_inst);
+        federated.add_instance("corrupted".into(), 0, corrupted_inst);
 
         let report = federated
             .health_report()
@@ -754,7 +1072,7 @@ mod tests {
                 &Node::new("task:z", "Inst only", NodeKind::Task, "").with_todo_state("TODO"),
             )
             .unwrap();
-        federated.add_instance("inst".into(), Arc::new(CozoQueryLayer::new(store2)));
+        federated.add_instance("inst".into(), 0, Arc::new(CozoQueryLayer::new(store2)));
         let fed_ids: Vec<_> = federated
             .todo_nodes()
             .into_iter()

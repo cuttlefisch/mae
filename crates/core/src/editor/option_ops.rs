@@ -166,6 +166,9 @@ impl super::Editor {
             "kb_search_sort" => self.kb.search_sort.clone(),
             "kb_storage_engine" => self.kb.storage_engine.clone(),
             "kb_search_scope" => self.kb.search_scope.clone(),
+            "kb_federated_max_fanout_instances" => {
+                self.kb.federated_max_fanout_instances.to_string()
+            }
             "kb_dailies_dir" => self
                 .kb
                 .dailies_dir
@@ -847,6 +850,12 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.kb.daily_chain_gap_max = v.clamp(1, 365);
+            }
+            "kb_federated_max_fanout_instances" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb.federated_max_fanout_instances = v.clamp(1, 100_000);
             }
             "format_on_save" => {
                 self.format_on_save = parse_option_bool(value)?;

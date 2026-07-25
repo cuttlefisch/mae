@@ -285,6 +285,7 @@ Source: `shared/kb/src/lib.rs`
 | `hygiene` | mod |
 | `lru_query` | mod |
 | `query` | mod |
+| `remote_hub` | mod |
 | `NodeKind` | enum |
 | `SubgraphSpec` | struct |
 | `SubgraphLink` | struct |

@@ -210,6 +210,8 @@ mod tests {
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
         });
         std::fs::write(
             tmp.path().join("kb-registry.toml"),
@@ -293,6 +295,8 @@ mod tests {
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
         });
         std::fs::write(
             data_dir.path().join("kb-registry.toml"),
@@ -349,6 +353,8 @@ mod tests {
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
         });
         std::fs::write(
             data_dir.path().join("kb-registry.toml"),

@@ -1857,6 +1857,8 @@ mod tests {
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
         }
     }
 
@@ -3302,6 +3304,8 @@ mod tests {
                 ai_residency: mae_kb::federation::AiResidency::default(),
                 project_root: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
             });
 
         // Unscoped: the federated node is included.
@@ -4041,6 +4045,8 @@ mod tests {
                 ai_residency: mae_kb::federation::AiResidency::default(),
                 project_root: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
             });
 
         let mut kb_b = mae_core::KnowledgeBase::new();
@@ -4068,6 +4074,8 @@ mod tests {
                 ai_residency: mae_kb::federation::AiResidency::default(),
                 project_root: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
             });
 
         let result = execute_kb_agenda(
@@ -4235,6 +4243,8 @@ mod tests {
                 ai_residency: mae_kb::federation::AiResidency::LocalModelsOnly,
                 project_root: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
             });
 
         let result =
@@ -4287,6 +4297,8 @@ mod tests {
                 ai_residency: mae_kb::federation::AiResidency::LocalModelsOnly,
                 project_root: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
             });
 
         let result =
@@ -4459,6 +4471,8 @@ mod tests {
                 ai_residency: mae_kb::federation::AiResidency::LocalModelsOnly,
                 project_root: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
             });
 
         let result = execute_kb_health(&editor, &serde_json::json!({}), Some("claude")).unwrap();
@@ -4520,6 +4534,8 @@ mod tests {
                 ai_residency: mae_kb::federation::AiResidency::default(),
                 project_root: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
             });
 
         let mut kb_other = mae_core::KnowledgeBase::new();
@@ -4550,6 +4566,8 @@ mod tests {
                 ai_residency: mae_kb::federation::AiResidency::default(),
                 project_root: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
             });
 
         let result = execute_kb_health(
@@ -4690,6 +4708,8 @@ mod tests {
                 ai_residency: mae_kb::federation::AiResidency::LocalModelsOnly,
                 project_root: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
             });
 
         execute_kb_graph_view_open(

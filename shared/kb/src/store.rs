@@ -21,7 +21,7 @@ pub struct Link {
 }
 
 /// A search hit from FTS.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SearchHit {
     pub id: String,
     pub score: f64,

@@ -52,6 +52,8 @@ pub mod cozo_store;
 pub mod hygiene;
 pub mod lru_query;
 pub mod query;
+#[cfg(feature = "remote-hub")]
+pub mod remote_hub;
 
 // Advisory file locking + the reload-fresh-then-mutate-then-save helper
 // (`with_locked_update`) live in `mae-mcp`, which this crate already

@@ -152,6 +152,8 @@ fn ensure_registered_with_path(data_dir: &Path, path: PathBuf) {
         ai_residency: mae_kb::federation::AiResidency::default(),
         project_root: None,
         kind: mae_kb::federation::KbInstanceKind::Guidance,
+        priority: 0,
+        remote_hub: None,
     };
     let _ = mae_kb::federation::KbRegistry::update(data_dir, |reg| {
         // Re-check against the freshly-reloaded registry: another mae
@@ -239,6 +241,8 @@ mod tests {
                 ai_residency: mae_kb::federation::AiResidency::default(),
                 project_root: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
             });
         });
 

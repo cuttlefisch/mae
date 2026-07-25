@@ -245,6 +245,8 @@ fn kb_update_node_shared_instance_queues_crdt_update() {
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
         });
     editor.collab.kb_sync_mode = "on_save".into();
     assert!(
@@ -296,6 +298,8 @@ fn kb_update_node_unshared_instance_does_not_queue() {
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
         });
     editor.collab.kb_sync_mode = "on_save".into();
     // A stale cache entry must NOT be trusted as authority.

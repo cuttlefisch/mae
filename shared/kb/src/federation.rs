@@ -55,6 +55,46 @@ pub enum KbInstanceKind {
     /// every already-registered non-primary KB.
     #[default]
     UserRegistered,
+    /// A hub KB reachable only via ADR-053's live scoped read-through `kb/query.*`
+    /// surface (ADR-062 Phase C) — never mirrored locally as a Cozo copy (the Hard Rule:
+    /// see `RemoteHubConfig`'s doc comment). Structurally distinct from `shared`/
+    /// `collab_id` (ADR-019 push/pull collaborative sync of a *local* store): a
+    /// `RemoteHub` instance has no local store at all, only a live connection to a
+    /// remote one.
+    RemoteHub,
+}
+
+/// How a `RemoteHub` instance's bearer token (ADR-052 OAuth2.1) is obtained at call time.
+/// A *reference*, never the raw token — mirroring `collab_bridge::resolve_client_credential`'s
+/// existing `cmd:`-sentinel-or-keystore-key precedent for peer auth (`crates/mae/src/collab_bridge/mod.rs`)
+/// rather than inventing a new storage shape. A reference (not a cached token) is required
+/// by ADR-062 Phase D's own verification bar: an expired/revoked token must be caught at
+/// the point of use, which means re-resolving it per call, not trusting a value stored here.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub enum RemoteHubAuth {
+    /// Run an external command at call time and use its stdout (trimmed) as the bearer
+    /// token — same convention as collab's `cmd:` credential sentinel.
+    Command(String),
+    /// Resolve from a named entry in the collab keystore (`mae_mcp::keystore`).
+    KeystoreKey(String),
+}
+
+/// Connection info for a `RemoteHub`-kind instance (ADR-062 Phase C). `None` for every
+/// other kind.
+///
+/// **Hard rule (ADR-062, following org-roam's own established best practice of never
+/// syncing the derived DB itself — see the ADR's Context section):** a `RemoteHub`
+/// instance is *always* queried live through this connection info by Phase D's bridging
+/// code; nothing here ever seeds a local Cozo copy of the hub's content. This struct
+/// describes how to reach the hub on each call, not a cache of what it contains.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RemoteHubConfig {
+    /// The hub daemon's OAuth-HTTPS-listener origin (e.g. `https://kb.example.org:8443`).
+    pub base_url: String,
+    /// The `kb_id` to pass in every `kb/query.*` call — the hub-side collaborative KB
+    /// id (`kbc:{kb_id}`), independent of this instance's own local `uuid`.
+    pub hub_kb_id: String,
+    pub auth: RemoteHubAuth,
 }
 
 /// A registered KB instance.
@@ -62,7 +102,14 @@ pub enum KbInstanceKind {
 pub struct KbInstance {
     pub uuid: String,
     pub name: String,
+    /// Meaningless for a `RemoteHub`-kind instance (no local store) — left as an empty
+    /// `PathBuf` (`register_remote_hub` sets it that way) rather than made `Option`, since
+    /// every other kind relies on it being a plain, always-present `PathBuf` and 30+
+    /// call sites across the codebase already assume that. Don't read this field for a
+    /// `RemoteHub` instance; check `kind`/`remote_hub` first.
     pub org_dir: PathBuf,
+    /// Meaningless for a `RemoteHub`-kind instance — same empty-`PathBuf` convention as
+    /// `org_dir` above.
     pub db_path: PathBuf,
     pub primary: bool,
     pub enabled: bool,
@@ -94,13 +141,31 @@ pub struct KbInstance {
     /// field directly — see that method's doc comment for why.
     #[serde(default)]
     pub kind: KbInstanceKind,
+    /// Federated search priority (ADR-062 Phase B). Higher wins when two instances'
+    /// results collide on the same node id — replaces the previous implicit "whichever
+    /// instance was registered/iterated first" rule with an explicit, user-controllable
+    /// one. `#[serde(default)]` — every pre-062 instance defaults to `0` (equal weight),
+    /// preserving today's behavior (ties still resolve by iteration order) until a user
+    /// deliberately raises an instance's priority.
+    #[serde(default)]
+    pub priority: u32,
+    /// Connection info when `kind == RemoteHub`; `None` otherwise. `#[serde(default,
+    /// skip_serializing_if = "Option::is_none")]` — every pre-062 registry entry
+    /// round-trips unaffected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub remote_hub: Option<RemoteHubConfig>,
 }
 
 impl KbInstance {
     /// Whether this instance is shared/remote (collaborative). Used by
-    /// `KbScope::RemoteOnly` to select only network-backed instances.
+    /// `KbScope::RemoteOnly` to select only network-backed instances. A `RemoteHub`
+    /// instance (ADR-062 Phase C) is definitionally remote — it has no local store at
+    /// all — so it counts here alongside the pre-existing ADR-019 push/pull sync markers.
     pub fn is_remote(&self) -> bool {
-        self.shared || self.collab_id.is_some() || !self.remote_peers.is_empty()
+        self.shared
+            || self.collab_id.is_some()
+            || !self.remote_peers.is_empty()
+            || self.kind == KbInstanceKind::RemoteHub
     }
 
     /// This instance's role. Simply the stored `kind` field (which serde has already
@@ -368,6 +433,58 @@ impl KbRegistry {
             ai_residency: AiResidency::default(),
             project_root: None,
             kind: KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
+        };
+        self.instances.push(instance);
+        uuid
+    }
+
+    /// Register a `RemoteHub`-kind instance (ADR-062 Phase C) — a hub KB reachable only
+    /// via ADR-053's live `kb/query.*` surface, never mirrored locally. Unlike `register`,
+    /// there's no local directory to canonicalize/sentinel-stamp or local `db_path` to
+    /// allocate; `org_dir`/`db_path` are left as empty placeholders (see their doc
+    /// comments on `KbInstance`). Idempotent on `(base_url, hub_kb_id)`, mirroring
+    /// `register`'s own idempotence-on-`org_dir` behavior — registering the same hub
+    /// twice returns the existing uuid rather than creating a duplicate row.
+    pub fn register_remote_hub(
+        &mut self,
+        name: String,
+        base_url: String,
+        hub_kb_id: String,
+        auth: RemoteHubAuth,
+    ) -> String {
+        if let Some(existing) = self.instances.iter().find(|i| {
+            i.kind == KbInstanceKind::RemoteHub
+                && i.remote_hub
+                    .as_ref()
+                    .is_some_and(|r| r.base_url == base_url && r.hub_kb_id == hub_kb_id)
+        }) {
+            return existing.uuid.clone();
+        }
+
+        let uuid = generate_uuid();
+        let instance = KbInstance {
+            uuid: uuid.clone(),
+            name,
+            org_dir: PathBuf::new(),
+            db_path: PathBuf::new(),
+            primary: false,
+            enabled: true,
+            last_import: None,
+            collab_id: None,
+            shared: false,
+            remote_peers: Vec::new(),
+            last_sync: None,
+            ai_residency: AiResidency::default(),
+            project_root: None,
+            kind: KbInstanceKind::RemoteHub,
+            priority: 0,
+            remote_hub: Some(RemoteHubConfig {
+                base_url,
+                hub_kb_id,
+                auth,
+            }),
         };
         self.instances.push(instance);
         uuid
@@ -971,6 +1088,8 @@ mod tests {
             ai_residency: AiResidency::default(),
             project_root: None,
             kind: KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
         };
         assert!(!inst.is_remote(), "plain local import is not remote");
         inst.shared = true;
@@ -1041,6 +1160,113 @@ enabled = true
             reserialized, reserialized2,
             "re-serialization must be a stable fixed point, not drift on repeated round-trips"
         );
+    }
+
+    /// ADR-062 Phase C: `register_remote_hub` produces a well-formed `RemoteHub`
+    /// instance, is idempotent on `(base_url, hub_kb_id)` (mirroring `register`'s own
+    /// idempotence-on-`org_dir` contract — calling it twice for the same hub must not
+    /// create a duplicate registry row), and a different hub at the same base_url (a
+    /// multi-tenant hub daemon serving several `kb_id`s) registers as a distinct instance.
+    #[test]
+    fn register_remote_hub_is_idempotent_per_hub_and_distinguishes_kb_id() {
+        let mut reg = KbRegistry::default();
+        let uuid1 = reg.register_remote_hub(
+            "Team Hub".to_string(),
+            "https://kb.example.org:8443".to_string(),
+            "team-notes".to_string(),
+            RemoteHubAuth::KeystoreKey("team-hub-token".to_string()),
+        );
+        assert!(!uuid1.is_empty());
+        assert_eq!(reg.instances.len(), 1);
+
+        let inst = reg
+            .find_by_uuid(&uuid1)
+            .expect("registered instance must be findable");
+        assert_eq!(inst.kind, KbInstanceKind::RemoteHub);
+        assert!(
+            inst.is_remote(),
+            "a RemoteHub instance must report is_remote() == true"
+        );
+        assert_eq!(inst.org_dir, PathBuf::new());
+        assert_eq!(inst.db_path, PathBuf::new());
+        let hub = inst
+            .remote_hub
+            .as_ref()
+            .expect("remote_hub config must be populated");
+        assert_eq!(hub.base_url, "https://kb.example.org:8443");
+        assert_eq!(hub.hub_kb_id, "team-notes");
+        assert_eq!(
+            hub.auth,
+            RemoteHubAuth::KeystoreKey("team-hub-token".to_string())
+        );
+
+        // Same hub registered again: idempotent, no duplicate row.
+        let uuid1_again = reg.register_remote_hub(
+            "Team Hub (renamed locally)".to_string(),
+            "https://kb.example.org:8443".to_string(),
+            "team-notes".to_string(),
+            RemoteHubAuth::Command("op read op://vault/team-hub-token".to_string()),
+        );
+        assert_eq!(
+            uuid1, uuid1_again,
+            "same (base_url, hub_kb_id) must not duplicate"
+        );
+        assert_eq!(reg.instances.len(), 1);
+
+        // A different kb_id on the SAME hub daemon is a genuinely distinct instance.
+        let uuid2 = reg.register_remote_hub(
+            "Team Hub — Archive".to_string(),
+            "https://kb.example.org:8443".to_string(),
+            "team-archive".to_string(),
+            RemoteHubAuth::KeystoreKey("team-hub-token".to_string()),
+        );
+        assert_ne!(uuid1, uuid2);
+        assert_eq!(reg.instances.len(), 2);
+    }
+
+    /// ADR-062 Phase C: a `RemoteHub` instance (including the new nested
+    /// `RemoteHubConfig`/`RemoteHubAuth` enum) must round-trip through TOML exactly like
+    /// every other instance, and a pre-062 registry with no `remote_hub` field at all
+    /// (predating this ADR) must still deserialize cleanly with `remote_hub: None` —
+    /// same backward-compatibility contract `pre_058_registry_toml_round_trips_unchanged_and_stably`
+    /// already proves for the ADR-058 fields.
+    #[test]
+    fn remote_hub_instance_round_trips_through_toml_and_pre_062_files_still_parse() {
+        let mut reg = KbRegistry::default();
+        reg.register_remote_hub(
+            "Team Hub".to_string(),
+            "https://kb.example.org:8443".to_string(),
+            "team-notes".to_string(),
+            RemoteHubAuth::Command("op read op://vault/team-hub-token".to_string()),
+        );
+
+        let toml_str = toml::to_string_pretty(&reg).expect("serialize");
+        let reparsed: KbRegistry = toml::from_str(&toml_str).expect("deserialize");
+        assert_eq!(reparsed.instances.len(), 1);
+        let inst = &reparsed.instances[0];
+        assert_eq!(inst.kind, KbInstanceKind::RemoteHub);
+        let hub = inst.remote_hub.as_ref().unwrap();
+        assert_eq!(hub.base_url, "https://kb.example.org:8443");
+        assert_eq!(hub.hub_kb_id, "team-notes");
+        assert_eq!(
+            hub.auth,
+            RemoteHubAuth::Command("op read op://vault/team-hub-token".to_string())
+        );
+
+        // Pre-062 file: no `remote_hub` key at all for a plain non-hub instance.
+        let pre_062_toml = r#"
+[[instances]]
+uuid = "abc-123"
+name = "Work"
+org_dir = "/home/user/notes"
+db_path = "/home/user/.local/share/mae/kb/work.cozo"
+primary = false
+enabled = true
+"#;
+        let pre_062: KbRegistry =
+            toml::from_str(pre_062_toml).expect("pre-062 registry TOML must still parse");
+        assert_eq!(pre_062.instances[0].remote_hub, None);
+        assert_eq!(pre_062.instances[0].kind, KbInstanceKind::UserRegistered);
     }
 
     #[test]
@@ -1347,5 +1573,64 @@ enabled = true
         assert_eq!(read_sentinel_uuid(&tmp), Some("test-uuid-123".to_string()));
 
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    /// ADR-062 Phase A verification. The ADR's own numeric target is derived from
+    /// org-roam's documented scaling cliff (org-roam#2474/#1752/#2241 — multi-second to
+    /// multi-minute operations at ~3,000 *nodes*). That comparison is about per-node
+    /// content operations inside one KB store, not lookups against `KbRegistry` — which
+    /// holds metadata for *registered KB instances* (whole separate CozoDB stores a user
+    /// explicitly registered: one per project plus a handful of second-brain KBs), a
+    /// population that is architecturally bounded several orders of magnitude smaller than
+    /// KB-node counts. This test proves that bound empirically rather than asserting it:
+    /// even a synthetic 5,000-instance registry (already an unrealistic size — no real
+    /// user registers thousands of distinct KB stores) resolves a worst-case `find_by_uuid`
+    /// lookup in single-digit microseconds, nowhere near a user-observable latency budget.
+    /// A regression that made this scan accidentally quadratic (e.g. a nested lookup added
+    /// inside the loop) would blow this bound and fail loudly.
+    #[test]
+    fn registry_find_by_uuid_stays_well_under_budget_at_thousands_of_instances() {
+        fn synth(n: usize) -> KbRegistry {
+            let mut reg = KbRegistry::default();
+            for i in 0..n {
+                reg.instances.push(KbInstance {
+                    uuid: format!("uuid-{i:06}"),
+                    name: format!("kb-name-{i:06}"),
+                    org_dir: PathBuf::from(format!("/tmp/bench-kb-{i}")),
+                    db_path: PathBuf::from(format!("/tmp/bench-kb-{i}.db")),
+                    primary: false,
+                    enabled: true,
+                    last_import: None,
+                    collab_id: None,
+                    shared: false,
+                    remote_peers: Vec::new(),
+                    last_sync: None,
+                    ai_residency: AiResidency::default(),
+                    project_root: None,
+                    kind: KbInstanceKind::default(),
+                    priority: 0,
+                    remote_hub: None,
+                });
+            }
+            reg
+        }
+
+        for n in [500usize, 2000, 5000] {
+            let reg = synth(n);
+            // Worst case: the target is the last element, forcing a full scan.
+            let target = format!("uuid-{:06}", n - 1);
+            let start = std::time::Instant::now();
+            for _ in 0..1000 {
+                assert!(reg.find_by_uuid(std::hint::black_box(&target)).is_some());
+            }
+            let per_call = start.elapsed() / 1000;
+            assert!(
+                per_call.as_micros() < 500,
+                "find_by_uuid at n={n} took {per_call:?}/call, expected well under 500us \
+                 (org-roam's own cliff is measured in seconds/minutes at comparable node \
+                 counts — a registry lookup regressing to even 1ms would still be 1000x \
+                 under that bar, so 500us catches a real regression without being flaky)"
+            );
+        }
     }
 }

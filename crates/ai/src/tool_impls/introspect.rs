@@ -592,6 +592,8 @@ mod tests {
                 ai_residency: mae_kb::federation::AiResidency::default(),
                 project_root: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
             });
         // shared_kbs intentionally left empty → divergence.
         let result = execute_introspect(&editor, &json!({"section": "collaboration"})).unwrap();

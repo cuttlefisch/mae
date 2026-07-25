@@ -1,6 +1,6 @@
 # ADR-062: Federation registry scaling + unified local/remote-hub search
 
-**Status:** Proposed.
+**Status:** Accepted (implemented — see "Status note" at the end of this document).
 **Extends:** ADR-029, ADR-057.
 **Relates to:** ADR-053, ADR-058.
 
@@ -305,3 +305,121 @@ implementation, not confirming the happy path once in a fixed order.
   copy from the first query. This is the direct proof that nothing is being silently cached
   or mirrored in violation of the Hard Rule, exercised as an actual test rather than left as
   an assertion in prose.
+
+---
+
+## Status note (added on implementation)
+
+All five phases are implemented, tested, and shipped.
+
+**Phase A — evidence-based scope correction.** Before indexing anything, a real
+benchmark (`registry_find_by_uuid_stays_well_under_budget_at_thousands_of_instances`,
+`shared/kb/src/federation.rs`) measured the *actual* cost of `KbRegistry`'s linear scans
+at 500/2,000/5,000 synthetic instances: worst case ~10.5μs even at 5,000 entries — five to
+six orders of magnitude below any user-observable latency, and nowhere near org-roam's own
+cited cliff (which is about *KB-node* count inside one store, not *registered-instance*
+count — a population this project's own registry keeps several orders of magnitude
+smaller than node counts by construction: one entry per project/second-brain KB a user
+explicitly registers, not per note). A repo-wide grep of every real call site
+(`shared/kb`, `crates/`, `daemon/`) also confirmed none does repeated lookups against one
+loaded registry snapshot — every call site does exactly one `find()`/`find_by_uuid()` per
+load. Given `KbRegistry.instances` is directly, publicly mutated at 15+ call sites across
+8 files outside `federation.rs`, adding a persistent secondary index would have required
+either a large encapsulation refactor (making the field private, migrating every call
+site) or accepting real desync/correctness risk for a performance win that doesn't exist
+at any realistic or even generously-projected scale. **Correction:** Phase A shipped as a
+permanent regression benchmark (proving the linear scan stays fast, guarding against a
+future accidental quadratic regression) rather than a new index — and redirected the real
+indexing/scaling effort to Phase B, where the actual analog to org-roam's problem lives
+(per-query fan-out cost, which DOES scale with registered-instance count on every single
+search).
+
+**Phase B — shipped as designed, plus a determinism fix.** `KbInstance.priority: u32`
+added (`#[serde(default)]`, backward compatible); `FederatedQuery` now dedups colliding
+node ids by priority (highest wins; primary is always implicitly highest) across every
+merge-based method (`search`/`agenda`/`list_ids`/`id_title_pairs`/`id_title_body_triples`)
+and every ownership-lookup method (`get`/`links_from`/`neighborhood`/`related`/`history`).
+`search`'s final ordering is now fully deterministic (score descending, id ascending
+tiebreak) — closing a real nondeterminism risk in the original `HashSet`-based merge (Rust
+`HashMap`/`HashSet` iteration order is process-randomized; a tied score could silently
+reorder across runs). A configurable fan-out cap
+(`kb_federated_max_fanout_instances`, OptionRegistry-registered per principle #7, default
+128) truncates to the *highest*-priority instances when a registry exceeds it, logging a
+warning rather than silently dropping scope. Verified: `federated_query_priority_decides_colliding_instance_ids_regardless_of_registration_order`,
+`federated_search_ordering_is_stable_across_twenty_repeated_identical_queries` (the ADR's
+own named test), `federated_query_fanout_cap_excludes_only_the_lowest_priority_instances`.
+
+**Phase C — shipped, with fields designed against the real ADR-053 implementation.**
+`KbInstanceKind::RemoteHub` added; a `RemoteHubConfig{base_url, hub_kb_id, auth}` +
+`RemoteHubAuth{Command(String), KeystoreKey(String)}` (a credential *reference*, never a
+raw token — matching `collab_bridge::resolve_client_credential`'s existing precedent)
+added to `KbInstance`. `KbRegistry::register_remote_hub` is idempotent on
+`(base_url, hub_kb_id)`. Fields were designed by first investigating ADR-053's *actual*
+shipped implementation (`daemon/src/kb_query.rs`, `daemon/src/oauth.rs`) rather than
+assuming its prose — confirmed the real RPC shapes, the real 401/bearer-token contract,
+and that no client-side Rust code calling `kb/query.*` existed yet anywhere in the repo
+(Phase D had to write it from scratch). `org_dir`/`db_path` stay required, non-`Option`
+`PathBuf`s (empty for a `RemoteHub` instance) rather than becoming `Option` everywhere —
+avoids rippling a breaking change through 30+ existing call sites for two fields that are
+already meaningless-but-harmless when empty.
+
+**Phase D — shipped as a genuinely live-queried, blocking `KbQueryLayer`.** Initial
+concern (mid-implementation): the ADR's own "via async HTTP" phrasing implied a large,
+risky async refactor of the entire synchronous KB-search call chain
+(`kb_exec::dispatch` → `Editor::kb_federated_search_scoped` → `FederatedQuery` are all
+plain, non-async `&mut Editor`-taking functions). Investigation resolved this: every
+`KbQueryLayer` implementor (including `CozoQueryLayer`) is *already* synchronous by
+design — a blocking HTTP client with a strict timeout is not a workaround, it's the
+architecturally consistent way to add a new backend to an already-synchronous trait.
+Shipped `RemoteHubQueryLayer` (`shared/kb/src/remote_hub.rs`, feature-gated behind a new
+optional `remote-hub` Cargo feature — off by default, forwarded through
+`mae-core`/`mae` so the interactive binary doesn't pay for a TLS+HTTP stack unless a user
+opts in) implementing `get`/`contains`/`search`/`list_ids` against real `kb/query.*`
+shapes, with `links_from`/`links_to`/`neighborhood`/`id_title_pairs` correctly returning
+empty (no such endpoints exist on ADR-053's surface; `id_title_pairs` deliberately does
+NOT fall back to an N+1-per-node `get()` loop, which would be a hidden, unbounded
+network-call scaling trap for a "list all titles" call on a large hub). E2E-encrypted hub
+content is explicitly, observably unsupported (`last_outcome()` surfaces it distinctly,
+never silently returned as plaintext) — decrypting it needs ADR-038/039's membership/key
+machinery, which lives above this crate in the dependency graph; a real follow-up, not a
+silent gap. Translation-boundary hardening: a response-size cap (8MB), malformed-JSON
+rejection, schema-incomplete-result rejection, and JSON-RPC-error-surfacing are all real,
+independently tested (`shared/kb/src/remote_hub.rs`'s own unit-test module, 8 tests
+against a hand-rolled protocol-accurate mock server). Auth failures are recorded via a
+`last_outcome()` diagnostic (not part of `KbQueryLayer` itself, which has no room for an
+error value — matching `CozoQueryLayer::get`'s own existing "log + return empty"
+precedent) so a caller/test can distinguish "the hub legitimately has nothing" from "the
+call failed," proven end-to-end against a **real spawned `mae-daemon`** with real TLS +
+real RS256-signed JWTs (`daemon/tests/remote_hub_query_layer_e2e.rs`, reusing
+`oauth_e2e.rs`'s proven harness shape) — an expired token produces a real 401 over the
+real wire and a clean, observable `AuthFailed` outcome, never a silent empty result.
+
+**Phase E — shipped, plus a real bug found and fixed while wiring it in.** While writing
+Phase E's own named "N-way blended query with a hung hub" test, discovered
+`FederatedQuery::search`'s fan-out was **sequential**, not concurrent — a loop over
+`priority_ordered_instances()` calling each instance's `.search()` one at a time. A slow
+`RemoteHubQueryLayer` (bounded by its own ~1.5s default timeout) positioned anywhere in
+that loop would have serialized its full timeout with every other instance's latency,
+making "the other 3 sources return within the local-only latency budget" false by
+construction — total latency would have been the *sum* of every source's latency, not the
+*max*. Fixed: `search`'s fan-out now runs every source (primary + each instance) on its
+own thread via `std::thread::scope`, joining all before merging — total latency is now
+bounded by the single slowest source, which is itself timeout-bounded. Added
+`KbQueryLayer::degraded()` (default `false`; `RemoteHubQueryLayer` overrides it from its
+own `last_outcome()`) and `FederatedQuery::last_query_was_partial()` (set fresh on every
+`search()` call, never sticky) as the partial-result flag the Decision text calls for,
+without widening every `KbQueryLayer` method's return type to carry a `Result`. Verified
+by `n_way_blended_query_with_a_hung_hub_bounds_latency_to_the_slowest_source_and_flags_partial`
+(primary + 2 local `InMemoryQueryLayer` instances + 1 deliberately-hung `RemoteHubQueryLayer`
+that accepts a connection and never responds): total latency stays near the hung hub's own
+timeout rather than serializing with it, the 3 healthy sources' content is present, the
+partial flag is set, and a subsequent query against an all-healthy federation correctly
+clears it — no stuck-degraded state.
+
+**Filed, not fixed this pass:** issue #448 — a real, adjacent, currently-uncovered gap
+found while explaining this work: nothing today lets a KB admin force an *authorized
+member* (not just a non-member thin client, which ADR-053 already covers) onto
+live-query-only access instead of full `kb_join` replication. `RemoteHubQueryLayer` is
+exactly the client-side vehicle a future ADR addressing that gap would rely on, but the
+server-side policy + `kb_join`-dispatch enforcement is out of this ADR's scope and belongs
+in its own design (tracked for a future ADR-067).

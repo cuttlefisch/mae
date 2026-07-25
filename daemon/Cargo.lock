@@ -2883,6 +2883,7 @@ dependencies = [
  "mae-sync",
  "ndarray",
  "notify",
+ "reqwest",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -4354,6 +4355,7 @@ checksum = "219c5811de6525e5416c7d5d53bb656d3afdbc6c5af816e0802bcfa42dbdc1c3"
 dependencies = [
  "base64 0.22.1",
  "bytes",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "http",

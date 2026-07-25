@@ -254,6 +254,10 @@ fn classify_kb_tool(tool_name: &str) -> Option<ToolResidencyShape> {
         | "kb_preview_dismiss"
         | "kb_register"
         | "kb_unregister"
+        // --- NonContent: per-project provisioning lifecycle (ADR-058) — registers/
+        // declines a project-scoped instance, never reads/returns node content ---
+        | "kb_init_project"
+        | "kb_decline_project_provisioning"
         // --- NonContent: sharing/membership/policy lifecycle actions —
         // mutate collaboration state, never read/return node content ---
         | "kb_sharing_status"
@@ -570,6 +574,8 @@ mod tests {
             ai_residency: mae_kb::federation::AiResidency::Open,
             project_root: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
         }
     }
 

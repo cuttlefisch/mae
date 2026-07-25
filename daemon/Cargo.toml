@@ -57,6 +57,12 @@ bytes = "1"
 [dev-dependencies]
 hex = "0.4"
 tempfile = "3"
+# ADR-062 Phase D e2e: drives a real `RemoteHubQueryLayer` (client side) against a real
+# spawned mae-daemon OAuth+kb_query listener (server side) — the daemon already links
+# mae-kb, so this reuses that same dependency rather than adding a new one; `remote-hub`
+# is dev-only (the daemon binary itself never constructs a RemoteHubQueryLayer — it's a
+# federated-query-client concern, not something the hub side needs).
+mae-kb = { path = "../shared/kb", default-features = false, features = ["crdt", "storage-sqlite", "remote-hub"] }
 # oauth.rs adversarial tests sign real JWTs with freshly-generated RSA
 # keypairs per test (CLAUDE.md principle #14 -- real inputs, not a shared
 # hardcoded test key) rather than relying on a live external IdP.

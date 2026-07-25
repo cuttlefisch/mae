@@ -225,6 +225,8 @@ mod tests {
                 ai_residency: AiResidency::LocalModelsOnly,
                 project_root: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
             });
         let results = vec![
             (

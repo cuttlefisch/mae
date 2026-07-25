@@ -14,6 +14,13 @@ storage-sled = ["cozo/storage-sled"]
 # native lib has no `links` conflict.
 storage-sqlite = ["cozo/storage-sqlite"]
 crdt = ["dep:mae-sync"]
+# ADR-062 Phase C/D: `RemoteHubQueryLayer`, a `KbQueryLayer` backed by blocking HTTP
+# calls to ADR-053's `kb/query.*` surface. Optional because it pulls a TLS+HTTP client
+# into every consumer of `mae-kb`, including the interactive editor GUI/TUI binary —
+# gated behind a feature (matching the `gui`-feature-gating precedent for other heavy,
+# not-universally-needed dependencies) so a build with no RemoteHub instances registered
+# pays nothing for it.
+remote-hub = ["dep:reqwest"]
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -29,6 +36,7 @@ cozo = { version = "0.7", default-features = false, features = ["rayon"] }
 sha2 = "0.11"
 ndarray = "0.15"
 hex = "0.4"
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "blocking"], optional = true }
 
 [dev-dependencies]
 tempfile = "3"

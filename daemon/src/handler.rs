@@ -70,7 +70,14 @@ impl DaemonState {
             let mut federated = mae_kb::FederatedQuery::new(primary);
             for (name, inst_store) in &self.instance_stores {
                 let layer = Arc::new(mae_kb::CozoQueryLayer::new(Arc::clone(inst_store)));
-                federated.add_instance(name.clone(), layer);
+                // Priority (ADR-062 Phase B) comes from the registry entry when one
+                // exists; falls back to the default (0) equal weight otherwise.
+                let priority = self
+                    .registry
+                    .find(name)
+                    .map(|inst| inst.priority)
+                    .unwrap_or(0);
+                federated.add_instance(name.clone(), priority, layer);
             }
             self.query_layer = Some(Arc::new(federated));
         }
@@ -1216,6 +1223,8 @@ mod tests {
                 ai_residency: mae_kb::federation::AiResidency::default(),
                 project_root: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
             });
         }
 

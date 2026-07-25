@@ -797,6 +797,8 @@ fn kb_prepare_share_lineage_mints_fresh_lineage_for_promoted_node() {
             ai_residency: mae_kb::federation::AiResidency::default(),
             project_root: None,
             kind: mae_kb::federation::KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
         });
     // Simulate a lingering OLD lineage from before it was federated to this
     // instance (upsert_with_crdt on the instance copy directly, bypassing

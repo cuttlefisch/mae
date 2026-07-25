@@ -716,6 +716,10 @@
           "kind": "mod"
         },
         {
+          "name": "remote_hub",
+          "kind": "mod"
+        },
+        {
           "name": "NodeKind",
           "kind": "enum"
         },

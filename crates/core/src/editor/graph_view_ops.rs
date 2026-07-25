@@ -1579,6 +1579,8 @@ mod tests {
                 ai_residency: mae_kb::federation::AiResidency::default(),
                 project_root: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
             });
         editor.kb.search_scope = instance_name.to_string();
         editor
@@ -1810,6 +1812,8 @@ mod tests {
                 ai_residency: mae_kb::federation::AiResidency::default(),
                 project_root: None,
                 kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
             });
 
         editor.kb.search_scope = "notes".to_string();
