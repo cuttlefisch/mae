@@ -70,6 +70,18 @@ pub fn discover_connection() -> Option<(PathBuf, Option<PathBuf>)> {
 /// newest-wins / agent-socket-preferred logic is testable against a tempdir
 /// of fixture files instead of the real `/tmp`.
 fn discover_connection_in(base: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
+    discover_connection_in_with(base, mae_mcp::file_lock::is_process_alive)
+}
+
+/// `discover_connection_in`, further parameterized on the liveness check
+/// itself -- lets a test exercise the newest-wins comparison against two
+/// PIDs it controls without depending on any real, platform-specific
+/// "guaranteed alive" PID (no such thing portably exists: PID 1 is `init`
+/// on Linux but typically doesn't exist at all on Windows).
+fn discover_connection_in_with(
+    base: &Path,
+    is_alive: impl Fn(u32) -> bool,
+) -> Option<(PathBuf, Option<PathBuf>)> {
     let entries = std::fs::read_dir(base).ok()?;
     let mut agent_candidate: Option<(std::time::SystemTime, PathBuf, PathBuf)> = None;
     let mut plain_candidate: Option<(std::time::SystemTime, PathBuf)> = None;
@@ -88,7 +100,7 @@ fn discover_connection_in(base: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
 
         if let Some(pid_str) = rest.strip_suffix("-agent.sock") {
             if let Ok(pid) = pid_str.parse::<u32>() {
-                if mae_mcp::file_lock::is_process_alive(pid) {
+                if is_alive(pid) {
                     let psk_path = base.join(format!("mae-{pid}.psk"));
                     let is_newer = agent_candidate.as_ref().is_none_or(|(t, ..)| modified > *t);
                     if is_newer {
@@ -98,7 +110,7 @@ fn discover_connection_in(base: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
             }
         } else if let Some(pid_str) = rest.strip_suffix(".sock") {
             if let Ok(pid) = pid_str.parse::<u32>() {
-                if mae_mcp::file_lock::is_process_alive(pid) {
+                if is_alive(pid) {
                     let is_newer = plain_candidate.as_ref().is_none_or(|(t, _)| modified > *t);
                     if is_newer {
                         plain_candidate = Some((modified, path.clone()));
@@ -373,41 +385,48 @@ mod tests {
     fn discover_connection_in_newest_agent_socket_wins_between_two_live_pids() {
         // Exercise the `is_newer` mtime-comparison branch against a SECOND
         // genuinely live pid (not just `None`, which every other test above
-        // compares against). PID 1 (init) is always alive on any Linux box,
-        // including containers, so this doesn't depend on any process this
-        // test itself spawns.
+        // compares against). There is no portable "always alive" PID across
+        // Linux/macOS/Windows to hardcode here -- PID 1 is `init` (always
+        // alive) on Linux/macOS but typically doesn't exist at all on
+        // Windows, which is exactly the bug this test used to have. Instead,
+        // use `discover_connection_in_with` and fake liveness for both PIDs
+        // this test itself writes -- deterministic and platform-independent,
+        // with no real OS process to spawn or race against.
         let own_pid = std::process::id();
-        let init_pid = 1u32;
+        let other_pid = 999_999u32;
+        let is_alive = |pid: u32| pid == own_pid || pid == other_pid;
 
         // Scenario A: own pid's socket is written second (newer) -> wins.
         {
             let dir = tempdir().unwrap();
-            std::fs::write(dir.path().join(format!("mae-{init_pid}-agent.sock")), b"").unwrap();
+            std::fs::write(dir.path().join(format!("mae-{other_pid}-agent.sock")), b"").unwrap();
             std::thread::sleep(Duration::from_millis(50));
             std::fs::write(dir.path().join(format!("mae-{own_pid}-agent.sock")), b"").unwrap();
 
-            let (sock, _psk) = discover_connection_in(dir.path()).expect("should find a candidate");
+            let (sock, _psk) =
+                discover_connection_in_with(dir.path(), is_alive).expect("should find a candidate");
             assert_eq!(
                 sock,
                 dir.path().join(format!("mae-{own_pid}-agent.sock")),
-                "newer own-pid socket should win over the older pid-1 socket"
+                "newer own-pid socket should win over the older other-pid socket"
             );
         }
 
-        // Scenario B: pid 1's socket is written second (newer) -> wins.
+        // Scenario B: the other pid's socket is written second (newer) -> wins.
         // Same comparison, opposite direction, so the branch isn't only ever
         // exercised with "our pid happens to always be newer".
         {
             let dir = tempdir().unwrap();
             std::fs::write(dir.path().join(format!("mae-{own_pid}-agent.sock")), b"").unwrap();
             std::thread::sleep(Duration::from_millis(50));
-            std::fs::write(dir.path().join(format!("mae-{init_pid}-agent.sock")), b"").unwrap();
+            std::fs::write(dir.path().join(format!("mae-{other_pid}-agent.sock")), b"").unwrap();
 
-            let (sock, _psk) = discover_connection_in(dir.path()).expect("should find a candidate");
+            let (sock, _psk) =
+                discover_connection_in_with(dir.path(), is_alive).expect("should find a candidate");
             assert_eq!(
                 sock,
-                dir.path().join(format!("mae-{init_pid}-agent.sock")),
-                "newer pid-1 socket should win over the older own-pid socket"
+                dir.path().join(format!("mae-{other_pid}-agent.sock")),
+                "newer other-pid socket should win over the older own-pid socket"
             );
         }
     }
