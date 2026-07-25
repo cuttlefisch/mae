@@ -883,6 +883,35 @@ fn is_kb_node_id(target: &str) -> bool {
     KB_NAMESPACES.iter().any(|ns| target.starts_with(ns))
 }
 
+/// Extract `#+TRANSCLUDE: member_id [role]` directives from arbitrary body text,
+/// as `(member_id, role)` pairs in file order. `role` defaults to `"content"` when
+/// omitted, matching the file-import parser this was extracted from.
+///
+/// Unlike `parse_org_multi_result` (which requires a file-level `header.file_id`
+/// to attribute transclusions to), this works on any body string in isolation —
+/// the primitive `update_meta_members_for_node` (ADR-065 item 4) needs to
+/// re-derive a single node's `meta_members` on every write, not just at
+/// whole-file import time, since a node authored via `kb_create`/`kb_update`
+/// has no backing file to import from at all.
+pub fn parse_transclusion_directives(body: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for line in body.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed
+            .strip_prefix("#+TRANSCLUDE:")
+            .or_else(|| trimmed.strip_prefix("#+transclude:"))
+        {
+            let parts: Vec<&str> = rest.trim().splitn(2, ' ').collect();
+            if !parts.is_empty() && !parts[0].is_empty() {
+                let member_id = parts[0].to_string();
+                let role = parts.get(1).unwrap_or(&"content").to_string();
+                out.push((member_id, role));
+            }
+        }
+    }
+    out
+}
+
 /// Parse an org file into an `OrgParseResult` with typed links and transclusions.
 ///
 /// This is the rich version of `parse_org_multi()` that extracts relationship
@@ -974,19 +1003,8 @@ pub fn parse_org_multi_result(content: &str) -> OrgParseResult {
 
     // Parse TRANSCLUDE directives from content (file-level)
     if let Some(ref file_id) = header.file_id {
-        for line in content.lines() {
-            let trimmed = line.trim();
-            if let Some(rest) = trimmed
-                .strip_prefix("#+TRANSCLUDE:")
-                .or_else(|| trimmed.strip_prefix("#+transclude:"))
-            {
-                let parts: Vec<&str> = rest.trim().splitn(2, ' ').collect();
-                if !parts.is_empty() && !parts[0].is_empty() {
-                    let member_id = parts[0].to_string();
-                    let role = parts.get(1).unwrap_or(&"content").to_string();
-                    transclusions.push((file_id.clone(), member_id, role));
-                }
-            }
+        for (member_id, role) in parse_transclusion_directives(content) {
+            transclusions.push((file_id.clone(), member_id, role));
         }
     }
 

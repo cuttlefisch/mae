@@ -17,6 +17,10 @@ impl KbStore for CozoKbStore {
         self.run_mut_params(Self::NODE_PUT_SCRIPT, self.node_put_params(node)?)
             .map_err(cozo_err)?;
         self.update_links_for_node(node)?;
+        // ADR-065 item 4: same write-path-independence fix as the typed-link
+        // call above, for the sibling `#+TRANSCLUDE:` directive — see
+        // `update_meta_members_for_node`'s doc comment.
+        self.update_meta_members_for_node(node)?;
         Ok(())
     }
 

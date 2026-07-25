@@ -357,7 +357,75 @@ impl KbQueryLayer for FederatedQuery {
     }
 
     fn health_report(&self) -> Option<HealthReport> {
-        self.primary.health_report()
+        // Mirrors `id_title_body_triples`'s aggregation pattern above: start from the
+        // primary's report and merge every registered instance's report into it, rather
+        // than silently returning only the primary (ADR-065 item 1). Unlike a plain
+        // merge, each instance's contribution is also recorded in `by_instance` so a
+        // corrupted/unreachable instance shows up as `reachable: false` instead of being
+        // indistinguishable from "this instance is empty and healthy".
+        let mut merged = self.primary.health_report()?;
+        let mut by_instance: std::collections::HashMap<String, crate::store::InstanceHealth> =
+            std::collections::HashMap::new();
+        by_instance.insert(
+            "primary".to_string(),
+            crate::store::InstanceHealth {
+                reachable: true,
+                total_nodes: merged.total_nodes,
+                orphan_count: merged.orphan_ids.len(),
+                broken_link_count: merged.broken_links.len(),
+            },
+        );
+
+        for (name, inst) in &self.instances {
+            match inst.health_report() {
+                Some(report) => {
+                    by_instance.insert(
+                        name.clone(),
+                        crate::store::InstanceHealth {
+                            reachable: true,
+                            total_nodes: report.total_nodes,
+                            orphan_count: report.orphan_ids.len(),
+                            broken_link_count: report.broken_links.len(),
+                        },
+                    );
+                    merged.total_nodes += report.total_nodes;
+                    merged.total_links += report.total_links;
+                    for (k, v) in report.namespace_counts {
+                        *merged.namespace_counts.entry(k).or_default() += v;
+                    }
+                    for (k, v) in report.by_kind {
+                        *merged.by_kind.entry(k).or_default() += v;
+                    }
+                    for (k, v) in report.by_rel_type {
+                        *merged.by_rel_type.entry(k).or_default() += v;
+                    }
+                    merged.orphan_ids.extend(report.orphan_ids);
+                    merged.broken_links.extend(report.broken_links);
+                    merged.hub_nodes.extend(report.hub_nodes);
+                }
+                None => {
+                    // Instance failed to report — surface it as unreachable rather than
+                    // silently dropping it from the aggregate (the exact bug this fix
+                    // closes: a corrupted non-primary instance must not vanish).
+                    by_instance.insert(
+                        name.clone(),
+                        crate::store::InstanceHealth {
+                            reachable: false,
+                            total_nodes: 0,
+                            orphan_count: 0,
+                            broken_link_count: 0,
+                        },
+                    );
+                }
+            }
+        }
+
+        // Re-rank hub nodes across the merged set (a node hub-ranked within one instance
+        // may not be a global top-10 once other instances' in-degrees are combined).
+        merged.hub_nodes.sort_by_key(|h| std::cmp::Reverse(h.1));
+        merged.hub_nodes.truncate(10);
+        merged.by_instance = by_instance;
+        Some(merged)
     }
 
     fn neighborhood(&self, id: &str, depth: u32) -> Option<SubGraph> {
@@ -583,6 +651,64 @@ mod tests {
         assert!(federated.contains("only:inst"));
         let node = federated.get("only:inst").unwrap();
         assert_eq!(node.title, "Instance Only");
+    }
+
+    #[test]
+    fn federated_health_report_aggregates_all_instances_and_surfaces_unreachable_ones() {
+        // ADR-065 item 1: `health_report` must mirror `id_title_body_triples`'s
+        // aggregation pattern (primary + every registered instance), not silently
+        // return only the primary. This test is adversarial per CLAUDE.md principle
+        // #14 — it injects a real instance whose `health_report()` genuinely returns
+        // `None` (simulating a corrupted/unreadable instance) and asserts it is
+        // surfaced in `by_instance` as unreachable, not silently dropped from the
+        // aggregate as if it were healthy-but-empty.
+        let tmp = tempfile::tempdir().unwrap();
+        let store1 = Arc::new(CozoKbStore::open(tmp.path().join("primary.cozo")).unwrap());
+        let store2 = Arc::new(CozoKbStore::open(tmp.path().join("inst.cozo")).unwrap());
+
+        store1
+            .insert_node(&Node::new("primary:a", "Primary A", NodeKind::Note, ""))
+            .unwrap();
+        store2
+            .insert_node(&Node::new("inst:a", "Instance A", NodeKind::Note, ""))
+            .unwrap();
+        store2
+            .insert_node(&Node::new("inst:b", "Instance B", NodeKind::Note, ""))
+            .unwrap();
+
+        let primary = Arc::new(CozoQueryLayer::new(store1));
+        let healthy_inst = Arc::new(CozoQueryLayer::new(store2));
+        // A real `KbQueryLayer` implementor whose `health_report()` genuinely returns
+        // `None` (see `InMemoryQueryLayer::health_report` above) — stands in for a
+        // corrupted/unreadable federated instance without needing a mock.
+        let corrupted_inst = Arc::new(InMemoryQueryLayer::new(crate::KnowledgeBase::new()));
+
+        let mut federated = FederatedQuery::new(primary);
+        federated.add_instance("healthy".into(), healthy_inst);
+        federated.add_instance("corrupted".into(), corrupted_inst);
+
+        let report = federated
+            .health_report()
+            .expect("primary must report health");
+
+        // The actual bug: total_nodes must reflect primary + the healthy instance
+        // (1 + 2 = 3), not just the primary alone (which would silently be 1).
+        assert_eq!(report.total_nodes, 3);
+
+        let primary_health = report.by_instance.get("primary").unwrap();
+        assert!(primary_health.reachable);
+        assert_eq!(primary_health.total_nodes, 1);
+
+        let healthy_health = report.by_instance.get("healthy").unwrap();
+        assert!(healthy_health.reachable);
+        assert_eq!(healthy_health.total_nodes, 2);
+
+        let corrupted_health = report.by_instance.get("corrupted").unwrap();
+        assert!(
+            !corrupted_health.reachable,
+            "a corrupted/unreadable instance must be surfaced as unreachable, \
+             not silently omitted from the federated health report"
+        );
     }
 
     #[test]

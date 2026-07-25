@@ -193,6 +193,25 @@ pub struct HealthReport {
     pub orphan_ids: Vec<String>,
     pub broken_links: Vec<BrokenLinkInfo>,
     pub hub_nodes: Vec<(String, usize)>,
+    /// Per-instance breakdown, keyed by instance name — populated only by
+    /// `FederatedQuery::health_report` (ADR-065 item 1) so a federated read
+    /// aggregating counts across primary + registered instances doesn't hide
+    /// *which* instance is unhealthy or unreachable behind a merged-only
+    /// summary. Empty for a single-instance (non-federated) health report.
+    pub by_instance: std::collections::HashMap<String, InstanceHealth>,
+}
+
+/// One instance's contribution to a federated `HealthReport::by_instance`
+/// breakdown. `reachable: false` means this instance's own `health_report()`
+/// call returned `None` (query failure, corrupt/unreadable store) — it
+/// contributed nothing to the merged counts above, and callers must surface
+/// that distinctly from "this instance is empty and healthy".
+#[derive(Debug, Clone)]
+pub struct InstanceHealth {
+    pub reachable: bool,
+    pub total_nodes: usize,
+    pub orphan_count: usize,
+    pub broken_link_count: usize,
 }
 
 /// A tracked source file whose on-disk mtime no longer matches what was
@@ -493,4 +512,57 @@ pub trait KbStore: Send + Sync {
 
     fn backend_name(&self) -> &str;
     fn db_path(&self) -> &std::path::Path;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn node_version_verify_integrity_passes_for_an_untampered_snapshot() {
+        let content_hash = NodeVersion::compute_hash("Title", "Body text", "[]", "TODO", "A");
+        let version = NodeVersion {
+            version: 1,
+            title: "Title".to_string(),
+            body: "Body text".to_string(),
+            tags_json: "[]".to_string(),
+            todo_state: "TODO".to_string(),
+            priority: "A".to_string(),
+            change_summary: "initial".to_string(),
+            author: "local".to_string(),
+            created_at: 0,
+            content_hash,
+        };
+        assert!(version.verify_integrity());
+    }
+
+    #[test]
+    fn node_version_verify_integrity_detects_tampering() {
+        // Adversarial per CLAUDE.md principle #14: this is the exact primitive
+        // `daemon::maintenance::run_maintenance_scan` (ADR-065 item 2) relies on
+        // to catch a corrupted/tampered version row — verify it actually
+        // detects a mismatch, not just that it passes on the happy path.
+        let content_hash = NodeVersion::compute_hash("Title", "Body text", "[]", "TODO", "A");
+        let mut version = NodeVersion {
+            version: 1,
+            title: "Title".to_string(),
+            body: "Body text".to_string(),
+            tags_json: "[]".to_string(),
+            todo_state: "TODO".to_string(),
+            priority: "A".to_string(),
+            change_summary: "initial".to_string(),
+            author: "local".to_string(),
+            created_at: 0,
+            content_hash,
+        };
+        assert!(version.verify_integrity());
+
+        // Simulate tampering: the body changed but content_hash was not
+        // recomputed (e.g. a direct row edit or storage-layer bit rot).
+        version.body = "Tampered body".to_string();
+        assert!(
+            !version.verify_integrity(),
+            "a body mutated independently of its content_hash must fail integrity verification"
+        );
+    }
 }

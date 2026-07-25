@@ -653,7 +653,7 @@ type SeededCollection = (mae_sync::kb::KbCollectionDoc, Vec<(String, Vec<u8>)>);
 /// store, or a named instance's store. `None` when the name isn't registered with
 /// this daemon — the share still proceeds at collection level, just without seeded
 /// node content.
-fn resolve_kb_store(st: &DaemonState, kb_id: &str) -> Option<Arc<CozoKbStore>> {
+pub(crate) fn resolve_kb_store(st: &DaemonState, kb_id: &str) -> Option<Arc<CozoKbStore>> {
     let inst = st.registry.find(kb_id)?;
     if inst.primary {
         st.store.clone()

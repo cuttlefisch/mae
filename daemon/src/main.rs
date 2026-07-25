@@ -19,6 +19,7 @@ pub mod hygiene;
 mod kb_query;
 #[cfg(test)]
 mod lazy_fetch_client;
+pub mod maintenance;
 mod oauth;
 mod p2p;
 mod scheduler;

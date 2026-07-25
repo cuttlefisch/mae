@@ -1,9 +1,12 @@
 # Pairing MAE with VS Code, Copilot, and Other MCP Clients
 
-> Last updated: 2026-07-24. Design: [ADR-050](adr/050-external-editor-mcp-pairing.md)
+> Last updated: 2026-07-25. Design: [ADR-050](adr/050-external-editor-mcp-pairing.md)
 > (D1, D3 — this doc is that ADR's Verification artifact for Phase B / issue #377, updated
 > for Phase I / issue #384's "MAE for VS Code" extension).
-> Related: [MCP_ARCHITECTURE.md](MCP_ARCHITECTURE.md) (wire protocol reference).
+> Related: [MCP_ARCHITECTURE.md](MCP_ARCHITECTURE.md) (wire protocol reference),
+> [ADR-060](adr/060-daemon-multi-tenancy.md) (daemon-mode's multi-tenant deployment story —
+> this doc's `daemon_mode` section below is item 3 of ADR-065's drift-correction bundle,
+> cross-linked with ADR-060 Phase G so the two documentation efforts don't diverge).
 
 MAE can act as a general-purpose MCP backend for **any** MCP-capable editor's AI agent —
 not just Claude Code. This doc covers the two supported paths: pairing with **VS Code +
@@ -190,6 +193,43 @@ A long-lived `mae --headless` instance also has a **stable, project-keyed** sock
 (`~/.local/share/mae/headless/{project-hash}.sock`, ADR-055) that doesn't change across
 restarts — useful for exactly this pinning, once you know the path (`mae --headless` logs
 it at startup — `MCP headless stable socket started`).
+
+## `daemon_mode`: where does the KB your paired agent reaches actually live?
+
+`daemon_mode` (ADR-035) governs the *editor* process's relationship to `mae-daemon` — it is
+**orthogonal** to everything above: `mae-mcp-shim`'s socket discovery, the `initialize`
+handshake, and tool dispatch behave identically regardless of which mode is active. What
+changes is where the KB content a paired agent's `kb_*` tool calls actually read from and
+write to lives, and how many other processes/machines might be sharing it concurrently.
+Three values, `:describe-option daemon-mode` for the live description:
+
+- **`off` (the default — the floor, per CLAUDE.md principle #12).** No `mae-daemon`
+  involved at all. The headless/GUI/TUI instance you paired your editor with owns an
+  in-process embedded KB store directly. This is the simplest, fully-local case: one
+  project, one KB, one editor process, zero extra moving parts to reason about when
+  debugging a pairing issue. If you're setting up your first VS Code pairing, start here —
+  don't reach for `on-demand`/`shared` until you actually need persistence across editor
+  restarts or multi-session sharing.
+- **`on-demand`.** The editor attaches to an already-running `mae-daemon` if one is
+  reachable at the configured socket, or auto-spawns a co-located one if not — persistence
+  and collab-readiness without any manual daemon setup ceremony. A paired agent's KB reads/
+  writes now flow through that daemon process instead of an in-process store; if you kill
+  the daemon out from under a live pairing session, expect KB tool calls to start failing
+  until either it respawns or you fall back to `off`.
+- **`shared`.** The editor attaches to an existing, externally-supervised daemon (systemd
+  unit, remote host) and **never** auto-spawns one — the multi-session / P2P-sharing case,
+  and the mode a genuinely shared team deployment (ADR-060's multi-tenant daemon work)
+  targets. Per [ADR-057's Gate W](adr/057-mae-architecture-vision.md#gate-w--client-cross-platform-compatibility-cross-cutting-requirement):
+  the daemon side of this is **Linux-only by design** — a `shared`-mode daemon your team
+  points multiple paired editors at always runs on Linux, while each individual editor
+  client (and its paired VS Code/other-host agent) can be on Linux, macOS, or Windows.
+
+**Practical implication for troubleshooting a pairing:** if a paired agent's `kb_search`/
+`kb_get` calls return content you didn't expect (stale, from a different project, or
+missing entirely), check `daemon_mode` and — if not `off` — which daemon socket/host the
+editor is actually attached to (`collab_status`/`daemon_status`) before assuming the MCP
+pairing itself is broken. The pairing mechanics and the KB backend are two independent
+failure surfaces.
 
 ## Config-format fragmentation: what to expect
 
