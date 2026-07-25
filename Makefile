@@ -418,6 +418,15 @@ install-adr: adr-kb
 	@cp assets/mae-adr.cozo.sha256 $(DATADIR)/mae/mae-adr.cozo.sha256
 	@echo "Installed ADR KB -> $(DATADIR)/mae/mae-adr.cozo"
 
+## verify-adr-kb-sync: CI staleness gate (ADR-059 Phase E) -- fails if a structured ADR
+## header field (Status/Extends/Relates to/Depends on/Supersedes) changed relative to
+## BASE without assets/mae-adr.cozo(.sha256) being regenerated in the same range.
+## BASE defaults to origin/main (a PR's target branch); override for a local check
+## against a different ref, e.g. `make verify-adr-kb-sync BASE=HEAD~3`.
+BASE ?= origin/main
+verify-adr-kb-sync:
+	$(CARGO) run --release --bin verify-adr-kb-sync -- --base $(BASE)
+
 ## install-vscode: pointer to the extracted "MAE for VS Code" extension repo
 install-vscode:
 	@echo "The VS Code extension moved to github.com/cuttlefisch/mae-vscode -- see its README for install instructions."

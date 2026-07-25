@@ -568,4 +568,4 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Verify ADR-header-only changes ship a regenerated ADR KB
-        run: ./scripts/verify-adr-kb-sync.sh
+        run: make verify-adr-kb-sync BASE=origin/${{ github.base_ref || 'main' }}
