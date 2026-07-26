@@ -1,5 +1,128 @@
 use super::*;
 
+/// Issue #447: 3+ threads racing to open the identical, not-yet-existing
+/// store path used to panic partway through schema creation ("index out of
+/// bounds: the len is 0 but the index is 0" reading `source_files` — a
+/// genuine CozoDB-relation-visibility race during concurrent first-time
+/// `:create relation {...}` DDL, not a registry-level bug ADR-058 Phase B
+/// already fixed separately). Fixed by serializing store creation via the
+/// existing, already-adversarially-tested advisory file lock
+/// (`mae_mcp::file_lock::LockGuard`) rather than a new mechanism.
+///
+/// **SQLite, not the default sled engine.** Writing this test surfaced a
+/// real, separate fact worth documenting: sled enforces single-live-handle
+/// exclusivity at the OS level (a second concurrent `open()` against a store
+/// another handle still has open fails immediately with a clean `WouldBlock`
+/// I/O error, verified directly — not a panic, and not something this fix
+/// needs to address). Genuinely concurrent *multi-handle* access to the same
+/// store — the scenario this bug needs — is exactly what SQLite's WAL mode
+/// exists for in this codebase (ADR-004/ADR-054), and is what `mae-daemon`
+/// actually uses in production (`daemon/Cargo.toml`: `default-features =
+/// false, features = ["storage-sqlite"]` — sled isn't even compiled in
+/// there). This test targets that real, reachable configuration rather than
+/// asserting a scenario sled's own design already rules out.
+#[cfg(feature = "storage-sqlite")]
+#[test]
+fn concurrent_first_time_sqlite_open_and_import_does_not_panic() {
+    let tmp = tempfile::tempdir().unwrap();
+    // A path that does NOT exist yet — every thread races to create it.
+    let store_path = tmp.path().join("fresh_concurrent_store");
+
+    let handles: Vec<_> = (0..5)
+        .map(|i| {
+            let store_path = store_path.clone();
+            std::thread::spawn(move || {
+                let store = CozoKbStore::open_with_engine(&store_path, "sqlite").unwrap();
+                // Exactly the call chain issue #447's real repro hit:
+                // record_source_file -> get_source_file_node_ids on a store
+                // that may still be mid-creation on another thread.
+                let node_id = format!("concurrent-node-{i}");
+                store
+                    .insert_node(&crate::Node::new(
+                        &node_id,
+                        format!("Concurrent node {i}"),
+                        crate::NodeKind::Note,
+                        "real body content, not a placeholder",
+                    ))
+                    .unwrap();
+                store
+                    .record_source_file(
+                        &format!("file-{i}.org"),
+                        &format!("hash-{i}"),
+                        0,
+                        std::slice::from_ref(&node_id),
+                    )
+                    .unwrap();
+                // Read back through the exact function that panicked.
+                let ids = store
+                    .get_source_file_node_ids(&format!("file-{i}.org"))
+                    .unwrap();
+                assert_eq!(ids, vec![node_id]);
+            })
+        })
+        .collect();
+
+    for h in handles {
+        h.join()
+            .expect("no thread should panic during concurrent first-time open+import");
+    }
+
+    // Sanity: the store genuinely converged to one consistent, fully-schema'd
+    // store on disk — reopening it and reading every thread's node back
+    // confirms no partial/corrupted schema state was left behind.
+    let reopened = CozoKbStore::open_with_engine(&store_path, "sqlite").unwrap();
+    for i in 0..5 {
+        let node = reopened.get_node(&format!("concurrent-node-{i}")).unwrap();
+        assert!(
+            node.is_some(),
+            "node from thread {i} must be present after all concurrent opens converge"
+        );
+    }
+}
+
+/// The sled-side half of the same investigation: concurrent opens of the
+/// identical not-yet-existing store must never panic, even though sled's own
+/// single-live-handle exclusivity means they can't all succeed the way the
+/// SQLite case above does. Either outcome — `Ok` with a genuinely usable
+/// store, or a clean `Err` (sled's own lock contention) — is acceptable;
+/// only a panic is the regression this guards against.
+#[test]
+fn concurrent_first_time_sled_open_never_panics_even_under_lock_contention() {
+    let tmp = tempfile::tempdir().unwrap();
+    let store_path = tmp.path().join("fresh_sled_store");
+
+    let handles: Vec<_> = (0..5)
+        .map(|i| {
+            let store_path = store_path.clone();
+            std::thread::spawn(move || {
+                // Catch a panic here explicitly (rather than only relying on
+                // the join below) so a single thread's panic can't poison
+                // the store/lock state for the others mid-test.
+                std::panic::catch_unwind(move || {
+                    if let Ok(store) = CozoKbStore::open(&store_path) {
+                        let node_id = format!("sled-node-{i}");
+                        let _ = store.insert_node(&crate::Node::new(
+                            &node_id,
+                            format!("Sled node {i}"),
+                            crate::NodeKind::Note,
+                            "real body content",
+                        ));
+                    }
+                    // A returned Err (e.g. sled's own lock contention) is a
+                    // clean, acceptable outcome -- only a panic is not.
+                })
+            })
+        })
+        .collect();
+
+    for h in handles {
+        assert!(
+            h.join().unwrap().is_ok(),
+            "concurrent sled opens must never panic, even when contended"
+        );
+    }
+}
+
 #[test]
 fn schema_creates_all_relations() {
     let (_tmp, store) = make_store();

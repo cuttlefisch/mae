@@ -18,6 +18,52 @@ impl CozoKbStore {
         let path = path.into();
         let path_str = path.to_str().unwrap_or("").to_string();
         let engine_owned = engine.to_string();
+
+        // Serialize the whole "create from scratch" window (DB-file/directory
+        // creation + schema DDL) across concurrent first-time opens of the SAME
+        // path -- a real, reproduced panic (issue #447: "index out of bounds"
+        // reading `source_files` mid-schema-creation) when 3+ processes race to
+        // open/import into an identical not-yet-existing store. Reuses the
+        // existing, already-adversarially-tested (ADR-058 Phase B's 3-way-race
+        // test) atomic-exclusive-create advisory lock rather than a new
+        // mechanism (principle #8) -- `acquire_lock`'s own doc comment names
+        // exactly this scenario: "the very first write on a fresh machine...
+        // multiple simultaneously-starting processes racing to create that same
+        // [path]". Held only across store creation, not the store's whole
+        // lifetime -- once schema exists, ordinary concurrent read/write is
+        // already handled by CozoDB's own SQLite WAL + busy-retry (ADR-004
+        // Tier 1), so there is nothing left to serialize past this point.
+        //
+        // The retry budget here is deliberately much wider than
+        // `with_locked_update`'s (30 x 20ms = 600ms, sized for a small TOML
+        // save): schema creation is a one-time, bounded event where N-1
+        // waiting openers may each need to wait out a full turn of the
+        // relation-creation sequence ahead of them, not a hot path where
+        // latency matters. A real 5-way adversarial test caught the original
+        // 600ms budget as too tight under genuine contention. Acquisition is
+        // also load-bearing here, unlike `with_locked_update`'s "proceed
+        // anyway" best-effort semantics -- proceeding unlocked after a
+        // failed acquisition would silently reintroduce the exact race this
+        // fix exists to close, so a still-unacquired guard after the full
+        // budget is a hard error, not a warning.
+        let _create_guard = if !path.as_os_str().is_empty() && path != Path::new(":memory:") {
+            let guard = mae_mcp::file_lock::LockGuard::try_acquire_with_retry(
+                &path,
+                200,
+                std::time::Duration::from_millis(25),
+            );
+            if !guard.acquired() {
+                return Err(KbStoreError::Storage(format!(
+                    "timed out waiting for the store-creation lock on {} (another process/\
+                     thread held it for over 5s -- see issue #447)",
+                    path.display()
+                )));
+            }
+            Some(guard)
+        } else {
+            None
+        };
+
         // @ai-caution: [architecture-debt] sled 0.34's PageCache::start can panic
         // (not just Err) — "tried to serialize Uninitialized" in
         // sled::pagecache::snapshot — when opening a directory it can't use as a
