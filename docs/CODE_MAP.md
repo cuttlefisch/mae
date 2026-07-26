@@ -268,6 +268,8 @@ Source: `shared/kb/src/lib.rs`
 | Item | Kind |
 |------|------|
 | `activity` | mod |
+| `adr_kb` | mod |
+| `adr_parse` | mod |
 | `backup` | mod |
 | `data_dir` | mod |
 | `export` | mod |
@@ -283,6 +285,7 @@ Source: `shared/kb/src/lib.rs`
 | `hygiene` | mod |
 | `lru_query` | mod |
 | `query` | mod |
+| `remote_hub` | mod |
 | `NodeKind` | enum |
 | `SubgraphSpec` | struct |
 | `SubgraphLink` | struct |
@@ -348,9 +351,11 @@ Source: `shared/mcp/src/lib.rs`
 | `file_lock` | mod |
 | `identity` | mod |
 | `keystore` | mod |
+| `local_ipc` | mod |
 | `protocol` | mod |
 | `session` | mod |
 | `tls` | mod |
+| `build_shim_initialize_params` | fn |
 | `RequesterContext` | struct |
 | `McpToolRequest` | struct |
 | `McpToolResult` | struct |
@@ -367,6 +372,7 @@ Source: `crates/renderer/src/lib.rs`
 |------|------|
 | `splash_render` | mod |
 | `Renderer` | trait |
+| `NullRenderer` | struct |
 | `TerminalRenderer` | struct |
 
 ## mae-scheme
@@ -441,7 +447,7 @@ Source: `shared/sync/src/lib.rs`
 | `compare_state_vectors` | fn |
 | `compute_project_identity` | fn |
 
-## Commands (555 built-in)
+## Commands (558 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -772,6 +778,8 @@ Source: `shared/sync/src/lib.rs`
 | `kb-unregister` | Remove a registered KB instance |
 | `kb-reimport` | Re-import KB instance from org files |
 | `kb-instances` | List all registered KB instances |
+| `kb-init-project` | Register a Project-kind KB instance for the current project (ADR-058) |
+| `kb-decline-project-provisioning` | Don't ask again to register a KB for the current project (ADR-058) |
 | `kb-promote` | Promote the current KB-view node from a federated instance into the primary KB (#303) |
 | `insert-newline-smart` | Insert newline with list continuation |
 | `table-next-cell` | Move to next table cell (Tab) |
@@ -904,6 +912,7 @@ Source: `shared/sync/src/lib.rs`
 | `daily-prev` | Navigate to previous daily note (SPC n d p) |
 | `daily-next` | Navigate to next daily note (SPC n d n) |
 | `kb-audit` | Run KB audit report (SPC n H a) |
+| `kb-export-guidance` | Export guidance-KB context to AGENTS.md or a custom path (ADR-050 Phase H) |
 | `kb-narrow` | Narrow to a meta-node component for editing |
 | `kb-widen` | Save edits and widen back from narrowed meta-node component |
 | `capture-finalize` | Save note and return from capture (C-c C-c) |

@@ -17,6 +17,9 @@
 #   make install-tui  — terminal-only install
 #   make setup-hooks  — configure git to use .githooks/ (pre-commit fmt+clippy check)
 #   make setup-dev    — install dev deps (rustfmt/clippy/lldb/rust-analyzer/…) + hooks
+#   make install-vscode — the "MAE for VS Code" extension now lives in its own repo,
+#                         github.com/cuttlefisch/mae-vscode (independent release cadence);
+#                         this target just points there
 #
 # Configuration (override on the command line or in the environment):
 #
@@ -46,7 +49,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean clean-cache ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual practices-kb install-practices
+.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean clean-cache ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual practices-kb install-practices adr-kb install-adr verify-adr-kb-sync install-vscode
 
 # Default target: release build
 all: build
@@ -73,7 +76,7 @@ dev:
 	$(CARGO) build $(FEAT_FLAG)
 
 ## install: build release binary + manual KB + practices KB, install to PREFIX, register desktop entry
-install: build manual-kb practices-kb
+install: build manual-kb practices-kb adr-kb
 	@mkdir -p $(PREFIX)
 	@install -m 755 $(RELEASE_BIN) $(PREFIX)/$(BINARY)
 	@install -m 755 $(RELEASE_SHIM) $(PREFIX)/$(SHIM_BINARY)
@@ -88,6 +91,10 @@ install: build manual-kb practices-kb
 	@cp -r assets/mae-practices.cozo $(DATADIR)/mae/mae-practices.cozo
 	@cp assets/mae-practices.cozo.sha256 $(DATADIR)/mae/mae-practices.cozo.sha256
 	@echo "Installed practices KB -> $(DATADIR)/mae/mae-practices.cozo"
+	@rm -rf $(DATADIR)/mae/mae-adr.cozo
+	@cp -r assets/mae-adr.cozo $(DATADIR)/mae/mae-adr.cozo
+	@cp assets/mae-adr.cozo.sha256 $(DATADIR)/mae/mae-adr.cozo.sha256
+	@echo "Installed ADR KB -> $(DATADIR)/mae/mae-adr.cozo"
 	@mkdir -p $(DATADIR)/applications
 	@sed 's|Exec=mae|Exec=$(PREFIX)/$(BINARY)|' $(DESKTOP_FILE) > $(DATADIR)/applications/mae.desktop
 	@echo "Installed desktop entry -> $(DATADIR)/applications/mae.desktop"
@@ -398,6 +405,33 @@ install-practices: practices-kb
 	@cp assets/mae-practices.cozo.sha256 $(DATADIR)/mae/mae-practices.cozo.sha256
 	@echo "Installed practices KB -> $(DATADIR)/mae/mae-practices.cozo"
 
+## adr-kb: build the pre-built ADR-as-KB-node KB (ADR-059, molecularly-structured decision records)
+adr-kb:
+	@mkdir -p assets
+	$(CARGO) run --release --bin build-adr-kb -- assets/mae-adr.cozo
+
+## install-adr: install pre-built ADR KB to XDG data dir
+install-adr: adr-kb
+	@mkdir -p $(DATADIR)/mae
+	@rm -rf $(DATADIR)/mae/mae-adr.cozo
+	@cp -r assets/mae-adr.cozo $(DATADIR)/mae/mae-adr.cozo
+	@cp assets/mae-adr.cozo.sha256 $(DATADIR)/mae/mae-adr.cozo.sha256
+	@echo "Installed ADR KB -> $(DATADIR)/mae/mae-adr.cozo"
+
+## verify-adr-kb-sync: CI staleness gate (ADR-059 Phase E) -- fails if a structured ADR
+## header field (Status/Extends/Relates to/Depends on/Supersedes) changed relative to
+## BASE without assets/mae-adr.cozo(.sha256) being regenerated in the same range.
+## BASE defaults to origin/main (a PR's target branch); override for a local check
+## against a different ref, e.g. `make verify-adr-kb-sync BASE=HEAD~3`.
+BASE ?= origin/main
+verify-adr-kb-sync:
+	$(CARGO) run --release --bin verify-adr-kb-sync -- --base $(BASE)
+
+## install-vscode: pointer to the extracted "MAE for VS Code" extension repo
+install-vscode:
+	@echo "The VS Code extension moved to github.com/cuttlefisch/mae-vscode -- see its README for install instructions."
+	@exit 1
+
 ## install-daemon: build + install mae-daemon to PREFIX
 install-daemon: build-daemon
 	@mkdir -p $(PREFIX)
@@ -508,6 +542,21 @@ docker-collab-test:
 	docker compose -f docker-compose.collab-test.yml logs --no-log-prefix verifier; \
 	echo "--- verifier exit code: $${RC:-unknown} ---"; \
 	docker compose -f docker-compose.collab-test.yml down --volumes --timeout 10; \
+	exit $${RC:-1}
+
+## docker-headless-e2e: run headless MAE service-mode E2E in Docker containers
+## (ADR-055, Phase J / #385) — real mae --headless, a real two-instance
+## collision race, and a real MCP handshake via mae-mcp-shim --check.
+## Uses `--wait` so compose exits once all client/verifier services complete,
+## then inspects the verifier exit code for pass/fail.
+docker-headless-e2e:
+	@echo "Running headless MAE E2E tests (docker compose)..."
+	@docker compose -f docker-compose.headless-e2e.yml up --build --wait 2>&1; \
+	RC=$$(docker compose -f docker-compose.headless-e2e.yml ps -a verifier --format '{{.ExitCode}}' 2>/dev/null); \
+	echo "--- verifier output ---"; \
+	docker compose -f docker-compose.headless-e2e.yml logs --no-log-prefix verifier; \
+	echo "--- verifier exit code: $${RC:-unknown} ---"; \
+	docker compose -f docker-compose.headless-e2e.yml down --volumes --timeout 10; \
 	exit $${RC:-1}
 
 ## docker-ci: run full CI pipeline in a container (no local toolchain needed)

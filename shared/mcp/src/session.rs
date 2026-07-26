@@ -71,6 +71,29 @@ pub struct ClientSession {
     /// crate itself has no KB/editor knowledge to compute it. `None`
     /// (default) omits the field entirely, unchanged behavior.
     pub instructions: Option<String>,
+    /// Permission-tier ceiling this session declared at `initialize`
+    /// (`permissionCeiling` param), e.g. `"ReadOnly"` (ADR-051). Unlike
+    /// `declared_ai_provider`, this is trusted from ANY client regardless of
+    /// authentication: a self-declared ceiling can only ever *tighten* what
+    /// the session is allowed to do (the consuming side, `mae-ai`'s
+    /// `PermissionPolicy`, takes the minimum of this and the server's own
+    /// configured policy — never the maximum), so there is no
+    /// privilege-escalation vector an unauthenticated client could exploit
+    /// by declaring one. `None` (default) means "use the server's policy
+    /// unchanged", identical to every client that predates this field.
+    pub declared_permission_ceiling: Option<String>,
+    /// Tool-category allowlist this session declared at `initialize`
+    /// (`toolCategoryAllowlist` param, comma-separated, e.g. `"knowledge"`)
+    /// (ADR-056). Same trust shape as `declared_permission_ceiling`: trusted
+    /// from ANY client regardless of authentication, since it can only ever
+    /// *narrow* which tools this session may dispatch (the consuming side
+    /// intersects this with the server's own configured allowlist, never
+    /// unions them) -- no privilege-escalation vector. Stored as a raw
+    /// string rather than `mae_ai::ToolCategory` since this crate has no
+    /// dependency on `mae-ai`; parsed downstream by
+    /// `mae_ai::tools::parse_categories`. `None` (default) means
+    /// "use the server's policy unchanged".
+    pub declared_tool_categories: Option<String>,
 }
 
 impl ClientSession {
@@ -91,6 +114,8 @@ impl ClientSession {
             peer_identity: None,
             declared_ai_provider: None,
             instructions: None,
+            declared_permission_ceiling: None,
+            declared_tool_categories: None,
         }
     }
 

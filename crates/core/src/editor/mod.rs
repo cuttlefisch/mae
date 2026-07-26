@@ -1027,6 +1027,30 @@ pub struct Editor {
     /// practices/guidance. Empty (default) disables this. See
     /// `mae_ai::guidance`.
     pub ai_guidance_kb: String,
+    /// When true, re-export the guidance KB to AGENTS.md automatically each
+    /// session start (ADR-050 D4). Default false — one-time/on-demand export
+    /// only, matching `ai_guidance_kb`'s own opt-in philosophy.
+    pub ai_guidance_export_live_sync: bool,
+    /// Max characters of the guidance KB's rendered content to inline
+    /// directly into the MCP `initialize` response's `instructions` field
+    /// (ADR-063 Phase A) before falling back to pointer-only behavior.
+    pub ai_guidance_inline_budget_chars: usize,
+    /// Option names explicitly set via `set_option` (init.scm, `:set`, or an
+    /// MCP/Scheme `set-option!` call) this session — ADR-063 Phase B's mechanism for
+    /// letting a conditional runtime-computed default apply only when the user hasn't
+    /// made an explicit choice, without re-deriving this per option.
+    pub explicitly_set_options: std::collections::HashSet<String>,
+    /// When true (default), the MCP server's `tools/list` response is
+    /// tiered (Core + `request_tools`/`search_tools` only) instead of the
+    /// full flat tool set — see `crates/mae/src/main.rs`'s `mcp_tools`
+    /// construction (K2, post-ship quality pass). Read at MCP-server-startup
+    /// time, not live-reloadable mid-session.
+    pub mcp_tools_tiered_by_default: bool,
+    /// Comma-separated `ToolCategory` names this MAE instance restricts MCP
+    /// tool DISPATCH to (ADR-056), not just advertisement. Empty (default) =
+    /// unrestricted. Read at MCP-server-startup time, same as
+    /// `mcp_tools_tiered_by_default` above — see `crates/mae/src/main.rs`.
+    pub mcp_tool_category_allowlist: String,
     /// Saved help view state from the last `help_close`. `help-reopen`
     /// restores this to resume exactly where the user left off.
     pub last_kb_state: Option<crate::kb_view::KbView>,
@@ -1459,6 +1483,11 @@ impl Editor {
             spell_enabled: false,
             ai_chat_enabled: false,
             ai_guidance_kb: String::new(),
+            ai_guidance_export_live_sync: false,
+            ai_guidance_inline_budget_chars: 8000,
+            explicitly_set_options: std::collections::HashSet::new(),
+            mcp_tools_tiered_by_default: true,
+            mcp_tool_category_allowlist: String::new(),
             ai: AiState::new(),
             bell_until: None,
             project: None,

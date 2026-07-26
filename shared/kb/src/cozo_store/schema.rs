@@ -18,6 +18,70 @@ impl CozoKbStore {
         let path = path.into();
         let path_str = path.to_str().unwrap_or("").to_string();
         let engine_owned = engine.to_string();
+
+        // Serialize the whole "create from scratch" window (DB-file/directory
+        // creation + schema DDL) across concurrent first-time opens of the SAME
+        // path -- a real, reproduced panic (issue #447: "index out of bounds"
+        // reading `source_files` mid-schema-creation) when 3+ processes race to
+        // open/import into an identical not-yet-existing store. Reuses the
+        // existing, already-adversarially-tested (ADR-058 Phase B's 3-way-race
+        // test) atomic-exclusive-create advisory lock rather than a new
+        // mechanism (principle #8) -- `acquire_lock`'s own doc comment names
+        // exactly this scenario: "the very first write on a fresh machine...
+        // multiple simultaneously-starting processes racing to create that same
+        // [path]". Held only across store creation, not the store's whole
+        // lifetime -- once schema exists, ordinary concurrent read/write is
+        // safe under CozoDB's per-instance write lock for callers sharing one
+        // `Db`/`CozoKbStore`. **Correction, found via a real CI failure, not
+        // assumed:** this ADR-004/ADR-054 "WAL + busy-retry" framing does NOT
+        // hold across *separate* `Db` instances opened against the same file
+        // (as this function's own concurrent-open callers are, by
+        // definition) -- direct inspection of `cozo-0.7.6/src/storage/
+        // sqlite.rs` confirms `new_cozo_sqlite` never sets `journal_mode=WAL`
+        // or `busy_timeout`, and each `open_with_engine` call constructs a
+        // wholly separate `SqliteStorage` with its own private
+        // `Arc<ShardedLock<()>>` -- cozo's own write-serialization is
+        // per-instance, not per-file, and its own internal bootstrap
+        // statement (`create table if not exists cozo`) `.unwrap()`s the
+        // result rather than retrying `SQLITE_BUSY`/"database is locked",
+        // so a *new* connection opening while a *different*, already-open
+        // connection from an earlier opener is mid-write-transaction can
+        // panic instead of waiting. See the retry loop immediately below,
+        // which exists specifically to absorb that gap -- this ADR-004 claim
+        // is corrected directly in `docs/adr/004-kb-scaling.md`'s own Tier 1
+        // section (a real, disproven claim gets the doc fixed, not a second
+        // unverified repetition of it here).
+        //
+        // The retry budget here is deliberately much wider than
+        // `with_locked_update`'s (30 x 20ms = 600ms, sized for a small TOML
+        // save): schema creation is a one-time, bounded event where N-1
+        // waiting openers may each need to wait out a full turn of the
+        // relation-creation sequence ahead of them, not a hot path where
+        // latency matters. A real 5-way adversarial test caught the original
+        // 600ms budget as too tight under genuine contention. Acquisition is
+        // also load-bearing here, unlike `with_locked_update`'s "proceed
+        // anyway" best-effort semantics -- proceeding unlocked after a
+        // failed acquisition would silently reintroduce the exact race this
+        // fix exists to close, so a still-unacquired guard after the full
+        // budget is a hard error, not a warning.
+        let _create_guard = if !path.as_os_str().is_empty() && path != Path::new(":memory:") {
+            let guard = mae_mcp::file_lock::LockGuard::try_acquire_with_retry(
+                &path,
+                200,
+                std::time::Duration::from_millis(25),
+            );
+            if !guard.acquired() {
+                return Err(KbStoreError::Storage(format!(
+                    "timed out waiting for the store-creation lock on {} (another process/\
+                     thread held it for over 5s -- see issue #447)",
+                    path.display()
+                )));
+            }
+            Some(guard)
+        } else {
+            None
+        };
+
         // @ai-caution: [architecture-debt] sled 0.34's PageCache::start can panic
         // (not just Err) — "tried to serialize Uninitialized" in
         // sled::pagecache::snapshot — when opening a directory it can't use as a
@@ -27,8 +91,28 @@ impl CozoKbStore {
         // load; see the two adversarial tests in crates/mae/src/bootstrap.rs that hit
         // this path (`init_kb_federation_notifies_on_a_real_store_open_failure`,
         // `init_kb_federation_notifies_on_a_real_migration_failure`).
+        //
+        // @ai-caution: [architecture-debt] a SECOND, distinct panic source lives in
+        // the SAME `DbInstance::new` call for the sqlite engine specifically: a real
+        // CI failure (nightly leg, not reproduced locally in dozens of runs --
+        // genuinely timing-dependent) caught `new_cozo_sqlite`'s own bootstrap
+        // `create table if not exists cozo` statement `.unwrap()`ing a
+        // `SQLITE_BUSY`/"database is locked" `Err` while a DIFFERENT, already-open
+        // `CozoKbStore` (a separate `Db` instance against the same file, opened by
+        // an earlier concurrent caller of this same function) was mid-write-
+        // transaction. This is NOT the same race the advisory lock above closes
+        // (that one only serializes concurrent *entries into this function*) --
+        // ADR-004's assumed "SQLite WAL + busy-retry" safety net does not
+        // actually exist in cozo 0.7.6 (`journal_mode`/`busy_timeout` are never
+        // configured, confirmed by direct source read; corrected directly in
+        // `docs/adr/004-kb-scaling.md`'s Tier 1 section, not re-asserted here
+        // a second time). Since that gap lives in an external crate, MAE
+        // compensates here: a bounded
+        // retry specifically for this transient, well-understood SQLite condition
+        // (never for a genuinely corrupt store, which is a different panic
+        // message and correctly still fails fast below).
         let db = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            DbInstance::new(&engine_owned, &path_str, "")
+            retry_on_transient_sqlite_busy(|| DbInstance::new(&engine_owned, &path_str, ""))
         }))
         .map_err(|_| {
             KbStoreError::Storage(format!(
@@ -385,6 +469,81 @@ impl CozoKbStore {
             .map_err(cozo_err)?;
         }
         Ok(())
+    }
+}
+
+/// Run `f` (a `DbInstance::new`-shaped call returning `Result<T, E>`),
+/// retrying a bounded number of times on a transient SQLite
+/// `SQLITE_BUSY`/"database is locked" condition — surfacing EITHER as a
+/// PANIC (cozo 0.7.6's own bootstrap `create table if not exists cozo`
+/// `.unwrap()`s this) OR as a normal `Err(E)` (cozo's post-open
+/// `initialize()`/`load_last_ids()` step, which DOES propagate via `?`
+/// rather than panicking) — both are the SAME underlying condition
+/// (confirmed by direct source read of `cozo-0.7.6/src/runtime/db.rs`'s
+/// `initialize()`/`load_last_ids()`), just surfaced two different ways
+/// depending on which internal cozo code path hits it first. **Found via
+/// two separate real CI failures, not assumed**: an earlier version of this
+/// function only caught the panic shape, and a later CI run reproduced the
+/// SAME race manifesting as the Err shape instead — proving both needed
+/// covering, not just the one first observed. See `open_with_engine`'s
+/// `@ai-caution` note for why this is needed at all (cozo 0.7.6 never
+/// configures `busy_timeout`). Any OTHER panic message or `Err` (a
+/// genuinely corrupt/inaccessible store, matching the sibling sled
+/// `@ai-caution` above) is NOT retried — returned on the first occurrence,
+/// for the caller's existing error mapping to handle exactly as if this
+/// wrapper weren't here.
+///
+/// Deliberately mirrors `Db::run_with_busy_retry`'s already-battle-tested
+/// backoff shape immediately below in this same crate (exponential cap with
+/// FULL jitter, not the two-instance-lockstep-prone linear/no-jitter backoff
+/// an earlier draft of this function used) rather than reinventing a worse
+/// one (principle #8) — the two can't literally share code (that one only
+/// ever sees a `Result`, never a panic; this one must handle both shapes
+/// from the same underlying condition) — but there is no reason for this
+/// backoff's *quality* to regress from established precedent just because
+/// the call shape differs. `run_with_busy_retry`'s own doc comment explains
+/// why jitter specifically matters here: "Without jitter, identical backoff
+/// keeps them in lockstep and they collide forever."
+pub(crate) fn retry_on_transient_sqlite_busy<T, E: std::fmt::Display>(
+    f: impl Fn() -> Result<T, E>,
+) -> Result<T, E> {
+    const MAX_ATTEMPTS: u32 = 400;
+    fn is_transient_busy_message(s: &str) -> bool {
+        let s = s.to_ascii_lowercase();
+        s.contains("database is locked") || s.contains("sqlite_busy") || s.contains("busy")
+    }
+    // Poor-man's per-call entropy (a stack address, like `Db::run_with_busy_retry`'s
+    // `self as *const Self as u64`) -- no need for a real RNG crate just to
+    // desynchronize two competing retriers.
+    let seed = &f as *const _ as u64;
+    let mut attempt: u32 = 0;
+    loop {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&f));
+        let is_retryable = match &outcome {
+            Ok(Err(e)) => is_transient_busy_message(&e.to_string()),
+            Err(payload) => payload
+                .downcast_ref::<String>()
+                .map(|s| s.as_str())
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .map(is_transient_busy_message)
+                .unwrap_or(false),
+            Ok(Ok(_)) => false,
+        };
+        if !is_retryable || attempt >= MAX_ATTEMPTS {
+            return match outcome {
+                Ok(result) => result,
+                Err(payload) => std::panic::resume_unwind(payload),
+            };
+        }
+        attempt += 1;
+        // Exponential cap (~0.25ms -> 8ms) with full jitter, same shape as
+        // `Db::run_with_busy_retry` below.
+        let cap = (250u64 << attempt.min(5)).min(8_000);
+        let jitter = seed
+            .wrapping_mul(attempt as u64 + 1)
+            .wrapping_add(attempt as u64)
+            % (cap + 1);
+        std::thread::sleep(std::time::Duration::from_micros(jitter));
     }
 }
 

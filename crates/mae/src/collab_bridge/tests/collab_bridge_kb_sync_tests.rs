@@ -147,6 +147,10 @@ fn collab_kb_shared_named_instance_tracks_nodes_by_uuid() {
             remote_peers: Vec::new(),
             last_sync: None,
             ai_residency: mae_kb::federation::AiResidency::default(),
+            project_root: None,
+            kind: mae_kb::federation::KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
         });
     // The handler now reloads the registry fresh from disk before stamping
     // the durable marker (KbRegistry::update) — persist the fixture instance
@@ -216,6 +220,10 @@ fn adr019_share_marker_survives_registry_reload() {
             remote_peers: Vec::new(),
             last_sync: None,
             ai_residency: mae_kb::federation::AiResidency::default(),
+            project_root: None,
+            kind: mae_kb::federation::KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
         });
     // The handler reloads the registry fresh from disk before stamping the
     // durable marker (KbRegistry::update) — persist the fixture instance

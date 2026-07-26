@@ -261,10 +261,6 @@ fn cmd_sync() -> i32 {
 
         if source.is_local() {
             // Local source — create symlink instead of cloning.
-            let local_path = match &source {
-                PackageSource::Local(p) => p.clone(),
-                _ => unreachable!(),
-            };
             if !target.exists() {
                 print!("  Linking {}...", pkg.name);
                 if let Err(e) = std::fs::create_dir_all(&pkg_dir) {
@@ -272,15 +268,19 @@ fn cmd_sync() -> i32 {
                     errors += 1;
                     continue;
                 }
-                let abs_path = if local_path.is_relative() {
-                    std::env::current_dir()
-                        .unwrap_or_default()
-                        .join(&local_path)
-                } else {
-                    local_path.clone()
-                };
                 #[cfg(unix)]
                 {
+                    let local_path = match &source {
+                        PackageSource::Local(p) => p.clone(),
+                        _ => unreachable!(),
+                    };
+                    let abs_path = if local_path.is_relative() {
+                        std::env::current_dir()
+                            .unwrap_or_default()
+                            .join(&local_path)
+                    } else {
+                        local_path.clone()
+                    };
                     match std::os::unix::fs::symlink(&abs_path, &target) {
                         Ok(()) => println!(" done (→ {})", abs_path.display()),
                         Err(e) => {

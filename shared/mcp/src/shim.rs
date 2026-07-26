@@ -19,6 +19,22 @@
 //! Set `MAE_MCP_SHIM_LOG=/path/to/file.log` to override the default log path.
 //! Default log: `/tmp/mae-shim.log`.
 //!
+//! Set `MAE_MCP_PERMISSION_CEILING=<ReadOnly|Write|Shell|Privileged>` to have
+//! the shim forward a `permissionCeiling` in its `initialize` request params
+//! (ADR-051). This can only ever *tighten* the effective policy on the
+//! editor side (`effective_permission_policy` takes a `min()` against global
+//! config) -- there is no server-side field this env var could set to
+//! *loosen* a session's tier, so it's safe to trust unconditionally, exactly
+//! like any hand-rolled MCP client that set the same field directly. Exists
+//! because the shim itself otherwise has no way to set this (a gap ADR-050
+//! D1/Phase I's "MAE for VS Code" extension needed closed).
+//!
+//! Set `MAE_MCP_TOOL_CATEGORY_ALLOWLIST=<comma-separated categories>` (e.g.
+//! `knowledge`) to have the shim forward a `toolCategoryAllowlist` in its
+//! `initialize` request params (ADR-056) -- the tool-category analogue of
+//! `MAE_MCP_PERMISSION_CEILING` above, same trust shape (can only narrow,
+//! never widen, this session's effective category restriction).
+//!
 //! Flags:
 //!   --version   Print version and exit
 //!   --check     Connectivity diagnostic (discover, connect, verify, exit)
@@ -30,6 +46,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::io::{split as io_split, AsyncBufReadExt, AsyncWriteExt, BufReader};
+#[cfg(all(test, unix))]
 use tokio::net::UnixStream;
 use tokio::sync::mpsc;
 
@@ -148,21 +165,24 @@ async fn write_jsonl<W: AsyncWriteExt + Unpin>(
 /// connect path did zero handshake verification: a freshly discovered but
 /// stale socket file could be "connected" to and then silently relay
 /// nothing.
-async fn connect_and_verify(socket_path: &str) -> Result<BufReader<UnixStream>, String> {
-    let stream = UnixStream::connect(socket_path)
+async fn connect_and_verify(
+    socket_path: &str,
+) -> Result<BufReader<mae_mcp::local_ipc::LocalStream>, String> {
+    let stream = mae_mcp::local_ipc::connect(std::path::Path::new(socket_path))
         .await
         .map_err(|e| format!("connect: {e}"))?;
     let mut stream = BufReader::new(stream);
 
+    let ceiling_env = env::var("MAE_MCP_PERMISSION_CEILING").ok();
+    let categories_env = env::var("MAE_MCP_TOOL_CATEGORY_ALLOWLIST").ok();
     let init_req = serde_json::json!({
         "jsonrpc": "2.0",
         "id": 1,
         "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-11-25",
-            "capabilities": {},
-            "clientInfo": { "name": "mae-mcp-shim", "version": VERSION }
-        }
+        "params": mae_mcp::build_shim_initialize_params(
+            ceiling_env.as_deref(),
+            categories_env.as_deref(),
+        )
     });
     mae_mcp::write_framed(
         &mut stream,
@@ -453,6 +473,7 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use tokio::net::UnixListener;
 
     fn test_socket_path(dir: &tempfile::TempDir, name: &str) -> String {
@@ -462,6 +483,7 @@ mod tests {
     /// A minimal fake MAE server: accepts one connection, replies to
     /// `initialize` and `$/ping` with a bare JSON-RPC result (ignores
     /// `notifications/initialized`, which has no response).
+    #[cfg(unix)]
     async fn serve_one_handshake(path: String) {
         let listener = UnixListener::bind(&path).unwrap();
         let (stream, _) = listener.accept().await.unwrap();
@@ -485,6 +507,7 @@ mod tests {
         }
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn connect_and_verify_succeeds_against_a_healthy_handshake() {
         let dir = tempfile::tempdir().unwrap();
@@ -504,6 +527,7 @@ mod tests {
     /// Adversarial: a socket that merely *accepts* the connection but never
     /// answers isn't sufficient proof of a healthy MAE process behind it --
     /// `connect_and_verify` must time out, not hang forever or report success.
+    #[cfg(unix)]
     #[tokio::test]
     async fn connect_and_verify_times_out_against_a_silent_acceptor() {
         let dir = tempfile::tempdir().unwrap();
@@ -542,6 +566,7 @@ mod tests {
     /// (`StdinClosed`) even while the socket side would otherwise keep
     /// waiting for data -- this is what lets `main()` distinguish "the MCP
     /// host is gone, exit for good" from "the editor dropped, reconnect".
+    #[cfg(unix)]
     #[tokio::test]
     async fn run_session_ends_stdin_closed_when_stdin_channel_closes() {
         let dir = tempfile::tempdir().unwrap();
@@ -580,6 +605,7 @@ mod tests {
     /// The mirror case: a live stdin channel (never closed) but a dropped
     /// socket must end the session as `SocketDropped`, driving a reconnect
     /// rather than a shutdown.
+    #[cfg(unix)]
     #[tokio::test]
     async fn run_session_ends_socket_dropped_on_socket_eof() {
         let dir = tempfile::tempdir().unwrap();

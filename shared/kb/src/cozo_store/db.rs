@@ -249,19 +249,44 @@ impl CozoKbStore {
         let s = e.to_string().to_ascii_lowercase();
         s.contains("locked") || s.contains("busy") || s.contains("executing against relation")
     }
-    /// Run an immutable CozoScript.
+    /// Run an immutable CozoScript, retrying on SQLite BUSY/locked contention
+    /// exactly like `run_mut` above.
+    ///
+    /// **Found via a real CI failure, not assumed**: a read was originally
+    /// unprotected here on the theory that only writers need retry — true
+    /// under SQLite's WAL mode, where readers never block on a writer, but
+    /// FALSE under the default rollback-journal mode cozo 0.7.6 actually
+    /// uses (confirmed no `journal_mode=WAL` is ever configured — see
+    /// `open_with_engine`'s own `@ai-caution` note). In rollback-journal
+    /// mode a writer's exclusive lock blocks readers too, so an unprotected
+    /// `run_immut` call CAN legitimately hit "database is locked" under
+    /// real concurrent write contention — exactly what surfaced as a CI-only
+    /// flake in `concurrent_first_time_sqlite_open_and_import_does_not_panic`
+    /// (`ensure_instance_id`'s existence-check read, `schema.rs`, racing a
+    /// different concurrent opener's `insert_node` write) even though the
+    /// store-creation window itself is lock-protected — the race is between
+    /// one opener's POST-open application writes and a DIFFERENT opener's
+    /// still-in-progress `ensure_schema` reads, which the advisory lock
+    /// deliberately does not (and should not) serialize against, since
+    /// ordinary concurrent read/write after creation is supposed to be
+    /// safe and usually is once contention clears within the retry budget.
     pub(super) fn run_immut(&self, script: &str) -> Result<NamedRows, cozo::Error> {
-        self.db
-            .run_script(script, BTreeMap::new(), ScriptMutability::Immutable)
+        self.run_with_busy_retry(|| {
+            self.db
+                .run_script(script, BTreeMap::new(), ScriptMutability::Immutable)
+        })
     }
-    /// Run an immutable CozoScript with parameters.
+    /// Run an immutable CozoScript with parameters, retrying on BUSY/locked
+    /// contention — see `run_immut`'s doc for why reads need this too.
     pub(super) fn run_immut_params(
         &self,
         script: &str,
         params: BTreeMap<String, DataValue>,
     ) -> Result<NamedRows, cozo::Error> {
-        self.db
-            .run_script(script, params, ScriptMutability::Immutable)
+        self.run_with_busy_retry(|| {
+            self.db
+                .run_script(script, params.clone(), ScriptMutability::Immutable)
+        })
     }
     pub(super) fn now_epoch(&self) -> i64 {
         std::time::SystemTime::now()

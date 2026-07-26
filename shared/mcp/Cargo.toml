@@ -36,6 +36,17 @@ ssh-key = { version = "0.6", default-features = false, features = ["ed25519", "a
 hostname = "0.4"
 libc = "0.2"
 
+# ADR-066: file_lock's stale-lock cleanup needs real process-liveness detection on
+# Windows too -- `libc::kill(pid, 0)` has no Windows equivalent, and the previous
+# "assume alive" placeholder there permanently disabled stale-lock cleanup on Windows
+# (a real correctness gap, not just a test artifact). sysinfo is already a proven,
+# actively-used dependency elsewhere in this workspace (mae-core's perf.rs), so this
+# reuses a known-good cross-platform abstraction instead of hand-rolled Windows FFI
+# this environment has no way to compile-check locally. Target-scoped to non-Unix only
+# -- the Unix path keeps its existing, unchanged `libc::kill` fast path.
+[target.'cfg(not(unix))'.dependencies]
+sysinfo = "0.39"
+
 [dev-dependencies]
 tempfile = "3"
 

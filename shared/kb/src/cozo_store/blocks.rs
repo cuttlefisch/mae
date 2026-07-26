@@ -61,6 +61,43 @@ impl CozoKbStore {
         .map_err(cozo_err)?;
         Ok(())
     }
+    /// Replace a meta-node's members wholesale — clear-then-reinsert, mirroring
+    /// `replace_node_links`'s own clear-then-reinsert pattern for typed links
+    /// (`links.rs`). `members` is `(member_id, role)` in the declared order;
+    /// position is assigned from that order.
+    pub fn replace_meta_members(
+        &self,
+        meta_id: &str,
+        members: &[(String, String)],
+    ) -> Result<(), KbStoreError> {
+        self.run_mut_params(
+            r#"?[meta_id, member_id, position] := *meta_members{meta_id, member_id, position}, meta_id = $id
+               :rm meta_members {meta_id, member_id, position}"#,
+            btree_params([("id", dv_str(meta_id))]),
+        )
+        .map_err(cozo_err)?;
+        for (order, (member_id, role)) in members.iter().enumerate() {
+            self.add_meta_member(meta_id, member_id, order as i32, role)?;
+        }
+        Ok(())
+    }
+
+    /// Re-derive a node's `meta_members` from its current body's `#+TRANSCLUDE:`
+    /// directives (ADR-065 item 4). Mirrors `update_links_for_node`'s role for
+    /// the sibling typed-link directive: parses `node.body` and replaces this
+    /// node's meta-membership wholesale to match what's declared *right now* —
+    /// including clearing it entirely when the body no longer declares any
+    /// transclusions, the same "fully re-derive from source" semantics
+    /// `replace_node_links` already gives typed links. Call this from the same
+    /// write path `update_links_for_node` is called from so a node authored or
+    /// edited via MCP `kb_create`/`kb_update` gets the same treatment a
+    /// file-imported node already does, instead of only ever picking up
+    /// `#+TRANSCLUDE:` directives at file-import time.
+    pub fn update_meta_members_for_node(&self, node: &Node) -> Result<(), KbStoreError> {
+        let members = crate::org::parse_transclusion_directives(&node.body);
+        self.replace_meta_members(&node.id, &members)
+    }
+
     /// Compose a meta-node's body from its members.
     pub fn compose_meta_body(&self, meta_id: &str) -> Result<String, KbStoreError> {
         let members = self.meta_members(meta_id)?;

@@ -173,6 +173,15 @@ enum ToolResidencyShape {
     /// leaves this tool (membership/policy/lifecycle actions, or pure
     /// view-state manipulation of an already-rendered scene). Never gated.
     NonContent,
+    /// Resolves its one target from **editor state** (the `ai_guidance_kb`
+    /// option), not from `arguments` — unlike [`Self::SingleTarget`], whose
+    /// gate mechanism only ever inspects `TARGET_ARG_KEYS` in the call's
+    /// arguments and would silently NOT gate a tool that takes no such
+    /// argument at all. `kb_export_guidance` writes that KB's content to a
+    /// plain file any subsequent agent (local or not) can read, so it must
+    /// be gated exactly like a direct read of that KB would be — empty
+    /// `ai_guidance_kb` (nothing configured) is always allowed.
+    GuidanceKbTarget,
 }
 
 /// Explicit residency classification for every `kb_*`/`help_open` AI tool.
@@ -245,6 +254,10 @@ fn classify_kb_tool(tool_name: &str) -> Option<ToolResidencyShape> {
         | "kb_preview_dismiss"
         | "kb_register"
         | "kb_unregister"
+        // --- NonContent: per-project provisioning lifecycle (ADR-058) — registers/
+        // declines a project-scoped instance, never reads/returns node content ---
+        | "kb_init_project"
+        | "kb_decline_project_provisioning"
         // --- NonContent: sharing/membership/policy lifecycle actions —
         // mutate collaboration state, never read/return node content ---
         | "kb_sharing_status"
@@ -261,6 +274,10 @@ fn classify_kb_tool(tool_name: &str) -> Option<ToolResidencyShape> {
         | "kb_set_policy"
         | "kb_set_encryption"
         | "kb_set_ai_residency" => NonContent,
+
+        // --- GuidanceKbTarget: reads ai_guidance_kb's content, target
+        // resolved from editor state rather than a tool argument ---
+        "kb_export_guidance" => GuidanceKbTarget,
 
         _ => return None,
     })
@@ -307,6 +324,23 @@ pub fn check_kb_residency(
 
     match shape {
         ToolResidencyShape::NonContent => ResidencyDecision::Allow,
+
+        ToolResidencyShape::GuidanceKbTarget => {
+            if editor.ai_guidance_kb.is_empty() {
+                return ResidencyDecision::Allow;
+            }
+            if let Some(label) = resolve_restricted_label(editor, &editor.ai_guidance_kb) {
+                return ResidencyDecision::Deny(format!(
+                    "AI-residency policy: KB '{label}' is set to local_models_only, and this \
+                     session's AI provider ({}) isn't a local model. kb_export_guidance would \
+                     write that KB's content to a plain file any subsequent agent can read — \
+                     switch to a local (Ollama) provider, or point ai_guidance_kb at an \
+                     unrestricted KB.",
+                    requester_provider.unwrap_or("none/unauthenticated")
+                ));
+            }
+            ResidencyDecision::Allow
+        }
 
         ToolResidencyShape::PrimaryOnly => {
             if editor.kb.registry.primary_ai_residency
@@ -469,8 +503,8 @@ fn any_restricted_kb_label(editor: &Editor) -> Option<String> {
 fn any_restricted_kb_label_in_scope(editor: &Editor, scope_arg: Option<&str>) -> Option<String> {
     let scope = scope_arg
         .filter(|s| !s.is_empty())
-        .map(mae_kb::KbScope::parse)
-        .unwrap_or_else(|| mae_kb::KbScope::parse(&editor.kb.search_scope));
+        .map(|s| editor.resolve_kb_scope(s))
+        .unwrap_or_else(|| editor.resolve_kb_scope(&editor.kb.search_scope));
 
     let is_restricted = |ai_residency: mae_kb::federation::AiResidency| {
         ai_residency == mae_kb::federation::AiResidency::LocalModelsOnly
@@ -502,6 +536,14 @@ fn any_restricted_kb_label_in_scope(editor: &Editor, scope_arg: Option<&str>) ->
                     .map(|inst| inst.name.clone())
             }
         }
+        mae_kb::KbScope::Project(root) => editor
+            .kb
+            .registry
+            .instances
+            .iter()
+            .filter(|inst| inst.matches_project_root(&root))
+            .find(|inst| is_restricted(inst.ai_residency))
+            .map(|inst| inst.name.clone()),
     }
 }
 
@@ -530,6 +572,10 @@ mod tests {
             remote_peers: Vec::new(),
             last_sync: None,
             ai_residency: mae_kb::federation::AiResidency::Open,
+            project_root: None,
+            kind: mae_kb::federation::KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
         }
     }
 
@@ -1242,5 +1288,107 @@ mod tests {
                 "{tool} must never be gated (administrative/lifecycle, not content)"
             );
         }
+    }
+
+    // --- kb_export_guidance (GuidanceKbTarget) — the target is resolved
+    // from editor state (`ai_guidance_kb`), not `arguments`, so this needs
+    // its own coverage distinct from SingleTarget's arg-based tests above.
+
+    #[test]
+    fn export_guidance_allowed_when_ai_guidance_kb_is_unset() {
+        let editor = editor_with_restricted_primary(); // restricted primary is irrelevant here
+        assert_eq!(
+            check_kb_residency(
+                &editor,
+                "kb_export_guidance",
+                &serde_json::json!({}),
+                Some("claude")
+            ),
+            ResidencyDecision::Allow,
+            "nothing configured to export means nothing to leak"
+        );
+    }
+
+    #[test]
+    fn export_guidance_denied_for_a_non_local_provider_when_the_guidance_kb_is_restricted() {
+        let mut editor = Editor::new();
+        editor
+            .kb
+            .registry
+            .instances
+            .push(restricted_instance("TeamSecrets", "uuid-secrets"));
+        editor.ai_guidance_kb = "TeamSecrets".to_string();
+
+        let decision = check_kb_residency(
+            &editor,
+            "kb_export_guidance",
+            &serde_json::json!({}),
+            Some("claude"),
+        );
+        assert!(
+            matches!(decision, ResidencyDecision::Deny(_)),
+            "a restricted guidance KB must deny export to a non-local provider, got: {decision:?}"
+        );
+    }
+
+    #[test]
+    fn export_guidance_allowed_for_a_local_provider_even_when_the_guidance_kb_is_restricted() {
+        let mut editor = Editor::new();
+        editor
+            .kb
+            .registry
+            .instances
+            .push(restricted_instance("TeamSecrets", "uuid-secrets"));
+        editor.ai_guidance_kb = "TeamSecrets".to_string();
+
+        assert_eq!(
+            check_kb_residency(
+                &editor,
+                "kb_export_guidance",
+                &serde_json::json!({}),
+                Some("ollama")
+            ),
+            ResidencyDecision::Allow
+        );
+    }
+
+    #[test]
+    fn export_guidance_allowed_when_the_guidance_kb_is_unrestricted() {
+        let mut editor = Editor::new();
+        editor
+            .kb
+            .registry
+            .instances
+            .push(open_instance("PublicDocs", "uuid-public"));
+        editor.ai_guidance_kb = "PublicDocs".to_string();
+
+        assert_eq!(
+            check_kb_residency(
+                &editor,
+                "kb_export_guidance",
+                &serde_json::json!({}),
+                Some("claude")
+            ),
+            ResidencyDecision::Allow
+        );
+    }
+
+    #[test]
+    fn export_guidance_denied_when_the_restricted_primary_is_the_guidance_kb() {
+        // "primary" is a valid ai_guidance_kb value too (not yet wired in
+        // guidance.rs's reader per its own option doc, but the residency
+        // gate must fail closed regardless of whether the read path
+        // currently resolves it -- a future wiring fix must not silently
+        // inherit an ungated path).
+        let mut editor = editor_with_restricted_primary();
+        editor.ai_guidance_kb = "primary".to_string();
+
+        let decision = check_kb_residency(
+            &editor,
+            "kb_export_guidance",
+            &serde_json::json!({}),
+            Some("claude"),
+        );
+        assert!(matches!(decision, ResidencyDecision::Deny(_)));
     }
 }

@@ -262,7 +262,9 @@ pub(crate) fn classify_tool_to_self_test_step(tool_name: &str) -> Option<&'stati
         "list_modules" => Some("modules"),
 
         "kb_health" | "kb_id_audit" | "kb_sync_status" | "kb_register" | "kb_unregister"
-        | "kb_reimport" | "kb_create" | "kb_update" | "kb_delete" => Some("federation"),
+        | "kb_reimport" | "kb_create" | "kb_update" | "kb_delete" | "kb_export_guidance" => {
+            Some("federation")
+        }
 
         "collab_status" | "collab_connect" | "collab_share" | "collab_doctor" => Some("collab"),
 

@@ -34,6 +34,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 pub mod activity;
+pub mod adr_kb;
+pub mod adr_parse;
 pub mod backup;
 pub mod data_dir;
 pub mod export;
@@ -50,6 +52,8 @@ pub mod cozo_store;
 pub mod hygiene;
 pub mod lru_query;
 pub mod query;
+#[cfg(feature = "remote-hub")]
+pub mod remote_hub;
 
 // Advisory file locking + the reload-fresh-then-mutate-then-save helper
 // (`with_locked_update`) live in `mae-mcp`, which this crate already

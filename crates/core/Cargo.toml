@@ -5,6 +5,14 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# ADR-062 Phase D: forwards to mae-kb's own `remote-hub` feature (a `RemoteHubQueryLayer`
+# blended into `rebuild_query_layer` for `KbInstanceKind::RemoteHub` registry entries).
+# Off by default, matching `crates/mae`'s own `gui` feature precedent — pulls a TLS+HTTP
+# client into the binary only when a user actually opts in (`mae --features remote-hub`),
+# not for every build.
+remote-hub = ["mae-kb/remote-hub"]
+
 [dependencies]
 mae-babel = { path = "../babel" }
 mae-canvas = { path = "../canvas" }

@@ -1,0 +1,51 @@
+# MAE Headless — the full editor engine (buffers, KB, AI, LSP, DAP, MCP)
+# running with no terminal or GUI attached (ADR-055), for pairing with an
+# external editor's AI agent (e.g. VS Code + Copilot) via mae-mcp-shim.
+#
+# This is a systemd TEMPLATE unit: one instance per project, instantiated
+# with the project's absolute path as the instance name, systemd-escaped.
+# Distinct from mae-daemon.service — the daemon is a separate, structurally
+# smaller service (KB persistence + collaboration hub only, no Editor/AI/
+# LSP/DAP); this unit is the full engine.
+#
+# Installation:
+#   cp mae-headless@.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now 'mae-headless@'"$(systemd-escape /path/to/project)"'.service'
+#
+# Logs: journalctl --user -u 'mae-headless@*' -f
+
+[Unit]
+Description=MAE Headless (%i)
+Documentation=https://github.com/cuttlefisch/mae
+After=network.target
+
+[Service]
+Type=simple
+# %i is the systemd-escaped instance name (the project path) — WorkingDirectory
+# unescapes it back to the real path, matching how `mae --headless` detects
+# its project root the same way interactive `mae` does: from the CWD.
+WorkingDirectory=%i
+ExecStart=%h/.local/bin/mae --headless
+Restart=on-failure
+RestartSec=5
+# SIGTERM triggers ADR-055's graceful-shutdown path (persist history/AI
+# session, signal AI/LSP/DAP tasks) — do not raise this above systemd's
+# default TimeoutStopSec unless a specific project's shutdown work needs it.
+KillSignal=SIGTERM
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+# The project directory itself (%i) plus MAE's own config/data dirs — a
+# headless instance writes buffer saves, KB nodes, and session state to
+# both.
+ReadWritePaths=%h/.local/share/mae %h/.config/mae %t %i
+PrivateTmp=yes
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

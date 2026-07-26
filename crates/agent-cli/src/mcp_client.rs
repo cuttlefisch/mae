@@ -13,9 +13,10 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use mae_mcp::auth::{AuthProvider, PskAuth};
+use mae_mcp::local_ipc::LocalStream;
 use mae_mcp::protocol::{JsonRpcRequest, JsonRpcResponse, ToolInfo};
-use tokio::io::BufReader;
-use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
+use tokio::io::{BufReader, ReadHalf, WriteHalf};
+#[cfg(all(test, unix))]
 use tokio::net::UnixStream;
 
 const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -28,8 +29,8 @@ pub struct ToolCallOutcome {
 }
 
 pub struct McpClient {
-    reader: BufReader<OwnedReadHalf>,
-    writer: OwnedWriteHalf,
+    reader: BufReader<ReadHalf<LocalStream>>,
+    writer: WriteHalf<LocalStream>,
     next_id: u64,
 }
 
@@ -69,6 +70,18 @@ pub fn discover_connection() -> Option<(PathBuf, Option<PathBuf>)> {
 /// newest-wins / agent-socket-preferred logic is testable against a tempdir
 /// of fixture files instead of the real `/tmp`.
 fn discover_connection_in(base: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
+    discover_connection_in_with(base, mae_mcp::file_lock::is_process_alive)
+}
+
+/// `discover_connection_in`, further parameterized on the liveness check
+/// itself -- lets a test exercise the newest-wins comparison against two
+/// PIDs it controls without depending on any real, platform-specific
+/// "guaranteed alive" PID (no such thing portably exists: PID 1 is `init`
+/// on Linux but typically doesn't exist at all on Windows).
+fn discover_connection_in_with(
+    base: &Path,
+    is_alive: impl Fn(u32) -> bool,
+) -> Option<(PathBuf, Option<PathBuf>)> {
     let entries = std::fs::read_dir(base).ok()?;
     let mut agent_candidate: Option<(std::time::SystemTime, PathBuf, PathBuf)> = None;
     let mut plain_candidate: Option<(std::time::SystemTime, PathBuf)> = None;
@@ -87,7 +100,7 @@ fn discover_connection_in(base: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
 
         if let Some(pid_str) = rest.strip_suffix("-agent.sock") {
             if let Ok(pid) = pid_str.parse::<u32>() {
-                if is_pid_alive(pid) {
+                if is_alive(pid) {
                     let psk_path = base.join(format!("mae-{pid}.psk"));
                     let is_newer = agent_candidate.as_ref().is_none_or(|(t, ..)| modified > *t);
                     if is_newer {
@@ -97,7 +110,7 @@ fn discover_connection_in(base: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
             }
         } else if let Some(pid_str) = rest.strip_suffix(".sock") {
             if let Ok(pid) = pid_str.parse::<u32>() {
-                if is_pid_alive(pid) {
+                if is_alive(pid) {
                     let is_newer = plain_candidate.as_ref().is_none_or(|(t, _)| modified > *t);
                     if is_newer {
                         plain_candidate = Some((modified, path.clone()));
@@ -112,10 +125,6 @@ fn discover_connection_in(base: &Path) -> Option<(PathBuf, Option<PathBuf>)> {
         return Some((sock, psk));
     }
     plain_candidate.map(|(_, sock)| (sock, None))
-}
-
-fn is_pid_alive(pid: u32) -> bool {
-    Path::new(&format!("/proc/{pid}")).exists()
 }
 
 /// Extract a `tools/call` outcome from its raw JSON-RPC `result` value:
@@ -150,7 +159,7 @@ impl McpClient {
         psk: Option<&str>,
         declared_provider: Option<&str>,
     ) -> Result<Self> {
-        let stream = UnixStream::connect(socket_path)
+        let stream = mae_mcp::local_ipc::connect(socket_path)
             .await
             .with_context(|| format!("connecting to {}", socket_path.display()))?;
         Self::from_stream(stream, psk, declared_provider).await
@@ -158,15 +167,16 @@ impl McpClient {
 
     /// Shared post-connect logic: split, optionally PSK-handshake, initialize.
     /// Split out from `connect` so tests can drive it over an in-process
-    /// `UnixStream::pair()` instead of a real filesystem socket. `pub(crate)`
-    /// so `main.rs`'s own test module (a sibling, not a descendant, of this
-    /// one) can build a real `McpClient` for its own executor-level tests.
+    /// `UnixStream::pair()` (wrapped in `LocalStream::Unix`) instead of a real
+    /// filesystem socket. `pub(crate)` so `main.rs`'s own test module (a sibling, not a
+    /// descendant, of this one) can build a real `McpClient` for its own
+    /// executor-level tests.
     pub(crate) async fn from_stream(
-        stream: UnixStream,
+        stream: mae_mcp::local_ipc::LocalStream,
         psk: Option<&str>,
         declared_provider: Option<&str>,
     ) -> Result<Self> {
-        let (read_half, write_half) = stream.into_split();
+        let (read_half, write_half) = tokio::io::split(stream);
         let mut reader = BufReader::new(read_half);
         let mut writer = write_half;
 
@@ -266,17 +276,19 @@ impl McpClient {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+    #[cfg(unix)]
+    use tokio::net::unix::{OwnedReadHalf, OwnedWriteHalf};
 
     // ---- pure logic: is_pid_alive / parse_tool_call_result ----
 
     #[test]
     fn is_pid_alive_true_for_own_process() {
-        assert!(is_pid_alive(std::process::id()));
+        assert!(mae_mcp::file_lock::is_process_alive(std::process::id()));
     }
 
     #[test]
     fn is_pid_alive_false_for_implausible_pid() {
-        assert!(!is_pid_alive(u32::MAX));
+        assert!(!mae_mcp::file_lock::is_process_alive(u32::MAX));
     }
 
     #[test]
@@ -373,41 +385,48 @@ mod tests {
     fn discover_connection_in_newest_agent_socket_wins_between_two_live_pids() {
         // Exercise the `is_newer` mtime-comparison branch against a SECOND
         // genuinely live pid (not just `None`, which every other test above
-        // compares against). PID 1 (init) is always alive on any Linux box,
-        // including containers, so this doesn't depend on any process this
-        // test itself spawns.
+        // compares against). There is no portable "always alive" PID across
+        // Linux/macOS/Windows to hardcode here -- PID 1 is `init` (always
+        // alive) on Linux/macOS but typically doesn't exist at all on
+        // Windows, which is exactly the bug this test used to have. Instead,
+        // use `discover_connection_in_with` and fake liveness for both PIDs
+        // this test itself writes -- deterministic and platform-independent,
+        // with no real OS process to spawn or race against.
         let own_pid = std::process::id();
-        let init_pid = 1u32;
+        let other_pid = 999_999u32;
+        let is_alive = |pid: u32| pid == own_pid || pid == other_pid;
 
         // Scenario A: own pid's socket is written second (newer) -> wins.
         {
             let dir = tempdir().unwrap();
-            std::fs::write(dir.path().join(format!("mae-{init_pid}-agent.sock")), b"").unwrap();
+            std::fs::write(dir.path().join(format!("mae-{other_pid}-agent.sock")), b"").unwrap();
             std::thread::sleep(Duration::from_millis(50));
             std::fs::write(dir.path().join(format!("mae-{own_pid}-agent.sock")), b"").unwrap();
 
-            let (sock, _psk) = discover_connection_in(dir.path()).expect("should find a candidate");
+            let (sock, _psk) =
+                discover_connection_in_with(dir.path(), is_alive).expect("should find a candidate");
             assert_eq!(
                 sock,
                 dir.path().join(format!("mae-{own_pid}-agent.sock")),
-                "newer own-pid socket should win over the older pid-1 socket"
+                "newer own-pid socket should win over the older other-pid socket"
             );
         }
 
-        // Scenario B: pid 1's socket is written second (newer) -> wins.
+        // Scenario B: the other pid's socket is written second (newer) -> wins.
         // Same comparison, opposite direction, so the branch isn't only ever
         // exercised with "our pid happens to always be newer".
         {
             let dir = tempdir().unwrap();
             std::fs::write(dir.path().join(format!("mae-{own_pid}-agent.sock")), b"").unwrap();
             std::thread::sleep(Duration::from_millis(50));
-            std::fs::write(dir.path().join(format!("mae-{init_pid}-agent.sock")), b"").unwrap();
+            std::fs::write(dir.path().join(format!("mae-{other_pid}-agent.sock")), b"").unwrap();
 
-            let (sock, _psk) = discover_connection_in(dir.path()).expect("should find a candidate");
+            let (sock, _psk) =
+                discover_connection_in_with(dir.path(), is_alive).expect("should find a candidate");
             assert_eq!(
                 sock,
-                dir.path().join(format!("mae-{init_pid}-agent.sock")),
-                "newer pid-1 socket should win over the older own-pid socket"
+                dir.path().join(format!("mae-{other_pid}-agent.sock")),
+                "newer other-pid socket should win over the older own-pid socket"
             );
         }
     }
@@ -419,6 +438,7 @@ mod tests {
     /// every message it saw (including notifications, which get no reply).
     /// Returns once the connection closes — real `McpClient`s never close
     /// proactively, so tests must `drop` their client to end this loop.
+    #[cfg(unix)]
     async fn run_fake_server(
         mut reader: BufReader<OwnedReadHalf>,
         mut writer: OwnedWriteHalf,
@@ -458,6 +478,7 @@ mod tests {
     /// `"result"` — lets tests drive `McpClient::request`'s error-handling
     /// branches (`resp.error` set, or neither `result` nor `error` present)
     /// that `run_fake_server` above has no way to produce.
+    #[cfg(unix)]
     async fn run_fake_server_with_raw_response(
         mut reader: BufReader<OwnedReadHalf>,
         mut writer: OwnedWriteHalf,
@@ -488,9 +509,11 @@ mod tests {
         seen
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn request_error_response_surfaces_code_and_message() {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let client_stream = mae_mcp::local_ipc::LocalStream::Unix(client_stream);
         let (server_read, server_write) = server_stream.into_split();
         let server_reader = BufReader::new(server_read);
 
@@ -520,9 +543,11 @@ mod tests {
         server.await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn request_with_neither_result_nor_error_is_reported_as_such() {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let client_stream = mae_mcp::local_ipc::LocalStream::Unix(client_stream);
         let (server_read, server_write) = server_stream.into_split();
         let server_reader = BufReader::new(server_read);
 
@@ -553,9 +578,11 @@ mod tests {
         server.await.unwrap();
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn client_connects_lists_tools_and_calls_one_over_a_paired_socket() {
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let client_stream = mae_mcp::local_ipc::LocalStream::Unix(client_stream);
         let (server_read, server_write) = server_stream.into_split();
         let server_reader = BufReader::new(server_read);
 
@@ -614,6 +641,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn full_turn_round_trips_through_the_real_socket_transport() {
         use mae_ai::{
@@ -643,6 +671,7 @@ mod tests {
         }
 
         let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let client_stream = mae_mcp::local_ipc::LocalStream::Unix(client_stream);
         let (server_read, server_write) = server_stream.into_split();
         let server_reader = BufReader::new(server_read);
         let server = tokio::spawn(run_fake_server(

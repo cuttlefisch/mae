@@ -24,6 +24,7 @@ mod graph_layout_bridge;
 mod gui_app;
 #[cfg(feature = "gui")]
 mod gui_event;
+mod headless_loop;
 mod key_handling;
 mod lsp_bridge;
 mod manual_kb;
@@ -65,6 +66,10 @@ use terminal_loop::{cleanup_stale_mcp_sockets, run_headless_self_test, run_termi
 ///
 /// Extracted from [`gui_display_available`] so the decision is unit-testable
 /// without touching process-global environment variables (see `mod tests`).
+/// `#[cfg(unix)]` because [`gui_display_available`]'s Windows branch never
+/// calls it (it unconditionally returns `true` there), which would otherwise
+/// make this genuinely dead code on Windows.
+#[cfg(unix)]
 fn display_available_from_env(ssh_session: bool, x11: bool, wayland: bool, is_macos: bool) -> bool {
     if ssh_session {
         // A remote shell has no local GUI session, regardless of platform.
@@ -87,7 +92,7 @@ fn display_available_from_env(ssh_session: bool, x11: bool, wayland: bool, is_ma
 fn gui_display_available() -> bool {
     #[cfg(not(unix))]
     {
-        return true;
+        true
     }
     #[cfg(unix)]
     {
@@ -324,6 +329,49 @@ fn enable_daemon_p2p(relay: &str) -> io::Result<std::path::PathBuf> {
     Ok(path)
 }
 
+/// ADR-063 Phase A: the guidance-KB portion of MCP `initialize.instructions`. Pure and
+/// free of `Editor`/MCP state so the budget boundary (at/under vs. over) is directly
+/// unit-testable without a full handshake. When `guidance_content` fits within
+/// `budget_chars` (character count, not bytes -- matches the option's own documented
+/// "character budget"), inlines it byte-identical to what `build_guidance_context()`
+/// produced -- no re-encoding, no truncation. Otherwise falls back to today's bare
+/// pointer sentence, never a truncated partial inline (a cut-off guidance payload could
+/// mislead an agent worse than no guidance at all).
+fn guidance_instructions_fragment(
+    guidance_kb: &str,
+    guidance_content: Option<&str>,
+    budget_chars: usize,
+) -> String {
+    if guidance_kb.is_empty() {
+        return String::new();
+    }
+    match guidance_content {
+        Some(content) if content.chars().count() <= budget_chars => {
+            format!(
+                "The following are required practices from KB '{guidance_kb}' -- read \
+                 them before acting:\n\n{content}\n\n"
+            )
+        }
+        _ => format!("Before acting, consult KB '{guidance_kb}' for required practices. "),
+    }
+}
+
+/// ADR-063 Phase B: the effective `ai_guidance_export_live_sync` value for this
+/// session. `explicit` is `Some(value)` when the user has explicitly set this option
+/// (tracked via `Editor::explicitly_set_options`) -- an explicit choice, `true` or
+/// `false`, always wins over the computed default. `None` (never touched) applies the
+/// conditional default: `true` exactly for a paired external session that benefits
+/// from it (`daemon_connects && is_headless`, ADR-055's stable-socket external-editor-
+/// pairing mode), `false` otherwise -- so a plain interactive GUI/TUI user sees no
+/// behavior change. Pure and directly testable without a full CLI/session simulation.
+fn effective_guidance_live_sync(
+    explicit: Option<bool>,
+    daemon_connects: bool,
+    is_headless: bool,
+) -> bool {
+    explicit.unwrap_or(daemon_connects && is_headless)
+}
+
 /// Emacs lesson: Emacs's event loop is synchronous and single-threaded.
 /// Retrofitting concurrency required 23,901 commits across 3 GC branches.
 /// We use async from day one so the AI agent can operate as a peer.
@@ -382,6 +430,9 @@ fn main() -> io::Result<()> {
     if let Some(result) = cli::handle_print_config_template(&args) {
         return result;
     }
+    if let Some(result) = cli::handle_print_socket_path(&args) {
+        return result;
+    }
     if let Some(result) = cli::handle_collab_identity(&args) {
         return result;
     }
@@ -397,6 +448,9 @@ fn main() -> io::Result<()> {
         return result;
     }
     if let Some(result) = cli::handle_check_config(&args) {
+        return result;
+    }
+    if let Some(result) = cli::handle_ensure_guidance_config(&args) {
         return result;
     }
     cli::handle_test_mode(&args)?;
@@ -651,7 +705,26 @@ fn main() -> io::Result<()> {
             tools.extend(mae_ai::scheme_tools_to_definitions(&editor.ai.scheme_tools));
             tools
         };
-        let permission_policy = config::resolve_permission_policy(&app_config);
+        let mut permission_policy = config::resolve_permission_policy(&app_config);
+        // ADR-056: seed the server's global tool-category restriction from
+        // config/init.scm before any MCP session connects, same pattern as
+        // `mcp_tools_tiered` below. Empty (default) leaves the policy
+        // unrestricted, identical to every deployment that predates this
+        // option. Intended for a `mae --headless` engine instance scoped to
+        // serve external editors' AI agents KB+guidance operations only.
+        {
+            let allowlist_raw = editor
+                .get_option("mcp_tool_category_allowlist")
+                .map(|(v, _)| v)
+                .unwrap_or_default();
+            if !allowlist_raw.is_empty() {
+                let categories: std::collections::HashSet<_> =
+                    mae_ai::parse_categories(&allowlist_raw).into_iter().collect();
+                if !categories.is_empty() {
+                    permission_policy.allowed_categories = Some(categories);
+                }
+            }
+        }
 
         // MCP client: connect to external MCP servers configured in config.toml
         let mcp_client_configs = {
@@ -697,13 +770,63 @@ fn main() -> io::Result<()> {
         let sync_broadcaster: mae_mcp::broadcast::SharedBroadcaster =
             std::sync::Arc::new(std::sync::Mutex::new(mae_mcp::broadcast::EventBroadcaster::new()));
         {
-            let mcp_tools: Vec<mae_mcp::protocol::ToolInfo> = all_tools
+            // K2 (post-ship quality pass): a flat ~758-tool tools/list
+            // measurably degrades external MCP clients' tool-selection
+            // accuracy (docs/MODEL_SUPPORT.md's cited finding; live-observed
+            // this session as an external agent repeatedly calling the wrong
+            // tool with empty arguments instead of a well-named Core one).
+            // The built-in agent already solves this for itself
+            // (AgentSession::new, crates/ai/src/session/mod.rs) via
+            // classify_tool_tier's Core/Extended split + request_tools --
+            // apply the same split to the MCP server's own tools/list by
+            // default. This only narrows what's *advertised*; tools/call
+            // dispatch (crates/ai/src/executor/tool_dispatch.rs,
+            // reached via ai_event_handler.rs's mcp_tool_rx handler) is
+            // always given the FULL `all_tools`, so any Extended-tier tool
+            // discovered via search_tools/request_tools remains directly
+            // callable by name even though it wasn't listed.
+            let mcp_tools_tiered = editor
+                .get_option("mcp_tools_tiered_by_default")
+                .map(|(v, _)| v == "true")
+                .unwrap_or(true);
+            let mcp_tool_defs: Vec<mae_ai::ToolDefinition> = if mcp_tools_tiered {
+                let mut core: Vec<mae_ai::ToolDefinition> = all_tools
+                    .iter()
+                    .filter(|t| mae_ai::classify_tool_tier(&t.name) == mae_ai::ToolTier::Core)
+                    .cloned()
+                    .collect();
+                if !core.iter().any(|t| t.name == "request_tools") {
+                    core.push(mae_ai::request_tools_definition());
+                }
+                core
+            } else {
+                all_tools.clone()
+            };
+            let mcp_tools: Vec<mae_mcp::protocol::ToolInfo> = mcp_tool_defs
                 .iter()
-                .map(|t| mae_mcp::protocol::ToolInfo {
-                    name: t.name.clone(),
-                    description: t.description.clone(),
-                    input_schema: serde_json::to_value(&t.parameters).unwrap_or_default(),
-                    permission: t.permission.map(|p| format!("{p:?}")),
+                .map(|t| {
+                    // ADR-050 D2: annotations are mechanically derived from
+                    // the tool's own PermissionTier, never hand-authored --
+                    // see mae_ai::annotations_for_tier for the single source
+                    // of truth. A tool with no declared tier gets no
+                    // annotations at all (never guess readOnlyHint: true).
+                    let annotations = t.permission.map(|tier| {
+                        let (read_only_hint, destructive_hint, idempotent_hint) =
+                            mae_ai::annotations_for_tier(tier);
+                        mae_mcp::protocol::ToolAnnotations {
+                            title: None,
+                            read_only_hint: Some(read_only_hint),
+                            destructive_hint: Some(destructive_hint),
+                            idempotent_hint: Some(idempotent_hint),
+                        }
+                    });
+                    mae_mcp::protocol::ToolInfo {
+                        name: t.name.clone(),
+                        description: t.description.clone(),
+                        input_schema: serde_json::to_value(&t.parameters).unwrap_or_default(),
+                        permission: t.permission.map(|p| format!("{p:?}")),
+                        annotations,
+                    }
                 })
                 .collect();
             // Always-on AI guidance (gap closed alongside mae-agent-cli's
@@ -726,21 +849,110 @@ fn main() -> io::Result<()> {
                     .iter()
                     .map(|i| i.name.clone())
                     .collect();
-                if guidance_kb.is_empty() && registered.is_empty() {
+                if guidance_kb.is_empty() && registered.is_empty() && !mcp_tools_tiered {
                     None
                 } else {
                     let mut s = String::new();
                     if !guidance_kb.is_empty() {
-                        s.push_str(&format!(
-                            "Before acting, consult KB '{guidance_kb}' for required practices. "
+                        // ADR-063 Phase A: inline the guidance KB's actual rendered
+                        // content (the SAME build_guidance_context() output
+                        // mae-agent-cli already inlines into its system prompt --
+                        // crates/agent-cli/src/main.rs's build_agent_system_prompt)
+                        // instead of a bare pointer, so an external MCP client gets
+                        // the guidance content itself by default. Size-budgeted:
+                        // falls back to the pointer when the content doesn't fit,
+                        // never truncates mid-content (a truncated instructions
+                        // payload could be worse than no guidance at all).
+                        let cwd = std::env::current_dir().unwrap_or_default();
+                        let data_dir = mae_ai::guidance::default_data_dir();
+                        let guidance_content = mae_ai::guidance::build_guidance_context(
+                            &cwd,
+                            data_dir.as_deref(),
+                            &guidance_kb,
+                        );
+                        let budget: usize = editor
+                            .get_option("ai_guidance_inline_budget_chars")
+                            .and_then(|(v, _)| v.parse().ok())
+                            .unwrap_or(8000);
+                        s.push_str(&guidance_instructions_fragment(
+                            &guidance_kb,
+                            guidance_content.as_deref(),
+                            budget,
                         ));
                     }
                     if !registered.is_empty() {
-                        s.push_str(&format!("Registered KBs: {}.", registered.join(", ")));
+                        s.push_str(&format!("Registered KBs: {}. ", registered.join(", ")));
+                    }
+                    if mcp_tools_tiered {
+                        // K2 (post-ship quality pass): a fresh client only
+                        // sees this Core-tier tools/list, never the full
+                        // catalog, unless it already knew search_tools/
+                        // request_tools existed -- name both explicitly here
+                        // so the escalation path is discoverable from the
+                        // very first handshake, not just from
+                        // request_tools' own tool description.
+                        s.push_str(
+                            "Only a curated core set of tools is listed here. Call \
+                             search_tools to find additional tools by keyword, then \
+                             request_tools (by category or exact name) to get full \
+                             definitions for tools not shown above -- once you have a \
+                             tool's name you can call it directly, whether or not it \
+                             appeared in this list.",
+                        );
                     }
                     Some(s)
                 }
             };
+
+            // ADR-050 D4 (Phase H) / ADR-063 Phase B: ai_guidance_export_live_sync --
+            // if the user has opted in, keep AGENTS.md in sync with the guidance KB
+            // automatically each session start, so external editors that
+            // read AGENTS.md unconditionally (rather than via MCP
+            // initialize.instructions, whose forwarding is host-dependent
+            // and unverified) see current content without a manual export.
+            // Best-effort: never blocks startup on a missing project root or
+            // a write failure, matching ai_guidance_kb's own read path.
+            //
+            // Conditional default (ADR-063 Phase B): when the user has never
+            // explicitly set this option (`init.scm`/`:set`/`set-option!` --
+            // tracked via `explicitly_set_options`, ADR-063 Phase B), the
+            // effective value is `true` exactly when this is a paired external
+            // session that actually benefits from it (`daemon_mode != off` AND
+            // `--headless`, ADR-055's stable-socket external-editor-pairing
+            // mode) and `false` otherwise -- so the one delivery path proven to
+            // work end-to-end (a file Copilot's agent mode reads directly)
+            // engages by default for the population it was built for, without
+            // a surprise AGENTS.md write for a plain interactive GUI/TUI user
+            // who never asked for external pairing. An explicit user choice
+            // (`true` or `false`) always wins over this computed default.
+            let guidance_live_sync = {
+                let is_headless = args.iter().any(|a| a == "--headless");
+                let explicit = if editor
+                    .explicitly_set_options
+                    .contains("ai_guidance_export_live_sync")
+                {
+                    editor
+                        .get_option("ai_guidance_export_live_sync")
+                        .map(|(v, _)| v == "true")
+                } else {
+                    None
+                };
+                effective_guidance_live_sync(explicit, editor.kb.daemon_mode.connects(), is_headless)
+            };
+            if guidance_live_sync {
+                let guidance_kb = editor
+                    .get_option("ai_guidance_kb")
+                    .map(|(v, _)| v)
+                    .unwrap_or_default();
+                if !guidance_kb.is_empty() {
+                    match mae_ai::execute_kb_export_guidance(&editor, &serde_json::json!({})) {
+                        Ok(msg) => info!(message = %msg, "guidance export (live-sync) complete"),
+                        Err(e) => {
+                            warn!(error = %e, "guidance export (live-sync) skipped")
+                        }
+                    }
+                }
+            }
 
             let mut server = mae_mcp::McpServer::new(
                 &mcp_socket_path,
@@ -769,18 +981,57 @@ fn main() -> io::Result<()> {
                 Ok(()) => {
                     let mut agent_server = mae_mcp::McpServer::new(
                         &agent_socket_path,
-                        mcp_tool_tx,
+                        mcp_tool_tx.clone(),
                         sync_broadcaster.clone(),
                     )
                     .with_psk_auth(mae_mcp::auth::PskAuth::new(&psk));
                     if let Some(ref instructions) = mcp_instructions {
                         agent_server = agent_server.with_instructions(instructions.clone());
                     }
-                    tokio::spawn(agent_server.run(mcp_tools));
+                    tokio::spawn(agent_server.run(mcp_tools.clone()));
                     info!(socket = %agent_socket_path, psk_file = %psk_path, "MCP agent (PSK-required) server started");
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, path = %psk_path, "failed to write PSK file — agent socket not started");
+                }
+            }
+
+            // --headless (ADR-055): an additional stable, project-keyed
+            // socket for long-lived instances, alongside the ephemeral
+            // PID-based ones above. Gated strictly on the flag — interactive
+            // GUI/TUI sessions never bind this extra listener.
+            if args.iter().any(|a| a == "--headless") {
+                match headless_loop::claim_stable_socket(editor.active_project_root()).await {
+                    Ok(headless_loop::StableSocketClaim::NoProjectRoot) => {
+                        info!("headless: no project root detected — stable socket not bound (PID-based socket only)");
+                    }
+                    Ok(headless_loop::StableSocketClaim::Claimed(stable_path)) => {
+                        let stable_path_str = stable_path.to_string_lossy().to_string();
+                        let mut stable_server = mae_mcp::McpServer::new(
+                            &stable_path_str,
+                            mcp_tool_tx.clone(),
+                            sync_broadcaster.clone(),
+                        );
+                        if let Some(ref instructions) = mcp_instructions {
+                            stable_server = stable_server.with_instructions(instructions.clone());
+                        }
+                        tokio::spawn(stable_server.run(mcp_tools.clone()));
+                        info!(socket = %stable_path_str, "MCP headless stable socket started");
+                    }
+                    Ok(headless_loop::StableSocketClaim::AlreadyRunning(stable_path)) => {
+                        // ADR-055's required adversarial test: a second
+                        // headless instance for the same project must fail
+                        // loudly, never silently share or overwrite the
+                        // first instance's stable socket.
+                        eprintln!(
+                            "mae --headless: another instance is already running for this project (stable socket: {})",
+                            stable_path.display()
+                        );
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "failed to claim stable headless socket — continuing with PID-based socket only");
+                    }
                 }
             }
         }
@@ -831,6 +1082,44 @@ fn main() -> io::Result<()> {
 
         let _ = std::fs::remove_file(&mcp_socket_path);
         std::process::exit(exit_code);
+    }
+
+    // --headless (ADR-055): long-running full engine, no Renderer, MCP-only.
+    // Reuses the same buffers/windows/KB/AI/LSP/DAP/MCP bootstrap every mode
+    // shares — the only difference from the interactive paths below is which
+    // event loop it enters (headless_loop::run_headless_loop instead of
+    // run_terminal_loop/gui_app::run_gui). Runs until SIGTERM/Ctrl-C.
+    if args.iter().any(|a| a == "--headless") {
+        info!("entering headless event loop");
+        let (mut collab_event_rx, collab_command_tx, collab_spawn) =
+            collab_bridge::setup_collab_channels(&editor);
+        let result = rt.block_on(async {
+            collab_bridge::spawn_collab_task(collab_spawn);
+            headless_loop::run_headless_loop(
+                &mut editor,
+                &mut scheme,
+                &mut ai_event_rx,
+                &ai_event_tx,
+                &ai_command_tx,
+                &mut lsp_event_rx,
+                &lsp_command_tx,
+                &mut dap_event_rx,
+                &dap_command_tx,
+                &mut mcp_tool_rx,
+                &mut collab_event_rx,
+                &collab_command_tx,
+                &mcp_socket_path,
+                &all_tools,
+                &permission_policy,
+                &app_config,
+                &mcp_client_mgr,
+                &sync_broadcaster,
+            )
+            .await
+        });
+        let _ = std::fs::remove_file(&mcp_socket_path);
+        info!("mae --headless exited cleanly");
+        return result;
     }
 
     if use_gui {
@@ -902,7 +1191,12 @@ fn main() -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{daemon_version_skew, display_available_from_env, parse_truthy, should_use_gui};
+    #[cfg(unix)]
+    use super::display_available_from_env;
+    use super::{
+        daemon_version_skew, effective_guidance_live_sync, guidance_instructions_fragment,
+        parse_truthy, should_use_gui,
+    };
 
     // --- daemon_version_skew (ADR-035 version-pin) ------------------------
 
@@ -927,8 +1221,94 @@ mod tests {
         assert_eq!(daemon_version_skew("0.14.2", &status), None);
     }
 
+    // --- guidance_instructions_fragment (ADR-063 Phase A budget boundary) --
+
+    #[test]
+    fn guidance_fragment_empty_kb_is_empty_regardless_of_content() {
+        assert_eq!(
+            guidance_instructions_fragment("", Some("some content"), 8000),
+            ""
+        );
+    }
+
+    #[test]
+    fn guidance_fragment_no_content_falls_back_to_pointer() {
+        let frag = guidance_instructions_fragment("MaePractices", None, 8000);
+        assert!(frag.contains("consult KB 'MaePractices'"));
+        assert!(!frag.contains("required practices from KB"));
+    }
+
+    #[test]
+    fn guidance_fragment_at_budget_inlines_byte_identical_content() {
+        // Exactly at the budget (character count, not bytes -- includes a multi-byte
+        // char to prove this isn't silently measuring UTF-8 byte length instead).
+        let content = "é".repeat(10);
+        assert_eq!(content.chars().count(), 10);
+        let frag = guidance_instructions_fragment("MaePractices", Some(&content), 10);
+        assert!(
+            frag.contains(&content),
+            "at-budget content must be inlined byte-identical to build_guidance_context()'s \
+             own output, not re-encoded or reformatted: {frag}"
+        );
+        assert!(
+            !frag.contains("consult KB 'MaePractices'"),
+            "must not also show the pointer"
+        );
+    }
+
+    #[test]
+    fn guidance_fragment_one_under_budget_inlines() {
+        let content = "x".repeat(9);
+        let frag = guidance_instructions_fragment("MaePractices", Some(&content), 10);
+        assert!(frag.contains(&content));
+    }
+
+    #[test]
+    fn guidance_fragment_one_over_budget_falls_back_cleanly_never_truncates() {
+        let content = "x".repeat(11);
+        let frag = guidance_instructions_fragment("MaePractices", Some(&content), 10);
+        assert!(
+            !frag.contains('x'),
+            "over-budget content must never appear even partially/truncated: {frag}"
+        );
+        assert!(frag.contains("consult KB 'MaePractices'"));
+    }
+
+    // --- effective_guidance_live_sync (ADR-063 Phase B conditional default) --
+
+    /// The single test asserting both outcomes side by side, per the ADR's own
+    /// Phase B verification bar: a non-paired interactive session sees no behavior
+    /// change (stays false), while a headless, daemon-connected (paired) session
+    /// gets the sync enabled automatically with zero manual option-setting.
+    #[test]
+    fn conditional_default_fires_only_for_headless_daemon_connected_sessions() {
+        // Non-paired interactive GUI/TUI: no daemon, not headless -> unchanged (false).
+        assert!(!effective_guidance_live_sync(None, false, false));
+        // Headless but daemon_mode == off: still false (not truly "paired" without a
+        // daemon to actually coordinate the external editor session through).
+        assert!(!effective_guidance_live_sync(None, false, true));
+        // Daemon-connected but NOT headless (a plain interactive session that happens
+        // to use on-demand/shared daemon_mode): still false -- headless is the actual
+        // external-pairing signal, daemon_mode alone isn't sufficient.
+        assert!(!effective_guidance_live_sync(None, true, false));
+        // The actual target case: headless AND daemon-connected -> true, automatically,
+        // with no explicit option set.
+        assert!(effective_guidance_live_sync(None, true, true));
+    }
+
+    #[test]
+    fn explicit_user_choice_always_wins_over_the_conditional_default() {
+        // Explicit `false` must stay false even in the paired case that would
+        // otherwise compute `true` -- an explicit choice is never silently overridden.
+        assert!(!effective_guidance_live_sync(Some(false), true, true));
+        // Explicit `true` must stay true even in the plain interactive case that would
+        // otherwise compute `false`.
+        assert!(effective_guidance_live_sync(Some(true), false, false));
+    }
+
     // --- gui_display_available policy -------------------------------------
 
+    #[cfg(unix)]
     #[test]
     fn ssh_session_has_no_display_regardless_of_platform() {
         // A remote shell never gets the GUI, even on macOS or with X11/Wayland.
@@ -936,11 +1316,13 @@ mod tests {
         assert!(!display_available_from_env(true, true, true, false));
     }
 
+    #[cfg(unix)]
     #[test]
     fn local_macos_session_has_a_display() {
         assert!(display_available_from_env(false, false, false, true));
     }
 
+    #[cfg(unix)]
     #[test]
     fn linux_needs_x11_or_wayland() {
         // Headless (no DISPLAY/WAYLAND_DISPLAY) → no display.

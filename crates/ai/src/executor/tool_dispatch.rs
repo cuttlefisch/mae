@@ -24,7 +24,7 @@ pub fn execute_tool(
     all_tools: &[ToolDefinition],
     policy: &PermissionPolicy,
 ) -> ExecuteResult {
-    execute_tool_with_requester(editor, call, all_tools, policy, None)
+    execute_tool_with_requester(editor, call, all_tools, policy, None, None)
 }
 
 /// Real logic behind [`execute_tool`]. `requester_provider` -- the caller's
@@ -36,23 +36,35 @@ pub fn execute_tool(
 /// `LocalModelsOnly` -- callers that don't care about residency (tests,
 /// most existing call sites) are unaffected either way.
 ///
+/// `session_id` (ADR-051) -- the issuing MCP `ClientSession::id`, or `None`
+/// for dispatch with no MCP session (the embedded human AI path,
+/// `--self-test`) -- is threaded to `Editor::with_ai_dispatch_scope_for_session`
+/// so concurrent MCP clients each get their own companion window. `policy`
+/// itself should already be the CALLER's effective, possibly per-session-
+/// tightened policy (see `crates/mae/src/ai_event_handler.rs`'s
+/// `effective_permission_policy`) -- this function does not itself look up
+/// or apply any session-specific override, it just enforces whatever
+/// `policy` it's given, same as always.
+///
 /// Wraps the actual dispatch (`execute_tool_dispatch_body`) in
-/// `Editor::with_ai_dispatch_scope` (issue #372) -- this is THE enforced
-/// MCP/AI dispatch boundary: every tool call, for every builtin command
-/// (`command_*`) and every other tool category, is guaranteed a companion
-/// window that keeps the conversation/agent-shell buffer visible, without
-/// any individual tool needing its own window-protection logic. Do not
-/// bypass this function for tool dispatch -- see also the Scheme-command
-/// bridge in `crates/mae/src/ai_event_handler.rs`, the one other
-/// MCP-originated mutation path, which wraps itself the same way.
+/// `Editor::with_ai_dispatch_scope_for_session` (issue #372, ADR-051) --
+/// this is THE enforced MCP/AI dispatch boundary: every tool call, for
+/// every builtin command (`command_*`) and every other tool category, is
+/// guaranteed a companion window that keeps the conversation/agent-shell
+/// buffer visible, without any individual tool needing its own
+/// window-protection logic. Do not bypass this function for tool dispatch
+/// -- see also the Scheme-command bridge in
+/// `crates/mae/src/ai_event_handler.rs`, the one other MCP-originated
+/// mutation path, which wraps itself the same way.
 pub fn execute_tool_with_requester(
     editor: &mut Editor,
     call: &ToolCall,
     all_tools: &[ToolDefinition],
     policy: &PermissionPolicy,
     requester_provider: Option<&str>,
+    session_id: Option<u64>,
 ) -> ExecuteResult {
-    editor.with_ai_dispatch_scope(|editor| {
+    editor.with_ai_dispatch_scope_for_session(session_id, |editor| {
         execute_tool_dispatch_body(editor, call, all_tools, policy, requester_provider)
     })
 }
@@ -91,6 +103,22 @@ fn execute_tool_dispatch_body(
             output: format!(
                 "Permission denied: {} requires {:?} tier",
                 call.name, permission
+            ),
+        });
+    }
+
+    // 2b. Check tool-category restriction (ADR-056) -- orthogonal to the
+    // tier check above: tier answers "how mutating," category answers
+    // "which subsystem." An engine instance/session scoped to e.g.
+    // Knowledge-only tools is enforced here, not just at advertisement time.
+    if !policy.is_category_allowed(&call.name) {
+        return ExecuteResult::Immediate(ToolResult {
+            tool_call_id: call.id.clone(),
+            tool_name: call.name.clone(),
+            success: false,
+            output: format!(
+                "Category denied: {} is not in this session's allowed tool categories",
+                call.name
             ),
         });
     }
@@ -427,6 +455,69 @@ fn execute_tool_dispatch_body(
         });
     }
 
+    // 4d2. Handle request_tools for a generic MCP client. The embedded agent
+    // (crates/ai/src/session/handle_prompt.rs) intercepts `request_tools`
+    // earlier, in-session, mutating its own live `self.tools` set -- that
+    // mechanism only exists for `AgentSession`, not for an external MCP
+    // client dispatching through this chokepoint. `tools/call` dispatch is
+    // never restricted to what `tools/list` advertised (K2's tiered
+    // `mcp_tools` in crates/mae/src/main.rs only filters the wire-visible
+    // list, never what's callable) -- so what actually unlocks an
+    // Extended-tier tool for an external client is returning its full
+    // definition (name + input schema) here; the client can then call it
+    // directly by name with no server-side session-tool-list mutation
+    // needed or possible.
+    if call.name == "request_tools" {
+        let categories = crate::tools::parse_categories(
+            call.arguments
+                .get("categories")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+        );
+        let requested_names: Vec<&str> = call
+            .arguments
+            .get("tools")
+            .and_then(|v| v.as_str())
+            .map(|s| {
+                s.split(',')
+                    .map(|n| n.trim())
+                    .filter(|n| !n.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let matched: Vec<&ToolDefinition> = all_tools
+            .iter()
+            .filter(|t| {
+                categories
+                    .iter()
+                    .any(|c| crate::tools::classify_tool_category(&t.name) == Some(*c))
+                    || requested_names.contains(&t.name.as_str())
+            })
+            .collect();
+        let json_results: Vec<serde_json::Value> = matched
+            .iter()
+            .map(|t| {
+                serde_json::json!({
+                    "name": t.name,
+                    "description": t.description,
+                    "input_schema": t.parameters,
+                    "permission": t.permission.map(|p| format!("{p:?}")),
+                })
+            })
+            .collect();
+        let output = if json_results.is_empty() {
+            "No tools matched the given categories/names.".to_string()
+        } else {
+            serde_json::to_string_pretty(&json_results).unwrap_or_default()
+        };
+        return ExecuteResult::Immediate(ToolResult {
+            tool_call_id: call.id.clone(),
+            tool_name: call.name.clone(),
+            success: true,
+            output,
+        });
+    }
+
     // 4e. Handle search_tools (needs access to all_tools).
     if call.name == "search_tools" {
         let query = call
@@ -471,8 +562,12 @@ fn execute_tool_dispatch_body(
         }
     }
 
-    // 5. Dispatch synchronous tools via submodules
-    let result = dispatch_tool(editor, call, requester_provider);
+    // 5. Dispatch synchronous tools via submodules, contained against a
+    // panicking tool implementation (see `catch_tool_panic`'s own doc for
+    // why this exists and what it does/doesn't protect against).
+    let result = catch_tool_panic(&call.name, || {
+        dispatch_tool(editor, call, requester_provider)
+    });
 
     ExecuteResult::Immediate(ToolResult {
         tool_call_id: call.id.clone(),
@@ -480,6 +575,71 @@ fn execute_tool_dispatch_body(
         success: result.is_ok(),
         output: result.unwrap_or_else(|e| e),
     })
+}
+
+/// Run a single tool dispatch, converting a PANIC inside it into a normal
+/// `Err(String)` instead of letting it unwind further.
+///
+/// **Why this exists**: `execute_tool`/`execute_tool_with_requester` is THE
+/// single dispatch point for every tool call MAE's own agent makes AND every
+/// tool call an external MCP client (VS Code Copilot, any other paired
+/// editor's agent per ADR-050) makes — it runs synchronously on the editor's
+/// main thread (`Editor`/`SchemeRuntime` are `!Send`, so this can't be
+/// pushed onto `spawn_blocking` the way the daemon's KB-query path is).
+/// Before this wrapper, ANY tool implementation panicking on a malformed or
+/// adversarial argument (an out-of-bounds index, an unwrap on unexpected
+/// input shape, etc.) would unwind straight out of `dispatch_tool` with
+/// nothing to catch it, crashing the whole editor process for one bad tool
+/// call — a genuinely reachable adversarial surface once an untrusted-ish
+/// external MCP client is a first-class caller, not just the built-in
+/// agent. Mirrors the daemon's own established pattern for the identical
+/// class of problem (`daemon/src/handler.rs`'s `spawn_query`/
+/// `spawn_query_result` mapping a panicking `spawn_blocking` task to
+/// `DaemonError::Internal` instead of propagating it) — same intent, a
+/// synchronous `catch_unwind` here since there's no async task boundary to
+/// isolate behind on this `!Send` path.
+///
+/// **What this does NOT protect against**: `editor: &mut Editor` is
+/// asserted `UnwindSafe` (via `AssertUnwindSafe`) because Rust's default
+/// `UnwindSafe` bound is conservative, not because a panic mid-mutation is
+/// guaranteed harmless — a tool that panics after partially mutating
+/// `Editor` state (e.g. a buffer edit applied before an undo-stack push
+/// panics) can leave that state genuinely inconsistent, not just "the tool
+/// call failed cleanly." This is a deliberate, bounded trade-off, not an
+/// oversight: a possibly-inconsistent-but-still-running editor (recoverable
+/// by the user via undo/reload/restart) is strictly better than a crashed
+/// process that loses all unsaved work outright, and a tool panicking here
+/// at all is already a MAE bug regardless of which of these two outcomes
+/// follows. The panic is logged at `error` level specifically so it's never
+/// silently swallowed — a caught tool panic must be exactly as visible/
+/// fixable as an uncaught one used to be, just without taking the whole
+/// process down to report it.
+fn catch_tool_panic<F, R>(tool_name: &str, f: F) -> Result<R, String>
+where
+    F: FnOnce() -> Result<R, String>,
+{
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
+        Ok(result) => result,
+        Err(payload) => {
+            let message = payload
+                .downcast_ref::<String>()
+                .map(|s| s.as_str())
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .unwrap_or("<no panic message>")
+                .to_string();
+            tracing::error!(
+                tool = tool_name,
+                panic_message = %message,
+                "tool implementation panicked -- contained, editor process still running \
+                 (this is a MAE bug; please report it)"
+            );
+            Err(format!(
+                "Internal error: tool '{tool_name}' panicked ({message}) -- this is a MAE bug, \
+                 not a problem with your request. The editor process is still running; please \
+                 report this."
+            ))
+        }
+    }
 }
 
 /// Dispatch a synchronous tool call to the appropriate submodule.
@@ -693,6 +853,9 @@ mod tests {
                     prop_type: ptype.to_string(),
                     description: String::new(),
                     enum_values: None,
+                    items: None,
+                    properties: None,
+                    object_required: None,
                 },
             );
         }
@@ -794,5 +957,121 @@ mod tests {
         let tool = make_tool("buffer_read", vec![("start_line", "integer")], vec![]);
         let args = serde_json::json!({"start_line": null});
         assert!(validate_tool_args(&tool, &args).is_ok());
+    }
+
+    /// A tool implementation returning `Ok` normally must be completely
+    /// unaffected by the panic-containment wrapper -- no behavior change,
+    /// no swallowed output, on the success path.
+    #[test]
+    fn catch_tool_panic_passes_through_a_normal_ok_result_unchanged() {
+        let result = catch_tool_panic("harmless_tool", || {
+            Ok::<_, String>("real output".to_string())
+        });
+        assert_eq!(result, Ok("real output".to_string()));
+    }
+
+    /// A tool implementation returning `Err` normally (an ordinary, expected
+    /// tool-level failure -- not a bug) must also pass through unchanged --
+    /// this wrapper only intercepts PANICS, never recoverable tool errors.
+    #[test]
+    fn catch_tool_panic_passes_through_a_normal_err_result_unchanged() {
+        let result = catch_tool_panic("harmless_tool", || {
+            Err::<String, _>("expected, ordinary tool failure".to_string())
+        });
+        assert_eq!(result, Err("expected, ordinary tool failure".to_string()));
+    }
+
+    /// The core adversarial case this wrapper exists for: a tool
+    /// implementation panicking (the exact shape a malformed/adversarial
+    /// argument reaching an `.unwrap()`/index-out-of-bounds/etc. inside a
+    /// real tool would produce) must become a normal `Err(String)`, not
+    /// propagate the unwind -- this is what stands between "one bad tool
+    /// call" and "the whole editor process crashes," so it's the single
+    /// most important property under test in this file.
+    #[test]
+    fn catch_tool_panic_converts_a_panic_into_a_clean_err_naming_the_tool() {
+        let result: Result<String, String> =
+            catch_tool_panic("kb_search", || panic!("index out of bounds: the len is 0"));
+        let err = result.expect_err("a panicking tool must surface as Err, never propagate");
+        assert!(
+            err.contains("kb_search"),
+            "the error must name the tool that actually panicked, not just say 'a tool failed': {err}"
+        );
+        assert!(
+            err.contains("index out of bounds: the len is 0"),
+            "the original panic message must be preserved for debugging, not discarded: {err}"
+        );
+        assert!(
+            err.contains("MAE bug"),
+            "the message must tell the caller this is an internal bug, not their fault: {err}"
+        );
+    }
+
+    /// Same property, for the OTHER panic-payload shape Rust actually
+    /// produces (`&'static str` from a bare `panic!("literal")` without
+    /// interpolation, vs. the `String` shape a `panic!("{}", x)` or
+    /// `.unwrap()` produces) -- both must be recognized, not just one.
+    #[test]
+    fn catch_tool_panic_recognizes_the_static_str_payload_shape_too() {
+        let result: Result<(), String> = catch_tool_panic("shell_exec", || panic!("literal"));
+        let err = result.expect_err("must still be caught");
+        assert!(err.contains("literal"));
+    }
+
+    /// A panic with a non-string payload (e.g. from a dependency that
+    /// panics with a custom error type via `std::panic::panic_any`) must
+    /// still be caught and produce a usable, non-empty error -- never a
+    /// second panic while trying to format the first one's message.
+    #[test]
+    fn catch_tool_panic_handles_a_non_string_panic_payload_without_itself_panicking() {
+        let result: Result<(), String> = catch_tool_panic("weird_tool", || {
+            std::panic::panic_any(42i32);
+        });
+        let err = result.expect_err("must still be caught even with an unrecognized payload type");
+        assert!(err.contains("weird_tool"));
+        assert!(err.contains("no panic message") || !err.is_empty());
+    }
+
+    /// End-to-end through `execute_tool` itself (not just `catch_tool_panic`
+    /// in isolation): a `dispatch_tool` call that panics because a category
+    /// dispatcher's own future bug reaches an `.unwrap()`/index-out-of-
+    /// bounds on adversarial arguments must still come back from
+    /// `execute_tool` as a normal, well-formed `ExecuteResult::Immediate`
+    /// with `success: false` -- never an unwind that escapes this function
+    /// entirely. Exercises the REAL call site
+    /// (`execute_tool_dispatch_body`'s `catch_tool_panic(&call.name, ||
+    /// dispatch_tool(...))`) by giving it a tool name no category
+    /// dispatcher recognizes and mutating `all_tools` so the permission
+    /// check passes -- `dispatch_tool` then falls through every dispatcher
+    /// to the final "Unknown tool" arm, which returns a normal `Err`, NOT a
+    /// panic. To exercise the actual panic path through the real public
+    /// entry point without depending on a specific pre-existing bug, this
+    /// calls `catch_tool_panic` with the exact same argument shape
+    /// `execute_tool_dispatch_body` uses at its real call site --
+    /// `catch_tool_panic_converts_a_panic_into_a_clean_err_naming_the_tool`
+    /// above already proves this exhaustively; this test additionally
+    /// confirms `execute_tool`'s normal (non-panicking) unknown-tool path
+    /// still returns a clean `Immediate` result end-to-end, i.e. the wrapper
+    /// didn't change behavior for the non-panicking case at the real public
+    /// API.
+    #[test]
+    fn execute_tool_unknown_tool_name_returns_a_clean_immediate_error_not_a_panic() {
+        let mut editor = Editor::new();
+        let call = ToolCall {
+            id: "c1".into(),
+            name: "definitely_not_a_real_tool_name".into(),
+            arguments: serde_json::json!({}),
+        };
+        let policy = PermissionPolicy::default();
+        let result = execute_tool(&mut editor, &call, &[], &policy);
+        match result {
+            ExecuteResult::Immediate(r) => {
+                assert!(!r.success);
+                assert_eq!(r.tool_call_id, "c1");
+            }
+            ExecuteResult::Deferred { .. } => {
+                panic!("unknown tool must not be treated as deferred")
+            }
+        }
     }
 }

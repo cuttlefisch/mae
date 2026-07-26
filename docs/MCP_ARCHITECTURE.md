@@ -1,6 +1,10 @@
 # MCP Architecture — MAE
 
-> Last updated: 2026-05-19 (v0.11.0)
+> Last updated: 2026-07-23 (v0.14.53)
+
+> This is a wire-protocol reference. For step-by-step setup instructions (VS Code +
+> Copilot, or any other MCP client), see
+> [EXTERNAL_EDITOR_MCP_PAIRING.md](EXTERNAL_EDITOR_MCP_PAIRING.md).
 
 ## Overview
 
@@ -193,7 +197,7 @@ Event types: `buffer_edit`, `cursor_move`, `diagnostics`, `mode_change`, `buffer
 - **Unix socket permissions**: standard filesystem permissions (owner-only by default)
 - **MCP socket**: no per-client auth (Unix permissions only, local use)
 - **Collab TCP**: auth mode is selectable via `collab_auth_mode` = `none` | `psk` | `key`. `key` mode uses native mutual-TLS (TLS 1.3, Ed25519 peer identity, pubkey pinning — `shared/mcp/src/tls.rs`, ADR-017). `psk` mode is PSK mutual auth (HMAC-SHA256) over plaintext TCP. `none` is for loopback/local use only.
-- **Auth roadmap**: ✅ PSK → ✅ Ed25519 trusted-peer mTLS (delivered, ADR-017) → OAuth/OIDC (via `initialize` params extension)
+- **Auth roadmap**: ✅ PSK → ✅ Ed25519 trusted-peer mTLS (delivered, ADR-017) → ✅ OAuth 2.1 resource server (delivered, ADR-052 — a dedicated HTTPS listener on `mae-daemon`, separate from this Unix-socket/TCP surface; bearer-token validation only, MAE never issues tokens)
 - **Transcripts**: stored in `~/.local/share/mae/transcripts/` — contain raw tool output (no secret scrubbing)
 - **Shell blocklist**: substring-based, bypassable — defense in depth, not a sandbox
 

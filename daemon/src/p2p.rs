@@ -172,6 +172,15 @@ fn resolve_mesh_peer(
 ///
 /// This is the Phase-1 transport adapter: one bi stream per connection, request/
 /// response like the TCP path. Mesh multiplexing/gossip is Phase 2 (#89).
+///
+/// `limiter` bounds concurrent mesh connections (ADR-054, `max_connections`,
+/// same shape as the collab TCP listener's `#342` fix — checked immediately
+/// after `endpoint.accept()` succeeds, before the QUIC handshake, so a
+/// connection at capacity costs nothing beyond the accept itself). Once a
+/// peer completes the handshake and passes `authorize_peer`, `accept_bi` is
+/// wrapped in `collab_handler::HANDSHAKE_TIMEOUT_SECS` — without it, a
+/// connected-but-silent authorized peer parks its task forever (the same
+/// `#342` failure class, just past the handshake instead of during it).
 pub async fn serve(
     endpoint: Endpoint,
     authorized_keys_path: std::path::PathBuf,
@@ -179,12 +188,22 @@ pub async fn serve(
     doc_store: Arc<DocStore>,
     broadcaster: SharedBroadcaster,
     start_time: Instant,
+    limiter: crate::conn_limit::ConnLimiter,
 ) {
     while let Some(incoming) = endpoint.accept().await {
+        let Some(guard) = limiter.try_acquire() else {
+            warn!(
+                active = limiter.current(),
+                "mesh: connection cap reached, rejecting new connection"
+            );
+            incoming.refuse();
+            continue;
+        };
         let authorized_keys_path = authorized_keys_path.clone();
         let doc_store = Arc::clone(&doc_store);
         let broadcaster = broadcaster.clone();
         tokio::spawn(async move {
+            let _guard = guard;
             // Complete the QUIC handshake.
             let conn = match incoming.accept() {
                 Ok(accepting) => match accepting.await {
@@ -216,10 +235,26 @@ pub async fn serve(
             info!(peer = %peer.label, "mesh peer authenticated");
 
             // The dialing peer opens one bi stream; feed it to the shared handler.
-            let (send, recv) = match conn.accept_bi().await {
-                Ok(streams) => streams,
-                Err(e) => {
+            // Bounded — an authorized-but-silent peer must not park this task
+            // forever (mirrors the TCP collab listener's own handshake timeout).
+            let (send, recv) = match tokio::time::timeout(
+                std::time::Duration::from_secs(collab_handler::HANDSHAKE_TIMEOUT_SECS),
+                conn.accept_bi(),
+            )
+            .await
+            {
+                Ok(Ok(streams)) => streams,
+                Ok(Err(e)) => {
                     warn!(peer = %peer.label, error = %e, "mesh peer opened no stream");
+                    return;
+                }
+                Err(_) => {
+                    warn!(
+                        peer = %peer.label,
+                        timeout_secs = collab_handler::HANDSHAKE_TIMEOUT_SECS,
+                        "mesh peer authenticated but never opened a stream; closing"
+                    );
+                    conn.close(1u32.into(), b"stream-open timeout");
                     return;
                 }
             };
@@ -500,6 +535,143 @@ mod tests {
             peer.as_bytes(),
             &con_pub,
             "acceptor sees the connector's EndpointId = its trusted-peer key"
+        );
+    }
+
+    /// ADR-054: the mesh accept loop must reject a connection once
+    /// `max_connections` is already in use — checked immediately after
+    /// `endpoint.accept()` succeeds, before the QUIC handshake even starts
+    /// (`Incoming::refuse()`), mirroring the collab TCP listener's own
+    /// `#342` connection-cap placement.
+    #[tokio::test]
+    async fn mesh_connection_cap_rejects_the_nplus1th_client() {
+        use iroh::EndpointAddr;
+        use mae_daemon::storage::SqliteBackend;
+        use mae_mcp::broadcast::EventBroadcaster;
+        use std::time::Duration;
+
+        let acc_id = Identity::generate("acceptor");
+        let dir = tempfile::tempdir().unwrap();
+        let ak_path = dir.path().join("authorized_keys"); // empty; gate_open admits anyway
+
+        let acceptor = bind_endpoint(&acc_id, RelayMode::Disabled).await.unwrap();
+        let acc_addr = EndpointAddr::from_parts(
+            acceptor.id(),
+            acceptor
+                .bound_sockets()
+                .into_iter()
+                .map(|sa| TransportAddr::Ip(loopback_if_unspecified(sa))),
+        );
+
+        let doc_store = Arc::new(DocStore::new(
+            Arc::new(SqliteBackend::open_memory().unwrap()),
+            0,
+        ));
+        let broadcaster: SharedBroadcaster =
+            Arc::new(std::sync::Mutex::new(EventBroadcaster::new()));
+        tokio::spawn(serve(
+            acceptor,
+            ak_path,
+            true, // gate_open — irrelevant here, the cap is checked first
+            doc_store,
+            broadcaster,
+            Instant::now(),
+            crate::conn_limit::ConnLimiter::new(1),
+        ));
+
+        // 1st peer: admitted, holds the connection open (matches max_connections=1).
+        let con_a = bind_endpoint(&Identity::generate("peer-a"), RelayMode::Disabled)
+            .await
+            .unwrap();
+        let conn_a = tokio::time::timeout(
+            Duration::from_secs(20),
+            con_a.connect(acc_addr.clone(), MAE_ALPN),
+        )
+        .await
+        .expect("1st dial must not hang")
+        .expect("1st peer admitted (within the cap)");
+
+        // 2nd peer: over the cap — the acceptor refuses before the QUIC handshake
+        // completes, so this dial must fail (not hang, not silently succeed).
+        let con_b = bind_endpoint(&Identity::generate("peer-b"), RelayMode::Disabled)
+            .await
+            .unwrap();
+        let result =
+            tokio::time::timeout(Duration::from_secs(20), con_b.connect(acc_addr, MAE_ALPN))
+                .await
+                .expect("2nd dial must not hang even when refused");
+        assert!(
+            result.is_err(),
+            "the (max_connections+1)th mesh peer must be refused, got a connection instead"
+        );
+
+        conn_a.close(0u32.into(), b"bye");
+    }
+
+    /// ADR-054: an authenticated peer that never opens its bidirectional stream
+    /// must not park the acceptor's task forever — the same `#342` failure
+    /// class, just past the handshake instead of during it. `accept_bi` is
+    /// bounded by `collab_handler::HANDSHAKE_TIMEOUT_SECS`; past it the
+    /// acceptor must close the connection, observable from the peer's own
+    /// `conn.closed()` resolving.
+    #[tokio::test]
+    async fn mesh_peer_that_never_opens_a_stream_is_dropped_within_the_handshake_timeout() {
+        use iroh::EndpointAddr;
+        use mae_daemon::storage::SqliteBackend;
+        use mae_mcp::broadcast::EventBroadcaster;
+        use std::time::Duration;
+
+        let acc_id = Identity::generate("acceptor");
+        let con_id = Identity::generate("connector");
+        let dir = tempfile::tempdir().unwrap();
+        let ak_path = dir.path().join("authorized_keys"); // empty; gate_open admits anyway
+
+        let acceptor = bind_endpoint(&acc_id, RelayMode::Disabled).await.unwrap();
+        let acc_addr = EndpointAddr::from_parts(
+            acceptor.id(),
+            acceptor
+                .bound_sockets()
+                .into_iter()
+                .map(|sa| TransportAddr::Ip(loopback_if_unspecified(sa))),
+        );
+
+        let doc_store = Arc::new(DocStore::new(
+            Arc::new(SqliteBackend::open_memory().unwrap()),
+            0,
+        ));
+        let broadcaster: SharedBroadcaster =
+            Arc::new(std::sync::Mutex::new(EventBroadcaster::new()));
+        tokio::spawn(serve(
+            acceptor,
+            ak_path,
+            true, // gate_open
+            doc_store,
+            broadcaster,
+            Instant::now(),
+            crate::conn_limit::ConnLimiter::new(0),
+        ));
+
+        let connector = bind_endpoint(&con_id, RelayMode::Disabled).await.unwrap();
+        let conn = tokio::time::timeout(
+            Duration::from_secs(20),
+            connector.connect(acc_addr, MAE_ALPN),
+        )
+        .await
+        .expect("dial must not hang")
+        .expect("dial acceptor");
+
+        // Deliberately never call conn.open_bi() — the exact scenario the
+        // accept_bi timeout exists to bound.
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(collab_handler::HANDSHAKE_TIMEOUT_SECS + 15),
+            conn.closed(),
+        )
+        .await;
+        assert!(
+            outcome.is_ok(),
+            "the acceptor must close a connection whose peer never opens a stream, within \
+             HANDSHAKE_TIMEOUT_SECS ({}) + margin — the accept_bi timeout regressed",
+            collab_handler::HANDSHAKE_TIMEOUT_SECS
         );
     }
 }

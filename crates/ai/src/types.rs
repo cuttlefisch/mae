@@ -46,6 +46,25 @@ pub struct ToolProperty {
     pub description: String,
     #[serde(skip_serializing_if = "Option::is_none", rename = "enum")]
     pub enum_values: Option<Vec<String>>,
+    /// Element schema for `"array"`-typed properties (JSON Schema `items`).
+    /// `None` for every existing flat tool def — omitted entirely on
+    /// serialization, so nothing that doesn't opt in changes shape on the
+    /// wire (K2's L1: a real gap, not speculative — several existing tools
+    /// like `propose_changes` declare `"array"` params with no `items`
+    /// schema, giving an external MCP client zero information about what
+    /// belongs inside the array).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub items: Option<Box<ToolProperty>>,
+    /// Nested field schema for `"object"`-typed properties (JSON Schema
+    /// `properties`) — used both for a top-level `"object"` property and
+    /// for the element shape of an array-of-objects `items`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub properties: Option<HashMap<String, ToolProperty>>,
+    /// Required field names for `"object"`-typed properties (JSON Schema
+    /// `required`, scoped to this object — distinct from
+    /// `ToolParameters::required`, the top-level tool's required params).
+    #[serde(skip_serializing_if = "Option::is_none", rename = "required")]
+    pub object_required: Option<Vec<String>>,
 }
 
 /// A tool call requested by the AI model.
@@ -239,6 +258,9 @@ mod tests {
                         prop_type: "integer".into(),
                         description: "First line (1-indexed)".into(),
                         enum_values: None,
+                        items: None,
+                        properties: None,
+                        object_required: None,
                     },
                 )]),
                 required: vec!["start_line".into()],

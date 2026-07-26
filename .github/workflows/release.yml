@@ -56,8 +56,10 @@ jobs:
           cp assets/sample-config.toml dist/mae-pkg/sample-config.toml
           cp assets/daemon-config.toml dist/mae-pkg/daemon-config.toml
           cp assets/mae-daemon.service dist/mae-pkg/mae-daemon.service
+          cp assets/mae-headless@.service dist/mae-pkg/mae-headless@.service
           cp assets/install.sh dist/mae-pkg/install.sh
           cp assets/com.cuttlefisch.mae-daemon.plist dist/mae-pkg/com.cuttlefisch.mae-daemon.plist
+          cp assets/com.cuttlefisch.mae-headless.plist dist/mae-pkg/com.cuttlefisch.mae-headless.plist
           chmod +x dist/mae-pkg/install.sh
           tar czf dist/mae-linux-x86_64.tar.gz -C dist/mae-pkg .
 
@@ -262,6 +264,7 @@ jobs:
           cp assets/daemon-config.toml dist/mae-cli-pkg/daemon-config.toml
           cp assets/install.sh dist/mae-cli-pkg/install.sh
           cp assets/com.cuttlefisch.mae-daemon.plist dist/mae-cli-pkg/com.cuttlefisch.mae-daemon.plist
+          cp assets/com.cuttlefisch.mae-headless.plist dist/mae-cli-pkg/com.cuttlefisch.mae-headless.plist
           chmod +x dist/mae-cli-pkg/install.sh
           tar czf dist/mae-macos-aarch64.tar.gz -C dist/mae-cli-pkg .
 
@@ -282,7 +285,9 @@ jobs:
           cp assets/sample-config.toml dist/mae-gui-pkg/sample-config.toml
           cp assets/daemon-config.toml dist/mae-gui-pkg/daemon-config.toml
           cp assets/mae-daemon.service dist/mae-gui-pkg/mae-daemon.service
+          cp assets/mae-headless@.service dist/mae-gui-pkg/mae-headless@.service
           cp assets/com.cuttlefisch.mae-daemon.plist dist/mae-gui-pkg/com.cuttlefisch.mae-daemon.plist
+          cp assets/com.cuttlefisch.mae-headless.plist dist/mae-gui-pkg/com.cuttlefisch.mae-headless.plist
           cp assets/install.sh dist/mae-gui-pkg/install.sh
           chmod +x dist/mae-gui-pkg/install.sh
           cd dist && ditto -c -k --sequesterRsrc mae-gui-pkg MAE-macos-aarch64.zip
@@ -293,6 +298,51 @@ jobs:
           path: |
             dist/MAE-macos-aarch64.zip
             dist/mae-macos-aarch64.tar.gz
+
+  build-windows:
+    name: Build windows-x86_64
+    runs-on: windows-latest
+    # ADR-066 Phase B: a real, installable Windows artifact for `mae` (TUI-only) and
+    # `mae-mcp-shim`. Deliberately NOT the GUI build (`--features gui`) yet -- ADR-066
+    # Phase D's own dedicated GUI-on-Windows smoke test (real simulated input, not just
+    # "the process launched") hasn't landed, and betting an unverified GUI dependency
+    # stack (skia-safe) on a platform this session had zero way to locally test would
+    # be a bigger, riskier claim than this phase's actual scope. The TUI-only artifact
+    # is still a real, meaningful deliverable on its own -- it's what exercises
+    # ADR-066 Phase A's local-IPC work end to end. Deliberately NOT wired into the
+    # `release`/`update-homebrew` jobs' `needs`/artifact list yet either -- that
+    # integration (checksums, download guide, Homebrew tap) is real follow-up work
+    # once this artifact is proven stable via its own smoke test below, not assumed
+    # correct on day one.
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build mae (TUI-only) + mae-mcp-shim
+        run: |
+          cargo build --release --package mae
+          cargo build --release --package mae-mcp
+
+      - name: Launch smoke test (real process execution, not just a successful build)
+        run: |
+          ./target/release/mae.exe --version
+          ./target/release/mae-mcp-shim.exe --help
+
+      - name: Prepare artifact
+        run: |
+          mkdir dist
+          Copy-Item target/release/mae.exe dist/
+          Copy-Item target/release/mae-mcp-shim.exe dist/
+          Copy-Item assets/sample-config.toml dist/
+          Compress-Archive -Path dist/* -DestinationPath mae-windows-x86_64.zip
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mae-windows-x86_64
+          path: mae-windows-x86_64.zip
 
   release:
     name: Publish release

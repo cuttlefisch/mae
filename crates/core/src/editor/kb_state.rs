@@ -247,6 +247,9 @@ pub struct KbContext {
     pub search_sort: String,
     /// KB option: default search scope ("all", "local", "remote", or instance name).
     pub search_scope: String,
+    /// KB option: max federated instances queried per search/agenda/list fan-out
+    /// (ADR-062 Phase B).
+    pub federated_max_fanout_instances: usize,
     /// KB option: dailies directory (explicit setting or derived from notes_dir/daily).
     pub dailies_dir: Option<PathBuf>,
     /// KB option: max days to walk backwards when chain-filling dailies (default 90).
@@ -301,7 +304,8 @@ impl KbContext {
     /// Whether a node id belongs to the given scope's participating KB(s).
     /// Mirrors `Editor::kb_federated_search_scoped`'s per-scope inclusion
     /// rules (primary participates for All/LocalOnly, a specific instance
-    /// for Named, any non-primary federated instance for RemoteOnly) but
+    /// for Named, any non-primary federated instance for RemoteOnly, any
+    /// matching `Project`-kind instance for Project — ADR-058 Phase C) but
     /// checks a single already-known id rather than performing a fresh
     /// search. Used to post-filter `kb_health`/`kb_agenda`, whose underlying
     /// queries (`agenda_query`, the per-instance health loop) aren't scope-
@@ -342,6 +346,17 @@ impl KbContext {
                     .and_then(|inst| self.instances.get(&inst.uuid))
                     .is_some_and(|kb| kb.contains(id))
             }
+            // Excludes the primary, mirroring RemoteOnly above (ADR-058 Phase C/D).
+            KbScope::Project(root) => self
+                .registry
+                .instances
+                .iter()
+                .filter(|inst| inst.matches_project_root(root))
+                .any(|inst| {
+                    self.instances
+                        .get(&inst.uuid)
+                        .is_some_and(|kb| kb.contains(id))
+                }),
         }
     }
 
@@ -467,22 +482,53 @@ impl KbContext {
         if let Some(ref cozo) = primary_arc {
             let primary_layer = Arc::new(mae_kb::CozoQueryLayer::new(cozo.clone()));
             let mut federated = mae_kb::FederatedQuery::new(primary_layer);
+            federated.set_max_fanout_instances(self.federated_max_fanout_instances);
 
             // If we used the user store as primary AND a manual store exists separately,
-            // add the manual store as an instance so its nodes are queryable.
+            // add the manual store as an instance so its nodes are queryable. The manual
+            // KB has no `KbInstance` registry row, so it always participates at the
+            // default (0) priority.
             if let Some(ref primary) = self.primary_cozo {
                 if let Some(ref manual) = self.manual_cozo {
                     if !Arc::ptr_eq(primary, manual) {
                         let manual_layer = Arc::new(mae_kb::CozoQueryLayer::new(manual.clone()));
-                        federated.add_instance("manual".to_string(), manual_layer);
+                        federated.add_instance("manual".to_string(), 0, manual_layer);
                     }
                 }
             }
 
             for (name, inst_store) in &self.instance_stores {
                 let layer = Arc::new(mae_kb::CozoQueryLayer::new(inst_store.clone()));
-                federated.add_instance(name.clone(), layer);
+                // Priority (ADR-062 Phase B) comes from the registry entry when one
+                // exists; an instance store with no matching registry row (shouldn't
+                // normally happen, but not fatal) falls back to the default (0).
+                let priority = self
+                    .registry
+                    .find(name)
+                    .map(|inst| inst.priority)
+                    .unwrap_or(0);
+                federated.add_instance(name.clone(), priority, layer);
             }
+
+            // ADR-062 Phase D: `RemoteHub`-kind registry entries have no local Cozo
+            // store (nothing in `self.instance_stores`) — they're queried live via
+            // `RemoteHubQueryLayer` instead. Feature-gated (`remote-hub`, off by
+            // default — see `crates/core/Cargo.toml`): with the feature disabled, a
+            // registered `RemoteHub` instance simply doesn't participate in federated
+            // queries, a graceful no-op rather than a build error, matching how an
+            // unrecognized future `KbInstanceKind` would degrade.
+            #[cfg(feature = "remote-hub")]
+            for inst in &self.registry.instances {
+                if inst.kind != mae_kb::federation::KbInstanceKind::RemoteHub {
+                    continue;
+                }
+                let Some(config) = inst.remote_hub.clone() else {
+                    continue;
+                };
+                let layer = Arc::new(mae_kb::remote_hub::RemoteHubQueryLayer::new(config));
+                federated.add_instance(inst.name.clone(), inst.priority, layer);
+            }
+
             self.query = Some(Arc::new(federated));
         }
     }
@@ -546,6 +592,7 @@ impl KbContext {
             activity_decay: 0.01,
             search_sort: "relevance".to_string(),
             search_scope: "all".to_string(),
+            federated_max_fanout_instances: 128,
             dailies_dir: None,
             daily_chain_gap_max: 90,
             storage_engine: "sqlite".to_string(),

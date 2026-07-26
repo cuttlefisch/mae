@@ -1,0 +1,105 @@
+# Docker Compose for headless MAE service-mode E2E (ADR-055, Phase J / #385).
+#
+# Topology: headless (a real `mae --headless` instance) + headless-race (a
+# SECOND real `mae --headless` instance racing to claim the SAME stable
+# socket path — ADR-055's own required "two instances racing" adversarial
+# test, proven here at the container/process level, not just in-process
+# Rust unit tests) + verifier (a real MCP handshake via `mae-mcp-shim
+# --check`, plus asserting the race loser exited 1, never silently sharing
+# or overwriting the winner's socket).
+#
+# `/workspace` is intentionally NOT a shared volume — each container creates
+# its own `/workspace/.git` at startup (identical absolute path, same image,
+# so `detect_project_root` computes the same canonical path and therefore
+# the same stable-socket hash in every container). Only `xdg-data` (where
+# the actual socket file lives) needs to be a genuinely shared volume — that
+# shared state is the entire point of this test.
+#
+# Usage:
+#   make docker-headless-e2e
+
+services:
+  headless:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    entrypoint: ["sh", "-c", "mkdir -p /workspace/.git && cd /workspace && exec mae --headless"]
+    stop_grace_period: 10s
+    environment:
+      MAE_SKIP_WIZARD: "1"
+      MAE_LOG: "mae=info"
+      XDG_DATA_HOME: /data
+      XDG_CONFIG_HOME: /config
+    volumes:
+      - xdg-data:/data
+      - xdg-config:/config
+    healthcheck:
+      test: ["CMD-SHELL", "mkdir -p /workspace/.git && cd /workspace && test -S \"$$(mae --headless --print-socket-path)\""]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 2s
+    networks:
+      - headless-e2e
+
+  headless-race:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    # Always exits 0 itself (so compose's service_completed_successfully
+    # gate is meaningful) — the INNER `mae --headless` exit code (expected:
+    # 1, "another instance is already running") is what the verifier checks.
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mkdir -p /workspace/.git && cd /workspace
+        mae --headless
+        echo "exit code: $?" > /result/race-exit-code
+        exit 0
+    environment:
+      MAE_SKIP_WIZARD: "1"
+      XDG_DATA_HOME: /data
+      XDG_CONFIG_HOME: /config
+    volumes:
+      - xdg-data:/data
+      - xdg-config:/config
+      - race-result:/result
+    depends_on:
+      headless:
+        condition: service_healthy
+    networks:
+      - headless-e2e
+
+  verifier:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    entrypoint: ["/tests/verify.sh"]
+    environment:
+      XDG_DATA_HOME: /data
+      XDG_CONFIG_HOME: /config
+    volumes:
+      - xdg-data:/data:ro
+      - xdg-config:/config:ro
+      - race-result:/result:ro
+      - ./tests/headless-e2e:/tests:ro
+    depends_on:
+      headless:
+        condition: service_healthy
+      headless-race:
+        condition: service_completed_successfully
+    networks:
+      - headless-e2e
+
+volumes:
+  xdg-data:
+  xdg-config:
+  race-result:
+
+networks:
+  headless-e2e:
+    driver: bridge

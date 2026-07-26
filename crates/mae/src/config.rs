@@ -672,6 +672,7 @@ pub fn resolve_permission_policy(config: &Config) -> PermissionPolicy {
     };
     PermissionPolicy {
         auto_approve_up_to: tier,
+        allowed_categories: None,
     }
 }
 

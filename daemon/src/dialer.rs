@@ -704,6 +704,7 @@ mod tests {
             Arc::clone(&a_store),
             a_bc.clone(),
             Instant::now(),
+            crate::conn_limit::ConnLimiter::new(0),
         ));
         (addr, a_store, a_bc)
     }

@@ -387,6 +387,48 @@ mod tests {
         editor
     }
 
+    /// ADR-063 Phase D regression: the legacy embedded `ai_chat` path is an explicit,
+    /// documented won't-fix for this ADR's guidance-delivery work (ADR-049 already put
+    /// it on a deprecation trajectory) — this proves it structurally, not just by
+    /// assertion. `submit_conversation_prompt` sends the raw buffer text via
+    /// `AiCommand::Prompt` with no guidance-context concatenation at all, so setting
+    /// `ai_guidance_kb`/`ai_guidance_inline_budget_chars` (ADR-063 Phase A) must have
+    /// zero effect on what gets sent — proving no accidental partial backport of the
+    /// MCP-`initialize`-only guidance inlining into this unrelated code path.
+    #[test]
+    fn legacy_ai_chat_prompt_is_unaffected_by_guidance_kb_options() {
+        let mut editor = editor_with_conversation(40);
+        editor
+            .set_option("ai_guidance_kb", "SomeGuidanceKb")
+            .expect("set ai_guidance_kb");
+        editor
+            .set_option("ai_guidance_inline_budget_chars", "50000")
+            .expect("set ai_guidance_inline_budget_chars");
+
+        let input_idx = editor
+            .ai
+            .conversation_pair
+            .as_ref()
+            .expect("conversation pair set up by editor_with_conversation")
+            .input_buffer_idx;
+        editor.buffers[input_idx].replace_contents("hello from the user");
+
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<AiCommand>(4);
+        let mut pending = None;
+        submit_conversation_prompt(&mut editor, &Some(tx), &mut pending);
+
+        let sent = rx.try_recv().expect("a prompt command must have been sent");
+        match sent {
+            AiCommand::Prompt(text) => assert_eq!(
+                text, "hello from the user",
+                "the legacy chat path must send exactly the user's raw input, never \
+                 guidance content concatenated in -- that inlining is scoped to the MCP \
+                 initialize handshake (ADR-063 Phase A) only"
+            ),
+            other => panic!("expected AiCommand::Prompt, got {other:?}"),
+        }
+    }
+
     #[test]
     fn scroll_uses_output_window_height_not_viewport_height() {
         let mut editor = editor_with_conversation(40);

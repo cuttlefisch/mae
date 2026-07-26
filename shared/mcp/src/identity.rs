@@ -454,6 +454,43 @@ impl AuthorizedKeys {
         }
     }
 
+    /// Load fresh under an advisory lock, then run `mutate` (expected to
+    /// call one of `add`/`revoke`/`revoke_by_fingerprint`, which persist
+    /// internally) — closes a real TOCTOU race in the CLI-driven
+    /// `authorize`/`revoke` commands: without this, two concurrent
+    /// invocations (e.g. a provisioning script authorizing several keys in
+    /// a loop, or parallel CI jobs) each load the same stale snapshot,
+    /// mutate their own in-memory copy, and the second writer's full-file
+    /// `write_secure` silently clobbers the first's change — a
+    /// security-relevant silent data loss (a just-granted key vanishing, or
+    /// a revoked key reappearing), not a crash. Mirrors
+    /// `federation::KbRegistry::update`'s use of the same
+    /// `file_lock::with_locked_update`-family primitive for the identical
+    /// class of bug (see that function's own doc comment) — adapted here
+    /// because `add`/`revoke`/`revoke_by_fingerprint` already persist
+    /// internally (a single self-persisting mutate step, not a separate
+    /// mutate-then-save pair), so this reuses `LockGuard` directly rather
+    /// than `with_locked_update`'s save-closure shape, which doesn't fit.
+    /// Returns the resulting (freshest-plus-my-change) set and whatever
+    /// `mutate` returned (typically the persisted `io::Result<()>` from
+    /// `add`/`revoke`).
+    pub fn update<R>(path: &Path, mutate: impl FnOnce(&mut Self) -> R) -> (Self, R) {
+        let guard = crate::file_lock::LockGuard::try_acquire_with_retry(
+            path,
+            30,
+            std::time::Duration::from_millis(20),
+        );
+        if !guard.acquired() {
+            tracing::warn!(
+                path = %path.display(),
+                "proceeding without advisory lock on authorized_keys (contended by another mae process)"
+            );
+        }
+        let mut value = Self::load(path);
+        let result = mutate(&mut value);
+        (value, result)
+    }
+
     /// The on-disk path this set was loaded from (for live re-reads, I-10).
     pub fn path(&self) -> &Path {
         &self.path
@@ -935,6 +972,110 @@ mod tests {
         let mut ak2 = AuthorizedKeys::load(&path);
         assert_eq!(ak2.revoke("laptop").unwrap(), 1);
         assert!(ak2.authorize(&client.to_bytes()).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Adversarial (principle #14): N real threads concurrently `authorize`-
+    /// ing distinct keys via `AuthorizedKeys::update` must all survive on
+    /// disk — closes the TOCTOU race `run_authorize`/`run_revoke` had before
+    /// this fix (each caller loading a stale snapshot, the last `write_secure`
+    /// silently clobbering everyone else's addition). N=8, not 2 — a 2-way
+    /// race can accidentally pass by luck of scheduling; a real lock failure
+    /// shows up reliably at higher concurrency.
+    #[test]
+    fn concurrent_update_calls_never_lose_a_concurrently_authorized_key() {
+        let dir =
+            std::env::temp_dir().join(format!("mae-ak-concurrent-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("authorized_keys");
+
+        let clients: Vec<PublicKey> = (0..8)
+            .map(|i| Identity::generate(&format!("client-{i}")).public())
+            .collect();
+
+        let handles: Vec<_> = clients
+            .iter()
+            .cloned()
+            .map(|pk| {
+                let path = path.clone();
+                std::thread::spawn(move || {
+                    let (_ak, result) = AuthorizedKeys::update(&path, |ak| ak.add(pk));
+                    result.expect("concurrent authorize must not fail");
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // Reload from disk (not the in-memory return value of any one
+        // thread) -- the real oracle is what's actually persisted.
+        let final_ak = AuthorizedKeys::load(&path);
+        assert_eq!(
+            final_ak.len(),
+            8,
+            "all 8 concurrently authorized keys must survive on disk, not just the last writer's"
+        );
+        for pk in &clients {
+            assert!(
+                final_ak.authorize(&pk.to_bytes()).is_some(),
+                "key {} must be present after concurrent authorize",
+                pk.label.as_deref().unwrap_or("?")
+            );
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The negative control for the test above: proves this test harness
+    /// actually WOULD catch the bug (not a vacuously-passing test) by
+    /// reproducing the pre-fix load-mutate-save pattern directly (bypassing
+    /// `AuthorizedKeys::update`'s lock) and confirming keys really do get
+    /// lost under the same concurrency this way — the exact silent-data-loss
+    /// failure mode `update` was added to close.
+    #[test]
+    fn without_the_lock_concurrent_naive_load_mutate_save_does_lose_keys() {
+        let dir = std::env::temp_dir().join(format!(
+            "mae-ak-negative-control-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("authorized_keys");
+
+        let clients: Vec<PublicKey> = (0..8)
+            .map(|i| Identity::generate(&format!("client-{i}")).public())
+            .collect();
+
+        // Barrier so all threads load their (stale, empty) snapshot at
+        // roughly the same instant, maximizing the chance of the race --
+        // without this, fast/slow thread scheduling could accidentally
+        // serialize them and hide the bug this control is verifying exists.
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(clients.len()));
+        let handles: Vec<_> = clients
+            .iter()
+            .cloned()
+            .map(|pk| {
+                let path = path.clone();
+                let barrier = std::sync::Arc::clone(&barrier);
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    // The OLD pattern: load, mutate in-memory, save -- no lock.
+                    let mut ak = AuthorizedKeys::load(&path);
+                    let _ = ak.add(pk);
+                })
+            })
+            .collect();
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        let final_ak = AuthorizedKeys::load(&path);
+        assert!(
+            final_ak.len() < 8,
+            "this control must reproduce real data loss under the naive (unlocked) pattern -- \
+             got {} of 8 keys; if this ever reads 8, the race is no longer reproducible this way \
+             and this control test should be revisited, not treated as 'the bug is fixed'",
+            final_ak.len()
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

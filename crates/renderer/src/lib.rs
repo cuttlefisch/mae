@@ -64,6 +64,60 @@ pub trait Renderer {
     fn cleanup(&mut self) -> io::Result<()>;
 }
 
+/// A `Renderer` that draws nothing (ADR-055, headless service mode).
+///
+/// `mae --headless` runs the full editor engine — buffers, KB, AI, LSP, DAP,
+/// MCP — with no terminal or GUI attached at all, so it can never construct
+/// a `TerminalRenderer` (its `new()` calls `enable_raw_mode()`, which fails
+/// outright with no controlling TTY, e.g. under systemd). Most of the event
+/// loop simply never runs the render step in headless mode. The one place
+/// that still needs *some* `&dyn Renderer` is embedded shell/PTY sizing
+/// (`shell_lifecycle::spawn_pending_shells`/`resize_shells`, used by the
+/// `shell_exec`/`terminal_spawn` MCP tools) — those take a renderer
+/// reference purely to ask "how big is the display," which `NullRenderer`
+/// answers with a fixed, configurable size instead of a real terminal query.
+pub struct NullRenderer {
+    size: (u16, u16),
+}
+
+impl NullRenderer {
+    /// `size` is the fixed (columns, rows) reported to callers — e.g. for
+    /// sizing an embedded shell's PTY with no real terminal to query.
+    /// Matches `mae_core::Editor::default_area()`'s 120x40 by convention
+    /// when the caller has no more specific preference.
+    pub fn new(size: (u16, u16)) -> Self {
+        NullRenderer { size }
+    }
+}
+
+impl Default for NullRenderer {
+    fn default() -> Self {
+        NullRenderer::new((120, 40))
+    }
+}
+
+impl Renderer for NullRenderer {
+    fn render(
+        &mut self,
+        _editor: &mut Editor,
+        _shells: &HashMap<usize, ShellTerminal>,
+    ) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn size(&self) -> io::Result<(u16, u16)> {
+        Ok(self.size)
+    }
+
+    fn viewport_height(&self) -> io::Result<usize> {
+        Ok(self.size.1.saturating_sub(2) as usize)
+    }
+
+    fn cleanup(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 /// Terminal renderer using ratatui/crossterm.
 ///
 /// Design: no global state, no static variables. The render function takes

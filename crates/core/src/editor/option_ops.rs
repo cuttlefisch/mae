@@ -166,6 +166,9 @@ impl super::Editor {
             "kb_search_sort" => self.kb.search_sort.clone(),
             "kb_storage_engine" => self.kb.storage_engine.clone(),
             "kb_search_scope" => self.kb.search_scope.clone(),
+            "kb_federated_max_fanout_instances" => {
+                self.kb.federated_max_fanout_instances.to_string()
+            }
             "kb_dailies_dir" => self
                 .kb
                 .dailies_dir
@@ -177,6 +180,10 @@ impl super::Editor {
             "spell_enabled" => self.spell_enabled.to_string(),
             "ai_chat_enabled" => self.ai_chat_enabled.to_string(),
             "ai_guidance_kb" => self.ai_guidance_kb.clone(),
+            "ai_guidance_export_live_sync" => self.ai_guidance_export_live_sync.to_string(),
+            "ai_guidance_inline_budget_chars" => self.ai_guidance_inline_budget_chars.to_string(),
+            "mcp_tools_tiered_by_default" => self.mcp_tools_tiered_by_default.to_string(),
+            "mcp_tool_category_allowlist" => self.mcp_tool_category_allowlist.clone(),
             "file_tree_focus_on_open" => self.file_tree_focus_on_open.to_string(),
             "collab_server_address" => self.collab.server_address.clone(),
             "collab_auto_connect" => self.collab.auto_connect.to_string(),
@@ -845,6 +852,12 @@ impl super::Editor {
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.kb.daily_chain_gap_max = v.clamp(1, 365);
             }
+            "kb_federated_max_fanout_instances" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb.federated_max_fanout_instances = v.clamp(1, 100_000);
+            }
             "format_on_save" => {
                 self.format_on_save = parse_option_bool(value)?;
             }
@@ -875,6 +888,25 @@ impl super::Editor {
                 // every time guidance context is built.
                 let trimmed = value.trim();
                 self.ai_guidance_kb = trimmed.to_string();
+            }
+            "ai_guidance_export_live_sync" => {
+                self.ai_guidance_export_live_sync = parse_option_bool(value)?;
+            }
+            "ai_guidance_inline_budget_chars" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.ai_guidance_inline_budget_chars = v.clamp(0, 1_000_000);
+            }
+            "mcp_tools_tiered_by_default" => {
+                self.mcp_tools_tiered_by_default = parse_option_bool(value)?;
+            }
+            "mcp_tool_category_allowlist" => {
+                // Accept any string unconditionally, same posture as
+                // `ai_guidance_kb` above: validation (unrecognized category
+                // tokens are simply ignored) happens at read time via
+                // `mae_ai::parse_categories`, never at set-time.
+                self.mcp_tool_category_allowlist = value.trim().to_string();
             }
             "file_tree_focus_on_open" => {
                 self.file_tree_focus_on_open = parse_option_bool(value)?;
@@ -1293,6 +1325,13 @@ impl super::Editor {
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }
+        // ADR-063 Phase B: record that this option was explicitly set (by init.scm,
+        // `:set`, or an MCP/Scheme `set-option!` call) — distinct from "still at its
+        // Rust-level initial value by coincidence". This is the single chokepoint every
+        // explicit set already passes through, so tracking it here is reusable for any
+        // future option wanting a runtime-computed conditional default (not just
+        // `ai_guidance_export_live_sync`) without re-deriving this per-option.
+        self.explicitly_set_options.insert(def_name.to_string());
         let (current, _) = self
             .get_option(&def_name)
             .ok_or_else(|| format!("internal: option '{}' not found after set", def_name))?;

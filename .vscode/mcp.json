@@ -1,0 +1,13 @@
+{
+  // MAE MCP pairing — docs/EXTERNAL_EDITOR_MCP_PAIRING.md. Lets VS Code
+  // Copilot (Agent mode) drive MAE's own editor while you work on MAE's
+  // codebase, over the same mae-mcp-shim bridge Claude Code uses (see
+  // .mcp.json). Requires `mae-mcp-shim` on PATH (`make install`) and a
+  // running `mae`/`mae --headless` instance for this project.
+  "servers": {
+    "mae-editor": {
+      "type": "stdio",
+      "command": "mae-mcp-shim"
+    }
+  }
+}

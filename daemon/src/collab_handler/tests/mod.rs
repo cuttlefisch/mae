@@ -7,6 +7,7 @@ pub(crate) use mae_sync::text::TextSync;
 
 mod collab_handler_block_enforcement_tests;
 mod collab_handler_connection_limits_tests;
+mod collab_handler_cross_kb_role_isolation_tests;
 mod collab_handler_derive_cache_tests;
 mod collab_handler_governance_quorum_tests;
 mod collab_handler_kb_lifecycle_tests;

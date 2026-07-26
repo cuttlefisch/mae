@@ -45,6 +45,15 @@ pub struct DaemonState {
     /// collection established via `p2p/share_kb` (mirrors the TCP `kb/share`
     /// owner-binding to the authenticated principal).
     pub owner: Option<Arc<mae_mcp::identity::Identity>>,
+    /// ADR-060 Phase C: per-tenant quota/eviction registry. An `Arc`, not
+    /// inlined state — `TenantRegistry` is internally concurrent (`dashmap`),
+    /// so cloning the `Arc` out under this brief lock (the same pattern
+    /// `store`/`query_layer`/`doc_store` already use) never reintroduces the
+    /// per-request contention Phase B proved this lock must stay free of.
+    /// Defaults to `TenantRegistry::empty()` (zero `[[tenant]]` tables = zero
+    /// behavior change) until `main()` replaces it with the real one built
+    /// from loaded config.
+    pub tenants: Arc<crate::tenant::TenantRegistry>,
 }
 
 impl DaemonState {
@@ -60,6 +69,7 @@ impl DaemonState {
             doc_store: None,
             broadcaster: None,
             owner: None,
+            tenants: Arc::new(crate::tenant::TenantRegistry::empty()),
         }
     }
 
@@ -70,7 +80,14 @@ impl DaemonState {
             let mut federated = mae_kb::FederatedQuery::new(primary);
             for (name, inst_store) in &self.instance_stores {
                 let layer = Arc::new(mae_kb::CozoQueryLayer::new(Arc::clone(inst_store)));
-                federated.add_instance(name.clone(), layer);
+                // Priority (ADR-062 Phase B) comes from the registry entry when one
+                // exists; falls back to the default (0) equal weight otherwise.
+                let priority = self
+                    .registry
+                    .find(name)
+                    .map(|inst| inst.priority)
+                    .unwrap_or(0);
+                federated.add_instance(name.clone(), priority, layer);
             }
             self.query_layer = Some(Arc::new(federated));
         }
@@ -88,126 +105,179 @@ pub async fn dispatch(
         "kb/get" => {
             let id = params["id"]
                 .as_str()
-                .ok_or(DaemonError::InvalidParams("missing 'id'"))?;
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            match ql.get(id) {
-                Some(node) => Ok(json!({
+                .ok_or(DaemonError::InvalidParams("missing 'id'"))?
+                .to_string();
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Read,
+            )
+            .await?;
+            spawn_query(move || match ql.get(&id) {
+                Some(node) => json!({
                     "id": node.id,
                     "title": node.title,
                     "kind": node.kind.as_str(),
                     "body": node.body,
                     "tags": node.tags,
-                })),
-                None => Ok(Value::Null),
-            }
+                }),
+                None => Value::Null,
+            })
+            .await
         }
 
         "kb/search" => {
             let query = params["query"]
                 .as_str()
-                .ok_or(DaemonError::InvalidParams("missing 'query'"))?;
+                .ok_or(DaemonError::InvalidParams("missing 'query'"))?
+                .to_string();
             let limit = std::cmp::min(params["limit"].as_u64().unwrap_or(20), 1000) as usize;
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            let hits: Vec<Value> = ql
-                .search(query, limit)
-                .into_iter()
-                .map(|h: SearchHit| json!({ "id": h.id, "score": h.score }))
-                .collect();
-            Ok(json!(hits))
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Scan,
+            )
+            .await?;
+            spawn_query(move || {
+                let hits: Vec<Value> = ql
+                    .search(&query, limit)
+                    .into_iter()
+                    .map(|h: SearchHit| json!({ "id": h.id, "score": h.score }))
+                    .collect();
+                json!(hits)
+            })
+            .await
         }
 
         "kb/links_from" => {
             let id = params["id"]
                 .as_str()
-                .ok_or(DaemonError::InvalidParams("missing 'id'"))?;
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            let links: Vec<Value> = ql
-                .links_from(id)
-                .into_iter()
-                .map(|l| {
-                    json!({
-                        "src": l.src,
-                        "dst": l.dst,
-                        "rel_type": l.rel_type,
+                .ok_or(DaemonError::InvalidParams("missing 'id'"))?
+                .to_string();
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Read,
+            )
+            .await?;
+            spawn_query(move || {
+                let links: Vec<Value> = ql
+                    .links_from(&id)
+                    .into_iter()
+                    .map(|l| {
+                        json!({
+                            "src": l.src,
+                            "dst": l.dst,
+                            "rel_type": l.rel_type,
+                        })
                     })
-                })
-                .collect();
-            Ok(json!(links))
+                    .collect();
+                json!(links)
+            })
+            .await
         }
 
         "kb/links_to" => {
             let id = params["id"]
                 .as_str()
-                .ok_or(DaemonError::InvalidParams("missing 'id'"))?;
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            let links: Vec<Value> = ql
-                .links_to(id)
-                .into_iter()
-                .map(|l| {
-                    json!({
-                        "src": l.src,
-                        "dst": l.dst,
-                        "rel_type": l.rel_type,
+                .ok_or(DaemonError::InvalidParams("missing 'id'"))?
+                .to_string();
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Read,
+            )
+            .await?;
+            spawn_query(move || {
+                let links: Vec<Value> = ql
+                    .links_to(&id)
+                    .into_iter()
+                    .map(|l| {
+                        json!({
+                            "src": l.src,
+                            "dst": l.dst,
+                            "rel_type": l.rel_type,
+                        })
                     })
-                })
-                .collect();
-            Ok(json!(links))
+                    .collect();
+                json!(links)
+            })
+            .await
         }
 
         "kb/list_ids" => {
-            let prefix = params["prefix"].as_str();
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            Ok(json!(ql.list_ids(prefix)))
+            let prefix = params["prefix"].as_str().map(|s| s.to_string());
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Read,
+            )
+            .await?;
+            spawn_query(move || json!(ql.list_ids(prefix.as_deref()))).await
         }
 
         "kb/health" => {
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            match ql.health_report() {
-                Some(report) => Ok(json!({
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Read,
+            )
+            .await?;
+            spawn_query(move || match ql.health_report() {
+                Some(report) => json!({
                     "total_nodes": report.total_nodes,
                     "total_links": report.total_links,
                     "orphan_count": report.orphan_ids.len(),
                     "broken_link_count": report.broken_links.len(),
-                })),
-                None => Ok(json!({"error": "health report unavailable"})),
-            }
+                }),
+                None => json!({"error": "health report unavailable"}),
+            })
+            .await
         }
 
         "kb/neighborhood" => {
             let id = params["id"]
                 .as_str()
-                .ok_or(DaemonError::InvalidParams("missing 'id'"))?;
+                .ok_or(DaemonError::InvalidParams("missing 'id'"))?
+                .to_string();
             let depth = params["depth"].as_u64().unwrap_or(1) as u32;
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            match ql.neighborhood(id, depth) {
-                Some(sg) => Ok(json!({
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Scan,
+            )
+            .await?;
+            spawn_query(move || match ql.neighborhood(&id, depth) {
+                Some(sg) => json!({
                     "nodes": sg.nodes.iter().map(|(id, t)| json!([id, t])).collect::<Vec<_>>(),
                     "edges": sg.edges.iter().map(|(s, d, r)| json!([s, d, r])).collect::<Vec<_>>(),
-                })),
-                None => Ok(json!({"nodes": [], "edges": []})),
-            }
+                }),
+                None => json!({"nodes": [], "edges": []}),
+            })
+            .await
         }
 
         "kb/related" => {
             let id = params["id"]
                 .as_str()
-                .ok_or(DaemonError::InvalidParams("missing 'id'"))?;
+                .ok_or(DaemonError::InvalidParams("missing 'id'"))?
+                .to_string();
             let limit = std::cmp::min(params["limit"].as_u64().unwrap_or(10), 1000) as usize;
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            let related: Vec<Value> = ql
-                .related(id, limit)
-                .into_iter()
-                .map(|(id, score)| json!([id, score]))
-                .collect();
-            Ok(json!(related))
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Scan,
+            )
+            .await?;
+            spawn_query(move || {
+                let related: Vec<Value> = ql
+                    .related(&id, limit)
+                    .into_iter()
+                    .map(|(id, score)| json!([id, score]))
+                    .collect();
+                json!(related)
+            })
+            .await
         }
 
         // Phase D3b (ADR-029): return a node's authoritative CRDT doc state from the
@@ -238,118 +308,169 @@ pub async fn dispatch(
             // Phase D thin-client: the agenda buffer was mirror-only. Serve all
             // TODO-bearing nodes as full (serde) nodes — minus the heavy crdt_doc
             // lineage, which the agenda doesn't need.
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            let nodes: Vec<Value> = ql
-                .todo_nodes()
-                .into_iter()
-                .map(|mut n| {
-                    n.crdt_doc = None;
-                    serde_json::to_value(&n).unwrap_or(Value::Null)
-                })
-                .collect();
-            Ok(json!(nodes))
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Read,
+            )
+            .await?;
+            spawn_query(move || {
+                let nodes: Vec<Value> = ql
+                    .todo_nodes()
+                    .into_iter()
+                    .map(|mut n| {
+                        n.crdt_doc = None;
+                        serde_json::to_value(&n).unwrap_or(Value::Null)
+                    })
+                    .collect();
+                json!(nodes)
+            })
+            .await
         }
 
         "kb/id_title_pairs" => {
-            let prefix = params["prefix"].as_str();
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            let pairs: Vec<Value> = ql
-                .id_title_pairs(prefix)
-                .into_iter()
-                .map(|(id, title)| json!([id, title]))
-                .collect();
-            Ok(json!(pairs))
+            let prefix = params["prefix"].as_str().map(|s| s.to_string());
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Read,
+            )
+            .await?;
+            spawn_query(move || {
+                let pairs: Vec<Value> = ql
+                    .id_title_pairs(prefix.as_deref())
+                    .into_iter()
+                    .map(|(id, title)| json!([id, title]))
+                    .collect();
+                json!(pairs)
+            })
+            .await
         }
 
         "kb/id_title_body_triples" => {
-            let prefix = params["prefix"].as_str();
+            let prefix = params["prefix"].as_str().map(|s| s.to_string());
             let body_limit =
                 std::cmp::min(params["body_limit"].as_u64().unwrap_or(0), 10_000) as usize;
-            let state = state.lock().await;
-            let ql = state.query_layer.as_ref().ok_or(DaemonError::NotReady)?;
-            let triples: Vec<Value> = ql
-                .id_title_body_triples(prefix, body_limit)
-                .into_iter()
-                .map(|(id, title, body)| json!([id, title, body]))
-                .collect();
-            Ok(json!(triples))
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Read,
+            )
+            .await?;
+            spawn_query(move || {
+                let triples: Vec<Value> = ql
+                    .id_title_body_triples(prefix.as_deref(), body_limit)
+                    .into_iter()
+                    .map(|(id, title, body)| json!([id, title, body]))
+                    .collect();
+                json!(triples)
+            })
+            .await
         }
 
         // --- Hygiene ---
         "kb/hygiene_scan" => {
-            let state = state.lock().await;
-            let store = state.store.as_ref().ok_or(DaemonError::NotReady)?;
-            let result = crate::hygiene::run_hygiene_scan(store);
-            Ok(json!({
-                "suggestions_created": result.suggestions_created,
-                "nodes_scanned": result.nodes_scanned,
-                "errors": result.errors,
-            }))
+            let (store, _conn_guard) = snapshot_store(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Mutation,
+            )
+            .await?;
+            spawn_query(move || {
+                let result = crate::hygiene::run_hygiene_scan(&store);
+                json!({
+                    "suggestions_created": result.suggestions_created,
+                    "nodes_scanned": result.nodes_scanned,
+                    "errors": result.errors,
+                })
+            })
+            .await
         }
 
         "kb/hygiene_report" => {
-            let category = params["category"].as_str();
-            let status = params["status"].as_str();
-            let state = state.lock().await;
-            let store = state.store.as_ref().ok_or(DaemonError::NotReady)?;
-            let suggestions = store
-                .list_suggestions(category, status)
-                .map_err(|e| DaemonError::Internal(e.to_string()))?;
-            let items: Vec<Value> = suggestions
-                .iter()
-                .map(|s| {
-                    json!({
-                        "node_id": s.node_id,
-                        "suggestion_id": s.suggestion_id,
-                        "category": s.category,
-                        "message": s.message,
-                        "suggested_action": s.suggested_action_json,
-                        "confidence": s.confidence,
-                        "status": s.status,
-                        "created_at": s.created_at,
+            let category = params["category"].as_str().map(|s| s.to_string());
+            let status = params["status"].as_str().map(|s| s.to_string());
+            let (store, _conn_guard) = snapshot_store(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Read,
+            )
+            .await?;
+            spawn_query_result(move || {
+                let suggestions = store
+                    .list_suggestions(category.as_deref(), status.as_deref())
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?;
+                let items: Vec<Value> = suggestions
+                    .iter()
+                    .map(|s| {
+                        json!({
+                            "node_id": s.node_id,
+                            "suggestion_id": s.suggestion_id,
+                            "category": s.category,
+                            "message": s.message,
+                            "suggested_action": s.suggested_action_json,
+                            "confidence": s.confidence,
+                            "status": s.status,
+                            "created_at": s.created_at,
+                        })
                     })
-                })
-                .collect();
-            Ok(json!(items))
+                    .collect();
+                Ok(json!(items))
+            })
+            .await
         }
 
         "kb/hygiene_accept" => {
             let node_id = params["node_id"]
                 .as_str()
-                .ok_or(DaemonError::InvalidParams("missing 'node_id'"))?;
+                .ok_or(DaemonError::InvalidParams("missing 'node_id'"))?
+                .to_string();
             let suggestion_id = params["suggestion_id"]
                 .as_i64()
                 .ok_or(DaemonError::InvalidParams("missing 'suggestion_id'"))?;
-            let state = state.lock().await;
-            let store = state.store.as_ref().ok_or(DaemonError::NotReady)?;
-            store
-                .update_suggestion_status(node_id, suggestion_id, "accepted")
-                .map_err(|e| DaemonError::Internal(e.to_string()))?;
-            Ok(json!({"ok": true}))
+            let (store, _conn_guard) = snapshot_store(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Mutation,
+            )
+            .await?;
+            spawn_query_result(move || {
+                store
+                    .update_suggestion_status(&node_id, suggestion_id, "accepted")
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?;
+                Ok(json!({"ok": true}))
+            })
+            .await
         }
 
         "kb/hygiene_dismiss" => {
             let node_id = params["node_id"]
                 .as_str()
-                .ok_or(DaemonError::InvalidParams("missing 'node_id'"))?;
+                .ok_or(DaemonError::InvalidParams("missing 'node_id'"))?
+                .to_string();
             let suggestion_id = params["suggestion_id"]
                 .as_i64()
                 .ok_or(DaemonError::InvalidParams("missing 'suggestion_id'"))?;
-            let state = state.lock().await;
-            let store = state.store.as_ref().ok_or(DaemonError::NotReady)?;
-            store
-                .update_suggestion_status(node_id, suggestion_id, "dismissed")
-                .map_err(|e| DaemonError::Internal(e.to_string()))?;
-            Ok(json!({"ok": true}))
+            let (store, _conn_guard) = snapshot_store(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Mutation,
+            )
+            .await?;
+            spawn_query_result(move || {
+                store
+                    .update_suggestion_status(&node_id, suggestion_id, "dismissed")
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?;
+                Ok(json!({"ok": true}))
+            })
+            .await
         }
 
         // --- Lifecycle ---
         "daemon/status" => {
             // Snapshot the fields, then drop the lock before the async doc_store scan
             // (don't hold the state mutex across an await).
-            let (uptime, store_count, has_ql, reg_count, doc_store) = {
+            let (uptime, store_count, has_ql, reg_count, doc_store, live_tenants) = {
                 let state = state.lock().await;
                 (
                     state.started_at.elapsed(),
@@ -357,6 +478,7 @@ pub async fn dispatch(
                     state.query_layer.is_some(),
                     state.registry.instances.len(),
                     state.doc_store.clone(),
+                    state.tenants.live_tenant_count(),
                 )
             };
             // Phase D introspection: which KB collections does the daemon host, and
@@ -382,7 +504,21 @@ pub async fn dispatch(
                 "registered_instances": reg_count,
                 "kb_collections": kb_collections,
                 "primary_exists": primary_exists,
+                "live_tenants": live_tenants,
             }))
+        }
+
+        // ADR-060 Phase C: the operator-triggered eviction escape hatch (the
+        // named rust-analyzer/Emacs-precedent lesson — don't wait for an idle
+        // window a still-connected tenant may never hit). Idempotent:
+        // evicting an unknown/already-idle-evicted tenant is a clean no-op.
+        "daemon/evict_tenant" => {
+            let name = params["name"]
+                .as_str()
+                .ok_or(DaemonError::InvalidParams("missing 'name'"))?;
+            let tenants = { state.lock().await.tenants.clone() };
+            tenants.evict(name);
+            Ok(json!({"evicted": name}))
         }
 
         // daemon/shutdown is intercepted by handle_client() before dispatch;
@@ -499,29 +635,44 @@ pub async fn dispatch(
                 (doc_store, broadcaster, owner, kb_store)
             };
             // Build the collection + node states from the daemon's KB store (outside
-            // the state lock — `load_all` is a blocking CozoDB read). Reuses the same
-            // `KnowledgeBase::to_collection` the editor's `kb/share` uses, so the
-            // seeded node docs are byte-identical. Absent store / empty KB ⇒ an empty
-            // collection (still a valid mesh share at collection level).
-            let seed = match kb_store {
-                Some(store) => {
-                    let nodes = store
-                        .load_all()
-                        .map_err(|e| DaemonError::Internal(format!("load KB nodes: {e}")))?;
-                    let mut kb = mae_kb::KnowledgeBase::new();
-                    for node in nodes {
-                        kb.insert(node);
-                    }
-                    Some(
-                        kb.to_collection(&kb_id, &owner.fingerprint(), &[])
-                            .map_err(|e| {
-                                DaemonError::Internal(format!(
-                                    "build collection from KB store: {e}"
+            // the state lock AND off the async executor — `load_all` is a blocking
+            // CozoDB read). Reuses the same `KnowledgeBase::to_collection` the
+            // editor's `kb/share` uses, so the seeded node docs are byte-identical.
+            // Absent store / empty KB ⇒ an empty collection (still a valid mesh
+            // share at collection level).
+            let seed = {
+                let blocking_kb_id = kb_id.clone();
+                let blocking_owner = Arc::clone(&owner);
+                tokio::task::spawn_blocking(
+                    move || -> Result<Option<SeededCollection>, DaemonError> {
+                        match kb_store {
+                            Some(store) => {
+                                let nodes = store.load_all().map_err(|e| {
+                                    DaemonError::Internal(format!("load KB nodes: {e}"))
+                                })?;
+                                let mut kb = mae_kb::KnowledgeBase::new();
+                                for node in nodes {
+                                    kb.insert(node);
+                                }
+                                Ok(Some(
+                                    kb.to_collection(
+                                        &blocking_kb_id,
+                                        &blocking_owner.fingerprint(),
+                                        &[],
+                                    )
+                                    .map_err(|e| {
+                                        DaemonError::Internal(format!(
+                                            "build collection from KB store: {e}"
+                                        ))
+                                    })?,
                                 ))
-                            })?,
-                    )
-                }
-                None => None,
+                            }
+                            None => Ok(None),
+                        }
+                    },
+                )
+                .await
+                .map_err(|e| DaemonError::Internal(format!("blocking task panicked: {e}")))??
             };
             let (created, node_count) = establish_p2p_share(
                 &doc_store,
@@ -558,6 +709,124 @@ pub async fn dispatch(
     }
 }
 
+/// Snapshot the federated query layer `Arc` under the state lock, then drop
+/// the lock (ADR-054). This is the read-arm half of the "snapshot-then-drop +
+/// spawn_blocking" idiom generalized from the pre-existing `kb/node_crdt` /
+/// `daemon/status` / `p2p/share_kb` arms: `DaemonState`'s lock must never be
+/// held across the actual (synchronous, potentially slow) CozoDB call.
+///
+/// ADR-060 Phase A: `addr` is an optional per-request instance address (a KB
+/// name or UUID, resolved via [`resolve_kb_store`] — the same address space
+/// `instance_stores` already uses, not a new identifier scheme). `None`
+/// preserves today's exact single-tenant behavior byte-for-byte: the
+/// federated query layer spanning every registered instance. `Some(addr)`
+/// scopes the query to exactly that one instance's store — never merged with
+/// any other instance's data, which is the property that matters for tenant
+/// isolation (a targeted query must never silently see another tenant's
+/// results). This is purely additive plumbing: it does not yet change
+/// locking or resource accounting (Phase B/C).
+async fn snapshot_query_layer(
+    state: &Arc<Mutex<DaemonState>>,
+    addr: Option<&str>,
+    cost: crate::tenant::RequestCost,
+) -> Result<(Arc<dyn KbQueryLayer>, Option<crate::conn_limit::ConnGuard>), DaemonError> {
+    let state = state.lock().await;
+    let guard = charge_tenant_or_reject(&state.tenants, addr, cost)?;
+    match addr {
+        None => state
+            .query_layer
+            .clone()
+            .ok_or(DaemonError::NotReady)
+            .map(|ql| (ql, guard)),
+        Some(addr) => {
+            let store = resolve_kb_store(&state, addr)
+                .ok_or_else(|| DaemonError::UnknownInstance(addr.to_string()))?;
+            Ok((Arc::new(mae_kb::CozoQueryLayer::new(store)), guard))
+        }
+    }
+}
+
+/// ADR-060 Phase C enforcement chokepoint: checked inside
+/// `snapshot_query_layer`/`snapshot_store`, immediately after acquiring
+/// `DaemonState`'s lock but before any of the (comparatively expensive)
+/// store-resolution work below it — a rejected request costs only a
+/// `dashmap` lookup and a couple of atomic/mutex ops, never a wasted
+/// `resolve_kb_store` or the CozoDB call the caller was about to spawn.
+/// `addr` unresolved to any `[[tenant]]` entry (including "no tenants
+/// configured at all") is `Unconfigured`, which is always admitted — Phase
+/// A's own zero-config-zero-behavior-change contract.
+fn charge_tenant_or_reject(
+    tenants: &crate::tenant::TenantRegistry,
+    addr: Option<&str>,
+    cost: crate::tenant::RequestCost,
+) -> Result<Option<crate::conn_limit::ConnGuard>, DaemonError> {
+    use crate::tenant::TenantOutcome;
+    let (outcome, guard) = tenants.check_and_charge_by_instance(addr, cost);
+    match outcome {
+        TenantOutcome::Unconfigured | TenantOutcome::Admitted => Ok(guard),
+        TenantOutcome::QuotaExceeded => Err(DaemonError::QuotaExceeded(
+            addr.unwrap_or("<unaddressed>").to_string(),
+        )),
+        TenantOutcome::ConnectionCapExceeded => Err(DaemonError::TenantAtCapacity(
+            addr.unwrap_or("<unaddressed>").to_string(),
+        )),
+    }
+}
+
+/// Snapshot a CozoDB store `Arc` under the state lock, then drop the lock —
+/// the hygiene arms' equivalent of `snapshot_query_layer` (they need direct
+/// store access, not the federated query layer). `addr` behaves identically
+/// to `snapshot_query_layer`'s: `None` is today's primary store, `Some(addr)`
+/// targets exactly the named/UUID-addressed instance (ADR-060 Phase A).
+async fn snapshot_store(
+    state: &Arc<Mutex<DaemonState>>,
+    addr: Option<&str>,
+    cost: crate::tenant::RequestCost,
+) -> Result<(Arc<CozoKbStore>, Option<crate::conn_limit::ConnGuard>), DaemonError> {
+    let state = state.lock().await;
+    let guard = charge_tenant_or_reject(&state.tenants, addr, cost)?;
+    match addr {
+        None => state
+            .store
+            .clone()
+            .ok_or(DaemonError::NotReady)
+            .map(|s| (s, guard)),
+        Some(addr) => resolve_kb_store(&state, addr)
+            .ok_or_else(|| DaemonError::UnknownInstance(addr.to_string()))
+            .map(|s| (s, guard)),
+    }
+}
+
+/// Extract the optional ADR-060 Phase A instance address from an RPC's
+/// `params`. A KB name or UUID (see [`resolve_kb_store`]); absent means
+/// "today's primary/federated behavior," never a validation error by itself.
+fn instance_addr(params: &Value) -> Option<&str> {
+    params.get("instance").and_then(|v| v.as_str())
+}
+
+/// Run an infallible synchronous query on a blocking-pool thread, off the
+/// async executor (ADR-054) — a synchronous CozoDB call left inline on an
+/// async task starves every other connection's I/O sharing that worker.
+async fn spawn_query<F>(f: F) -> Result<Value, DaemonError>
+where
+    F: FnOnce() -> Value + Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| DaemonError::Internal(format!("blocking task panicked: {e}")))
+}
+
+/// Like [`spawn_query`], for a synchronous body that can itself fail (the
+/// hygiene write arms, which surface a `DaemonError` from the store call).
+async fn spawn_query_result<F>(f: F) -> Result<Value, DaemonError>
+where
+    F: FnOnce() -> Result<Value, DaemonError> + Send + 'static,
+{
+    tokio::task::spawn_blocking(f)
+        .await
+        .map_err(|e| DaemonError::Internal(format!("blocking task panicked: {e}")))?
+}
+
 /// A store-seeded collection ready to share: the collection doc (manifest +
 /// owner/policy) plus each node's `(node_id, encoded yrs state)`.
 type SeededCollection = (mae_sync::kb::KbCollectionDoc, Vec<(String, Vec<u8>)>);
@@ -566,7 +835,7 @@ type SeededCollection = (mae_sync::kb::KbCollectionDoc, Vec<(String, Vec<u8>)>);
 /// store, or a named instance's store. `None` when the name isn't registered with
 /// this daemon — the share still proceeds at collection level, just without seeded
 /// node content.
-fn resolve_kb_store(st: &DaemonState, kb_id: &str) -> Option<Arc<CozoKbStore>> {
+pub(crate) fn resolve_kb_store(st: &DaemonState, kb_id: &str) -> Option<Arc<CozoKbStore>> {
     let inst = st.registry.find(kb_id)?;
     if inst.primary {
         st.store.clone()
@@ -710,6 +979,21 @@ pub enum DaemonError {
     NotReady,
     MethodNotFound(String),
     Internal(String),
+    /// ADR-060 Phase A: an RPC's `instance` address (name or UUID) didn't
+    /// resolve to any instance this daemon has registered. Distinct from
+    /// `InvalidParams` (the address is well-formed, just unknown) so a
+    /// client can tell "you typo'd the address" apart from "malformed
+    /// request" — same JSON-RPC code today, but a distinguishable variant
+    /// for future per-tenant error handling (Phase C/D).
+    UnknownInstance(String),
+    /// ADR-060 Phase C: the resolved tenant's cost-weighted points budget
+    /// for the current 60s window is exhausted. Distinct from
+    /// `TenantAtCapacity` (a different resource dimension — see the ADR's
+    /// Decision section on why they're two independent caps, not one).
+    QuotaExceeded(String),
+    /// ADR-060 Phase C: the resolved tenant already has `max_connections`
+    /// requests in flight.
+    TenantAtCapacity(String),
 }
 
 impl std::fmt::Display for DaemonError {
@@ -719,6 +1003,21 @@ impl std::fmt::Display for DaemonError {
             DaemonError::NotReady => write!(f, "Daemon not ready (no KB store loaded)"),
             DaemonError::MethodNotFound(m) => write!(f, "Method not found: {m}"),
             DaemonError::Internal(msg) => write!(f, "Internal error: {msg}"),
+            DaemonError::UnknownInstance(addr) => {
+                write!(f, "Unknown instance address: {addr}")
+            }
+            DaemonError::QuotaExceeded(tenant) => {
+                write!(
+                    f,
+                    "Tenant '{tenant}' has exhausted its request budget for this window"
+                )
+            }
+            DaemonError::TenantAtCapacity(tenant) => {
+                write!(
+                    f,
+                    "Tenant '{tenant}' has reached its concurrent-request cap"
+                )
+            }
         }
     }
 }
@@ -731,6 +1030,12 @@ impl DaemonError {
             DaemonError::NotReady => -32603,
             DaemonError::MethodNotFound(_) => -32601,
             DaemonError::Internal(_) => -32603,
+            DaemonError::UnknownInstance(_) => -32602,
+            // Server-error range (-32000..-32099), not one of the standard
+            // JSON-RPC codes above -- a rate-limit-shaped rejection is
+            // neither a malformed request nor an internal failure.
+            DaemonError::QuotaExceeded(_) => -32001,
+            DaemonError::TenantAtCapacity(_) => -32002,
         }
     }
 }
@@ -1127,6 +1432,10 @@ mod tests {
                 remote_peers: Vec::new(),
                 last_sync: None,
                 ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
             });
         }
 
@@ -1167,5 +1476,664 @@ mod tests {
             node_doc.body().contains("ZEPHYRINE"),
             "seeded node doc must carry the body content"
         );
+    }
+
+    // ---- ADR-060 Phase A: per-tenant RPC addressing ----
+
+    /// Build a `DaemonState` with 3 registered instances (principle #14: ≥3 when
+    /// isolation is the property under test, not 2) — a primary and two named
+    /// secondaries — each holding a node under the SAME id but with distinct,
+    /// real content, so a test can prove a targeted query returns exactly one
+    /// tenant's data and never another's (a selective oracle on content, not
+    /// merely "something was found").
+    fn three_instance_state() -> (Arc<Mutex<DaemonState>>, String, String, String) {
+        let primary_store = mae_kb::CozoKbStore::open_mem().unwrap();
+        primary_store
+            .insert_node(&mae_kb::Node::new(
+                "shared-id",
+                "Team A's note",
+                mae_kb::NodeKind::Note,
+                "TEAM A CONTENT",
+            ))
+            .unwrap();
+
+        let team_b_store = mae_kb::CozoKbStore::open_mem().unwrap();
+        team_b_store
+            .insert_node(&mae_kb::Node::new(
+                "shared-id",
+                "Team B's note",
+                mae_kb::NodeKind::Note,
+                "TEAM B CONTENT",
+            ))
+            .unwrap();
+
+        let team_c_store = mae_kb::CozoKbStore::open_mem().unwrap();
+        team_c_store
+            .insert_node(&mae_kb::Node::new(
+                "shared-id",
+                "Team C's note",
+                mae_kb::NodeKind::Note,
+                "TEAM C CONTENT",
+            ))
+            .unwrap();
+
+        let uuid_a = "uuid-team-a".to_string();
+        let uuid_b = "uuid-team-b".to_string();
+        let uuid_c = "uuid-team-c".to_string();
+
+        let mut st = DaemonState::new();
+        st.store = Some(Arc::new(primary_store));
+        st.instance_stores
+            .insert(uuid_b.clone(), Arc::new(team_b_store));
+        st.instance_stores
+            .insert(uuid_c.clone(), Arc::new(team_c_store));
+
+        let mk_instance = |uuid: &str, name: &str, primary: bool| mae_kb::federation::KbInstance {
+            uuid: uuid.to_string(),
+            name: name.to_string(),
+            org_dir: std::path::PathBuf::new(),
+            db_path: std::path::PathBuf::new(),
+            primary,
+            enabled: true,
+            last_import: None,
+            collab_id: None,
+            shared: false,
+            remote_peers: Vec::new(),
+            last_sync: None,
+            ai_residency: mae_kb::federation::AiResidency::default(),
+            project_root: None,
+            kind: mae_kb::federation::KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
+        };
+        st.registry
+            .instances
+            .push(mk_instance(&uuid_a, "team-a", true));
+        st.registry
+            .instances
+            .push(mk_instance(&uuid_b, "team-b", false));
+        st.registry
+            .instances
+            .push(mk_instance(&uuid_c, "team-c", false));
+        st.rebuild_query_layer();
+
+        (Arc::new(Mutex::new(st)), uuid_a, uuid_b, uuid_c)
+    }
+
+    #[tokio::test]
+    async fn instance_addr_omitted_preserves_todays_federated_behavior() {
+        // Backward compatibility is load-bearing (ADR-060 Phase A): omitting
+        // `instance` must behave exactly as before this ADR -- the federated
+        // layer across every registered instance, unchanged.
+        let (state, ..) = three_instance_state();
+        let r = dispatch("kb/get", json!({"id": "shared-id"}), &state)
+            .await
+            .unwrap();
+        // The federated layer resolves the collision by priority/order, but the
+        // key regression-guard property is simply that omitting the address
+        // still finds *a* result via the pre-existing federated path, not an
+        // UnknownInstance error or a NotReady failure.
+        assert!(
+            !r.is_null(),
+            "omitted instance must still resolve via federation"
+        );
+    }
+
+    #[tokio::test]
+    async fn instance_addr_scopes_strictly_to_the_addressed_tenant_never_another() {
+        // The core Phase A isolation property: addressing team B's instance for a
+        // node id that ALSO exists (with different content) in team A and team C
+        // must return exactly team B's content -- never A's, never C's, and never
+        // a federated merge of any of them.
+        let (state, uuid_a, uuid_b, uuid_c) = three_instance_state();
+
+        let a = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": uuid_a}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(a["body"].as_str(), Some("TEAM A CONTENT"));
+
+        let b = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": uuid_b}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            b["body"].as_str(),
+            Some("TEAM B CONTENT"),
+            "addressing team B must never return team A's or team C's content"
+        );
+
+        let c = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": uuid_c}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            c["body"].as_str(),
+            Some("TEAM C CONTENT"),
+            "addressing team C must never return team A's or team B's content"
+        );
+    }
+
+    #[tokio::test]
+    async fn instance_addr_accepts_either_name_or_uuid_for_the_same_instance() {
+        // resolve_kb_store (reused, not reinvented -- principle #8) already
+        // resolves by name OR uuid; Phase A's addressing must expose both, since
+        // that's the address space it claims to reuse.
+        let (state, _uuid_a, uuid_b, _uuid_c) = three_instance_state();
+
+        let by_uuid = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": uuid_b}),
+            &state,
+        )
+        .await
+        .unwrap();
+        let by_name = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": "team-b"}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_uuid["body"], by_name["body"]);
+        assert_eq!(by_name["body"].as_str(), Some("TEAM B CONTENT"));
+    }
+
+    #[tokio::test]
+    async fn instance_addr_unknown_is_a_clean_error_not_a_silent_fallback_or_panic() {
+        // An address that doesn't resolve to any registered instance must fail
+        // explicitly -- never silently fall through to the primary/federated
+        // result (which would be a real cross-tenant data leak if this were a
+        // typo'd or forged address in a real deployment) and never panic.
+        let (state, ..) = three_instance_state();
+        let r = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": "no-such-tenant"}),
+            &state,
+        )
+        .await;
+        match r {
+            Err(DaemonError::UnknownInstance(addr)) => assert_eq!(addr, "no-such-tenant"),
+            other => panic!("expected UnknownInstance, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn instance_addr_search_is_also_scoped_not_only_get() {
+        // Addressing must apply uniformly across the query-layer arms, not just
+        // kb/get -- kb/search must also never surface another tenant's hits.
+        let (state, _uuid_a, uuid_b, _uuid_c) = three_instance_state();
+        let r = dispatch(
+            "kb/search",
+            json!({"query": "TEAM", "instance": uuid_b}),
+            &state,
+        )
+        .await
+        .unwrap();
+        let hits = r.as_array().unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "team B's addressed store has exactly one matching node: {hits:?}"
+        );
+        assert_eq!(hits[0]["id"].as_str(), Some("shared-id"));
+    }
+
+    #[tokio::test]
+    async fn instance_addr_also_scopes_the_store_based_hygiene_arms() {
+        // snapshot_store (the hygiene arms' equivalent of snapshot_query_layer)
+        // must honor the same addressing -- Phase A's DoD is "every daemon RPC",
+        // not just the query-layer ones.
+        let (state, uuid_a, uuid_b, _uuid_c) = three_instance_state();
+
+        let scan_a = dispatch("kb/hygiene_scan", json!({"instance": uuid_a}), &state)
+            .await
+            .unwrap();
+        let scan_b = dispatch("kb/hygiene_scan", json!({"instance": uuid_b}), &state)
+            .await
+            .unwrap();
+        // Both must succeed independently against their own addressed store
+        // (not error, not silently reuse the primary's scan) -- the specific
+        // hygiene findings aren't the point here, that both resolve distinctly is.
+        assert!(scan_a.is_object() || scan_a.is_array());
+        assert!(scan_b.is_object() || scan_b.is_array());
+
+        let unknown = dispatch(
+            "kb/hygiene_scan",
+            json!({"instance": "no-such-tenant"}),
+            &state,
+        )
+        .await;
+        assert!(matches!(unknown, Err(DaemonError::UnknownInstance(_))));
+    }
+
+    // ---- ADR-060 Phase D: the IDOR-shaped adversarial case ----
+    //
+    // Named as this ADR's own single highest-priority adversarial test, per the
+    // real Gitea (CVE-2026-27771/CVE-2026-58444) and Vaultwarden (CVE-2026-27898)
+    // precedent cited in the ADR's Context: a request correctly, validly
+    // addressed at tenant A's own instance whose payload separately references a
+    // raw ID that actually belongs to a DIFFERENT tenant's data must be rejected
+    // at ID-resolution time -- not served just because the outer address was
+    // fine. Written and run against the current (post-Phase-A) code first, per
+    // the same principle-#15 discipline that resolved Phase B, before assuming
+    // any new resolution-time check needs to be built.
+
+    #[tokio::test]
+    async fn idor_a_valid_instance_address_never_resolves_a_different_tenants_id() {
+        let (state, uuid_a, uuid_b, uuid_c) = three_instance_state();
+
+        // A node ID that exists ONLY in tenant B's store, never in A's or C's --
+        // the exact IDOR shape: address A validly, but ask for an ID that lives
+        // in B.
+        {
+            let st = state.lock().await;
+            let b_store = st.instance_stores.get(&uuid_b).unwrap();
+            b_store
+                .insert_node(&mae_kb::Node::new(
+                    "b-only-secret",
+                    "Team B's secret note",
+                    mae_kb::NodeKind::Note,
+                    "TEAM B SECRET CONTENT -- must never be reachable via tenant A's address",
+                ))
+                .unwrap();
+        }
+
+        // kb/get addressed at A, requesting the ID that only exists in B.
+        let r = dispatch(
+            "kb/get",
+            json!({"id": "b-only-secret", "instance": uuid_a.clone()}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert!(
+            r.is_null(),
+            "an ID that only exists in tenant B must be Null (not found), never resolved, \
+             when the request is addressed at tenant A: {r:?}"
+        );
+
+        // Same shape via kb/links_from/kb/links_to -- the other id-taking arms
+        // that resolve a raw, request-supplied identifier against the addressed
+        // store, not just kb/get.
+        let links_from = dispatch(
+            "kb/links_from",
+            json!({"id": "b-only-secret", "instance": uuid_a.clone()}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            links_from.as_array().map(|a| a.len()),
+            Some(0),
+            "links_from for a B-only id addressed at A must be empty, not B's real links"
+        );
+        let links_to = dispatch(
+            "kb/links_to",
+            json!({"id": "b-only-secret", "instance": uuid_a}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            links_to.as_array().map(|a| a.len()),
+            Some(0),
+            "links_to for a B-only id addressed at A must be empty, not B's real links"
+        );
+
+        // Sanity: the SAME id, addressed correctly at B, DOES resolve -- proving
+        // the null above is genuine cross-tenant isolation, not a broken lookup.
+        let via_b = dispatch(
+            "kb/get",
+            json!({"id": "b-only-secret", "instance": uuid_b}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            via_b["body"].as_str(),
+            Some("TEAM B SECRET CONTENT -- must never be reachable via tenant A's address"),
+            "the id genuinely exists and is reachable when addressed at its real tenant B"
+        );
+
+        // And tenant C (a third, uninvolved tenant, per principle #14's N-way
+        // requirement) must ALSO never see B's id when addressed at C.
+        let via_c = dispatch(
+            "kb/get",
+            json!({"id": "b-only-secret", "instance": uuid_c}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert!(
+            via_c.is_null(),
+            "a B-only id addressed at an uninvolved third tenant C must also be Null: {via_c:?}"
+        );
+    }
+
+    // ---- ADR-060 Phase B: N-way concurrency isolation ----
+    //
+    // This is the test ADR-060's own Verification section names as "the highest-
+    // priority test alongside Phase D's IDOR case" -- and, per the ADR's own
+    // instruction to re-check the literal mechanism against reality before
+    // implementing (the same discipline ADR-054's Implementation Note applied),
+    // it is written and run FIRST, against the current Phase-A-only code, before
+    // any lock-splitting rewrite. ADR-054 already generalized "snapshot-then-
+    // drop" (clone the needed Arc under the lock, drop the lock, do the real
+    // work in spawn_blocking) to every read/hygiene arm in this file AND to
+    // scheduler.rs's watcher/maintenance/health ticks -- verified by direct
+    // reading, not assumed. If that's genuinely sufficient, this test proves it
+    // empirically instead of a rewrite being carried out on the strength of the
+    // ADR's own prose alone.
+
+    #[tokio::test]
+    async fn concurrent_slow_tenant_a_query_does_not_measurably_degrade_b_or_c_reads() {
+        use std::time::Duration;
+
+        // A real store with real, varied content (principle #14: no synthetic
+        // placeholder used to dodge realistic load) large enough that a real
+        // Cozo `search` scan takes measurable, non-trivial time -- empirically
+        // tuned (500 nodes x 5 sequential searches ~= 150-800ms depending on
+        // machine speed) to model the ADR's "tenant A runs a slow bulk query"
+        // scenario without a fake sleep standing in for real work.
+        let slow_store = mae_kb::CozoKbStore::open_mem().unwrap();
+        for i in 0..500 {
+            let body = format!(
+                "Real body content for node {i}, discussing widgets, gadgets, and \
+                 various engineering considerations relevant to search performance."
+            );
+            slow_store
+                .insert_node(&mae_kb::Node::new(
+                    format!("node:{i}"),
+                    format!("Node {i} about widgets"),
+                    mae_kb::NodeKind::Note,
+                    &body,
+                ))
+                .unwrap();
+        }
+
+        let fast_store_b = mae_kb::CozoKbStore::open_mem().unwrap();
+        fast_store_b
+            .insert_node(&mae_kb::Node::new(
+                "b-node",
+                "Team B's note",
+                mae_kb::NodeKind::Note,
+                "team B content",
+            ))
+            .unwrap();
+        let fast_store_c = mae_kb::CozoKbStore::open_mem().unwrap();
+        fast_store_c
+            .insert_node(&mae_kb::Node::new(
+                "c-node",
+                "Team C's note",
+                mae_kb::NodeKind::Note,
+                "team C content",
+            ))
+            .unwrap();
+
+        let uuid_a = "uuid-slow-tenant".to_string();
+        let uuid_b = "uuid-fast-tenant-b".to_string();
+        let uuid_c = "uuid-fast-tenant-c".to_string();
+
+        let mut st = DaemonState::new();
+        st.store = Some(Arc::new(slow_store));
+        st.instance_stores
+            .insert(uuid_b.clone(), Arc::new(fast_store_b));
+        st.instance_stores
+            .insert(uuid_c.clone(), Arc::new(fast_store_c));
+        let mk = |uuid: &str, name: &str, primary: bool| mae_kb::federation::KbInstance {
+            uuid: uuid.to_string(),
+            name: name.to_string(),
+            org_dir: std::path::PathBuf::new(),
+            db_path: std::path::PathBuf::new(),
+            primary,
+            enabled: true,
+            last_import: None,
+            collab_id: None,
+            shared: false,
+            remote_peers: Vec::new(),
+            last_sync: None,
+            ai_residency: mae_kb::federation::AiResidency::default(),
+            project_root: None,
+            kind: mae_kb::federation::KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
+        };
+        st.registry.instances.push(mk(&uuid_a, "team-a", true));
+        st.registry.instances.push(mk(&uuid_b, "team-b", false));
+        st.registry.instances.push(mk(&uuid_c, "team-c", false));
+        st.rebuild_query_layer();
+        let state = Arc::new(Mutex::new(st));
+
+        // Solo baseline: B's read latency with no concurrent load at all --
+        // the yardstick "measurably degrade" is measured against, per the
+        // ADR's own verification language, rather than a hardcoded absolute
+        // millisecond threshold (which would be flaky across CI runners of
+        // different speeds).
+        let baseline_start = Instant::now();
+        dispatch(
+            "kb/get",
+            json!({"id": "b-node", "instance": uuid_b.clone()}),
+            &state,
+        )
+        .await
+        .unwrap();
+        let solo_baseline = baseline_start.elapsed();
+
+        // Now run tenant A's slow bulk query (5 sequential full-text scans over
+        // 500 nodes) CONCURRENTLY with tenant B's and tenant C's single-node
+        // reads, all racing on the one shared `Arc<Mutex<DaemonState>>`.
+        let state_a = Arc::clone(&state);
+        let slow_a = tokio::spawn(async move {
+            let start = Instant::now();
+            for _ in 0..5 {
+                dispatch(
+                    "kb/search",
+                    json!({"query": "widgets", "limit": 1000, "instance": uuid_a.clone()}),
+                    &state_a,
+                )
+                .await
+                .unwrap();
+            }
+            start.elapsed()
+        });
+
+        // Give A's task a head start actually acquiring the lock and beginning
+        // its blocking work, so B/C's reads land while A is genuinely in
+        // flight, not merely scheduled.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+
+        let state_b = Arc::clone(&state);
+        let concurrent_b = tokio::spawn(async move {
+            let start = Instant::now();
+            dispatch(
+                "kb/get",
+                json!({"id": "b-node", "instance": uuid_b}),
+                &state_b,
+            )
+            .await
+            .unwrap();
+            start.elapsed()
+        });
+        let state_c = Arc::clone(&state);
+        let concurrent_c = tokio::spawn(async move {
+            let start = Instant::now();
+            dispatch(
+                "kb/get",
+                json!({"id": "c-node", "instance": uuid_c}),
+                &state_c,
+            )
+            .await
+            .unwrap();
+            start.elapsed()
+        });
+
+        let a_duration = slow_a.await.unwrap();
+        let b_duration = concurrent_b.await.unwrap();
+        let c_duration = concurrent_c.await.unwrap();
+
+        // Sanity: A's workload must actually be slow enough for this test to
+        // mean anything -- if the machine is fast enough that A's 5-scan
+        // workload finishes in a handful of milliseconds, the "did B/C wait
+        // behind A" question isn't meaningfully exercised. 10ms is far below
+        // what 5x full-text scans over 500 real nodes take even on a fast
+        // release build (empirically ~150ms in dev-profile CI).
+        assert!(
+            a_duration > Duration::from_millis(10),
+            "tenant A's workload wasn't actually slow enough to test against: {a_duration:?}"
+        );
+
+        // The property under test: B and C's reads, issued WHILE A's slow
+        // query is in flight, must land close to their solo baseline -- not
+        // anywhere near A's multi-hundred-millisecond workload duration. A
+        // superficial Phase A/B implementation with one still-shared lock
+        // held across the actual query would show B/C's latency rising in
+        // lockstep with A's -- this generous-but-meaningful bound (10x the
+        // solo baseline, or 50ms floor for a baseline too small to divide
+        // sanely) catches exactly that regression while tolerating normal
+        // scheduler jitter on a loaded CI runner.
+        let tolerance = std::cmp::max(solo_baseline * 10, Duration::from_millis(50));
+        assert!(
+            b_duration < tolerance,
+            "tenant B's read took {b_duration:?} while tenant A's slow query ({a_duration:?}) \
+             was in flight -- solo baseline was {solo_baseline:?}, tolerance {tolerance:?}. \
+             This is the specific regression Phase B's lock-splitting exists to prevent."
+        );
+        assert!(
+            c_duration < tolerance,
+            "tenant C's read took {c_duration:?} while tenant A's slow query ({a_duration:?}) \
+             was in flight -- solo baseline was {solo_baseline:?}, tolerance {tolerance:?}."
+        );
+    }
+
+    // --- ADR-060 Phase C: end-to-end enforcement through the real
+    // `dispatch()` path, not just `TenantRegistry`'s own unit tests
+    // (`tenant.rs`) -- proves the wiring itself (config -> DaemonState ->
+    // `charge_tenant_or_reject` -> a real `DaemonError`), which the unit
+    // tests alone can't catch a mistake in.
+
+    fn tenant_config(
+        name: &str,
+        instances: &[&str],
+        budget_per_minute: u32,
+    ) -> crate::config::TenantConfig {
+        crate::config::TenantConfig {
+            name: name.to_string(),
+            instances: instances.iter().map(|s| s.to_string()).collect(),
+            principals: Vec::new(),
+            quota: crate::config::TenantQuotaConfig {
+                max_connections: 32,
+                budget_per_minute,
+                max_result_bytes: 4_194_304,
+                idle_evict_secs: 1800,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_rejects_a_quota_exceeding_tenant_with_a_real_daemon_error() {
+        let (state, uuid_a, uuid_b, _uuid_c) = three_instance_state();
+        {
+            let mut st = state.lock().await;
+            st.tenants = Arc::new(crate::tenant::TenantRegistry::from_config(&[
+                tenant_config("team-a", &[&uuid_a], 1),
+                tenant_config("team-b", &[&uuid_b], 1000),
+            ]));
+        }
+
+        // team-a's budget (1 point) covers exactly one Read-cost kb/get.
+        let r1 = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": uuid_a}),
+            &state,
+        )
+        .await;
+        assert!(r1.is_ok(), "first request must be admitted: {r1:?}");
+
+        // The second is over budget and must come back as a real,
+        // distinguishable DaemonError -- not a generic failure, and not a
+        // silent pass-through that ignores the quota entirely.
+        let r2 = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": uuid_a}),
+            &state,
+        )
+        .await;
+        match r2 {
+            Err(DaemonError::QuotaExceeded(name)) => assert_eq!(name, uuid_a),
+            other => panic!("expected QuotaExceeded, got {other:?}"),
+        }
+
+        // team-b, an entirely different tenant with an untouched budget, is
+        // unaffected by team-a's exhaustion -- the real dispatch()/DaemonState
+        // wiring preserves the isolation TenantRegistry's own unit tests prove
+        // in isolation.
+        let r3 = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": uuid_b}),
+            &state,
+        )
+        .await;
+        assert!(r3.is_ok(), "team-b must be unaffected: {r3:?}");
+    }
+
+    #[tokio::test]
+    async fn dispatch_cost_weights_scan_higher_than_read_through_the_real_path() {
+        let (state, uuid_a, _uuid_b, _uuid_c) = three_instance_state();
+        {
+            let mut st = state.lock().await;
+            // Budget covers exactly one Scan (3pts) or three Reads (1pt each).
+            st.tenants = Arc::new(crate::tenant::TenantRegistry::from_config(&[
+                tenant_config("team-a", &[&uuid_a], 3),
+            ]));
+        }
+
+        let scan = dispatch(
+            "kb/search",
+            json!({"query": "note", "instance": uuid_a}),
+            &state,
+        )
+        .await;
+        assert!(scan.is_ok(), "one Scan must fit a 3-point budget: {scan:?}");
+
+        let next = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": uuid_a}),
+            &state,
+        )
+        .await;
+        assert!(
+            matches!(next, Err(DaemonError::QuotaExceeded(_))),
+            "budget must already be exhausted by the single 3-point Scan: {next:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_admits_unconfigured_instances_unchanged_zero_tenant_tables() {
+        // No `[[tenant]]` entries at all -- DaemonState::new()'s default
+        // TenantRegistry::empty() must never reject anything, matching
+        // Phase A's own zero-config-zero-behavior-change contract.
+        let (state, uuid_a, _uuid_b, _uuid_c) = three_instance_state();
+        for _ in 0..20 {
+            let r = dispatch(
+                "kb/get",
+                json!({"id": "shared-id", "instance": uuid_a}),
+                &state,
+            )
+            .await;
+            assert!(
+                r.is_ok(),
+                "unconfigured tenants must never be rejected: {r:?}"
+            );
+        }
     }
 }

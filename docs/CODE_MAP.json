@@ -648,6 +648,14 @@
           "kind": "mod"
         },
         {
+          "name": "adr_kb",
+          "kind": "mod"
+        },
+        {
+          "name": "adr_parse",
+          "kind": "mod"
+        },
+        {
           "name": "backup",
           "kind": "mod"
         },
@@ -705,6 +713,10 @@
         },
         {
           "name": "query",
+          "kind": "mod"
+        },
+        {
+          "name": "remote_hub",
           "kind": "mod"
         },
         {
@@ -880,6 +892,10 @@
           "kind": "mod"
         },
         {
+          "name": "local_ipc",
+          "kind": "mod"
+        },
+        {
           "name": "protocol",
           "kind": "mod"
         },
@@ -890,6 +906,10 @@
         {
           "name": "tls",
           "kind": "mod"
+        },
+        {
+          "name": "build_shim_initialize_params",
+          "kind": "fn"
         },
         {
           "name": "RequesterContext",
@@ -935,6 +955,10 @@
         {
           "name": "Renderer",
           "kind": "trait"
+        },
+        {
+          "name": "NullRenderer",
+          "kind": "struct"
         },
         {
           "name": "TerminalRenderer",
@@ -2437,6 +2461,14 @@
       "doc": "List all registered KB instances"
     },
     {
+      "name": "kb-init-project",
+      "doc": "Register a Project-kind KB instance for the current project (ADR-058)"
+    },
+    {
+      "name": "kb-decline-project-provisioning",
+      "doc": "Don't ask again to register a KB for the current project (ADR-058)"
+    },
+    {
       "name": "kb-promote",
       "doc": "Promote the current KB-view node from a federated instance into the primary KB (#303)"
     },
@@ -2959,6 +2991,10 @@
     {
       "name": "kb-audit",
       "doc": "Run KB audit report (SPC n H a)"
+    },
+    {
+      "name": "kb-export-guidance",
+      "doc": "Export guidance-KB context to AGENTS.md or a custom path (ADR-050 Phase H)"
     },
     {
       "name": "kb-narrow",

@@ -15,6 +15,17 @@ VERSION="0.14.54"  # updated by version-bump workflow
 BINARIES="mae mae-mcp-shim mae-daemon"
 SERVICES="mae-daemon"
 LAUNCHD_LABEL="com.cuttlefisch.mae-daemon"
+# mae-headless (ADR-055) is deliberately NOT in $SERVICES/stop_services/
+# restart_services: unlike mae-daemon (one singleton service), it's a
+# systemd TEMPLATE unit (mae-headless@<project-hash>.service) instantiated
+# per-project, on demand -- there's no single "mae-headless" unit to
+# stop/restart across an upgrade. Its template file is placed (and removed
+# on uninstall) below, same as the daemon's, but never auto-enabled/started
+# -- a user opts a specific project instance in themselves
+# (`systemctl --user enable --now mae-headless@<hash>`) when they want a
+# persistent headless instance instead of the extension/CLI spawning one
+# on demand.
+LAUNCHD_LABEL_HEADLESS="com.cuttlefisch.mae-headless"
 
 # ========================================================================
 # Argument parsing
@@ -247,6 +258,12 @@ if [ "$ACTION" = "uninstall" ]; then
         else
             skip "launchd agent not installed"
         fi
+        if [ -f "$LAUNCHD_DIR/$LAUNCHD_LABEL_HEADLESS.plist" ]; then
+            rm -f "$LAUNCHD_DIR/$LAUNCHD_LABEL_HEADLESS.plist"
+            ok "removed $LAUNCHD_LABEL_HEADLESS.plist"
+        else
+            skip "headless launchd agent template not installed"
+        fi
     elif [ "$OS" = "Linux" ]; then
         SYSTEMD_DIR="$CONFIGDIR/systemd/user"
         if [ -f "$SYSTEMD_DIR/mae-daemon.service" ]; then
@@ -254,6 +271,12 @@ if [ "$ACTION" = "uninstall" ]; then
             ok "removed mae-daemon.service"
         else
             skip "mae-daemon.service not installed"
+        fi
+        if [ -f "$SYSTEMD_DIR/mae-headless@.service" ]; then
+            rm -f "$SYSTEMD_DIR/mae-headless@.service"
+            ok "removed mae-headless@.service"
+        else
+            skip "mae-headless@.service not installed"
         fi
         if command -v systemctl >/dev/null 2>&1; then
             systemctl --user daemon-reload 2>/dev/null || true
@@ -471,6 +494,15 @@ if [ "$OS" = "Linux" ] && command -v systemctl >/dev/null 2>&1; then
         skip "mae-daemon.service not in package"
     fi
 
+    if [ -f "$SCRIPT_DIR/mae-headless@.service" ]; then
+        # Same rewrite; never enabled/started here -- see the LAUNCHD_LABEL_HEADLESS
+        # comment above for why (templated, per-project, opt-in unit).
+        sed "s|%h/.local/bin/|$BINDIR/|g" "$SCRIPT_DIR/mae-headless@.service" > "$SYSTEMD_DIR/mae-headless@.service"
+        verify "$SYSTEMD_DIR/mae-headless@.service" "mae-headless@.service"
+    else
+        skip "mae-headless@.service not in package"
+    fi
+
     systemctl --user daemon-reload 2>/dev/null || true
     ok "systemctl --user daemon-reload"
 elif [ "$OS" = "Linux" ]; then
@@ -500,6 +532,28 @@ elif [ "$OS" = "Darwin" ]; then
         fi
     else
         skip "launchd plist not in package"
+    fi
+
+    HEADLESS_PLIST_SRC="$SCRIPT_DIR/$LAUNCHD_LABEL_HEADLESS.plist"
+    HEADLESS_PLIST_DST="$LAUNCHD_DIR/$LAUNCHD_LABEL_HEADLESS.plist"
+
+    if [ -f "$HEADLESS_PLIST_SRC" ]; then
+        # Same rewrite; never loaded here -- templated/opt-in, see the
+        # LAUNCHD_LABEL_HEADLESS comment above.
+        sed -e "s|__BINDIR__|$BINDIR|g" \
+            -e "s|__LOGDIR__|$LOGDIR|g" \
+            "$HEADLESS_PLIST_SRC" > "$HEADLESS_PLIST_DST"
+        verify "$HEADLESS_PLIST_DST" "launchd agent template ($LAUNCHD_LABEL_HEADLESS)"
+
+        if command -v plutil >/dev/null 2>&1; then
+            if plutil -lint "$HEADLESS_PLIST_DST" >/dev/null 2>&1; then
+                ok "plist syntax valid"
+            else
+                fail "plist syntax invalid — launchd won't load it"
+            fi
+        fi
+    else
+        skip "headless launchd plist not in package"
     fi
 fi
 

@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    MAE Headless (macOS launchd, ADR-055) — the full editor engine
+    (buffers, KB, AI, LSP, DAP, MCP) running with no terminal or GUI
+    attached, for pairing with an external editor's AI agent (e.g. VS Code
+    + Copilot) via mae-mcp-shim. Distinct from com.cuttlefisch.mae-daemon —
+    the daemon is a separate, structurally smaller service (KB persistence +
+    collaboration hub only); this is the full engine.
+
+    Unlike systemd's native template-unit mechanism (mae-headless@.service),
+    launchd has no per-instance templating — one instance is one project, so
+    this file is a TEMPLATE: generate one real plist per project by
+    substituting the four placeholders below, then install it under a
+    project-unique label so multiple projects' instances never collide:
+
+      sed -e 's|__BINDIR__|/path/to/bin|g' \
+          -e 's|__LOGDIR__|~/Library/Logs/mae|g' \
+          -e 's|__PROJECT_DIR__|/path/to/project|g' \
+          -e 's|__LABEL_SUFFIX__|<short-stable-id-for-this-project>|g' \
+          assets/com.cuttlefisch.mae-headless.plist \
+          > ~/Library/LaunchAgents/com.cuttlefisch.mae-headless.__LABEL_SUFFIX__.plist
+      launchctl load ~/Library/LaunchAgents/com.cuttlefisch.mae-headless.<id>.plist
+
+    __LABEL_SUFFIX__ should be the same project-hash `headless_loop::project_hash`
+    computes for the stable MCP socket path, so the two stay correlated for
+    a given project without inventing a second identifier scheme.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.cuttlefisch.mae-headless.__LABEL_SUFFIX__</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__BINDIR__/mae</string>
+        <string>--headless</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__PROJECT_DIR__</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+
+    <key>StandardOutPath</key>
+    <string>__LOGDIR__/mae-headless-__LABEL_SUFFIX__.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>__LOGDIR__/mae-headless-__LABEL_SUFFIX__.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

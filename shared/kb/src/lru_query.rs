@@ -372,6 +372,7 @@ impl KbQueryLayer for LruQueryLayer {
                     orphan_ids: Vec::new(), // Daemon returns count, not full list
                     broken_links: Vec::new(),
                     hub_nodes: Vec::new(),
+                    by_instance: HashMap::new(),
                 })
             }
             Err(e) => {

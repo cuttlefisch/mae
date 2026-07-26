@@ -429,6 +429,9 @@ impl OptionRegistry {
                 opt!("kb_search_scope", &["kb-search-scope"],
                     "Default KB search scope: all (primary + federated), local (primary only), remote (shared/collaborative instances only), or a specific instance name",
                     OptionKind::String, "all", Some("kb.search_scope"), &[]),
+                opt!("kb_federated_max_fanout_instances", &["kb-federated-max-fanout-instances"],
+                    "Max federated KB instances queried per search/agenda/list fan-out (ADR-062 Phase B). Every participating instance costs a full store query, so this bounds worst-case per-query cost; if a registry exceeds it, the lowest-priority instances (kb_instances priority) are excluded from that query, not an arbitrary subset.",
+                    OptionKind::Int, "128", Some("kb.federated_max_fanout_instances"), &[]),
                 opt!("kb_dailies_dir", &["kb-dailies-dir"],
                     "Directory for daily journal notes. Defaults to kb_notes_dir/daily if unset.",
                     OptionKind::String, "", Some("kb.dailies_dir"), &[]),
@@ -471,6 +474,48 @@ impl OptionRegistry {
                      but not yet wired in `crates/ai/src/guidance.rs`'s reader — setting it \
                      currently surfaces no content; use a registered instance name instead.",
                     OptionKind::String, "", Some("ai.guidance_kb"), &[]),
+                opt!("ai_guidance_inline_budget_chars", &["ai-guidance-inline-budget-chars"],
+                    "Max characters of ai_guidance_kb's rendered content (mae_ai::guidance::build_guidance_context \
+                     — the same content mae-agent-cli inlines into its system prompt) to inline \
+                     directly into the MCP initialize response's instructions field (ADR-063 Phase A), \
+                     so an external MCP client gets the guidance content itself by default instead of \
+                     a bare pointer it must separately fetch. When the rendered content exceeds this \
+                     budget, falls back cleanly to the pointer-only behavior (never truncates content \
+                     mid-stream) to avoid a pathologically large initialize handshake payload.",
+                    OptionKind::Int, "8000", Some("ai.guidance_inline_budget_chars"), &[]),
+                opt!("ai_guidance_export_live_sync", &["ai-guidance-export-live-sync"],
+                    "When true, re-run kb-export-guidance/kb_export_guidance once automatically \
+                     at session start whenever ai_guidance_kb is set (ADR-050 D4) — kept in sync \
+                     with the guidance KB from one session to the next, not a continuous \
+                     file-watcher. Default false: exporting to AGENTS.md/.github/copilot-instructions.md \
+                     stays a one-time/on-demand action the user (or an external agent, via the \
+                     kb_export_guidance tool) triggers explicitly, matching ai_guidance_kb's own \
+                     opt-in-by-default philosophy. A missing project root or export failure never \
+                     blocks startup — best-effort, same as ai_guidance_kb's own read path.",
+                    OptionKind::Bool, "false", Some("ai.guidance_export_live_sync"), &[]),
+                opt!("mcp_tools_tiered_by_default", &["mcp-tools-tiered-by-default"],
+                    "When true (default), the MCP server's tools/list response sends only \
+                     ToolTier::Core (~85 tools) plus the request_tools/search_tools escalation \
+                     tools, instead of the full ~758-tool flat set — the same tiering \
+                     crates/ai/src/tools/categories.rs::classify_tool_tier already applies to the \
+                     built-in agent (crates/ai/src/session/mod.rs). A large flat tool list \
+                     measurably degrades tool-selection accuracy for external MCP clients (see \
+                     docs/MODEL_SUPPORT.md); an external agent can still reach any Extended-tier \
+                     tool via request_tools/search_tools. Set false to send every tool \
+                     unfiltered, e.g. for a deployment already tuned around the full flat list.",
+                    OptionKind::Bool, "true", Some("mcp.tools_tiered_by_default"), &[]),
+                opt!("mcp_tool_category_allowlist", &["mcp-tool-category-allowlist"],
+                    "Comma-separated ToolCategory names (knowledge, lsp, dap, shell, commands, \
+                     git, web, ai, visual, debug, mcp — same taxonomy as request_tools) that \
+                     this MAE instance restricts MCP tool DISPATCH to, not just advertisement \
+                     (ADR-056). Empty (default) = unrestricted. Composes with (never overrides) \
+                     any per-session declaration a client makes at initialize (permissionCeiling's \
+                     toolCategoryAllowlist analogue) — the effective policy is always the \
+                     intersection of both, so this can only ever tighten what a session can do, \
+                     never grant more than a session already declared for itself. Intended for a \
+                     `mae --headless` engine instance scoped specifically to serve external \
+                     editors' AI agents KB+guidance operations only.",
+                    OptionKind::String, "", Some("mcp.tool_category_allowlist"), &[]),
                 // --- Which-key ---
                 opt!("which_key_idle_delay", &["which-key-idle-delay"],
                     "Milliseconds of idle time (no input) after the leader keypad activates \

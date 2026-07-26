@@ -122,6 +122,7 @@ impl CozoKbStore {
             orphan_ids,
             broken_links,
             hub_nodes: hubs,
+            by_instance: std::collections::HashMap::new(),
         })
     }
 }

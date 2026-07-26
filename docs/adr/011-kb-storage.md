@@ -1,8 +1,16 @@
 # ADR-011: KB Storage Architecture — CozoDB-First with SQLite Bridge
 
-**Status**: Implemented (all phases complete as of v0.12.0)
+**Status**: Implemented (all phases complete as of v0.12.0) — **the "CozoDB owns truth" framing
+below is superseded by ADR-029**, which reframes CozoDB as a *derived projection* over a CRDT
+source of truth and documents that this ADR's original model is "inverted in practice" (CozoDB
+is de-facto the source of truth on both editor and daemon, with a live bug where the daemon
+never persists collab edits back into its own cozo store). The migration work Phases 1-5 below
+describe genuinely happened and CozoDB genuinely is the storage backend — read this ADR for that
+history — but do not treat its "CozoDB is the sole/authoritative source of truth" claims as
+current architecture without also reading ADR-029.
 **Date**: 2026-05-31 (accepted), 2026-06-02 (all phases complete)
-**Related**: ADR-004 (KB scaling), ADR-005 (KB CRDT)
+**Related**: ADR-004 (KB scaling), ADR-005 (KB CRDT — storage model superseded by ADR-011, in
+turn corrected by ADR-029), ADR-029 (source-of-truth correction, see Status above)
 
 ## Context
 

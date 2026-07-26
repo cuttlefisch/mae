@@ -57,6 +57,22 @@ pub struct DaemonConfig {
     pub log_level: String,
     /// Collaboration server settings (absorbed from mae-state-server).
     pub collab: CollabConfig,
+    /// OAuth 2.1 resource-server settings (ADR-052). A dedicated HTTPS
+    /// listener, deliberately separate from `collab` (which stays
+    /// mTLS/PSK-authenticated JSON-RPC) — the MCP spec scopes OAuth to
+    /// HTTP-based transports specifically.
+    pub oauth: OAuthConfig,
+    /// KB Unix-socket connection hardening (ADR-054). This socket is local,
+    /// unauthenticated, filesystem-permissions-only trust (SECURITY.md) — no
+    /// per-principal/per-IP sub-limits apply here (there is no principal or
+    /// IP on a Unix domain socket), only a total connection cap + idle
+    /// timeout, mirroring the collab TCP listener's own `#342` hardening.
+    pub kb_socket: KbSocketConfig,
+    /// ADR-060 Phase C: named tenants sharing this daemon, each with its own
+    /// cost-weighted request-points budget + concurrent-request cap. Zero
+    /// entries (the default) means zero behavior change — no tenant
+    /// resolves, so every request is treated exactly as it is today.
+    pub tenant: Vec<TenantConfig>,
 }
 
 /// Collaboration server configuration (TCP sync, persistence, auth).
@@ -122,6 +138,11 @@ pub struct P2pConfig {
     ///   who via the verified `remote_id`); per-KB access stays fully mediated by
     ///   membership + JoinPolicy. Enables the frictionless magnet-link join.
     pub connection_gate: String,
+    /// Hard cap on concurrent mesh connections (0 = unlimited), RAII-counted
+    /// via `conn_limit::ConnLimiter` (ADR-054) — same shape as
+    /// `collab.max_connections`, bounding an authenticated-but-otherwise-silent
+    /// peer parking a task forever alongside the existing `accept_bi` timeout.
+    pub max_connections: usize,
 }
 
 impl Default for P2pConfig {
@@ -130,6 +151,7 @@ impl Default for P2pConfig {
             enabled: false,
             relay: "default".to_string(),
             connection_gate: "authorized_keys".to_string(),
+            max_connections: 256,
         }
     }
 }
@@ -238,6 +260,12 @@ pub struct StorageConfig {
     pub compact_threshold: u64,
     /// Maximum WAL entries between forced compactions (0 = no forced compaction).
     pub max_wal_entries: u64,
+    /// Number of SQLite connections opened in WAL mode to the same file
+    /// (`SqliteBackend::open_with_pool_size`, ADR-054) — was hardcoded to 4;
+    /// raising it gives concurrent writers more shards to spread across
+    /// under load, at the cost of one more open file descriptor/connection
+    /// per shard.
+    pub shard_count: usize,
 }
 
 impl Default for StorageConfig {
@@ -247,6 +275,7 @@ impl Default for StorageConfig {
             data_dir: None,
             compact_threshold: 500,
             max_wal_entries: 5000,
+            shard_count: 4,
         }
     }
 }
@@ -309,6 +338,194 @@ impl Default for DaemonConfig {
             data_dir: None,
             log_level: "info".to_string(),
             collab: CollabConfig::default(),
+            oauth: OAuthConfig::default(),
+            kb_socket: KbSocketConfig::default(),
+            tenant: Vec::new(),
+        }
+    }
+}
+
+/// ADR-060 Phase C: one named tenant sharing this daemon. `instances` keys
+/// the KB-socket path (Phase A instance addresses this tenant owns);
+/// `principals` keys the collab/OAuth path (authenticated identities this
+/// tenant owns) — the two-key design the ADR's Decision section requires,
+/// since the KB Unix socket has no principal concept to key on uniformly.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TenantConfig {
+    /// Unique tenant name (referenced by `daemon/evict_tenant` and in logs).
+    pub name: String,
+    /// KB-socket instance addresses (names or UUIDs, `handler::instance_addr`'s
+    /// address space) this tenant owns. May be empty for a collab/OAuth-only
+    /// tenant.
+    #[serde(default)]
+    pub instances: Vec<String>,
+    /// Authenticated principals (Ed25519 fingerprint or `psk:<keyid>`) this
+    /// tenant owns. May be empty for a KB-socket-only tenant.
+    #[serde(default)]
+    pub principals: Vec<String>,
+    #[serde(default)]
+    pub quota: TenantQuotaConfig,
+}
+
+/// Per-tenant resource limits (ADR-060 Phase C).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct TenantQuotaConfig {
+    /// Concurrent in-flight request cap for this tenant (0 = unlimited),
+    /// same `ConnLimiter` shape as `kb_socket.max_connections`/
+    /// `collab.max_connections`, instantiated once per tenant.
+    pub max_connections: usize,
+    /// Cost-weighted request-points budget per fixed 60-second window (0 =
+    /// unlimited). Reads cost 1 point, scans cost 3, mutations cost 5 — see
+    /// `tenant::RequestCost`.
+    pub budget_per_minute: u32,
+    /// Result-size overage threshold in bytes. Part of the `[[tenant]]`
+    /// schema (the ADR's cost model reserves +2 points for an over-size
+    /// response) but not yet enforced by any call site in this
+    /// implementation pass — no `handler.rs` arm currently measures its own
+    /// response size before returning it. Configurable now so a future pass
+    /// wiring enforcement doesn't also need a config-schema/migration change.
+    pub max_result_bytes: usize,
+    /// Seconds of no activity before this tenant's live quota/connection
+    /// state is idle-evicted by `DaemonScheduler::run_maintenance_tick` (0 =
+    /// never idle-evict). Eviction is a pure cache-drop: the next request
+    /// rebuilds fresh state (see `TenantRegistry::evict_idle`).
+    pub idle_evict_secs: u64,
+}
+
+impl Default for TenantQuotaConfig {
+    fn default() -> Self {
+        TenantQuotaConfig {
+            max_connections: 32,
+            budget_per_minute: 1000,
+            max_result_bytes: 4_194_304,
+            idle_evict_secs: 1800,
+        }
+    }
+}
+
+/// OAuth 2.1 resource-server configuration (ADR-052). Never on by default
+/// (principle #12 — daemon value is earned by an explicit need, not
+/// assumed) — an operator opts in by setting `enabled = true` and pointing
+/// `jwks_url`/`issuer` at their chosen external authorization server.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct OAuthConfig {
+    /// Whether the OAuth HTTPS listener starts at all.
+    pub enabled: bool,
+    /// TCP bind address for the OAuth-protected HTTPS listener — separate
+    /// from `collab.bind` (the mTLS/PSK JSON-RPC listener).
+    pub bind: SocketAddr,
+    /// This server's own canonical resource URI (RFC 8707 `resource` /
+    /// RFC 9728 protected-resource identifier). MUST be set by the
+    /// operator to a real, stable, externally-reachable URL before
+    /// `enabled = true` is meaningful — there is no safe default to infer
+    /// this from.
+    pub canonical_resource_uri: String,
+    /// URL to fetch the authorization server's JWKS from.
+    pub jwks_url: String,
+    /// The authorization server's issuer, checked against each token's
+    /// `iss` claim. Strongly recommended to set; `None` skips issuer
+    /// validation.
+    pub issuer: Option<String>,
+    /// Which JWT claim becomes the mapped `kb_access` principal.
+    pub principal_claim: String,
+    /// PEM-encoded TLS certificate chain path for the HTTPS listener.
+    pub cert_path: PathBuf,
+    /// PEM-encoded TLS private key path for the HTTPS listener.
+    pub key_path: PathBuf,
+    /// ADR-053/Phase G (#382): whether the `kb/query.get`/`search`/`graph`/
+    /// `capabilities` RPC family is reachable on this listener at all.
+    /// Independently toggleable from `enabled` — an operator may want the
+    /// OAuth listener up (e.g. for the plain bearer-verification diagnostic)
+    /// without exposing the KB-query surface yet. Default false (principle
+    /// #12 — never on by default). Also requires `collab.enabled` (a
+    /// `DocStore` must exist to serve from — see `main.rs`'s
+    /// `doc_store_for_query` wiring); this flag alone does not create one.
+    pub kb_query_enabled: bool,
+    /// Cap on the raw size (bytes) of an incoming authenticated request
+    /// body, enforced BEFORE it's read into memory at all (`http_body_util
+    /// ::Limited`, which errors mid-stream rather than buffering past the
+    /// limit) and regardless of `kb_query_enabled` — a validly-authenticated
+    /// caller hitting ANY endpoint on this listener must not be able to
+    /// force unbounded server-side buffering merely by sending a large body.
+    /// Distinct from `kb_query_max_body_bytes` below, which bounds a
+    /// *response*'s node content, not the request itself.
+    pub max_request_body_bytes: usize,
+    /// Cap on a single `kb/query.get` response body's node-body size, bytes
+    /// (unencrypted KBs only — an E2E KB's response is raw ciphertext,
+    /// capped by nothing since the daemon can't inspect it to truncate it
+    /// meaningfully; the op-set itself is already bounded elsewhere).
+    /// Prevents a single "get" from being a disguised bulk-content vector.
+    pub kb_query_max_body_bytes: usize,
+    /// Cap on how many nodes a single `kb/query.search` call will
+    /// materialize and scan (unencrypted KBs only) — bounds server-side
+    /// cost and is the literal "prevent search from being a disguised
+    /// full-dump vector" cap (ADR-053 decision 3), independent of
+    /// `kb_query_max_search_results` below (a cap on the *scan*, not just
+    /// the returned count).
+    pub kb_query_max_scan_nodes: usize,
+    /// Cap on the number of results a single `kb/query.search` call returns.
+    pub kb_query_max_search_results: usize,
+    /// Hard cap on concurrent connections this listener will accept
+    /// (ADR-054's `#342` failure class — found missing here via an
+    /// independent security review: every OTHER listener in this daemon
+    /// gained this cap, but the OAuth HTTPS listener, added later, never
+    /// did). Same shape as `collab.max_connections`/`p2p.max_connections`
+    /// (`conn_limit::ConnLimiter`, `0` = unlimited).
+    pub max_connections: usize,
+}
+
+impl Default for OAuthConfig {
+    fn default() -> Self {
+        OAuthConfig {
+            enabled: false,
+            bind: "127.0.0.1:9474".parse().unwrap(),
+            canonical_resource_uri: String::new(),
+            jwks_url: String::new(),
+            issuer: None,
+            principal_claim: "sub".to_string(),
+            cert_path: PathBuf::new(),
+            key_path: PathBuf::new(),
+            kb_query_enabled: false,
+            max_request_body_bytes: 1_048_576,
+            kb_query_max_body_bytes: 65_536,
+            kb_query_max_scan_nodes: 500,
+            kb_query_max_search_results: 20,
+            max_connections: 256,
+        }
+    }
+}
+
+/// KB Unix-socket connection hardening (ADR-054). This is the daemon's local,
+/// filesystem-permissions-only-trust listener (SECURITY.md) that every
+/// locally-connected frontend's routine `kb_search`/`kb_get`/etc. calls
+/// actually use — unlike `collab`/`oauth`, there is no per-principal or
+/// per-IP identity to sub-limit against here (a Unix domain socket carries
+/// neither), so this config deliberately offers only a total connection cap
+/// and an idle-read timeout, not the finer-grained knobs the network-facing
+/// listeners have.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct KbSocketConfig {
+    /// Hard cap on concurrent connections (0 = unlimited), RAII-counted via
+    /// `conn_limit::ConnLimiter` — same shape as `collab.max_connections`.
+    pub max_connections: usize,
+    /// Seconds a connection may sit with no request in flight before the
+    /// server closes it (0 = disabled). `DaemonClient` keeps one persistent
+    /// connection open for the whole editor session and transparently
+    /// reconnects on I/O error, so a server-side idle-close is self-healing
+    /// from the client's perspective, not a hard failure. Default is
+    /// generous (mirrors `collab.sync.idle_eviction_secs`'s own default)
+    /// since a genuinely idle-but-still-open editor session is normal.
+    pub idle_timeout_secs: u64,
+}
+
+impl Default for KbSocketConfig {
+    fn default() -> Self {
+        KbSocketConfig {
+            max_connections: 256,
+            idle_timeout_secs: 300,
         }
     }
 }
@@ -481,6 +698,45 @@ impl DaemonConfig {
 
         issues
     }
+
+    /// Validate `[[tenant]]` configuration: duplicate tenant names, and an
+    /// instance address or principal claimed by more than one tenant (both
+    /// are silent-data-leak shaped bugs if left unchecked — the second
+    /// tenant registered would win the routing table race, silently pooling
+    /// two supposedly-isolated tenants' quota into one).
+    pub fn check_tenants(&self) -> Vec<String> {
+        let mut issues = Vec::new();
+        let mut seen_names = std::collections::HashSet::new();
+        let mut seen_instances = std::collections::HashMap::new();
+        let mut seen_principals = std::collections::HashMap::new();
+
+        for t in &self.tenant {
+            if t.name.is_empty() {
+                issues.push("tenant.name must not be empty".to_string());
+            }
+            if !seen_names.insert(t.name.clone()) {
+                issues.push(format!("duplicate tenant name '{}'", t.name));
+            }
+            for inst in &t.instances {
+                if let Some(prior) = seen_instances.insert(inst.clone(), t.name.clone()) {
+                    issues.push(format!(
+                        "instance '{inst}' claimed by both tenant '{prior}' and tenant '{}'",
+                        t.name
+                    ));
+                }
+            }
+            for p in &t.principals {
+                if let Some(prior) = seen_principals.insert(p.clone(), t.name.clone()) {
+                    issues.push(format!(
+                        "principal '{p}' claimed by both tenant '{prior}' and tenant '{}'",
+                        t.name
+                    ));
+                }
+            }
+        }
+
+        issues
+    }
 }
 
 /// Legacy state-server.toml format for migration.
@@ -598,5 +854,109 @@ mod tests {
                 "'{gate}' should be accepted"
             );
         }
+    }
+
+    fn tenant(name: &str, instances: &[&str], principals: &[&str]) -> TenantConfig {
+        TenantConfig {
+            name: name.to_string(),
+            instances: instances.iter().map(|s| s.to_string()).collect(),
+            principals: principals.iter().map(|s| s.to_string()).collect(),
+            quota: TenantQuotaConfig::default(),
+        }
+    }
+
+    #[test]
+    fn zero_tenant_tables_is_valid_and_matches_the_default() {
+        let config = DaemonConfig::default();
+        assert!(config.tenant.is_empty());
+        assert!(config.check_tenants().is_empty());
+    }
+
+    fn config_with_tenants(tenants: Vec<TenantConfig>) -> DaemonConfig {
+        DaemonConfig {
+            tenant: tenants,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn duplicate_tenant_name_is_rejected() {
+        let config = config_with_tenants(vec![
+            tenant("team-a", &["kb-1"], &[]),
+            tenant("team-a", &["kb-2"], &[]),
+        ]);
+        let issues = config.check_tenants();
+        assert!(
+            issues.iter().any(|i| i.contains("duplicate tenant name")),
+            "got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn instance_claimed_by_two_tenants_is_rejected() {
+        let config = config_with_tenants(vec![
+            tenant("team-a", &["shared-kb"], &[]),
+            tenant("team-b", &["shared-kb"], &[]),
+        ]);
+        let issues = config.check_tenants();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.contains("shared-kb") && i.contains("team-a") && i.contains("team-b")),
+            "got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn principal_claimed_by_two_tenants_is_rejected() {
+        let config = config_with_tenants(vec![
+            tenant("team-a", &[], &["ed25519:same"]),
+            tenant("team-b", &[], &["ed25519:same"]),
+        ]);
+        let issues = config.check_tenants();
+        assert!(
+            issues.iter().any(|i| i.contains("ed25519:same")),
+            "got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn disjoint_tenants_pass_validation() {
+        let config = config_with_tenants(vec![
+            tenant("team-a", &["kb-1"], &["ed25519:a"]),
+            tenant("team-b", &["kb-2"], &["ed25519:b"]),
+        ]);
+        assert!(config.check_tenants().is_empty());
+    }
+
+    /// Round-trip the exact `[[tenant]]` TOML shape from the ADR's own
+    /// example — a config schema that parses in isolation but silently
+    /// diverges from what the ADR documents (a field renamed, a nesting
+    /// level wrong) would still pass every other test here.
+    #[test]
+    fn parses_the_documented_toml_tenant_table_shape() {
+        let toml_str = r#"
+[[tenant]]
+name = "team-a"
+instances = ["team-a-kb", "shared-ref"]
+principals = ["ed25519:AbCd...", "psk:teamA-key1"]
+
+[tenant.quota]
+max_connections = 32
+budget_per_minute = 1000
+max_result_bytes = 4194304
+idle_evict_secs = 1800
+"#;
+        let config: DaemonConfig = toml::from_str(toml_str).expect("valid [[tenant]] TOML");
+        assert_eq!(config.tenant.len(), 1);
+        let t = &config.tenant[0];
+        assert_eq!(t.name, "team-a");
+        assert_eq!(t.instances, vec!["team-a-kb", "shared-ref"]);
+        assert_eq!(t.principals, vec!["ed25519:AbCd...", "psk:teamA-key1"]);
+        assert_eq!(t.quota.max_connections, 32);
+        assert_eq!(t.quota.budget_per_minute, 1000);
+        assert_eq!(t.quota.max_result_bytes, 4_194_304);
+        assert_eq!(t.quota.idle_evict_secs, 1800);
+        assert!(config.check_tenants().is_empty());
     }
 }

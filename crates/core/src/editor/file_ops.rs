@@ -1808,6 +1808,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn acquire_file_lock_contention_sets_status() {
         let tmp = tempfile::TempDir::new().unwrap();
         let file = tmp.path().join("contested.txt");

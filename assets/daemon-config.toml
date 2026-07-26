@@ -46,11 +46,86 @@
 # [collab.storage]
 # Collab WAL data directory (default: data_dir/collab)
 # data_dir = ""
-# Number of SQLite shards (default: 4)
-# pool_size = 4
+# Number of SQLite connections opened in WAL mode to the same file (ADR-054).
+# Raising this gives concurrent writers more shards to spread across under
+# load, at the cost of one more open connection/fd per shard.
+# shard_count = 4
 
 # [collab.sync]
 # Background compaction interval in seconds
 # compaction_interval_secs = 60
 # Idle document eviction timeout in seconds
 # idle_eviction_secs = 300
+
+# ========================================================================
+# OAuth 2.1 resource server (ADR-052) — a dedicated HTTPS listener,
+# separate from [collab], for external MCP clients (e.g. VS Code/Copilot)
+# to authenticate against a hub-hosted KB. Never enabled by default: the
+# daemon validates bearer tokens issued by an external authorization
+# server you configure — it never issues tokens itself.
+# ========================================================================
+[oauth]
+# Enable the OAuth-protected HTTPS listener.
+# enabled = false
+
+# TCP bind address for the OAuth listener.
+# bind = "127.0.0.1:9474"
+
+# This server's own canonical resource URI (RFC 8707 / RFC 9728). Must be
+# a real, stable, externally-reachable URL — every valid token presented
+# here must include this exact value in its `aud` claim.
+# canonical_resource_uri = "https://mae.example.com:9474"
+
+# URL to fetch the authorization server's JWKS from.
+# jwks_url = "https://idp.example.com/.well-known/jwks.json"
+
+# The authorization server's issuer, checked against each token's `iss`.
+# issuer = "https://idp.example.com"
+
+# Which JWT claim becomes the mapped kb_access principal.
+# principal_claim = "sub"
+
+# PEM-encoded TLS certificate chain + private key for the HTTPS listener.
+# cert_path = "/etc/mae/oauth-tls.crt"
+# key_path = "/etc/mae/oauth-tls.key"
+
+# Live scoped read-through KB query surface (ADR-053, kb/query.get/search/graph/
+# capabilities). Independently toggleable from `enabled` above. Also requires
+# [collab] enabled = true (a DocStore must exist to serve from).
+# kb_query_enabled = false
+
+# Cap on the raw size (bytes) of an incoming authenticated request body, enforced
+# BEFORE it's read into memory, regardless of kb_query_enabled -- protects against
+# an authenticated caller forcing unbounded server-side buffering. Distinct from
+# kb_query_max_body_bytes below (a cap on response content, not the request).
+# max_request_body_bytes = 1048576
+
+# Cap on a single kb/query.get response's node-body size, bytes (unencrypted KBs
+# only -- an E2E KB's response is opaque ciphertext, not truncatable).
+# kb_query_max_body_bytes = 65536
+
+# Cap on how many nodes a single kb/query.search call materializes and scans
+# (unencrypted KBs only) -- bounds cost independent of the result-count cap below;
+# this is what actually prevents "search" from being a disguised full-dump vector.
+# kb_query_max_scan_nodes = 500
+
+# Cap on the number of results a single kb/query.search call returns.
+# kb_query_max_search_results = 20
+
+# ========================================================================
+# KB Unix socket connection hardening (ADR-054). This is the local,
+# filesystem-permissions-only-trust listener every locally-connected
+# frontend's routine kb_search/kb_get/etc. calls use. There is no
+# per-principal/per-IP identity to sub-limit against on a Unix domain
+# socket, so only a total connection cap + idle timeout are configurable
+# here (unlike [collab]/[oauth]'s richer per-network-client controls).
+# ========================================================================
+[kb_socket]
+# Hard cap on concurrent connections (0 = unlimited).
+# max_connections = 256
+
+# Seconds a connection may sit with no request in flight before the server
+# closes it (0 = disabled). Self-healing: DaemonClient transparently
+# reconnects on I/O error, so this is not a hard failure for legitimate
+# long-idle editor sessions.
+# idle_timeout_secs = 300

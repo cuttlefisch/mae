@@ -19,6 +19,26 @@ use tracing::{debug, error, trace};
 
 use crate::event::{ShellEvent, ShellEventListener};
 
+/// PID of a just-spawned PTY's child process. ADR-066 Phase A/C: `alacritty_terminal`'s
+/// `Pty` has a structurally different API per platform, not just a missing method —
+/// Unix's `Pty::child() -> &Child` (fork/exec-based) has no Windows equivalent, since
+/// ConPTY doesn't expose a `Child` the same way; the real Windows accessor is
+/// `child_watcher().pid() -> Option<NonZeroU32>` (verified against the crate's actual
+/// Windows source, `tty/windows/child.rs`'s `ChildExitWatcher`, not guessed). `0` on the
+/// rare `None` case (the watcher genuinely has no PID yet) — matches this function's
+/// existing callers' own tolerance for a not-always-meaningful PID (see `cwd()`'s doc
+/// comment: already documented best-effort/Linux-only for the one thing this PID feeds).
+fn pty_child_pid(pty: &tty::Pty) -> u32 {
+    #[cfg(unix)]
+    {
+        pty.child().id()
+    }
+    #[cfg(windows)]
+    {
+        pty.child_watcher().pid().map(|p| p.get()).unwrap_or(0)
+    }
+}
+
 /// Terminal dimensions in cells.
 pub struct TermSize {
     pub columns: usize,
@@ -295,7 +315,7 @@ impl ShellTerminal {
 
         tty::setup_env();
         let pty = tty::new(&pty_opts, window_size, 0)?;
-        let child_pid = pty.child().id();
+        let child_pid = pty_child_pid(&pty);
         let event_loop = EventLoop::new(Arc::clone(&term), listener, pty, true, false)?;
         let pty_tx = event_loop.channel();
         let io_thread = event_loop.spawn();
@@ -367,7 +387,7 @@ impl ShellTerminal {
         let pty = tty::new(&pty_opts, window_size, 0)?;
 
         // Extract child PID before the PTY is moved into the event loop.
-        let child_pid = pty.child().id();
+        let child_pid = pty_child_pid(&pty);
 
         // Create and spawn the I/O event loop.
         let event_loop = EventLoop::new(
