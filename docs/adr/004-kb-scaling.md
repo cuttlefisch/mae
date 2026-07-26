@@ -72,6 +72,32 @@ against a 20K-node store, not lock serialization. Re-run via
 hardware-dependent and will drift — re-measure before quoting this table in
 anything customer-facing.
 
+**Correction (found via a real CI failure, not assumed — ~2026-07):** the WAL
+mode / `busy_timeout` PRAGMAs above describe an implementation against
+`crates/kb/src/persist.rs`, a file that no longer exists — this codebase's KB
+storage was later migrated to CozoDB (`shared/kb/src/cozo_store/`, ADR-014's
+binary-architecture split), and **CozoDB 0.7.6 never configures
+`journal_mode=WAL` or `busy_timeout` anywhere** (confirmed by direct
+inspection of `cozo-0.7.6/src/storage/sqlite.rs`, not carried forward
+unverified from this ADR's original text). The "(done)" mitigation in the
+bottleneck table below is therefore not accurate for the current
+implementation. What actually exists instead, discovered and extended this
+session while fixing a real "database is locked" panic under concurrent
+store-open (issue #447's follow-on): two independent, hand-rolled
+application-level compensations for the same underlying gap —
+`Db::run_with_busy_retry` (`shared/kb/src/cozo_store/db.rs`, pre-existing —
+exponential-backoff-with-full-jitter retry around `run_script` calls, raised
+to a 400-attempt budget after this exact contention flaked a CI run before)
+for the query/write path, and `retry_on_transient_sqlite_busy_panic`
+(`shared/kb/src/cozo_store/schema.rs`, added this session, same backoff
+shape) for the store-*open* path specifically, since `DbInstance::new`
+panics rather than returning a retryable `Result` on this condition. Neither
+is a PRAGMA-level fix — both are call-site retry loops absorbing an upstream
+crate gap. `daemon/src/storage.rs` (the daemon's *separate* hand-rolled
+SQLite backend for collab/CRDT persistence, not the KB store) DOES set these
+PRAGMAs correctly — this correction applies specifically to the CozoDB-backed
+KB store this ADR is about, not every SQLite usage in the codebase.
+
 ### Tier 2: Multi-Instance (20-100 users, <100K nodes) — PLANNED
 
 - Dedicated `mae-kb-server` microservice (async tokio-based)
@@ -100,13 +126,19 @@ anything customer-facing.
 
 | Symptom | Cause | Mitigation |
 |---------|-------|-----------|
-| SQLITE_BUSY | High write contention | WAL + busy_timeout (done) |
+| SQLITE_BUSY | High write contention | App-level retry w/ full jitter (`Db::run_with_busy_retry` for queries, `retry_on_transient_sqlite_busy_panic` for opens) — see the Tier 1 correction above; NOT a WAL/`busy_timeout` PRAGMA fix, cozo 0.7.6 sets neither |
 | Slow FTS5 | Large index, complex queries | Limit results, prefix queries |
 | Memory growth | Connection cache | Pooling with limits (Tier 2) |
 | WAL file growth | Long-running readers | Periodic `PRAGMA wal_checkpoint(TRUNCATE)` |
 
 ## Consequences
 
+- **Superseded by the Tier 1 correction above for the current CozoDB-backed
+  store**: the three bullets below describe the WAL-mode implementation this
+  ADR originally specified, which is not what actually runs today. Kept for
+  historical record rather than deleted, since `daemon/src/storage.rs`'s
+  separate collab/CRDT SQLite backend genuinely does implement WAL mode this
+  way — the bullets are accurate for *that* usage, just not the KB store.
 - WAL mode creates `kb.db-wal` and `kb.db-shm` files alongside the database.
   These are normal SQLite WAL artifacts.
 - `busy_timeout` means KB operations may block for up to 5 seconds under

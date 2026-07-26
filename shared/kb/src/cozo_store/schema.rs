@@ -47,11 +47,10 @@ impl CozoKbStore {
         // so a *new* connection opening while a *different*, already-open
         // connection from an earlier opener is mid-write-transaction can
         // panic instead of waiting. See the retry loop immediately below,
-        // which exists specifically to absorb that gap -- this ADR-004
-        // claim is tracked as a real, filed drift finding (see the
-        // `@ai-caution` note there) rather than silently re-asserted here a
-        // second time now that it's been disproven for this specific
-        // multi-instance-same-file shape.
+        // which exists specifically to absorb that gap -- this ADR-004 claim
+        // is corrected directly in `docs/adr/004-kb-scaling.md`'s own Tier 1
+        // section (a real, disproven claim gets the doc fixed, not a second
+        // unverified repetition of it here).
         //
         // The retry budget here is deliberately much wider than
         // `with_locked_update`'s (30 x 20ms = 600ms, sized for a small TOML
@@ -103,11 +102,12 @@ impl CozoKbStore {
         // an earlier concurrent caller of this same function) was mid-write-
         // transaction. This is NOT the same race the advisory lock above closes
         // (that one only serializes concurrent *entries into this function*) --
-        // ADR-004/054's assumed "SQLite WAL + busy-retry" safety net does not
+        // ADR-004's assumed "SQLite WAL + busy-retry" safety net does not
         // actually exist in cozo 0.7.6 (`journal_mode`/`busy_timeout` are never
-        // configured, confirmed by direct source read; tracked as its own drift
-        // finding, ADR-004 is not corrected in this comment a second time). Since
-        // that gap lives in an external crate, MAE compensates here: a bounded
+        // configured, confirmed by direct source read; corrected directly in
+        // `docs/adr/004-kb-scaling.md`'s Tier 1 section, not re-asserted here
+        // a second time). Since that gap lives in an external crate, MAE
+        // compensates here: a bounded
         // retry specifically for this transient, well-understood SQLite condition
         // (never for a genuinely corrupt store, which is a different panic
         // message and correctly still fails fast below).
