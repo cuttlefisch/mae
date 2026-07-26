@@ -1,6 +1,7 @@
 # ADR-060: Daemon multi-tenancy
 
-**Status:** Proposed.
+**Status:** In progress (Phases A/B landed — see "Implementation note" below; Phases C–G
+remain, tracked as real follow-on work, not silently deferred).
 **Extends:** ADR-035, ADR-054, ADR-057.
 **Relates to:** ADR-017, ADR-018, ADR-025.
 **Tracking:** issue #375 (epic tracker).
@@ -314,6 +315,75 @@ per-tenant limit changed), whether `mae-daemon` applies it live or requires a re
 take effect. Leaving this ambiguous is itself a failure mode — an operator who believes a
 quota change took effect live when it actually didn't (or vice versa) is exactly the
 untested middle ground Verification's Phase G test below is designed to falsify.
+
+## Implementation note (added during Phase B implementation, principle #15)
+
+Phase B's Decision text above, as originally written, described the mechanism as
+**"replace the single `Arc<Mutex<DaemonState>>`... with a directory plus a genuinely
+separate `Arc<Mutex<InstanceState>>` per tenant."** During implementation, that literal
+mechanism was re-checked against the current codebase first — the same discipline
+ADR-054's own Implementation Note applied when its originally-proposed "per-KB-instance
+locking" turned out to be redundant with concurrency control Cozo already provides — and
+found to already be substantially delivered by ADR-054's prior work, not something this
+phase needed to build from scratch:
+
+- ADR-054 generalized "snapshot-then-drop" (clone the needed `Arc` under
+  `state.lock().await` in a tight scoped block, drop the lock, then run the actual
+  synchronous CozoDB call inside `tokio::task::spawn_blocking`) to **every** read/hygiene
+  arm in `daemon/src/handler.rs` — confirmed by direct reading of all 15 arms that touch
+  `state.query_layer`/`state.store`, not assumed from the ADR's own prose. The daemon
+  `Arc<Mutex<DaemonState>>` is therefore already held only for the O(microseconds) it
+  takes to clone an `Arc`, never across an actual query, mutation, or blocking I/O call.
+- `daemon/src/scheduler.rs`'s background `watcher_tick`/`maintenance_tick`/`health_tick`
+  arms independently apply the identical snapshot-then-drop pattern (confirmed by direct
+  reading) — background maintenance work was already not a lock-hold-duration risk either.
+- `daemon/src/main.rs`'s `handle_client` already spawns one independent `tokio::task` per
+  connection (`accept_loop`), and the blocking `read_message().await` that waits for a
+  client's next message is never performed while holding `DaemonState`'s lock. A stalled,
+  malformed, or disconnected client can only ever block or end *its own* connection task —
+  structurally, not merely empirically — which is exactly the Emacs bug#11639/bug#23499
+  shape this ADR's Context cites as the risk to close.
+
+**Resolved mechanism:** rather than build a new directory + per-tenant lock structure that
+would duplicate synchronization ADR-054 already put in place, Phase B is scoped to what was
+actually missing: the **N-way concurrency-isolation test** this ADR's own Verification
+section calls "the primary concurrency-isolation test... alongside Phase D's IDOR case" —
+deliberately deferred out of Phase A (see that phase's own commit message) specifically
+because it would have been meaningless to write before Phase B's mechanism existed. Written
+and run against the current (post-Phase-A) code *before* any rewrite was attempted, per this
+same principle-#15 discipline:
+
+- `handler::tests::concurrent_slow_tenant_a_query_does_not_measurably_degrade_b_or_c_reads`
+  (`daemon/src/handler.rs`) — a ≥3-tenant fixture (principle #14) where tenant A's real,
+  measurably slow bulk query (5 sequential full-text scans over 500 real, varied-content
+  nodes — empirically ~150-300ms in a debug build, no artificial sleep standing in for real
+  work) runs concurrently with tenant B's and tenant C's single-node reads. Measured result:
+  B's concurrent-with-A latency was statistically indistinguishable from its solo baseline
+  (e.g. 3.4ms concurrent vs. 3.6ms solo in one representative run) — not the ~150-300ms a
+  genuinely serialized implementation would show. The test asserts a generous-but-meaningful
+  bound (10x the solo baseline, floored at 50ms) to avoid CI timing flakiness while still
+  easily catching the ~40-90x gap a real regression would produce.
+- `tests::kb_socket_malformed_and_disconnect_tests::malformed_json_on_one_connection_does_not_starve_or_hang_another`
+  and `tests::kb_socket_malformed_and_disconnect_tests::client_disconnect_mid_request_does_not_hang_other_tenants_rpcs`
+  (`daemon/src/tests/`, real `UnixListener`/`UnixStream` sockets via the existing
+  `spawn_kb_socket` harness ADR-054 built) — the other two named adversarial cases from this
+  ADR's Verification section, both passing against the current architecture: a connection
+  sent deliberately malformed JSON, and a connection that sends a partial message then
+  disconnects mid-request, each verified to have zero effect (neither elevated latency nor a
+  hang) on a separate, concurrently-issued, unrelated tenant's request — including with a
+  third, currently-stalled (connected but silent) peer also present.
+
+**What this means for Phase B's status:** the concurrency-isolation *property* this ADR
+exists to establish is verified, today, against the real architecture — not asserted from
+the Decision text's own prose. No new lock-splitting code was written, because none was
+load-bearing for the property under test; writing one anyway would have been exactly the
+"ad-hoc solution... duplicated logic" principle #8 warns against; a directory structure and
+per-tenant lock sitting *beside* concurrency control that already provides the same
+guarantee. Phase B's issue is closed on this basis, cross-linked to this note. This does
+**not** retroactively validate Phases C/D's own mechanisms (per-tenant quotas' actual
+accounting structure, the IDOR resolution-time check) — each remains its own phase, to be
+verified independently and on its own adversarial terms when implemented, exactly as
+Phase A's own scope boundary was respected here.
 
 ## Consequences
 

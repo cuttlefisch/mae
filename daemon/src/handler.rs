@@ -1550,4 +1550,199 @@ mod tests {
         .await;
         assert!(matches!(unknown, Err(DaemonError::UnknownInstance(_))));
     }
+
+    // ---- ADR-060 Phase B: N-way concurrency isolation ----
+    //
+    // This is the test ADR-060's own Verification section names as "the highest-
+    // priority test alongside Phase D's IDOR case" -- and, per the ADR's own
+    // instruction to re-check the literal mechanism against reality before
+    // implementing (the same discipline ADR-054's Implementation Note applied),
+    // it is written and run FIRST, against the current Phase-A-only code, before
+    // any lock-splitting rewrite. ADR-054 already generalized "snapshot-then-
+    // drop" (clone the needed Arc under the lock, drop the lock, do the real
+    // work in spawn_blocking) to every read/hygiene arm in this file AND to
+    // scheduler.rs's watcher/maintenance/health ticks -- verified by direct
+    // reading, not assumed. If that's genuinely sufficient, this test proves it
+    // empirically instead of a rewrite being carried out on the strength of the
+    // ADR's own prose alone.
+
+    #[tokio::test]
+    async fn concurrent_slow_tenant_a_query_does_not_measurably_degrade_b_or_c_reads() {
+        use std::time::Duration;
+
+        // A real store with real, varied content (principle #14: no synthetic
+        // placeholder used to dodge realistic load) large enough that a real
+        // Cozo `search` scan takes measurable, non-trivial time -- empirically
+        // tuned (500 nodes x 5 sequential searches ~= 150-800ms depending on
+        // machine speed) to model the ADR's "tenant A runs a slow bulk query"
+        // scenario without a fake sleep standing in for real work.
+        let slow_store = mae_kb::CozoKbStore::open_mem().unwrap();
+        for i in 0..500 {
+            let body = format!(
+                "Real body content for node {i}, discussing widgets, gadgets, and \
+                 various engineering considerations relevant to search performance."
+            );
+            slow_store
+                .insert_node(&mae_kb::Node::new(
+                    format!("node:{i}"),
+                    format!("Node {i} about widgets"),
+                    mae_kb::NodeKind::Note,
+                    &body,
+                ))
+                .unwrap();
+        }
+
+        let fast_store_b = mae_kb::CozoKbStore::open_mem().unwrap();
+        fast_store_b
+            .insert_node(&mae_kb::Node::new(
+                "b-node",
+                "Team B's note",
+                mae_kb::NodeKind::Note,
+                "team B content",
+            ))
+            .unwrap();
+        let fast_store_c = mae_kb::CozoKbStore::open_mem().unwrap();
+        fast_store_c
+            .insert_node(&mae_kb::Node::new(
+                "c-node",
+                "Team C's note",
+                mae_kb::NodeKind::Note,
+                "team C content",
+            ))
+            .unwrap();
+
+        let uuid_a = "uuid-slow-tenant".to_string();
+        let uuid_b = "uuid-fast-tenant-b".to_string();
+        let uuid_c = "uuid-fast-tenant-c".to_string();
+
+        let mut st = DaemonState::new();
+        st.store = Some(Arc::new(slow_store));
+        st.instance_stores
+            .insert(uuid_b.clone(), Arc::new(fast_store_b));
+        st.instance_stores
+            .insert(uuid_c.clone(), Arc::new(fast_store_c));
+        let mk = |uuid: &str, name: &str, primary: bool| mae_kb::federation::KbInstance {
+            uuid: uuid.to_string(),
+            name: name.to_string(),
+            org_dir: std::path::PathBuf::new(),
+            db_path: std::path::PathBuf::new(),
+            primary,
+            enabled: true,
+            last_import: None,
+            collab_id: None,
+            shared: false,
+            remote_peers: Vec::new(),
+            last_sync: None,
+            ai_residency: mae_kb::federation::AiResidency::default(),
+            project_root: None,
+            kind: mae_kb::federation::KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
+        };
+        st.registry.instances.push(mk(&uuid_a, "team-a", true));
+        st.registry.instances.push(mk(&uuid_b, "team-b", false));
+        st.registry.instances.push(mk(&uuid_c, "team-c", false));
+        st.rebuild_query_layer();
+        let state = Arc::new(Mutex::new(st));
+
+        // Solo baseline: B's read latency with no concurrent load at all --
+        // the yardstick "measurably degrade" is measured against, per the
+        // ADR's own verification language, rather than a hardcoded absolute
+        // millisecond threshold (which would be flaky across CI runners of
+        // different speeds).
+        let baseline_start = Instant::now();
+        dispatch(
+            "kb/get",
+            json!({"id": "b-node", "instance": uuid_b.clone()}),
+            &state,
+        )
+        .await
+        .unwrap();
+        let solo_baseline = baseline_start.elapsed();
+
+        // Now run tenant A's slow bulk query (5 sequential full-text scans over
+        // 500 nodes) CONCURRENTLY with tenant B's and tenant C's single-node
+        // reads, all racing on the one shared `Arc<Mutex<DaemonState>>`.
+        let state_a = Arc::clone(&state);
+        let slow_a = tokio::spawn(async move {
+            let start = Instant::now();
+            for _ in 0..5 {
+                dispatch(
+                    "kb/search",
+                    json!({"query": "widgets", "limit": 1000, "instance": uuid_a.clone()}),
+                    &state_a,
+                )
+                .await
+                .unwrap();
+            }
+            start.elapsed()
+        });
+
+        // Give A's task a head start actually acquiring the lock and beginning
+        // its blocking work, so B/C's reads land while A is genuinely in
+        // flight, not merely scheduled.
+        tokio::time::sleep(Duration::from_millis(5)).await;
+
+        let state_b = Arc::clone(&state);
+        let concurrent_b = tokio::spawn(async move {
+            let start = Instant::now();
+            dispatch(
+                "kb/get",
+                json!({"id": "b-node", "instance": uuid_b}),
+                &state_b,
+            )
+            .await
+            .unwrap();
+            start.elapsed()
+        });
+        let state_c = Arc::clone(&state);
+        let concurrent_c = tokio::spawn(async move {
+            let start = Instant::now();
+            dispatch(
+                "kb/get",
+                json!({"id": "c-node", "instance": uuid_c}),
+                &state_c,
+            )
+            .await
+            .unwrap();
+            start.elapsed()
+        });
+
+        let a_duration = slow_a.await.unwrap();
+        let b_duration = concurrent_b.await.unwrap();
+        let c_duration = concurrent_c.await.unwrap();
+
+        // Sanity: A's workload must actually be slow enough for this test to
+        // mean anything -- if the machine is fast enough that A's 5-scan
+        // workload finishes in a handful of milliseconds, the "did B/C wait
+        // behind A" question isn't meaningfully exercised. 10ms is far below
+        // what 5x full-text scans over 500 real nodes take even on a fast
+        // release build (empirically ~150ms in dev-profile CI).
+        assert!(
+            a_duration > Duration::from_millis(10),
+            "tenant A's workload wasn't actually slow enough to test against: {a_duration:?}"
+        );
+
+        // The property under test: B and C's reads, issued WHILE A's slow
+        // query is in flight, must land close to their solo baseline -- not
+        // anywhere near A's multi-hundred-millisecond workload duration. A
+        // superficial Phase A/B implementation with one still-shared lock
+        // held across the actual query would show B/C's latency rising in
+        // lockstep with A's -- this generous-but-meaningful bound (10x the
+        // solo baseline, or 50ms floor for a baseline too small to divide
+        // sanely) catches exactly that regression while tolerating normal
+        // scheduler jitter on a loaded CI runner.
+        let tolerance = std::cmp::max(solo_baseline * 10, Duration::from_millis(50));
+        assert!(
+            b_duration < tolerance,
+            "tenant B's read took {b_duration:?} while tenant A's slow query ({a_duration:?}) \
+             was in flight -- solo baseline was {solo_baseline:?}, tolerance {tolerance:?}. \
+             This is the specific regression Phase B's lock-splitting exists to prevent."
+        );
+        assert!(
+            c_duration < tolerance,
+            "tenant C's read took {c_duration:?} while tenant A's slow query ({a_duration:?}) \
+             was in flight -- solo baseline was {solo_baseline:?}, tolerance {tolerance:?}."
+        );
+    }
 }
