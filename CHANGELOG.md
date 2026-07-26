@@ -2,15 +2,101 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.55] - 2026-07-26
+
+### Bug Fixes
+
+- *(daemon,vscode)* 5 bugs from a QA/adversarial-review pass on Phases F/G/I ([d415e84](https://github.com/cuttlefisch/mae/commit/d415e84999ef8a145b28163b6d1708b6f0da9442))
+- *(vscode)* Headless startup timeout too tight, make it configurable ([c2edc5f](https://github.com/cuttlefisch/mae/commit/c2edc5f04782b7ee61a84ccd067b756d689b1a8e))
+- Post-ship quality pass — seed provenance, MCP tool tiering, guidance auto-config (K1-K5) ([a8ef364](https://github.com/cuttlefisch/mae/commit/a8ef36485d42443a5097a3397e144731745bfebf))
+- Close out epic issues #376-385 for real — DoD verification pass (L1-L7) ([220169e](https://github.com/cuttlefisch/mae/commit/220169e9d0619f4ee2f583cb813ab00b36428d6e))
+- 2 real CI failures — mae-daemon not built for new e2e test, flaky babel test collision ([75f9703](https://github.com/cuttlefisch/mae/commit/75f9703d7775a3d1cdd15e09e3b7a21dc9dc0c3a))
+- *(security)* Close 3 real gaps found in a full-branch adversarial review ([e17768a](https://github.com/cuttlefisch/mae/commit/e17768a8deeb695dbb95dde4aea9331da841a6eb))
+- *(daemon)* Eliminate a real CI-observed race in the OAuth cap test ([394254b](https://github.com/cuttlefisch/mae/commit/394254b6ac18c4ae0726863bde867728ce0d0349))
+- *(vscode,ai)* Pre-extraction hardening from a VS Code extension best-practices review ([af8fe7e](https://github.com/cuttlefisch/mae/commit/af8fe7e0e16d040de8ff70fa85bc4221d8cc498d))
+- *(kb,daemon)* ADR-065 — 4 drift corrections closing gaps behind sibling-proven patterns ([940864b](https://github.com/cuttlefisch/mae/commit/940864b6e6268fb9ae35af6927cc989bff39b1aa))
+- *(ci)* ADR KB staleness gate referenced a script that was never created ([bdba243](https://github.com/cuttlefisch/mae/commit/bdba2433627ad924af0f8de712594980719c7669))
+- *(mcp)* Real Windows CI failure — daemon_client.rs BufRead/Ordering imports ([7e2fd02](https://github.com/cuttlefisch/mae/commit/7e2fd02e78dec6e4477314bba142e341181a6435))
+- *(shell)* Real Windows CI failure — alacritty_terminal's Pty has no .child() there ([b6fcfce](https://github.com/cuttlefisch/mae/commit/b6fcfce3d05708523ffee327525e847007639745))
+- *(windows-ci)* Gate remaining Unix-only libc calls behind cfg(unix) (ADR-066) ([5b17149](https://github.com/cuttlefisch/mae/commit/5b17149424fee12a318ab568d7e62b8bdae8a09d))
+- *(windows-ci)* Gate mae-mcp socket tests + skip pre-existing mae-core Windows failures ([b9801a4](https://github.com/cuttlefisch/mae/commit/b9801a4cdaeb27f9f90a4638c40d27c59e569f66))
+- *(windows-ci)* Force bash for the multi-line --skip test command ([0aac8e6](https://github.com/cuttlefisch/mae/commit/0aac8e60d8ddd423ecc35f2b9b7681c88c05c4eb))
+- *(windows-ci)* Gate remaining raw Unix-socket test code across 4 files (ADR-066) ([94e1bfd](https://github.com/cuttlefisch/mae/commit/94e1bfdb873243c8d8dd6f8d0f52d7e3ee0e8fe1))
+- *(windows-ci)* Real process-liveness check for stale-lock cleanup on Windows ([eab9167](https://github.com/cuttlefisch/mae/commit/eab9167faa90ff24405bde9b6a60078ec3714f35))
+- *(windows-ci)* Consolidate PID-liveness checks, fix pid_t overflow + EPERM handling ([696e01e](https://github.com/cuttlefisch/mae/commit/696e01e15b42462fabd3e311ab9f4d67203adf15))
+- *(windows-ci)* Remove hardcoded PID-1 assumption from a portability test ([117b64e](https://github.com/cuttlefisch/mae/commit/117b64e0e0c3e70b9db011ab090b68862b50942a))
+- *(windows-ci)* Gate daemon_client's next_id field + read_cl_message as dead on Windows ([9edbe65](https://github.com/cuttlefisch/mae/commit/9edbe65b85e23094dda4e17398e9ea0c2d68f81c))
+- *(windows-ci)* Gate 3 more dead-Windows items + suppress LispError's borderline size lint ([b7e4b48](https://github.com/cuttlefisch/mae/commit/b7e4b484f009e559f13add8222583835e56e1ba6))
+- *(windows-ci)* Gate a whole PTY integration test file + 2 self-inflicted lints ([0b62543](https://github.com/cuttlefisch/mae/commit/0b62543876a8a8540aafa43edcbb2a9cbfa81be9))
+- *(kb)* Serialize concurrent first-time CozoDB store creation (#447) ([8f9cbb3](https://github.com/cuttlefisch/mae/commit/8f9cbb39396484b193dbc038dfd632dd6d29d957))
+- *(kb)* Retry transient SQLITE_BUSY panic during store open (nightly CI) ([693214e](https://github.com/cuttlefisch/mae/commit/693214e5e3d81210b966f3b19127050f263d896c))
+- *(ai)* Contain a panicking tool implementation instead of crashing the editor ([da26526](https://github.com/cuttlefisch/mae/commit/da265261f0b8b98c3625821362186213e4eae918))
+- *(mcp)* Close a TOCTOU race in authorized_keys authorize/revoke ([a5c1c49](https://github.com/cuttlefisch/mae/commit/a5c1c4905df91dd75d75803e69a31e044af71ab0))
+- *(kb)* Close two more gaps in the SQLite busy-retry coverage ([29b9b43](https://github.com/cuttlefisch/mae/commit/29b9b43e36d2a9c277d27bf4517333adb74360ba))
+
+### Documentation
+
+- *(adr)* ADR-057..066 — MAE long-term architecture vision + 9 closing ADRs ([c3e3dfe](https://github.com/cuttlefisch/mae/commit/c3e3dfe415615b9e930d8cd65ce8e55d4ed37fa8))
+- *(adr)* Add ADR-067 — admin-enforced live-query-only KB access ([1449c9a](https://github.com/cuttlefisch/mae/commit/1449c9a39aa5727e9811055fb57398026eff3833))
+- *(adr-066)* Mark Phase C confirmed green on real windows-latest CI ([3d09d06](https://github.com/cuttlefisch/mae/commit/3d09d0639e22fca1cae8a0aee1d27906f469ac09))
+- *(adr-060)* Correct Phase C's design — no existing throttle, two quota keys not one ([d1c8939](https://github.com/cuttlefisch/mae/commit/d1c89395af813399410a1ce8ea4ab4ebdbcce149))
+- *(adr)* Ratify ADR-057 — MAE architecture vision (issue #395) ([0cce0b8](https://github.com/cuttlefisch/mae/commit/0cce0b801082d73f96ffde52d5b63dcdbc71bf05))
+- *(adr)* Correct ADR-004's WAL/busy_timeout claim for the KB store ([424c8fc](https://github.com/cuttlefisch/mae/commit/424c8fc68f9b1ee733cb6c18fc6ce90c1c4d45fc))
+- *(adr)* Flag ADR-011's storage model as superseded by ADR-029 ([7d6f812](https://github.com/cuttlefisch/mae/commit/7d6f8120d566b5a35f79247067547f6add5a00a8))
+
+### Features
+
+- *(mcp)* ADR-056 — session-scoped tool-category dispatch enforcement ([edefb8d](https://github.com/cuttlefisch/mae/commit/edefb8d39271d6595ad282f8af4973c00de6bf82))
+- *(kb)* ADR-058 — per-project KB provisioning & KbScope::Project ([f6b7484](https://github.com/cuttlefisch/mae/commit/f6b7484a9821009b30f30798d577a365ce0bb3c4))
+- *(kb)* ADR-059 — ADR-as-KB-node generalization (molecular decision records) ([ab5b384](https://github.com/cuttlefisch/mae/commit/ab5b384527a9ed20a1375f95ce7796179785230e))
+- *(kb)* ADR-062 — federation registry scaling & unified local/remote-hub search ([230f400](https://github.com/cuttlefisch/mae/commit/230f400d175a7cda581733606d2b9cce22808714))
+- *(ai)* ADR-063 — guidance-delivery uniformity across MCP clients ([bcd95ec](https://github.com/cuttlefisch/mae/commit/bcd95ec880ae9a1e3d18c4036a15e0a85fd701fa))
+- *(mcp)* ADR-066 Phases A/B/C — Windows client support (local IPC + CI) ([8da1ebc](https://github.com/cuttlefisch/mae/commit/8da1ebc6e20b3ae65049855a491ff5be722fd081))
+- *(daemon)* ADR-060 Phase A — per-tenant RPC addressing ([ede6b33](https://github.com/cuttlefisch/mae/commit/ede6b33a45b85258da309d30ad7b2ab30571f93a))
+- *(daemon)* ADR-060 Phase B — verify concurrency isolation, no rewrite needed ([aae88b4](https://github.com/cuttlefisch/mae/commit/aae88b44419783ba9f8f4749cc6bebbbbc0d0ec0))
+- *(daemon)* ADR-060 Phase D — IDOR + cross-KB role isolation, verified not rewritten ([126e201](https://github.com/cuttlefisch/mae/commit/126e201e0e7bcce6cd9b0c72c21fc10d8024a60c))
+- *(daemon)* ADR-060 Phase C — per-tenant quotas + independent eviction (#411) ([7d9419a](https://github.com/cuttlefisch/mae/commit/7d9419aa4626eef98f860b7be67eccd244663f19))
+- *(mae)* ADR-050 Phase H — :kb-export-guidance colon command (#383) ([c7794e3](https://github.com/cuttlefisch/mae/commit/c7794e3517203b30e5616928c1cd1266a6e6c722))
+
+### Miscellaneous
+
+- Sync Cargo.lock after merging origin/main's 0.14.54 version bump ([dbda687](https://github.com/cuttlefisch/mae/commit/dbda6874acd86921cfd85a09bbc1b404d65ae95f))
+- *(vscode)* Add LICENSE (GPL-3.0-or-later) + fix npm audit properly ([7c6cdc2](https://github.com/cuttlefisch/mae/commit/7c6cdc277c8fd1df1eec4155337fc03e98f3024f))
+- *(vscode)* Extract "MAE for VS Code" into its own repository ([0ab3ae2](https://github.com/cuttlefisch/mae/commit/0ab3ae24f3793d2f38440ad257d671dbdcf8b82d))
+- *(kb)* Regenerate ADR KB asset for ADR-062's Status flip to Accepted ([929defa](https://github.com/cuttlefisch/mae/commit/929defa783f500b262645867ce79b2a03ea2e2f7))
+
+### Testing
+
+- Real subprocess/TLS e2e for headless mode + OAuth/kb-query (Phases E/F/G) ([2d96c8b](https://github.com/cuttlefisch/mae/commit/2d96c8b4613fc12a1529ac25de1471723dc4ef52))
+- *(vscode)* Real mae/mae-mcp-shim binary round trip in CI ([5ba49ab](https://github.com/cuttlefisch/mae/commit/5ba49ab6721ea800be7e520c31076f7b389a0fe7))
+- *(docker)* Docker-headless-e2e compose service + CI job (Phase J, #385) ([413599c](https://github.com/cuttlefisch/mae/commit/413599cd1db62888bdbc6e1938b0c1cfb99f2801))
+
 ## [0.14.54] - 2026-07-23
 
 ### Documentation
 
 - Cross-link RUSTSEC-2026-0215 exception to tracking issue #374 ([226829e](https://github.com/cuttlefisch/mae/commit/226829e8b860bd7e0c51fa43250a23f18d96075e))
+- *(adr)* Propose ADR-050..055 for external-editor MCP pairing initiative ([af14420](https://github.com/cuttlefisch/mae/commit/af14420ba3a6de9d61eadeab934d8b3908014142))
+- *(mcp)* Minimum viable local VS Code pairing + generic cross-editor docs (ADR-050, #377) ([e64f452](https://github.com/cuttlefisch/mae/commit/e64f452c1c0984cee18b5218ba617a3da770462b))
+
+### Features
+
+- *(mcp)* Phase C — per-session permission policy + DrivenWindow isolation (#378) ([383c172](https://github.com/cuttlefisch/mae/commit/383c172f4b5badf2f9a0e005727d4c83cab4df69))
+- *(mae)* Phase E — headless MAE service mode (#380) ([a756e8f](https://github.com/cuttlefisch/mae/commit/a756e8f21c370689937131ea9917318006812a67))
+- *(daemon)* Phase F — OAuth 2.1 resource server (#381) ([8876896](https://github.com/cuttlefisch/mae/commit/8876896082c4072c2166af672f422a4663d64e6c))
+- *(daemon)* Daemon concurrency hardening & benchmarked capacity figure (ADR-054, #379) ([74fd476](https://github.com/cuttlefisch/mae/commit/74fd4768a42c3294b15499052e1158df6798ebb2))
+- *(ai)* Guidance delivery robustness — kb_export_guidance fallback exporter (ADR-050 D4, #383) ([45d78dc](https://github.com/cuttlefisch/mae/commit/45d78dc93b026bdacab5d83444ce7cfa044cc6cf))
+- *(daemon)* Live scoped read-through KB query surface (ADR-053, #382) ([f8a747a](https://github.com/cuttlefisch/mae/commit/f8a747a5e8709de31bc3fcb6b7ecbf1a93019184))
+- *(vscode)* MAE for VS Code extension (ADR-050 D1 full, Phase I, #384) ([6d89a49](https://github.com/cuttlefisch/mae/commit/6d89a494b4314fa078f49ee4c933fe0c45d7f67d))
 
 ### Miscellaneous
 
 - Accept RUSTSEC-2026-0215 (smallstr unmaintained, transitive via yrs) ([8c885ff](https://github.com/cuttlefisch/mae/commit/8c885ff784be1bc11b66edd82e334720f3e529f3))
+- Bump version to 0.14.54 ([c451f62](https://github.com/cuttlefisch/mae/commit/c451f62bbf5a31bdc18d58fe75716121e8496b1d))
+
+### Testing
+
+- *(vscode)* Close the orphan-cleanup DoD gap for #384 ([8d889a2](https://github.com/cuttlefisch/mae/commit/8d889a22af6f1beb9cc74a4105dff126fef0b9de))
 
 ## [0.14.53] - 2026-07-22
 
