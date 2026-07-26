@@ -97,7 +97,7 @@ pub async fn dispatch(
                 .as_str()
                 .ok_or(DaemonError::InvalidParams("missing 'id'"))?
                 .to_string();
-            let ql = snapshot_query_layer(state).await?;
+            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
             spawn_query(move || match ql.get(&id) {
                 Some(node) => json!({
                     "id": node.id,
@@ -117,7 +117,7 @@ pub async fn dispatch(
                 .ok_or(DaemonError::InvalidParams("missing 'query'"))?
                 .to_string();
             let limit = std::cmp::min(params["limit"].as_u64().unwrap_or(20), 1000) as usize;
-            let ql = snapshot_query_layer(state).await?;
+            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
             spawn_query(move || {
                 let hits: Vec<Value> = ql
                     .search(&query, limit)
@@ -134,7 +134,7 @@ pub async fn dispatch(
                 .as_str()
                 .ok_or(DaemonError::InvalidParams("missing 'id'"))?
                 .to_string();
-            let ql = snapshot_query_layer(state).await?;
+            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
             spawn_query(move || {
                 let links: Vec<Value> = ql
                     .links_from(&id)
@@ -157,7 +157,7 @@ pub async fn dispatch(
                 .as_str()
                 .ok_or(DaemonError::InvalidParams("missing 'id'"))?
                 .to_string();
-            let ql = snapshot_query_layer(state).await?;
+            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
             spawn_query(move || {
                 let links: Vec<Value> = ql
                     .links_to(&id)
@@ -177,12 +177,12 @@ pub async fn dispatch(
 
         "kb/list_ids" => {
             let prefix = params["prefix"].as_str().map(|s| s.to_string());
-            let ql = snapshot_query_layer(state).await?;
+            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
             spawn_query(move || json!(ql.list_ids(prefix.as_deref()))).await
         }
 
         "kb/health" => {
-            let ql = snapshot_query_layer(state).await?;
+            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
             spawn_query(move || match ql.health_report() {
                 Some(report) => json!({
                     "total_nodes": report.total_nodes,
@@ -201,7 +201,7 @@ pub async fn dispatch(
                 .ok_or(DaemonError::InvalidParams("missing 'id'"))?
                 .to_string();
             let depth = params["depth"].as_u64().unwrap_or(1) as u32;
-            let ql = snapshot_query_layer(state).await?;
+            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
             spawn_query(move || match ql.neighborhood(&id, depth) {
                 Some(sg) => json!({
                     "nodes": sg.nodes.iter().map(|(id, t)| json!([id, t])).collect::<Vec<_>>(),
@@ -218,7 +218,7 @@ pub async fn dispatch(
                 .ok_or(DaemonError::InvalidParams("missing 'id'"))?
                 .to_string();
             let limit = std::cmp::min(params["limit"].as_u64().unwrap_or(10), 1000) as usize;
-            let ql = snapshot_query_layer(state).await?;
+            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
             spawn_query(move || {
                 let related: Vec<Value> = ql
                     .related(&id, limit)
@@ -258,7 +258,7 @@ pub async fn dispatch(
             // Phase D thin-client: the agenda buffer was mirror-only. Serve all
             // TODO-bearing nodes as full (serde) nodes — minus the heavy crdt_doc
             // lineage, which the agenda doesn't need.
-            let ql = snapshot_query_layer(state).await?;
+            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
             spawn_query(move || {
                 let nodes: Vec<Value> = ql
                     .todo_nodes()
@@ -275,7 +275,7 @@ pub async fn dispatch(
 
         "kb/id_title_pairs" => {
             let prefix = params["prefix"].as_str().map(|s| s.to_string());
-            let ql = snapshot_query_layer(state).await?;
+            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
             spawn_query(move || {
                 let pairs: Vec<Value> = ql
                     .id_title_pairs(prefix.as_deref())
@@ -291,7 +291,7 @@ pub async fn dispatch(
             let prefix = params["prefix"].as_str().map(|s| s.to_string());
             let body_limit =
                 std::cmp::min(params["body_limit"].as_u64().unwrap_or(0), 10_000) as usize;
-            let ql = snapshot_query_layer(state).await?;
+            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
             spawn_query(move || {
                 let triples: Vec<Value> = ql
                     .id_title_body_triples(prefix.as_deref(), body_limit)
@@ -305,7 +305,7 @@ pub async fn dispatch(
 
         // --- Hygiene ---
         "kb/hygiene_scan" => {
-            let store = snapshot_store(state).await?;
+            let store = snapshot_store(state, instance_addr(&params)).await?;
             spawn_query(move || {
                 let result = crate::hygiene::run_hygiene_scan(&store);
                 json!({
@@ -320,7 +320,7 @@ pub async fn dispatch(
         "kb/hygiene_report" => {
             let category = params["category"].as_str().map(|s| s.to_string());
             let status = params["status"].as_str().map(|s| s.to_string());
-            let store = snapshot_store(state).await?;
+            let store = snapshot_store(state, instance_addr(&params)).await?;
             spawn_query_result(move || {
                 let suggestions = store
                     .list_suggestions(category.as_deref(), status.as_deref())
@@ -353,7 +353,7 @@ pub async fn dispatch(
             let suggestion_id = params["suggestion_id"]
                 .as_i64()
                 .ok_or(DaemonError::InvalidParams("missing 'suggestion_id'"))?;
-            let store = snapshot_store(state).await?;
+            let store = snapshot_store(state, instance_addr(&params)).await?;
             spawn_query_result(move || {
                 store
                     .update_suggestion_status(&node_id, suggestion_id, "accepted")
@@ -371,7 +371,7 @@ pub async fn dispatch(
             let suggestion_id = params["suggestion_id"]
                 .as_i64()
                 .ok_or(DaemonError::InvalidParams("missing 'suggestion_id'"))?;
-            let store = snapshot_store(state).await?;
+            let store = snapshot_store(state, instance_addr(&params)).await?;
             spawn_query_result(move || {
                 store
                     .update_suggestion_status(&node_id, suggestion_id, "dismissed")
@@ -614,19 +614,54 @@ pub async fn dispatch(
 /// spawn_blocking" idiom generalized from the pre-existing `kb/node_crdt` /
 /// `daemon/status` / `p2p/share_kb` arms: `DaemonState`'s lock must never be
 /// held across the actual (synchronous, potentially slow) CozoDB call.
+///
+/// ADR-060 Phase A: `addr` is an optional per-request instance address (a KB
+/// name or UUID, resolved via [`resolve_kb_store`] — the same address space
+/// `instance_stores` already uses, not a new identifier scheme). `None`
+/// preserves today's exact single-tenant behavior byte-for-byte: the
+/// federated query layer spanning every registered instance. `Some(addr)`
+/// scopes the query to exactly that one instance's store — never merged with
+/// any other instance's data, which is the property that matters for tenant
+/// isolation (a targeted query must never silently see another tenant's
+/// results). This is purely additive plumbing: it does not yet change
+/// locking or resource accounting (Phase B/C).
 async fn snapshot_query_layer(
     state: &Arc<Mutex<DaemonState>>,
+    addr: Option<&str>,
 ) -> Result<Arc<dyn KbQueryLayer>, DaemonError> {
     let state = state.lock().await;
-    state.query_layer.clone().ok_or(DaemonError::NotReady)
+    match addr {
+        None => state.query_layer.clone().ok_or(DaemonError::NotReady),
+        Some(addr) => {
+            let store = resolve_kb_store(&state, addr)
+                .ok_or_else(|| DaemonError::UnknownInstance(addr.to_string()))?;
+            Ok(Arc::new(mae_kb::CozoQueryLayer::new(store)))
+        }
+    }
 }
 
-/// Snapshot the primary CozoDB store `Arc` under the state lock, then drop
-/// the lock — the hygiene arms' equivalent of `snapshot_query_layer` (they
-/// need direct store access, not the federated query layer).
-async fn snapshot_store(state: &Arc<Mutex<DaemonState>>) -> Result<Arc<CozoKbStore>, DaemonError> {
+/// Snapshot a CozoDB store `Arc` under the state lock, then drop the lock —
+/// the hygiene arms' equivalent of `snapshot_query_layer` (they need direct
+/// store access, not the federated query layer). `addr` behaves identically
+/// to `snapshot_query_layer`'s: `None` is today's primary store, `Some(addr)`
+/// targets exactly the named/UUID-addressed instance (ADR-060 Phase A).
+async fn snapshot_store(
+    state: &Arc<Mutex<DaemonState>>,
+    addr: Option<&str>,
+) -> Result<Arc<CozoKbStore>, DaemonError> {
     let state = state.lock().await;
-    state.store.clone().ok_or(DaemonError::NotReady)
+    match addr {
+        None => state.store.clone().ok_or(DaemonError::NotReady),
+        Some(addr) => resolve_kb_store(&state, addr)
+            .ok_or_else(|| DaemonError::UnknownInstance(addr.to_string())),
+    }
+}
+
+/// Extract the optional ADR-060 Phase A instance address from an RPC's
+/// `params`. A KB name or UUID (see [`resolve_kb_store`]); absent means
+/// "today's primary/federated behavior," never a validation error by itself.
+fn instance_addr(params: &Value) -> Option<&str> {
+    params.get("instance").and_then(|v| v.as_str())
 }
 
 /// Run an infallible synchronous query on a blocking-pool thread, off the
@@ -804,6 +839,13 @@ pub enum DaemonError {
     NotReady,
     MethodNotFound(String),
     Internal(String),
+    /// ADR-060 Phase A: an RPC's `instance` address (name or UUID) didn't
+    /// resolve to any instance this daemon has registered. Distinct from
+    /// `InvalidParams` (the address is well-formed, just unknown) so a
+    /// client can tell "you typo'd the address" apart from "malformed
+    /// request" — same JSON-RPC code today, but a distinguishable variant
+    /// for future per-tenant error handling (Phase C/D).
+    UnknownInstance(String),
 }
 
 impl std::fmt::Display for DaemonError {
@@ -813,6 +855,9 @@ impl std::fmt::Display for DaemonError {
             DaemonError::NotReady => write!(f, "Daemon not ready (no KB store loaded)"),
             DaemonError::MethodNotFound(m) => write!(f, "Method not found: {m}"),
             DaemonError::Internal(msg) => write!(f, "Internal error: {msg}"),
+            DaemonError::UnknownInstance(addr) => {
+                write!(f, "Unknown instance address: {addr}")
+            }
         }
     }
 }
@@ -825,6 +870,7 @@ impl DaemonError {
             DaemonError::NotReady => -32603,
             DaemonError::MethodNotFound(_) => -32601,
             DaemonError::Internal(_) => -32603,
+            DaemonError::UnknownInstance(_) => -32602,
         }
     }
 }
@@ -1265,5 +1311,243 @@ mod tests {
             node_doc.body().contains("ZEPHYRINE"),
             "seeded node doc must carry the body content"
         );
+    }
+
+    // ---- ADR-060 Phase A: per-tenant RPC addressing ----
+
+    /// Build a `DaemonState` with 3 registered instances (principle #14: ≥3 when
+    /// isolation is the property under test, not 2) — a primary and two named
+    /// secondaries — each holding a node under the SAME id but with distinct,
+    /// real content, so a test can prove a targeted query returns exactly one
+    /// tenant's data and never another's (a selective oracle on content, not
+    /// merely "something was found").
+    fn three_instance_state() -> (Arc<Mutex<DaemonState>>, String, String, String) {
+        let primary_store = mae_kb::CozoKbStore::open_mem().unwrap();
+        primary_store
+            .insert_node(&mae_kb::Node::new(
+                "shared-id",
+                "Team A's note",
+                mae_kb::NodeKind::Note,
+                "TEAM A CONTENT",
+            ))
+            .unwrap();
+
+        let team_b_store = mae_kb::CozoKbStore::open_mem().unwrap();
+        team_b_store
+            .insert_node(&mae_kb::Node::new(
+                "shared-id",
+                "Team B's note",
+                mae_kb::NodeKind::Note,
+                "TEAM B CONTENT",
+            ))
+            .unwrap();
+
+        let team_c_store = mae_kb::CozoKbStore::open_mem().unwrap();
+        team_c_store
+            .insert_node(&mae_kb::Node::new(
+                "shared-id",
+                "Team C's note",
+                mae_kb::NodeKind::Note,
+                "TEAM C CONTENT",
+            ))
+            .unwrap();
+
+        let uuid_a = "uuid-team-a".to_string();
+        let uuid_b = "uuid-team-b".to_string();
+        let uuid_c = "uuid-team-c".to_string();
+
+        let mut st = DaemonState::new();
+        st.store = Some(Arc::new(primary_store));
+        st.instance_stores
+            .insert(uuid_b.clone(), Arc::new(team_b_store));
+        st.instance_stores
+            .insert(uuid_c.clone(), Arc::new(team_c_store));
+
+        let mk_instance = |uuid: &str, name: &str, primary: bool| mae_kb::federation::KbInstance {
+            uuid: uuid.to_string(),
+            name: name.to_string(),
+            org_dir: std::path::PathBuf::new(),
+            db_path: std::path::PathBuf::new(),
+            primary,
+            enabled: true,
+            last_import: None,
+            collab_id: None,
+            shared: false,
+            remote_peers: Vec::new(),
+            last_sync: None,
+            ai_residency: mae_kb::federation::AiResidency::default(),
+            project_root: None,
+            kind: mae_kb::federation::KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
+        };
+        st.registry
+            .instances
+            .push(mk_instance(&uuid_a, "team-a", true));
+        st.registry
+            .instances
+            .push(mk_instance(&uuid_b, "team-b", false));
+        st.registry
+            .instances
+            .push(mk_instance(&uuid_c, "team-c", false));
+        st.rebuild_query_layer();
+
+        (Arc::new(Mutex::new(st)), uuid_a, uuid_b, uuid_c)
+    }
+
+    #[tokio::test]
+    async fn instance_addr_omitted_preserves_todays_federated_behavior() {
+        // Backward compatibility is load-bearing (ADR-060 Phase A): omitting
+        // `instance` must behave exactly as before this ADR -- the federated
+        // layer across every registered instance, unchanged.
+        let (state, ..) = three_instance_state();
+        let r = dispatch("kb/get", json!({"id": "shared-id"}), &state)
+            .await
+            .unwrap();
+        // The federated layer resolves the collision by priority/order, but the
+        // key regression-guard property is simply that omitting the address
+        // still finds *a* result via the pre-existing federated path, not an
+        // UnknownInstance error or a NotReady failure.
+        assert!(
+            !r.is_null(),
+            "omitted instance must still resolve via federation"
+        );
+    }
+
+    #[tokio::test]
+    async fn instance_addr_scopes_strictly_to_the_addressed_tenant_never_another() {
+        // The core Phase A isolation property: addressing team B's instance for a
+        // node id that ALSO exists (with different content) in team A and team C
+        // must return exactly team B's content -- never A's, never C's, and never
+        // a federated merge of any of them.
+        let (state, uuid_a, uuid_b, uuid_c) = three_instance_state();
+
+        let a = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": uuid_a}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(a["body"].as_str(), Some("TEAM A CONTENT"));
+
+        let b = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": uuid_b}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            b["body"].as_str(),
+            Some("TEAM B CONTENT"),
+            "addressing team B must never return team A's or team C's content"
+        );
+
+        let c = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": uuid_c}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            c["body"].as_str(),
+            Some("TEAM C CONTENT"),
+            "addressing team C must never return team A's or team B's content"
+        );
+    }
+
+    #[tokio::test]
+    async fn instance_addr_accepts_either_name_or_uuid_for_the_same_instance() {
+        // resolve_kb_store (reused, not reinvented -- principle #8) already
+        // resolves by name OR uuid; Phase A's addressing must expose both, since
+        // that's the address space it claims to reuse.
+        let (state, _uuid_a, uuid_b, _uuid_c) = three_instance_state();
+
+        let by_uuid = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": uuid_b}),
+            &state,
+        )
+        .await
+        .unwrap();
+        let by_name = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": "team-b"}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_uuid["body"], by_name["body"]);
+        assert_eq!(by_name["body"].as_str(), Some("TEAM B CONTENT"));
+    }
+
+    #[tokio::test]
+    async fn instance_addr_unknown_is_a_clean_error_not_a_silent_fallback_or_panic() {
+        // An address that doesn't resolve to any registered instance must fail
+        // explicitly -- never silently fall through to the primary/federated
+        // result (which would be a real cross-tenant data leak if this were a
+        // typo'd or forged address in a real deployment) and never panic.
+        let (state, ..) = three_instance_state();
+        let r = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": "no-such-tenant"}),
+            &state,
+        )
+        .await;
+        match r {
+            Err(DaemonError::UnknownInstance(addr)) => assert_eq!(addr, "no-such-tenant"),
+            other => panic!("expected UnknownInstance, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn instance_addr_search_is_also_scoped_not_only_get() {
+        // Addressing must apply uniformly across the query-layer arms, not just
+        // kb/get -- kb/search must also never surface another tenant's hits.
+        let (state, _uuid_a, uuid_b, _uuid_c) = three_instance_state();
+        let r = dispatch(
+            "kb/search",
+            json!({"query": "TEAM", "instance": uuid_b}),
+            &state,
+        )
+        .await
+        .unwrap();
+        let hits = r.as_array().unwrap();
+        assert_eq!(
+            hits.len(),
+            1,
+            "team B's addressed store has exactly one matching node: {hits:?}"
+        );
+        assert_eq!(hits[0]["id"].as_str(), Some("shared-id"));
+    }
+
+    #[tokio::test]
+    async fn instance_addr_also_scopes_the_store_based_hygiene_arms() {
+        // snapshot_store (the hygiene arms' equivalent of snapshot_query_layer)
+        // must honor the same addressing -- Phase A's DoD is "every daemon RPC",
+        // not just the query-layer ones.
+        let (state, uuid_a, uuid_b, _uuid_c) = three_instance_state();
+
+        let scan_a = dispatch("kb/hygiene_scan", json!({"instance": uuid_a}), &state)
+            .await
+            .unwrap();
+        let scan_b = dispatch("kb/hygiene_scan", json!({"instance": uuid_b}), &state)
+            .await
+            .unwrap();
+        // Both must succeed independently against their own addressed store
+        // (not error, not silently reuse the primary's scan) -- the specific
+        // hygiene findings aren't the point here, that both resolve distinctly is.
+        assert!(scan_a.is_object() || scan_a.is_array());
+        assert!(scan_b.is_object() || scan_b.is_array());
+
+        let unknown = dispatch(
+            "kb/hygiene_scan",
+            json!({"instance": "no-such-tenant"}),
+            &state,
+        )
+        .await;
+        assert!(matches!(unknown, Err(DaemonError::UnknownInstance(_))));
     }
 }
