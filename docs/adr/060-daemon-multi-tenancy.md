@@ -1,7 +1,7 @@
 # ADR-060: Daemon multi-tenancy
 
-**Status:** In progress (Phases A/B landed — see "Implementation note" below; Phases C–G
-remain, tracked as real follow-on work, not silently deferred).
+**Status:** In progress (Phases A/B/D landed — see "Implementation note" sections below;
+Phases C, E–G remain, tracked as real follow-on work, not silently deferred).
 **Extends:** ADR-035, ADR-054, ADR-057.
 **Relates to:** ADR-017, ADR-018, ADR-025.
 **Tracking:** issue #375 (epic tracker).
@@ -384,6 +384,60 @@ guarantee. Phase B's issue is closed on this basis, cross-linked to this note. T
 accounting structure, the IDOR resolution-time check) — each remains its own phase, to be
 verified independently and on its own adversarial terms when implemented, exactly as
 Phase A's own scope boundary was respected here.
+
+## Implementation note (added during Phase D implementation, principle #15)
+
+Phase D's own Decision text named three adversarial cases: the IDOR-shaped resolution-time
+check, cross-KB role composition, and a forged/rotated-key signature regression check. Each
+was written and run against the current architecture *before* assuming new enforcement code
+was needed — the same discipline that resolved Phase B — and each resolved differently, for
+a reason worth stating precisely rather than folding into one blanket "already fine":
+
+- **The IDOR case is a genuine property of Phase A's own addressing mechanism, not a
+  separate check layered on top.** `daemon/src/handler.rs::dispatch`'s
+  `snapshot_query_layer`/`snapshot_store` (Phase A) resolve an `instance` address to a
+  specific `Arc<CozoKbStore>` *before* any inner ID in the request is ever looked at — every
+  subsequent `get`/`links_from`/`links_to`/etc. call is backed by exactly that one store's
+  own SQLite-backed relations, with no shared ID space and no cross-instance join across
+  stores anywhere in the call path. There is no separate "check if this ID belongs to me"
+  step for an attacker to bypass, because the store handle itself *is* the scope boundary —
+  structurally, not by a resolution-time check that could be forgotten on a new arm.
+  `handler::tests::idor_a_valid_instance_address_never_resolves_a_different_tenants_id`
+  proves this with a real cross-instance ID collision (a node ID inserted directly into
+  tenant B's store, requested via a validly-addressed tenant A request): the result is
+  `Null`, not tenant B's real content, across `kb/get`/`kb/links_from`/`kb/links_to`, with a
+  third uninvolved tenant C included per principle #14's N-way requirement.
+- **The role-composition case tests a code path Phase A/B never touched at all.** Per-KB
+  Owner/Editor/Viewer roles (ADR-017/018) are derived per-`kbc:{kb_id}` collection in
+  `daemon/src/collab_handler/mod.rs`'s `kb_access` — an entirely separate daemon listener
+  (the mTLS collab/sync path) from `daemon/src/handler.rs`'s KB Unix-socket dispatch Phase
+  A/B's addressing work modified. **Correction to this ADR's own framing**: the KB
+  Unix-socket path Phase A/B built on has no principal/role concept on it at all by design
+  (`daemon/src/config.rs`'s own comments: "there is no principal or IP on a Unix domain
+  socket" — filesystem-permission trust only) — so the role-composition property Phase D
+  names doesn't interact with ADR-060's own changes, it's a pre-existing guarantee of
+  per-collection membership derivation that predates this ADR. No existing test explicitly
+  proved a single principal holding *different* roles on *two different* KBs simultaneously
+  doesn't leak the stronger role across the boundary, so
+  `collab_handler::tests::collab_handler_cross_kb_role_isolation_tests::
+  owner_of_one_kb_is_not_owner_of_another_kb_where_only_viewer` closes that specific gap —
+  bob, genuinely Owner of his own KB, attempts an Owner-only `kb/add_member` on a second KB
+  where he's only a Viewer; denied, and the reverse (alice, Owner of her own KB, has zero
+  access on bob's) also verified.
+- **The forged/rotated-key signature case was already covered, pre-existing, unrelated to
+  this ADR.** `shared/sync/src/membership.rs`'s
+  `tampering_any_field_breaks_the_signature` (plus `forged_rebind_wrong_signer_is_rejected`
+  and several `daemon/src/collab_handler/tests/*.rs` forged/tampered-signature cases)
+  already prove this — Phase A/B's addressing changes never touched signature verification
+  or the signed op-log at all, so there was nothing to regression-test here beyond
+  confirming (by direct reading, not by writing a duplicate test) that this coverage
+  genuinely exists and genuinely still applies.
+
+**Net effect:** Phase D closes with one genuinely new test (cross-KB role isolation), one
+test proving a structural property of Phase A's own mechanism rather than a bolted-on check
+(the IDOR case), and one citation of pre-existing, unrelated coverage (the signature case) —
+not a uniform "nothing to do here," and not a rewrite either. Issue #412 is closed on this
+basis, cross-linked to this note.
 
 ## Consequences
 

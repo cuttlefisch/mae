@@ -1551,6 +1551,110 @@ mod tests {
         assert!(matches!(unknown, Err(DaemonError::UnknownInstance(_))));
     }
 
+    // ---- ADR-060 Phase D: the IDOR-shaped adversarial case ----
+    //
+    // Named as this ADR's own single highest-priority adversarial test, per the
+    // real Gitea (CVE-2026-27771/CVE-2026-58444) and Vaultwarden (CVE-2026-27898)
+    // precedent cited in the ADR's Context: a request correctly, validly
+    // addressed at tenant A's own instance whose payload separately references a
+    // raw ID that actually belongs to a DIFFERENT tenant's data must be rejected
+    // at ID-resolution time -- not served just because the outer address was
+    // fine. Written and run against the current (post-Phase-A) code first, per
+    // the same principle-#15 discipline that resolved Phase B, before assuming
+    // any new resolution-time check needs to be built.
+
+    #[tokio::test]
+    async fn idor_a_valid_instance_address_never_resolves_a_different_tenants_id() {
+        let (state, uuid_a, uuid_b, uuid_c) = three_instance_state();
+
+        // A node ID that exists ONLY in tenant B's store, never in A's or C's --
+        // the exact IDOR shape: address A validly, but ask for an ID that lives
+        // in B.
+        {
+            let st = state.lock().await;
+            let b_store = st.instance_stores.get(&uuid_b).unwrap();
+            b_store
+                .insert_node(&mae_kb::Node::new(
+                    "b-only-secret",
+                    "Team B's secret note",
+                    mae_kb::NodeKind::Note,
+                    "TEAM B SECRET CONTENT -- must never be reachable via tenant A's address",
+                ))
+                .unwrap();
+        }
+
+        // kb/get addressed at A, requesting the ID that only exists in B.
+        let r = dispatch(
+            "kb/get",
+            json!({"id": "b-only-secret", "instance": uuid_a.clone()}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert!(
+            r.is_null(),
+            "an ID that only exists in tenant B must be Null (not found), never resolved, \
+             when the request is addressed at tenant A: {r:?}"
+        );
+
+        // Same shape via kb/links_from/kb/links_to -- the other id-taking arms
+        // that resolve a raw, request-supplied identifier against the addressed
+        // store, not just kb/get.
+        let links_from = dispatch(
+            "kb/links_from",
+            json!({"id": "b-only-secret", "instance": uuid_a.clone()}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            links_from.as_array().map(|a| a.len()),
+            Some(0),
+            "links_from for a B-only id addressed at A must be empty, not B's real links"
+        );
+        let links_to = dispatch(
+            "kb/links_to",
+            json!({"id": "b-only-secret", "instance": uuid_a}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            links_to.as_array().map(|a| a.len()),
+            Some(0),
+            "links_to for a B-only id addressed at A must be empty, not B's real links"
+        );
+
+        // Sanity: the SAME id, addressed correctly at B, DOES resolve -- proving
+        // the null above is genuine cross-tenant isolation, not a broken lookup.
+        let via_b = dispatch(
+            "kb/get",
+            json!({"id": "b-only-secret", "instance": uuid_b}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            via_b["body"].as_str(),
+            Some("TEAM B SECRET CONTENT -- must never be reachable via tenant A's address"),
+            "the id genuinely exists and is reachable when addressed at its real tenant B"
+        );
+
+        // And tenant C (a third, uninvolved tenant, per principle #14's N-way
+        // requirement) must ALSO never see B's id when addressed at C.
+        let via_c = dispatch(
+            "kb/get",
+            json!({"id": "b-only-secret", "instance": uuid_c}),
+            &state,
+        )
+        .await
+        .unwrap();
+        assert!(
+            via_c.is_null(),
+            "a B-only id addressed at an uninvolved third tenant C must also be Null: {via_c:?}"
+        );
+    }
+
     // ---- ADR-060 Phase B: N-way concurrency isolation ----
     //
     // This is the test ADR-060's own Verification section names as "the highest-
