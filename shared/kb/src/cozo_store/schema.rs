@@ -111,17 +111,16 @@ impl CozoKbStore {
         // retry specifically for this transient, well-understood SQLite condition
         // (never for a genuinely corrupt store, which is a different panic
         // message and correctly still fails fast below).
-        let db =
-            retry_on_transient_sqlite_busy_panic(|| DbInstance::new(&engine_owned, &path_str, ""))
-                .map_err(|_| {
-                    KbStoreError::Storage(format!(
-                        "CozoDB open ({engine}) panicked internally (store directory likely \
+        let db = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            retry_on_transient_sqlite_busy(|| DbInstance::new(&engine_owned, &path_str, ""))
+        }))
+        .map_err(|_| {
+            KbStoreError::Storage(format!(
+                "CozoDB open ({engine}) panicked internally (store directory likely \
                  inaccessible or corrupt)"
-                    ))
-                })?
-                .map_err(|e| {
-                    KbStoreError::Storage(format!("CozoDB open ({engine}) failed: {e}"))
-                })?;
+            ))
+        })?
+        .map_err(|e| KbStoreError::Storage(format!("CozoDB open ({engine}) failed: {e}")))?;
 
         let store = Self { db, path };
         store.ensure_schema()?;
@@ -473,61 +472,78 @@ impl CozoKbStore {
     }
 }
 
-/// Run `f` (a `DbInstance::new`-shaped call), retrying a bounded number of
-/// times if it panics with a message indicating a transient SQLite
-/// `SQLITE_BUSY`/"database is locked" condition — see `open_with_engine`'s
-/// `@ai-caution` note for why this is needed (cozo 0.7.6 never configures
-/// `busy_timeout`, so a `.unwrap()` inside its own sqlite bootstrap panics
-/// immediately instead of waiting out another already-open instance's
-/// in-flight write transaction against the same file). Any OTHER panic
-/// message (a genuinely corrupt/inaccessible store, matching the sibling
-/// sled `@ai-caution` above) is NOT retried — the original panic payload is
-/// returned as-is (`Err`) on the first occurrence, for the caller's existing
-/// `catch_unwind`-based error mapping to handle exactly as if this wrapper
-/// weren't here.
+/// Run `f` (a `DbInstance::new`-shaped call returning `Result<T, E>`),
+/// retrying a bounded number of times on a transient SQLite
+/// `SQLITE_BUSY`/"database is locked" condition — surfacing EITHER as a
+/// PANIC (cozo 0.7.6's own bootstrap `create table if not exists cozo`
+/// `.unwrap()`s this) OR as a normal `Err(E)` (cozo's post-open
+/// `initialize()`/`load_last_ids()` step, which DOES propagate via `?`
+/// rather than panicking) — both are the SAME underlying condition
+/// (confirmed by direct source read of `cozo-0.7.6/src/runtime/db.rs`'s
+/// `initialize()`/`load_last_ids()`), just surfaced two different ways
+/// depending on which internal cozo code path hits it first. **Found via
+/// two separate real CI failures, not assumed**: an earlier version of this
+/// function only caught the panic shape, and a later CI run reproduced the
+/// SAME race manifesting as the Err shape instead — proving both needed
+/// covering, not just the one first observed. See `open_with_engine`'s
+/// `@ai-caution` note for why this is needed at all (cozo 0.7.6 never
+/// configures `busy_timeout`). Any OTHER panic message or `Err` (a
+/// genuinely corrupt/inaccessible store, matching the sibling sled
+/// `@ai-caution` above) is NOT retried — returned on the first occurrence,
+/// for the caller's existing error mapping to handle exactly as if this
+/// wrapper weren't here.
 ///
 /// Deliberately mirrors `Db::run_with_busy_retry`'s already-battle-tested
 /// backoff shape immediately below in this same crate (exponential cap with
 /// FULL jitter, not the two-instance-lockstep-prone linear/no-jitter backoff
 /// an earlier draft of this function used) rather than reinventing a worse
-/// one (principle #8) — the two can't literally share code (that one retries
-/// a `Result`-returning `run_script` call; this one must `catch_unwind` a
-/// call that PANICS instead of returning `Err`), but there is no reason for
-/// this backoff's *quality* to regress from established precedent just
-/// because the call shape differs. `run_with_busy_retry`'s own doc comment
-/// explains why jitter specifically matters here: "Without jitter, identical
-/// backoff keeps them in lockstep and they collide forever."
-pub(crate) fn retry_on_transient_sqlite_busy_panic<T>(f: impl Fn() -> T) -> std::thread::Result<T> {
+/// one (principle #8) — the two can't literally share code (that one only
+/// ever sees a `Result`, never a panic; this one must handle both shapes
+/// from the same underlying condition) — but there is no reason for this
+/// backoff's *quality* to regress from established precedent just because
+/// the call shape differs. `run_with_busy_retry`'s own doc comment explains
+/// why jitter specifically matters here: "Without jitter, identical backoff
+/// keeps them in lockstep and they collide forever."
+pub(crate) fn retry_on_transient_sqlite_busy<T, E: std::fmt::Display>(
+    f: impl Fn() -> Result<T, E>,
+) -> Result<T, E> {
     const MAX_ATTEMPTS: u32 = 400;
+    fn is_transient_busy_message(s: &str) -> bool {
+        let s = s.to_ascii_lowercase();
+        s.contains("database is locked") || s.contains("sqlite_busy") || s.contains("busy")
+    }
     // Poor-man's per-call entropy (a stack address, like `Db::run_with_busy_retry`'s
     // `self as *const Self as u64`) -- no need for a real RNG crate just to
     // desynchronize two competing retriers.
     let seed = &f as *const _ as u64;
     let mut attempt: u32 = 0;
     loop {
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(&f)) {
-            Ok(v) => return Ok(v),
-            Err(payload) => {
-                let is_transient_busy = payload
-                    .downcast_ref::<String>()
-                    .map(|s| s.as_str())
-                    .or_else(|| payload.downcast_ref::<&str>().copied())
-                    .map(|s| s.contains("database is locked") || s.contains("SQLITE_BUSY"))
-                    .unwrap_or(false);
-                if !is_transient_busy || attempt >= MAX_ATTEMPTS {
-                    return Err(payload);
-                }
-                attempt += 1;
-                // Exponential cap (~0.25ms -> 8ms) with full jitter, same
-                // shape as `Db::run_with_busy_retry` below.
-                let cap = (250u64 << attempt.min(5)).min(8_000);
-                let jitter = seed
-                    .wrapping_mul(attempt as u64 + 1)
-                    .wrapping_add(attempt as u64)
-                    % (cap + 1);
-                std::thread::sleep(std::time::Duration::from_micros(jitter));
-            }
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&f));
+        let is_retryable = match &outcome {
+            Ok(Err(e)) => is_transient_busy_message(&e.to_string()),
+            Err(payload) => payload
+                .downcast_ref::<String>()
+                .map(|s| s.as_str())
+                .or_else(|| payload.downcast_ref::<&str>().copied())
+                .map(is_transient_busy_message)
+                .unwrap_or(false),
+            Ok(Ok(_)) => false,
+        };
+        if !is_retryable || attempt >= MAX_ATTEMPTS {
+            return match outcome {
+                Ok(result) => result,
+                Err(payload) => std::panic::resume_unwind(payload),
+            };
         }
+        attempt += 1;
+        // Exponential cap (~0.25ms -> 8ms) with full jitter, same shape as
+        // `Db::run_with_busy_retry` below.
+        let cap = (250u64 << attempt.min(5)).min(8_000);
+        let jitter = seed
+            .wrapping_mul(attempt as u64 + 1)
+            .wrapping_add(attempt as u64)
+            % (cap + 1);
+        std::thread::sleep(std::time::Duration::from_micros(jitter));
     }
 }
 

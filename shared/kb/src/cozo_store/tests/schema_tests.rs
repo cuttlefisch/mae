@@ -123,25 +123,27 @@ fn concurrent_first_time_sled_open_never_panics_even_under_lock_contention() {
     }
 }
 
-/// Deterministic coverage for `retry_on_transient_sqlite_busy_panic`
-/// (`schema.rs`) — the real "database is locked" race it exists for is
-/// SQLite-internals-timing-dependent (a real nightly-CI failure, never
-/// reproduced in dozens of local runs), so this exercises the retry logic
-/// itself directly rather than relying on getting lucky with real
-/// contention.
-mod retry_on_transient_sqlite_busy_panic_tests {
-    use crate::cozo_store::schema::retry_on_transient_sqlite_busy_panic;
+/// Deterministic coverage for `retry_on_transient_sqlite_busy` (`schema.rs`)
+/// — the real "database is locked" race it exists for is SQLite-internals-
+/// timing-dependent (two SEPARATE real CI failures this session: first
+/// surfacing as a panic, then -- after that was fixed -- surfacing again
+/// via a totally different cozo-internal code path that returns a normal
+/// `Err` instead, from the exact same underlying condition), so this
+/// exercises the retry logic itself directly for BOTH shapes rather than
+/// relying on getting lucky with real contention.
+mod retry_on_transient_sqlite_busy_tests {
+    use crate::cozo_store::schema::retry_on_transient_sqlite_busy;
     use std::sync::atomic::{AtomicU32, Ordering};
 
     #[test]
     fn retries_and_eventually_succeeds_on_a_transient_busy_panic() {
         let attempts = AtomicU32::new(0);
-        let result = retry_on_transient_sqlite_busy_panic(|| {
+        let result: Result<&str, String> = retry_on_transient_sqlite_busy(|| {
             let n = attempts.fetch_add(1, Ordering::SeqCst) + 1;
             if n < 5 {
                 panic!("database is locked");
             }
-            "ok"
+            Ok("ok")
         });
         assert_eq!(result.unwrap(), "ok");
         assert_eq!(
@@ -151,14 +153,48 @@ mod retry_on_transient_sqlite_busy_panic_tests {
         );
     }
 
+    /// The NEW shape this fix specifically closes: the busy condition
+    /// surfacing as a normal `Err`, not a panic (cozo's `initialize()` /
+    /// `load_last_ids()` internal step, which propagates via `?` rather
+    /// than the bootstrap step's `.unwrap()`) -- the real second CI failure
+    /// this session hit after the panic-only version of this function
+    /// shipped.
+    #[test]
+    fn retries_and_eventually_succeeds_on_a_transient_busy_err_not_just_a_panic() {
+        let attempts = AtomicU32::new(0);
+        let result: Result<&str, String> = retry_on_transient_sqlite_busy(|| {
+            let n = attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            if n < 5 {
+                return Err("database is locked (code 5)".to_string());
+            }
+            Ok("ok")
+        });
+        assert_eq!(result.unwrap(), "ok");
+        assert_eq!(attempts.load(Ordering::SeqCst), 5);
+    }
+
     #[test]
     fn recognizes_the_sqlite_busy_error_code_wording_too() {
         let attempts = AtomicU32::new(0);
-        let result = retry_on_transient_sqlite_busy_panic(|| {
+        let result: Result<i32, String> = retry_on_transient_sqlite_busy(|| {
             if attempts.fetch_add(1, Ordering::SeqCst) < 2 {
                 panic!("Error {{ code: Some(5), message: Some(\"SQLITE_BUSY\") }}");
             }
-            42
+            Ok(42)
+        });
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    /// The non-panic mirror of the above: an `Err` (not panic) carrying the
+    /// SQLITE_BUSY wording specifically, not just "database is locked".
+    #[test]
+    fn recognizes_the_sqlite_busy_error_code_wording_in_an_err_too() {
+        let attempts = AtomicU32::new(0);
+        let result: Result<i32, String> = retry_on_transient_sqlite_busy(|| {
+            if attempts.fetch_add(1, Ordering::SeqCst) < 2 {
+                return Err("Error { code: Some(5), message: Some(\"SQLITE_BUSY\") }".to_string());
+            }
+            Ok(42)
         });
         assert_eq!(result.unwrap(), 42);
     }
@@ -166,15 +202,17 @@ mod retry_on_transient_sqlite_busy_panic_tests {
     #[test]
     fn does_not_retry_an_unrelated_panic_real_corruption_must_fail_fast() {
         let attempts = AtomicU32::new(0);
-        let result = retry_on_transient_sqlite_busy_panic(|| {
-            attempts.fetch_add(1, Ordering::SeqCst);
-            panic!("disk I/O error: permission denied");
-            #[allow(unreachable_code)]
-            "unreachable"
-        });
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            retry_on_transient_sqlite_busy(|| -> Result<&str, String> {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                panic!("disk I/O error: permission denied");
+            })
+        }));
         assert!(
-            result.is_err(),
-            "a non-busy panic must propagate, not be swallowed"
+            outcome.is_err(),
+            "a non-busy panic must still propagate as a panic, not be silently swallowed into \
+             an Err -- open_with_engine's own outer catch_unwind is what's responsible for \
+             converting it to a clean error, matching this function's doc comment"
         );
         assert_eq!(
             attempts.load(Ordering::SeqCst),
@@ -185,19 +223,32 @@ mod retry_on_transient_sqlite_busy_panic_tests {
         );
     }
 
+    /// The non-panic mirror: an unrelated `Err` (not a busy condition) must
+    /// also fail fast on the first attempt, never retried.
+    #[test]
+    fn does_not_retry_an_unrelated_err_real_corruption_must_fail_fast() {
+        let attempts = AtomicU32::new(0);
+        let result: Result<&str, String> = retry_on_transient_sqlite_busy(|| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            Err("disk I/O error: permission denied".to_string())
+        });
+        assert!(result.is_err());
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+    }
+
     #[test]
     fn gives_up_after_the_bounded_retry_budget_on_persistent_contention() {
         let attempts = AtomicU32::new(0);
-        let result = retry_on_transient_sqlite_busy_panic(|| {
-            attempts.fetch_add(1, Ordering::SeqCst);
-            panic!("database is locked");
-            #[allow(unreachable_code)]
-            ()
-        });
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            retry_on_transient_sqlite_busy(|| -> Result<(), String> {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                panic!("database is locked");
+            })
+        }));
         assert!(
-            result.is_err(),
-            "persistent (never-clearing) contention must eventually surface as an error, not \
-             loop forever"
+            outcome.is_err(),
+            "persistent (never-clearing) contention must eventually surface as a propagated \
+             panic, not loop forever"
         );
         let n = attempts.load(Ordering::SeqCst);
         // MAX_ATTEMPTS=400 permits 401 total calls (the check happens before
@@ -209,6 +260,23 @@ mod retry_on_transient_sqlite_busy_panic_tests {
             (1..=500).contains(&n),
             "must give up within the documented bounded budget (~400, matching \
              Db::run_with_busy_retry's own precedent), got {n} attempts"
+        );
+    }
+
+    /// The non-panic mirror of the budget test: persistent contention
+    /// surfacing as `Err` every time must also give up within budget.
+    #[test]
+    fn gives_up_after_the_bounded_retry_budget_on_persistent_err_contention() {
+        let attempts = AtomicU32::new(0);
+        let result: Result<(), String> = retry_on_transient_sqlite_busy(|| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            Err("database is locked".to_string())
+        });
+        assert!(result.is_err());
+        let n = attempts.load(Ordering::SeqCst);
+        assert!(
+            (1..=500).contains(&n),
+            "must give up within the documented bounded budget, got {n} attempts"
         );
     }
 }
