@@ -1,6 +1,6 @@
 # ADR-057: MAE architecture vision — the 5-layer model and its confirmed gaps
 
-**Status:** Proposed.
+**Status:** Accepted.
 **Relates to:** ADR-014 (binary architecture — editor/daemon/shared workspace split), ADR-029
 (KB source of truth = CRDT, CozoDB = derived projection), ADR-030 (in-text typed-link grammar +
 parser-as-projector), ADR-035 (editor↔daemon boundary + `daemon_mode`), ADR-050 (external-editor
@@ -272,3 +272,39 @@ child ADR inherits specific, falsifiable obligations from it:
   child's start** — per principle #15, that is itself worth recording as a correction in this
   ADR (mirroring how ADR-056 recorded its own mid-write correction) rather than silently absorbed
   into the child ADR with no trace back to the root table.
+
+### Ratification note (issue #395)
+
+Before flipping status, the evidence table's 12 citations were spot-checked against current
+`main` rather than trusted from the original authoring pass (per the requirement above: code
+moves between ratification and use). Six of the nine child ADRs this table justifies (058, 059,
+062, 063, 065, and 066 Phases A-C) have since shipped real code — checked directly:
+
+- Row 3 (`daemon/src/main.rs`) — `CozoKbStore::open_with_engine(&db_path, "sqlite")` still present
+  at the cited call site; the ADR-054 doc citation's capacity/connection-cap claims still match.
+- Row 5 (`daemon/src/scheduler.rs`) — the maintenance/health tick split ADR-065 item 2 closed is
+  present and now carries an explicit in-code comment naming both ADR-065 item 2 and the ADR-061
+  Phase C enrichment work it deliberately leaves for later — exact line numbers shifted (expected,
+  since this is the code ADR-065 modified) but the claim holds.
+- Row 6 (`shared/kb/src/federation.rs`) — `Vec<KbInstance>`, `register_remote_hub`, and
+  `FederatedKb`'s `HashMap<String, KnowledgeBase>` all still present, confirming unbounded
+  federated-instance registration remains the shape ADR-062 built on.
+- Row 11 (`shared/kb/src/cozo_store/links.rs` vs `crates/core/src/editor/kb_ops/nodes.rs`) — the
+  cited inconsistency is gone, replaced by `update_links_for_node`'s `parse_typed_links` call with
+  an in-code comment naming the exact conformance gap ADR-065 item 4 closed. This row's "today's
+  reality" text is now stale in the sense that the gap it describes no longer exists — expected
+  once a closing ADR ships, not a defect in the table (see the "revisited if discovers... already
+  partially closed" bullet above, which anticipates exactly this).
+- Row 12 (CI/release workflows) — `windows-latest` legs present in both `ci.yml` and
+  `release.yml`, matching ADR-066 Phases A-C's shipped state.
+
+No fabricated or dangling citation was found. Line-number drift on rows tied to since-shipped
+child ADRs is expected and doesn't invalidate the table — it recorded a real point-in-time gap
+that has since closed, which is precisely what "Closed by" attributes it to. Gate W (Windows
+verification requiring a pre-fix failing test, defined earlier in this section) is confirmed
+agreed and binding on ADR-060, ADR-064, and ADR-066 as cross-cutting scope — ADR-066 Phases A-C
+already followed it (a real `windows-latest` CI leg exists and was iterated on against actual
+failures, not added post-hoc); it remains binding on ADR-066's unstarted Phases D-E and on
+ADR-060/ADR-064 once their own Windows-relevant surfaces are implemented.
+
+Status flipped `Proposed` → `Accepted` on this basis.
