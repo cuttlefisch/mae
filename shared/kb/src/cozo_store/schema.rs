@@ -31,8 +31,27 @@ impl CozoKbStore {
         // multiple simultaneously-starting processes racing to create that same
         // [path]". Held only across store creation, not the store's whole
         // lifetime -- once schema exists, ordinary concurrent read/write is
-        // already handled by CozoDB's own SQLite WAL + busy-retry (ADR-004
-        // Tier 1), so there is nothing left to serialize past this point.
+        // safe under CozoDB's per-instance write lock for callers sharing one
+        // `Db`/`CozoKbStore`. **Correction, found via a real CI failure, not
+        // assumed:** this ADR-004/ADR-054 "WAL + busy-retry" framing does NOT
+        // hold across *separate* `Db` instances opened against the same file
+        // (as this function's own concurrent-open callers are, by
+        // definition) -- direct inspection of `cozo-0.7.6/src/storage/
+        // sqlite.rs` confirms `new_cozo_sqlite` never sets `journal_mode=WAL`
+        // or `busy_timeout`, and each `open_with_engine` call constructs a
+        // wholly separate `SqliteStorage` with its own private
+        // `Arc<ShardedLock<()>>` -- cozo's own write-serialization is
+        // per-instance, not per-file, and its own internal bootstrap
+        // statement (`create table if not exists cozo`) `.unwrap()`s the
+        // result rather than retrying `SQLITE_BUSY`/"database is locked",
+        // so a *new* connection opening while a *different*, already-open
+        // connection from an earlier opener is mid-write-transaction can
+        // panic instead of waiting. See the retry loop immediately below,
+        // which exists specifically to absorb that gap -- this ADR-004
+        // claim is tracked as a real, filed drift finding (see the
+        // `@ai-caution` note there) rather than silently re-asserted here a
+        // second time now that it's been disproven for this specific
+        // multi-instance-same-file shape.
         //
         // The retry budget here is deliberately much wider than
         // `with_locked_update`'s (30 x 20ms = 600ms, sized for a small TOML
@@ -73,16 +92,36 @@ impl CozoKbStore {
         // load; see the two adversarial tests in crates/mae/src/bootstrap.rs that hit
         // this path (`init_kb_federation_notifies_on_a_real_store_open_failure`,
         // `init_kb_federation_notifies_on_a_real_migration_failure`).
-        let db = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            DbInstance::new(&engine_owned, &path_str, "")
-        }))
-        .map_err(|_| {
-            KbStoreError::Storage(format!(
-                "CozoDB open ({engine}) panicked internally (store directory likely \
+        //
+        // @ai-caution: [architecture-debt] a SECOND, distinct panic source lives in
+        // the SAME `DbInstance::new` call for the sqlite engine specifically: a real
+        // CI failure (nightly leg, not reproduced locally in dozens of runs --
+        // genuinely timing-dependent) caught `new_cozo_sqlite`'s own bootstrap
+        // `create table if not exists cozo` statement `.unwrap()`ing a
+        // `SQLITE_BUSY`/"database is locked" `Err` while a DIFFERENT, already-open
+        // `CozoKbStore` (a separate `Db` instance against the same file, opened by
+        // an earlier concurrent caller of this same function) was mid-write-
+        // transaction. This is NOT the same race the advisory lock above closes
+        // (that one only serializes concurrent *entries into this function*) --
+        // ADR-004/054's assumed "SQLite WAL + busy-retry" safety net does not
+        // actually exist in cozo 0.7.6 (`journal_mode`/`busy_timeout` are never
+        // configured, confirmed by direct source read; tracked as its own drift
+        // finding, ADR-004 is not corrected in this comment a second time). Since
+        // that gap lives in an external crate, MAE compensates here: a bounded
+        // retry specifically for this transient, well-understood SQLite condition
+        // (never for a genuinely corrupt store, which is a different panic
+        // message and correctly still fails fast below).
+        let db =
+            retry_on_transient_sqlite_busy_panic(|| DbInstance::new(&engine_owned, &path_str, ""))
+                .map_err(|_| {
+                    KbStoreError::Storage(format!(
+                        "CozoDB open ({engine}) panicked internally (store directory likely \
                  inaccessible or corrupt)"
-            ))
-        })?
-        .map_err(|e| KbStoreError::Storage(format!("CozoDB open ({engine}) failed: {e}")))?;
+                    ))
+                })?
+                .map_err(|e| {
+                    KbStoreError::Storage(format!("CozoDB open ({engine}) failed: {e}"))
+                })?;
 
         let store = Self { db, path };
         store.ensure_schema()?;
@@ -431,6 +470,64 @@ impl CozoKbStore {
             .map_err(cozo_err)?;
         }
         Ok(())
+    }
+}
+
+/// Run `f` (a `DbInstance::new`-shaped call), retrying a bounded number of
+/// times if it panics with a message indicating a transient SQLite
+/// `SQLITE_BUSY`/"database is locked" condition — see `open_with_engine`'s
+/// `@ai-caution` note for why this is needed (cozo 0.7.6 never configures
+/// `busy_timeout`, so a `.unwrap()` inside its own sqlite bootstrap panics
+/// immediately instead of waiting out another already-open instance's
+/// in-flight write transaction against the same file). Any OTHER panic
+/// message (a genuinely corrupt/inaccessible store, matching the sibling
+/// sled `@ai-caution` above) is NOT retried — the original panic payload is
+/// returned as-is (`Err`) on the first occurrence, for the caller's existing
+/// `catch_unwind`-based error mapping to handle exactly as if this wrapper
+/// weren't here.
+///
+/// Deliberately mirrors `Db::run_with_busy_retry`'s already-battle-tested
+/// backoff shape immediately below in this same crate (exponential cap with
+/// FULL jitter, not the two-instance-lockstep-prone linear/no-jitter backoff
+/// an earlier draft of this function used) rather than reinventing a worse
+/// one (principle #8) — the two can't literally share code (that one retries
+/// a `Result`-returning `run_script` call; this one must `catch_unwind` a
+/// call that PANICS instead of returning `Err`), but there is no reason for
+/// this backoff's *quality* to regress from established precedent just
+/// because the call shape differs. `run_with_busy_retry`'s own doc comment
+/// explains why jitter specifically matters here: "Without jitter, identical
+/// backoff keeps them in lockstep and they collide forever."
+pub(crate) fn retry_on_transient_sqlite_busy_panic<T>(f: impl Fn() -> T) -> std::thread::Result<T> {
+    const MAX_ATTEMPTS: u32 = 400;
+    // Poor-man's per-call entropy (a stack address, like `Db::run_with_busy_retry`'s
+    // `self as *const Self as u64`) -- no need for a real RNG crate just to
+    // desynchronize two competing retriers.
+    let seed = &f as *const _ as u64;
+    let mut attempt: u32 = 0;
+    loop {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(&f)) {
+            Ok(v) => return Ok(v),
+            Err(payload) => {
+                let is_transient_busy = payload
+                    .downcast_ref::<String>()
+                    .map(|s| s.as_str())
+                    .or_else(|| payload.downcast_ref::<&str>().copied())
+                    .map(|s| s.contains("database is locked") || s.contains("SQLITE_BUSY"))
+                    .unwrap_or(false);
+                if !is_transient_busy || attempt >= MAX_ATTEMPTS {
+                    return Err(payload);
+                }
+                attempt += 1;
+                // Exponential cap (~0.25ms -> 8ms) with full jitter, same
+                // shape as `Db::run_with_busy_retry` below.
+                let cap = (250u64 << attempt.min(5)).min(8_000);
+                let jitter = seed
+                    .wrapping_mul(attempt as u64 + 1)
+                    .wrapping_add(attempt as u64)
+                    % (cap + 1);
+                std::thread::sleep(std::time::Duration::from_micros(jitter));
+            }
+        }
     }
 }
 

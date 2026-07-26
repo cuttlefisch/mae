@@ -123,6 +123,96 @@ fn concurrent_first_time_sled_open_never_panics_even_under_lock_contention() {
     }
 }
 
+/// Deterministic coverage for `retry_on_transient_sqlite_busy_panic`
+/// (`schema.rs`) — the real "database is locked" race it exists for is
+/// SQLite-internals-timing-dependent (a real nightly-CI failure, never
+/// reproduced in dozens of local runs), so this exercises the retry logic
+/// itself directly rather than relying on getting lucky with real
+/// contention.
+mod retry_on_transient_sqlite_busy_panic_tests {
+    use crate::cozo_store::schema::retry_on_transient_sqlite_busy_panic;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    #[test]
+    fn retries_and_eventually_succeeds_on_a_transient_busy_panic() {
+        let attempts = AtomicU32::new(0);
+        let result = retry_on_transient_sqlite_busy_panic(|| {
+            let n = attempts.fetch_add(1, Ordering::SeqCst) + 1;
+            if n < 5 {
+                panic!("database is locked");
+            }
+            "ok"
+        });
+        assert_eq!(result.unwrap(), "ok");
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            5,
+            "must retry exactly until the first non-busy success, not more or fewer times"
+        );
+    }
+
+    #[test]
+    fn recognizes_the_sqlite_busy_error_code_wording_too() {
+        let attempts = AtomicU32::new(0);
+        let result = retry_on_transient_sqlite_busy_panic(|| {
+            if attempts.fetch_add(1, Ordering::SeqCst) < 2 {
+                panic!("Error {{ code: Some(5), message: Some(\"SQLITE_BUSY\") }}");
+            }
+            42
+        });
+        assert_eq!(result.unwrap(), 42);
+    }
+
+    #[test]
+    fn does_not_retry_an_unrelated_panic_real_corruption_must_fail_fast() {
+        let attempts = AtomicU32::new(0);
+        let result = retry_on_transient_sqlite_busy_panic(|| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            panic!("disk I/O error: permission denied");
+            #[allow(unreachable_code)]
+            "unreachable"
+        });
+        assert!(
+            result.is_err(),
+            "a non-busy panic must propagate, not be swallowed"
+        );
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            1,
+            "an unrelated panic must fail on the FIRST attempt, never retried -- retrying a \
+             genuinely corrupt/inaccessible store would just waste the caller's time before \
+             failing anyway"
+        );
+    }
+
+    #[test]
+    fn gives_up_after_the_bounded_retry_budget_on_persistent_contention() {
+        let attempts = AtomicU32::new(0);
+        let result = retry_on_transient_sqlite_busy_panic(|| {
+            attempts.fetch_add(1, Ordering::SeqCst);
+            panic!("database is locked");
+            #[allow(unreachable_code)]
+            ()
+        });
+        assert!(
+            result.is_err(),
+            "persistent (never-clearing) contention must eventually surface as an error, not \
+             loop forever"
+        );
+        let n = attempts.load(Ordering::SeqCst);
+        // MAX_ATTEMPTS=400 permits 401 total calls (the check happens before
+        // the retry-th call, same off-by-one shape as this crate's existing
+        // `Db::run_with_busy_retry` precedent) -- bound loosely at 500 rather
+        // than pin the exact number, since the point of this assertion is
+        // "bounded, not infinite," not enforcing an exact off-by-one.
+        assert!(
+            (1..=500).contains(&n),
+            "must give up within the documented bounded budget (~400, matching \
+             Db::run_with_busy_retry's own precedent), got {n} attempts"
+        );
+    }
+}
+
 #[test]
 fn schema_creates_all_relations() {
     let (_tmp, store) = make_store();
