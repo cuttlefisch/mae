@@ -241,6 +241,17 @@ impl DaemonScheduler {
             tracing::debug!(cycle = s.maintenance_cycles, "DB maintenance tick");
         }
 
+        // ADR-060 Phase C: idle-tenant quota/connection-state sweep. Cheap
+        // (a `dashmap::retain` scan, no store I/O), so it runs inline here
+        // rather than off the async executor like the store scans below.
+        {
+            let tenants = { self.daemon_state.lock().await.tenants.clone() };
+            let evicted = tenants.evict_idle();
+            if !evicted.is_empty() {
+                tracing::info!(tenants = ?evicted, "maintenance_tick: idle-evicted tenant quota state");
+            }
+        }
+
         let stores: Vec<(String, Arc<CozoKbStore>)> = {
             let ds = self.daemon_state.lock().await;
             let mut stores = Vec::new();

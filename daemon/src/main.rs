@@ -23,6 +23,7 @@ pub mod maintenance;
 mod oauth;
 mod p2p;
 mod scheduler;
+mod tenant;
 #[cfg(test)]
 mod tests;
 mod ticket;
@@ -154,6 +155,25 @@ async fn main() {
     let db_path = data_dir.join("daemon-kb.cozo");
 
     let state = Arc::new(Mutex::new(DaemonState::new()));
+
+    // ADR-060 Phase C: replace the empty (zero-behavior-change) tenant
+    // registry `DaemonState::new()` starts with with the real one built from
+    // loaded config. Validated at `--check-config` time (`run_check_config`)
+    // and here too — a daemon that fails to start on a config error a
+    // separate check command would have caught is the wrong asymmetry, so
+    // this validates unconditionally rather than only under `--check-config`.
+    let tenant_issues = config.check_tenants();
+    if !tenant_issues.is_empty() {
+        for issue in &tenant_issues {
+            tracing::error!(issue = %issue, "tenant configuration error");
+        }
+        eprintln!("Error: invalid [[tenant]] configuration (see log for details)");
+        std::process::exit(1);
+    }
+    {
+        let mut s = state.lock().await;
+        s.tenants = Arc::new(tenant::TenantRegistry::from_config(&config.tenant));
+    }
 
     match CozoKbStore::open_with_engine(&db_path, "sqlite") {
         Ok(store) => {
@@ -932,6 +952,17 @@ fn run_check_config() {
             }
             std::process::exit(1);
         }
+    }
+
+    // ADR-060 Phase C: [[tenant]] validation, independent of collab.enabled.
+    println!("  tenants: {}", config.tenant.len());
+    let tenant_issues = config.check_tenants();
+    if !tenant_issues.is_empty() {
+        eprintln!("Tenant configuration issues:");
+        for issue in &tenant_issues {
+            eprintln!("  - {issue}");
+        }
+        std::process::exit(1);
     }
 
     println!("Config OK");

@@ -68,6 +68,11 @@ pub struct DaemonConfig {
     /// IP on a Unix domain socket), only a total connection cap + idle
     /// timeout, mirroring the collab TCP listener's own `#342` hardening.
     pub kb_socket: KbSocketConfig,
+    /// ADR-060 Phase C: named tenants sharing this daemon, each with its own
+    /// cost-weighted request-points budget + concurrent-request cap. Zero
+    /// entries (the default) means zero behavior change — no tenant
+    /// resolves, so every request is treated exactly as it is today.
+    pub tenant: Vec<TenantConfig>,
 }
 
 /// Collaboration server configuration (TCP sync, persistence, auth).
@@ -335,6 +340,66 @@ impl Default for DaemonConfig {
             collab: CollabConfig::default(),
             oauth: OAuthConfig::default(),
             kb_socket: KbSocketConfig::default(),
+            tenant: Vec::new(),
+        }
+    }
+}
+
+/// ADR-060 Phase C: one named tenant sharing this daemon. `instances` keys
+/// the KB-socket path (Phase A instance addresses this tenant owns);
+/// `principals` keys the collab/OAuth path (authenticated identities this
+/// tenant owns) — the two-key design the ADR's Decision section requires,
+/// since the KB Unix socket has no principal concept to key on uniformly.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TenantConfig {
+    /// Unique tenant name (referenced by `daemon/evict_tenant` and in logs).
+    pub name: String,
+    /// KB-socket instance addresses (names or UUIDs, `handler::instance_addr`'s
+    /// address space) this tenant owns. May be empty for a collab/OAuth-only
+    /// tenant.
+    #[serde(default)]
+    pub instances: Vec<String>,
+    /// Authenticated principals (Ed25519 fingerprint or `psk:<keyid>`) this
+    /// tenant owns. May be empty for a KB-socket-only tenant.
+    #[serde(default)]
+    pub principals: Vec<String>,
+    #[serde(default)]
+    pub quota: TenantQuotaConfig,
+}
+
+/// Per-tenant resource limits (ADR-060 Phase C).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct TenantQuotaConfig {
+    /// Concurrent in-flight request cap for this tenant (0 = unlimited),
+    /// same `ConnLimiter` shape as `kb_socket.max_connections`/
+    /// `collab.max_connections`, instantiated once per tenant.
+    pub max_connections: usize,
+    /// Cost-weighted request-points budget per fixed 60-second window (0 =
+    /// unlimited). Reads cost 1 point, scans cost 3, mutations cost 5 — see
+    /// `tenant::RequestCost`.
+    pub budget_per_minute: u32,
+    /// Result-size overage threshold in bytes. Part of the `[[tenant]]`
+    /// schema (the ADR's cost model reserves +2 points for an over-size
+    /// response) but not yet enforced by any call site in this
+    /// implementation pass — no `handler.rs` arm currently measures its own
+    /// response size before returning it. Configurable now so a future pass
+    /// wiring enforcement doesn't also need a config-schema/migration change.
+    pub max_result_bytes: usize,
+    /// Seconds of no activity before this tenant's live quota/connection
+    /// state is idle-evicted by `DaemonScheduler::run_maintenance_tick` (0 =
+    /// never idle-evict). Eviction is a pure cache-drop: the next request
+    /// rebuilds fresh state (see `TenantRegistry::evict_idle`).
+    pub idle_evict_secs: u64,
+}
+
+impl Default for TenantQuotaConfig {
+    fn default() -> Self {
+        TenantQuotaConfig {
+            max_connections: 32,
+            budget_per_minute: 1000,
+            max_result_bytes: 4_194_304,
+            idle_evict_secs: 1800,
         }
     }
 }
@@ -633,6 +698,45 @@ impl DaemonConfig {
 
         issues
     }
+
+    /// Validate `[[tenant]]` configuration: duplicate tenant names, and an
+    /// instance address or principal claimed by more than one tenant (both
+    /// are silent-data-leak shaped bugs if left unchecked — the second
+    /// tenant registered would win the routing table race, silently pooling
+    /// two supposedly-isolated tenants' quota into one).
+    pub fn check_tenants(&self) -> Vec<String> {
+        let mut issues = Vec::new();
+        let mut seen_names = std::collections::HashSet::new();
+        let mut seen_instances = std::collections::HashMap::new();
+        let mut seen_principals = std::collections::HashMap::new();
+
+        for t in &self.tenant {
+            if t.name.is_empty() {
+                issues.push("tenant.name must not be empty".to_string());
+            }
+            if !seen_names.insert(t.name.clone()) {
+                issues.push(format!("duplicate tenant name '{}'", t.name));
+            }
+            for inst in &t.instances {
+                if let Some(prior) = seen_instances.insert(inst.clone(), t.name.clone()) {
+                    issues.push(format!(
+                        "instance '{inst}' claimed by both tenant '{prior}' and tenant '{}'",
+                        t.name
+                    ));
+                }
+            }
+            for p in &t.principals {
+                if let Some(prior) = seen_principals.insert(p.clone(), t.name.clone()) {
+                    issues.push(format!(
+                        "principal '{p}' claimed by both tenant '{prior}' and tenant '{}'",
+                        t.name
+                    ));
+                }
+            }
+        }
+
+        issues
+    }
 }
 
 /// Legacy state-server.toml format for migration.
@@ -750,5 +854,109 @@ mod tests {
                 "'{gate}' should be accepted"
             );
         }
+    }
+
+    fn tenant(name: &str, instances: &[&str], principals: &[&str]) -> TenantConfig {
+        TenantConfig {
+            name: name.to_string(),
+            instances: instances.iter().map(|s| s.to_string()).collect(),
+            principals: principals.iter().map(|s| s.to_string()).collect(),
+            quota: TenantQuotaConfig::default(),
+        }
+    }
+
+    #[test]
+    fn zero_tenant_tables_is_valid_and_matches_the_default() {
+        let config = DaemonConfig::default();
+        assert!(config.tenant.is_empty());
+        assert!(config.check_tenants().is_empty());
+    }
+
+    fn config_with_tenants(tenants: Vec<TenantConfig>) -> DaemonConfig {
+        DaemonConfig {
+            tenant: tenants,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn duplicate_tenant_name_is_rejected() {
+        let config = config_with_tenants(vec![
+            tenant("team-a", &["kb-1"], &[]),
+            tenant("team-a", &["kb-2"], &[]),
+        ]);
+        let issues = config.check_tenants();
+        assert!(
+            issues.iter().any(|i| i.contains("duplicate tenant name")),
+            "got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn instance_claimed_by_two_tenants_is_rejected() {
+        let config = config_with_tenants(vec![
+            tenant("team-a", &["shared-kb"], &[]),
+            tenant("team-b", &["shared-kb"], &[]),
+        ]);
+        let issues = config.check_tenants();
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.contains("shared-kb") && i.contains("team-a") && i.contains("team-b")),
+            "got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn principal_claimed_by_two_tenants_is_rejected() {
+        let config = config_with_tenants(vec![
+            tenant("team-a", &[], &["ed25519:same"]),
+            tenant("team-b", &[], &["ed25519:same"]),
+        ]);
+        let issues = config.check_tenants();
+        assert!(
+            issues.iter().any(|i| i.contains("ed25519:same")),
+            "got: {issues:?}"
+        );
+    }
+
+    #[test]
+    fn disjoint_tenants_pass_validation() {
+        let config = config_with_tenants(vec![
+            tenant("team-a", &["kb-1"], &["ed25519:a"]),
+            tenant("team-b", &["kb-2"], &["ed25519:b"]),
+        ]);
+        assert!(config.check_tenants().is_empty());
+    }
+
+    /// Round-trip the exact `[[tenant]]` TOML shape from the ADR's own
+    /// example — a config schema that parses in isolation but silently
+    /// diverges from what the ADR documents (a field renamed, a nesting
+    /// level wrong) would still pass every other test here.
+    #[test]
+    fn parses_the_documented_toml_tenant_table_shape() {
+        let toml_str = r#"
+[[tenant]]
+name = "team-a"
+instances = ["team-a-kb", "shared-ref"]
+principals = ["ed25519:AbCd...", "psk:teamA-key1"]
+
+[tenant.quota]
+max_connections = 32
+budget_per_minute = 1000
+max_result_bytes = 4194304
+idle_evict_secs = 1800
+"#;
+        let config: DaemonConfig = toml::from_str(toml_str).expect("valid [[tenant]] TOML");
+        assert_eq!(config.tenant.len(), 1);
+        let t = &config.tenant[0];
+        assert_eq!(t.name, "team-a");
+        assert_eq!(t.instances, vec!["team-a-kb", "shared-ref"]);
+        assert_eq!(t.principals, vec!["ed25519:AbCd...", "psk:teamA-key1"]);
+        assert_eq!(t.quota.max_connections, 32);
+        assert_eq!(t.quota.budget_per_minute, 1000);
+        assert_eq!(t.quota.max_result_bytes, 4_194_304);
+        assert_eq!(t.quota.idle_evict_secs, 1800);
+        assert!(config.check_tenants().is_empty());
     }
 }

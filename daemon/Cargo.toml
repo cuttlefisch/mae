@@ -26,6 +26,11 @@ mae-sync = { path = "../shared/sync" }
 sqlite = "0.32"
 async-trait = "0.1"
 
+# ADR-060 Phase C: per-tenant quota registry. Already fully resolved
+# transitively (via yrs) in this workspace's Cargo.lock, so promoting it to a
+# direct dependency adds zero new crates to the build graph.
+dashmap = "6"
+
 tokio = { version = "1", features = ["full", "signal"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

@@ -45,6 +45,15 @@ pub struct DaemonState {
     /// collection established via `p2p/share_kb` (mirrors the TCP `kb/share`
     /// owner-binding to the authenticated principal).
     pub owner: Option<Arc<mae_mcp::identity::Identity>>,
+    /// ADR-060 Phase C: per-tenant quota/eviction registry. An `Arc`, not
+    /// inlined state — `TenantRegistry` is internally concurrent (`dashmap`),
+    /// so cloning the `Arc` out under this brief lock (the same pattern
+    /// `store`/`query_layer`/`doc_store` already use) never reintroduces the
+    /// per-request contention Phase B proved this lock must stay free of.
+    /// Defaults to `TenantRegistry::empty()` (zero `[[tenant]]` tables = zero
+    /// behavior change) until `main()` replaces it with the real one built
+    /// from loaded config.
+    pub tenants: Arc<crate::tenant::TenantRegistry>,
 }
 
 impl DaemonState {
@@ -60,6 +69,7 @@ impl DaemonState {
             doc_store: None,
             broadcaster: None,
             owner: None,
+            tenants: Arc::new(crate::tenant::TenantRegistry::empty()),
         }
     }
 
@@ -97,7 +107,12 @@ pub async fn dispatch(
                 .as_str()
                 .ok_or(DaemonError::InvalidParams("missing 'id'"))?
                 .to_string();
-            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Read,
+            )
+            .await?;
             spawn_query(move || match ql.get(&id) {
                 Some(node) => json!({
                     "id": node.id,
@@ -117,7 +132,12 @@ pub async fn dispatch(
                 .ok_or(DaemonError::InvalidParams("missing 'query'"))?
                 .to_string();
             let limit = std::cmp::min(params["limit"].as_u64().unwrap_or(20), 1000) as usize;
-            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Scan,
+            )
+            .await?;
             spawn_query(move || {
                 let hits: Vec<Value> = ql
                     .search(&query, limit)
@@ -134,7 +154,12 @@ pub async fn dispatch(
                 .as_str()
                 .ok_or(DaemonError::InvalidParams("missing 'id'"))?
                 .to_string();
-            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Read,
+            )
+            .await?;
             spawn_query(move || {
                 let links: Vec<Value> = ql
                     .links_from(&id)
@@ -157,7 +182,12 @@ pub async fn dispatch(
                 .as_str()
                 .ok_or(DaemonError::InvalidParams("missing 'id'"))?
                 .to_string();
-            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Read,
+            )
+            .await?;
             spawn_query(move || {
                 let links: Vec<Value> = ql
                     .links_to(&id)
@@ -177,12 +207,22 @@ pub async fn dispatch(
 
         "kb/list_ids" => {
             let prefix = params["prefix"].as_str().map(|s| s.to_string());
-            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Read,
+            )
+            .await?;
             spawn_query(move || json!(ql.list_ids(prefix.as_deref()))).await
         }
 
         "kb/health" => {
-            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Read,
+            )
+            .await?;
             spawn_query(move || match ql.health_report() {
                 Some(report) => json!({
                     "total_nodes": report.total_nodes,
@@ -201,7 +241,12 @@ pub async fn dispatch(
                 .ok_or(DaemonError::InvalidParams("missing 'id'"))?
                 .to_string();
             let depth = params["depth"].as_u64().unwrap_or(1) as u32;
-            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Scan,
+            )
+            .await?;
             spawn_query(move || match ql.neighborhood(&id, depth) {
                 Some(sg) => json!({
                     "nodes": sg.nodes.iter().map(|(id, t)| json!([id, t])).collect::<Vec<_>>(),
@@ -218,7 +263,12 @@ pub async fn dispatch(
                 .ok_or(DaemonError::InvalidParams("missing 'id'"))?
                 .to_string();
             let limit = std::cmp::min(params["limit"].as_u64().unwrap_or(10), 1000) as usize;
-            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Scan,
+            )
+            .await?;
             spawn_query(move || {
                 let related: Vec<Value> = ql
                     .related(&id, limit)
@@ -258,7 +308,12 @@ pub async fn dispatch(
             // Phase D thin-client: the agenda buffer was mirror-only. Serve all
             // TODO-bearing nodes as full (serde) nodes — minus the heavy crdt_doc
             // lineage, which the agenda doesn't need.
-            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Read,
+            )
+            .await?;
             spawn_query(move || {
                 let nodes: Vec<Value> = ql
                     .todo_nodes()
@@ -275,7 +330,12 @@ pub async fn dispatch(
 
         "kb/id_title_pairs" => {
             let prefix = params["prefix"].as_str().map(|s| s.to_string());
-            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Read,
+            )
+            .await?;
             spawn_query(move || {
                 let pairs: Vec<Value> = ql
                     .id_title_pairs(prefix.as_deref())
@@ -291,7 +351,12 @@ pub async fn dispatch(
             let prefix = params["prefix"].as_str().map(|s| s.to_string());
             let body_limit =
                 std::cmp::min(params["body_limit"].as_u64().unwrap_or(0), 10_000) as usize;
-            let ql = snapshot_query_layer(state, instance_addr(&params)).await?;
+            let (ql, _conn_guard) = snapshot_query_layer(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Read,
+            )
+            .await?;
             spawn_query(move || {
                 let triples: Vec<Value> = ql
                     .id_title_body_triples(prefix.as_deref(), body_limit)
@@ -305,7 +370,12 @@ pub async fn dispatch(
 
         // --- Hygiene ---
         "kb/hygiene_scan" => {
-            let store = snapshot_store(state, instance_addr(&params)).await?;
+            let (store, _conn_guard) = snapshot_store(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Mutation,
+            )
+            .await?;
             spawn_query(move || {
                 let result = crate::hygiene::run_hygiene_scan(&store);
                 json!({
@@ -320,7 +390,12 @@ pub async fn dispatch(
         "kb/hygiene_report" => {
             let category = params["category"].as_str().map(|s| s.to_string());
             let status = params["status"].as_str().map(|s| s.to_string());
-            let store = snapshot_store(state, instance_addr(&params)).await?;
+            let (store, _conn_guard) = snapshot_store(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Read,
+            )
+            .await?;
             spawn_query_result(move || {
                 let suggestions = store
                     .list_suggestions(category.as_deref(), status.as_deref())
@@ -353,7 +428,12 @@ pub async fn dispatch(
             let suggestion_id = params["suggestion_id"]
                 .as_i64()
                 .ok_or(DaemonError::InvalidParams("missing 'suggestion_id'"))?;
-            let store = snapshot_store(state, instance_addr(&params)).await?;
+            let (store, _conn_guard) = snapshot_store(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Mutation,
+            )
+            .await?;
             spawn_query_result(move || {
                 store
                     .update_suggestion_status(&node_id, suggestion_id, "accepted")
@@ -371,7 +451,12 @@ pub async fn dispatch(
             let suggestion_id = params["suggestion_id"]
                 .as_i64()
                 .ok_or(DaemonError::InvalidParams("missing 'suggestion_id'"))?;
-            let store = snapshot_store(state, instance_addr(&params)).await?;
+            let (store, _conn_guard) = snapshot_store(
+                state,
+                instance_addr(&params),
+                crate::tenant::RequestCost::Mutation,
+            )
+            .await?;
             spawn_query_result(move || {
                 store
                     .update_suggestion_status(&node_id, suggestion_id, "dismissed")
@@ -385,7 +470,7 @@ pub async fn dispatch(
         "daemon/status" => {
             // Snapshot the fields, then drop the lock before the async doc_store scan
             // (don't hold the state mutex across an await).
-            let (uptime, store_count, has_ql, reg_count, doc_store) = {
+            let (uptime, store_count, has_ql, reg_count, doc_store, live_tenants) = {
                 let state = state.lock().await;
                 (
                     state.started_at.elapsed(),
@@ -393,6 +478,7 @@ pub async fn dispatch(
                     state.query_layer.is_some(),
                     state.registry.instances.len(),
                     state.doc_store.clone(),
+                    state.tenants.live_tenant_count(),
                 )
             };
             // Phase D introspection: which KB collections does the daemon host, and
@@ -418,7 +504,21 @@ pub async fn dispatch(
                 "registered_instances": reg_count,
                 "kb_collections": kb_collections,
                 "primary_exists": primary_exists,
+                "live_tenants": live_tenants,
             }))
+        }
+
+        // ADR-060 Phase C: the operator-triggered eviction escape hatch (the
+        // named rust-analyzer/Emacs-precedent lesson — don't wait for an idle
+        // window a still-connected tenant may never hit). Idempotent:
+        // evicting an unknown/already-idle-evicted tenant is a clean no-op.
+        "daemon/evict_tenant" => {
+            let name = params["name"]
+                .as_str()
+                .ok_or(DaemonError::InvalidParams("missing 'name'"))?;
+            let tenants = { state.lock().await.tenants.clone() };
+            tenants.evict(name);
+            Ok(json!({"evicted": name}))
         }
 
         // daemon/shutdown is intercepted by handle_client() before dispatch;
@@ -628,15 +728,48 @@ pub async fn dispatch(
 async fn snapshot_query_layer(
     state: &Arc<Mutex<DaemonState>>,
     addr: Option<&str>,
-) -> Result<Arc<dyn KbQueryLayer>, DaemonError> {
+    cost: crate::tenant::RequestCost,
+) -> Result<(Arc<dyn KbQueryLayer>, Option<crate::conn_limit::ConnGuard>), DaemonError> {
     let state = state.lock().await;
+    let guard = charge_tenant_or_reject(&state.tenants, addr, cost)?;
     match addr {
-        None => state.query_layer.clone().ok_or(DaemonError::NotReady),
+        None => state
+            .query_layer
+            .clone()
+            .ok_or(DaemonError::NotReady)
+            .map(|ql| (ql, guard)),
         Some(addr) => {
             let store = resolve_kb_store(&state, addr)
                 .ok_or_else(|| DaemonError::UnknownInstance(addr.to_string()))?;
-            Ok(Arc::new(mae_kb::CozoQueryLayer::new(store)))
+            Ok((Arc::new(mae_kb::CozoQueryLayer::new(store)), guard))
         }
+    }
+}
+
+/// ADR-060 Phase C enforcement chokepoint: checked inside
+/// `snapshot_query_layer`/`snapshot_store`, immediately after acquiring
+/// `DaemonState`'s lock but before any of the (comparatively expensive)
+/// store-resolution work below it — a rejected request costs only a
+/// `dashmap` lookup and a couple of atomic/mutex ops, never a wasted
+/// `resolve_kb_store` or the CozoDB call the caller was about to spawn.
+/// `addr` unresolved to any `[[tenant]]` entry (including "no tenants
+/// configured at all") is `Unconfigured`, which is always admitted — Phase
+/// A's own zero-config-zero-behavior-change contract.
+fn charge_tenant_or_reject(
+    tenants: &crate::tenant::TenantRegistry,
+    addr: Option<&str>,
+    cost: crate::tenant::RequestCost,
+) -> Result<Option<crate::conn_limit::ConnGuard>, DaemonError> {
+    use crate::tenant::TenantOutcome;
+    let (outcome, guard) = tenants.check_and_charge_by_instance(addr, cost);
+    match outcome {
+        TenantOutcome::Unconfigured | TenantOutcome::Admitted => Ok(guard),
+        TenantOutcome::QuotaExceeded => Err(DaemonError::QuotaExceeded(
+            addr.unwrap_or("<unaddressed>").to_string(),
+        )),
+        TenantOutcome::ConnectionCapExceeded => Err(DaemonError::TenantAtCapacity(
+            addr.unwrap_or("<unaddressed>").to_string(),
+        )),
     }
 }
 
@@ -648,12 +781,19 @@ async fn snapshot_query_layer(
 async fn snapshot_store(
     state: &Arc<Mutex<DaemonState>>,
     addr: Option<&str>,
-) -> Result<Arc<CozoKbStore>, DaemonError> {
+    cost: crate::tenant::RequestCost,
+) -> Result<(Arc<CozoKbStore>, Option<crate::conn_limit::ConnGuard>), DaemonError> {
     let state = state.lock().await;
+    let guard = charge_tenant_or_reject(&state.tenants, addr, cost)?;
     match addr {
-        None => state.store.clone().ok_or(DaemonError::NotReady),
+        None => state
+            .store
+            .clone()
+            .ok_or(DaemonError::NotReady)
+            .map(|s| (s, guard)),
         Some(addr) => resolve_kb_store(&state, addr)
-            .ok_or_else(|| DaemonError::UnknownInstance(addr.to_string())),
+            .ok_or_else(|| DaemonError::UnknownInstance(addr.to_string()))
+            .map(|s| (s, guard)),
     }
 }
 
@@ -846,6 +986,14 @@ pub enum DaemonError {
     /// request" — same JSON-RPC code today, but a distinguishable variant
     /// for future per-tenant error handling (Phase C/D).
     UnknownInstance(String),
+    /// ADR-060 Phase C: the resolved tenant's cost-weighted points budget
+    /// for the current 60s window is exhausted. Distinct from
+    /// `TenantAtCapacity` (a different resource dimension — see the ADR's
+    /// Decision section on why they're two independent caps, not one).
+    QuotaExceeded(String),
+    /// ADR-060 Phase C: the resolved tenant already has `max_connections`
+    /// requests in flight.
+    TenantAtCapacity(String),
 }
 
 impl std::fmt::Display for DaemonError {
@@ -857,6 +1005,18 @@ impl std::fmt::Display for DaemonError {
             DaemonError::Internal(msg) => write!(f, "Internal error: {msg}"),
             DaemonError::UnknownInstance(addr) => {
                 write!(f, "Unknown instance address: {addr}")
+            }
+            DaemonError::QuotaExceeded(tenant) => {
+                write!(
+                    f,
+                    "Tenant '{tenant}' has exhausted its request budget for this window"
+                )
+            }
+            DaemonError::TenantAtCapacity(tenant) => {
+                write!(
+                    f,
+                    "Tenant '{tenant}' has reached its concurrent-request cap"
+                )
             }
         }
     }
@@ -871,6 +1031,11 @@ impl DaemonError {
             DaemonError::MethodNotFound(_) => -32601,
             DaemonError::Internal(_) => -32603,
             DaemonError::UnknownInstance(_) => -32602,
+            // Server-error range (-32000..-32099), not one of the standard
+            // JSON-RPC codes above -- a rate-limit-shaped rejection is
+            // neither a malformed request nor an internal failure.
+            DaemonError::QuotaExceeded(_) => -32001,
+            DaemonError::TenantAtCapacity(_) => -32002,
         }
     }
 }
@@ -1848,5 +2013,127 @@ mod tests {
             "tenant C's read took {c_duration:?} while tenant A's slow query ({a_duration:?}) \
              was in flight -- solo baseline was {solo_baseline:?}, tolerance {tolerance:?}."
         );
+    }
+
+    // --- ADR-060 Phase C: end-to-end enforcement through the real
+    // `dispatch()` path, not just `TenantRegistry`'s own unit tests
+    // (`tenant.rs`) -- proves the wiring itself (config -> DaemonState ->
+    // `charge_tenant_or_reject` -> a real `DaemonError`), which the unit
+    // tests alone can't catch a mistake in.
+
+    fn tenant_config(
+        name: &str,
+        instances: &[&str],
+        budget_per_minute: u32,
+    ) -> crate::config::TenantConfig {
+        crate::config::TenantConfig {
+            name: name.to_string(),
+            instances: instances.iter().map(|s| s.to_string()).collect(),
+            principals: Vec::new(),
+            quota: crate::config::TenantQuotaConfig {
+                max_connections: 32,
+                budget_per_minute,
+                max_result_bytes: 4_194_304,
+                idle_evict_secs: 1800,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn dispatch_rejects_a_quota_exceeding_tenant_with_a_real_daemon_error() {
+        let (state, uuid_a, uuid_b, _uuid_c) = three_instance_state();
+        {
+            let mut st = state.lock().await;
+            st.tenants = Arc::new(crate::tenant::TenantRegistry::from_config(&[
+                tenant_config("team-a", &[&uuid_a], 1),
+                tenant_config("team-b", &[&uuid_b], 1000),
+            ]));
+        }
+
+        // team-a's budget (1 point) covers exactly one Read-cost kb/get.
+        let r1 = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": uuid_a}),
+            &state,
+        )
+        .await;
+        assert!(r1.is_ok(), "first request must be admitted: {r1:?}");
+
+        // The second is over budget and must come back as a real,
+        // distinguishable DaemonError -- not a generic failure, and not a
+        // silent pass-through that ignores the quota entirely.
+        let r2 = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": uuid_a}),
+            &state,
+        )
+        .await;
+        match r2 {
+            Err(DaemonError::QuotaExceeded(name)) => assert_eq!(name, uuid_a),
+            other => panic!("expected QuotaExceeded, got {other:?}"),
+        }
+
+        // team-b, an entirely different tenant with an untouched budget, is
+        // unaffected by team-a's exhaustion -- the real dispatch()/DaemonState
+        // wiring preserves the isolation TenantRegistry's own unit tests prove
+        // in isolation.
+        let r3 = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": uuid_b}),
+            &state,
+        )
+        .await;
+        assert!(r3.is_ok(), "team-b must be unaffected: {r3:?}");
+    }
+
+    #[tokio::test]
+    async fn dispatch_cost_weights_scan_higher_than_read_through_the_real_path() {
+        let (state, uuid_a, _uuid_b, _uuid_c) = three_instance_state();
+        {
+            let mut st = state.lock().await;
+            // Budget covers exactly one Scan (3pts) or three Reads (1pt each).
+            st.tenants = Arc::new(crate::tenant::TenantRegistry::from_config(&[
+                tenant_config("team-a", &[&uuid_a], 3),
+            ]));
+        }
+
+        let scan = dispatch(
+            "kb/search",
+            json!({"query": "note", "instance": uuid_a}),
+            &state,
+        )
+        .await;
+        assert!(scan.is_ok(), "one Scan must fit a 3-point budget: {scan:?}");
+
+        let next = dispatch(
+            "kb/get",
+            json!({"id": "shared-id", "instance": uuid_a}),
+            &state,
+        )
+        .await;
+        assert!(
+            matches!(next, Err(DaemonError::QuotaExceeded(_))),
+            "budget must already be exhausted by the single 3-point Scan: {next:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_admits_unconfigured_instances_unchanged_zero_tenant_tables() {
+        // No `[[tenant]]` entries at all -- DaemonState::new()'s default
+        // TenantRegistry::empty() must never reject anything, matching
+        // Phase A's own zero-config-zero-behavior-change contract.
+        let (state, uuid_a, _uuid_b, _uuid_c) = three_instance_state();
+        for _ in 0..20 {
+            let r = dispatch(
+                "kb/get",
+                json!({"id": "shared-id", "instance": uuid_a}),
+                &state,
+            )
+            .await;
+            assert!(
+                r.is_ok(),
+                "unconfigured tenants must never be rejected: {r:?}"
+            );
+        }
     }
 }

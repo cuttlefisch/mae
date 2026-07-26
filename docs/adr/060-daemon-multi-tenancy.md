@@ -1,7 +1,8 @@
 # ADR-060: Daemon multi-tenancy
 
-**Status:** In progress (Phases A/B/D landed — see "Implementation note" sections below;
-Phases C, E–G remain, tracked as real follow-on work, not silently deferred).
+**Status:** In progress (Phases A/B/C/D landed — see "Implementation note" sections below;
+Phase C's collab/OAuth-side principal-keyed wiring is explicitly deferred, tracked as issue
+#456, not silently gapped. Phases E–G remain, tracked as real follow-on work.)
 **Extends:** ADR-035, ADR-054, ADR-057.
 **Relates to:** ADR-017, ADR-018, ADR-025.
 **Tracking:** issue #375 (epic tracker).
@@ -556,6 +557,60 @@ test proving a structural property of Phase A's own mechanism rather than a bolt
 not a uniform "nothing to do here," and not a rewrite either. Issue #412 is closed on this
 basis, cross-linked to this note.
 
+## Implementation note (added during Phase C implementation, principle #15)
+
+The corrected design above (two-key `TenantRegistry`, cost-weighted points budget,
+`dashmap`-backed state, eviction reusing `run_maintenance_tick`) shipped largely as designed,
+with one deliberate, stated scoping decision made during implementation rather than design —
+recorded here per the same "bounded down payment, not a silent gap" discipline that closed
+Phase B/D.
+
+**What shipped, KB-socket side (the full mechanism, wired end-to-end):** `daemon/src/tenant.rs`
+(`RequestCost`, `TenantQuotaState`, `TenantRegistry`), `[[tenant]]`/`[tenant.quota]` in
+`daemon/src/config.rs` (validated by `DaemonConfig::check_tenants` — duplicate names, an
+instance/principal double-claimed by two tenants — called both from `--check-config` and
+unconditionally at daemon startup), and enforcement plugged into
+`daemon/src/handler.rs::snapshot_query_layer`/`snapshot_store` — the two functions every one of
+`dispatch`'s 15 KB-query/hygiene arms already funnels through. **One simplification from the
+original design, made with evidence, not assumption:** the Decision text above called for
+enforcement to run *before* `DaemonState`'s lock is acquired at all. Implementation found this
+unnecessary — Phase B already proved (real 3-tenant concurrent-load test) that this lock's
+critical section is so brief it produces no measurable cross-tenant latency delta even under
+genuine contention, so checking the tenant budget *inside* that same already-proven-cheap
+critical section (immediately after acquiring the lock, before any store-resolution work) meets
+every isolation/fairness property the original design wanted, without a second dispatch-signature
+parameter threaded through all 15 call sites *and* all 44 existing test call sites that construct
+raw `dispatch()` calls. `TenantRegistry` itself lives outside the lock (an `Arc<TenantRegistry>`
+field on `DaemonState`, cloned out cheaply under the same brief lock — the identical pattern
+`store`/`query_layer`/`doc_store` already use), so Phase B's own "no per-request-contended state
+inside this lock" finding is still honored; only the *check* moved, not the *state*. The
+concurrent-request cap (`ConnLimiter`, tenant-scoped) is bound to the lifetime of one
+dispatch-arm's `(ql, _conn_guard)`/`(store, _conn_guard)` binding — a genuinely different
+resource dimension from the points budget, verified independently
+(`tenant::tests::connection_cap_and_points_budget_are_independently_enforced`). The manual
+`daemon/evict_tenant` RPC and the idle-tenant sweep in `run_maintenance_tick` both shipped as
+designed. Six adversarial tests in `tenant.rs` (3+-tenant isolation, instance- vs. principal-key
+non-crossover, self-healing eviction that never disturbs a co-resident tenant, cost-weighting,
+independent connection-cap enforcement, zero-config zero-behavior-change) plus three end-to-end
+tests in `handler.rs` that exercise the real `dispatch()` path (not just `TenantRegistry` in
+isolation) plus six `config.rs` tests (including a round-trip of the exact `[[tenant]]`/
+`[tenant.quota]` TOML shape this ADR's Decision section documents) all pass; manually verified
+end-to-end via `mae-daemon --check-config` against both a valid and a deliberately-conflicting
+real `daemon.toml`.
+
+**What did not ship this pass, stated explicitly rather than left as a silent gap:**
+collab/OAuth-side principal-keyed enforcement. `TenantRegistry::check_and_charge_by_principal`
+and the `principals` half of `[[tenant]]` config are fully implemented and tested
+(`tenant::tests::principal_keyed_isolation_never_crosses_into_instance_keyed_tenants` proves the
+two key spaces never cross-contaminate even given a colliding literal string) — but not yet
+called from `daemon/src/collab_handler/mod.rs::handle_doc_request_inner`. Reason: that surface's
+methods (`sync/*`, `kb/share`, `kb/node_update`, `kb/collection_op`, membership ops) don't map
+onto the KB-socket's `kb/get`-shaped cost table the ADR names concretely — assigning them
+plausible-looking costs without the same reasoned pass this note gives the KB-socket table would
+be exactly the "unicorn"-shaped scope creep principle #14 warns against, not a faithful
+implementation of this phase's own Decision section. Tracked as **issue #456** rather than left
+implicit.
+
 ## Consequences
 
 **Positive.** Closes a documented, recurring bug class inherited directly from Emacs's own
@@ -655,46 +710,76 @@ this ADR alongside Phase D's IDOR case:**
   other tenants' unrelated RPCs. This test exists because the precedent it reproduces is
   real and documented, not hypothetical.
 
-**Phase C** (updated during design to match the corrected two-key mechanism above — see
-that section's own "corrected during design" note for why a single principal-keyed test
-isn't the right shape):
+**Phase C** (updated during design to match the corrected two-key mechanism above, then
+updated again after implementation — see this section's status markers and the Phase C
+Implementation Note above for what shipped and what's tracked as issue #456):
 
-- A quota-exceeding **tenant** (not "principal" — see the two-key correction above) must be
-  rejected before consuming another tenant's capacity, tested against a **≥3-tenant**
-  baseline specifically — a single-tenant quota test proves the mechanism exists but proves
-  nothing about tenant isolation, which is the property actually at stake here.
-- **KB-socket instance-keyed isolation**, its own distinct test from the principal-keyed
-  case below: two connections both addressed at the same tenant's instance must share that
-  tenant's budget; a third connection addressed at a different tenant's instance must be
-  completely unaffected. This specifically falsifies "accidentally scoped the quota
-  per-connection instead of per-instance-address" — a plausible implementation bug given
-  `ConnLimiter`'s existing per-connection shape is the nearest copy-pasteable precedent, and
-  the wrong one to copy here.
-- The mirror case for the collab/OAuth listeners' principal-keyed isolation: a quota-
-  exceeding principal on one tenant's KB must not be rejected differently than intended when
-  a *different* principal, member of a *different* tenant, is concurrently well within
-  budget.
-- A synthetic unbounded-growth harness, modeling the rust-analyzer / Emacs-daemon
+- **[shipped]** A quota-exceeding **tenant** (not "principal" — see the two-key correction
+  above) must be rejected before consuming another tenant's capacity, tested against a
+  **≥3-tenant** baseline specifically — a single-tenant quota test proves the mechanism
+  exists but proves nothing about tenant isolation, which is the property actually at stake
+  here. (`tenant::tests::quota_exceeding_tenant_rejected_without_touching_other_tenants_budget`;
+  end-to-end through real `dispatch()` in
+  `handler::tests::dispatch_rejects_a_quota_exceeding_tenant_with_a_real_daemon_error`.)
+- **[shipped]** **KB-socket instance-keyed isolation**, its own distinct test from the
+  principal-keyed case below: two connections both addressed at the same tenant's instance
+  must share that tenant's budget; a third connection addressed at a different tenant's
+  instance must be completely unaffected. This specifically falsifies "accidentally scoped
+  the quota per-connection instead of per-instance-address" — a plausible implementation bug
+  given `ConnLimiter`'s existing per-connection shape is the nearest copy-pasteable
+  precedent, and the wrong one to copy here.
+  (`tenant::tests::kb_socket_isolation_is_keyed_on_instance_not_per_call`.)
+- **[implemented + tested in isolation; not yet wired to a listener — issue #456]** The
+  mirror case for the collab/OAuth listeners' principal-keyed isolation: a quota-exceeding
+  principal on one tenant's KB must not be rejected differently than intended when a
+  *different* principal, member of a *different* tenant, is concurrently well within budget.
+  `tenant::tests::principal_keyed_isolation_never_crosses_into_instance_keyed_tenants` proves
+  the mechanism itself (including that the two key spaces never cross-contaminate on a
+  colliding literal string); an end-to-end test through the real collab dispatch path is
+  part of issue #456's scope, not written yet since there is no call site to exercise.
+- **[shipped, simplified from the original design with evidence — see Implementation Note]**
+  A synthetic unbounded-growth harness, modeling the rust-analyzer / Emacs-daemon
   memory-growth precedent cited in Context (a tenant whose in-process state grows
   pathologically over a long-running session while staying within its per-request quota at
   every individual step), must be individually resettable via Phase C's per-tenant
   restart/eviction mechanism, with **zero observable impact on co-resident tenants'** live
-  sessions during and after the reset (reusing Phase B's own statistical-bound technique:
-  10x the solo baseline, floored at 50ms, to avoid CI timing flakiness while still easily
-  catching a real regression). The evicted tenant's own next request must succeed with
-  *correct* data after self-healing — not merely avoid a crash. The whole daemon process
-  must never need restarting just to reclaim one tenant's leaked state — that is the
-  specific claim this test exists to prove, not merely "restart works."
-- A cost-weighting negative case: a tenant issuing only cheap reads (`kb/get`-shaped, cost
-  1) must not exhaust its budget anywhere near the rate of a tenant issuing the same
-  *count* of mutating hygiene-arm requests (cost 5) — proving the accounting genuinely
-  applies the cost table rather than silently flattening to a per-request counter during
-  implementation.
-- A config-reload/restart contract check: registering a new `[[tenant]]` after the daemon
-  is already running either takes effect live (proven positively, not assumed) or the
-  daemon surfaces an explicit, observable "restart required" signal — feeding directly into
-  Phase G's own config-change-contract documentation requirement, so this phase doesn't
-  leave that ambiguity for Phase G to discover independently.
+  sessions during and after the reset. Implemented as
+  `tenant::tests::evicting_a_tenant_self_heals_and_never_disturbs_co_resident_tenants`: a
+  direct state-level proof (evict tenant A, confirm tenant B's independent spend is
+  untouched, confirm tenant A self-heals with a fresh budget on its next request) rather than
+  Phase B's own latency-based statistical-bound technique — the two mechanisms differ in kind
+  (Phase B: does contention leak across a lock; Phase C: does eviction leak across
+  independent `dashmap` entries), so a direct state assertion is the more precise proof for
+  this specific property, not a weaker substitute for the timing-based one. The evicted
+  tenant's own next request succeeds with *correct* (fresh, zeroed) state after self-healing
+  — not merely avoiding a crash. The whole daemon process never needs restarting just to
+  reclaim one tenant's leaked state — that is the specific claim this test proves, not merely
+  "restart works."
+- **[shipped]** A cost-weighting negative case: a tenant issuing only cheap reads
+  (`kb/get`-shaped, cost 1) must not exhaust its budget anywhere near the rate of a tenant
+  issuing the same *count* of mutating hygiene-arm requests (cost 5) — proving the accounting
+  genuinely applies the cost table rather than silently flattening to a per-request counter
+  during implementation.
+  (`tenant::tests::cost_weighting_makes_mutation_heavy_tenant_exhaust_far_faster_than_read_only`;
+  end-to-end in `handler::tests::dispatch_cost_weights_scan_higher_than_read_through_the_real_path`.)
+- **[shipped, not in the original bullet list — the connection-cap dimension needed its own
+  negative case]** The concurrent-request cap and the points budget are independently
+  enforced: a tenant with an exhausted connection cap but an untouched points budget must
+  still be rejected, proving this isn't secretly the same mechanism as the points budget
+  wearing a different name.
+  (`tenant::tests::connection_cap_and_points_budget_are_independently_enforced`.)
+- **[not done, genuinely deferred — tracked in Phase G, not fabricated as "out of scope"]**
+  A config-reload/restart contract check: registering a new `[[tenant]]` after the daemon is
+  already running either takes effect live (proven positively, not assumed) or the daemon
+  surfaces an explicit, observable "restart required" signal. Confirmed during Phase C
+  implementation: this daemon has **no live-reload mechanism for any `daemon.toml` section**,
+  `[[tenant]]` included — `DaemonConfig::load()` runs once at startup
+  (`main.rs`) and nothing watches the file afterward, so today a `[[tenant]]` edit is
+  silently inert until a manual restart, with no observable signal either way. That silent
+  gap is real, not merely untested — Phase C did not build a reload mechanism (out of scope
+  for a quotas phase), but the test this bullet calls for still needs writing once Phase G
+  documents the actual (currently silent) contract, so a reader doesn't have to discover it
+  by editing the file and noticing nothing happened.
 
 **Phase D — the named IDOR-shaped test, called out explicitly as the single highest-
 priority adversarial test in this entire ADR, per the Gitea/Vaultwarden CVE precedent in

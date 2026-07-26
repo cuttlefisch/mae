@@ -2843,6 +2843,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "criterion",
+ "dashmap",
  "data-encoding",
  "dirs",
  "hex",
