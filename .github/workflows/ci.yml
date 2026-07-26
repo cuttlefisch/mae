@@ -158,12 +158,16 @@ jobs:
     # proven stable, not a silently-accepted permanent gap -- see ADR-066's Status
     # note for the explicit tracking issue.
     #
-    # The 24 `--skip`s below are real, pre-existing mae-core test failures the first
+    # The 23 `--skip`s below are real, pre-existing mae-core test failures the first
     # real `windows-latest` run surfaced (path-separator/canonicalization/permission
     # differences across file_picker/dap_ops/kb_ops/lsp/navigation/project/babel/swap --
     # unrelated to what ADR-066 Phase A itself changed). Tracked as debt, not silently
     # dropped: issue #455 has the full per-cluster breakdown and root-cause hypotheses.
-    # The other 2765 mae-core lib tests stay enforced. mae-mcp's `--all-targets` also
+    # (kb_scope_project_path_identity_not_string_equality, originally a 24th skip here,
+    # is now `#[cfg(unix)]`-gated at its source instead -- it relies on a real symlink,
+    # so a runtime skip was never the right fix; this list keeps the ones that are
+    # genuine behavioral differences worth diagnosing properly, not path-support gaps.)
+    # The other 2766 mae-core lib tests stay enforced. mae-mcp's `--all-targets` also
     # runs with reduced Windows coverage right now -- 19 socket-integration tests in
     # `shared/mcp/src/lib.rs` are `#[cfg(unix)]`-gated rather than ported to the
     # `local_ipc` abstraction, also tracked in #455 (closes the #442 DoD gap).
@@ -201,7 +205,6 @@ jobs:
             --skip editor::kb_ops::tests::kb_ops_durability_tests::kb_promote_node_resave_org_file_after_promote_reappears_but_crud_stays_correct \
             --skip editor::kb_ops::tests::kb_ops_durability_tests::kb_reimport_file_persists_to_instance_store \
             --skip editor::kb_ops::tests::kb_ops_durability_tests::kb_reimport_file_retracts_id_dropped_by_in_place_rename \
-            --skip editor::kb_ops::tests::kb_ops_search_federation_tests::kb_scope_project_path_identity_not_string_equality \
             --skip editor::kb_ops::tests::kb_ops_watcher_misc_tests::kb_register_does_not_clobber_user_dirs \
             --skip editor::tests::lsp_tests::open_file_in_project_sets_pending_lsp_root_change_when_no_project \
             --skip editor::tests::navigation_tests::gf_opens_file_under_cursor \

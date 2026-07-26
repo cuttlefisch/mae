@@ -385,6 +385,11 @@ fn kb_federated_search_scope_project_never_leaks_across_projects() {
 ///    false positives / silent collisions either, which is the specific failure mode the ADR
 ///    names: two projects "colliding by string path but differing by canonicalized path" must
 ///    not silently merge.
+// #[cfg(unix)]: relies on std::os::unix::fs::symlink (no portable equivalent --
+// Windows symlink creation needs elevated privileges by default, see ADR-066's
+// bootstrap.rs precedent). Tracked as a known Windows test-coverage gap in issue
+// #455 (Gap 1's kb_ops cluster) rather than ported/skipped ad hoc.
+#[cfg(unix)]
 #[test]
 fn kb_scope_project_path_identity_not_string_equality() {
     use mae_kb::federation::{KbInstance, KbInstanceKind};
@@ -396,10 +401,7 @@ fn kb_scope_project_path_identity_not_string_equality() {
     std::fs::create_dir_all(&real_a).unwrap();
     std::fs::create_dir_all(&real_b).unwrap();
     let link_to_a = tmp.path().join("alias-to-a");
-    #[cfg(unix)]
     std::os::unix::fs::symlink(&real_a, &link_to_a).unwrap();
-    #[cfg(not(unix))]
-    panic!("this test requires symlink support (unix); skip/port for other platforms");
 
     let canonical_a = real_a.canonicalize().unwrap();
 

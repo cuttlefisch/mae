@@ -66,6 +66,10 @@ use terminal_loop::{cleanup_stale_mcp_sockets, run_headless_self_test, run_termi
 ///
 /// Extracted from [`gui_display_available`] so the decision is unit-testable
 /// without touching process-global environment variables (see `mod tests`).
+/// `#[cfg(unix)]` because [`gui_display_available`]'s Windows branch never
+/// calls it (it unconditionally returns `true` there), which would otherwise
+/// make this genuinely dead code on Windows.
+#[cfg(unix)]
 fn display_available_from_env(ssh_session: bool, x11: bool, wayland: bool, is_macos: bool) -> bool {
     if ssh_session {
         // A remote shell has no local GUI session, regardless of platform.
@@ -1187,9 +1191,11 @@ fn main() -> io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use super::display_available_from_env;
     use super::{
-        daemon_version_skew, display_available_from_env, effective_guidance_live_sync,
-        guidance_instructions_fragment, parse_truthy, should_use_gui,
+        daemon_version_skew, effective_guidance_live_sync, guidance_instructions_fragment,
+        parse_truthy, should_use_gui,
     };
 
     // --- daemon_version_skew (ADR-035 version-pin) ------------------------
@@ -1302,6 +1308,7 @@ mod tests {
 
     // --- gui_display_available policy -------------------------------------
 
+    #[cfg(unix)]
     #[test]
     fn ssh_session_has_no_display_regardless_of_platform() {
         // A remote shell never gets the GUI, even on macOS or with X11/Wayland.
@@ -1309,11 +1316,13 @@ mod tests {
         assert!(!display_available_from_env(true, true, true, false));
     }
 
+    #[cfg(unix)]
     #[test]
     fn local_macos_session_has_a_display() {
         assert!(display_available_from_env(false, false, false, true));
     }
 
+    #[cfg(unix)]
     #[test]
     fn linux_needs_x11_or_wayland() {
         // Headless (no DISPLAY/WAYLAND_DISPLAY) → no display.

@@ -272,15 +272,15 @@ fn cmd_sync() -> i32 {
                     errors += 1;
                     continue;
                 }
-                let abs_path = if local_path.is_relative() {
-                    std::env::current_dir()
-                        .unwrap_or_default()
-                        .join(&local_path)
-                } else {
-                    local_path.clone()
-                };
                 #[cfg(unix)]
                 {
+                    let abs_path = if local_path.is_relative() {
+                        std::env::current_dir()
+                            .unwrap_or_default()
+                            .join(&local_path)
+                    } else {
+                        local_path.clone()
+                    };
                     match std::os::unix::fs::symlink(&abs_path, &target) {
                         Ok(()) => println!(" done (→ {})", abs_path.display()),
                         Err(e) => {
