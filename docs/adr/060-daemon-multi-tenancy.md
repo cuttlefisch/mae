@@ -145,6 +145,25 @@ optional polish layered on top of resource caps — it is the difference between
 that degrades gracefully per-tenant when one tenant misbehaves" and "a daemon that
 inherits rust-analyzer's known failure mode, but now with a wider blast radius."
 
+**Real-world precedent for the quota mechanism itself** (Phase C, distinct from the
+eviction precedent above): **Kubernetes `ResourceQuota` + `LimitRange`** is the standard
+trusted-multi-tenant resource-governance pattern — a namespace-level aggregate hard cap
+(`ResourceQuota`) paired with per-object defaults/maximums within that namespace
+(`LimitRange`), and the field's own stated best practice is to start with generous quotas
+and tighten them from observed real usage rather than invent numbers up front. This is
+directly adopted below: Phase C's `daemon.toml` quota defaults are deliberately generous,
+sized against ADR-054's own measured ~8-concurrent-session ceiling
+(`docs/adr/004-kb-scaling.md`'s Tier 1 table), not picked arbitrarily. Separately,
+**GitHub's own production REST API rate limiting** (docs.github.com/en/rest/using-the-rest-
+api/rate-limits-for-the-rest-api) is real, current precedent for *how* to shape a quota
+budget for a mixed read/write API: alongside a simple per-hour primary bucket, GitHub
+layers a **secondary limit** combining a concurrent-request cap with a cost-weighted
+points-per-minute budget where a write (POST/PATCH/PUT/DELETE) costs 5 points against a
+read's 1 — not four independent flat counters per resource type. Phase C adopts this
+cost-weighted-single-budget shape directly below, rather than the ADR's own earlier,
+vaguer "connection count, query rate, result size, background-job priority" framing
+implying four separate mechanisms.
+
 ## Decision
 
 This ADR proceeds in seven phases (A–G). Phases A–D are the core multi-tenancy mechanism
@@ -184,30 +203,128 @@ section (see Verification below for the test that falsifies exactly this shortcu
 
 ### Phase C — per-tenant quotas and independent restart/eviction
 
-Two distinct mechanisms, not one:
+**Corrected during design (principle #15 — re-checked before implementing, the same
+discipline Phase B and Phase D applied to their own originally-proposed mechanisms).** This
+phase's text originally said quotas would "extend ADR-054's already-existing per-principal/
+per-IP soft throttle mechanism." That mechanism does not exist: `daemon/src/conn_limit.rs`'s
+`ConnLimiter` is the only admission-control primitive in this daemon today, and it is a
+global, identity-blind, per-*listener* connection-**count** cap — not per-principal, not
+per-IP, not a time-windowed rate limiter of any kind. `daemon/src/config.rs:65-70` and
+`:435-442`, and `daemon/src/main.rs:1259-1264`, independently confirm this in their own
+words: "there is no principal or IP on a Unix domain socket... filesystem-permissions-only
+trust." No rate-limiting crate (token bucket, sliding window, leaky bucket) is a dependency
+anywhere in this workspace. Phase C is therefore "design and build the first identity/
+tenant-scoped accounting this daemon has ever had," not an extension.
 
-- **Quotas.** Per-tenant limits on connection count, query rate, result size, and
-  background-job priority, extending ADR-054's already-existing per-principal/per-IP soft
-  throttle mechanism rather than building a parallel accounting system (principle #8).
-  Quotas are keyed on the existing Ed25519 principal identity already established by
-  ADR-017's asymmetric peer authentication — no new identity system is needed; a tenant is,
-  for accounting purposes, the set of principals the operator has assigned to it, reusing
-  identity infrastructure that already exists and is already trusted.
-- **Independent restart/eviction**, added as a genuinely separate mechanism because quotas
-  alone do not solve the problem the Emacs bug#38345 / rust-analyzer precedent describes.
-  Resource caps prevent a tenant from *starting* to consume unboundedly, but they do
-  nothing to help once a tenant's in-process state has already grown pathologically inside
-  its cap-respecting steady-state footprint (a slow leak inside otherwise-legal usage, a
-  pathological query plan cached and reused, accumulated background-job state). The daemon
-  must provide a way to individually reset one tenant's in-process state — evict its
-  cached handles, drop its `InstanceState`, force its connections to reconnect against
-  fresh state — **without restarting the whole daemon process** and without observably
-  affecting any co-resident tenant's live session. This is the direct, named lesson from
-  both precedents cited in Context: Emacs's daemon has no per-client reset short of a full
-  restart, and rust-analyzer's only workaround is the same blunt instrument. A multi-tenant
-  `mae-daemon` that also has no better answer than "restart the whole process" inherits
-  that exact failure mode, but multiplies its cost by every co-resident tenant forced to
-  restart along with the one that actually leaked.
+**A second correction, found in the same pass: quotas cannot be keyed on principal identity
+uniformly across all three listeners, because only two of the three have one.** The KB Unix
+socket — `daemon/src/handler.rs::dispatch`, where Phase A's `instance_addr()` addressing
+lives, and which carries every locally-connected frontend's routine `kb_search`/`kb_get`
+traffic — has zero principal concept, by the same deliberate, documented design cited above.
+The collab (mTLS) listener and the OAuth listener *do* carry real identity
+(`Session::authenticated_principal()`, `shared/mcp/src/session.rs:140-146`; `OAuthConfig.
+principal_claim`-mapped JWT `sub`, `daemon/src/oauth.rs:113-183`). Resolution: **two quota
+keys, not one** — the KB socket keys on Phase A's own instance address (already resolved on
+every dispatch arm); collab/OAuth key on the real authenticated principal. This is not a
+compromise forced by a gap; the KB socket's local-trust model is a permanent design choice
+(three independent code comments say so), not something a quota mechanism should route
+around by inventing a new local-auth handshake it was never meant to need.
+
+**Tenant representation.** A new `[[tenant]]` array-of-tables in `daemon.toml`, sibling of
+`[collab]`/`[oauth]`/`[kb_socket]` on `DaemonConfig` (`daemon/src/config.rs:38-71`):
+
+```toml
+[[tenant]]
+name = "team-a"
+instances = ["team-a-kb", "shared-ref"]   # Phase A addresses this tenant owns
+principals = ["ed25519:AbCd...", "psk:teamA-key1"]  # collab/OAuth identities it owns
+
+[tenant.quota]
+max_connections = 32
+budget_per_minute = 1000
+max_result_bytes = 4194304
+idle_evict_secs = 1800
+```
+
+Zero `[[tenant]]` tables means zero behavior change, matching Phase A's own backward-
+compatibility contract. Runtime state lives in a **new sibling structure**, `TenantRegistry`
+— not inside `DaemonState` — passed into `dispatch` alongside `Arc<Mutex<DaemonState>>`.
+This follows directly from Phase B's own finding: `DaemonState`'s lock is safe today
+precisely because nothing per-request-contended lives inside it; adding live quota
+counters there would either reintroduce the contention risk Phase B just proved doesn't
+exist, or bury a second lock inside the first for no benefit over a sibling structure.
+`TenantRegistry` is backed by `dashmap` (v6.2.1, already fully resolved in both this
+workspace's and the daemon's own `Cargo.lock` — transitively via `yrs` — so promoting it to
+a direct `daemon/Cargo.toml` dependency adds zero new crates to the build graph), reusing a
+proven sharded-concurrent-map primitive rather than hand-rolling a new locking scheme.
+
+**Quota mechanism: one cost-weighted points budget per fixed 60-second window, not four
+independent flat counters.** Direct precedent from GitHub's own production secondary rate
+limit (see Context): reads cost 1 point (`kb/get`, `kb/links_from`, `kb/links_to`,
+`kb/list_ids`), broader scans cost 3 (`kb/search`, `kb/related`, `kb/neighborhood`), any
+mutating hygiene arm costs 5, and a result-size overage (over `max_result_bytes`) adds +2 on
+top of the base cost. Connection count stays its own separate mechanism — a second,
+tenant-scoped `ConnLimiter` instance (the same struct Phase A's listeners already use,
+instantiated once per tenant instead of once per listener) — a genuinely different resource
+dimension, mirroring GitHub's own two-tier split rather than folding everything into one
+number. Enforcement plugs into `handler::dispatch` immediately after `instance_addr(&params)`
+resolves and *before* `snapshot_query_layer`/`snapshot_store` ever touch `DaemonState`'s
+lock or spawn blocking work — a rejected request costs only a `dashmap` lookup and an atomic
+compare, never contending with any other tenant's in-flight work.
+
+**Independent restart/eviction**, a genuinely separate mechanism from quotas because quotas
+alone do not solve the problem the Emacs bug#38345 / rust-analyzer precedent describes.
+Resource caps prevent a tenant from *starting* to consume unboundedly, but do nothing once a
+tenant's in-process state has already grown pathologically inside its cap-respecting
+steady-state footprint. Reuses existing precedent exactly, inventing no new idiom:
+`DaemonScheduler::run_maintenance_tick` (`daemon/src/scheduler.rs:237`, already the periodic
+per-instance hygiene home) gains an idle-tenant sweep evicting any tenant past its
+`idle_evict_secs`, plus a manual `daemon/evict_tenant` RPC for an operator who notices
+pathological growth without waiting for an idle window a still-connected tenant may never
+hit (the direct, named rust-analyzer-precedent lesson: an operator's only tool must not be
+"restart the whole process"). Concretely, what gets evicted and what happens on the next
+access:
+- The `TenantQuotaState` itself — dropped; the next request re-inserts a zeroed one via
+  `dashmap`'s `entry().or_insert_with()`, mirroring
+  `crates/core/src/editor/window_ops.rs:634-644`'s `mcp_session_windows` coarse-evict-then-
+  self-heal idiom (`crates/core/src/editor/ai_state.rs:48,111`).
+- The `Arc<CozoKbStore>` handle(s) in `DaemonState.instance_stores` — removed under Phase
+  B's own brief snapshot-then-drop lock discipline, forcing a lazy reopen on next access —
+  the direct precedent for this is `daemon/src/doc_store.rs:827`'s `evict_idle` (paired with
+  `pick_lru_evictable`, `daemon/src/doc_store.rs:171`), which already "lazy-reloads from
+  SQLite on next access."
+- The federated `query_layer`'s per-name entry — rebuilt via the existing
+  `DaemonState::rebuild_query_layer()`, reused rather than reinvented.
+- If org-dir-backed, `DaemonScheduler.watchers[uuid]` — removed the same way
+  `run_watcher_tick`'s existing `watchers.retain(...)` (`daemon/src/scheduler.rs:162`)
+  already prunes unregistered instances; its existing "recreate if missing" check
+  (`daemon/src/scheduler.rs:165`) already self-heals this one for free, with zero new code.
+
+**Safety, stated explicitly:** an in-flight `spawn_blocking` query already holds its own
+`Arc<CozoKbStore>` clone (Phase A's own snapshot-then-drop design), so removing the map
+entry during eviction never disturbs it — a stronger guarantee than the `try_lock`-skip
+`daemon/src/doc_store.rs`'s own `pick_lru_evictable` needs for its busier, more contended
+case, meaning tenant eviction here can run unconditionally without checking for in-flight
+work first. This is the direct, named lesson from both precedents cited in Context: Emacs's
+daemon has no per-client reset short of a full restart, and rust-analyzer's only workaround
+is the same blunt instrument. A multi-tenant `mae-daemon` that also has no better answer
+than "restart the whole process" inherits that exact failure mode, but multiplies its cost
+by every co-resident tenant forced to restart along with the one that actually leaked.
+
+**Explicitly out of scope for this phase, stated plainly rather than left implicit:** a full
+token-bucket/leaky-bucket algorithm (a fixed window's known boundary-burst weakness is an
+accepted, disclosed trade-off — the same tier as `ConnLimiter`'s own existing `Relaxed`-
+ordering approximation — and no such crate exists in this dependency graph to build on);
+adaptive/dynamic quota tuning (the Kubernetes `ResourceQuota` precedent's own "start
+generous, tighten from real usage" guidance is adopted directly — static `daemon.toml`
+values only, auto-tuning is Phase F-contingent future work once real multi-tenant capacity
+numbers exist); unifying the KB-socket and collab/OAuth accounting into one identity model
+(the two-key split above is final for this phase, not an interim step — the KB socket's
+trust model is a permanent design choice, not a gap to close later); and per-tenant
+CPU-seconds budgeting (GitHub's third rate-limit dimension — MAE's existing scan/fanout
+caps, `DEFAULT_MAX_FANOUT_INSTANCES` and `OAuthConfig`'s `kb_query_max_scan_nodes`/
+`kb_query_max_search_results`, already bound this cost dimension; principle #8, no
+duplicate mechanism).
 
 ### Phase D — tenant-boundary role composition and the IDOR-shaped adversarial case
 
@@ -538,20 +655,46 @@ this ADR alongside Phase D's IDOR case:**
   other tenants' unrelated RPCs. This test exists because the precedent it reproduces is
   real and documented, not hypothetical.
 
-**Phase C:**
+**Phase C** (updated during design to match the corrected two-key mechanism above — see
+that section's own "corrected during design" note for why a single principal-keyed test
+isn't the right shape):
 
-- A quota-exceeding principal must be rejected or throttled **before** consuming another
-  tenant's capacity, tested against a **≥3-tenant** baseline specifically — a single-tenant
-  quota test proves the quota mechanism exists but proves nothing about tenant isolation,
-  which is the property actually at stake here.
+- A quota-exceeding **tenant** (not "principal" — see the two-key correction above) must be
+  rejected before consuming another tenant's capacity, tested against a **≥3-tenant**
+  baseline specifically — a single-tenant quota test proves the mechanism exists but proves
+  nothing about tenant isolation, which is the property actually at stake here.
+- **KB-socket instance-keyed isolation**, its own distinct test from the principal-keyed
+  case below: two connections both addressed at the same tenant's instance must share that
+  tenant's budget; a third connection addressed at a different tenant's instance must be
+  completely unaffected. This specifically falsifies "accidentally scoped the quota
+  per-connection instead of per-instance-address" — a plausible implementation bug given
+  `ConnLimiter`'s existing per-connection shape is the nearest copy-pasteable precedent, and
+  the wrong one to copy here.
+- The mirror case for the collab/OAuth listeners' principal-keyed isolation: a quota-
+  exceeding principal on one tenant's KB must not be rejected differently than intended when
+  a *different* principal, member of a *different* tenant, is concurrently well within
+  budget.
 - A synthetic unbounded-growth harness, modeling the rust-analyzer / Emacs-daemon
-  memory-growth precedent cited in Context (a tenant whose in-process state — cached query
-  plans, accumulated background-job state — grows pathologically over a long-running
-  session while staying within its per-request quota at every individual step), must be
-  individually resettable via Phase C's per-tenant restart/eviction mechanism, with **zero
-  observable impact on co-resident tenants'** live sessions during and after the reset.
-  The whole daemon process must never need restarting just to reclaim one tenant's leaked
-  state — that is the specific claim this test exists to prove, not merely "restart works."
+  memory-growth precedent cited in Context (a tenant whose in-process state grows
+  pathologically over a long-running session while staying within its per-request quota at
+  every individual step), must be individually resettable via Phase C's per-tenant
+  restart/eviction mechanism, with **zero observable impact on co-resident tenants'** live
+  sessions during and after the reset (reusing Phase B's own statistical-bound technique:
+  10x the solo baseline, floored at 50ms, to avoid CI timing flakiness while still easily
+  catching a real regression). The evicted tenant's own next request must succeed with
+  *correct* data after self-healing — not merely avoid a crash. The whole daemon process
+  must never need restarting just to reclaim one tenant's leaked state — that is the
+  specific claim this test exists to prove, not merely "restart works."
+- A cost-weighting negative case: a tenant issuing only cheap reads (`kb/get`-shaped, cost
+  1) must not exhaust its budget anywhere near the rate of a tenant issuing the same
+  *count* of mutating hygiene-arm requests (cost 5) — proving the accounting genuinely
+  applies the cost table rather than silently flattening to a per-request counter during
+  implementation.
+- A config-reload/restart contract check: registering a new `[[tenant]]` after the daemon
+  is already running either takes effect live (proven positively, not assumed) or the
+  daemon surfaces an explicit, observable "restart required" signal — feeding directly into
+  Phase G's own config-change-contract documentation requirement, so this phase doesn't
+  leave that ambiguity for Phase G to discover independently.
 
 **Phase D — the named IDOR-shaped test, called out explicitly as the single highest-
 priority adversarial test in this entire ADR, per the Gitea/Vaultwarden CVE precedent in
