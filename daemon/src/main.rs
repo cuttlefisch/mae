@@ -1149,10 +1149,10 @@ fn run_authorize(rest: &[String]) -> i32 {
             return 1;
         }
     };
-    let mut ak = mae_mcp::identity::AuthorizedKeys::load(&path);
     let fp = pk.fingerprint();
     let label = pk.label.clone().unwrap_or_default();
-    match ak.add(pk) {
+    let (_ak, add_result) = mae_mcp::identity::AuthorizedKeys::update(&path, |ak| ak.add(pk));
+    match add_result {
         Ok(()) => {
             println!("Authorized {label} ({fp}) → {}", path.display());
             0
@@ -1194,15 +1194,16 @@ fn run_revoke(target: Option<&str>) -> i32 {
             return 1;
         }
     };
-    let mut ak = mae_mcp::identity::AuthorizedKeys::load(&path);
     // Revoke by fingerprint (the precise, unambiguous identity — ADR-018) or by a
     // now-unique label.
     let by_fp = target.starts_with("SHA256:");
-    let result = if by_fp {
-        ak.revoke_by_fingerprint(target)
-    } else {
-        ak.revoke(target)
-    };
+    let (_ak, result) = mae_mcp::identity::AuthorizedKeys::update(&path, |ak| {
+        if by_fp {
+            ak.revoke_by_fingerprint(target)
+        } else {
+            ak.revoke(target)
+        }
+    });
     match result {
         Ok(0) => {
             println!("No authorized key matching '{target}'");
