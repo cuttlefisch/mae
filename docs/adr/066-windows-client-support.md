@@ -1,7 +1,8 @@
 # ADR-066: Native Windows Support for MAE Clients
 
-**Status:** In progress (Phases A/B/C landed — see "Status note" at the end of this
-document; Phases D/E remain, tracked as real follow-on work, not silently deferred).
+**Status:** In progress (Phases A/B/C landed and verified GREEN on real `windows-latest`
+CI — see "Status note" at the end of this document; Phases D/E remain, tracked as real
+follow-on work, not silently deferred).
 **Extends:** ADR-014, ADR-055, ADR-057.
 **Relates to:** issue #386 (existing Windows/WSL scoping issue in cuttlefisch/mae, resolved
 by this ADR rather than left open-ended), cuttlefisch/mae-vscode issue #1 (concrete,
@@ -400,7 +401,20 @@ four separate pushes, each diagnosed from the actual `gh api .../jobs/<id>/logs`
    `ci.yml` with the full per-cluster breakdown in issue #455 (Gap 1) — the other 2765
    mae-core lib tests stay enforced. Commit (pending push, this pass).
 
-Net effect: this leg is proven stable through 4 real iteration rounds against actual
+Net effect: this leg is proven stable through 13 real iteration rounds against actual
 Windows CI feedback (not simulated), each fix grounded in the real error output or real
-third-party docs, with two honestly-scoped, individually-tracked coverage gaps (issue
+third-party docs, with three honestly-scoped, individually-tracked coverage gaps (issue
 #455) rather than either an indefinitely-blocked leg or a silently-reduced one.
+
+**Phase C: confirmed GREEN.** After the 13 rounds above (compile errors → dead-Windows
+code → a real stale-lock-cleanup correctness bug → a hardcoded PID-1-is-alive test
+assumption → a size-threshold clippy lint → an entirely ungated real-PTY integration
+test), `stable / test (windows)` passed cleanly on PR #387's final commit (`0b625438`,
+run 30182624908, 32m17s). Issues #442 and #444 closed with full implementation notes
+citing every commit. This is the first real evidence — not a simulated or locally-run
+one — that the gap ADR-066 exists to close was real and is now closed for the scope
+Phases A–C cover (editor workspace compile + the 4 crates Phase A's local-IPC work
+touches). Phases D (GUI Windows verification) and E (remote-connection path
+verification) remain open, tracked as issues #445/#446 — deliberately not compressed
+into this pass, consistent with this ADR's own "Costs" section calling Windows support
+one of the three largest children in the ADR-057 vision set.
