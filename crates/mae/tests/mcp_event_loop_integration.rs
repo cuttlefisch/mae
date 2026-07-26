@@ -12,6 +12,14 @@
 //! Requires: `mae` binary built (cargo build -p mae).
 //! Marked `#[ignore]` by default — run with:
 //!   MAE_EVENT_LOOP_E2E=1 cargo test -p mae --test mcp_event_loop_integration -- --ignored --nocapture
+//!
+//! `#[cfg(unix)]` (whole file): drives the real event loop through a real PTY via
+//! raw libc primitives (`openpty`/`setsid`/`ioctl TIOCSCTTY`/`pre_exec`) -- these
+//! have no portable equivalent (Windows' ConPTY is an entirely different API
+//! shape), and `#[ignore]` alone doesn't stop clippy from compiling (and thus
+//! linting) an `#[ignore]`d test, which is what surfaced this on Windows CI.
+
+#![cfg(unix)]
 
 use std::os::fd::FromRawFd;
 use std::os::unix::process::CommandExt;

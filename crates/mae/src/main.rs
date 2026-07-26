@@ -92,7 +92,7 @@ fn display_available_from_env(ssh_session: bool, x11: bool, wayland: bool, is_ma
 fn gui_display_available() -> bool {
     #[cfg(not(unix))]
     {
-        return true;
+        true
     }
     #[cfg(unix)]
     {
