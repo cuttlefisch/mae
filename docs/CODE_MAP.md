@@ -447,7 +447,7 @@ Source: `shared/sync/src/lib.rs`
 | `compare_state_vectors` | fn |
 | `compute_project_identity` | fn |
 
-## Commands (557 built-in)
+## Commands (558 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -912,6 +912,7 @@ Source: `shared/sync/src/lib.rs`
 | `daily-prev` | Navigate to previous daily note (SPC n d p) |
 | `daily-next` | Navigate to next daily note (SPC n d n) |
 | `kb-audit` | Run KB audit report (SPC n H a) |
+| `kb-export-guidance` | Export guidance-KB context to AGENTS.md or a custom path (ADR-050 Phase H) |
 | `kb-narrow` | Narrow to a meta-node component for editing |
 | `kb-widen` | Save edits and widen back from narrowed meta-node component |
 | `capture-finalize` | Save note and return from capture (C-c C-c) |

@@ -156,7 +156,7 @@ never implied to be fine by omission (P1's config-fragmentation mitigation, ADR-
 
 | Host | Tool discovery + `tools/call` | Annotations (`readOnlyHint` etc.) | `initialize.instructions` forwarded? | Notes |
 |---|---|---|---|---|
-| VS Code + GitHub Copilot (Agent mode) | ✅ Live-tested this session (real Copilot session, K1-K5 found via exactly this) | ✅ Live-tested | See L5 below — being checked | Requires the chat settings (⚙️) checkbox, not just the 🔧 picker — see Troubleshooting |
+| VS Code + GitHub Copilot (Agent mode) | ✅ Live-tested this session (real Copilot session, K1-K5 found via exactly this) | ✅ Live-tested | ⬜ Not yet verified — genuinely requires a human with a live session (see `docs/adr/050-final-adversarial-review.md`'s L5 for the reproducible method); ships a host-agnostic fallback (`kb_export_guidance`/`:kb-export-guidance`) regardless of the answer | Requires the chat settings (⚙️) checkbox, not just the 🔧 picker — see Troubleshooting |
 | Generic/raw MCP client (`scripts/mcp-shim-stdio-smoke.sh`) | ✅ Automated, runs in CI | ✅ Automated, runs in CI | N/A — this script doesn't have model context to forward into | This IS "a raw MCP test client," one of ADR-050 D3's three explicitly-acceptable proof options (alongside Zed/Cursor) — not a lesser substitute for a named host |
 | Zed | ⬜ Not yet verified | ⬜ Not yet verified | ⬜ Not yet verified | `mae-mcp-shim`'s stdio surface has nothing Zed-specific to block this (same protocol as every other Path 2 host) — untested, not unsupported |
 | Cursor | ⬜ Not yet verified | ⬜ Not yet verified | ⬜ Not yet verified | Same as Zed |
@@ -274,8 +274,12 @@ these up expecting them to affect Copilot in any way.
   For the FULL guidance content (project `CLAUDE.md`/`README.md` + the guidance KB's
   index body) delivered as plain text any host reads unconditionally as part of its own
   repo scan, use the **`kb_export_guidance`** tool (callable by the built-in `mae` agent
-  or any MCP client, including a paired VS Code session) — writes to `AGENTS.md` by
-  default, or pass `{"path": ".github/copilot-instructions.md"}` for that convention
+  or any MCP client, including a paired VS Code session) — or, from inside MAE itself,
+  the **`:kb-export-guidance [path]`** colon command (same underlying function,
+  human-driven instead of agent-driven; `path` defaults to `AGENTS.md` exactly like the
+  tool's own default) — writes to `AGENTS.md` by
+  default, or pass `{"path": ".github/copilot-instructions.md"}` (tool) / `:kb-export-guidance
+  .github/copilot-instructions.md` (command) for that convention
   instead. Additive-merge-safe: re-running only replaces MAE's own clearly delimited
   managed block, never touching hand-written content elsewhere in the file. Set
   `ai_guidance_export_live_sync = true` (`:set-save`) to have this happen automatically

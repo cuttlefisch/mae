@@ -2993,6 +2993,10 @@
       "doc": "Run KB audit report (SPC n H a)"
     },
     {
+      "name": "kb-export-guidance",
+      "doc": "Export guidance-KB context to AGENTS.md or a custom path (ADR-050 Phase H)"
+    },
+    {
       "name": "kb-narrow",
       "doc": "Narrow to a meta-node component for editing"
     },

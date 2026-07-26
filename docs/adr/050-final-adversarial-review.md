@@ -52,6 +52,31 @@ via 3 parallel Explore-agent audits, then closed the real gaps found:
 - **L4 (#381):** no code changes — the "real external IdP" DoD wording was reframed
   against what the existing adversarial OAuth test suite actually and defensibly proves
   (see below).
+- **L5 (#383):** `initialize.instructions` forwarding into VS Code Copilot's actual model
+  context genuinely cannot be checked by an automated pass or a headless agent — it
+  requires a human with a live VS Code + Copilot Agent-mode session inspecting what the
+  model actually received, which is not observable from MAE's side of the MCP connection
+  (MAE only knows it *sent* the field on `initialize`, per
+  `shared/mcp/src/lib.rs:1686`'s `with_instructions_surfaces_in_every_client_initialize_response`
+  — that test proves MAE's send path, nothing about the client's receive/forward path).
+  What shipped instead, unconditionally regardless of this question's answer (per Phase
+  H's own "regardless of outcome, ship a fallback" framing): `kb_export_guidance`
+  (`crates/ai/src/tool_impls/guidance_export.rs`) writes the full guidance context to
+  `AGENTS.md`/`.github/copilot-instructions.md` — a file every major host's agent reads as
+  part of its own repo scan independent of MCP `initialize.instructions` support, so the
+  guidance-delivery goal is met either way. **Reproducible verification method** (for a
+  human to run, not simulated here): (1) enable `ai_guidance_kb` on a project with a
+  populated guidance KB, (2) connect VS Code + Copilot Agent mode via `mae-mcp-shim`
+  (`docs/EXTERNAL_EDITOR_MCP_PAIRING.md`'s setup steps), (3) start a fresh Copilot Agent
+  chat session and ask it a question whose correct answer depends ONLY on content in the
+  guidance KB's index body (not general knowledge, not something discoverable via
+  `kb_search`/`kb_get` — the point is to test passive context injection, not the agent's
+  ability to call tools), (4) if it answers correctly without calling any `kb_*` tool
+  first, `instructions` forwarding works; if it doesn't know or has to look it up, it
+  doesn't (or isn't enabled — check the ⚙️ chat-settings checkbox per the compatibility
+  matrix's own troubleshooting note first). Recorded here as method-documented,
+  result-pending — the compatibility matrix cell reflects this status accurately rather
+  than a claimed result.
 - **L6 (#377/#385):** a real host-compatibility matrix (naming what's verified vs.
   not-yet-verified per host, not generic "any client" language) and this document.
 

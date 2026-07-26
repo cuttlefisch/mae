@@ -223,6 +223,24 @@ pub fn handle_command_mode(
                 return;
             }
 
+            // :kb-export-guidance [path] — ADR-050 Phase H fallback exporter: write the
+            // guidance-KB context to AGENTS.md (default) or a custom `path`
+            // (e.g. .github/copilot-instructions.md), additive-merge-safe. No
+            // ai_tx/LLM round-trip needed — synchronous like ai-status above.
+            if cmd == "kb-export-guidance" || cmd.starts_with("kb-export-guidance ") {
+                let path = cmd.strip_prefix("kb-export-guidance").unwrap_or("").trim();
+                let args = if path.is_empty() {
+                    serde_json::json!({})
+                } else {
+                    serde_json::json!({"path": path})
+                };
+                match mae_ai::execute_kb_export_guidance(editor, &args) {
+                    Ok(msg) => editor.set_status(format!("[KB] {msg}")),
+                    Err(e) => editor.set_status(format!("[KB] Export failed: {e}")),
+                }
+                return;
+            }
+
             // :verify [objective] — spawn verifier sub-agent (direct delegate, no LLM round-trip)
             if cmd == "verify" || cmd.starts_with("verify ") {
                 let objective = cmd.strip_prefix("verify").unwrap_or("").trim();

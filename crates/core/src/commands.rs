@@ -1199,6 +1199,10 @@ impl CommandRegistry {
         reg.register_builtin("daily-prev", "Navigate to previous daily note (SPC n d p)");
         reg.register_builtin("daily-next", "Navigate to next daily note (SPC n d n)");
         reg.register_builtin("kb-audit", "Run KB audit report (SPC n H a)");
+        reg.register_builtin(
+            "kb-export-guidance",
+            "Export guidance-KB context to AGENTS.md or a custom path (ADR-050 Phase H)",
+        );
         reg.register_builtin("kb-narrow", "Narrow to a meta-node component for editing");
         reg.register_builtin(
             "kb-widen",
