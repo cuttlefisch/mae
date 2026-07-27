@@ -183,6 +183,26 @@ impl OptionRegistry {
                     "Reasoning/thinking mode for supported providers: true, false, high, medium, low (empty = provider default)",
                     OptionKind::String, "", Some("ai.thinking"),
                     &["", "true", "false", "high", "medium", "low"]),
+                opt!("ai_embedding_provider", &["ai-embedding-provider"],
+                    "KB enrichment embedding provider (ADR-061). Only local providers are \
+                     supported today -- a LocalModelsOnly-residency KB's content must never \
+                     reach a hosted API for embedding, same as for chat.",
+                    OptionKind::String, "ollama", Some("ai.embedding_provider"), &["ollama"]),
+                opt!("ai_embedding_model", &["ai-embedding-model"],
+                    "Embedding model name (must be pulled in the target Ollama instance)",
+                    OptionKind::String, "nomic-embed-text", Some("ai.embedding_model"), &[]),
+                opt!("ai_embedding_base_url", &["ai-embedding-base-url"],
+                    "Base URL override for the embedding provider's API endpoint (empty = provider default)",
+                    OptionKind::String, "", Some("ai.embedding_base_url"), &[]),
+                opt!("ai_embedding_api_key_command", &["ai-embedding-api-key-command"],
+                    "Shell command whose stdout is the embedding provider's API key (empty = none)",
+                    OptionKind::String, "", Some("ai.embedding_api_key_command"), &[]),
+                opt!("ai_embedding_chunk_version", &["ai-embedding-chunk-version"],
+                    "ADR-031 cache-key third component -- bump to force re-embedding of every \
+                     node under a changed chunking strategy without disturbing entries under \
+                     the old key. Must match the daemon's own [enrichment] chunk_version to \
+                     share cache entries with its background sweep.",
+                    OptionKind::Int, "1", Some("ai.embedding_chunk_version"), &[]),
                 opt!("restore_session", &["restore-session"],
                     "Automatically restore the previous session on startup (per-project)",
                     OptionKind::Bool, "false", Some("editor.restore_session"), &[]),

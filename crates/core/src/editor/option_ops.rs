@@ -93,6 +93,11 @@ impl super::Editor {
             "ai_mode" => self.ai.mode.clone(),
             "ai_profile" => self.ai.profile.clone(),
             "ai_thinking" => self.ai.thinking.clone(),
+            "ai_embedding_provider" => self.ai.embedding_provider.clone(),
+            "ai_embedding_model" => self.ai.embedding_model.clone(),
+            "ai_embedding_base_url" => self.ai.embedding_base_url.clone(),
+            "ai_embedding_api_key_command" => self.ai.embedding_api_key_command.clone(),
+            "ai_embedding_chunk_version" => self.ai.embedding_chunk_version.to_string(),
             "restore_session" => self.restore_session.to_string(),
             "insert_ctrl_d" => self.insert_ctrl_d.clone(),
             "heading_scale" => self.heading_scale.to_string(),
@@ -477,6 +482,23 @@ impl super::Editor {
                     ));
                 }
                 self.ai.thinking = value.to_string();
+            }
+            "ai_embedding_provider" => {
+                self.ai.embedding_provider = value.to_string();
+            }
+            "ai_embedding_model" => {
+                self.ai.embedding_model = value.to_string();
+            }
+            "ai_embedding_base_url" => {
+                self.ai.embedding_base_url = value.to_string();
+            }
+            "ai_embedding_api_key_command" => {
+                self.ai.embedding_api_key_command = value.to_string();
+            }
+            "ai_embedding_chunk_version" => {
+                self.ai.embedding_chunk_version = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
             }
             "restore_session" => {
                 self.restore_session = parse_option_bool(value)?;

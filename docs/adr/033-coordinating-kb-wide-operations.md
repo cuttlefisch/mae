@@ -1,6 +1,6 @@
 # ADR-033: Coordinating KB-wide operations — advisory lease + epoch fencing
 
-**Status:** Accepted (design); implemented in Phase F.
+**Status:** Accepted (design); not yet implemented. See "Implementation status" below.
 **Extends:** ADR-023 (secure write access — the epoch fence reused here), ADR-024 (notification
 attention bus — carries the advisory claim), ADR-026 (signed membership — the lease authority +
 tiebreak).
@@ -98,3 +98,25 @@ peers claiming concurrently converge to one via the deterministic tiebreak; the 
 terminology sweep applied as one atomic batch is never observed half-applied by a peer; a concurrent
 second sweep is fenced. Crashed holder → lease expires → another peer re-attempts. Hub config: the
 hub arbitrates dedup; fence still rejects stale writes.
+
+## Implementation status (principle #15 correction)
+
+The status line above previously read "implemented in Phase F," which is false and was corrected
+during ADR-061's implementation (2026-07). Grepping the whole repository for this decision's own
+named fields (`lease_ttl`, `holder_fp`, `op_kind`, `claim_lease`/`acquire_lease`) returns **zero**
+hits outside this document — the advisory lease claim/TTL/tiebreak protocol described in Decision
+item 2 has never been built.
+
+What genuinely IS shipped and tested is a **different, narrower** mechanism this ADR's Decision
+item 1 says to *reuse*: the ADR-023/ADR-039 D1 per-member epoch fence
+(`enforce_epoch_fence`/`enforce_epoch_fence_with_coll`, `daemon/src/collab_handler/mod.rs:1043-
+1066`) that rejects an ordinary CRDT edit from a member whose client_id carries a stale
+authorization epoch. That fence is real, but it is NOT this ADR's own contribution — it has no
+`op_kind`, no `lease_ttl`, no advisory-claim broadcast on the ADR-024 attention bus, and no
+ADR-026 deterministic tiebreak. Conflating the two let the status line claim more than was true.
+
+Issue #420 (ADR-061 Phase D) is where this primitive is actually planned to be built, with
+enrichment (ADR-061) as its first real caller and ADR-034's cross-peer sharing following — exactly
+the "Feeds" relationship this ADR already declares. Until #420 lands, this document remains a
+design with no implementation, and any future PR touching it should update this section rather
+than re-introduce an "implemented" claim that isn't backed by the grep above.

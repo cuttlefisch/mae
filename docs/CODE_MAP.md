@@ -273,6 +273,8 @@ Source: `shared/kb/src/lib.rs`
 | `adr_parse` | mod |
 | `backup` | mod |
 | `data_dir` | mod |
+| `embedding_client` | mod |
+| `enrichment` | mod |
 | `export` | mod |
 | `federation` | mod |
 | `fuzzy` | mod |

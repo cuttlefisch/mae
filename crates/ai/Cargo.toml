@@ -7,12 +7,22 @@ license.workspace = true
 
 [dependencies]
 mae-core = { path = "../core" }
-mae-kb = { path = "../../shared/kb", features = ["storage-sled", "crdt"] }
+# `remote-hub` is unconditional here (not forwarded via mae-ai's own opt-in
+# feature) -- ADR-061 Phase E's `daemon_mode=off` enrich-now path needs the
+# blocking Ollama HTTP call it unlocks (`mae_kb::embedding_client::
+# ollama_embed_blocking`) to always be compiled into the shipped `mae`
+# binary (mae-ai is already an unconditional dependency of it), matching
+# principle #12's "genuinely usable floor" requirement -- it must not be
+# gated behind an extra opt-in build flag.
+mae-kb = { path = "../../shared/kb", features = ["storage-sled", "crdt", "remote-hub"] }
 mae-shell = { path = "../shell" }
 mae-sync = { path = "../../shared/sync" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-reqwest = { version = "0.13", features = ["json"] }
+# "blocking" is for ADR-061 Phase E's synchronous enrich-now tool only
+# (`execute_kb_enrich`) -- every other use of `reqwest` in this crate
+# (chat/completion providers) stays on the async client.
+reqwest = { version = "0.13", features = ["json", "blocking"] }
 tokio = { version = "1", features = ["sync", "process"] }
 async-trait = "0.1"
 uuid = { version = "1", features = ["v4"] }

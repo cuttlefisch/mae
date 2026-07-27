@@ -264,7 +264,9 @@ impl DaemonScheduler {
             stores
         };
 
-        for (name, store) in stores {
+        for (name, store) in &stores {
+            let name = name.clone();
+            let store = Arc::clone(store);
             // Off the async executor (ADR-054) — same rationale as the
             // hygiene/watcher ticks above.
             let result = tokio::task::spawn_blocking(move || {
@@ -296,6 +298,58 @@ impl DaemonScheduler {
                 }
                 Err(e) => {
                     tracing::warn!(error = %e, instance = %name, "maintenance_tick: scan task panicked");
+                }
+            }
+        }
+
+        // ADR-061 Phase C: the AI-driven enrichment half of this tick — a
+        // separate pass, not folded into the loop above, so a disabled
+        // (default) enrichment config costs nothing beyond this one flag
+        // check and never touches the maintenance scan's own control flow.
+        if self.config.enrichment.enabled {
+            let backend = crate::enrichment::OllamaEmbedBackend::new(
+                self.config.enrichment.base_url.clone(),
+                self.config.enrichment.api_key.clone(),
+            );
+            for (name, store) in &stores {
+                let residency = {
+                    let ds = self.daemon_state.lock().await;
+                    if name == "primary" {
+                        ds.registry.primary_ai_residency
+                    } else {
+                        ds.registry
+                            .instances
+                            .iter()
+                            .find(|i| &i.uuid == name)
+                            .map(|i| i.ai_residency)
+                            .unwrap_or_default()
+                    }
+                };
+                let result = crate::enrichment::run_enrichment_sweep(
+                    Arc::clone(store),
+                    residency,
+                    &backend,
+                    &self.config.enrichment,
+                )
+                .await;
+                if result.residency_blocked {
+                    tracing::debug!(
+                        instance = %name,
+                        provider = %self.config.enrichment.provider,
+                        "maintenance_tick: enrichment skipped -- residency policy forbids this provider"
+                    );
+                } else if result.newly_embedded > 0 || !result.errors.is_empty() {
+                    tracing::info!(
+                        instance = %name,
+                        scanned = result.nodes_scanned,
+                        cache_hits = result.cache_hits,
+                        newly_embedded = result.newly_embedded,
+                        errors = result.errors.len(),
+                        "maintenance_tick: enrichment sweep complete"
+                    );
+                }
+                for err in &result.errors {
+                    tracing::warn!(instance = %name, error = %err, "maintenance_tick: enrichment error");
                 }
             }
         }
@@ -419,5 +473,93 @@ mod tests {
 
         let s = state.lock().await;
         assert_eq!(s.drain_cycles, 1);
+    }
+
+    // ADR-061 Phase C: enrichment is dispatched from `run_maintenance_tick`
+    // ONLY when explicitly enabled (default: disabled), and consults the
+    // per-instance residency policy from the SAME registry the query-time
+    // `kb_access`/`check_kb_residency` gates already read — exercised here at
+    // the tick level (not just `run_enrichment_sweep` in isolation), so a
+    // wiring regression between the two is caught, not just a logic
+    // regression in the sweep itself.
+
+    #[tokio::test]
+    async fn maintenance_tick_does_not_touch_the_cache_when_enrichment_is_disabled() {
+        let mut config = DaemonConfig::default();
+        assert!(
+            !config.enrichment.enabled,
+            "enrichment must default to disabled"
+        );
+        config.maintenance_interval_secs = 3600; // irrelevant here -- calling the tick directly
+
+        let store = Arc::new(CozoKbStore::open_mem().unwrap());
+        {
+            use mae_kb::store::KbStore;
+            use mae_kb::{Node, NodeKind};
+            store
+                .insert_node(&Node::new("n:1", "One", NodeKind::Note, "some body"))
+                .unwrap();
+        }
+        let mut daemon_state = DaemonState::new();
+        daemon_state.store = Some(Arc::clone(&store));
+        let daemon_state = Arc::new(Mutex::new(daemon_state));
+
+        let scheduler = DaemonScheduler::new(config, daemon_state);
+        let state = Arc::clone(&scheduler.state);
+        scheduler.run_maintenance_tick(&state).await;
+
+        let content_hash = mae_kb::activity::body_hash("some body");
+        assert_eq!(
+            store
+                .get_cached_embedding(&content_hash, "nomic-embed-text", 1)
+                .unwrap(),
+            None,
+            "disabled enrichment must never populate the cache, even though a \
+             maintenance tick ran"
+        );
+    }
+
+    #[tokio::test]
+    async fn maintenance_tick_skips_enrichment_for_a_local_models_only_primary_kb_against_a_hosted_provider(
+    ) {
+        let mut config = DaemonConfig::default();
+        config.enrichment.enabled = true;
+        config.enrichment.provider = "claude".to_string(); // a hosted, non-local provider
+        config.enrichment.base_url = "http://unused.invalid".to_string();
+
+        let store = Arc::new(CozoKbStore::open_mem().unwrap());
+        {
+            use mae_kb::store::KbStore;
+            use mae_kb::{Node, NodeKind};
+            store
+                .insert_node(&Node::new(
+                    "n:1",
+                    "Sensitive",
+                    NodeKind::Note,
+                    "must never leave this machine",
+                ))
+                .unwrap();
+        }
+        let mut daemon_state = DaemonState::new();
+        daemon_state.store = Some(Arc::clone(&store));
+        daemon_state.registry.primary_ai_residency =
+            mae_kb::federation::AiResidency::LocalModelsOnly;
+        let daemon_state = Arc::new(Mutex::new(daemon_state));
+
+        let scheduler = DaemonScheduler::new(config, daemon_state);
+        let state = Arc::clone(&scheduler.state);
+        // Must complete without ever attempting a real HTTP call to the
+        // invalid base_url -- if the residency gate were bypassed, this tick
+        // would hang/error trying to actually reach `unused.invalid`.
+        scheduler.run_maintenance_tick(&state).await;
+
+        let content_hash = mae_kb::activity::body_hash("must never leave this machine");
+        assert_eq!(
+            store
+                .get_cached_embedding(&content_hash, "nomic-embed-text", 1)
+                .unwrap(),
+            None,
+            "a LocalModelsOnly KB must never have its content embedded via a hosted provider"
+        );
     }
 }

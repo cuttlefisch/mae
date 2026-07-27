@@ -73,6 +73,54 @@ pub struct DaemonConfig {
     /// entries (the default) means zero behavior change — no tenant
     /// resolves, so every request is treated exactly as it is today.
     pub tenant: Vec<TenantConfig>,
+    /// ADR-061 Phase C: KB enrichment sweep settings, dispatched off the same
+    /// `maintenance_tick` as the deterministic integrity scan.
+    pub enrichment: EnrichmentConfig,
+}
+
+/// ADR-061 Phase C: background embedding-enrichment sweep settings. Disabled
+/// by default (`enabled: false`) — an operator must opt in explicitly, since
+/// this is the first daemon workload that spends real external API cost/time
+/// on a background tick (the ADR's own Costs section names this directly).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
+pub struct EnrichmentConfig {
+    /// Whether the enrichment sweep runs at all.
+    pub enabled: bool,
+    /// Provider name, consulted at the SAME `residency_permits_provider`
+    /// gate ADR-048's chat/completion calls already use — "ollama" is the
+    /// only local, day-one option (ADR-061 Phase A), matching a
+    /// `LocalModelsOnly`-residency KB's requirement that no byte of its
+    /// content ever reach a hosted provider.
+    pub provider: String,
+    /// Ollama's native API base URL.
+    pub base_url: String,
+    /// Optional bearer token, forwarded exactly as `crates/ai`'s
+    /// `OllamaProvider` already does.
+    pub api_key: Option<String>,
+    /// Embedding model name (must be pulled in the target Ollama instance).
+    pub model: String,
+    /// ADR-031's cache-key third component — bump to force re-embedding of
+    /// every node under a changed chunking strategy without disturbing
+    /// entries under the old key.
+    pub chunk_version: i64,
+    /// Nodes embedded per `/api/embed` batch call, bounding both the request
+    /// body size and how much work is lost if a single batch call fails.
+    pub batch_size: usize,
+}
+
+impl Default for EnrichmentConfig {
+    fn default() -> Self {
+        EnrichmentConfig {
+            enabled: false,
+            provider: "ollama".to_string(),
+            base_url: "http://localhost:11434".to_string(),
+            api_key: None,
+            model: "nomic-embed-text".to_string(),
+            chunk_version: 1,
+            batch_size: 16,
+        }
+    }
 }
 
 /// Collaboration server configuration (TCP sync, persistence, auth).
@@ -341,6 +389,7 @@ impl Default for DaemonConfig {
             oauth: OAuthConfig::default(),
             kb_socket: KbSocketConfig::default(),
             tenant: Vec::new(),
+            enrichment: EnrichmentConfig::default(),
         }
     }
 }

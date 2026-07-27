@@ -14,6 +14,7 @@
 mod config;
 mod conn_limit;
 mod dialer;
+pub mod enrichment;
 mod handler;
 pub mod hygiene;
 mod kb_query;
