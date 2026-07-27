@@ -361,6 +361,16 @@ impl Editor {
     /// Clean up orphan user notes (no links in or out).
     /// Preserves seed nodes (cmd:, concept:, lesson:, scheme:, option:).
     /// Returns the number of orphans removed.
+    ///
+    /// #485: orphan DETECTION (`orphan_ids` above) is already federation-reconciled
+    /// (issue #474's fix — `FederatedQuery::health_report` sees links across every
+    /// registered instance, not just primary), but each id must still be REMOVED from
+    /// whichever store actually owns it, not unconditionally from `self.kb.primary`.
+    /// A federated-instance orphan hitting `primary.remove(id)` was a silent no-op at
+    /// best, or a wrong-node deletion at worst (two independently-authored KBs can
+    /// legitimately reuse the same bare id — see `kb_owner_of`'s own doc comment).
+    /// This transplants `kb_delete_node`'s (`kb_ops/nodes.rs`) owner-aware removal
+    /// branch: resolve `kb_owner_of(id)` per id and delete from the resolved owner.
     pub fn kb_cleanup_orphans(&mut self) -> usize {
         let seed_prefixes = ["cmd:", "concept:", "lesson:", "scheme:", "option:"];
         let orphan_ids: Vec<String> = if let Some(q) = self.kb.query_layer() {
@@ -374,7 +384,35 @@ impl Editor {
             .collect();
         let count = to_remove.len();
         for id in &to_remove {
-            self.kb.primary.remove(id);
+            match self.kb_owner_of(id) {
+                // Not found anywhere: shouldn't normally happen for something the
+                // health report just reported as an orphan, but resolve it as a
+                // graceful no-op rather than panicking or guessing a store.
+                None => {}
+                // Owned by primary (or genuinely unresolvable and defaulting to
+                // primary, per `kb_owner_of`'s own fallback) — same primary branch
+                // `kb_delete_node` uses: persist the deletion to the backing store,
+                // then drop it from the in-memory mirror.
+                Some(None) => {
+                    self.kb_persist_delete(id);
+                    self.kb.primary.remove(id);
+                }
+                // Owned by a federated instance — delete from that instance's own
+                // persisted store AND its in-memory copy, exactly like
+                // `kb_delete_node`'s federated branch. Missing store/instance entries
+                // are handled gracefully (matching `kb_delete_node`'s own warn-and-
+                // continue behavior), never panicking.
+                Some(Some(uuid)) => {
+                    if let Some(store) = self.kb.instance_stores.get(&uuid) {
+                        if let Err(e) = store.delete_node(id) {
+                            tracing::warn!(node_id = %id, error = %e, "KB instance store delete failed (orphan cleanup)");
+                        }
+                    }
+                    if let Some(kb) = self.kb.instances.get_mut(&uuid) {
+                        kb.remove(id);
+                    }
+                }
+            }
         }
         if count > 0 {
             self.fire_hook("after-kb-change");

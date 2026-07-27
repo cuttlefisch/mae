@@ -509,3 +509,121 @@ fn kb_cleanup_orphans_still_removes_a_genuine_orphan_in_a_federated_setup() {
         "expected at least the genuine orphan to be counted as removed, got {removed}"
     );
 }
+
+// --- Issue #485: kb_cleanup_orphans must delete from the OWNING store, not always primary ---
+//
+// The two tests above (#474) only ever assert against `editor.kb.primary` — a federated-
+// instance orphan slips straight through both: it's neither `user:survivor` (a primary node,
+// not touched either way) nor would a bug leaving it un-deleted in `kb.instances` be caught
+// by an assertion that only ever inspects `kb.primary`. This is exactly the gap #485 reports:
+// `kb_cleanup_orphans` called `self.kb.primary.remove(id)` unconditionally for every orphan
+// id, so a genuine orphan actually OWNED by a federated instance was never removed from
+// `kb.instances` at all (silent no-op) — or, if primary happened to independently reuse the
+// same bare id, the WRONG node was deleted. Adversarial per CLAUDE.md #14: this test must
+// fail against the pre-fix code (which never touches `kb.instances`) and pass against the
+// owner-aware fix.
+#[test]
+fn kb_cleanup_orphans_removes_a_genuine_orphan_owned_by_a_federated_instance() {
+    let mut editor = Editor::new();
+    let tmp = TempDir::new().unwrap();
+    let (_primary_store, inst_store) = setup_federated_primary_and_instance(&mut editor, &tmp);
+
+    // Register the in-memory copy too (`kb_owner_of` resolves ownership via
+    // `kb.instances`, not `kb.instance_stores` — a real federated instance always has
+    // both; the fix's federated branch must remove from both).
+    let mut inst_mirror = mae_kb::KnowledgeBase::new();
+
+    // The genuine orphan: lives ONLY in the federated instance, with zero links
+    // anywhere in the federation.
+    let orphan = mae_kb::Node::new(
+        "inst:federated-orphan",
+        "Federated Orphan",
+        mae_kb::NodeKind::Note,
+        "",
+    );
+    inst_store.insert_node(&orphan).unwrap();
+    inst_mirror.insert(orphan);
+
+    // Unrelated linked pair in the same instance, so the health report has real
+    // non-orphan content to distinguish from (not a "delete everything" unicorn case).
+    let a = mae_kb::Node::new("inst:linked-a", "A", mae_kb::NodeKind::Note, "");
+    let b = mae_kb::Node::new("inst:linked-b", "B", mae_kb::NodeKind::Note, "");
+    inst_store.insert_node(&a).unwrap();
+    inst_store.insert_node(&b).unwrap();
+    inst_store
+        .add_typed_link("inst:linked-a", "inst:linked-b", "references", 1.0)
+        .unwrap();
+    inst_mirror.insert(a);
+    inst_mirror.insert(b);
+
+    editor
+        .kb
+        .instances
+        .insert("inst-uuid".to_string(), inst_mirror);
+
+    // Sanity: kb_owner_of must resolve this id to the federated instance, not
+    // primary and not "not found" — otherwise this test would exercise the wrong
+    // branch of the fix.
+    assert_eq!(
+        editor.kb_owner_of("inst:federated-orphan"),
+        Some(Some("inst-uuid".to_string())),
+        "sanity: the orphan must resolve as owned by the federated instance"
+    );
+
+    let removed = editor.kb_cleanup_orphans();
+
+    assert!(
+        removed >= 1,
+        "expected the federated-instance orphan to be counted as removed, got {removed}"
+    );
+    assert!(
+        !editor.kb.instances["inst-uuid"].contains("inst:federated-orphan"),
+        "a genuine orphan owned by a federated instance must be removed from \
+         kb.instances — the old primary-only deletion path would leave this present"
+    );
+    // The persisted store copy must also be gone (mirrors kb_delete_node's own
+    // federated branch, which deletes from `instance_stores` in addition to the
+    // in-memory `instances` copy).
+    assert!(
+        inst_store
+            .get_node("inst:federated-orphan")
+            .unwrap()
+            .is_none(),
+        "the federated instance's persisted store must also have the orphan deleted"
+    );
+    // The unrelated linked pair must survive untouched.
+    assert!(editor.kb.instances["inst-uuid"].contains("inst:linked-a"));
+    assert!(editor.kb.instances["inst-uuid"].contains("inst:linked-b"));
+}
+
+// --- Issue #485: kb_owner_of resolving to "not found anywhere" must be a graceful no-op ---
+//
+// The fix's removal loop has a `None` arm (id in the orphan list but unresolvable by
+// `kb_owner_of`) that "shouldn't normally happen" in practice — an id only lands in
+// `orphan_ids` because some store's health report found it — but must not panic if it ever
+// does. There's no way to force the real orphan-detection path to report an id that
+// `kb_owner_of` then fails to resolve without reaching into private internals, so this test
+// instead pins `kb_owner_of`'s own contract directly (the precondition the loop's `None` arm
+// depends on) and confirms `kb_cleanup_orphans` runs to completion without panicking on an
+// otherwise-empty federation.
+#[test]
+fn kb_owner_of_returns_none_for_an_id_that_does_not_exist_anywhere() {
+    let mut editor = Editor::new();
+    let tmp = TempDir::new().unwrap();
+    let _ = setup_federated_primary_and_instance(&mut editor, &tmp);
+    editor
+        .kb
+        .instances
+        .insert("inst-uuid".to_string(), mae_kb::KnowledgeBase::new());
+
+    assert_eq!(
+        editor.kb_owner_of("this-id-was-never-created-anywhere"),
+        None,
+        "kb_owner_of must resolve to None (not found) rather than defaulting to a store"
+    );
+
+    // Calling kb_cleanup_orphans in this state (nothing orphaned, federation set up but
+    // empty) must not panic — the None-handling branch is graceful even when reachable.
+    let removed = editor.kb_cleanup_orphans();
+    assert_eq!(removed, 0, "empty federation has nothing to clean up");
+}
