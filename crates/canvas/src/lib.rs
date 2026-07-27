@@ -14,4 +14,4 @@ pub mod scene;
 pub use interaction::{center_on_node, hit_test, navigate_direction, pan, zoom, Direction};
 pub use kb_graph::build_kb_graph;
 pub use layout::{ForceLayout, LayoutConfig};
-pub use scene::{EdgeStyle, NodeKind, NodeStyle, SceneEdge, SceneGraph, SceneNode, Viewport};
+pub use scene::{EdgeStyle, NodeKind, SceneEdge, SceneGraph, SceneNode, Viewport};

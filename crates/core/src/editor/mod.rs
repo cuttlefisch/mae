@@ -895,6 +895,66 @@ pub struct Editor {
     /// Opacity (0.0-1.0) of the dimming scrim drawn behind the graph view
     /// when `kb_graph_view_overlay_active` is true.
     pub kb_graph_view_overlay_dim_opacity: f32,
+    /// Whether the graph view composes one KB instance or several (#462
+    /// PR4). Mirrors `kb_graph_view_mode`; see
+    /// `crate::graph_view::GraphViewMode`.
+    pub kb_graph_view_mode: crate::graph_view::GraphViewMode,
+    /// Safety-net cap on how many related instances `kb_graph_view_mode =
+    /// Multi` composes alongside the seed. Mirrors
+    /// `kb_graph_multi_kb_max_related_instances`.
+    pub kb_graph_multi_kb_max_related_instances: usize,
+    /// Which related KB instances `kb_graph_view_mode = Multi` pulls in.
+    /// Mirrors `kb_graph_multi_kb_scope`; see
+    /// `crate::graph_view::GraphMultiKbScope`.
+    pub kb_graph_multi_kb_scope: crate::graph_view::GraphMultiKbScope,
+    /// Extra spacing between adjacent grid cells in `kb_graph_view_mode =
+    /// Multi`'s small-multiples chord grid, as a fraction of the
+    /// larger-radius diagram sharing that row/column boundary. Mirrors
+    /// `kb_graph_multi_kb_grid_gap_factor`; threaded into
+    /// `mae_canvas::kb_graph::build_multi_kb_chord_positions` as a function
+    /// parameter (mirroring `kb_graph_layout_spacing_scale`'s own plumbing)
+    /// since `mae-canvas` has no `OptionRegistry`/`Editor` access.
+    pub kb_graph_multi_kb_grid_gap_factor: f32,
+    /// Master opt-in switch (ADR-068 Phase B) for full-corpus retrieval in
+    /// `kb_graph_view_mode = Multi` — when `true`, `populate_graph_buffer`
+    /// extracts each diagram via `KnowledgeBase::extract_full_corpus`
+    /// instead of `extract_subgraph`. Mirrors `kb_graph_multi_kb_full_corpus`;
+    /// `false` (the default) leaves Multi mode's extraction byte-for-byte
+    /// unchanged.
+    pub kb_graph_multi_kb_full_corpus: bool,
+    /// Safety-net node-count cap applied per diagram when
+    /// `kb_graph_multi_kb_full_corpus` is on. Mirrors
+    /// `kb_graph_full_corpus_node_cap`; see
+    /// `KnowledgeBase::extract_full_corpus`'s `cap` parameter.
+    pub kb_graph_full_corpus_node_cap: usize,
+    /// ADR-068 Phase B6: below this viewport zoom level, an elided
+    /// (non-`Full`-tier) node is drawn as `RenderTier::Hidden` (skipped
+    /// entirely) rather than `RenderTier::Clustered` (an aggregate "... (+N)"
+    /// stub) — too zoomed out for even a stub to be legible. Mirrors
+    /// `kb_graph_label_zoom_threshold`'s exact same-family threshold
+    /// pattern. Only consulted when `kb_graph_multi_kb_full_corpus` is on
+    /// AND `kb_graph_view_mode = Multi`; see `crate::graph_view::
+    /// compute_node_tiers`.
+    pub kb_graph_doi_zoom_threshold: f32,
+    /// ADR-068 Phase B6: hop-count reach from the DOI focus (`GraphView.
+    /// doi_focus`, or a diagram's own default focus when unset) within
+    /// which a `Degree`/`Ordinary`-tier node stays `RenderTier::Full`.
+    /// `Bridge`/`Hub`-tier nodes are exempt entirely (always `Full`,
+    /// regardless of distance) — see `crate::graph_view::ApiTier`. Kept as
+    /// one simple integer knob per the ADR-068 design (deliberately not an
+    /// exposed formula/weighted score).
+    pub kb_graph_doi_distance_falloff: usize,
+    /// ADR-068 Phase B6: minimum cluster-candidate-pool size (nodes beyond
+    /// `kb_graph_doi_distance_falloff`'s reach) before clustering kicks in
+    /// at all — below this, every node renders `Full` regardless (not
+    /// worth the visual overhead of a stub for a handful of elided nodes).
+    /// Subsumes issue #477's own originally-proposed option of the same
+    /// shape.
+    pub kb_graph_dense_cluster_threshold: usize,
+    /// ADR-068 Phase B6: how `RenderTier::Clustered` nodes bucket into
+    /// aggregate "... (+N)" stubs. Mirrors `kb_graph_layout_algorithm`'s
+    /// exact enum-option shape; see `crate::graph_view::ClusterGroupBy`.
+    pub kb_graph_cluster_group_by: crate::graph_view::ClusterGroupBy,
     /// Queued background layout request for the open/refreshed graph-view
     /// buffer (`mae::graph_layout_bridge`, Part C Phase 1) — drained once
     /// per GUI event-loop tick, see `crate::graph_view::GraphLayoutIntent`'s
@@ -1422,6 +1482,16 @@ impl Editor {
             kb_graph_hover_enabled: true,
             kb_graph_view_overlay_active: false,
             kb_graph_view_overlay_dim_opacity: 0.6,
+            kb_graph_view_mode: crate::graph_view::GraphViewMode::Single,
+            kb_graph_multi_kb_max_related_instances: 6,
+            kb_graph_multi_kb_scope: crate::graph_view::GraphMultiKbScope::Linked,
+            kb_graph_multi_kb_grid_gap_factor: 0.6,
+            kb_graph_multi_kb_full_corpus: false,
+            kb_graph_full_corpus_node_cap: 5000,
+            kb_graph_doi_zoom_threshold: 0.5,
+            kb_graph_doi_distance_falloff: 2,
+            kb_graph_dense_cluster_threshold: 20,
+            kb_graph_cluster_group_by: crate::graph_view::ClusterGroupBy::Kind,
             pending_graph_layout: None,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)
             messages_synced_seq: None,

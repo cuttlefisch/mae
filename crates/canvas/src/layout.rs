@@ -236,7 +236,7 @@ impl ForceLayout {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{EdgeStyle, NodeKind, NodeStyle};
+    use crate::scene::{EdgeStyle, NodeKind};
 
     fn make_node(id: &str, x: f64, y: f64) -> SceneNode {
         make_node_kind(id, x, y, NodeKind::Concept)
@@ -248,10 +248,7 @@ mod tests {
             label: id.to_string(),
             x,
             y,
-            width: 100.0,
-            height: 40.0,
             kind,
-            style: NodeStyle::default(),
             pinned: false,
             is_seed: false,
         }
@@ -593,5 +590,69 @@ mod tests {
             "a lower-weight edge should settle at a looser (larger) distance \
              (strong={strong_dist}, weak={weak_dist})"
         );
+    }
+
+    #[test]
+    fn coincident_start_positions_produce_finite_output_not_nan_or_infinite() {
+        // Regression guard for the `.max(0.01)` distance-floor guard (the
+        // repulsion pair-distance floor, `step()`'s "1. Repulsion" loop;
+        // and the attraction edge-distance floor, its "2. Attraction"
+        // loop) that exists specifically to prevent a div-by-zero -> NaN
+        // cascade when two (or more) nodes start at the EXACT same scene
+        // position — a real degenerate case (e.g. a freshly-inserted KB
+        // node with no prior position). `no_overlapping_after_layout`
+        // above deliberately perturbs positions slightly before running to
+        // AVOID this exact case; this test is the one that actually hits
+        // it head-on — every node here starts at literally `(0.0, 0.0)`,
+        // not a near-coincident approximation.
+        let layout = ForceLayout::new(LayoutConfig::default());
+        let mut nodes: Vec<SceneNode> = (0..5)
+            .map(|i| make_node(&format!("n{i}"), 0.0, 0.0))
+            .collect();
+        // Connect them too, so the ATTRACTION distance floor is exercised
+        // as well, not just the repulsion one — a zero-length edge is
+        // exactly as degenerate as a zero-length repulsion pair.
+        let edges: Vec<SceneEdge> = (0..4).map(|i| make_edge(i, i + 1)).collect();
+
+        layout.run(&mut nodes, &edges, 50);
+
+        for (i, node) in nodes.iter().enumerate() {
+            assert!(
+                node.x.is_finite(),
+                "node {i}'s x must be finite after a coincident-start layout, got {}",
+                node.x
+            );
+            assert!(
+                node.y.is_finite(),
+                "node {i}'s y must be finite after a coincident-start layout, got {}",
+                node.y
+            );
+        }
+
+        // Also exercise `step()` directly (the Phase 3 per-tick animation
+        // path `run()` doesn't cover), same degenerate coincident input on
+        // a fresh scene.
+        let mut ticked_nodes: Vec<SceneNode> = (0..3)
+            .map(|i| make_node(&format!("t{i}"), 0.0, 0.0))
+            .collect();
+        let ticked_edges: Vec<SceneEdge> = (0..2).map(|i| make_edge(i, i + 1)).collect();
+        let disp = layout.step(&mut ticked_nodes, &ticked_edges, 100.0);
+        assert!(
+            disp.is_finite(),
+            "step()'s settlement-signal return value must be finite for a \
+             coincident-start scene, got {disp}"
+        );
+        for (i, node) in ticked_nodes.iter().enumerate() {
+            assert!(
+                node.x.is_finite(),
+                "ticked node {i}'s x must be finite, got {}",
+                node.x
+            );
+            assert!(
+                node.y.is_finite(),
+                "ticked node {i}'s y must be finite, got {}",
+                node.y
+            );
+        }
     }
 }

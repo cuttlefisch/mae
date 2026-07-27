@@ -538,6 +538,29 @@ fn kb_search_scope_option_round_trip() {
 }
 
 #[test]
+fn kb_search_scope_option_accepts_project_and_project_only() {
+    // A6 config-gap fix: `resolve_kb_scope` already fully supports (and has
+    // its own passing test for) the "project"/"project-only" token, but the
+    // setter's keyword allowlist omitted both spellings -- a user could not
+    // actually `:set kb_search_scope project` (or `(set-option! "kb_search_scope"
+    // "project")`) despite it being a real, working, documented scope value.
+    // This previously returned Err("Invalid kb_search_scope: ..."); both
+    // spellings, case-insensitively, must now validate.
+    let mut editor = Editor::new();
+    for kw in ["project", "project-only", "PROJECT", "Project-Only"] {
+        assert!(
+            editor.set_option("kb_search_scope", kw).is_ok(),
+            "kb_search_scope must accept '{kw}'"
+        );
+        assert_eq!(editor.kb.search_scope, kw);
+        assert_eq!(
+            editor.get_option("kb_search_scope").map(|(v, _)| v),
+            Some(kw.to_string())
+        );
+    }
+}
+
+#[test]
 fn ai_guidance_kb_option_round_trip() {
     let mut editor = Editor::new();
     // Empty (disabled, the default) always validates.
@@ -820,7 +843,7 @@ fn kb_set_search_scope_command_opens_picker() {
     );
     // Keyword scopes are always present (no instances registered here).
     let names: Vec<&str> = palette.entries.iter().map(|e| e.name.as_str()).collect();
-    assert_eq!(names, vec!["all", "local", "remote"]);
+    assert_eq!(names, vec!["all", "local", "remote", "project"]);
 }
 
 #[test]

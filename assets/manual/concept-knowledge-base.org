@@ -42,6 +42,6 @@ The KB supports multiple instances: a local KB (seed + user help) plus N externa
 ** AI surface
 Core tools: `kb_get`, `kb_search`, `kb_list`, `kb_links_from`, `kb_links_to`, `kb_graph`, `kb_health`. Graph tools: `kb_agenda`, `kb_history`, `kb_restore`, `kb_view_query`, `kb_vector_search`, `kb_raw_query`, `kb_shortest_path`, `kb_neighborhood`, `kb_add_link`, `kb_search_context`. Federation: `kb_register`, `kb_unregister`, `kb_reimport`, `kb_instances`.
 
-See also: [[concept:kb-federation?rel=references][KB Federation]], [[concept:kb-workflows?rel=references][KB Workflows]], [[concept:kb-sharing?rel=references][KB Sharing]], [[concept:kb-vs-alternatives?rel=references][KB vs Alternatives]], [[concept:ai-as-peer?rel=references][The AI as Peer Actor]], [[index]]
+See also: [[concept:kb-federation?rel=references][KB Federation]], [[concept:kb-workflows?rel=references][KB Workflows]], [[concept:kb-sharing?rel=references][KB Sharing]], [[concept:kb-vs-alternatives?rel=references][KB vs Alternatives]], [[concept:kb-graph-view?rel=references][Native KB Graph View]], [[concept:ai-as-peer?rel=references][The AI as Peer Actor]], [[index]]
 
 Documented by: [[concept:adr-kb-crdt?rel=documents][ADR-005: KB as CRDT]]

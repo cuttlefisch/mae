@@ -541,6 +541,13 @@ impl CommandPalette {
                 doc: "Search only shared/collaborative instances.".to_string(),
                 searchable_extra: Some("shared collaborative federated".to_string()),
             },
+            PaletteEntry {
+                name: "project".to_string(),
+                doc: "Search only the instance registered for the current project root \
+                      (falls back to all if no project root can be detected)."
+                    .to_string(),
+                searchable_extra: Some("project-only project root".to_string()),
+            },
         ];
         for inst in instances {
             entries.push(PaletteEntry {
@@ -735,10 +742,13 @@ mod tests {
         let palette = CommandPalette::for_kb_search_scope(&["Work", "Research"]);
         assert_eq!(palette.purpose, PalettePurpose::SetKbSearchScope);
         let names: Vec<&str> = palette.entries.iter().map(|e| e.name.as_str()).collect();
-        // Three keyword scopes first, then each registered instance.
-        assert_eq!(names, vec!["all", "local", "remote", "Work", "Research"]);
+        // Four keyword scopes first, then each registered instance.
+        assert_eq!(
+            names,
+            vec!["all", "local", "remote", "project", "Work", "Research"]
+        );
         // Every entry is searchable in the empty-query filter.
-        assert_eq!(palette.filtered.len(), 5);
+        assert_eq!(palette.filtered.len(), 6);
     }
 
     #[test]

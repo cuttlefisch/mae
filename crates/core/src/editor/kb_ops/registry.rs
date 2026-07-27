@@ -1,6 +1,8 @@
 //! KB instance registry: register/unregister/reimport, instance store
 //! adoption, and instance-persistence plumbing.
 
+use std::collections::HashSet;
+
 use super::*;
 
 impl Editor {
@@ -796,6 +798,105 @@ impl Editor {
         self.kb_resolve_anywhere(id).map(|(node, _)| node)
     }
 
+    /// Split a subgraph's boundary links (`SubgraphResult::boundary_links`)
+    /// into "same instance (or unresolvable)" vs "genuinely crosses into a
+    /// DIFFERENT registered KB instance" — the multi-KB chord view's (#462)
+    /// building block for turning a fringe/boundary stub into a real
+    /// cross-diagram edge. `owner_instance` is the KB instance the subgraph
+    /// was extracted FROM (`None` = primary, `Some(uuid)` = federated —
+    /// matches `GraphView.kb_instance`'s convention), so a link whose
+    /// target resolves to that SAME instance is correctly kept as a plain
+    /// boundary stub (it's just outside the depth/cap cutoff, not a
+    /// cross-KB relationship).
+    ///
+    /// @ai-caution: [correctness] "Not found anywhere" (`kb_owner_of`
+    /// returns `None` — a genuinely dead/unresolvable link) and "found, but
+    /// in the SAME instance the subgraph was extracted from" (truncated by
+    /// `max_depth`/`node_cap`, not actually missing) are deliberately NOT
+    /// distinguished by this split — both land in the plain `SubgraphLink`
+    /// bucket returned as `.0`. A future feature that needs to tell a dead
+    /// link apart from a same-instance link merely hidden by today's BFS
+    /// truncation must NOT assume this two-way split is exhaustive; it
+    /// isn't — a third bucket would be needed for that.
+    pub(crate) fn partition_boundary_links_by_instance(
+        &self,
+        owner_instance: Option<&str>,
+        boundary_links: Vec<mae_kb::SubgraphLink>,
+    ) -> (Vec<mae_kb::SubgraphLink>, Vec<mae_kb::CrossInstanceLink>) {
+        let mut same_or_dead = Vec::with_capacity(boundary_links.len());
+        let mut cross = Vec::new();
+        for link in boundary_links {
+            let owner = self.kb_owner_of(&link.target);
+            let is_cross_instance = matches!(&owner, Some(o) if o.as_deref() != owner_instance);
+            if is_cross_instance {
+                cross.push(mae_kb::CrossInstanceLink {
+                    source: link.source,
+                    target: link.target,
+                    rel_type: link.rel_type,
+                    weight: link.weight,
+                    // Safe to unwrap: `is_cross_instance` only matched the
+                    // `Some(o)` arm above.
+                    target_instance: owner.unwrap(),
+                    // The instance this BATCH of boundary links was
+                    // extracted from — see Phase A2's doc comment on
+                    // `CrossInstanceLink::source_instance` for why this can
+                    // no longer be assumed to always be the seed once this
+                    // function is called per-diagram.
+                    source_instance: owner_instance.map(str::to_string),
+                });
+            } else {
+                same_or_dead.push(link);
+            }
+        }
+        (same_or_dead, cross)
+    }
+
+    /// Phase B1 (#462 full-corpus retrieval): every node id in `instance`'s
+    /// own KB (`None` = primary, `Some(uuid)` = a federated instance) that
+    /// has at least one outgoing link whose target resolves to a
+    /// DIFFERENT registered KB instance — i.e. every node that would ever
+    /// produce a `CrossInstanceLink` if this instance's boundary links were
+    /// classified via `partition_boundary_links_by_instance`. This is the
+    /// "bridge" half of `KnowledgeBase::extract_full_corpus`'s `protected`
+    /// set: cutting one of these nodes under a full-corpus node cap would
+    /// silently sever the only connection between two rendered diagrams,
+    /// which is exactly the failure mode `extract_full_corpus`'s exemption
+    /// mechanism exists to prevent.
+    ///
+    /// Deliberately lives here (`mae-core`), not on `KnowledgeBase` itself
+    /// (`shared/kb`) — resolving "which instance owns this link's target"
+    /// requires `kb_owner_of` and `self.kb.instances`, neither of which
+    /// `mae-kb` has access to (it has no notion of a federation registry at
+    /// all). `extract_full_corpus` only knows "here is a protected id set,
+    /// exempt it from truncation"; this is where that set gets computed.
+    ///
+    /// Cost: O(nodes-in-instance × avg-out-degree), each outgoing link
+    /// resolved via one `kb_owner_of` call (O(#registered instances) each,
+    /// not O(#nodes) — bounded, cheap even for a many-thousand-node
+    /// instance). Meant to be called ONCE per instance per
+    /// `populate_graph_buffer` call, not once per node-cap truncation.
+    pub(crate) fn kb_cross_instance_link_sources(&self, instance: Option<&str>) -> HashSet<String> {
+        let kb: &mae_kb::KnowledgeBase = match instance {
+            None => &self.kb.primary,
+            Some(uuid) => match self.kb.instances.get(uuid) {
+                Some(kb) => kb,
+                None => return HashSet::new(),
+            },
+        };
+        let mut sources = HashSet::new();
+        for (id, node) in kb.iter() {
+            for (target, _rel_type, _weight) in node.links_typed() {
+                if let Some(owner) = self.kb_owner_of(&target) {
+                    if owner.as_deref() != instance {
+                        sources.insert(id.clone());
+                        break;
+                    }
+                }
+            }
+        }
+        sources
+    }
+
     /// Like [`Self::kb_get_node_anywhere`], but also reports WHICH tier the
     /// node resolved through (query layer / in-memory primary / a specific
     /// federated instance by uuid). Callers that need more than just the
@@ -924,5 +1025,267 @@ mod scoped_owner_tests {
                 "keyword scope '{scope}' must behave identically to the unscoped lookup"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod partition_boundary_links_by_instance_tests {
+    use crate::editor::Editor;
+    use mae_kb::{KnowledgeBase, Node, NodeKind, SubgraphLink};
+
+    fn link(source: &str, target: &str) -> SubgraphLink {
+        SubgraphLink {
+            source: source.to_string(),
+            target: target.to_string(),
+            rel_type: "references".to_string(),
+            weight: 1.0,
+        }
+    }
+
+    fn register_instance<'a>(
+        editor: &'a mut Editor,
+        uuid: &str,
+        name: &str,
+    ) -> &'a mut KnowledgeBase {
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: uuid.to_string(),
+                name: name.to_string(),
+                org_dir: std::path::PathBuf::from(format!("/tmp/{name}")),
+                db_path: std::path::PathBuf::from(format!("/tmp/{name}.db")),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
+            });
+        editor.kb.instances.entry(uuid.to_string()).or_default()
+    }
+
+    /// Three registered instances (primary + two siblings, "alpha" and
+    /// "beta"), fanning boundary links out to BOTH siblings from a primary
+    /// seed — the adversarial N-way case (CLAUDE.md #14: not just a single
+    /// cherry-picked sibling).
+    fn three_instance_editor() -> Editor {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(Node::new(
+            "concept:seed",
+            "Seed",
+            NodeKind::Concept,
+            "seed body",
+        ));
+        editor.kb.primary.insert(Node::new(
+            "concept:same-instance-truncated",
+            "Truncated",
+            NodeKind::Concept,
+            "",
+        ));
+        let alpha = register_instance(&mut editor, "uuid-alpha", "alpha");
+        alpha.insert(Node::new(
+            "concept:alpha-target",
+            "Alpha Target",
+            NodeKind::Concept,
+            "",
+        ));
+        let beta = register_instance(&mut editor, "uuid-beta", "beta");
+        beta.insert(Node::new(
+            "concept:beta-target",
+            "Beta Target",
+            NodeKind::Concept,
+            "",
+        ));
+        editor
+    }
+
+    #[test]
+    fn fans_out_to_two_distinct_sibling_instances_correctly_attributed() {
+        let editor = three_instance_editor();
+        let boundary = vec![
+            link("concept:seed", "concept:alpha-target"),
+            link("concept:seed", "concept:beta-target"),
+        ];
+        let (same_or_dead, cross) = editor.partition_boundary_links_by_instance(None, boundary);
+        assert!(
+            same_or_dead.is_empty(),
+            "both links genuinely cross into a different instance"
+        );
+        assert_eq!(cross.len(), 2);
+        let alpha = cross
+            .iter()
+            .find(|l| l.target == "concept:alpha-target")
+            .expect("alpha-target link must survive");
+        assert_eq!(alpha.target_instance.as_deref(), Some("uuid-alpha"));
+        let beta = cross
+            .iter()
+            .find(|l| l.target == "concept:beta-target")
+            .expect("beta-target link must survive");
+        assert_eq!(beta.target_instance.as_deref(), Some("uuid-beta"));
+    }
+
+    #[test]
+    fn same_instance_truncated_link_stays_in_the_boundary_bucket_unchanged() {
+        let editor = three_instance_editor();
+        let boundary = vec![link("concept:seed", "concept:same-instance-truncated")];
+        let (same_or_dead, cross) =
+            editor.partition_boundary_links_by_instance(None, boundary.clone());
+        assert!(cross.is_empty());
+        assert_eq!(same_or_dead.len(), 1);
+        assert_eq!(same_or_dead[0].target, boundary[0].target);
+    }
+
+    #[test]
+    fn dead_unresolvable_link_stays_in_the_boundary_bucket_not_dropped_not_misclassified() {
+        let editor = three_instance_editor();
+        let boundary = vec![link("concept:seed", "concept:nowhere")];
+        let (same_or_dead, cross) = editor.partition_boundary_links_by_instance(None, boundary);
+        assert!(
+            cross.is_empty(),
+            "an unresolvable target is never cross-instance"
+        );
+        assert_eq!(
+            same_or_dead.len(),
+            1,
+            "an unresolvable target must not be silently dropped"
+        );
+    }
+
+    #[test]
+    fn federated_source_pointing_back_into_primary_resolves_the_none_direction() {
+        // Adversarial (#14): verify the `target_instance: None` direction
+        // specifically, not just the `Some(uuid)` direction exercised by
+        // the other tests above — a federated instance's own boundary link
+        // pointing back into PRIMARY must promote to `CrossInstanceLink`
+        // with `target_instance: None`.
+        let mut editor = three_instance_editor();
+        let alpha = editor.kb.instances.get_mut("uuid-alpha").unwrap();
+        alpha.insert(Node::new(
+            "concept:alpha-seed",
+            "Alpha Seed",
+            NodeKind::Concept,
+            "",
+        ));
+        let boundary = vec![link("concept:alpha-seed", "concept:seed")];
+        let (same_or_dead, cross) =
+            editor.partition_boundary_links_by_instance(Some("uuid-alpha"), boundary);
+        assert!(same_or_dead.is_empty());
+        assert_eq!(cross.len(), 1);
+        assert_eq!(
+            cross[0].target_instance, None,
+            "a link resolving back to PRIMARY must carry target_instance: None, not be \
+             mistaken for unresolvable"
+        );
+    }
+
+    #[test]
+    fn unregistering_the_target_instance_between_detection_and_a_later_render_never_panics() {
+        // Simulates the narrow race the plan calls out: detect a
+        // cross-instance link while the target instance is still
+        // registered, then the instance is unregistered before a
+        // hypothetical re-render reads the stale `CrossInstanceLink`.
+        // Nothing in this crate dereferences `target_instance` back into
+        // the registry without a fallible lookup, so this must simply not
+        // panic — a live TOCTOU-shaped scenario, not just a static check.
+        let mut editor = three_instance_editor();
+        let boundary = vec![link("concept:seed", "concept:alpha-target")];
+        let (_, cross) = editor.partition_boundary_links_by_instance(None, boundary);
+        assert_eq!(cross.len(), 1);
+        let stale_uuid = cross[0].target_instance.clone();
+
+        // Unregister "alpha" entirely.
+        editor.kb.instances.remove("uuid-alpha");
+        editor
+            .kb
+            .registry
+            .instances
+            .retain(|i| i.uuid != "uuid-alpha");
+
+        // A later lookup against the now-stale uuid must resolve to
+        // nothing, not panic.
+        assert!(editor
+            .kb
+            .registry
+            .find(stale_uuid.as_deref().unwrap())
+            .is_none());
+        assert!(!editor
+            .kb
+            .instances
+            .contains_key(stale_uuid.as_deref().unwrap()));
+    }
+
+    // --- kb_cross_instance_link_sources (Phase B1, #462 full-corpus retrieval) ---
+
+    #[test]
+    fn kb_cross_instance_link_sources_finds_a_node_with_a_real_cross_instance_link() {
+        let mut editor = three_instance_editor();
+        // Re-upsert "concept:seed" (primary) with a real link into alpha —
+        // KnowledgeBase::insert overwrites in place, rebuilding indexes.
+        editor.kb.primary.insert(Node::new(
+            "concept:seed",
+            "Seed",
+            NodeKind::Concept,
+            "see [[concept:alpha-target]]",
+        ));
+        let sources = editor.kb_cross_instance_link_sources(None);
+        assert!(
+            sources.contains("concept:seed"),
+            "a node with a real cross-instance link must be in the protected set: {sources:?}"
+        );
+    }
+
+    #[test]
+    fn kb_cross_instance_link_sources_excludes_a_node_with_only_same_instance_links() {
+        let mut editor = three_instance_editor();
+        editor.kb.primary.insert(Node::new(
+            "concept:seed",
+            "Seed",
+            NodeKind::Concept,
+            "see [[concept:same-instance-truncated]]",
+        ));
+        let sources = editor.kb_cross_instance_link_sources(None);
+        assert!(
+            !sources.contains("concept:seed"),
+            "a node whose only links stay within the SAME instance must not be \
+             misclassified as a cross-instance bridge: {sources:?}"
+        );
+    }
+
+    #[test]
+    fn kb_cross_instance_link_sources_works_for_a_federated_instance_too_not_just_primary() {
+        // Adversarial (#14): the pre-pass must work uniformly for a
+        // federated instance's own KB, not only primary — the Multi-mode
+        // wiring calls this for the seed AND every related instance.
+        let mut editor = three_instance_editor();
+        let alpha = editor.kb.instances.get_mut("uuid-alpha").unwrap();
+        alpha.insert(Node::new(
+            "concept:alpha-seed",
+            "Alpha Seed",
+            NodeKind::Concept,
+            "see [[concept:seed]]", // points back into primary
+        ));
+        let sources = editor.kb_cross_instance_link_sources(Some("uuid-alpha"));
+        assert!(
+            sources.contains("concept:alpha-seed"),
+            "a federated instance's own bridge node must be found too: {sources:?}"
+        );
+    }
+
+    #[test]
+    fn kb_cross_instance_link_sources_is_empty_for_an_unregistered_or_unloaded_instance() {
+        let editor = three_instance_editor();
+        let sources = editor.kb_cross_instance_link_sources(Some("uuid-does-not-exist"));
+        assert!(
+            sources.is_empty(),
+            "an unloaded/unregistered instance must yield an empty protected set, not panic"
+        );
     }
 }

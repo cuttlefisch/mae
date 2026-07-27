@@ -27,7 +27,7 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
     let s = shared.clone();
     vm.register_fn(
         "kb-graph-view-open",
-        "Open the native KB graph view, centered on ID (default: whichever KB node the *KB* buffer is currently showing, else \"index\"), at DEPTH hops (default: kb_graph_default_depth option). Reuses the existing graph window if already open.",
+        "Open the native KB graph view, centered on ID (default: whichever KB node the *KB* buffer is currently showing, else the active project's own registered KB instance's default node if one is registered for it, else \"index\"), at DEPTH hops (default: kb_graph_default_depth option). Reuses the existing graph window if already open.",
         Arity::Variadic(0),
         move |args: &[Value]| {
             let center = if !args.is_empty() {
@@ -184,9 +184,19 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
 
     // (kb-graph-view-state) → #f if no graph view is open, else
     // (center depth kb-instance follow-current? selected-node hovered-node
-    //  nodes edges)
+    //  nodes edges mode hidden-cross-instance-link-count diagrams
+    //  hidden-related-instance-count)
     //   nodes: list of (id title kind x y pinned? selected? hovered?)
     //   edges: list of (source-id target-id boundary? label-or-#f)
+    //   mode: "single" | "multi" (#462 PR4)
+    //   diagrams: list of (instance-or-#f name node-count loaded?)
+    // In "multi" mode, nodes/edges are laid out in CONTIGUOUS per-diagram
+    // blocks matching diagrams' order (diagram 0's node-count nodes, then
+    // diagram 1's, ...) — no separate per-node/per-edge instance tag; a
+    // consumer walks diagrams' node-counts cumulatively instead. See
+    // `GraphView::describe_state`'s `@ai-caution: [api-stability]` comment
+    // (`crates/core/src/graph_view.rs`) for the construction-side contract
+    // this relies on.
     // Read-only, so — unlike every other primitive in this file — this
     // does NOT queue a GraphViewIntent; it reads the SharedState snapshot
     // `inject_graph_view_state` (`state_sync_inject_kb.rs`) populates fresh
@@ -197,7 +207,7 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
     let s = shared.clone();
     vm.register_fn(
         "kb-graph-view-state",
-        "Structured introspection snapshot of the open native KB graph view: which node is hovered, which is selected, every node currently rendered (the ego-network), and every edge/link shown between them. Returns #f if no graph view is open. Returns (center depth kb-instance follow-current? selected-node hovered-node nodes edges) — nodes: list of (id title kind x y pinned? selected? hovered?); edges: list of (source-id target-id boundary? label-or-#f).",
+        "Structured introspection snapshot of the open native KB graph view: which node is hovered, which is selected, every node currently rendered (the ego-network), and every edge/link shown between them. Returns #f if no graph view is open. Returns (center depth kb-instance follow-current? selected-node hovered-node nodes edges mode hidden-cross-instance-link-count diagrams hidden-related-instance-count) — nodes: list of (id title kind x y pinned? selected? hovered? render-tier); edges: list of (source-id target-id boundary? label-or-#f); mode: \"single\"|\"multi\" (#462); diagrams: list of (instance-or-#f name node-count loaded?), one entry per composed KB instance — loaded? (#479, appended as the 4th element, append-only) is #f when a registered KB instance failed to load/open (distinct from a genuinely empty-but-healthy instance, which reports loaded? = #t with node-count 0); render-tier (ADR-068 Phase B4, appended as a node's 9th element, append-only) is \"full\"|\"clustered\"|\"hidden\" — \"full\" unless kb_graph_multi_kb_full_corpus DOI/LOD tiering is active and elided this node into an aggregate stub (\"clustered\") or off-screen entirely (\"hidden\"); hidden-related-instance-count: how many candidate related instances kb_graph_multi_kb_max_related_instances capped away. In \"multi\" mode, nodes/edges appear in CONTIGUOUS per-diagram blocks matching diagrams' order — diagram 0's node-count nodes come first, then diagram 1's, etc. — so a consumer can determine a node's/edge's owning KB instance purely positionally, by walking diagrams' node-counts cumulatively, with no separate per-node/per-edge instance tag needed.",
         Arity::Fixed(0),
         move |_args: &[Value]| {
             let state = s.lock();
@@ -222,6 +232,7 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
                             Value::Bool(n.pinned),
                             Value::Bool(n.selected),
                             Value::Bool(n.hovered),
+                            Value::string(n.render_tier.clone()),
                         ])
                     })
                     .collect::<Vec<_>>(),
@@ -242,6 +253,19 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
                     })
                     .collect::<Vec<_>>(),
             );
+            let diagrams = Value::list(
+                gv.diagrams
+                    .iter()
+                    .map(|d| {
+                        Value::list(vec![
+                            opt_string(&d.instance),
+                            Value::string(d.name.clone()),
+                            Value::Int(d.node_count as i64),
+                            Value::Bool(d.loaded),
+                        ])
+                    })
+                    .collect::<Vec<_>>(),
+            );
 
             Ok(Value::list(vec![
                 opt_string(&gv.center_node),
@@ -252,6 +276,10 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
                 opt_string(&gv.hovered_node),
                 nodes,
                 edges,
+                Value::string(gv.mode.clone()),
+                Value::Int(gv.hidden_cross_instance_link_count as i64),
+                diagrams,
+                Value::Int(gv.hidden_related_instance_count as i64),
             ]))
         },
     );

@@ -54,16 +54,25 @@ impl Default for SceneGraph {
 }
 
 /// A node in the scene graph.
+///
+/// @ai-caution: [dead-code] No `width`/`height`/`style` fields — removed
+/// (#462 audit) as confirmed-dead: every node renders as a circle via
+/// `flatten_scene_graph`'s degree/zoom-scaled `node_render_radius`
+/// (`crates/core/src/graph_view.rs`), colored exclusively from
+/// `GraphStyleOptions` (theme-driven, `crate::interaction::hit_test`'s doc
+/// comment explains why hit-testing was never keyed off them either — a
+/// leftover from an earlier rectangular-node model the renderer no longer
+/// uses). If a future rectangular/box-style node representation is added,
+/// re-derive its geometry from `GraphStyleOptions`/render-time inputs
+/// rather than resurrecting per-node stored fields that can drift from
+/// what's actually drawn (that drift is exactly why these were dead).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SceneNode {
     pub id: String,
     pub label: String,
     pub x: f64,
     pub y: f64,
-    pub width: f64,
-    pub height: f64,
     pub kind: NodeKind,
-    pub style: NodeStyle,
     pub pinned: bool,
     /// MAE's own seeded/built-in content (structurally mirrors
     /// `shared_kb::NodeSource::Seed`, threaded through the same
@@ -117,30 +126,6 @@ pub enum NodeKind {
     Task,
     /// Configurable query+display node (kanban, backlog, sprint, …).
     View,
-}
-
-/// Visual style for a node.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NodeStyle {
-    /// Fill color as hex (e.g. "#4a9eff").
-    pub fill: String,
-    /// Border color as hex.
-    pub border: String,
-    /// Border width in logical pixels.
-    pub border_width: f64,
-    /// Whether this is a "starter" node (highlighted).
-    pub highlighted: bool,
-}
-
-impl Default for NodeStyle {
-    fn default() -> Self {
-        Self {
-            fill: "#2a2d3e".to_string(),
-            border: "#4a4d5e".to_string(),
-            border_width: 1.0,
-            highlighted: false,
-        }
-    }
 }
 
 /// An edge between two nodes.
@@ -225,10 +210,7 @@ mod tests {
             label: "Node 1".to_string(),
             x: 0.0,
             y: 0.0,
-            width: 100.0,
-            height: 40.0,
             kind: NodeKind::Concept,
-            style: NodeStyle::default(),
             pinned: false,
             is_seed: false,
         });

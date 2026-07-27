@@ -1861,6 +1861,79 @@ fn kb_graph_view_state_from_scheme_reflects_open_graph() {
     assert!(!result.starts_with("#f"), "got: {result}");
 }
 
+fn test_kb_instance(uuid: &str, name: &str) -> mae_kb::federation::KbInstance {
+    mae_kb::federation::KbInstance {
+        uuid: uuid.to_string(),
+        name: name.to_string(),
+        org_dir: std::path::PathBuf::from(format!("/tmp/{name}")),
+        db_path: std::path::PathBuf::from(format!("/tmp/{name}.db")),
+        primary: false,
+        enabled: true,
+        last_import: None,
+        collab_id: None,
+        shared: false,
+        remote_peers: Vec::new(),
+        last_sync: None,
+        ai_residency: mae_kb::federation::AiResidency::default(),
+        project_root: None,
+        kind: mae_kb::federation::KbInstanceKind::default(),
+        priority: 0,
+        remote_hub: None,
+    }
+}
+
+#[test]
+fn kb_graph_view_state_from_scheme_appends_loaded_as_the_fourth_diagram_tuple_element() {
+    // #479: `(kb-graph-view-state)`'s `diagrams` tuple is documented as
+    // APPEND-ONLY -- existing consumers destructure `(instance name
+    // node-count)` positionally, so `loaded?` must land as the 4th (last)
+    // element without disturbing that prefix. Exercises Multi mode with a
+    // mixed pair (per CLAUDE.md #14): a healthy related instance (in
+    // `kb.instances`) and a registered-but-unloaded one (registry entry
+    // present, `kb.instances` entry missing -- simulates a federated store
+    // that failed to load/open).
+    let mut rt = new_runtime();
+    let mut editor = Editor::new(); // seeds the built-in "index" node
+
+    let mut alive = mae_kb::KnowledgeBase::new();
+    alive.insert(mae_kb::Node::new(
+        "concept:alive",
+        "Alive",
+        mae_kb::NodeKind::Concept,
+        "",
+    ));
+    editor.kb.instances.insert("uuid-alive".to_string(), alive);
+    editor
+        .kb
+        .registry
+        .instances
+        .push(test_kb_instance("uuid-alive", "alive"));
+    // Registered, but deliberately never inserted into `kb.instances`.
+    editor
+        .kb
+        .registry
+        .instances
+        .push(test_kb_instance("uuid-dead", "dead"));
+
+    editor.kb_graph_view_mode = mae_core::GraphViewMode::Multi;
+    editor.kb_graph_multi_kb_scope = mae_core::GraphMultiKbScope::All;
+
+    rt.eval(r#"(kb-graph-view-open "index" 1)"#).unwrap();
+    rt.apply_to_editor(&mut editor);
+    rt.inject_editor_state(&editor);
+
+    let result = rt.eval("(kb-graph-view-state)").unwrap();
+    assert!(!result.starts_with("#f"), "got: {result}");
+    assert!(
+        result.contains(r#""alive" 1 #t"#),
+        "the healthy related instance's tuple must end `... \"alive\" 1 #t`: {result}"
+    );
+    assert!(
+        result.contains(r#""dead" 0 #f"#),
+        "the registered-but-unloaded instance's tuple must end `... \"dead\" 0 #f`: {result}"
+    );
+}
+
 #[test]
 fn kb_preview_show_from_scheme_populates_popup() {
     let mut rt = new_runtime();

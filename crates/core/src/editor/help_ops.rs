@@ -461,6 +461,24 @@ impl Editor {
     /// `render_kb_node_for_query` directly without widening that
     /// function's visibility.
     pub fn render_graph_view_as_text(&self) -> String {
+        // #462 PR4: Multi mode composes several KB instances into one
+        // merged `GraphView.scene` — the single-node "** Neighborhood"
+        // renderer below has no notion of that, so it's handled by a
+        // dedicated path that groups by instance instead. Single mode
+        // (including a graph view not yet opened at all) falls through to
+        // the ORIGINAL body below, entirely unchanged — see
+        // `render_graph_view_as_text_multi_mode_*` tests for the
+        // Single-mode-byte-identical guarantee this split preserves.
+        let mode = self
+            .buffers
+            .iter()
+            .find(|b| b.kind == BufferKind::Graph)
+            .and_then(|b| b.graph_view())
+            .map(|gv| gv.mode);
+        if mode == Some(crate::graph_view::GraphViewMode::Multi) {
+            return self.render_multi_kb_graph_view_as_text();
+        }
+
         let Some(center) = self
             .buffers
             .iter()
@@ -497,6 +515,156 @@ impl Editor {
             "* KB Graph — {}\n(no KB query layer available; graph data unavailable in this build)\n",
             center
         )
+    }
+
+    /// `Multi`-mode TUI rendering (#462 PR4): unlike Single mode (which
+    /// delegates to the existing single-node `render_kb_node_for_query`/
+    /// `render_kb_node_with_store` KB-neighborhood renderer),
+    /// `GraphView.scene` here is a MERGED scene spanning several
+    /// instances, so there is no single "the" center node to feed that
+    /// renderer. Instead, groups by `GraphView.diagram_labels` (one
+    /// "** Neighborhood (name)" heading per composed instance, listing
+    /// that diagram's node titles — sliced out of the merged `scene.nodes`
+    /// via each label's `node_count`, relying on the contiguous-block
+    /// ordering invariant documented on `GraphView.diagram_labels`), then a
+    /// "** Cross-KB links" section listing every resolved cross-instance
+    /// link (plus a hidden-count note for any that were dropped). This is
+    /// a coarser summary than Single mode's full recursive KB-node render
+    /// (no per-related-instance center id is tracked to feed that renderer
+    /// with) — sufficient for TUI parity/introspection, not a byte-for-byte
+    /// re-implementation of the single-node view N times over.
+    fn render_multi_kb_graph_view_as_text(&self) -> String {
+        let Some(gv) = self
+            .buffers
+            .iter()
+            .find(|b| b.kind == BufferKind::Graph)
+            .and_then(|b| b.graph_view())
+        else {
+            return "(KB graph view: no center node yet — open with :kb-graph-view-open)\n"
+                .to_string();
+        };
+        if gv.center_node.is_none() {
+            return "(KB graph view: no center node yet — open with :kb-graph-view-open)\n"
+                .to_string();
+        }
+
+        // ADR-068 Phase B8 (TUI decision): a full-corpus diagram can carry
+        // hundreds/thousands of nodes — dumping every single title as its
+        // own "- " line would be a real readability regression versus the
+        // capped-BFS view this replaced. Rather than build full GUI feature
+        // parity (zoom, per-frame LOD) for a text listing, reuse the
+        // ALREADY-cached `node_api_tier` (topology-derived, zoom-
+        // independent — computed once at populate time regardless of
+        // whether a GUI window ever reflattens) to show Bridge/Hub-tier
+        // nodes individually plus one honest "... and N more (clustered)"
+        // summary line, gated behind the SAME `kb_graph_dense_cluster_
+        // threshold` option the GUI's clustering uses (so a small diagram
+        // still lists every node, matching pre-Phase-B behavior). Judgment
+        // call, deliberately proportionate per CLAUDE.md #9 — this is TUI
+        // PARITY (never silently truncate/dump thousands of lines), not a
+        // call to replicate every GUI visual nuance (zoom-aware Hidden vs.
+        // Clustered, cluster-group bucketing) in plain text.
+        let full_corpus_active = self.kb_graph_multi_kb_full_corpus
+            && gv.mode == crate::graph_view::GraphViewMode::Multi;
+        let mut out = String::new();
+        out.push_str("* KB Graph (multi-KB)\n");
+        let mut offset = 0usize;
+        for label in &gv.diagram_labels {
+            // #479: TUI parity with the GUI's `push_diagram_labels`
+            // dimmed-caption treatment — a registered-but-unloaded KB
+            // instance must be visibly distinguished in the text listing
+            // too, not just silently rendered as an empty-but-healthy one.
+            if label.loaded {
+                out.push_str(&format!("\n** Neighborhood ({})\n", label.name));
+            } else {
+                out.push_str(&format!(
+                    "\n** Neighborhood ({}) (not loaded)\n",
+                    label.name
+                ));
+            }
+            let end = (offset + label.node_count).min(gv.scene.nodes.len());
+            let slice = gv.scene.nodes.get(offset..end).unwrap_or(&[]);
+            let tier_slice = gv.node_api_tier.get(offset..end);
+            if slice.is_empty() {
+                out.push_str("(no nodes)\n");
+            } else if full_corpus_active && slice.len() >= self.kb_graph_dense_cluster_threshold {
+                let mut shown = 0usize;
+                for (i, node) in slice.iter().enumerate() {
+                    let tier = tier_slice
+                        .and_then(|t| t.get(i))
+                        .copied()
+                        .unwrap_or(crate::graph_view::ApiTier::Ordinary);
+                    if matches!(
+                        tier,
+                        crate::graph_view::ApiTier::Bridge | crate::graph_view::ApiTier::Hub
+                    ) {
+                        out.push_str(&format!("- {}\n", node.label));
+                        shown += 1;
+                    }
+                }
+                let elided = slice.len() - shown;
+                if elided > 0 {
+                    out.push_str(&format!("... and {elided} more (clustered)\n"));
+                }
+            } else {
+                for node in slice {
+                    out.push_str(&format!("- {}\n", node.label));
+                }
+            }
+            offset = end;
+        }
+
+        if !gv.cross_instance_links.is_empty() || gv.hidden_cross_instance_link_count > 0 {
+            out.push_str("\n** Cross-KB links\n");
+            for link in &gv.cross_instance_links {
+                let target_name = gv
+                    .diagram_labels
+                    .iter()
+                    .find(|d| d.instance == link.target_instance)
+                    .map(|d| d.name.as_str())
+                    .unwrap_or("?");
+                // Phase A2 (#462): a cross-instance link can now originate
+                // from ANY rendered diagram, not just the seed — before this
+                // fix, `source_instance` was hard-wired to the seed, so
+                // showing only the target's KB name was unambiguous. Now
+                // that a related instance can itself be a link's source,
+                // only name the source's KB when it's NOT the seed
+                // (`gv.kb_instance`) — the seed case keeps today's exact
+                // text, since that's still the overwhelmingly common case
+                // and the "obvious" diagram a reader would already assume.
+                if link.source_instance != gv.kb_instance {
+                    let source_name = gv
+                        .diagram_labels
+                        .iter()
+                        .find(|d| d.instance == link.source_instance)
+                        .map(|d| d.name.as_str())
+                        .unwrap_or("?");
+                    out.push_str(&format!(
+                        "- {} (KB: {}) -> {} [{}] (KB: {})\n",
+                        link.source, source_name, link.target, link.rel_type, target_name
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "- {} -> {} [{}] (KB: {})\n",
+                        link.source, link.target, link.rel_type, target_name
+                    ));
+                }
+            }
+            if gv.hidden_cross_instance_link_count > 0 {
+                out.push_str(&format!(
+                    "- ... (+{} more cross-KB link(s) hidden)\n",
+                    gv.hidden_cross_instance_link_count
+                ));
+            }
+        }
+
+        if gv.hidden_related_instance_count > 0 {
+            out.push_str(&format!(
+                "\n(+{} related KB instance(s) hidden by kb_graph_multi_kb_max_related_instances)\n",
+                gv.hidden_related_instance_count
+            ));
+        }
+        out
     }
 
     /// Generate live help text for a command, querying current keymaps and hooks.
@@ -1486,6 +1654,278 @@ mod tests {
         assert!(e.kb.query_layer().is_none());
         let text = e.render_graph_view_as_text();
         assert!(text.contains("no KB query layer"));
+    }
+
+    #[test]
+    fn render_graph_view_as_text_single_mode_is_unaffected_by_multi_mode_existing() {
+        // #462 PR4 regression guard: Single mode (the default) must render
+        // byte-identically regardless of the Multi-mode branch existing —
+        // confirmed by re-running the pre-existing in-memory-fallback
+        // assertion with `kb_graph_view_mode` explicitly left at its
+        // default.
+        let mut e = Editor::new();
+        assert_eq!(
+            e.kb_graph_view_mode,
+            crate::graph_view::GraphViewMode::Single
+        );
+        e.kb_graph_view_open(Some("index".to_string()), Some(1));
+        let text = e.render_graph_view_as_text();
+        assert!(text.contains("index"));
+        assert!(!text.contains("multi-KB"));
+    }
+
+    #[test]
+    fn render_graph_view_as_text_multi_mode_groups_by_instance_and_lists_cross_kb_links() {
+        let mut e = Editor::new();
+        e.kb.primary.insert(mae_kb::Node::new(
+            "concept:seed",
+            "Seed",
+            mae_kb::NodeKind::Concept,
+            "[[concept:sibling-target]]",
+        ));
+        let mut inst = mae_kb::KnowledgeBase::new();
+        inst.insert(mae_kb::Node::new(
+            "concept:sibling-target",
+            "Sibling Target",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        e.kb.instances.insert("uuid-sibling".to_string(), inst);
+        e.kb.registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-sibling".into(),
+                name: "sibling".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
+            });
+        e.kb_graph_view_mode = crate::graph_view::GraphViewMode::Multi;
+        e.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+
+        let text = e.render_graph_view_as_text();
+        assert!(text.contains("* KB Graph (multi-KB)"));
+        assert!(text.contains("** Neighborhood (Primary)"));
+        assert!(text.contains("** Neighborhood (sibling)"));
+        assert!(
+            text.contains("Seed"),
+            "Primary diagram's node title must be listed: {text}"
+        );
+        assert!(
+            text.contains("Sibling Target"),
+            "sibling diagram's node title must be listed: {text}"
+        );
+        assert!(text.contains("** Cross-KB links"));
+        assert!(
+            text.contains("concept:seed") && text.contains("concept:sibling-target"),
+            "the cross-KB link's endpoints must be listed: {text}"
+        );
+    }
+
+    #[test]
+    fn render_graph_view_as_text_multi_mode_names_both_endpoints_kb_when_source_is_not_the_seed() {
+        // Phase A2 (#462): once a cross-instance link's source can be ANY
+        // rendered diagram (not just the seed — the bug this phase fixes),
+        // the plain-text listing must name BOTH endpoints' KB. Before this
+        // fix, only the target's KB was ever shown, because the source was
+        // silently assumed to always be the seed. Seed A links to B; B
+        // (NOT the seed) links onward to C — the exact non-seed-source
+        // shape.
+        let mut e = Editor::new();
+        e.kb.primary.insert(mae_kb::Node::new(
+            "concept:seed",
+            "Seed",
+            mae_kb::NodeKind::Concept,
+            "[[concept:b-hub]]",
+        ));
+        let mut b = mae_kb::KnowledgeBase::new();
+        b.insert(mae_kb::Node::new(
+            "concept:b-hub",
+            "B Hub",
+            mae_kb::NodeKind::Concept,
+            "[[concept:c-target]]",
+        ));
+        e.kb.instances.insert("uuid-b".to_string(), b);
+        e.kb.registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-b".into(),
+                name: "b".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
+            });
+        let mut c = mae_kb::KnowledgeBase::new();
+        c.insert(mae_kb::Node::new(
+            "concept:c-target",
+            "C Target",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        e.kb.instances.insert("uuid-c".to_string(), c);
+        e.kb.registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-c".into(),
+                name: "c".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
+            });
+
+        e.kb_graph_view_mode = crate::graph_view::GraphViewMode::Multi;
+        // `All` scope: B's own link to C is a relationship the seed knows
+        // nothing about, and `Linked` scope's one-hop-from-the-seed
+        // candidate discovery would never find C on its own.
+        e.kb_graph_multi_kb_scope = crate::graph_view::GraphMultiKbScope::All;
+        // depth=0: sidesteps an unrelated `extract_subgraph` BFS quirk at
+        // depth>=1 — see the doc comment on the equivalent call in
+        // `graph_view_ops.rs`'s
+        // `multi_mode_detects_a_real_cross_link_between_two_non_seed_related_instances`.
+        e.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+
+        let text = e.render_graph_view_as_text();
+        assert!(text.contains("** Neighborhood (b)"));
+        assert!(text.contains("** Neighborhood (c)"));
+
+        // The seed's own A->B link keeps today's exact (target-only)
+        // format -- the overwhelmingly common case, unaffected by this fix.
+        assert!(
+            text.contains("- concept:seed -> concept:b-hub [") && text.contains("(KB: b)"),
+            "seed-sourced cross-link must keep its original target-only format: {text}"
+        );
+        // The B->C link's source (b) is NOT the seed -- both endpoints' KB
+        // names must now be named.
+        assert!(
+            text.contains("- concept:b-hub (KB: b) -> concept:c-target [")
+                && text.contains("(KB: c)"),
+            "a non-seed-sourced cross-link must name BOTH endpoints' KB: {text}"
+        );
+    }
+
+    #[test]
+    fn render_graph_view_as_text_multi_mode_annotates_an_unloaded_diagram_but_not_a_loaded_one() {
+        // #479 TUI parity: a registered-but-unloaded related instance must
+        // read differently in the plain-text listing from a healthy one --
+        // mixed input (one loaded sibling, one not), per CLAUDE.md #14.
+        let mut e = Editor::new();
+        e.kb.primary.insert(mae_kb::Node::new(
+            "concept:seed",
+            "Seed",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        let mut alive = mae_kb::KnowledgeBase::new();
+        alive.insert(mae_kb::Node::new(
+            "concept:alive",
+            "Alive",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        e.kb.instances.insert("uuid-alive".to_string(), alive);
+        e.kb.registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-alive".into(),
+                name: "alive".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
+            });
+        // Registered, but deliberately never inserted into `kb.instances` --
+        // simulates a federated store that failed to load/open.
+        e.kb.registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-dead".into(),
+                name: "dead".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
+            });
+        e.kb_graph_view_mode = crate::graph_view::GraphViewMode::Multi;
+        e.kb_graph_multi_kb_scope = crate::graph_view::GraphMultiKbScope::All;
+        e.kb_graph_view_open(Some("concept:seed".to_string()), Some(1));
+
+        let text = e.render_graph_view_as_text();
+        assert!(
+            text.contains("** Neighborhood (Primary)\n"),
+            "the healthy seed must NOT be annotated: {text}"
+        );
+        assert!(
+            text.contains("** Neighborhood (alive)\n"),
+            "the healthy related instance must NOT be annotated: {text}"
+        );
+        assert!(
+            text.contains("** Neighborhood (dead) (not loaded)\n"),
+            "the registered-but-unloaded instance must be annotated: {text}"
+        );
+    }
+
+    #[test]
+    fn render_graph_view_as_text_multi_mode_no_center_before_open_matches_single_mode_message() {
+        let mut e = Editor::new();
+        e.kb_graph_view_mode = crate::graph_view::GraphViewMode::Multi;
+        // Graph buffer doesn't exist yet at all -- `mode` lookup finds
+        // nothing, so this falls all the way through to the same
+        // no-center-yet message Single mode gives.
+        let text = e.render_graph_view_as_text();
+        assert!(text.contains("no center node"));
     }
 
     #[test]

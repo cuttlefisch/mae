@@ -292,6 +292,7 @@ Source: `shared/kb/src/lib.rs`
 | `NodeKind` | enum |
 | `SubgraphSpec` | struct |
 | `SubgraphLink` | struct |
+| `CrossInstanceLink` | struct |
 | `SubgraphResult` | struct |
 | `NodeSource` | enum |
 | `Node` | struct |

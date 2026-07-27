@@ -102,7 +102,8 @@ pub use file_browser::{Activation as BrowserActivation, BrowserEntry, FileBrowse
 pub use file_picker::FilePicker;
 pub use graph_view::{
     flatten_scene_graph, GraphLayoutAlgorithm, GraphLayoutIntent, GraphLayoutMode,
-    GraphNavDirection, GraphStyleOptions, GraphView, GraphViewIntent,
+    GraphMultiKbScope, GraphNavDirection, GraphStyleOptions, GraphView, GraphViewIntent,
+    GraphViewMode,
 };
 pub use hooks::HookRegistry;
 pub use input::{InputEvent, MouseButton};

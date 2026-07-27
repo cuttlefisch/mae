@@ -447,7 +447,7 @@ impl OptionRegistry {
                     OptionKind::String, "relevance", Some("kb.search_sort"),
                     &["relevance", "activity", "alphabetical", "recency"]),
                 opt!("kb_search_scope", &["kb-search-scope"],
-                    "Default KB search scope: all (primary + federated), local (primary only), remote (shared/collaborative instances only), or a specific instance name",
+                    "Default KB search scope: all (primary + federated), local (primary only), remote (shared/collaborative instances only), project/project-only (only the instance registered for the current project root, ADR-058 Phase C — falls back to all if no project root can be detected), or a specific instance name",
                     OptionKind::String, "all", Some("kb.search_scope"), &[]),
                 opt!("kb_federated_max_fanout_instances", &["kb-federated-max-fanout-instances"],
                     "Max federated KB instances queried per search/agenda/list fan-out (ADR-062 Phase B). Every participating instance costs a full store query, so this bounds worst-case per-query cost; if a registry exceeds it, the lowest-priority instances (kb_instances priority) are excluded from that query, not an arbitrary subset.",
@@ -581,11 +581,17 @@ impl OptionRegistry {
                      outgoing links.",
                     OptionKind::Bool, "true", Some("kb-graph.include-backlinks"), &[]),
                 opt!("kb_graph_node_count_cap", &["kb-graph-node-count-cap"],
-                    "Safety-net cap on the graph view's total node count (SubgraphSpec::node_cap), \
+                    "Safety-net cap on a single diagram's node count (SubgraphSpec::node_cap), \
                      independent of kb_graph_default_depth/kb_graph_include_backlinks. When a walk \
                      would exceed this, starter nodes plus the highest-degree remaining nodes are \
                      kept and the rest surface as boundary-stub \"... (+N)\" links, same as a \
-                     depth cutoff. Mirrors Neo4j Browser's default 300-node initial display cap.",
+                     depth cutoff. Mirrors Neo4j Browser's default 300-node initial display cap. \
+                     In kb_graph_view_mode=single this IS the view's total node count. In \
+                     kb_graph_view_mode=multi it is applied INDEPENDENTLY per diagram — once for \
+                     the seed instance's own SubgraphSpec, and again for EACH related instance's \
+                     own SubgraphSpec — so the real worst-case total across every diagram in the \
+                     merged multi-KB scene is cap × (1 + related-instance-count), not this value \
+                     alone; see kb_graph_multi_kb_max_related_instances for that count's own cap.",
                     OptionKind::Int, "300", Some("kb-graph.node-count-cap"), &[]),
                 opt!("kb_graph_node_radius", &["kb-graph-node-radius"],
                     "Base node circle radius in logical pixels for the graph view's GUI \
@@ -754,6 +760,117 @@ impl OptionRegistry {
                      (kb-graph-view-toggle-overlay), so underlying text stays legible but \
                      visually de-emphasized while the graph is on top.",
                     OptionKind::Float, "0.6", Some("kb-graph.view-overlay-dim-opacity"), &[]),
+                opt!("kb_graph_view_mode", &["kb-graph-view-mode"],
+                    "Whether the graph view composes a single KB instance's subgraph (default) \
+                     or several at once (multi) — issue #462's multi-KB chord view. In multi \
+                     mode, the seed instance's own related instances (per \
+                     kb_graph_multi_kb_scope, capped by \
+                     kb_graph_multi_kb_max_related_instances) are laid out as a grid of \
+                     small-multiple chord diagrams in ONE merged scene, with real cross-instance \
+                     links resolved into edges between them. Single mode's own output is \
+                     byte-for-byte unchanged by this option's existence.",
+                    OptionKind::String, "single", Some("kb-graph.view-mode"),
+                    &["single", "multi"]),
+                opt!("kb_graph_multi_kb_max_related_instances",
+                    &["kb-graph-multi-kb-max-related-instances"],
+                    "Safety-net cap on how many related KB instances kb_graph_view_mode=multi \
+                     composes alongside the seed instance. When the candidate set (per \
+                     kb_graph_multi_kb_scope) exceeds this, the overflow is surfaced as a count \
+                     (never silently truncated) rather than composing an unbounded number of \
+                     diagrams into one scene.",
+                    OptionKind::Int, "6", Some("kb-graph.multi-kb-max-related-instances"), &[]),
+                opt!("kb_graph_multi_kb_scope", &["kb-graph-multi-kb-scope"],
+                    "Which related KB instances kb_graph_view_mode=multi pulls in alongside the \
+                     seed instance. linked (default): the set of instances the seed's own \
+                     cross-instance links point to, one hop only — the related instances' OWN \
+                     cross-links are not transitively re-walked. all: every registered KB \
+                     instance (including primary), regardless of whether it's actually linked \
+                     from the seed. Both are capped by \
+                     kb_graph_multi_kb_max_related_instances.",
+                    OptionKind::String, "linked", Some("kb-graph.multi-kb-scope"),
+                    &["linked", "all"]),
+                opt!("kb_graph_multi_kb_grid_gap_factor",
+                    &["kb-graph-multi-kb-grid-gap-factor"],
+                    "Extra spacing between adjacent grid cells in kb_graph_view_mode=multi's \
+                     small-multiples chord grid, as a FRACTION of the larger-radius diagram \
+                     sharing that row/column boundary — never a fixed pixel gap, so the \
+                     breathing room (needed for each diagram's own name caption, drawn just \
+                     above it) scales the same sub-linear way every other distance in the chord \
+                     layout does. Independent of kb_graph_layout_spacing_scale, which only scales \
+                     each diagram's OWN internal ring radius, not the gap BETWEEN diagrams. 0.0 \
+                     packs adjacent diagrams edge-to-edge with no gap; the default of 0.6 \
+                     matches this option's pre-existing hardcoded behavior exactly.",
+                    OptionKind::Float, "0.6", Some("kb-graph.multi-kb-grid-gap-factor"), &[]),
+                opt!("kb_graph_multi_kb_full_corpus", &["kb-graph-multi-kb-full-corpus"],
+                    "Master opt-in switch (ADR-068 Phase B) for full-corpus retrieval in \
+                     kb_graph_view_mode=multi: when on, each diagram (the seed AND every related \
+                     instance) is extracted via KnowledgeBase::extract_full_corpus (every node in \
+                     that instance, safety-netted by kb_graph_full_corpus_node_cap) instead of a \
+                     depth/breadth-bounded BFS from kb_graph_default_depth around one seed node. \
+                     A node that would otherwise be truncated is exempt from the cap when it's \
+                     either the diagram's own focus/starter node or a cross-instance-link source \
+                     (a 'bridge' — losing it would silently sever the only connection between two \
+                     diagrams), computed once per diagram via Editor::kb_cross_instance_link_sources. \
+                     Off (the default) leaves kb_graph_view_mode=multi's extraction byte-for-byte \
+                     unchanged — this option's mere existence changes nothing until explicitly \
+                     enabled. Render-time level-of-detail (which full-corpus nodes actually draw \
+                     vs. cluster/hide) is a separate layer (ADR-068 Phases B2-B5, see \
+                     kb_graph_doi_zoom_threshold / kb_graph_doi_distance_falloff / \
+                     kb_graph_dense_cluster_threshold / kb_graph_cluster_group_by) that always runs \
+                     alongside this option — a node in-scope only draws individually when its \
+                     degree-of-interest tier keeps it above the current clustering threshold.",
+                    OptionKind::Bool, "false", Some("kb-graph.multi-kb-full-corpus"), &[]),
+                opt!("kb_graph_full_corpus_node_cap", &["kb-graph-full-corpus-node-cap"],
+                    "Safety-net cap on a single diagram's node count when \
+                     kb_graph_multi_kb_full_corpus is on — analogous to kb_graph_node_count_cap, \
+                     but deliberately a separate, much higher default: full-corpus mode's whole \
+                     point is showing (near-)everything, and kb_graph_view_mode=multi can compose \
+                     up to kb_graph_multi_kb_max_related_instances+1 diagrams, so a pathological-\
+                     scale federation (e.g. several thousand-node KBs at once) still needs a real \
+                     ceiling. Exempts the diagram's own focus/starter node and any cross-instance- \
+                     link source from truncation (see kb_graph_multi_kb_full_corpus); everything \
+                     else is kept by highest-degree-first, same selection rule \
+                     kb_graph_node_count_cap already uses.",
+                    OptionKind::Int, "5000", Some("kb-graph.full-corpus-node-cap"), &[]),
+                opt!("kb_graph_doi_zoom_threshold", &["kb-graph-doi-zoom-threshold"],
+                    "ADR-068 Phase B: below this viewport zoom level, a node elided by DOI/LOD \
+                     tiering (kb_graph_multi_kb_full_corpus) is skipped entirely (RenderTier::Hidden) \
+                     rather than folded into a visible '... (+N)' aggregate stub \
+                     (RenderTier::Clustered) — too zoomed out for even a stub label to be legible. \
+                     Mirrors kb_graph_label_zoom_threshold's exact same-family threshold pattern. \
+                     Only consulted when kb_graph_multi_kb_full_corpus is on AND \
+                     kb_graph_view_mode=multi; has no effect otherwise.",
+                    OptionKind::Float, "0.5", Some("kb-graph.doi-zoom-threshold"), &[]),
+                opt!("kb_graph_doi_distance_falloff", &["kb-graph-doi-distance-falloff"],
+                    "ADR-068 Phase B: hop-count reach from the DOI focus node (whichever KB node \
+                     the human/AI last navigated to, decoupled from the graph's own extraction \
+                     center — see kb_graph_multi_kb_full_corpus) within which a node stays fully \
+                     rendered. Bridge (cross-instance-link endpoint) and Hub (a diagram's own \
+                     default center) tier nodes are exempt entirely — always full detail \
+                     regardless of distance. A node one tier more a-priori important (Degree tier, \
+                     ranked by connection count) gets one extra hop of reach beyond this value. \
+                     Kept as one simple integer knob, not an exposed formula/weighted score — only \
+                     consulted when kb_graph_multi_kb_full_corpus is on AND \
+                     kb_graph_view_mode=multi.",
+                    OptionKind::Int, "2", Some("kb-graph.doi-distance-falloff"), &[]),
+                opt!("kb_graph_dense_cluster_threshold", &["kb-graph-dense-cluster-threshold"],
+                    "ADR-068 Phase B: minimum count of nodes elided by kb_graph_doi_distance_falloff \
+                     before clustering kicks in at all — below this, every node renders at full \
+                     detail regardless (not worth the visual overhead of an aggregate stub for a \
+                     handful of elided nodes). Subsumes issue #477's own originally-proposed option \
+                     of the same shape. Only consulted when kb_graph_multi_kb_full_corpus is on AND \
+                     kb_graph_view_mode=multi.",
+                    OptionKind::Int, "20", Some("kb-graph.dense-cluster-threshold"), &[]),
+                opt!("kb_graph_cluster_group_by", &["kb-graph-cluster-group-by"],
+                    "ADR-068 Phase B: how nodes elided by DOI/LOD tiering bucket into aggregate \
+                     '... (+N)' stubs — kind (group by NodeKind, e.g. every clustered Concept in a \
+                     diagram collapses into one stub) or degree_bucket (group by a coarse log2 \
+                     bucket of connection count — useful when a KB's node kinds are too uniform for \
+                     kind-grouping to usefully separate hubs-in-waiting from genuine leaves). Only \
+                     consulted when kb_graph_multi_kb_full_corpus is on AND \
+                     kb_graph_view_mode=multi.",
+                    OptionKind::String, "kind", Some("kb-graph.cluster-group-by"),
+                    &["kind", "degree_bucket"]),
                 // --- File tree ---
                 opt!("file_tree_focus_on_open", &["file-tree-focus-on-open"],
                     "Auto-focus the file tree window when it opens",

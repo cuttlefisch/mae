@@ -173,7 +173,28 @@ pub struct SubgraphSpec {
     /// like a depth cutoff (see `extract_subgraph`), so the existing
     /// "... (+N)" boundary-stub rendering already handles it — no new
     /// render path needed.
+    ///
+    /// Note: the cap is deliberately applied POST-HOC, after the BFS has
+    /// already walked to full depth-bounded completion (see
+    /// `extract_subgraph`) — NOT as an early BFS stopping condition. An
+    /// early-stopping BFS would change WHICH nodes get selected (traversal-
+    /// order-biased) instead of today's exact global degree-sort over the
+    /// full reachable set. This was considered and deliberately declined as
+    /// a real selection-semantics change, not just a performance one.
     pub node_cap: Option<usize>,
+    /// When `false`, collected `Node`s have their heavy fields
+    /// (`body`, `properties`, `source_file`, `crdt_doc`) stripped to their
+    /// lightest legitimate values before being cloned into
+    /// `SubgraphResult.nodes`. `Node::body` can carry an entire org-mode
+    /// document, `properties` a full drawer, and `crdt_doc` an encoded yrs
+    /// document — none of which the KB graph view ever reads (it only
+    /// needs `id`/`title`/`kind`/`source` for rendering). The BFS walk
+    /// itself always uses the full node data (link extraction reads
+    /// `body`) regardless of this flag — only the *collected* clones pushed
+    /// into the result are affected. Defaults to `true` (preserves every
+    /// pre-existing caller's behavior exactly); set `false` only when the
+    /// caller is confirmed to need metadata alone.
+    pub include_body: bool,
 }
 
 /// A typed link within a `SubgraphResult` — carries the ADR-030
@@ -187,6 +208,41 @@ pub struct SubgraphLink {
     pub rel_type: String,
     /// 0.0-1.0, `1.0` when not explicitly authored (ADR-030 default).
     pub weight: f64,
+}
+
+/// A boundary link promoted to "genuinely crosses into a DIFFERENT
+/// registered KB instance" — see `Editor::partition_boundary_links_by_instance`
+/// (`crates/core/src/editor/kb_ops/registry.rs`), the multi-KB chord view's
+/// (#462) sole producer of this type. A plain `SubgraphLink` boundary link
+/// only ever carries `(source, target, rel_type, weight)` with no notion of
+/// WHICH KB the target lives in — this adds exactly that, so a caller can
+/// tell "this is a real cross-instance relationship, render an edge to the
+/// other diagram" apart from "this is just outside the depth/cap cutoff, or
+/// unresolvable" (both of which stay plain `SubgraphLink`s).
+#[derive(Debug, Clone)]
+pub struct CrossInstanceLink {
+    pub source: String,
+    pub target: String,
+    pub rel_type: String,
+    pub weight: f64,
+    /// Which KB instance owns `target` — `None` = primary, `Some(uuid)` = a
+    /// federated instance, matching `GraphView.kb_instance`'s convention
+    /// (`crates/core/src/graph_view.rs`).
+    pub target_instance: Option<String>,
+    /// Which KB instance this link's `source` belongs to — i.e. the
+    /// `owner_instance` the classifying `partition_boundary_links_by_instance`
+    /// call was made with. `None` = primary, `Some(uuid)` = a federated
+    /// instance, same convention as `target_instance`.
+    ///
+    /// @ai-caution: [correctness] Phase A2 (#462 multi-KB chord view):
+    /// `partition_boundary_links_by_instance` is now called once PER
+    /// rendered diagram (seed AND every related instance), not just once
+    /// against the seed — a real link from related-instance B to
+    /// related-instance C is only ever discovered from B's own extraction,
+    /// so its source is B, not the seed. Do NOT assume `source` is always
+    /// "the subgraph this batch was extracted from" == the seed; read this
+    /// field instead of re-deriving the source from call-site context.
+    pub source_instance: Option<String>,
 }
 
 /// Result of subgraph extraction.
@@ -1178,21 +1234,37 @@ impl KnowledgeBase {
         while depth <= spec.max_depth && !frontier.is_empty() {
             let mut next_frontier = Vec::new();
             for node_id in &frontier {
-                if included.insert(node_id.clone()) && depth < spec.max_depth {
-                    // Add outgoing links to frontier
-                    if let Some(node) = self.nodes.get(node_id) {
+                // #493: only a node that actually resolves may enter
+                // `included` at all. A dead/typo'd link's target must NOT be
+                // phantom-inserted here even though it's silently skipped
+                // later in `collect_and_categorize`'s node-collection loop --
+                // by the time that loop runs, the damage is already done:
+                // `collect_and_categorize` classifies a link as internal vs.
+                // boundary purely via `included.contains(&target)`, so a
+                // phantom-included dead target makes a REAL link pointing at
+                // it misclassify as "internal" (same-subgraph) instead of
+                // "boundary" (unresolvable) -- the target never actually
+                // appears in the result's `nodes`, so that link now points at
+                // nothing, silently. Gating the `included.insert` on node
+                // existence (short-circuit, so a nonexistent id also never
+                // triggers link/backlink expansion) fixes this at the source
+                // instead of leaving it for every downstream categorization
+                // site to work around individually (CLAUDE.md #8).
+                if let Some(node) = self.nodes.get(node_id) {
+                    if included.insert(node_id.clone()) && depth < spec.max_depth {
+                        // Add outgoing links to frontier
                         for link in node.links() {
                             if !included.contains(&link) {
                                 next_frontier.push(link);
                             }
                         }
-                    }
-                    // Add backlinks if requested
-                    if spec.include_backlinks {
-                        if let Some(sources) = self.links_in.get(node_id) {
-                            for src in sources {
-                                if !included.contains(src) {
-                                    next_frontier.push(src.clone());
+                        // Add backlinks if requested
+                        if spec.include_backlinks {
+                            if let Some(sources) = self.links_in.get(node_id) {
+                                for src in sources {
+                                    if !included.contains(src) {
+                                        next_frontier.push(src.clone());
+                                    }
                                 }
                             }
                         }
@@ -1234,15 +1306,75 @@ impl KnowledgeBase {
             _ => 0,
         };
 
-        // Collect nodes and categorize links
+        // Collect nodes and categorize links.
+        let (nodes, internal_links, boundary_links) =
+            self.collect_and_categorize(&included, spec.include_body);
+
+        SubgraphResult {
+            nodes,
+            links: internal_links,
+            boundary_links,
+            hidden_node_count,
+        }
+    }
+
+    /// Shared node-collection/link-categorization block, factored out of
+    /// `extract_subgraph` (Phase B1, #462 full-corpus retrieval) so
+    /// `extract_full_corpus` can reuse it verbatim instead of duplicating
+    /// the same clone/strip-fields/internal-vs-boundary logic a second time.
+    /// `extract_subgraph` itself passes its own BFS-produced `included` set
+    /// here unchanged — behavior is byte-identical to before this refactor
+    /// (see the `extract_subgraph_*` test suite, which exercises this
+    /// indirectly and is unmodified by this split).
+    ///
+    /// For every id in `included` that resolves to a real stored `Node`,
+    /// clones it (heavy fields stripped when `include_body` is `false` —
+    /// see `SubgraphSpec::include_body`'s doc comment for exactly which
+    /// fields), then walks its typed links, sorting each into `internal`
+    /// (target also in `included`) or `boundary` (target outside). Ids in
+    /// `included` with no matching stored node (e.g. a phantom BFS starter)
+    /// are silently skipped, matching `extract_subgraph`'s pre-existing
+    /// behavior.
+    fn collect_and_categorize(
+        &self,
+        included: &HashSet<String>,
+        include_body: bool,
+    ) -> (Vec<Node>, Vec<SubgraphLink>, Vec<SubgraphLink>) {
         let mut nodes = Vec::new();
         let mut internal_links = Vec::new();
         let mut boundary_links = Vec::new();
 
-        for id in &included {
+        for id in included {
             if let Some(node) = self.nodes.get(id) {
-                nodes.push(node.clone());
-                for (target, rel_type, weight) in node.links_typed() {
+                // `links_typed()` reads `node.body` — must be computed from
+                // the full node BEFORE any lightweight stripping below, so
+                // `include_body: false` never affects which links surface.
+                let typed_links = node.links_typed();
+                if include_body {
+                    nodes.push(node.clone());
+                } else {
+                    // Keep every cheap scalar/small-Vec field (some are read
+                    // downstream — e.g. `source` by `is_residency_exempt`,
+                    // `kind` by the canvas conversion); drop only the
+                    // confirmed-heavy fields (body/properties/source_file/
+                    // crdt_doc) that the graph view never reads.
+                    nodes.push(Node {
+                        id: node.id.clone(),
+                        title: node.title.clone(),
+                        kind: node.kind,
+                        body: String::new(),
+                        tags: node.tags.clone(),
+                        todo_state: node.todo_state.clone(),
+                        priority: node.priority,
+                        source: node.source,
+                        source_version: node.source_version,
+                        aliases: node.aliases.clone(),
+                        properties: HashMap::new(),
+                        source_file: None,
+                        crdt_doc: None,
+                    });
+                }
+                for (target, rel_type, weight) in typed_links {
                     let link = SubgraphLink {
                         source: id.clone(),
                         target: target.clone(),
@@ -1257,6 +1389,84 @@ impl KnowledgeBase {
                 }
             }
         }
+
+        (nodes, internal_links, boundary_links)
+    }
+
+    /// Full-corpus extraction (Phase B1, #462): every node in this KB, not a
+    /// depth/breadth-bounded BFS from a seed. The naive version of this —
+    /// `extract_subgraph` with `node_cap: None` and `starter_nodes:
+    /// list_ids(None)` — genuinely works (BFS-from-every-node collapses to
+    /// "include everything reachable"), BUT `extract_subgraph`'s node_cap
+    /// truncation unconditionally exempts every `starter_node`, so making
+    /// every node a starter would defeat the one safety net a pathological-
+    /// scale KB needs most. This method sidesteps that entirely: it never
+    /// runs a BFS, so there is no starter-node concept to abuse — the only
+    /// exemption is the caller-supplied `protected` set.
+    ///
+    /// `cap`: safety-net truncation exactly like `SubgraphSpec::node_cap`
+    /// (same degree-sort-descending, tie-break-by-id-ascending selection
+    /// logic, same `hidden_node_count` meaning) — `None` disables it.
+    ///
+    /// `protected`: ids exempt from truncation. Unlike `extract_subgraph`'s
+    /// starter-node exemption (which is total — the whole `starter_nodes`
+    /// list, by construction usually small), the CALLER decides what's
+    /// protected here — e.g. the current focus node plus every node this
+    /// instance uses as a cross-instance-link source (a "bridge" — cutting
+    /// it would silently sever the only connection between two diagrams).
+    /// This function does not know or care what makes an id worth
+    /// protecting; that's a cross-instance/DOI-tiering concern that belongs
+    /// to the caller (`mae-core`, which has `Editor::kb_owner_of` and
+    /// registry access — this crate deliberately has neither). An id in
+    /// `protected` that isn't actually present in this KB is silently
+    /// ignored (never inflates the effective cap), matching `list_ids`'
+    /// "only ids that actually exist" contract.
+    ///
+    /// `include_body`: forwarded to `collect_and_categorize` unchanged —
+    /// same meaning as `SubgraphSpec::include_body`.
+    pub fn extract_full_corpus(
+        &self,
+        cap: Option<usize>,
+        protected: &HashSet<String>,
+        include_body: bool,
+    ) -> SubgraphResult {
+        let mut included: HashSet<String> = self.list_ids(None).into_iter().collect();
+
+        let hidden_node_count = match cap {
+            Some(cap) if included.len() > cap => {
+                // Only ids BOTH caller-protected AND actually present in this
+                // KB count against the exemption budget — an id the caller
+                // protected because it matters in a DIFFERENT instance must
+                // not silently shrink how many of THIS instance's own nodes
+                // get to survive the cap.
+                let protected_in_scope: HashSet<&String> = included
+                    .iter()
+                    .filter(|id| protected.contains(id.as_str()))
+                    .collect();
+                let mut candidates: Vec<&String> = included
+                    .iter()
+                    .filter(|id| !protected_in_scope.contains(id))
+                    .collect();
+                candidates.sort_by(|a, b| {
+                    let deg_a = self.node_degree(a);
+                    let deg_b = self.node_degree(b);
+                    deg_b.cmp(&deg_a).then_with(|| a.cmp(b))
+                });
+                let keep_budget = cap.saturating_sub(protected_in_scope.len());
+                let kept: HashSet<String> = protected_in_scope
+                    .iter()
+                    .map(|s| (*s).clone())
+                    .chain(candidates.into_iter().take(keep_budget).cloned())
+                    .collect();
+                let hidden = included.len() - kept.len();
+                included = kept;
+                hidden
+            }
+            _ => 0,
+        };
+
+        let (nodes, internal_links, boundary_links) =
+            self.collect_and_categorize(&included, include_body);
 
         SubgraphResult {
             nodes,
@@ -1292,6 +1502,63 @@ impl KnowledgeBase {
                     .then_with(|| b.cmp(a))
             })
             .cloned()
+    }
+
+    /// Hop-distance from `focus` to every node reachable from it (ADR-068
+    /// Phase B3 — Furnas Degree-of-Interest's `D(x, focus)` term), walking
+    /// BOTH outgoing (`Node::links()`) and incoming (`links_in`) adjacency —
+    /// i.e. undirected reachability. Deliberately does NOT gate on
+    /// `SubgraphSpec::include_backlinks` the way `extract_subgraph`'s BFS
+    /// does: that flag steers what a BFS-based EXTRACTION pulls in, whereas
+    /// "how far is this node from the user's focus" for render-time
+    /// tiering is a pure topology question that shouldn't silently change
+    /// shape depending on an unrelated extraction setting.
+    ///
+    /// `focus` itself is distance `0` (only when it's an actual node id in
+    /// this KB — an unknown `focus` returns an empty map, never panics).
+    /// Every other key present is reachable, at its shortest hop count; an
+    /// id NOT present in the returned map is unreachable from `focus`
+    /// within this KB (the caller should treat a missing entry as "no
+    /// bound" — see `Editor::graph_view_doi_distances`, the one production
+    /// caller, which maps a missing entry to `None`).
+    ///
+    /// O(V+E) — one BFS frontier expansion per hop, each node visited
+    /// exactly once (the `distances.contains_key` guard below). Callers
+    /// needing a MULTI-source distance (e.g. a diagram with several
+    /// cross-link landing points) call this once per source id and merge
+    /// via per-id minimum — kept a single-source primitive here rather than
+    /// accepting a `&[String]` itself, since every other extraction helper
+    /// in this module (`extract_subgraph`, `extract_full_corpus`) already
+    /// puts multi-id/merge concerns on the CALLER, not this crate.
+    pub fn hop_distances_from(&self, focus: &str) -> HashMap<String, usize> {
+        let mut distances = HashMap::new();
+        if !self.nodes.contains_key(focus) {
+            return distances;
+        }
+        distances.insert(focus.to_string(), 0);
+        let mut frontier = vec![focus.to_string()];
+        let mut depth = 0usize;
+        while !frontier.is_empty() {
+            let mut next_frontier = Vec::new();
+            for id in &frontier {
+                let mut neighbors: Vec<String> = Vec::new();
+                if let Some(node) = self.nodes.get(id) {
+                    neighbors.extend(node.links());
+                }
+                if let Some(sources) = self.links_in.get(id) {
+                    neighbors.extend(sources.iter().cloned());
+                }
+                for n in neighbors {
+                    if !distances.contains_key(&n) {
+                        distances.insert(n.clone(), depth + 1);
+                        next_frontier.push(n);
+                    }
+                }
+            }
+            frontier = next_frontier;
+            depth += 1;
+        }
+        distances
     }
 
     /// Remove multiple nodes at once. Returns the removed nodes.
@@ -3745,6 +4012,7 @@ mod tests {
             max_depth,
             include_backlinks,
             node_cap: None,
+            include_body: true,
         }
     }
 
@@ -3867,5 +4135,404 @@ mod tests {
         let result = kb.extract_subgraph(&s);
         assert_eq!(result.nodes.len(), 2);
         assert_eq!(result.hidden_node_count, 0);
+    }
+
+    #[test]
+    fn extract_subgraph_include_body_false_strips_heavy_fields_without_changing_cap_selection() {
+        // "popular" carries a large body + non-empty properties + a
+        // source_file — the fields we're stripping — and is also the
+        // higher-degree node (two backlinks) that must survive a cap of 2
+        // (starter + 1) over "lonely" (degree 0). Real (not unicorn) sizes:
+        // a few KB of body text, a populated property drawer.
+        let big_body = "x".repeat(5_000);
+        let mut props = HashMap::new();
+        props.insert("last-accessed".to_string(), "2026-01-01".to_string());
+
+        let make_kb = || {
+            kb_with(vec![
+                Node::new("start", "Start", NodeKind::Note, "[[popular]] [[lonely]]"),
+                Node::new("ref1", "Ref1", NodeKind::Note, "[[popular]]"),
+                Node::new("ref2", "Ref2", NodeKind::Note, "[[popular]]"),
+                Node::new("popular", "Popular", NodeKind::Note, big_body.clone())
+                    .with_properties(props.clone())
+                    .with_source_file("/tmp/popular.org"),
+                Node::new("lonely", "Lonely", NodeKind::Note, ""),
+            ])
+        };
+
+        let mut s_light = spec("start", 1, false);
+        s_light.node_cap = Some(2);
+        s_light.include_body = false;
+        let light = make_kb().extract_subgraph(&s_light);
+
+        let mut s_full = spec("start", 1, false);
+        s_full.node_cap = Some(2);
+        // spec()'s include_body defaults to true.
+        let full = make_kb().extract_subgraph(&s_full);
+
+        // The selection (which nodes survive the cap vs. get demoted to a
+        // boundary stub) must be byte-for-byte identical regardless of
+        // include_body — stripping heavy fields must never bias which
+        // nodes get kept. Cap selection happens on the KB's own stored
+        // nodes/degree table before the collection loop, so this is a
+        // regression guard, not a coincidence.
+        let mut light_ids: Vec<&str> = light.nodes.iter().map(|n| n.id.as_str()).collect();
+        let mut full_ids: Vec<&str> = full.nodes.iter().map(|n| n.id.as_str()).collect();
+        light_ids.sort();
+        full_ids.sort();
+        assert_eq!(
+            light_ids, full_ids,
+            "include_body must not change which nodes the cap keeps"
+        );
+        assert_eq!(light.hidden_node_count, full.hidden_node_count);
+        assert!(light_ids.contains(&"popular"));
+        assert!(!light_ids.contains(&"lonely"));
+
+        let popular_light = light.nodes.iter().find(|n| n.id == "popular").unwrap();
+        assert_eq!(popular_light.title, "Popular");
+        assert_eq!(popular_light.kind, NodeKind::Note);
+        assert_eq!(popular_light.body, "", "body must be stripped");
+        assert!(
+            popular_light.properties.is_empty(),
+            "properties must be stripped"
+        );
+        assert_eq!(
+            popular_light.source_file, None,
+            "source_file must be stripped"
+        );
+        assert_eq!(popular_light.crdt_doc, None, "crdt_doc must be stripped");
+
+        // The include_body: true path (existing default behavior) must be
+        // completely unaffected — full body/properties/source_file intact.
+        let popular_full = full.nodes.iter().find(|n| n.id == "popular").unwrap();
+        assert_eq!(popular_full.body, big_body);
+        assert_eq!(popular_full.properties, props);
+        assert_eq!(
+            popular_full.source_file,
+            Some(std::path::PathBuf::from("/tmp/popular.org"))
+        );
+    }
+
+    #[test]
+    fn extract_subgraph_include_body_true_clones_every_field_byte_identical() {
+        // Regression guard for principle #14: the pre-existing (default)
+        // behavior must be provably unchanged by this PR, not just
+        // "looks empty by coincidence" — every field on the returned Node
+        // must match the originally-inserted Node exactly.
+        let big_body = "y".repeat(500);
+        let mut props = HashMap::new();
+        props.insert("k".to_string(), "v".to_string());
+        let original = Node::new("a", "A", NodeKind::Concept, big_body.clone())
+            .with_properties(props.clone())
+            .with_tags(vec!["t1", "t2"])
+            .with_aliases(vec!["alias1"])
+            .with_todo_state("TODO")
+            .with_priority('A')
+            .with_source(NodeSource::UserOrg, 3);
+
+        let kb = kb_with(vec![original.clone()]);
+        let result = kb.extract_subgraph(&spec("a", 0, false));
+        assert_eq!(result.nodes.len(), 1);
+        let got = &result.nodes[0];
+        assert_eq!(got.id, original.id);
+        assert_eq!(got.title, original.title);
+        assert_eq!(got.kind, original.kind);
+        assert_eq!(got.body, original.body);
+        assert_eq!(got.tags, original.tags);
+        assert_eq!(got.todo_state, original.todo_state);
+        assert_eq!(got.priority, original.priority);
+        assert_eq!(got.source, original.source);
+        assert_eq!(got.source_version, original.source_version);
+        assert_eq!(got.aliases, original.aliases);
+        assert_eq!(got.properties, original.properties);
+        assert_eq!(got.source_file, original.source_file);
+        assert_eq!(got.crdt_doc, original.crdt_doc);
+    }
+
+    #[test]
+    fn extract_subgraph_include_body_false_avoids_cloning_heavy_body_text_at_scale() {
+        // Proxy for the memory-scaling claim: N=250 nodes each with a
+        // several-KB body, chained so a single BFS walk reaches all of
+        // them (mirroring "near-whole-KB subgraph for a well-connected
+        // node" from kb_graph_node_count_cap's own doc string). Asserting
+        // the summed body length is ~0 proves the heavy field genuinely
+        // isn't cloned, not merely that it happens to look empty.
+        const N: usize = 250;
+        const BODY_BYTES: usize = 4096;
+        let body = "z".repeat(BODY_BYTES);
+
+        let mut nodes = Vec::with_capacity(N);
+        for i in 0..N {
+            let link = if i + 1 < N {
+                format!("[[n{}]]", i + 1)
+            } else {
+                String::new()
+            };
+            let node_body = format!("{body}\n{link}");
+            nodes.push(Node::new(
+                format!("n{i}"),
+                format!("N{i}"),
+                NodeKind::Note,
+                node_body,
+            ));
+        }
+        let kb = kb_with(nodes);
+
+        let mut s = spec("n0", N, false);
+        s.include_body = false;
+        let result = kb.extract_subgraph(&s);
+
+        assert_eq!(
+            result.nodes.len(),
+            N,
+            "sanity: BFS must actually walk the full chain"
+        );
+        let total_body_bytes: usize = result.nodes.iter().map(|n| n.body.len()).sum();
+        assert!(
+            total_body_bytes < 1024,
+            "include_body: false must not clone body text at scale — got \
+             {total_body_bytes} bytes across {N} nodes that each have a \
+             {BODY_BYTES}-byte body"
+        );
+    }
+
+    /// Build a KB of `n` nodes with varying degree: node 0 is a hub linking
+    /// to every other node (giving it the highest degree by construction);
+    /// the rest have no outgoing links of their own, so their only degree
+    /// comes from that one incoming edge (all tied at degree 1) — except
+    /// `low_degree_id`, which additionally gets NO backlink from the hub
+    /// (degree 0), making it the single lowest-degree node a naive
+    /// degree-only cap would always cut first.
+    fn kb_with_hub_and_low_degree_outlier(n: usize, low_degree_id: &str) -> KnowledgeBase {
+        let mut nodes = Vec::with_capacity(n);
+        let mut hub_body = String::new();
+        for i in 0..n {
+            let id = format!("n{i}");
+            if id != low_degree_id {
+                hub_body.push_str(&format!("[[{id}]] "));
+            }
+        }
+        nodes.push(Node::new("hub", "Hub", NodeKind::Note, hub_body));
+        for i in 0..n {
+            nodes.push(Node::new(
+                format!("n{i}"),
+                format!("N{i}"),
+                NodeKind::Note,
+                "",
+            ));
+        }
+        kb_with(nodes)
+    }
+
+    #[test]
+    fn extract_full_corpus_no_cap_includes_literally_every_node() {
+        // 20+ nodes across varying degree (a hub + everything else), no cap
+        // — every single node must survive, proving this pulls the WHOLE
+        // corpus rather than any BFS-reachable subset.
+        const N: usize = 24;
+        let kb = kb_with_hub_and_low_degree_outlier(N, "n0");
+        let result = kb.extract_full_corpus(None, &HashSet::new(), true);
+        assert_eq!(
+            result.nodes.len(),
+            N + 1,
+            "must include every node (hub + {N} leaves), not a truncated subset"
+        );
+        assert_eq!(result.hidden_node_count, 0);
+        let ids: HashSet<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains("hub"));
+        for i in 0..N {
+            assert!(
+                ids.contains(format!("n{i}").as_str()),
+                "n{i} must be present"
+            );
+        }
+    }
+
+    #[test]
+    fn extract_full_corpus_cap_exempts_only_the_protected_low_degree_bridge_node() {
+        // Adversarial case (CLAUDE.md #14): "lonely_bridge" is deliberately
+        // the LOWEST-degree node in the KB (no incoming link from the hub,
+        // unlike every other leaf) — a naive degree-only cap would always
+        // cut it first. It's also the sole cross-instance-link source in
+        // this scenario (simulated here by the caller marking it
+        // `protected`), so it MUST survive truncation anyway, while OTHER
+        // equally-unprotected low-degree nodes (n1, n2, ... ordinary leaves)
+        // DO get cut to make room.
+        const N: usize = 30;
+        // "unused" never appears in any n{i} id, so the hub links to every
+        // n{i} (each getting degree 1) while "lonely_bridge", added below,
+        // gets zero incoming links — the deliberately lowest-degree node.
+        let base = kb_with_hub_and_low_degree_outlier(N, "unused");
+        let mut nodes: Vec<Node> = base.iter().map(|(_, n)| n.clone()).collect();
+        nodes.push(Node::new(
+            "lonely_bridge",
+            "Lonely Bridge",
+            NodeKind::Note,
+            "",
+        ));
+        let kb = kb_with(nodes);
+
+        // cap well below the total (hub + N leaves + lonely_bridge).
+        let cap = 5usize;
+        let mut protected = HashSet::new();
+        protected.insert("lonely_bridge".to_string());
+
+        let result = kb.extract_full_corpus(Some(cap), &protected, true);
+        let ids: HashSet<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+
+        assert!(
+            ids.contains("lonely_bridge"),
+            "the protected, deliberately-lowest-degree bridge node must survive \
+             truncation even though a naive degree-only cap would cut it: {ids:?}"
+        );
+        assert!(
+            ids.contains("hub"),
+            "the highest-degree node should also naturally survive on merit"
+        );
+        // The cap (5) minus the one protected node leaves room for 4
+        // degree-ranked survivors; with N=30 ordinary leaves all tied at
+        // degree 1 (or 0), most must be cut — prove at least one ordinary
+        // (unprotected) leaf was actually excluded, not just "everything
+        // happened to fit".
+        let some_leaf_cut = (0..N).any(|i| !ids.contains(format!("n{i}").as_str()));
+        assert!(
+            some_leaf_cut,
+            "unprotected low-degree leaves must actually be cut by the cap, not just \
+             the protected node exempted: {ids:?}"
+        );
+        assert_eq!(
+            result.nodes.len(),
+            cap,
+            "protected node counts toward the cap budget (like a starter node does in \
+             extract_subgraph), it's just never the one CHOSEN to be cut"
+        );
+    }
+
+    #[test]
+    fn extract_full_corpus_hidden_node_count_matches_actual_cut_count() {
+        const N: usize = 40;
+        let kb = kb_with_hub_and_low_degree_outlier(N, "n0");
+        let total = N + 1; // hub + N leaves
+        let cap = 10usize;
+        let result = kb.extract_full_corpus(Some(cap), &HashSet::new(), true);
+        assert_eq!(result.nodes.len(), cap);
+        assert_eq!(
+            result.hidden_node_count,
+            total - cap,
+            "hidden_node_count must reflect exactly how many were cut, not an \
+             incidental/stale value"
+        );
+    }
+
+    #[test]
+    fn extract_full_corpus_protected_id_absent_from_this_kb_does_not_shrink_the_effective_cap() {
+        // A `protected` id that belongs to a DIFFERENT KB instance (never
+        // present here) must be silently ignored — not treated as consuming
+        // one slot of the exemption budget, which would otherwise leave one
+        // fewer real node kept than the cap promises.
+        const N: usize = 20;
+        let kb = kb_with_hub_and_low_degree_outlier(N, "n0");
+        let cap = 8usize;
+        let mut protected = HashSet::new();
+        protected.insert("concept:from-a-totally-different-instance".to_string());
+
+        let result = kb.extract_full_corpus(Some(cap), &protected, true);
+        assert_eq!(
+            result.nodes.len(),
+            cap,
+            "a protected id absent from this KB must not change the effective cap"
+        );
+    }
+
+    #[test]
+    fn extract_full_corpus_cap_larger_than_total_is_a_no_op() {
+        const N: usize = 10;
+        let kb = kb_with_hub_and_low_degree_outlier(N, "n0");
+        let result = kb.extract_full_corpus(Some(1000), &HashSet::new(), true);
+        assert_eq!(result.nodes.len(), N + 1);
+        assert_eq!(result.hidden_node_count, 0);
+    }
+
+    #[test]
+    fn extract_full_corpus_include_body_false_strips_heavy_fields() {
+        let big_body = "x".repeat(5_000);
+        let kb = kb_with(vec![Node::new("a", "A", NodeKind::Note, big_body.clone())]);
+        let result = kb.extract_full_corpus(None, &HashSet::new(), false);
+        assert_eq!(result.nodes.len(), 1);
+        assert_eq!(result.nodes[0].body, "", "body must be stripped");
+
+        let result_full = kb.extract_full_corpus(None, &HashSet::new(), true);
+        assert_eq!(result_full.nodes[0].body, big_body);
+    }
+
+    // --- hop_distances_from (ADR-068 Phase B3) ---
+
+    #[test]
+    fn hop_distances_from_focus_itself_is_zero_and_neighbors_grow_by_one_hop() {
+        // a -> b -> c, a straight chain: focus a is 0, b is 1, c is 2.
+        let kb = kb_with(vec![
+            Node::new("a", "A", NodeKind::Note, "[[b]]"),
+            Node::new("b", "B", NodeKind::Note, "[[c]]"),
+            Node::new("c", "C", NodeKind::Note, ""),
+        ]);
+        let dist = kb.hop_distances_from("a");
+        assert_eq!(dist.get("a"), Some(&0));
+        assert_eq!(dist.get("b"), Some(&1));
+        assert_eq!(dist.get("c"), Some(&2));
+    }
+
+    #[test]
+    fn hop_distances_from_walks_incoming_links_too_not_just_outgoing() {
+        // a links to b (a -> b); distance FROM b must still find a at hop 1
+        // via the incoming/backlink side -- distance is undirected
+        // reachability, unlike extract_subgraph's include_backlinks-gated
+        // BFS.
+        let kb = kb_with(vec![
+            Node::new("a", "A", NodeKind::Note, "[[b]]"),
+            Node::new("b", "B", NodeKind::Note, ""),
+        ]);
+        let dist = kb.hop_distances_from("b");
+        assert_eq!(dist.get("b"), Some(&0));
+        assert_eq!(
+            dist.get("a"),
+            Some(&1),
+            "distance must walk the incoming-link side too: {dist:?}"
+        );
+    }
+
+    #[test]
+    fn hop_distances_from_takes_the_shortest_of_multiple_paths() {
+        // a -> b -> d (2 hops) and a -> c -> nothing, but ALSO a -> d
+        // directly (1 hop) -- the direct edge must win, not the longer path
+        // discovered on the same BFS frontier.
+        let kb = kb_with(vec![
+            Node::new("a", "A", NodeKind::Note, "[[b]] [[d]]"),
+            Node::new("b", "B", NodeKind::Note, "[[d]]"),
+            Node::new("d", "D", NodeKind::Note, ""),
+        ]);
+        let dist = kb.hop_distances_from("a");
+        assert_eq!(dist.get("d"), Some(&1));
+    }
+
+    #[test]
+    fn hop_distances_from_unreachable_node_is_absent_not_panicking() {
+        let kb = kb_with(vec![
+            Node::new("a", "A", NodeKind::Note, ""),
+            Node::new("island", "Island", NodeKind::Note, ""),
+        ]);
+        let dist = kb.hop_distances_from("a");
+        assert_eq!(dist.get("a"), Some(&0));
+        assert_eq!(
+            dist.get("island"),
+            None,
+            "a node with no path to/from focus must be absent, not zero/panic: {dist:?}"
+        );
+    }
+
+    #[test]
+    fn hop_distances_from_unknown_focus_id_returns_empty_map() {
+        let kb = kb_with(vec![Node::new("a", "A", NodeKind::Note, "")]);
+        let dist = kb.hop_distances_from("does-not-exist");
+        assert!(dist.is_empty());
     }
 }

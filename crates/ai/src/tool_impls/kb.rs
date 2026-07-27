@@ -991,6 +991,23 @@ pub fn execute_kb_graph_view_open(
         "node_count": gv.scene.nodes.len(),
         "edge_count": gv.scene.edges.len(),
         "hidden_node_count": gv.hidden_node_count,
+        // #462 PR4: "single" (default) or "multi" — see
+        // GraphViewMode::as_str. `diagrams`/the two hidden-* counts are
+        // always present (Single mode reports exactly one diagram, zero
+        // hidden of either kind) so callers don't need to branch on mode
+        // to read them.
+        "mode": gv.mode.as_str(),
+        "diagrams": gv.diagram_labels.iter().map(|d| serde_json::json!({
+            "instance": d.instance,
+            "name": d.name,
+            "node_count": d.node_count,
+            // #479: `false` when a registered KB instance failed to
+            // load/open, distinct from a genuinely empty-but-healthy
+            // instance (`loaded: true`, `node_count: 0`).
+            "loaded": d.loaded,
+        })).collect::<Vec<_>>(),
+        "hidden_cross_instance_link_count": gv.hidden_cross_instance_link_count,
+        "hidden_related_instance_count": gv.hidden_related_instance_count,
     }))
     .map_err(|e| e.to_string())
 }
@@ -1117,10 +1134,20 @@ pub fn execute_kb_graph_view_toggle_overlay(
 /// `requester_provider` -- the caller's AI provider, when known -- lets this
 /// UnscopedFederatedContentFilterable tool (#361) post-filter the AI's read
 /// of an already-open graph buffer without restricting what the human sees
-/// on screen: a graph view is scoped to exactly one KB (`kb_instance`, or
-/// primary when `None`), so if THAT kb is restricted, only seed-exempt
-/// nodes (and edges between surviving nodes) are reported; `selected_node`/
-/// `hovered_node` are cleared if they pointed at a filtered-out node.
+/// on screen. Per-diagram (#462 PR4): `Single` mode's graph view is scoped
+/// to exactly one KB (`kb_instance`, or primary when `None`, mirrored as
+/// `s.diagrams`' one entry), so if THAT kb is restricted, only seed-exempt
+/// nodes (and edges between surviving nodes) are reported — unchanged from
+/// before this PR. `Multi` mode composes N instances into one merged
+/// scene, so this now checks EACH diagram's OWN residency policy against
+/// its OWN contiguous node-block (`s.diagrams`, in the same order as
+/// `s.nodes` — see `GraphViewState.diagrams`'s doc comment for that
+/// ordering/contiguity invariant) rather than only ever consulting the
+/// seed's — otherwise a `LocalModelsOnly` federated KB pulled in as a
+/// RELATED instance could leak its non-seed content to a non-local
+/// provider just because the SEED instance itself happened to be
+/// unrestricted. `selected_node`/`hovered_node` are cleared if they
+/// pointed at a filtered-out node.
 pub fn execute_kb_graph_view_state(
     editor: &mut Editor,
     _args: &serde_json::Value,
@@ -1130,8 +1157,8 @@ pub fn execute_kb_graph_view_state(
     if let Some(s) = state.as_mut() {
         let local_bypass =
             requester_provider.is_some_and(mae_core::ai_residency::is_local_provider);
-        let restricted = !local_bypass
-            && match &s.kb_instance {
+        if !local_bypass {
+            let is_restricted_instance = |instance: &Option<String>| match instance {
                 None => {
                     editor.kb.registry.primary_ai_residency
                         == mae_kb::federation::AiResidency::LocalModelsOnly
@@ -1140,13 +1167,66 @@ pub fn execute_kb_graph_view_state(
                     inst.ai_residency == mae_kb::federation::AiResidency::LocalModelsOnly
                 }),
             };
-        if restricted {
-            s.nodes.retain(|n| n.is_seed);
-            let kept_ids: std::collections::HashSet<&str> =
-                s.nodes.iter().map(|n| n.id.as_str()).collect();
-            s.edges.retain(|e| {
-                kept_ids.contains(e.source_id.as_str()) && kept_ids.contains(e.target_id.as_str())
+            // One flag per node, aligned via each diagram's contiguous
+            // `node_count` block. `s.diagrams` is non-empty (one entry per
+            // composed instance, at least the seed) whenever `s.nodes` is,
+            // so this always has SOME coverage; any surplus (a broken
+            // invariant, e.g. `diagrams`' counts not summing to
+            // `nodes.len()`) fails CLOSED (treated as restricted) rather
+            // than silently leaving trailing nodes unfiltered.
+            let mut node_restricted = vec![true; s.nodes.len()];
+            let mut offset = 0usize;
+            for d in &s.diagrams {
+                let restricted = is_restricted_instance(&d.instance);
+                for slot in node_restricted.iter_mut().skip(offset).take(d.node_count) {
+                    *slot = restricted;
+                }
+                offset += d.node_count;
+            }
+            // Per-node keep decision, computed up front (not inline in the
+            // `retain` closure below) so it can ALSO drive a per-diagram
+            // survivor recount — see the `d.node_count` rewrite below.
+            let keep_flags: Vec<bool> = s
+                .nodes
+                .iter()
+                .enumerate()
+                .map(|(i, n)| n.is_seed || !node_restricted[i])
+                .collect();
+
+            // #462 access-model review: `s.diagrams[i].node_count` must
+            // reflect what SURVIVES filtering, not the pre-filter total --
+            // otherwise (a) `GraphViewState.diagrams`' documented
+            // "contiguous per-diagram block" invariant (`diagrams[i].
+            // node_count` nodes, then `diagrams[i+1]`'s, ...) goes stale
+            // the moment any node in that block is filtered out, and (b) a
+            // `LocalModelsOnly` RELATED instance's true neighborhood size
+            // near this link leaks even when every one of its non-seed
+            // nodes was just excluded above.
+            {
+                let mut offset = 0usize;
+                for d in s.diagrams.iter_mut() {
+                    let original_count = d.node_count;
+                    let survivors = keep_flags
+                        .get(offset..offset + original_count)
+                        .map(|slice| slice.iter().filter(|&&k| k).count())
+                        .unwrap_or(0);
+                    d.node_count = survivors;
+                    offset += original_count;
+                }
+            }
+
+            let mut kept_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+            let mut idx = 0usize;
+            s.nodes.retain(|n| {
+                let keep = keep_flags[idx];
+                idx += 1;
+                if keep {
+                    kept_ids.insert(n.id.clone());
+                }
+                keep
             });
+            s.edges
+                .retain(|e| kept_ids.contains(&e.source_id) && kept_ids.contains(&e.target_id));
             if s.selected_node
                 .as_deref()
                 .is_some_and(|id| !kept_ids.contains(id))
@@ -4886,6 +4966,97 @@ mod tests {
         );
     }
 
+    #[test]
+    fn kb_graph_view_state_multi_mode_filters_only_the_restricted_diagrams_non_seed_nodes() {
+        // Adversarial (#462 PR4 / CLAUDE.md #14): the ORIGINAL check only
+        // ever consulted the SEED's own residency (`kb_instance`) -- in
+        // `Multi` mode a RELATED instance can carry its own, stricter
+        // residency policy independent of the seed's. A `LocalModelsOnly`
+        // related instance's non-seed content must never leak to a
+        // non-local provider just because the seed (primary, unrestricted
+        // here) happens to be fine.
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(seed_node_with(
+            "seed:multi-graphview-center",
+            "see [[user:multi-graphview-sibling]]",
+        ));
+        let mut inst = mae_core::KnowledgeBase::new();
+        inst.insert(non_seed_node_with(
+            "user:multi-graphview-sibling",
+            "sibling content",
+        ));
+        editor
+            .kb
+            .instances
+            .insert("uuid-multi-graphview-restricted".to_string(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-multi-graphview-restricted".into(),
+                name: "MultiGraphViewRestricted".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::LocalModelsOnly,
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
+            });
+
+        editor.kb_graph_view_mode = mae_core::GraphViewMode::Multi;
+        execute_kb_graph_view_open(
+            &mut editor,
+            &serde_json::json!({"id": "seed:multi-graphview-center", "depth": 0}),
+        )
+        .unwrap();
+
+        // Sanity: confirm this actually composed two diagrams -- otherwise
+        // this test would vacuously pass without ever exercising the
+        // multi-instance filtering path at all.
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == mae_core::BufferKind::Graph)
+            .unwrap();
+        let diagram_count = editor.buffers[idx]
+            .graph_view()
+            .unwrap()
+            .diagram_labels
+            .len();
+        assert_eq!(
+            diagram_count, 2,
+            "sanity: seed + the restricted sibling diagram"
+        );
+
+        let result =
+            execute_kb_graph_view_state(&mut editor, &serde_json::json!({}), Some("claude"))
+                .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let nodes = v["nodes"].as_array().unwrap();
+        assert!(
+            nodes
+                .iter()
+                .any(|n| n["id"] == "seed:multi-graphview-center"),
+            "the unrestricted seed's own node must survive: {nodes:?}"
+        );
+        assert!(
+            !nodes
+                .iter()
+                .any(|n| n["id"] == "user:multi-graphview-sibling"),
+            "a restricted RELATED instance's non-seed node must be filtered out even though the \
+             seed instance itself is unrestricted: {nodes:?}"
+        );
+    }
+
     // ADR-061 Phase E: `kb_enrich` (daemon_mode=off enrich-now).
 
     #[test]
@@ -5015,6 +5186,136 @@ mod tests {
         assert!(
             !v["errors"].as_array().unwrap().is_empty(),
             "a failed embed call must be reported as an error, not silently dropped: {v}"
+        );
+    }
+
+    #[test]
+    fn kb_graph_view_state_multi_mode_recomputes_diagram_node_count_after_residency_filter() {
+        // Adversarial (#462 access-model review / CLAUDE.md #14): the original
+        // per-diagram filter dropped restricted non-seed NODES but left each
+        // `diagrams[i].node_count` at its PRE-filter total -- a real bug on
+        // two fronts. (1) It breaks `GraphViewState.diagrams`'s own
+        // documented contiguous-per-diagram-block invariant the moment any
+        // node in that block is filtered out (a consumer trying to re-derive
+        // which of `nodes` belongs to which diagram from `node_count` alone
+        // gets the wrong grouping). (2) It leaks a `LocalModelsOnly` related
+        // instance's true neighborhood size (how many notes are actually
+        // there) to a non-local provider even when every one of those nodes
+        // was just excluded from `nodes` -- content-adjacent metadata the
+        // filter was supposed to withhold, not merely the node bodies/titles.
+        //
+        // The restricted sibling instance has THREE nodes reachable at
+        // depth 0 (all direct cross-links from the seed, so all three are
+        // starters): one seed-exempt, two genuinely non-seed. Only the
+        // seed-exempt one should survive -- so `node_count` for that
+        // diagram must end up `1`, never the pre-filter `3`.
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(seed_node_with(
+            "seed:multi-graphview-count-center",
+            "see [[user:multi-graphview-count-seed]] [[user:multi-graphview-count-a]] \
+             [[user:multi-graphview-count-b]]",
+        ));
+        let mut inst = mae_core::KnowledgeBase::new();
+        inst.insert(seed_node_with(
+            "user:multi-graphview-count-seed",
+            "seed-exempt sibling content",
+        ));
+        inst.insert(non_seed_node_with(
+            "user:multi-graphview-count-a",
+            "non-seed sibling content a",
+        ));
+        inst.insert(non_seed_node_with(
+            "user:multi-graphview-count-b",
+            "non-seed sibling content b",
+        ));
+        editor
+            .kb
+            .instances
+            .insert("uuid-multi-graphview-count-restricted".to_string(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-multi-graphview-count-restricted".into(),
+                name: "MultiGraphViewCountRestricted".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::LocalModelsOnly,
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
+            });
+
+        editor.kb_graph_view_mode = mae_core::GraphViewMode::Multi;
+        execute_kb_graph_view_open(
+            &mut editor,
+            &serde_json::json!({"id": "seed:multi-graphview-count-center", "depth": 0}),
+        )
+        .unwrap();
+
+        // Sanity: confirm the restricted sibling diagram really did compose
+        // with all 3 nodes BEFORE filtering -- otherwise this test would
+        // vacuously pass without ever exercising a real pre/post-filter
+        // count mismatch.
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == mae_core::BufferKind::Graph)
+            .unwrap();
+        let pre_filter_diagrams = editor.buffers[idx]
+            .graph_view()
+            .unwrap()
+            .diagram_labels
+            .clone();
+        let pre_filter_sibling = pre_filter_diagrams
+            .iter()
+            .find(|d| d.name == "MultiGraphViewCountRestricted")
+            .expect("sanity: the restricted sibling diagram must have composed");
+        assert_eq!(
+            pre_filter_sibling.node_count, 3,
+            "sanity: all 3 sibling nodes must be present pre-filter"
+        );
+
+        let result =
+            execute_kb_graph_view_state(&mut editor, &serde_json::json!({}), Some("claude"))
+                .unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let diagrams = v["diagrams"].as_array().unwrap();
+        let sibling_diagram = diagrams
+            .iter()
+            .find(|d| d["name"] == "MultiGraphViewCountRestricted")
+            .expect(
+                "the restricted sibling's diagram entry must still be reported (name/existence \
+                     is never gated -- kb_instances already exposes this unconditionally)",
+            );
+        assert_eq!(
+            sibling_diagram["node_count"], 1,
+            "node_count must be recomputed to the POST-filter survivor count (the lone seed-exempt \
+             node), never the pre-filter total of 3 non-seed-filtered nodes: {sibling_diagram:?}"
+        );
+
+        // Cross-check against the actual surviving `nodes` array: exactly
+        // one node from this instance should be present, and it must be
+        // the seed-exempt one.
+        let nodes = v["nodes"].as_array().unwrap();
+        let surviving_sibling_ids: Vec<&str> = nodes
+            .iter()
+            .filter_map(|n| n["id"].as_str())
+            .filter(|id| id.starts_with("user:multi-graphview-count-"))
+            .collect();
+        assert_eq!(
+            surviving_sibling_ids,
+            vec!["user:multi-graphview-count-seed"],
+            "the recomputed node_count must actually match which nodes survived: {nodes:?}"
         );
     }
 

@@ -47,7 +47,15 @@ pub struct GraphView {
     pub depth: usize,
     /// Which KB instance owns `center_node`: `None` = primary,
     /// `Some(uuid)` = a federated instance (see `Editor::kb_owner_of`).
+    /// In `GraphViewMode::Multi`, this is still just the SEED instance —
+    /// see `diagram_labels` for the full composed set.
     pub kb_instance: Option<String>,
+    /// Whether this view composes ONE KB instance's subgraph or several
+    /// (#462 PR4). Snapshotted from `kb_graph_view_mode` by
+    /// `Editor::populate_graph_buffer` on every (re)populate — read back by
+    /// `describe_state`, `render_graph_view_as_text`'s TUI grouping, and
+    /// `execute_kb_graph_view_state`'s per-diagram AI-residency filtering.
+    pub mode: GraphViewMode,
     /// Phase 2 (not wired yet): whether the graph should re-center itself
     /// when the human/AI navigates to a different KB node elsewhere.
     /// Snapshotted from `kb_graph_follow_current_node` on open.
@@ -56,6 +64,17 @@ pub struct GraphView {
     /// is buffer-level/shared topology, legitimately the SAME for every
     /// window showing this graph buffer (see `viewports`/`rendered` below
     /// for the per-window state a second window needs its own copy of).
+    ///
+    /// @ai-caution: [window-lifecycle] Multi-KB mode (`GraphViewMode::Multi`,
+    /// #462 PR4) populates this SAME field with one merged `SceneGraph`
+    /// spanning every composed instance — it does NOT add a new per-window
+    /// or per-instance map. `viewports`/`rendered`/`render_epoch` below are
+    /// populated exactly the same way in both modes. If a future change
+    /// adds a genuinely new per-window map for multi-KB (e.g. per-diagram
+    /// collapse state), it MUST be added to `Editor::
+    /// prune_closed_window_graph_state`'s retain block — see this struct's
+    /// own top-level doc comment for why that's the one canonical prune
+    /// site.
     pub scene: mae_canvas::scene::SceneGraph,
     /// Per-window pan/zoom/pixel-size (issue #321). A graph buffer can be
     /// shown in more than one window (`:split-vertical` while it's focused
@@ -151,6 +170,124 @@ pub struct GraphView {
     /// and a one-shot status message so a truncated view is never silently
     /// mistaken for the whole neighborhood.
     pub hidden_node_count: usize,
+    /// Per-diagram caption metadata (#462 PR4) — populated in BOTH
+    /// `GraphViewMode::Single` (exactly one entry, the seed KB's own name —
+    /// a small parity bonus, not load-bearing for Single mode's own
+    /// rendering) and `GraphViewMode::Multi` (one entry per composed
+    /// instance, in the SAME order `mae_canvas::kb_graph::
+    /// build_multi_kb_chord_positions` appended their nodes into the merged
+    /// `scene` — i.e. `diagram_labels[i]`'s node block occupies a
+    /// CONTIGUOUS `node_count`-wide slice of `scene.nodes`, starting right
+    /// after the previous entry's slice ends. `render_graph_view_as_text`'s
+    /// Multi-mode grouping and `push_diagram_labels`'s GUI caption
+    /// rendering both rely on this ordering/contiguity invariant).
+    pub diagram_labels: Vec<mae_canvas::kb_graph::DiagramLabel>,
+    /// How many `Multi`-mode cross-instance links `build_multi_kb_chord_
+    /// positions` had to drop because their `target_instance` wasn't among
+    /// the actually-rendered diagrams (stale/unregistered/filtered by
+    /// `kb_graph_multi_kb_max_related_instances`) — parallel to
+    /// `hidden_node_count` above (same "surface a count, never silently
+    /// truncate" contract). Always `0` in `Single` mode.
+    pub hidden_cross_instance_link_count: usize,
+    /// The cross-instance links that WERE successfully resolved into
+    /// `scene` edges in `Multi` mode — semantic (source/target ids +
+    /// target instance + rel_type), NOT scene indices, so
+    /// `render_graph_view_as_text`'s "** Cross-KB links" section (and any
+    /// future MCP/Scheme introspection) can resolve titles/format however
+    /// it needs without reverse-engineering which merged `scene.edges`
+    /// entries happen to be cross-instance ones. Always empty in `Single`
+    /// mode.
+    pub cross_instance_links: Vec<mae_kb::CrossInstanceLink>,
+    /// How many candidate related instances (per `kb_graph_multi_kb_scope`)
+    /// were NOT composed because `kb_graph_multi_kb_max_related_instances`
+    /// capped the set — same "surface a count, never silently truncate"
+    /// contract as `hidden_node_count`/`hidden_cross_instance_link_count`.
+    /// Always `0` in `Single` mode.
+    pub hidden_related_instance_count: usize,
+    /// Monotonic counter bumped by every `Editor::populate_graph_buffer`
+    /// call (a fresh topology) AND by `Editor::kb_graph_view_close` —
+    /// stamped onto every `GraphLayoutIntent` this view queues (including
+    /// the Phase 3 tick-requeue) and compared back against in
+    /// `Editor::apply_graph_layout_result`.
+    ///
+    /// @ai-caution: [architecture-debt] Fixes the stale-background-layout
+    /// race (#462 audit): a background `ForceLayout` computation is not
+    /// cancellable, so a second `populate_graph_buffer` (e.g.
+    /// `maybe_follow_kb_graph_view` re-centering) firing before the first
+    /// pass's result lands used to let whichever result arrived LAST
+    /// wholesale-replace `scene` — even carrying `hovered`/`selection`/
+    /// `pinned` forward BY INDEX against a topology that may no longer
+    /// match. `apply_graph_layout_result` now discards (no-ops) any result
+    /// whose stamped generation doesn't match this field's CURRENT value.
+    /// Starts at `0` (never populated); resets to `0` on a brand-new
+    /// `GraphView` instance (`GraphView::new()`), so a stale result from a
+    /// CLOSED view landing after a close+reopen that happens to reuse the
+    /// same `buf_idx` is caught whenever the two views' populate counts
+    /// differ — the common case for this narrow window, though not an
+    /// absolute guarantee if both experienced the exact same number of
+    /// populates before the stale result lands (a global, never-reset
+    /// per-buf_idx counter would close that residual gap; out of scope for
+    /// this pass).
+    pub generation: u64,
+    /// Memoized `compute_label_winners` result — see `LabelWinnerCache`'s
+    /// doc comment. `pub(crate)`, not `pub`: only `flatten_scene_graph_
+    /// cached`'s one real call site (`graph_view_reflatten_window`) ever
+    /// touches this; it is not part of `GraphView`'s externally-meaningful
+    /// state (unlike `scene`/`node_degrees`/etc.), just a render-path
+    /// optimization detail.
+    pub(crate) label_winner_cache: Option<LabelWinnerCache>,
+    /// ADR-068 Phase B3: the current DOI (Degree-of-Interest) focus node —
+    /// DISTINCT from `center_node` (the topology's BFS/extraction seed).
+    /// `None` before the first focus-follow event in full-corpus mode, or
+    /// whenever full-corpus DOI tiering isn't active for this view at all
+    /// (`kb_graph_multi_kb_full_corpus` off, or `mode != Multi`) — in
+    /// either case each diagram falls back to its own default focus set
+    /// (`diagram_focus_ids`). Updated by `Editor::maybe_follow_kb_graph_view`
+    /// WITHOUT calling `populate_graph_buffer` — the whole point of
+    /// decoupling "focus changed" from "topology changed" (see that
+    /// method's doc comment): a focus change must be cheap (no
+    /// re-extraction, no re-layout, no node-position changes), unlike a
+    /// genuine `center_node` change in non-full-corpus mode, which still
+    /// re-extracts exactly as before.
+    pub doi_focus: Option<String>,
+    /// Monotonic counter bumped whenever `doi_focus` changes (focus-follow
+    /// in full-corpus mode) AND on every `populate_graph_buffer` call (a
+    /// fresh topology implicitly invalidates whatever `doi_focus` meant
+    /// under the OLD topology — see `populate_graph_buffer`'s reset of
+    /// `doi_focus` to `None` on every populate). Mirrors `generation`'s
+    /// exact bump-and-stamp idiom, but scoped to DOI/tiering caches only
+    /// (`doi_tier_cache`) — deliberately NOT the same counter as
+    /// `generation` itself (that one is for topology/layout staleness;
+    /// this one is for "does the cached render-tier assignment still
+    /// reflect the current focus").
+    pub doi_generation: u64,
+    /// Per-node a-priori importance tier (ADR-068 Phase B2), topology-
+    /// derived — computed ONCE per `populate_graph_buffer` call (mirrors
+    /// `node_degrees`' own "compute once, cache, never per-frame" pattern)
+    /// and parallel to `scene.nodes`. Empty whenever full-corpus DOI mode
+    /// isn't active for this view (`kb_graph_multi_kb_full_corpus` off, or
+    /// `mode != Multi`) — `compute_node_tiers` treats an empty/short slice
+    /// as `ApiTier::Ordinary` for any index past its end, but in practice
+    /// callers gate the WHOLE DOI pass on the same full-corpus check
+    /// before ever reading this, so it's simply unused garbage-free `Vec::
+    /// new()` in that case, never a source of incorrect tiering.
+    pub(crate) node_api_tier: Vec<ApiTier>,
+    /// Each composed diagram's own default DOI focus set — one entry per
+    /// `diagram_labels` entry, same order (ADR-068 Phase B3). For the seed
+    /// diagram: `[center_node]`. For a related diagram (`Multi` mode):
+    /// whichever landing-point ids `populate_graph_buffer`'s related-
+    /// instance loop already resolved as that diagram's `starters` (the
+    /// seed's cross-links into it, or its own default-center fallback when
+    /// there were none) — reused verbatim, not re-derived. Consulted by
+    /// `Editor::graph_view_doi_distances` whenever `doi_focus` doesn't
+    /// name a node belonging to a given diagram (the common case for every
+    /// diagram except whichever one the user's focus currently sits in).
+    pub(crate) diagram_focus_ids: Vec<Vec<String>>,
+    /// Memoized `compute_node_tiers` result — see `DoiTierCache`'s doc
+    /// comment. `pub(crate)`, not `pub`, for the same reason as
+    /// `label_winner_cache`: an internal render-path optimization detail,
+    /// not part of `GraphView`'s externally-meaningful state.
+    pub(crate) doi_tier_cache: Option<DoiTierCache>,
 }
 
 /// An in-flight color transition for one node — see `GraphView.color_tween`.
@@ -366,14 +503,69 @@ impl GraphView {
     /// `(kb-graph-view-state)` Scheme primitive (hand-converted to a
     /// `Value`, snapshot-injected — see `crates/scheme/src/runtime/
     /// state_sync_inject_kb.rs`) — parity at the data-shape level.
+    ///
+    /// @ai-caution: [api-stability] `nodes`/`edges` below are emitted in
+    /// `self.scene.nodes`/`self.scene.edges` order, UNMODIFIED (map, not
+    /// sort/filter/regroup). In `GraphViewMode::Multi`, `self.scene.nodes`
+    /// itself was assembled by `mae_canvas::kb_graph::
+    /// build_multi_kb_chord_positions` as CONTIGUOUS per-diagram blocks in
+    /// `self.diagram_labels`' order (diagram 0's `node_count` nodes, then
+    /// diagram 1's, ...) — see that field's doc comment and function's
+    /// doc comment for the construction-side half of this contract. This
+    /// method is the OTHER half: it is a documented, tested contract
+    /// (`nodes_and_edges_stay_in_contiguous_per_diagram_blocks_in_multi_mode`
+    /// below) that this pass-through must never reorder, sort, or
+    /// otherwise regroup `nodes`/`edges` relative to `scene`'s own order —
+    /// `render_graph_view_as_text`'s TUI grouping and any external
+    /// consumer of `(kb-graph-view-state)` are entitled to reconstruct
+    /// "which diagram is node N in" purely positionally, by walking
+    /// `diagrams`' `node_count`s cumulatively, WITHOUT a per-node instance
+    /// tag. If a future change needs to reorder/filter nodes here (e.g. a
+    /// density/LOD pass, or residency filtering moving into this path —
+    /// see the tracked follow-up on Scheme primitives bypassing AI-residency
+    /// filtering), it MUST either preserve this contiguity (recomputing
+    /// `diagram_labels[i].node_count` to match surviving nodes, exactly as
+    /// `execute_kb_graph_view_state`'s AI-residency filter already does for
+    /// its own separate JSON response — see `crates/ai/src/tool_impls/
+    /// kb.rs`) or add an explicit per-node/per-edge instance tag instead of
+    /// silently breaking positional inference.
     pub fn describe_state(&self) -> GraphViewState {
         let node_id = |i: usize| self.scene.nodes.get(i).map(|n| n.id.clone());
+        // ADR-068 Phase B4/B8 (cross-backend parity): read whatever tier
+        // `flatten_scene_graph_cached`'s production call site last computed
+        // and cached (`doi_tier_cache`) — NOT a fresh recomputation here,
+        // so a human's screen and the AI's introspection read the exact
+        // same underlying decision. Empty (defaulting every node to
+        // `Full`) whenever no full-corpus reflatten has populated the
+        // cache yet — the same "every node draws normally" state that
+        // predates Phase B4 entirely.
+        let render_tier_at = |i: usize| -> &'static str {
+            self.doi_tier_cache
+                .as_ref()
+                .and_then(|c| c.result.get(i))
+                .copied()
+                .unwrap_or(RenderTier::Full)
+                .as_str()
+        };
         GraphViewState {
             center_node: self.center_node.clone(),
             depth: self.depth,
             kb_instance: self.kb_instance.clone(),
+            mode: self.mode.as_str().to_string(),
             follow_current: self.follow_current,
             hidden_node_count: self.hidden_node_count,
+            hidden_cross_instance_link_count: self.hidden_cross_instance_link_count,
+            hidden_related_instance_count: self.hidden_related_instance_count,
+            diagrams: self
+                .diagram_labels
+                .iter()
+                .map(|d| GraphViewDiagramState {
+                    instance: d.instance.clone(),
+                    name: d.name.clone(),
+                    node_count: d.node_count,
+                    loaded: d.loaded,
+                })
+                .collect(),
             selected_node: self.scene.selection.and_then(node_id),
             hovered_node: self.scene.hovered.and_then(node_id),
             nodes: self
@@ -391,6 +583,7 @@ impl GraphView {
                     selected: self.scene.selection == Some(i),
                     hovered: self.scene.hovered == Some(i),
                     is_seed: n.is_seed,
+                    render_tier: render_tier_at(i).to_string(),
                 })
                 .collect(),
             edges: self
@@ -401,7 +594,19 @@ impl GraphView {
                     Some(GraphViewEdgeState {
                         source_id: node_id(e.source)?,
                         target_id: node_id(e.target)?,
-                        boundary: e.style.dashed,
+                        // `style.dashed` alone is no longer a unique
+                        // boundary signal (#462 audit): a genuine
+                        // self-referential KB link is ALSO dashed now (see
+                        // `kb_graph::positions_to_scene`'s doc comment) so
+                        // it renders recognizably rather than as a bare
+                        // unlabeled stub. A real boundary/fringe stub
+                        // always carries `rel_type: None` (its underlying
+                        // link's type was discarded when multiple
+                        // out-of-subgraph links collapsed into one stub);
+                        // a self-link always carries its real `rel_type`
+                        // — so this combination is what actually means
+                        // "there's more graph beyond this depth, here".
+                        boundary: e.style.dashed && e.rel_type.is_none(),
                         label: e.label.clone(),
                     })
                 })
@@ -417,12 +622,44 @@ pub struct GraphViewState {
     pub center_node: Option<String>,
     pub depth: usize,
     pub kb_instance: Option<String>,
+    /// `"single"` or `"multi"` — see `GraphViewMode::as_str`.
+    pub mode: String,
     pub follow_current: bool,
     pub hidden_node_count: usize,
+    /// Always `0` when `mode == "single"`. See `GraphView.
+    /// hidden_cross_instance_link_count`'s doc comment.
+    pub hidden_cross_instance_link_count: usize,
+    /// Always `0` when `mode == "single"`. See `GraphView.
+    /// hidden_related_instance_count`'s doc comment.
+    pub hidden_related_instance_count: usize,
+    /// One entry per composed KB instance — exactly one (the seed) when
+    /// `mode == "single"`; N entries in `"multi"`, in the SAME order as
+    /// `nodes`' contiguous per-diagram blocks (`diagrams[i].node_count`
+    /// nodes, then `diagrams[i+1]`'s, ...) — see `GraphView.diagram_labels`'s
+    /// doc comment for this ordering/contiguity invariant.
+    pub diagrams: Vec<GraphViewDiagramState>,
     pub selected_node: Option<String>,
     pub hovered_node: Option<String>,
     pub nodes: Vec<GraphViewNodeState>,
     pub edges: Vec<GraphViewEdgeState>,
+}
+
+/// One composed diagram's introspection summary — see `GraphViewState.
+/// diagrams`'s doc comment for the ordering/contiguity invariant this
+/// relies on.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GraphViewDiagramState {
+    pub instance: Option<String>,
+    pub name: String,
+    pub node_count: usize,
+    /// See `mae_canvas::kb_graph::KbInstanceSubgraph::loaded`'s doc comment
+    /// (#479) — `true` for primary and for a federated instance actually
+    /// present in `self.kb.instances`; `false` for a registered instance
+    /// that failed to load/open. Distinguishes "genuinely empty but
+    /// healthy" (`loaded: true`, `node_count: 0`) from "not loaded"
+    /// (`loaded: false`) — both would otherwise render as an identical
+    /// empty diagram.
+    pub loaded: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -439,16 +676,37 @@ pub struct GraphViewNodeState {
     pub pinned: bool,
     pub selected: bool,
     pub hovered: bool,
+    /// ADR-068 Phase B4: `"full"` (drawn normally), `"clustered"` (folded
+    /// into an aggregate "... (+N)" stub, not drawn individually), or
+    /// `"hidden"` (skipped from drawing entirely) — see `RenderTier`.
+    /// Always `"full"` whenever full-corpus DOI tiering isn't active for
+    /// this view (`kb_graph_multi_kb_full_corpus` off, `mode != Multi`, or
+    /// no reflatten has run yet to populate `doi_tier_cache`) — i.e. the
+    /// exact same "every node draws normally" state this field's absence
+    /// implied before Phase B4 existed. Sourced from `GraphView.
+    /// doi_tier_cache` (the SAME cache `flatten_scene_graph_cached`'s
+    /// production call site consults/populates), NOT recomputed here —
+    /// the house rule this codebase already enforces
+    /// (`describe_state_is_unaffected_by_culling_or_lod`) is that
+    /// introspection must never RESHAPE `nodes`/`edges` for a render-time
+    /// LOD decision (this field is purely additive, same node/index,
+    /// never reordered/filtered), but reporting an ACCURATE tier value is
+    /// exactly the AI-peer-parity contract Phase B4 requires (a human must
+    /// never be told a node is "full" while the AI reads "clustered", or
+    /// vice versa).
+    pub render_tier: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct GraphViewEdgeState {
     pub source_id: String,
     pub target_id: String,
-    /// True for the dashed subgraph-fringe self-loop edges
-    /// `mae_canvas::kb_graph::build_kb_graph` emits (`edge.style.dashed`),
-    /// NOT the same as the unrelated `NodeStyle.highlighted` "starter node"
-    /// flag.
+    /// True for the dashed subgraph-fringe self-loop stub edges
+    /// `mae_canvas::kb_graph::positions_to_scene` emits — NOT simply
+    /// `edge.style.dashed` (a genuine self-referential link is ALSO
+    /// dashed, so it can render recognizably rather than as a bare
+    /// unlabeled stub; see `GraphView::describe_state`'s computation of
+    /// this field for the `rel_type`-based disambiguation).
     pub boundary: bool,
     pub label: Option<String>,
 }
@@ -498,6 +756,7 @@ impl GraphView {
             center_node: None,
             depth: 2,
             kb_instance: None,
+            mode: GraphViewMode::default(),
             follow_current: true,
             scene: mae_canvas::scene::SceneGraph::new(),
             viewports: HashMap::new(),
@@ -510,6 +769,17 @@ impl GraphView {
             color_tween: None,
             render_epoch: HashMap::new(),
             hidden_node_count: 0,
+            diagram_labels: Vec::new(),
+            hidden_cross_instance_link_count: 0,
+            cross_instance_links: Vec::new(),
+            hidden_related_instance_count: 0,
+            generation: 0,
+            label_winner_cache: None,
+            doi_focus: None,
+            doi_generation: 0,
+            node_api_tier: Vec::new(),
+            diagram_focus_ids: Vec::new(),
+            doi_tier_cache: None,
         }
     }
 }
@@ -638,6 +908,182 @@ impl GraphLayoutAlgorithm {
     }
 }
 
+/// Which KB instances a `BufferKind::Graph` buffer composes — orthogonal to
+/// [`GraphLayoutAlgorithm`] (which computes positions for whatever set of
+/// nodes ends up in `GraphView.scene` either way). Configured via the
+/// `kb_graph_view_mode` option; see `Editor::populate_graph_buffer`'s
+/// `Single`/`Multi` branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GraphViewMode {
+    /// One KB instance's subgraph — today's behavior, unchanged (#462 PR4).
+    #[default]
+    Single,
+    /// The seed instance's subgraph PLUS related instances (per
+    /// `kb_graph_multi_kb_scope`), composed into one merged `SceneGraph` via
+    /// `mae_canvas::kb_graph::build_multi_kb_chord_positions` — issue #462.
+    Multi,
+}
+
+impl GraphViewMode {
+    /// Stable wire/config string (matches the option's accepted values).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GraphViewMode::Single => "single",
+            GraphViewMode::Multi => "multi",
+        }
+    }
+
+    /// Parse a configured value.
+    pub fn parse(s: &str) -> Option<GraphViewMode> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "single" => Some(GraphViewMode::Single),
+            "multi" => Some(GraphViewMode::Multi),
+            _ => None,
+        }
+    }
+}
+
+/// Which related KB instances `GraphViewMode::Multi` pulls in alongside the
+/// seed instance — configured via the `kb_graph_multi_kb_scope` option; see
+/// `Editor::populate_graph_buffer`'s `Multi` branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GraphMultiKbScope {
+    /// One hop only: the set of `target_instance` values among the seed's
+    /// OWN `CrossInstanceLink`s (from `partition_boundary_links_by_instance`).
+    /// Deliberately does NOT transitively re-walk each related instance's
+    /// own cross-links — a scope limit, not an oversight (see that method's
+    /// call site in `populate_graph_buffer` for why: an unbounded
+    /// transitive walk has no natural stopping point short of "the whole
+    /// federation graph").
+    #[default]
+    Linked,
+    /// Every registered `KbRegistry` instance (including primary),
+    /// regardless of whether it's actually linked from the seed — capped by
+    /// `kb_graph_multi_kb_max_related_instances` the same way `Linked` is.
+    All,
+}
+
+impl GraphMultiKbScope {
+    /// Stable wire/config string (matches the option's accepted values).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GraphMultiKbScope::Linked => "linked",
+            GraphMultiKbScope::All => "all",
+        }
+    }
+
+    /// Parse a configured value.
+    pub fn parse(s: &str) -> Option<GraphMultiKbScope> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "linked" => Some(GraphMultiKbScope::Linked),
+            "all" => Some(GraphMultiKbScope::All),
+            _ => None,
+        }
+    }
+}
+
+/// A-priori importance tier for one node (ADR-068 Phase B2, Furnas's
+/// Degree-of-Interest `API(x)` term) — evaluated top-down, first match
+/// wins, computed ONCE per `populate_graph_buffer` call by
+/// `Editor::compute_node_api_tiers` and cached on `GraphView.node_api_tier`.
+/// Deliberately TIERED, not a weighted-sum score: a score needs tuning
+/// constants and makes "always visible" merely probabilistic; a hard tier
+/// makes `Bridge`/`Hub`'s "always full detail" guarantee a structural
+/// invariant `compute_node_tiers` can enforce by construction (never even
+/// evaluating distance/zoom for them), not a threshold that could
+/// theoretically be crossed by an aggressive option combination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApiTier {
+    /// A cross-instance-link endpoint (source OR target side) for this
+    /// node's own diagram — see `Editor::compute_node_api_tiers`'s doc
+    /// comment. DOI is never evaluated for this tier: `compute_node_tiers`
+    /// excludes it from the clustering candidate pool entirely (ADR-068
+    /// Phase B5), guaranteeing a cross-KB `SceneEdge` always terminates at
+    /// a stable, individually-rendered position.
+    Bridge,
+    /// This diagram's own designated default center (`Editor::
+    /// default_center_for_owner`) — the "land here first" node, always
+    /// full detail for the same structural reason as `Bridge`.
+    Hub,
+    /// Top-quantile by degree within its own diagram (see
+    /// `DEGREE_TIER_QUANTILE`) — not exempt from DOI, but gets a modest
+    /// reach bonus over an `Ordinary` node at the same distance (see
+    /// `compute_node_tiers`).
+    Degree,
+    /// Every other node — governed by DOI (distance + zoom + the
+    /// clustering options) with no a-priori bonus.
+    Ordinary,
+}
+
+/// Render-time level-of-detail decision for one node (ADR-068 Phase B4) —
+/// the OUTPUT of `compute_node_tiers`, consumed by `flatten_scene_graph_
+/// cached`'s node loop. Distinct from `ApiTier` (an INPUT, topology-
+/// derived, computed once per populate): `RenderTier` also depends on the
+/// current DOI focus/zoom/threshold options, so it's recomputed (and
+/// cached via `DoiTierCache`) per reflatten instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RenderTier {
+    /// Draw normally — circle + (zoom/declutter-gated) label, exactly like
+    /// every node did before Phase B4 existed.
+    Full,
+    /// Not drawn individually — folded into one aggregate "... (+N)" stub
+    /// per (diagram, cluster-group) alongside every other `Clustered` node
+    /// sharing that bucket. Still present in `scene`/`describe_state` (see
+    /// `describe_state_is_unaffected_by_culling_or_lod`) — only the DRAW is
+    /// skipped/redirected.
+    Clustered,
+    /// Skipped from drawing entirely (too zoomed out for even an aggregate
+    /// stub to be legible — see `compute_node_tiers`'s doc comment for the
+    /// zoom-threshold rationale). Still present in `scene`/`describe_state`.
+    Hidden,
+}
+
+impl RenderTier {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            RenderTier::Full => "full",
+            RenderTier::Clustered => "clustered",
+            RenderTier::Hidden => "hidden",
+        }
+    }
+}
+
+/// How `RenderTier::Clustered` nodes bucket into aggregate stubs (ADR-068
+/// Phase B6) — configured via `kb_graph_cluster_group_by`. Mirrors
+/// `GraphLayoutAlgorithm`'s exact enum shape (`as_str`/`parse`, `Default`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ClusterGroupBy {
+    /// Group by `mae_canvas::scene::NodeKind` — e.g. every clustered
+    /// `Concept` in a diagram collapses into one stub, every clustered
+    /// `Note` into another.
+    #[default]
+    Kind,
+    /// Group by a coarse log2 bucket of the node's `node_degrees` count
+    /// (0, 1, 2-3, 4-7, 8-15, ...) — useful when a KB's `NodeKind`s are
+    /// too uniform (e.g. almost everything is `Note`) for kind-grouping to
+    /// usefully separate hubs-in-waiting from genuine leaves.
+    DegreeBucket,
+}
+
+impl ClusterGroupBy {
+    /// Stable wire/config string (matches the option's accepted values).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ClusterGroupBy::Kind => "kind",
+            ClusterGroupBy::DegreeBucket => "degree_bucket",
+        }
+    }
+
+    /// Parse a configured value.
+    pub fn parse(s: &str) -> Option<ClusterGroupBy> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "kind" => Some(ClusterGroupBy::Kind),
+            "degree_bucket" => Some(ClusterGroupBy::DegreeBucket),
+            _ => None,
+        }
+    }
+}
+
 /// Which background layout pass a `GraphLayoutIntent` requests.
 ///
 /// - `OneShot`: Phase 1/2 behavior (`kb_graph_animate = false`, the
@@ -682,6 +1128,14 @@ pub struct GraphLayoutIntent {
     /// (including the Phase 3 tick-requeue) must read the cached value
     /// rather than defaulting.
     pub layout_config: mae_canvas::layout::LayoutConfig,
+    /// Snapshot of `GraphView.generation` at the moment this intent was
+    /// queued — see that field's doc comment. `Editor::apply_graph_layout_
+    /// result` discards the eventual `GraphLayoutResult` unless this still
+    /// matches the view's CURRENT generation when the result lands, so a
+    /// background computation superseded by a later `populate_graph_buffer`
+    /// (or a close) can never wholesale-replace a newer scene with a
+    /// stale one.
+    pub generation: u64,
 }
 
 /// Resolved, theme-driven styling inputs for `flatten_scene_graph` — sizing
@@ -757,6 +1211,9 @@ pub struct GraphStyleOptions {
     /// `Force`'s perpendicular-offset-from-midpoint. Mirrors
     /// `kb_graph_layout_algorithm`.
     pub layout_algorithm: GraphLayoutAlgorithm,
+    /// How `RenderTier::Clustered` nodes bucket into aggregate stubs
+    /// (ADR-068 Phase B6). Mirrors `kb_graph_cluster_group_by`.
+    pub cluster_group_by: ClusterGroupBy,
     /// `(node_index, hex_color)` — when set, that node's color is FORCED
     /// to this value, checked before the selected/hovered/kind-color
     /// chain below. Set by the call site (not `from_editor`, which has no
@@ -969,6 +1426,7 @@ impl GraphStyleOptions {
             edge_curvature: editor.kb_graph_edge_curvature,
             edge_alpha: editor.kb_graph_edge_alpha,
             layout_algorithm: editor.kb_graph_layout_algorithm,
+            cluster_group_by: editor.kb_graph_cluster_group_by,
             color_override: None,
             node_border_enabled: editor.kb_graph_node_border_enabled,
             node_colors,
@@ -1029,6 +1487,65 @@ pub fn node_degrees(scene: &mae_canvas::scene::SceneGraph) -> Vec<u32> {
         }
     }
     degrees
+}
+
+/// Broadcast each diagram's own `(center_x, center_y)` (scene-space,
+/// `mae_canvas::kb_graph::DiagramLabel`) across its contiguous node range in
+/// `scene.nodes` — parallel to `node_degrees` above (same shape, indexed by
+/// node index), consumed by `flatten_scene_graph_cached`'s Chord-mode
+/// edge-curvature formula so each diagram's edges bow toward ITS OWN
+/// center rather than the whole merged scene's origin (A3 fix). After
+/// `mae_canvas::kb_graph::build_multi_kb_chord_positions` composes N
+/// diagrams onto a grid, scene `(0,0)` is the grid's CENTROID, not any
+/// individual diagram's own center — only `DiagramLabel.center_x/center_y`
+/// tracks that per-diagram.
+///
+/// Relies on the already-documented contiguous-per-diagram-block invariant
+/// (`GraphView.diagram_labels`'s doc comment /
+/// `nodes_and_edges_stay_in_contiguous_per_diagram_blocks_in_multi_mode`):
+/// walks `diagram_labels` ONCE, broadcasting each entry's center over its
+/// own `node_count`-wide slice — O(diagrams) work broadcast over O(nodes)
+/// total, no Big-O regression (the caller, `graph_view_reflatten_window`,
+/// already does an O(nodes) pass every reflatten to transform node
+/// positions — see `positions`/`radii` there — so this doesn't add a new
+/// complexity class to that hot path, just one more O(nodes) pass of the
+/// same order).
+///
+/// Both `GraphViewMode::Single` and a single-diagram `GraphViewMode::Multi`
+/// scene have exactly one `diagram_labels` entry whose center is
+/// `(0.0, 0.0)` by construction (`build_multi_kb_chord_positions`'s grid
+/// re-centering step collapses to a no-op for one diagram; Single mode's
+/// own `DiagramLabel` is hardcoded to `(0.0, 0.0)`) — so this reproduces
+/// the prior single-origin behavior byte-for-byte in both of those cases,
+/// no special-casing needed here.
+pub(crate) fn node_diagram_centers(
+    diagram_labels: &[mae_canvas::kb_graph::DiagramLabel],
+) -> Vec<(f64, f64)> {
+    let mut centers = Vec::new();
+    for d in diagram_labels {
+        centers.extend(std::iter::repeat_n((d.center_x, d.center_y), d.node_count));
+    }
+    centers
+}
+
+/// Broadcast each diagram's ORDINAL position (`0`, `1`, ...) across its
+/// contiguous node range — same broadcast shape as `node_diagram_centers`
+/// (parallel to `scene.nodes`), used by `flatten_scene_graph_cached`'s
+/// cluster-stub aggregation (ADR-068 Phase B4) to group `RenderTier::
+/// Clustered` nodes per-DIAGRAM (never merging two different diagrams'
+/// clustered nodes into one stub, even if they happen to share a cluster-
+/// group bucket) without relying on floating-point equality between two
+/// diagrams' `(center_x, center_y)` values, which — while true by
+/// construction in the grid layout — is a fragile thing to key a
+/// `HashMap` on.
+pub(crate) fn node_diagram_indices(
+    diagram_labels: &[mae_canvas::kb_graph::DiagramLabel],
+) -> Vec<usize> {
+    let mut indices = Vec::new();
+    for (d, label) in diagram_labels.iter().enumerate() {
+        indices.extend(std::iter::repeat_n(d, label.node_count));
+    }
+    indices
 }
 
 /// Compute a node's FINAL render radius (logical px) — the single formula
@@ -1160,9 +1677,9 @@ pub fn zoom_to_fit(
 /// `render_visual_buffer` pipeline, projected through one window's
 /// `Viewport` (issue #321 — the same shared `scene` can be flattened once
 /// per window showing it, each through its own pan/zoom/pixel-size). Edges
-/// are emitted before nodes (drawn under them); boundary edges
-/// (`SceneEdge.style.dashed`, the subgraph fringe — see
-/// `mae_canvas::kb_graph::build_kb_graph`) render as dashed lines using
+/// are emitted before nodes (drawn under them); boundary edges AND genuine
+/// self-referential links (both `SceneEdge.style.dashed` — see
+/// `mae_canvas::kb_graph::positions_to_scene`) render as dashed lines using
 /// `style.boundary_edge_color`, internal edges as solid lines using
 /// `style.edge_color`. Nodes render as a themed circle (selected node uses
 /// `style.selected_color`, others their `NodeKind`'s themed color) plus a
@@ -1360,6 +1877,333 @@ fn label_boxes_overlap(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool
         && a.3 + LABEL_DECLUTTER_PADDING_PX > b.1
 }
 
+/// DEGREE tier cutoff (ADR-068 Phase B2) — the top `DEGREE_TIER_QUANTILE`
+/// fraction of a diagram's nodes by degree (excluding whatever already
+/// resolved to `Bridge`/`Hub`) get `ApiTier::Degree` rather than
+/// `ApiTier::Ordinary`. A plain constant, not an `OptionRegistry` entry
+/// (mirrors this module's existing `ANIMATION_*`/`MAX_CURVE_OFFSET_PX`
+/// precedent for tuning that isn't itself a user-facing behavior toggle) —
+/// the plan deliberately left this cutoff unspecified; 0.25 (top quartile)
+/// is a reasonable, simple, round-number judgment call: generous enough to
+/// give a diagram's genuinely well-connected nodes SOME DOI reach bonus
+/// (see `compute_node_tiers`), conservative enough that "Degree tier"
+/// still means something narrower than "half the diagram."
+pub(crate) const DEGREE_TIER_QUANTILE: f64 = 0.25;
+
+/// Cached inputs + result of the last `compute_node_tiers` call (ADR-068
+/// Phase B4) — same single-last-call-slot memoization shape as
+/// `LabelWinnerCache` (see that struct's doc comment for the rationale:
+/// keep this simple, not clever), just for the DOI/LOD render-tier
+/// decision instead of label-occlusion culling. Invalidated by `GraphView.
+/// doi_generation`'s bump — NOT `GraphView.generation` (topology/layout
+/// staleness) — see `doi_generation`'s own doc comment for why a fresh
+/// `populate_graph_buffer` call bumps BOTH counters (a fresh topology
+/// always invalidates any previously-cached tiering too, just via the
+/// same mechanism a focus change uses, not a second invalidation path).
+#[derive(Debug, Clone)]
+pub(crate) struct DoiTierCache {
+    doi_generation: u64,
+    node_count: usize,
+    doi_distance_falloff: usize,
+    /// The EXPENSIVE part: node indices identified as DOI-elision
+    /// candidates by `compute_doi_candidates` (which needs `distances`, an
+    /// O(V+E) BFS per diagram via `Editor::graph_view_doi_distances`).
+    /// Deliberately independent of zoom/dense_cluster_threshold/
+    /// doi_zoom_threshold — those only affect the cheap `finalize_render_
+    /// tiers` step below, so a continuous zoom gesture reuses this
+    /// unchanged instead of re-running the BFS on every tick (the actual
+    /// bug this split fixes: the previous single-tier cache keyed on raw
+    /// `zoom: f64`, so a mouse-wheel zoom's continuously-varying value
+    /// almost never matched by exact equality, invalidating the WHOLE
+    /// cache — including this expensive part — on nearly every frame of a
+    /// zoom gesture).
+    pub(crate) candidates: Vec<usize>,
+    // Last-finalized (cheap) inputs + result, purely to short-circuit a
+    // truly-unchanged repeat call (e.g. two reflattens in the same frame
+    // with no state change at all) — NOT required for the candidates
+    // reuse above, which only depends on the three fields above this.
+    zoom: f64,
+    doi_zoom_threshold: f32,
+    dense_cluster_threshold: usize,
+    pub(crate) result: Vec<RenderTier>,
+}
+
+impl DoiTierCache {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        doi_generation: u64,
+        node_count: usize,
+        doi_distance_falloff: usize,
+        candidates: Vec<usize>,
+        zoom: f64,
+        doi_zoom_threshold: f32,
+        dense_cluster_threshold: usize,
+        result: Vec<RenderTier>,
+    ) -> Self {
+        DoiTierCache {
+            doi_generation,
+            node_count,
+            doi_distance_falloff,
+            candidates,
+            zoom,
+            doi_zoom_threshold,
+            dense_cluster_threshold,
+            result,
+        }
+    }
+
+    /// Whether this cache's EXPENSIVE part (`candidates`, BFS-derived) is
+    /// still valid — deliberately excludes zoom/dense_cluster_threshold/
+    /// doi_zoom_threshold, which only ever affect the cheap finalization
+    /// step and must never gate reuse of the expensive one.
+    pub(crate) fn candidates_valid(
+        &self,
+        doi_generation: u64,
+        node_count: usize,
+        doi_distance_falloff: usize,
+    ) -> bool {
+        self.doi_generation == doi_generation
+            && self.node_count == node_count
+            && self.doi_distance_falloff == doi_distance_falloff
+    }
+
+    /// Whether EVERYTHING (including the cheap zoom-dependent inputs)
+    /// matches — a genuine no-op call where not even `finalize_render_
+    /// tiers` needs to rerun.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn matches(
+        &self,
+        doi_generation: u64,
+        node_count: usize,
+        zoom: f64,
+        doi_zoom_threshold: f32,
+        doi_distance_falloff: usize,
+        dense_cluster_threshold: usize,
+    ) -> bool {
+        self.candidates_valid(doi_generation, node_count, doi_distance_falloff)
+            && self.zoom == zoom
+            && self.doi_zoom_threshold == doi_zoom_threshold
+            && self.dense_cluster_threshold == dense_cluster_threshold
+    }
+}
+
+// Test-only instrumentation for `compute_doi_candidates` — proves the
+// zoom/expensive-recompute split actually works (a continuous zoom
+// gesture must never bump this), not merely assumed from reading the
+// caching logic. Same `thread_local!` rationale as
+// `LABEL_WINNERS_COMPUTE_COUNT` above.
+#[cfg(test)]
+thread_local! {
+    static DOI_CANDIDATES_COMPUTE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn doi_candidates_compute_count() -> usize {
+    DOI_CANDIDATES_COMPUTE_COUNT.with(|c| c.get())
+}
+
+/// Decide each node's `RenderTier` (ADR-068 Phase B4) from its `ApiTier`
+/// (a-priori importance, `node_api_tier`) and hop-distance-from-focus
+/// (`distances`, `None` = unreachable from this node's own diagram's
+/// focus — see `Editor::graph_view_doi_distances`).
+///
+/// Judgment calls made where the plan left the exact formula unspecified
+/// (documented here, not silently invented):
+///
+/// - **Bridge/Hub are structurally exempt** (ADR-068 Phase B5): never
+///   enter the candidate pool at all, regardless of distance/zoom/
+///   thresholds — this is what guarantees a cross-KB edge always
+///   terminates at a stable, individually-rendered node.
+/// - **Reach**: a `Degree`-tier node's effective DOI reach is
+///   `doi_distance_falloff + 1` (one extra hop of "benefit of the doubt"
+///   over an `Ordinary` node at `doi_distance_falloff`) — the concrete,
+///   simple way tiers 3/4 "combine with distance" per the plan's own
+///   language, without inventing a weighted score.
+/// - **Dense-cluster gate**: if fewer than `dense_cluster_threshold`
+///   nodes would be elided, don't bother clustering at all — render
+///   everything `Full` (matches `kb_graph_dense_cluster_threshold`'s own
+///   option doc: "minimum cluster-candidate-pool size before clustering
+///   kicks in at all; below this, just render everything at Full tier").
+/// - **Zoom decides Hidden vs. Clustered, not Full-tier membership**: below
+///   `doi_zoom_threshold`, an elided node is too small/zoomed-out for even
+///   a legible "... (+N)" stub to be worth drawing, so it's `Hidden`
+///   instead of `Clustered` — mirrors `kb_graph_label_zoom_threshold`'s
+///   own "below this zoom, don't bother drawing this at all" precedent.
+///   Deliberately does NOT let zoom override which nodes are IN the
+///   candidate pool (only what happens to nodes already there) — this
+///   keeps `RenderTier::Full` membership a pure function of `ApiTier` +
+///   distance + the two count-based thresholds, so raising zoom can never
+///   SHRINK the full-tier set (monotonic nesting, B8 test 2) — it can only
+///   ever change whether an elided node gets a visible stub or none at all.
+///
+/// The EXPENSIVE half of `compute_node_tiers`'s old body: identifies which
+/// node indices are DOI-elision CANDIDATES from `node_api_tier` +
+/// `distances` (the latter an O(V+E) BFS per diagram,
+/// `Editor::graph_view_doi_distances`) + `doi_distance_falloff`.
+/// Deliberately takes no zoom/dense-cluster-threshold input — those only
+/// decide what happens to an already-identified candidate (see
+/// `finalize_render_tiers`), so this is exactly the part `DoiTierCache`
+/// caches independent of zoom, making a continuous zoom gesture cheap.
+///
+/// Pure function of its inputs — no scene mutation, no I/O — same
+/// independent-unit-testability precedent as `compute_label_winners`.
+pub(crate) fn compute_doi_candidates(
+    node_count: usize,
+    node_api_tier: &[ApiTier],
+    distances: &[Option<usize>],
+    doi_distance_falloff: usize,
+) -> Vec<usize> {
+    #[cfg(test)]
+    DOI_CANDIDATES_COMPUTE_COUNT.with(|c| c.set(c.get() + 1));
+    let mut candidates: Vec<usize> = Vec::new();
+    for i in 0..node_count {
+        let tier = node_api_tier.get(i).copied().unwrap_or(ApiTier::Ordinary);
+        if matches!(tier, ApiTier::Bridge | ApiTier::Hub) {
+            // B5: never eligible for clustering/hiding, DOI never evaluated.
+            continue;
+        }
+        let reach = doi_distance_falloff + if tier == ApiTier::Degree { 1 } else { 0 };
+        let within_reach = distances
+            .get(i)
+            .copied()
+            .flatten()
+            .is_some_and(|d| d <= reach);
+        if !within_reach {
+            candidates.push(i);
+        }
+    }
+    candidates
+}
+
+/// The CHEAP half of `compute_node_tiers`'s old body: given an
+/// already-identified candidate set (see `compute_doi_candidates`, cached
+/// across zoom changes by `DoiTierCache`), decides the final per-node
+/// `RenderTier` for the CURRENT zoom/dense-cluster-threshold. Cost is
+/// linear in `node_count` plus `candidates`' length, safe to call on
+/// every frame / every zoom tick — this is intentionally the ONLY part of
+/// the DOI pipeline that re-runs on a raw zoom-value change, so a
+/// continuous zoom gesture never re-triggers the expensive BFS that
+/// produced `candidates`.
+pub(crate) fn finalize_render_tiers(
+    node_count: usize,
+    candidates: &[usize],
+    zoom: f64,
+    doi_zoom_threshold: f32,
+    dense_cluster_threshold: usize,
+) -> Vec<RenderTier> {
+    let mut tiers = vec![RenderTier::Full; node_count];
+    if candidates.len() < dense_cluster_threshold {
+        // Too few to bother clustering — render everything Full (see this
+        // function's doc comment / `kb_graph_dense_cluster_threshold`'s
+        // option doc).
+        return tiers;
+    }
+    let elided_tier = if zoom < doi_zoom_threshold as f64 {
+        RenderTier::Hidden
+    } else {
+        RenderTier::Clustered
+    };
+    for &i in candidates {
+        tiers[i] = elided_tier;
+    }
+    tiers
+}
+
+/// Cached inputs + result of the last `compute_label_winners` call — see
+/// that function's doc comment for the (up to) O(n^2) greedy-overlap cost
+/// this exists to avoid re-paying on every call. `tick_graph_color_tweens`
+/// (`graph_view_ops.rs`) reflattens on EVERY tween tick (9-20 frames per
+/// hover/selection color transition), but the actual determinants of the
+/// label-winner set — node screen positions/radii/degrees, selection,
+/// hover, and the viewport — never change mid-tween; only the ONE tweened
+/// node's fill color does, which this computation never reads. A plain
+/// "do this call's inputs match the last one" check lets every tick after
+/// the first reuse the prior result instead of re-running the greedy
+/// overlap pass. Deliberately a single last-call slot, not a multi-entry
+/// map — see `GraphView.label_winner_cache`'s doc comment for why that's
+/// the right amount of caching here (principle #8: keep this simple, not
+/// clever).
+#[derive(Debug, Clone)]
+pub(crate) struct LabelWinnerCache {
+    positions: Vec<(f32, f32)>,
+    radii: Vec<f32>,
+    degrees: Vec<u32>,
+    selection: Option<usize>,
+    hovered: Option<usize>,
+    viewport: mae_canvas::scene::Viewport,
+    font_size: f32,
+    layout_algorithm: GraphLayoutAlgorithm,
+    result: std::collections::HashSet<usize>,
+}
+
+impl LabelWinnerCache {
+    /// Whether a fresh call with these exact inputs would recompute to the
+    /// SAME result this cache already holds. `scene.nodes.len()` stands in
+    /// for "the topology itself hasn't changed" — combined with
+    /// `positions`/`radii`/`degrees` (which are recomputed from the scene
+    /// every `flatten_scene_graph` call and would differ if any node's
+    /// position, render radius, or degree changed), this is exactly the
+    /// set of things `compute_label_winners` actually reads.
+    ///
+    /// `#[allow(too_many_arguments)]`: each parameter is a genuinely
+    /// distinct input `compute_label_winners` itself already takes (see
+    /// its signature) — bundling them into a params struct used by this
+    /// one call site wouldn't reduce complexity, just relocate the same
+    /// fields.
+    #[allow(clippy::too_many_arguments)]
+    fn matches(
+        &self,
+        node_count: usize,
+        positions: &[(f32, f32)],
+        radii: &[f32],
+        degrees: &[u32],
+        selection: Option<usize>,
+        hovered: Option<usize>,
+        viewport: &mae_canvas::scene::Viewport,
+        font_size: f32,
+        layout_algorithm: GraphLayoutAlgorithm,
+    ) -> bool {
+        self.positions.len() == node_count
+            && self.selection == selection
+            && self.hovered == hovered
+            && self.font_size == font_size
+            && self.layout_algorithm == layout_algorithm
+            && viewport_eq(&self.viewport, viewport)
+            && self.positions.as_slice() == positions
+            && self.radii.as_slice() == radii
+            && self.degrees.as_slice() == degrees
+    }
+}
+
+/// Field-by-field `Viewport` equality — `Viewport` itself doesn't derive
+/// `PartialEq` (see `mae_canvas::scene::Viewport`), so this is the one
+/// place that needs it (`LabelWinnerCache::matches`).
+fn viewport_eq(a: &mae_canvas::scene::Viewport, b: &mae_canvas::scene::Viewport) -> bool {
+    a.center_x == b.center_x
+        && a.center_y == b.center_y
+        && a.zoom == b.zoom
+        && a.width == b.width
+        && a.height == b.height
+}
+
+// Test-only instrumentation for `compute_label_winners` — see that
+// function's counter-increment call and `flatten_scene_graph_cached`'s
+// memoization test below. `thread_local!` rather than a global atomic:
+// `cargo test` runs each test on its own thread by default, so this
+// naturally starts fresh (0) per test with no cross-test interference,
+// and it costs nothing in a non-test build (the whole item is
+// `#[cfg(test)]`). A plain `//` comment, not `///` — rustdoc can't attach
+// doc comments to a `thread_local!` macro invocation's expansion.
+#[cfg(test)]
+thread_local! {
+    static LABEL_WINNERS_COMPUTE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn label_winners_compute_count() -> usize {
+    LABEL_WINNERS_COMPUTE_COUNT.with(|c| c.get())
+}
+
 /// Greedy priority-based label occlusion culling — the standard real-time
 /// approximation to the NP-hard optimal label-placement problem, used by
 /// cartographic renderers (e.g. city labels dropping out at low zoom
@@ -1379,6 +2223,12 @@ fn label_boxes_overlap(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool
 /// loop, which draws them unconditionally; they carry no degree/selection
 /// state and their purpose (a correctness signal: "more graph beyond this
 /// depth, here") shouldn't be silently hidden by a denser node label.
+///
+/// See `flatten_scene_graph_cached` for the memoized entry point most
+/// production callers should use instead of calling this directly on
+/// every frame — this function itself is unchanged/always-recomputes, so
+/// every existing test calling it (or `flatten_scene_graph`) directly
+/// keeps its exact prior behavior.
 fn compute_label_winners(
     scene: &mae_canvas::scene::SceneGraph,
     positions: &[(f32, f32)],
@@ -1388,6 +2238,16 @@ fn compute_label_winners(
     viewport: &mae_canvas::scene::Viewport,
     center: (f32, f32),
 ) -> std::collections::HashSet<usize> {
+    // Test-only call counter (zero cost in a non-test build — the whole
+    // block compiles away) — proves `flatten_scene_graph_cached`'s
+    // memoization actually SKIPS this function on a cache hit, which
+    // output-equality alone can't distinguish from "recomputed and
+    // happened to get the same answer" (this function is a deterministic,
+    // pure function of its inputs). See `label_winners_compute_count`.
+    #[cfg(test)]
+    {
+        LABEL_WINNERS_COMPUTE_COUNT.with(|c| c.set(c.get() + 1));
+    }
     let mut candidates: Vec<usize> = (0..scene.nodes.len())
         .filter(|&i| !node_is_offscreen(positions[i].0, positions[i].1, radii[i], viewport))
         .collect();
@@ -1428,11 +2288,83 @@ fn compute_label_winners(
     winners
 }
 
+/// Flatten a scene graph into `VisualElement`s, with NO label-winner
+/// memoization — every call recomputes `compute_label_winners` from
+/// scratch when the declutter pass runs. This is what every existing
+/// caller (all pre-existing tests, plus anywhere that doesn't have a
+/// persistent `GraphView` to hang a cache off of) keeps using unchanged.
+/// See `flatten_scene_graph_cached` for the memoized entry point real
+/// per-window rendering (`graph_view_ops.rs::graph_view_reflatten_window`)
+/// uses instead.
 pub fn flatten_scene_graph(
     scene: &mae_canvas::scene::SceneGraph,
     viewport: &mae_canvas::scene::Viewport,
     style: &GraphStyleOptions,
     degrees: &[u32],
+) -> Vec<VisualElement> {
+    let mut no_cache = None;
+    // Empty `diagram_centers`: every call site of this public wrapper is a
+    // test (~35 call sites, confirmed this session) exercising the
+    // single-diagram assumption directly — an empty slice makes
+    // `flatten_scene_graph_cached`'s per-edge lookup fall back to the
+    // scene's own global origin for every node, reproducing exactly the
+    // behavior every one of those existing tests already asserts. See
+    // `node_diagram_centers` for the real (non-empty) production array.
+    // `render_tiers`/`diagram_indices`: also empty for the same reason —
+    // an empty `render_tiers` slice makes every node resolve to
+    // `RenderTier::Full` (see the node loop below), reproducing pre-Phase-
+    // B4 behavior exactly for every one of this wrapper's existing callers.
+    flatten_scene_graph_cached(
+        scene,
+        viewport,
+        style,
+        degrees,
+        &[],
+        &[],
+        &[],
+        &mut no_cache,
+    )
+}
+
+/// Same as `flatten_scene_graph`, but reuses `label_cache`'s prior
+/// `compute_label_winners` result across calls whose inputs are identical
+/// (see `LabelWinnerCache`'s doc comment) — the memoized entry point
+/// `Editor::graph_view_reflatten_window` calls, backed by
+/// `GraphView.label_winner_cache`. Pass `&mut None` (or use
+/// `flatten_scene_graph` directly) for a one-off call with no cache to
+/// maintain, e.g. from a test or an ephemeral render.
+///
+/// `diagram_centers` (A3): parallel to `degrees` — `diagram_centers[i]` is
+/// node `i`'s OWN diagram's scene-space `(center_x, center_y)`, from
+/// `node_diagram_centers`. Indexed by `edge.source` in the Chord-mode
+/// curvature formula below, so each diagram's edges bow toward ITS OWN
+/// center instead of the merged scene's single global origin. An empty
+/// slice (or an index past its end) falls back to the scene's own origin —
+/// exactly today's pre-A3 single-diagram behavior, which `flatten_scene_graph`
+/// relies on for its ~35 existing test call sites.
+///
+/// `render_tiers` (ADR-068 Phase B4): parallel to `degrees` — the
+/// `RenderTier` decision `Editor::graph_view_doi_render_tiers` computed (or
+/// reused from cache) for the CURRENT viewport/DOI-focus. An empty slice
+/// (or an index past its end) resolves to `RenderTier::Full` for that
+/// node — reproduces pre-Phase-B4 behavior (every node draws normally)
+/// exactly, both for `flatten_scene_graph`'s test-only callers and for any
+/// production call where full-corpus DOI mode isn't active. `diagram_indices`
+/// (`node_diagram_indices`) is REQUIRED alongside a non-empty `render_tiers`
+/// whenever any node is `Clustered` — it's how clustered nodes get grouped
+/// per-diagram into separate aggregate stubs (see the cluster-stub
+/// emission below); an empty slice groups every clustered node into
+/// diagram `0`, which is only correct for a single-diagram scene.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn flatten_scene_graph_cached(
+    scene: &mae_canvas::scene::SceneGraph,
+    viewport: &mae_canvas::scene::Viewport,
+    style: &GraphStyleOptions,
+    degrees: &[u32],
+    diagram_centers: &[(f64, f64)],
+    render_tiers: &[RenderTier],
+    diagram_indices: &[usize],
+    label_cache: &mut Option<LabelWinnerCache>,
 ) -> Vec<VisualElement> {
     use mae_canvas::interaction::scene_to_viewport;
 
@@ -1473,34 +2405,74 @@ pub fn flatten_scene_graph(
         })
         .unzip();
 
-    // Scene-origin's viewport-space position — only used by the Chord
-    // edge-curve formula below, but panning/zooming shifts where scene
-    // `(0,0)` lands on screen, so it must go through the same transform as
-    // every node position (never a raw `(0,0)` in viewport space).
-    // Precomputed once, outside the edge loop, since it's identical for
-    // every edge.
+    // Scene-origin's viewport-space position — the FALLBACK the Chord
+    // edge-curve formula below uses when `diagram_centers` is empty (or
+    // doesn't cover a given node), plus what `compute_label_winners`/
+    // `node_label_placement` still key their own rotation off (unchanged,
+    // out of A3's scope). Panning/zooming shifts where scene `(0,0)` lands
+    // on screen, so it must go through the same transform as every node
+    // position (never a raw `(0,0)` in viewport space). Precomputed once,
+    // outside the edge loop, since it's identical for every edge.
     let (center_x, center_y) = scene_to_viewport(viewport, 0.0, 0.0);
+
+    // Per-node diagram-local center, transformed to viewport space ONCE
+    // here (A3) — same shape/cost class as `positions` above (one more
+    // O(nodes) pass). Looked up by `edge.source` in the Chord curvature
+    // formula below so each diagram's edges bow toward ITS OWN center,
+    // never the whole merged scene's origin. Falls back to the scene's
+    // own origin (`center_x, center_y` above) for any node index
+    // `diagram_centers` doesn't cover — reproduces today's single-origin
+    // behavior exactly for `flatten_scene_graph`'s test-only callers
+    // (which always pass an empty slice) and for the genuinely
+    // single-diagram case (whose one real diagram center IS scene origin
+    // by construction — see `node_diagram_centers`'s doc comment).
+    let diagram_center_viewport: Vec<(f64, f64)> = (0..scene.nodes.len())
+        .map(|i| {
+            diagram_centers
+                .get(i)
+                .map(|&(cx, cy)| scene_to_viewport(viewport, cx, cy))
+                .unwrap_or((center_x, center_y))
+        })
+        .collect();
 
     for edge in &scene.edges {
         let Some(src) = scene.nodes.get(edge.source) else {
             continue;
         };
-        let is_boundary = edge.style.dashed;
-        let color = if is_boundary {
+        // `is_self_link` is true for BOTH a genuine self-referential KB
+        // link AND a boundary/fringe stub — both are represented as
+        // `source == target` self-loops with no distinct second node (see
+        // `kb_graph::positions_to_scene`'s doc comment), which is exactly
+        // the condition that must render as a straight stub with
+        // boundary-style coloring/opacity, never curved. A cross-instance
+        // edge (`build_multi_kb_chord_positions`) is ALSO `edge.style.dashed`
+        // (reusing the same visual convention), but connects two REAL
+        // distinct nodes — it must NOT be swept in here. This is the
+        // deliberate difference from `GraphView::describe_state`'s
+        // `dashed && rel_type.is_none()` boundary check (appropriate for
+        // ITS OWN purpose): a verbatim copy of that formula would
+        // misclassify a genuine self-link too, since it also carries
+        // `rel_type: Some(..)` — flipping a self-loop stub into the
+        // curvature branch, where the "second endpoint" is a synthetic
+        // stub-offset position, not a real second node.
+        let is_self_link = edge.source == edge.target;
+        let color = if is_self_link {
             style.boundary_edge_color.clone()
         } else {
             style.edge_color.clone()
         };
         let (sx1, sy1) = scene_to_viewport(viewport, src.x, src.y);
         let src_r = radii.get(edge.source).copied().unwrap_or(style.node_radius);
-        // A boundary edge is represented as a self-loop (source == target,
-        // see `build_kb_graph`) — draw a short stub off to the side instead
-        // of a zero-length line, so it's visually distinguishable. The stub
-        // offset is sized off the source node's OWN real render radius
-        // (`src_r`, computed above), so it stays proportionate to the
-        // circle it's attached to regardless of that node's degree/zoom
-        // size — not a flat, unrelated screen-space constant.
-        let (sx2, sy2) = if edge.target < scene.nodes.len() && edge.target != edge.source {
+        // A boundary edge OR a genuine self-referential link is
+        // represented as a self-loop (source == target, see
+        // `kb_graph::positions_to_scene`) — draw a short stub off to the
+        // side instead of a zero-length line, so it's visually
+        // distinguishable. The stub offset is sized off the source node's
+        // OWN real render radius (`src_r`, computed above), so it stays
+        // proportionate to the circle it's attached to regardless of that
+        // node's degree/zoom size — not a flat, unrelated screen-space
+        // constant.
+        let (sx2, sy2) = if edge.target < scene.nodes.len() && !is_self_link {
             let t = &scene.nodes[edge.target];
             scene_to_viewport(viewport, t.x, t.y)
         } else {
@@ -1509,11 +2481,14 @@ pub fn flatten_scene_graph(
         if edge_is_offscreen_same_side(sx1 as f32, sy1 as f32, sx2 as f32, sy2 as f32, viewport) {
             continue;
         }
-        // Curved internal edges. Boundary/self-loop stub edges stay
-        // straight regardless of algorithm — dashing here only ever
-        // applies to those short stubs, never a distinct-node-to-node
+        // Curved internal edges — now including real cross-instance edges
+        // (A3): the only thing that keeps an edge OUT of this branch is
+        // being a self-link/boundary stub (`is_self_link`), not `dashed`
+        // alone. Boundary/self-loop stub edges stay straight regardless of
+        // algorithm — dashing on the `Line` branch below only ever applies
+        // to those short stubs in practice, never a distinct-node-to-node
         // edge, so the dash segmenter never needs to learn to dash a curve.
-        if !is_boundary && style.edge_curvature > 0.0 {
+        if !is_self_link && style.edge_curvature > 0.0 {
             let dx = sx2 - sx1;
             let dy = sy2 - sy1;
             let len = (dx * dx + dy * dy).sqrt();
@@ -1523,17 +2498,20 @@ pub fn flatten_scene_graph(
                 let (ctrl_x, ctrl_y) = match style.layout_algorithm {
                     GraphLayoutAlgorithm::Chord => {
                         // Chord-diagram style: pull the control point
-                        // toward the circle's center instead of bowing
+                        // toward THIS EDGE'S OWN diagram's center (A3 —
+                        // the source node's diagram, via
+                        // `diagram_center_viewport`) instead of bowing
                         // perpendicular to the edge — the visually
                         // essential trait of a chord diagram, not just a
                         // cosmetic variant of the Force curve. Capped at
                         // `edge_curvature <= 1.0`'s natural meaning (never
                         // overshoots PAST the center itself).
                         let t = (style.edge_curvature as f64).min(1.0);
-                        (
-                            mid_x + (center_x - mid_x) * t,
-                            mid_y + (center_y - mid_y) * t,
-                        )
+                        let (dcx, dcy) = diagram_center_viewport
+                            .get(edge.source)
+                            .copied()
+                            .unwrap_or((center_x, center_y));
+                        (mid_x + (dcx - mid_x) * t, mid_y + (dcy - mid_y) * t)
                     }
                     GraphLayoutAlgorithm::Force => {
                         // A quadratic control point offset perpendicular to
@@ -1579,13 +2557,21 @@ pub fn flatten_scene_graph(
             y2: sy2 as f32,
             color: color.clone(),
             thickness: edge.style.width as f32,
-            dashed: is_boundary,
+            // The raw data-level flag, NOT `is_self_link` — a real
+            // cross-instance edge is also `edge.style.dashed` (reused
+            // convention), and stays visually flagged as "not an ordinary
+            // edge" even in the rare case it falls through to this
+            // straight-line branch (`edge_curvature == 0.0`).
+            dashed: edge.style.dashed,
             // The boundary self-loop stub is sparse and a meaningful
             // correctness signal ("more graph beyond this depth, here"),
             // not part of the dense-overlapping-edges problem `edge_alpha`
             // exists to fix — it always draws fully opaque, regardless of
-            // the configured edge_alpha.
-            alpha: if is_boundary { 1.0 } else { style.edge_alpha },
+            // the configured edge_alpha. A real cross-instance edge is NOT
+            // that signal (A3) — it's an ordinary edge for density
+            // purposes, so it respects `edge_alpha` like any other
+            // non-self-link edge, even in this straight-line fallback.
+            alpha: if is_self_link { 1.0 } else { style.edge_alpha },
         });
         // A boundary stub's label ("...", or "... (+N)" for a source with
         // multiple collapsed out-of-subgraph links — see
@@ -1625,23 +2611,104 @@ pub fn flatten_scene_graph(
     // `compute_label_winners`'s doc comment) — computed ONCE here, gated on
     // the SAME zoom threshold that already hides all labels below it, so
     // the pass is skipped entirely (not just its result discarded) at low
-    // zoom or when the feature is disabled.
+    // zoom or when the feature is disabled. Memoized via `label_cache` (see
+    // `LabelWinnerCache`'s doc comment): reused verbatim when this call's
+    // inputs match the cache's, recomputed (and the cache replaced)
+    // otherwise — so a run of calls whose only difference is an in-flight
+    // color tween's fill color (topology/selection/hover/viewport all
+    // unchanged) pays for the greedy overlap pass exactly once.
     let label_winners: Option<std::collections::HashSet<usize>> =
         if style.label_declutter_enabled && viewport.zoom >= style.label_zoom_threshold as f64 {
-            Some(compute_label_winners(
-                scene,
-                &positions,
-                &radii,
-                degrees,
-                style,
-                viewport,
-                (center_x as f32, center_y as f32),
-            ))
+            let cache_hit = label_cache.as_ref().is_some_and(|c| {
+                c.matches(
+                    scene.nodes.len(),
+                    &positions,
+                    &radii,
+                    degrees,
+                    scene.selection,
+                    scene.hovered,
+                    viewport,
+                    style.font_size,
+                    style.layout_algorithm,
+                )
+            });
+            let winners = if cache_hit {
+                label_cache.as_ref().unwrap().result.clone()
+            } else {
+                let winners = compute_label_winners(
+                    scene,
+                    &positions,
+                    &radii,
+                    degrees,
+                    style,
+                    viewport,
+                    (center_x as f32, center_y as f32),
+                );
+                *label_cache = Some(LabelWinnerCache {
+                    positions: positions.clone(),
+                    radii: radii.clone(),
+                    degrees: degrees.to_vec(),
+                    selection: scene.selection,
+                    hovered: scene.hovered,
+                    viewport: *viewport,
+                    font_size: style.font_size,
+                    layout_algorithm: style.layout_algorithm,
+                    result: winners.clone(),
+                });
+                winners
+            };
+            Some(winners)
         } else {
             None
         };
 
+    // ADR-068 Phase B4: accumulate `RenderTier::Clustered` node indices per
+    // (diagram, cluster-group-bucket, angular-sector) — drawn as ONE
+    // aggregate stub AFTER this loop, instead of being drawn individually
+    // inside it. The angular-sector component (live-testing fix, see
+    // `angular_sector_of`'s doc comment) keeps a bucket's members spatially
+    // contiguous on their diagram's ring, so the aggregate stub's centroid
+    // position is always genuinely near its own members — without it, a
+    // semantic bucket (same kind/degree) can scatter evenly all the way
+    // around the ring, and its centroid cancels out to the ring's empty
+    // center: a stub that visually "points to nowhere". Keyed by
+    // `(diagram_index, bucket, sector)` so two different diagrams' clustered
+    // nodes (even sharing the same kind/degree-bucket) never merge into one
+    // stub — see `node_diagram_indices`'s doc comment.
+    let mut cluster_groups: std::collections::HashMap<(usize, u32, u32), Vec<usize>> =
+        std::collections::HashMap::new();
+    // One pass to find each diagram's contiguous node-index range (start,
+    // len) — needed by `angular_sector_of` below. Cheap: a `HashMap` insert
+    // per node, no BFS/allocation-heavy work.
+    let mut diagram_start: std::collections::HashMap<usize, usize> =
+        std::collections::HashMap::new();
+    let mut diagram_len: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for (i, &d) in diagram_indices.iter().enumerate() {
+        diagram_start.entry(d).or_insert(i);
+        *diagram_len.entry(d).or_insert(0) += 1;
+    }
+
     for (i, node) in scene.nodes.iter().enumerate() {
+        let tier = render_tiers.get(i).copied().unwrap_or(RenderTier::Full);
+        if tier == RenderTier::Hidden {
+            // Skip the draw entirely — still present in `scene`/
+            // `describe_state` (see `describe_state_is_unaffected_by_
+            // culling_or_lod`), only the VISUAL is suppressed.
+            continue;
+        }
+        if tier == RenderTier::Clustered {
+            let diagram_idx = diagram_indices.get(i).copied().unwrap_or(0);
+            let degree = degrees.get(i).copied().unwrap_or(0);
+            let bucket = cluster_bucket_key(style.cluster_group_by, node.kind, degree);
+            let start = diagram_start.get(&diagram_idx).copied().unwrap_or(0);
+            let len = diagram_len.get(&diagram_idx).copied().unwrap_or(1);
+            let sector = angular_sector_of(i, start, len);
+            cluster_groups
+                .entry((diagram_idx, bucket, sector))
+                .or_default()
+                .push(i);
+            continue;
+        }
         let is_selected = scene.selection == Some(i);
         let is_hovered = scene.hovered == Some(i);
         // Selected always wins over hovered when both target the same
@@ -1722,13 +2789,199 @@ pub fn flatten_scene_graph(
         }
     }
 
+    // ADR-068 Phase B4/B5: one aggregate "+N nodes" stub per (diagram,
+    // cluster-group, angular-sector) — reuses the SAME visual language as a
+    // boundary-link stub (`style.boundary_edge_color`/
+    // `boundary_edge_text_color`, a dashed-feeling muted marker + a count
+    // label), just anchored at the group's own centroid position rather
+    // than a real source node's (there IS no single "source" node for an
+    // aggregate of many unrelated far-from-focus nodes) — the angular-
+    // sector key (above) keeps that centroid genuinely near its own
+    // members, never cancelling out to empty ring-center. The circle's
+    // radius additionally scales with the cluster's size (sub-linear, same
+    // sqrt convention `node_render_radius` uses for degree — see that
+    // function's doc comment), so a "+112" stub reads visually bigger/more
+    // significant than a "+2" one, rather than both being an
+    // indistinguishable dot. Deterministic iteration order (sorted by key)
+    // so this function stays a pure, reproducible function of its inputs
+    // like the rest of this file, not dependent on `HashMap`'s
+    // per-process-hash-seed iteration order.
+    let mut group_keys: Vec<&(usize, u32, u32)> = cluster_groups.keys().collect();
+    group_keys.sort();
+    for key in group_keys {
+        let members = &cluster_groups[key];
+        if members.is_empty() {
+            continue;
+        }
+        let (sum_x, sum_y, sum_r) = members.iter().fold((0.0f32, 0.0f32, 0.0f32), |acc, &i| {
+            (
+                acc.0 + positions[i].0,
+                acc.1 + positions[i].1,
+                acc.2 + radii[i],
+            )
+        });
+        let n = members.len() as f32;
+        let (cx, cy, avg_r) = (sum_x / n, sum_y / n, (sum_r / n).max(1.0));
+        // Sub-linear (sqrt) growth with cluster size, capped at 4x the
+        // average member radius — visually communicates "more collapsed
+        // nodes here" without letting a huge cluster (e.g. +112) dwarf the
+        // diagram it belongs to.
+        let r = avg_r * n.sqrt().min(4.0);
+        elements.push(VisualElement::Circle {
+            cx,
+            cy,
+            r,
+            // Hollow (no fill) — visually distinct from a real, filled
+            // node, while still using the same boundary color language a
+            // "there's more here, collapsed" signal already uses elsewhere
+            // in this function.
+            fill: None,
+            stroke: Some(style.boundary_edge_color.clone()),
+        });
+        elements.push(VisualElement::Text {
+            x: cx + r + 4.0,
+            y: cy,
+            // Self-explanatory even out of context — a bare "... (+112)"
+            // (the earlier wording) reads as a stray rendering artifact
+            // rather than a legible count (live-testing feedback: "a
+            // circle pointing to nowhere and that text blurb doesn't
+            // communicate anything clearly").
+            text: format!("+{} nodes", members.len()),
+            font_size: style.font_size,
+            color: style.boundary_edge_text_color.clone(),
+            rotation_degrees: 0.0,
+            right_align: false,
+        });
+    }
+
     elements
+}
+
+/// Which bucket a `RenderTier::Clustered` node's aggregate stub groups
+/// into, per `kb_graph_cluster_group_by` (ADR-068 Phase B6) — a `u32` key
+/// so it composes cheaply into the `(diagram_index, bucket)` `HashMap` key
+/// `flatten_scene_graph_cached`'s cluster-stub aggregation uses.
+fn cluster_bucket_key(
+    group_by: ClusterGroupBy,
+    kind: mae_canvas::scene::NodeKind,
+    degree: u32,
+) -> u32 {
+    match group_by {
+        ClusterGroupBy::Kind => kind as u32,
+        // Coarse log2 bucket: degree 0 -> bucket 0, 1 -> 1, 2-3 -> 2,
+        // 4-7 -> 3, 8-15 -> 4, ... — groups nodes of roughly comparable
+        // connectivity together without needing one bucket per exact
+        // degree value (which would fragment a cluster into many
+        // single-node "stubs", defeating the point of clustering).
+        ClusterGroupBy::DegreeBucket => degree.checked_ilog2().map(|v| v + 1).unwrap_or(0),
+    }
+}
+
+/// Number of angular slices a diagram's ring is divided into for
+/// `angular_sector_of` — coarse enough that a real hidden-node count still
+/// yields one legible stub per sector rather than fragmenting into many
+/// single-node ones, fine enough to keep each sector's members within a
+/// tight enough arc that their centroid reads as "roughly here on the
+/// ring", not "somewhere in this diagram".
+const CLUSTER_ANGULAR_SECTORS: usize = 8;
+
+/// Which angular slice of its diagram's ring node `i` falls in — live-
+/// testing found the ORIGINAL cluster grouping (by kind/degree-bucket
+/// alone) could scatter one bucket's members evenly all the way around a
+/// diagram's ring; the aggregate stub's centroid (a plain mean of member
+/// positions) then cancels out to the ring's empty center, rendering as "a
+/// circle pointing to nowhere". Folding this sector into the grouping key
+/// (see the `cluster_groups` `HashMap` above) keeps every bucket spatially
+/// contiguous, so its centroid always lands within the same arc as its own
+/// members.
+///
+/// Cheap and exact for Multi mode specifically (the only mode
+/// `RenderTier::Clustered` is ever produced in — see
+/// `Editor::graph_view_doi_render_tiers`'s doc comment): Multi mode always
+/// forces the Chord layout algorithm (A3), whose node ordering directly IS
+/// angular ordering around each diagram's own ring (`chord_ring_positions`,
+/// `crates/canvas/src/kb_graph.rs` — node `j` of `n` sits at angle
+/// `j * 2π / n`). So the node's LOCAL index within its diagram's contiguous
+/// block (`i - diagram_start`, see `node_diagram_indices`'s contiguous-
+/// block invariant) maps directly to a sector — no trigonometry or
+/// position lookup needed.
+fn angular_sector_of(global_index: usize, diagram_start: usize, diagram_len: usize) -> u32 {
+    let local_index = global_index.saturating_sub(diagram_start);
+    let len = diagram_len.max(1);
+    ((local_index * CLUSTER_ANGULAR_SECTORS) / len) as u32
+}
+
+/// Vertical gap (logical px, screen-space, NOT scene-space — captions stay
+/// a fixed screen size regardless of zoom, like every other UI-chrome text
+/// in this module) between a diagram's bounding circle and its caption.
+const DIAGRAM_LABEL_OFFSET_PX: f32 = 10.0;
+
+/// Append one `VisualElement::Text` per `GraphView.diagram_labels` entry,
+/// anchored above that diagram's bounding circle — the multi-KB chord
+/// view's (#462 PR4) per-diagram KB-name caption. A separate function
+/// called right after `flatten_scene_graph_cached` at the one real
+/// per-window render call site (`Editor::graph_view_reflatten_window`),
+/// rather than a new parameter threaded through `flatten_scene_graph`/
+/// `_cached` themselves (CLAUDE.md #9 — minimal footprint: threading it
+/// through would touch ~40 existing test call sites in this module for an
+/// orthogonal concern). A no-op for an empty `diagram_labels` slice — every
+/// existing `flatten_scene_graph`/`_cached` caller is therefore completely
+/// unaffected by this function existing.
+///
+/// Reuses `style.font_size` (no new `kb_graph_*` option) — see this
+/// function's own call site for why a dedicated diagram-caption font-size
+/// option was judged unnecessary.
+///
+/// #479: when `label.loaded` is `false` (a registered KB instance that
+/// failed to load/open — see `DiagramLabel::loaded`'s doc comment), the
+/// caption is visually distinguished from a healthy diagram's — a
+/// "(not loaded)" suffix plus `style.boundary_edge_text_color` (the same
+/// already-WCAG-contrast-checked muted color used for boundary stubs'
+/// "there's more, unresolved" signal) instead of the normal caption color —
+/// rather than inventing a new dedicated color/option for this one case.
+pub fn push_diagram_labels(
+    elements: &mut Vec<VisualElement>,
+    diagram_labels: &[mae_canvas::kb_graph::DiagramLabel],
+    viewport: &mae_canvas::scene::Viewport,
+    style: &GraphStyleOptions,
+) {
+    use mae_canvas::interaction::scene_to_viewport;
+    for label in diagram_labels {
+        let (cx, top_y) =
+            scene_to_viewport(viewport, label.center_x, label.center_y - label.radius);
+        let text = if label.loaded {
+            label.name.clone()
+        } else {
+            format!("{} (not loaded)", label.name)
+        };
+        let color = if label.loaded {
+            ensure_min_contrast(
+                &style.edge_color,
+                &style.background_color,
+                WCAG_AA_TEXT_CONTRAST,
+            )
+        } else {
+            style.boundary_edge_text_color.clone()
+        };
+        let approx_half_width = text.chars().count() as f32
+            * style.font_size
+            * mae_canvas::kb_graph::DIAGRAM_LABEL_CHAR_WIDTH_EM;
+        elements.push(VisualElement::Text {
+            x: cx as f32 - approx_half_width,
+            y: top_y as f32 - DIAGRAM_LABEL_OFFSET_PX,
+            text,
+            font_size: style.font_size,
+            color,
+            rotation_degrees: 0.0,
+            right_align: false,
+        });
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mae_canvas::scene::{EdgeStyle, NodeKind, NodeStyle, SceneEdge, SceneGraph, SceneNode};
+    use mae_canvas::scene::{EdgeStyle, NodeKind, SceneEdge, SceneGraph, SceneNode};
 
     fn test_style() -> GraphStyleOptions {
         GraphStyleOptions {
@@ -1776,6 +3029,7 @@ mod tests {
             // formula (or a straight line); new chord-mode tests build
             // their own style with `Chord` explicitly, same pattern.
             layout_algorithm: GraphLayoutAlgorithm::Force,
+            cluster_group_by: ClusterGroupBy::Kind,
             color_override: None,
             node_border_enabled: false,
             node_colors: [
@@ -1840,10 +3094,7 @@ mod tests {
             label: id.to_string(),
             x,
             y,
-            width: 100.0,
-            height: 40.0,
             kind,
-            style: NodeStyle::default(),
             pinned: false,
             is_seed: false,
         }
@@ -1858,6 +3109,66 @@ mod tests {
             weight: 1.0,
             rel_type: None,
         }
+    }
+
+    fn test_diagram_label(name: &str, loaded: bool) -> mae_canvas::kb_graph::DiagramLabel {
+        mae_canvas::kb_graph::DiagramLabel {
+            instance: None,
+            name: name.to_string(),
+            center_x: 0.0,
+            center_y: 0.0,
+            radius: 50.0,
+            node_count: 3,
+            loaded,
+        }
+    }
+
+    #[test]
+    fn push_diagram_labels_unloaded_diagram_gets_a_distinguishing_suffix_and_color() {
+        // #479: a registered-but-unloaded instance's caption must be
+        // visually distinguishable from a healthy diagram's -- not just an
+        // internal `loaded` flag nobody can see. Mixed input (one loaded,
+        // one not), per CLAUDE.md #14, so this can't pass by accident.
+        // `test_style()`'s `edge_color`/`boundary_edge_text_color` are both
+        // placeholder non-hex strings that `ensure_min_contrast` happens to
+        // fall back to the SAME white for (an incidental fixture
+        // coincidence, not a real invariant) -- override
+        // `boundary_edge_text_color` to a distinct real hex here so this
+        // test can actually distinguish the two colors, per CLAUDE.md #14
+        // (no unicorn inputs that coincidentally make an assertion pass).
+        let style = GraphStyleOptions {
+            boundary_edge_text_color: "#888888".to_string(),
+            ..test_style()
+        };
+        let viewport = mae_canvas::scene::Viewport::default();
+        let labels = vec![
+            test_diagram_label("Healthy", true),
+            test_diagram_label("Dead", false),
+        ];
+        let mut elements = Vec::new();
+        push_diagram_labels(&mut elements, &labels, &viewport, &style);
+        assert_eq!(elements.len(), 2);
+
+        let VisualElement::Text { text, color, .. } = &elements[0] else {
+            panic!("expected a Text element");
+        };
+        assert_eq!(text, "Healthy");
+        let expected_loaded_color = ensure_min_contrast(
+            &style.edge_color,
+            &style.background_color,
+            WCAG_AA_TEXT_CONTRAST,
+        );
+        assert_eq!(color, &expected_loaded_color);
+
+        let VisualElement::Text { text, color, .. } = &elements[1] else {
+            panic!("expected a Text element");
+        };
+        assert_eq!(text, "Dead (not loaded)");
+        assert_eq!(color, &style.boundary_edge_text_color);
+        assert_ne!(
+            color, &expected_loaded_color,
+            "the unloaded diagram's caption must not share the healthy diagram's color"
+        );
     }
 
     #[test]
@@ -2222,6 +3533,83 @@ mod tests {
     }
 
     #[test]
+    fn cluster_stub_centroid_never_collapses_to_the_ring_center_when_members_span_the_whole_ring() {
+        // Live-testing bug: bucketing `RenderTier::Clustered` nodes ONLY by
+        // kind/degree (no spatial component) let one bucket's members
+        // scatter evenly all the way around a diagram's ring — their plain
+        // positional-mean centroid then cancels out to the ring's empty
+        // center, a stub that visually "points to nowhere" (direct user
+        // feedback). 16 same-kind, same-degree nodes evenly spaced on a
+        // ring of radius 100 around the diagram's own center (0, 0) is
+        // exactly the pathological case: the OLD code's single bucket would
+        // average to (0, 0) by symmetry.
+        const N: usize = 16;
+        const RADIUS: f64 = 100.0;
+        let mut scene = SceneGraph::new();
+        for i in 0..N {
+            let angle = i as f64 * 2.0 * std::f64::consts::PI / N as f64;
+            scene.nodes.push(test_node(
+                &format!("n{i}"),
+                RADIUS * angle.cos(),
+                RADIUS * angle.sin(),
+                NodeKind::Note,
+            ));
+        }
+        let style = test_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let degrees = vec![0u32; N];
+        let render_tiers = vec![RenderTier::Clustered; N];
+        let diagram_indices = vec![0usize; N];
+        let mut cache = None;
+        let elements = flatten_scene_graph_cached(
+            &scene,
+            &viewport,
+            &style,
+            &degrees,
+            &[],
+            &render_tiers,
+            &diagram_indices,
+            &mut cache,
+        );
+
+        let stub_centers: Vec<(f32, f32)> = elements
+            .iter()
+            .filter_map(|e| match e {
+                VisualElement::Circle {
+                    cx, cy, fill: None, ..
+                } => Some((*cx, *cy)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !stub_centers.is_empty(),
+            "16 clustered same-kind nodes must produce at least one stub"
+        );
+        assert!(
+            stub_centers.len() > 1,
+            "16 nodes spanning the whole ring must split into MULTIPLE angular-sector stubs, \
+             not one — got {}",
+            stub_centers.len()
+        );
+
+        let (origin_x, origin_y) = mae_canvas::interaction::scene_to_viewport(&viewport, 0.0, 0.0);
+        let (ring_edge_x, ring_edge_y) =
+            mae_canvas::interaction::scene_to_viewport(&viewport, RADIUS, 0.0);
+        let ring_radius_screen =
+            ((ring_edge_x - origin_x).powi(2) + (ring_edge_y - origin_y).powi(2)).sqrt();
+        for (cx, cy) in &stub_centers {
+            let dist_from_center =
+                ((*cx as f64 - origin_x).powi(2) + (*cy as f64 - origin_y).powi(2)).sqrt();
+            assert!(
+                dist_from_center > ring_radius_screen * 0.5,
+                "a cluster stub must sit near its OWN (spatially contiguous) members on the \
+                 ring, not collapse toward the empty center — got distance {dist_from_center} \
+                 from center, ring radius is {ring_radius_screen}"
+            );
+        }
+    }
+
+    #[test]
     fn flatten_never_suppresses_the_hovered_nodes_label_even_at_low_degree() {
         let (mut scene, _) = overlapping_nodes_scene("hub", "hovered_leaf");
         let degrees = vec![0u32, 20u32];
@@ -2361,6 +3749,119 @@ mod tests {
             (0.0, 0.0),
         );
         assert_eq!(winners1, winners2);
+    }
+
+    #[test]
+    fn flatten_scene_graph_cached_reuses_label_winners_across_unchanged_ticks_and_recomputes_on_selection_change(
+    ) {
+        // #462 audit finding: `compute_label_winners`'s (up to) O(n^2)
+        // greedy overlap pass used to re-run from scratch on EVERY color-
+        // tween animation frame (9-20 ticks per hover/selection change),
+        // even though topology/selection/hover/viewport are unchanged
+        // during a pure color tween. `flatten_scene_graph_cached` must
+        // reuse the memoized result across such a run, and must still
+        // recompute the moment selection/hover genuinely changes.
+        let (scene, degrees) = overlapping_nodes_scene("hub", "leaf");
+        let style = declutter_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let mut cache: Option<LabelWinnerCache> = None;
+
+        let before_first = label_winners_compute_count();
+        let elements1 = flatten_scene_graph_cached(
+            &scene,
+            &viewport,
+            &style,
+            &degrees,
+            &[],
+            &[],
+            &[],
+            &mut cache,
+        );
+        let after_first = label_winners_compute_count();
+        assert_eq!(
+            after_first,
+            before_first + 1,
+            "the first call must actually run the greedy overlap pass (empty cache)"
+        );
+        assert!(cache.is_some(), "a successful pass must populate the cache");
+
+        // Simulate several more color-tween ticks: SAME scene/viewport/
+        // degrees/style, nothing that would change label winners.
+        // `VisualElement` has no `PartialEq`, so compare the cheaper
+        // Text-element count as a proxy for "the same labels won" —
+        // sufficient here since the compute-count assertion below is what
+        // actually proves memoization, not this shape check.
+        let text_count = |els: &[VisualElement]| {
+            els.iter()
+                .filter(|e| matches!(e, VisualElement::Text { .. }))
+                .count()
+        };
+        let expected_text_count = text_count(&elements1);
+        for _ in 0..5 {
+            let elements_n = flatten_scene_graph_cached(
+                &scene,
+                &viewport,
+                &style,
+                &degrees,
+                &[],
+                &[],
+                &[],
+                &mut cache,
+            );
+            assert_eq!(
+                text_count(&elements_n),
+                expected_text_count,
+                "identical inputs must keep producing the same visible-label set"
+            );
+        }
+        let after_run = label_winners_compute_count();
+        assert_eq!(
+            after_run, after_first,
+            "a run of ticks with unchanged inputs must NOT re-run compute_label_winners \
+             even once — the whole point of the cache"
+        );
+
+        // Now genuinely change the selection — the winner set is priority-
+        // sensitive (selected/hovered nodes are tier 0), so this MUST bust
+        // the cache and recompute.
+        let mut reselected_scene = scene.clone();
+        reselected_scene.selection = Some(1); // was None; now "leaf" is selected
+        let _ = flatten_scene_graph_cached(
+            &reselected_scene,
+            &viewport,
+            &style,
+            &degrees,
+            &[],
+            &[],
+            &[],
+            &mut cache,
+        );
+        let after_selection_change = label_winners_compute_count();
+        assert_eq!(
+            after_selection_change,
+            after_run + 1,
+            "a genuine selection change must invalidate the cache and recompute exactly once"
+        );
+
+        // And hover, independently of selection.
+        let mut rehovered_scene = scene.clone();
+        rehovered_scene.hovered = Some(1);
+        let _ = flatten_scene_graph_cached(
+            &rehovered_scene,
+            &viewport,
+            &style,
+            &degrees,
+            &[],
+            &[],
+            &[],
+            &mut cache,
+        );
+        let after_hover_change = label_winners_compute_count();
+        assert_eq!(
+            after_hover_change,
+            after_selection_change + 1,
+            "a genuine hover change must also invalidate the cache and recompute exactly once"
+        );
     }
 
     #[test]
@@ -3335,6 +4836,198 @@ mod tests {
         );
     }
 
+    /// A3 root-cause regression guard: N-way (CLAUDE.md #14), not just
+    /// seed+one-sibling. Three diagrams, each with its own center FAR from
+    /// BOTH the shared scene origin `(0,0)` AND from each other's centers —
+    /// before this fix, `flatten_scene_graph_cached` bowed EVERY diagram's
+    /// internal edges toward the single global scene origin (correct only
+    /// for the single-diagram case, where a diagram's own center coincides
+    /// with scene origin by construction). Each diagram's edge must bow
+    /// toward ITS OWN center instead.
+    #[test]
+    fn flatten_chord_mode_multi_diagram_pulls_each_edges_control_point_toward_its_own_diagram_center(
+    ) {
+        // Kept within `Viewport::default()`'s 800x600 on-screen bounds
+        // (each node offset by +/-100 from its diagram's own center) so
+        // `edge_is_offscreen_same_side` never culls a diagram's edge —
+        // still far enough apart (and from the shared scene origin) to
+        // make the own-center-vs-global-origin distinction unambiguous.
+        let diagram_centers_scene = [(150.0, 0.0), (-120.0, 130.0), (60.0, -140.0)];
+        let mut scene = SceneGraph::new();
+        let mut labels = Vec::new();
+        for (i, &(cx, cy)) in diagram_centers_scene.iter().enumerate() {
+            // Two nodes per diagram, offset from THAT diagram's own center
+            // (mirroring the existing single-diagram test's 0/90-degree
+            // ring geometry) — so each edge's straight-line midpoint sits
+            // away from its own diagram's center; otherwise "pulls toward
+            // center" would be trivially unfalsifiable (the midpoint would
+            // already BE the center).
+            let base = scene.nodes.len();
+            scene.nodes.push(test_node(
+                &format!("d{i}-a"),
+                cx + 100.0,
+                cy,
+                NodeKind::Note,
+            ));
+            scene.nodes.push(test_node(
+                &format!("d{i}-b"),
+                cx,
+                cy + 100.0,
+                NodeKind::Note,
+            ));
+            scene.edges.push(test_edge(base, base + 1));
+            labels.push(mae_canvas::kb_graph::DiagramLabel {
+                instance: None,
+                name: format!("diagram-{i}"),
+                center_x: cx,
+                center_y: cy,
+                radius: 100.0,
+                node_count: 2,
+                loaded: true,
+            });
+        }
+
+        let mut style = test_style();
+        style.edge_curvature = 0.5;
+        style.layout_algorithm = GraphLayoutAlgorithm::Chord;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let degrees = node_degrees(&scene);
+        let diagram_centers = node_diagram_centers(&labels);
+        let mut cache = None;
+        let elements = flatten_scene_graph_cached(
+            &scene,
+            &viewport,
+            &style,
+            &degrees,
+            &diagram_centers,
+            &[],
+            &[],
+            &mut cache,
+        );
+
+        let (origin_x, origin_y) = mae_canvas::interaction::scene_to_viewport(&viewport, 0.0, 0.0);
+        let dist =
+            |a: (f64, f64), b: (f64, f64)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+
+        let curves: Vec<(f64, f64, f64, f64, f64, f64)> = elements
+            .iter()
+            .filter_map(|e| match e {
+                VisualElement::Curve {
+                    x1,
+                    y1,
+                    ctrl_x,
+                    ctrl_y,
+                    x2,
+                    y2,
+                    ..
+                } => Some((
+                    *x1 as f64,
+                    *y1 as f64,
+                    *ctrl_x as f64,
+                    *ctrl_y as f64,
+                    *x2 as f64,
+                    *y2 as f64,
+                )),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            curves.len(),
+            3,
+            "expected exactly one curve per diagram's internal edge"
+        );
+
+        for (i, &(cx, cy)) in diagram_centers_scene.iter().enumerate() {
+            let (own_center_x, own_center_y) =
+                mae_canvas::interaction::scene_to_viewport(&viewport, cx, cy);
+            let (x1, y1, ctrl_x, ctrl_y, x2, y2) = curves[i];
+            let mid = ((x1 + x2) / 2.0, (y1 + y2) / 2.0);
+            let ctrl = (ctrl_x, ctrl_y);
+            assert!(
+                dist(ctrl, (own_center_x, own_center_y))
+                    < dist(mid, (own_center_x, own_center_y)) - 1.0,
+                "diagram {i}'s edge must bow toward ITS OWN center {:?}, got ctrl {:?} vs mid \
+                 {:?}",
+                (own_center_x, own_center_y),
+                ctrl,
+                mid
+            );
+            // Root-cause-specific: strictly closer to its OWN center than
+            // to the shared global scene origin — the exact grid-centroid
+            // bug this test guards against (each diagram's own center is
+            // deliberately far from `(0,0)` here).
+            assert!(
+                dist(ctrl, (own_center_x, own_center_y)) < dist(ctrl, (origin_x, origin_y)),
+                "diagram {i}'s control point must be closer to its OWN center {:?} than to the \
+                 shared global scene origin {:?} — got ctrl {:?}",
+                (own_center_x, own_center_y),
+                (origin_x, origin_y),
+                ctrl
+            );
+        }
+    }
+
+    /// A3 byte-identical regression guard at the FLATTEN level (not just
+    /// raw scene topology, which `multi_kb_single_diagram_matches_plain_
+    /// chord_positions_byte_for_byte` in `mae-canvas` already covers): a
+    /// single-diagram scene's `diagram_centers`-aware flatten must produce
+    /// the exact same output as the empty-slice fallback `flatten_scene_
+    /// graph` (the pre-A3 behavior every one of its ~35 test callers
+    /// relies on) — proving the fix is a genuine no-op whenever there's
+    /// only one diagram (Single mode, or single-diagram Multi mode), since
+    /// that one diagram's center IS scene origin `(0, 0)` by construction.
+    #[test]
+    fn flatten_scene_graph_cached_is_byte_identical_to_the_empty_slice_fallback_for_a_single_diagram(
+    ) {
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("a", 100.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("b", 0.0, 100.0, NodeKind::Note));
+        scene.edges.push(test_edge(0, 1));
+        let mut style = test_style();
+        style.edge_curvature = 0.5;
+        style.layout_algorithm = GraphLayoutAlgorithm::Chord;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let degrees = node_degrees(&scene);
+
+        // The "no diagram_centers info" path (what `flatten_scene_graph`,
+        // and every pre-A3 test caller, always used).
+        let via_wrapper = flatten_scene_graph(&scene, &viewport, &style, &degrees);
+
+        // The "real" single-diagram path: exactly one `DiagramLabel`
+        // covering both nodes, centered at scene `(0, 0)` — matching both
+        // `GraphViewMode::Single`'s hardcoded `DiagramLabel` and
+        // `build_multi_kb_chord_positions`'s single-diagram grid
+        // re-centering, per `node_diagram_centers`'s doc comment.
+        let labels = vec![mae_canvas::kb_graph::DiagramLabel {
+            instance: None,
+            name: "seed".to_string(),
+            center_x: 0.0,
+            center_y: 0.0,
+            radius: 100.0,
+            node_count: 2,
+            loaded: true,
+        }];
+        let diagram_centers = node_diagram_centers(&labels);
+        let mut cache = None;
+        let via_real_centers = flatten_scene_graph_cached(
+            &scene,
+            &viewport,
+            &style,
+            &degrees,
+            &diagram_centers,
+            &[],
+            &[],
+            &mut cache,
+        );
+
+        assert_eq!(
+            serde_json::to_string(&via_wrapper).unwrap(),
+            serde_json::to_string(&via_real_centers).unwrap(),
+            "a single diagram's own center (0,0) must reproduce the empty-slice/global-origin \
+             fallback byte-for-byte"
+        );
+    }
+
     #[test]
     fn flatten_curve_offset_is_capped_at_max_curve_offset_px() {
         let mut scene = SceneGraph::new();
@@ -3663,6 +5356,45 @@ mod tests {
     }
 
     #[test]
+    fn describe_state_does_not_mark_a_genuine_self_link_as_boundary() {
+        // #462 audit fix: a genuine self-referential KB link is ALSO
+        // dashed now (so it renders recognizably rather than as a bare
+        // unlabeled stub — see `kb_graph::positions_to_scene`), so
+        // `style.dashed` alone can no longer tell it apart from a real
+        // subgraph-fringe boundary stub. It must still resolve to
+        // `boundary: false` here — the discriminator is `rel_type`: a
+        // genuine self-link keeps its real relationship type, a boundary
+        // stub's is always `None` (its underlying link's type was
+        // discarded when multiple out-of-subgraph links collapsed into
+        // one stub).
+        let mut gv = GraphView::new();
+        gv.scene
+            .nodes
+            .push(test_node("concept:a", 0.0, 0.0, NodeKind::Concept));
+        gv.scene.edges.push(SceneEdge {
+            source: 0,
+            target: 0,
+            label: Some("self".to_string()),
+            style: EdgeStyle {
+                color: "#unused".to_string(),
+                width: 1.0,
+                dashed: true,
+            },
+            weight: 1.0,
+            rel_type: Some("references".to_string()),
+        });
+
+        let state = gv.describe_state();
+
+        assert_eq!(state.edges.len(), 1);
+        assert!(
+            !state.edges[0].boundary,
+            "a genuine self-link (real rel_type) must not be reported as a boundary stub"
+        );
+        assert_eq!(state.edges[0].label.as_deref(), Some("self"));
+    }
+
+    #[test]
     fn describe_state_skips_edges_with_out_of_range_endpoints() {
         let mut gv = GraphView::new();
         gv.scene
@@ -3680,5 +5412,97 @@ mod tests {
         let state = gv.describe_state();
 
         assert!(state.edges.is_empty());
+    }
+
+    #[test]
+    fn nodes_and_edges_stay_in_contiguous_per_diagram_blocks_in_multi_mode() {
+        // #462 PR4b (docs/API-parity pass): `(kb-graph-view-state)` /
+        // `GraphViewState.nodes` document (see `describe_state`'s
+        // `@ai-caution: [api-stability]` comment and `GraphViewState.
+        // diagrams`'s doc comment) that a consumer can determine which
+        // composed KB instance a node/edge belongs to PURELY positionally
+        // — by walking `diagrams`' `node_count`s cumulatively — rather than
+        // needing a per-node/per-edge instance tag. This test exercises the
+        // REAL construction path end-to-end (`mae_canvas::kb_graph::
+        // build_multi_kb_chord_positions`, not a hand-built already-sorted
+        // fixture) with THREE diagrams of differing sizes (2/3/1 nodes —
+        // varied, not a cherry-picked uniform size, per CLAUDE.md #14), so a
+        // future change that re-sorts/regroups `scene.nodes` (e.g. a
+        // density/LOD pass) would fail this test loudly instead of silently
+        // breaking every consumer relying on the documented contract.
+        use mae_canvas::kb_graph::{
+            build_multi_kb_chord_positions, KbInstanceSubgraph, KbNodeInfo,
+        };
+
+        let subgraph = |instance: Option<&str>, name: &str, ids: &[&str]| KbInstanceSubgraph {
+            instance: instance.map(str::to_string),
+            name: name.to_string(),
+            nodes: ids
+                .iter()
+                .map(|id| KbNodeInfo {
+                    id: id.to_string(),
+                    title: id.to_string(),
+                    kind: NodeKind::Concept,
+                    is_seed: false,
+                })
+                .collect(),
+            links: Vec::new(),
+            boundary_links: Vec::new(),
+            starter_ids: Vec::new(),
+            loaded: true,
+        };
+
+        let diagrams = vec![
+            subgraph(None, "Primary", &["seed:a", "seed:b"]),
+            subgraph(
+                Some("uuid-alpha"),
+                "Alpha",
+                &["alpha:a", "alpha:b", "alpha:c"],
+            ),
+            subgraph(Some("uuid-beta"), "Beta", &["beta:a"]),
+        ];
+        let (scene, labels, hidden) =
+            build_multi_kb_chord_positions(&diagrams, &[], 1.0, 0.6, 14.0);
+        assert_eq!(hidden, 0);
+        assert_eq!(scene.nodes.len(), 6, "2 + 3 + 1 nodes across 3 diagrams");
+
+        let mut gv = GraphView::new();
+        gv.mode = GraphViewMode::Multi;
+        gv.scene = scene;
+        gv.diagram_labels = labels;
+
+        let state = gv.describe_state();
+        assert_eq!(state.mode, "multi");
+        assert_eq!(state.diagrams.len(), 3);
+        assert_eq!(state.nodes.len(), 6);
+
+        // Walk `diagrams`' node_counts cumulatively — exactly the recipe
+        // the docstring/`@ai-caution` comment promise a consumer can use —
+        // and confirm each block's node ids are precisely that diagram's
+        // own ids, in the diagram's own order, with no interleaving.
+        let expected_blocks: [&[&str]; 3] = [
+            &["seed:a", "seed:b"],
+            &["alpha:a", "alpha:b", "alpha:c"],
+            &["beta:a"],
+        ];
+        let mut offset = 0usize;
+        for (diagram, expected_ids) in state.diagrams.iter().zip(expected_blocks.iter()) {
+            assert_eq!(diagram.node_count, expected_ids.len());
+            let block: Vec<&str> = state.nodes[offset..offset + diagram.node_count]
+                .iter()
+                .map(|n| n.id.as_str())
+                .collect();
+            assert_eq!(
+                &block, expected_ids,
+                "node block for diagram {:?} must be contiguous and match its own ids exactly",
+                diagram.name
+            );
+            offset += diagram.node_count;
+        }
+        assert_eq!(
+            offset,
+            state.nodes.len(),
+            "blocks must cover every node exactly once"
+        );
     }
 }
