@@ -1,8 +1,8 @@
 # ADR-060: Daemon multi-tenancy
 
-**Status:** In progress (Phases A/B/C/D/E landed — see "Implementation note" sections below;
-Phase C's collab/OAuth-side principal-keyed wiring is explicitly deferred, tracked as issue
-#456, not silently gapped. Phases F–G remain, tracked as real follow-on work.)
+**Status:** Accepted — all phases A–G landed (see "Implementation note" sections below).
+Phase C's collab/OAuth-side principal-keyed wiring is the one explicitly deferred piece,
+tracked as issue #456, not silently gapped.
 **Extends:** ADR-035, ADR-054, ADR-057.
 **Relates to:** ADR-017, ADR-018, ADR-025.
 **Tracking:** issue #408 (epic tracker) — corrected from a stale "#375" reference (that issue
@@ -919,3 +919,62 @@ primary) in every real deployment, making federation a no-op regardless of what 
 `kb-registry.toml` claimed. This fix is therefore also the first time federated *search* across
 multiple daemon-hosted KB instances becomes real in production, not just addressing to one
 instance at a time.
+
+## Implementation note (added during Phase F implementation, principle #15)
+
+`daemon/benches/kb_dispatch_concurrency.rs` gained `bench_kb_dispatch_multi_tenant_concurrency`,
+made possible by issue #460's fix directly above (before it, there was no way to get a real
+`mae-daemon` process to serve more than one KB instance, so an honest multi-instance benchmark
+against the real binary could not have been run). Each tenant gets its own dedicated
+20K-node store and an unlimited quota, isolating what this phase measures (Phase B's
+per-instance lock isolation) from Phase C's quota-enforcement overhead.
+
+**Regression check run first, as this phase's own Verification bullet requires**: the
+existing single-tenant `bench_kb_dispatch_concurrency` was re-run in the same session
+(un-filtered, both benchmarks back-to-back on the same machine) rather than assumed still
+valid, and its N=1 figure was cross-checked against the new sweep's 1-tenant×1-session
+figure — close, as expected (same dispatch path, same store size), confirming no
+regression. Full numbers, the multi-tenant capacity ceiling, and the explicit "no savings
+claimed beyond what real cache overlap could deliver" framing (per gopls's own documented
+caveat, cited in Context) are recorded in `docs/adr/004-kb-scaling.md`'s Tier 1 section
+alongside — not replacing — the existing single-tenant table, per this phase's own
+instruction that a single-tenant number and a multi-tenant number answer different
+questions and both remain useful.
+
+## Implementation note (added during Phase G implementation, principle #15)
+
+**The `daemon_mode` documentation gap this phase's Decision section named was already
+partially closed by ADR-065** (its own drift-correction bundle added a `daemon_mode`
+section to `docs/EXTERNAL_EDITOR_MCP_PAIRING.md`, including a direct reference to "ADR-060's
+multi-tenant daemon work" for the `shared` mode) — found by checking the file directly
+rather than trusting this ADR's own now-stale "currently contains zero mentions of
+daemon_mode" claim. What that section did NOT yet cover, and what this implementation adds:
+a "Multi-tenant `mae-daemon` deployment (ADR-060) and `shared` mode" subsection connecting
+`daemon_mode=shared` to Phase E's two deployment shapes (shared-process default vs.
+process-per-tenant), cross-linked to `DAEMON_ADMIN.md`'s own multi-tenant section rather
+than duplicating its mechanics.
+
+**The config-change contract, proven rather than assumed**: this ADR's own Verification
+section names two acceptable proof shapes — (a) live-apply, genuinely demonstrated, or (b)
+an explicit signal (a log line, a rejected reconfiguration attempt, or **documented
+behavior**) that a restart is required. Live-apply is confirmed false (`DaemonConfig::load()`
+runs once at startup, nothing watches the file afterward — already established during
+Phase C). Rather than building new file-watching/signal-emitting infrastructure to satisfy
+option (b)'s "log line" reading, this phase takes the "documented behavior" reading
+explicitly offered by the same sentence: `daemon/tests/config_change_contract_e2e.rs` proves
+empirically (a real spawned daemon, a `[[tenant]]` entry with a 1-point-per-minute budget
+added to the on-disk config file mid-session, ten subsequent `kb/get` calls that a
+live-reloading daemon would reject after the first — all still succeed) that the restart
+requirement is real, and `EXTERNAL_EDITOR_MCP_PAIRING.md`'s new subsection states it
+plainly for an operator, closing the specific failure mode this ADR's Verification section
+names: "a config change that silently fails to take effect with no error surfaced
+anywhere."
+
+**A separate, smaller bug found while scoping this phase, filed rather than fixed here**:
+`daemon/src/main.rs`'s scheduler construction calls `DaemonConfig::load()` a second time
+instead of reusing the already-`--config`-resolved `config` variable in scope — an operator
+using `--config <custom-path>` gets a scheduler configured from the default path instead.
+Doesn't affect tenant routing/quotas (those correctly use the resolved `config`), only the
+scheduler's own tick intervals. Tracked as issue #461, not fixed in this pass (out of this
+phase's own scope — a config-change-CONTRACT phase, not a config-resolution-correctness
+phase).
