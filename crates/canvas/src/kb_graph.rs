@@ -182,6 +182,18 @@ fn sqrt_area_radius(n: usize, spacing_scale: f64) -> f64 {
         .max(100.0)
 }
 
+/// Approximate width (as a multiple of `font_size`) of one character in the
+/// GUI's proportional font. Shared between this module (which uses it to
+/// keep a multi-KB grid cell wide enough for its own diagram's caption —
+/// see `build_multi_kb_chord_positions`'s `label_font_size` parameter) and
+/// `crates/core/src/graph_view.rs`'s `push_diagram_labels` (which uses the
+/// SAME estimate to horizontally center that caption above its circle) —
+/// one shared constant so the layout-time reservation and the render-time
+/// placement can never silently drift apart (CLAUDE.md #8). `VisualElement::
+/// Text` has no width-measurement affordance, so this is a deliberate
+/// approximation, not a precise text metric.
+pub const DIAGRAM_LABEL_CHAR_WIDTH_EM: f32 = 0.3;
+
 /// Shared node/edge assembly for every `build_kb_graph*` variant (CLAUDE.md
 /// #8) — the only thing that differs between them is HOW `positions` was
 /// computed (sunflower disk, circular ring, ...); the internal/boundary
@@ -469,11 +481,23 @@ pub struct DiagramLabel {
 /// function parameter — the caller (`kb_graph_multi_kb_grid_gap_factor`
 /// option, `crates/core/src/editor/graph_view_ops.rs`) is the one place that
 /// can read it from the registry.
+///
+/// `label_font_size` is `kb_graph_font_size` (same threading pattern as
+/// `grid_gap_factor` above), used to widen each COLUMN's spacing to fit its
+/// widest diagram's caption text, not just its widest ring radius. Without
+/// this, a small instance with a long name (e.g. "DistributedSelfHostedLLMs")
+/// gets a grid cell sized only for its (small) ring, and its caption —
+/// centered above the ring, per `push_diagram_labels` — overlaps the
+/// adjacent column's diagram/caption. Only columns are widened (not rows):
+/// captions extend horizontally, and each diagram's own row already reserves
+/// a small fixed vertical gap for its caption via `DIAGRAM_LABEL_OFFSET_PX`
+/// (`crates/core/src/graph_view.rs`), independent of ring radius.
 pub fn build_multi_kb_chord_positions(
     diagrams: &[KbInstanceSubgraph],
     cross_instance_links: &[KbCrossInstanceLinkInfo],
     spacing_scale: f64,
     grid_gap_factor: f64,
+    label_font_size: f64,
 ) -> (SceneGraph, Vec<DiagramLabel>, usize) {
     if diagrams.is_empty() {
         return (SceneGraph::new(), Vec::new(), cross_instance_links.len());
@@ -486,12 +510,21 @@ pub fn build_multi_kb_chord_positions(
         .iter()
         .map(|d| sqrt_area_radius(d.nodes.len(), spacing_scale))
         .collect();
+    // Half the estimated pixel width of each diagram's own caption — see
+    // this function's doc comment for `label_font_size`. Same estimate
+    // `push_diagram_labels` uses to center that same caption at render time.
+    let label_half_widths: Vec<f64> = diagrams
+        .iter()
+        .map(|d| {
+            d.name.chars().count() as f64 * label_font_size * DIAGRAM_LABEL_CHAR_WIDTH_EM as f64
+        })
+        .collect();
 
     let mut row_max = vec![0.0_f64; rows];
     let mut col_max = vec![0.0_f64; cols];
     for (i, &r) in radii.iter().enumerate() {
         row_max[i / cols] = row_max[i / cols].max(r);
-        col_max[i % cols] = col_max[i % cols].max(r);
+        col_max[i % cols] = col_max[i % cols].max(r).max(label_half_widths[i]);
     }
 
     // Cumulative cell centers along each axis: column `c`'s center sits
@@ -1224,7 +1257,7 @@ mod tests {
         // exactly — the re-centering math must collapse to a no-op for n=1.
         let d = diagram(None, "Primary", &["a", "b", "c"]);
         let (multi_scene, labels, hidden) =
-            build_multi_kb_chord_positions(std::slice::from_ref(&d), &[], 1.0, 0.6);
+            build_multi_kb_chord_positions(std::slice::from_ref(&d), &[], 1.0, 0.6, 14.0);
         let plain = build_kb_graph_chord_positions(&d.nodes, &d.links, &d.boundary_links, 1.0);
 
         assert_eq!(hidden, 0);
@@ -1251,7 +1284,8 @@ mod tests {
             ]
         };
         let center_gap = |gap_factor: f64| {
-            let (_, labels, _) = build_multi_kb_chord_positions(&diagrams(), &[], 1.0, gap_factor);
+            let (_, labels, _) =
+                build_multi_kb_chord_positions(&diagrams(), &[], 1.0, gap_factor, 14.0);
             assert_eq!(labels.len(), 2);
             (labels[0].center_x - labels[1].center_x).abs()
         };
@@ -1270,10 +1304,59 @@ mod tests {
     }
 
     #[test]
+    fn multi_kb_long_diagram_name_widens_column_spacing_beyond_pure_radius() {
+        // Root cause of a real live-testing bug: grid spacing used to be
+        // sized ONLY from each diagram's node-ring radius, with zero
+        // consideration of label TEXT WIDTH — a long KB name (e.g.
+        // "DistributedSelfHostedLLMs") on a small instance produced a
+        // caption wider than its own cell, overlapping the next column's
+        // diagram/caption. Two equally-small (3-node) diagrams side by
+        // side: giving one of them a long name must widen the gap between
+        // centers beyond what pure radius-based spacing alone would
+        // produce, and by enough to actually clear both labels.
+        let short_names = vec![
+            diagram(None, "AB", &["a1", "a2", "a3"]),
+            diagram(Some("uuid-b"), "CD", &["b1", "b2", "b3"]),
+        ];
+        let long_name = vec![
+            diagram(None, "DistributedSelfHostedLLMs", &["a1", "a2", "a3"]),
+            diagram(Some("uuid-b"), "CD", &["b1", "b2", "b3"]),
+        ];
+
+        let (_, short_labels, _) =
+            build_multi_kb_chord_positions(&short_names, &[], 1.0, 0.6, 14.0);
+        let (_, long_labels, _) = build_multi_kb_chord_positions(&long_name, &[], 1.0, 0.6, 14.0);
+
+        let short_gap = (short_labels[0].center_x - short_labels[1].center_x).abs();
+        let long_gap = (long_labels[0].center_x - long_labels[1].center_x).abs();
+        assert!(
+            long_gap > short_gap,
+            "a long diagram name must widen column spacing beyond pure-radius \
+             sizing: short={short_gap}, long={long_gap}"
+        );
+
+        // The gap between centers must clear both diagrams' estimated label
+        // half-widths, or the long name's caption (centered on its own
+        // diagram) would still reach past the midpoint into the neighbor's
+        // territory.
+        let font_size = 14.0_f64;
+        let long_half_width = "DistributedSelfHostedLLMs".chars().count() as f64
+            * font_size
+            * DIAGRAM_LABEL_CHAR_WIDTH_EM as f64;
+        let short_half_width =
+            "CD".chars().count() as f64 * font_size * DIAGRAM_LABEL_CHAR_WIDTH_EM as f64;
+        assert!(
+            long_gap >= long_half_width + short_half_width,
+            "gap {long_gap} must clear both labels' half-widths \
+             ({long_half_width} + {short_half_width})"
+        );
+    }
+
+    #[test]
     fn multi_kb_two_instances_do_not_overlap() {
         let a = diagram(None, "Primary", &["a1", "a2", "a3"]);
         let b = diagram(Some("uuid-b"), "Notes", &["b1", "b2", "b3"]);
-        let (scene, labels, hidden) = build_multi_kb_chord_positions(&[a, b], &[], 1.0, 0.6);
+        let (scene, labels, hidden) = build_multi_kb_chord_positions(&[a, b], &[], 1.0, 0.6, 14.0);
         assert_eq!(hidden, 0);
         assert_eq!(labels.len(), 2);
         assert_eq!(scene.nodes.len(), 6);
@@ -1308,7 +1391,8 @@ mod tests {
             diagram(Some("uuid-b"), "Beta", &["b"]),
             diagram(Some("uuid-c"), "Gamma", &["c"]),
         ];
-        let (scene, labels, hidden) = build_multi_kb_chord_positions(&diagrams, &[], 1.0, 0.6);
+        let (scene, labels, hidden) =
+            build_multi_kb_chord_positions(&diagrams, &[], 1.0, 0.6, 14.0);
         assert_eq!(hidden, 0);
         assert_eq!(scene.nodes.len(), 3);
         assert_eq!(labels.len(), 3);
@@ -1335,7 +1419,8 @@ mod tests {
         let a = diagram(None, "Primary", &["a1", "a2"]);
         let b = diagram(Some("uuid-b"), "Notes", &["b1", "b2"]);
         let links = vec![cross_link("a1", None, "b2", Some("uuid-b"))];
-        let (scene, _labels, hidden) = build_multi_kb_chord_positions(&[a, b], &links, 1.0, 0.6);
+        let (scene, _labels, hidden) =
+            build_multi_kb_chord_positions(&[a, b], &links, 1.0, 0.6, 14.0);
         assert_eq!(hidden, 0);
         // Global layout: diagram a occupies [0,2), diagram b occupies [2,4).
         // a1 -> index 0, b2 -> index 3.
@@ -1354,7 +1439,7 @@ mod tests {
         // Target instance "uuid-ghost" is not among the rendered diagrams —
         // simulates a stale/unregistered/filtered-out related instance.
         let links = vec![cross_link("a1", None, "ghost-node", Some("uuid-ghost"))];
-        let (scene, labels, hidden) = build_multi_kb_chord_positions(&[a], &links, 1.0, 0.6);
+        let (scene, labels, hidden) = build_multi_kb_chord_positions(&[a], &links, 1.0, 0.6, 14.0);
         assert_eq!(
             hidden, 1,
             "the dangling cross-link must be counted, not silently lost"
@@ -1370,7 +1455,7 @@ mod tests {
     #[test]
     fn multi_kb_empty_diagrams_produces_an_empty_scene_and_counts_every_link_as_hidden() {
         let links = vec![cross_link("a1", None, "b1", Some("uuid-b"))];
-        let (scene, labels, hidden) = build_multi_kb_chord_positions(&[], &links, 1.0, 0.6);
+        let (scene, labels, hidden) = build_multi_kb_chord_positions(&[], &links, 1.0, 0.6, 14.0);
         assert!(scene.nodes.is_empty());
         assert!(labels.is_empty());
         assert_eq!(hidden, 1);
@@ -1392,7 +1477,8 @@ mod tests {
             diagram(Some("uuid-alive"), "Alive", &["alive:a", "alive:b"]),
             unloaded,
         ];
-        let (_scene, labels, _hidden) = build_multi_kb_chord_positions(&diagrams, &[], 1.0, 0.6);
+        let (_scene, labels, _hidden) =
+            build_multi_kb_chord_positions(&diagrams, &[], 1.0, 0.6, 14.0);
         assert_eq!(labels.len(), 3);
         assert!(labels[0].loaded, "seed diagram must report loaded");
         assert!(
@@ -1413,7 +1499,7 @@ mod tests {
         let empty_but_healthy = diagram(Some("uuid-empty"), "EmptyHealthy", &[]);
         assert!(empty_but_healthy.loaded);
         let (_scene, labels, _hidden) =
-            build_multi_kb_chord_positions(&[empty_but_healthy], &[], 1.0, 0.6);
+            build_multi_kb_chord_positions(&[empty_but_healthy], &[], 1.0, 0.6, 14.0);
         assert_eq!(labels.len(), 1);
         assert_eq!(labels[0].node_count, 0);
         assert!(

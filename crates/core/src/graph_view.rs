@@ -2840,14 +2840,6 @@ fn cluster_bucket_key(
     }
 }
 
-/// Approximate width (as a multiple of `font_size`) of one character in the
-/// GUI's proportional font — used only to roughly horizontally CENTER a
-/// diagram caption above its circle. `VisualElement::Text` has no
-/// width-measurement/centering affordance (its `right_align` flag only
-/// supports the two endpoints, not a true center — see that field's doc
-/// comment), so this is a deliberate approximation, not a precise text
-/// metric; a caption a few pixels off-center is cosmetically harmless.
-const DIAGRAM_LABEL_CHAR_WIDTH_EM: f32 = 0.3;
 /// Vertical gap (logical px, screen-space, NOT scene-space — captions stay
 /// a fixed screen size regardless of zoom, like every other UI-chrome text
 /// in this module) between a diagram's bounding circle and its caption.
@@ -2900,8 +2892,9 @@ pub fn push_diagram_labels(
         } else {
             style.boundary_edge_text_color.clone()
         };
-        let approx_half_width =
-            text.chars().count() as f32 * style.font_size * DIAGRAM_LABEL_CHAR_WIDTH_EM;
+        let approx_half_width = text.chars().count() as f32
+            * style.font_size
+            * mae_canvas::kb_graph::DIAGRAM_LABEL_CHAR_WIDTH_EM;
         elements.push(VisualElement::Text {
             x: cx as f32 - approx_half_width,
             y: top_y as f32 - DIAGRAM_LABEL_OFFSET_PX,
@@ -5320,7 +5313,8 @@ mod tests {
             ),
             subgraph(Some("uuid-beta"), "Beta", &["beta:a"]),
         ];
-        let (scene, labels, hidden) = build_multi_kb_chord_positions(&diagrams, &[], 1.0, 0.6);
+        let (scene, labels, hidden) =
+            build_multi_kb_chord_positions(&diagrams, &[], 1.0, 0.6, 14.0);
         assert_eq!(hidden, 0);
         assert_eq!(scene.nodes.len(), 6, "2 + 3 + 1 nodes across 3 diagrams");
 
