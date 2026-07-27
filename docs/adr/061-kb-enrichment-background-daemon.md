@@ -290,3 +290,47 @@ obligation once the cache exists to corrupt.
 
 `cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean across both
 the editor and daemon workspaces (confirming the `shared/kb` relocation doesn't regress either).
+
+## Implementation note (Phase B, principle #15)
+
+A new `embedding_cache` CozoDB relation (`shared/kb/src/cozo_store/schema.rs`), keyed exactly on
+`(content_hash, model, chunk_version)` per this section's own spec. **Deliberately a separate
+relation from `embeddings`, not an extra key column on it** — a real constraint discovered while
+designing this phase, not assumed: `embeddings` (the relation `vector_search`/`graphrag_search`
+actually query) is HNSW-indexed with a **fixed `<F32; 384>` vector width** (all-MiniLM-L6-v2's
+dimension), confirmed by direct read of its `::hnsw create` DDL. Phase A's `embed()` is fully
+provider/model-agnostic and could return a vector of *any* dimension (Ollama alone ships models
+at 384/768/1024+ dims) — storing a non-384-dim vector in `embeddings` would be a type mismatch.
+This cache never needs similarity search (only exact-key lookup), so its `vec` column is a plain
+variable-length `[Float]` list, not the fixed-width HNSW type — meaning the cache itself is NOT
+locked to any one dimension. **The 384-dim limitation on the *searchable* `embeddings` relation is
+real and not fixed by this phase** — it's Phase F's concern (the phase that actually wires
+`kb_vector_search`/`kb_federated_search_scoped` to read from `embeddings`), named here so it isn't
+silently discovered again later.
+
+`content_hash` reuses `mae_kb::activity::body_hash` (FNV-1a-64 over property-drawer-stripped body
+text) — the existing per-node change-detection hash already used by `crates/core/src/editor/
+kb_ops/activity.rs` — rather than inventing a second, parallel content-hashing scheme (principle
+#8). Two new `CozoKbStore` methods, `get_cached_embedding`/`put_cached_embedding`, are the only
+new API surface; persistence-across-restart is free (same on-disk CozoDB store every other KB
+relation already lives in, no separate cache file/mechanism).
+
+Three tests added to `shared/kb/src/cozo_store/tests/vector_tests.rs`, matching this section's
+own Verification bullets exactly: `cached_embedding_survives_a_real_daemon_restart` (the store is
+FULLY dropped and reopened at the same on-disk path, not just checked in-process — the specific
+thing a naive in-memory-only cache would fail), `model_or_chunk_version_bump_invalidates_only_
+the_affected_entries` (asserts a miss under the new key, an UNCHANGED hit under the old key, and
+both keys correctly coexisting once the new one is populated — not "the whole cache invalidates"
+and not "nothing invalidates"), and a plain clean-miss baseline.
+
+**Scope note**: this phase builds the storage primitive only. Computing a node's `content_hash`
+and actually calling `get_cached_embedding`/`put_cached_embedding` around a real `embed()` call is
+Phase C's scheduler-wiring job, not this phase's — matching the ADR's own phase boundaries.
+
+`cargo test -p mae-kb --lib`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check`
+clean across the editor and daemon workspaces; `cargo build --workspace --features gui` clean.
+(Two pre-existing, unrelated test failures --
+`migrate::tests::sled_to_sqlite_{is_idempotent_and_noop_when_not_sled,preserves_nodes_links_and_
+backs_up}` -- confirmed via `git stash` to fail identically on a clean checkout, an environmental
+gap where this local build's editor-workspace `mae-kb` doesn't have the sqlite cozo engine
+compiled in; not a regression from this phase.)
