@@ -495,6 +495,7 @@ impl GraphView {
                     instance: d.instance.clone(),
                     name: d.name.clone(),
                     node_count: d.node_count,
+                    loaded: d.loaded,
                 })
                 .collect(),
             selected_node: self.scene.selection.and_then(node_id),
@@ -582,6 +583,14 @@ pub struct GraphViewDiagramState {
     pub instance: Option<String>,
     pub name: String,
     pub node_count: usize,
+    /// See `mae_canvas::kb_graph::KbInstanceSubgraph::loaded`'s doc comment
+    /// (#479) — `true` for primary and for a federated instance actually
+    /// present in `self.kb.instances`; `false` for a registered instance
+    /// that failed to load/open. Distinguishes "genuinely empty but
+    /// healthy" (`loaded: true`, `node_count: 0`) from "not loaded"
+    /// (`loaded: false`) — both would otherwise render as an identical
+    /// empty diagram.
+    pub loaded: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -2185,6 +2194,14 @@ const DIAGRAM_LABEL_OFFSET_PX: f32 = 10.0;
 /// Reuses `style.font_size` (no new `kb_graph_*` option) — see this
 /// function's own call site for why a dedicated diagram-caption font-size
 /// option was judged unnecessary.
+///
+/// #479: when `label.loaded` is `false` (a registered KB instance that
+/// failed to load/open — see `DiagramLabel::loaded`'s doc comment), the
+/// caption is visually distinguished from a healthy diagram's — a
+/// "(not loaded)" suffix plus `style.boundary_edge_text_color` (the same
+/// already-WCAG-contrast-checked muted color used for boundary stubs'
+/// "there's more, unresolved" signal) instead of the normal caption color —
+/// rather than inventing a new dedicated color/option for this one case.
 pub fn push_diagram_labels(
     elements: &mut Vec<VisualElement>,
     diagram_labels: &[mae_canvas::kb_graph::DiagramLabel],
@@ -2195,17 +2212,26 @@ pub fn push_diagram_labels(
     for label in diagram_labels {
         let (cx, top_y) =
             scene_to_viewport(viewport, label.center_x, label.center_y - label.radius);
-        let color = ensure_min_contrast(
-            &style.edge_color,
-            &style.background_color,
-            WCAG_AA_TEXT_CONTRAST,
-        );
+        let text = if label.loaded {
+            label.name.clone()
+        } else {
+            format!("{} (not loaded)", label.name)
+        };
+        let color = if label.loaded {
+            ensure_min_contrast(
+                &style.edge_color,
+                &style.background_color,
+                WCAG_AA_TEXT_CONTRAST,
+            )
+        } else {
+            style.boundary_edge_text_color.clone()
+        };
         let approx_half_width =
-            label.name.chars().count() as f32 * style.font_size * DIAGRAM_LABEL_CHAR_WIDTH_EM;
+            text.chars().count() as f32 * style.font_size * DIAGRAM_LABEL_CHAR_WIDTH_EM;
         elements.push(VisualElement::Text {
             x: cx as f32 - approx_half_width,
             y: top_y as f32 - DIAGRAM_LABEL_OFFSET_PX,
-            text: label.name.clone(),
+            text,
             font_size: style.font_size,
             color,
             rotation_degrees: 0.0,
@@ -2344,6 +2370,66 @@ mod tests {
             weight: 1.0,
             rel_type: None,
         }
+    }
+
+    fn test_diagram_label(name: &str, loaded: bool) -> mae_canvas::kb_graph::DiagramLabel {
+        mae_canvas::kb_graph::DiagramLabel {
+            instance: None,
+            name: name.to_string(),
+            center_x: 0.0,
+            center_y: 0.0,
+            radius: 50.0,
+            node_count: 3,
+            loaded,
+        }
+    }
+
+    #[test]
+    fn push_diagram_labels_unloaded_diagram_gets_a_distinguishing_suffix_and_color() {
+        // #479: a registered-but-unloaded instance's caption must be
+        // visually distinguishable from a healthy diagram's -- not just an
+        // internal `loaded` flag nobody can see. Mixed input (one loaded,
+        // one not), per CLAUDE.md #14, so this can't pass by accident.
+        // `test_style()`'s `edge_color`/`boundary_edge_text_color` are both
+        // placeholder non-hex strings that `ensure_min_contrast` happens to
+        // fall back to the SAME white for (an incidental fixture
+        // coincidence, not a real invariant) -- override
+        // `boundary_edge_text_color` to a distinct real hex here so this
+        // test can actually distinguish the two colors, per CLAUDE.md #14
+        // (no unicorn inputs that coincidentally make an assertion pass).
+        let style = GraphStyleOptions {
+            boundary_edge_text_color: "#888888".to_string(),
+            ..test_style()
+        };
+        let viewport = mae_canvas::scene::Viewport::default();
+        let labels = vec![
+            test_diagram_label("Healthy", true),
+            test_diagram_label("Dead", false),
+        ];
+        let mut elements = Vec::new();
+        push_diagram_labels(&mut elements, &labels, &viewport, &style);
+        assert_eq!(elements.len(), 2);
+
+        let VisualElement::Text { text, color, .. } = &elements[0] else {
+            panic!("expected a Text element");
+        };
+        assert_eq!(text, "Healthy");
+        let expected_loaded_color = ensure_min_contrast(
+            &style.edge_color,
+            &style.background_color,
+            WCAG_AA_TEXT_CONTRAST,
+        );
+        assert_eq!(color, &expected_loaded_color);
+
+        let VisualElement::Text { text, color, .. } = &elements[1] else {
+            panic!("expected a Text element");
+        };
+        assert_eq!(text, "Dead (not loaded)");
+        assert_eq!(color, &style.boundary_edge_text_color);
+        assert_ne!(
+            color, &expected_loaded_color,
+            "the unloaded diagram's caption must not share the healthy diagram's color"
+        );
     }
 
     #[test]
@@ -4322,6 +4408,7 @@ mod tests {
             links: Vec::new(),
             boundary_links: Vec::new(),
             starter_ids: Vec::new(),
+            loaded: true,
         };
 
         let diagrams = vec![

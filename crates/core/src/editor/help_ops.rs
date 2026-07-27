@@ -552,7 +552,18 @@ impl Editor {
         out.push_str("* KB Graph (multi-KB)\n");
         let mut offset = 0usize;
         for label in &gv.diagram_labels {
-            out.push_str(&format!("\n** Neighborhood ({})\n", label.name));
+            // #479: TUI parity with the GUI's `push_diagram_labels`
+            // dimmed-caption treatment — a registered-but-unloaded KB
+            // instance must be visibly distinguished in the text listing
+            // too, not just silently rendered as an empty-but-healthy one.
+            if label.loaded {
+                out.push_str(&format!("\n** Neighborhood ({})\n", label.name));
+            } else {
+                out.push_str(&format!(
+                    "\n** Neighborhood ({}) (not loaded)\n",
+                    label.name
+                ));
+            }
             let end = (offset + label.node_count).min(gv.scene.nodes.len());
             let slice = gv.scene.nodes.get(offset..end).unwrap_or(&[]);
             if slice.is_empty() {
@@ -1659,6 +1670,87 @@ mod tests {
         assert!(
             text.contains("concept:seed") && text.contains("concept:sibling-target"),
             "the cross-KB link's endpoints must be listed: {text}"
+        );
+    }
+
+    #[test]
+    fn render_graph_view_as_text_multi_mode_annotates_an_unloaded_diagram_but_not_a_loaded_one() {
+        // #479 TUI parity: a registered-but-unloaded related instance must
+        // read differently in the plain-text listing from a healthy one --
+        // mixed input (one loaded sibling, one not), per CLAUDE.md #14.
+        let mut e = Editor::new();
+        e.kb.primary.insert(mae_kb::Node::new(
+            "concept:seed",
+            "Seed",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        let mut alive = mae_kb::KnowledgeBase::new();
+        alive.insert(mae_kb::Node::new(
+            "concept:alive",
+            "Alive",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        e.kb.instances.insert("uuid-alive".to_string(), alive);
+        e.kb.registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-alive".into(),
+                name: "alive".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
+            });
+        // Registered, but deliberately never inserted into `kb.instances` --
+        // simulates a federated store that failed to load/open.
+        e.kb.registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-dead".into(),
+                name: "dead".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
+            });
+        e.kb_graph_view_mode = crate::graph_view::GraphViewMode::Multi;
+        e.kb_graph_multi_kb_scope = crate::graph_view::GraphMultiKbScope::All;
+        e.kb_graph_view_open(Some("concept:seed".to_string()), Some(1));
+
+        let text = e.render_graph_view_as_text();
+        assert!(
+            text.contains("** Neighborhood (Primary)\n"),
+            "the healthy seed must NOT be annotated: {text}"
+        );
+        assert!(
+            text.contains("** Neighborhood (alive)\n"),
+            "the healthy related instance must NOT be annotated: {text}"
+        );
+        assert!(
+            text.contains("** Neighborhood (dead) (not loaded)\n"),
+            "the registered-but-unloaded instance must be annotated: {text}"
         );
     }
 

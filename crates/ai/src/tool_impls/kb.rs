@@ -849,6 +849,10 @@ pub fn execute_kb_graph_view_open(
             "instance": d.instance,
             "name": d.name,
             "node_count": d.node_count,
+            // #479: `false` when a registered KB instance failed to
+            // load/open, distinct from a genuinely empty-but-healthy
+            // instance (`loaded: true`, `node_count: 0`).
+            "loaded": d.loaded,
         })).collect::<Vec<_>>(),
         "hidden_cross_instance_link_count": gv.hidden_cross_instance_link_count,
         "hidden_related_instance_count": gv.hidden_related_instance_count,

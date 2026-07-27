@@ -366,6 +366,17 @@ pub struct KbInstanceSubgraph {
     /// order", which `extract_subgraph`'s `HashSet`-backed node collection
     /// does not guarantee to be the seed).
     pub starter_ids: Vec<String>,
+    /// Whether the KB instance this diagram represents is actually present
+    /// in the live `self.kb.instances` map (or is primary, always `true`) —
+    /// as opposed to REGISTERED (known to `KbRegistry`) but failed to
+    /// load/open. #479: without this, a registered-but-unloaded instance's
+    /// empty extraction result is indistinguishable from a genuinely-empty-
+    /// but-healthy instance — both funnel into zero nodes/links. Threaded
+    /// through unchanged to `DiagramLabel::loaded` by
+    /// `build_multi_kb_chord_positions` (mirrors how `instance`/`name` are
+    /// already threaded through today — `mae-canvas` has no `Editor`
+    /// access, so this must be resolved by the caller, not read here).
+    pub loaded: bool,
 }
 
 /// A cross-instance link for [`build_multi_kb_chord_positions`] — the
@@ -404,6 +415,14 @@ pub struct DiagramLabel {
     pub center_y: f64,
     pub radius: f64,
     pub node_count: usize,
+    /// Copied verbatim from `KbInstanceSubgraph::loaded` (#479) — see that
+    /// field's doc comment. Consumed by `push_diagram_labels` (GUI+TUI
+    /// shared caption rendering, `crates/core/src/graph_view.rs`) to render
+    /// an unloaded/unhealthy registered instance visibly differently from a
+    /// genuinely-empty-but-healthy one, and by `render_multi_kb_graph_view_
+    /// as_text` (TUI listing, `crates/core/src/editor/help_ops.rs`) for the
+    /// same distinction in plain text.
+    pub loaded: bool,
 }
 
 /// Build ONE merged `SceneGraph` composing N KB instances' subgraphs as a
@@ -572,6 +591,7 @@ pub fn build_multi_kb_chord_positions(
             center_y: cy,
             radius: radii[i],
             node_count: diagram.nodes.len(),
+            loaded: diagram.loaded,
         });
     }
 
@@ -1177,6 +1197,7 @@ mod tests {
             links: Vec::new(),
             boundary_links: Vec::new(),
             starter_ids: ids.first().map(|s| s.to_string()).into_iter().collect(),
+            loaded: true,
         }
     }
 
@@ -1353,5 +1374,51 @@ mod tests {
         assert!(scene.nodes.is_empty());
         assert!(labels.is_empty());
         assert_eq!(hidden, 1);
+    }
+
+    // --- #479: per-diagram `loaded` threading ---
+
+    #[test]
+    fn multi_kb_diagram_label_loaded_mirrors_the_input_subgraphs_loaded_flag() {
+        // Three diagrams, mixed loaded/unloaded (not a cherry-picked
+        // uniform case, per CLAUDE.md #14): the seed (always loaded), a
+        // healthy loaded related instance, and a related instance that's
+        // REGISTERED but failed to load (simulated by `loaded: false` with
+        // a genuinely empty node set — the exact ambiguity #479 is about).
+        let mut unloaded = diagram(Some("uuid-dead"), "Dead", &[]);
+        unloaded.loaded = false;
+        let diagrams = vec![
+            diagram(None, "Primary", &["seed:a"]),
+            diagram(Some("uuid-alive"), "Alive", &["alive:a", "alive:b"]),
+            unloaded,
+        ];
+        let (_scene, labels, _hidden) = build_multi_kb_chord_positions(&diagrams, &[], 1.0, 0.6);
+        assert_eq!(labels.len(), 3);
+        assert!(labels[0].loaded, "seed diagram must report loaded");
+        assert!(
+            labels[1].loaded,
+            "healthy related instance must report loaded"
+        );
+        assert!(
+            !labels[2].loaded,
+            "registered-but-unloaded instance must NOT report loaded"
+        );
+    }
+
+    #[test]
+    fn multi_kb_diagram_label_loaded_true_for_a_genuinely_empty_but_healthy_instance() {
+        // Distinguishes "empty and healthy" (loaded: true, zero nodes) from
+        // "not loaded" (loaded: false) — both produce zero nodes, but only
+        // one is the #479 health signal.
+        let empty_but_healthy = diagram(Some("uuid-empty"), "EmptyHealthy", &[]);
+        assert!(empty_but_healthy.loaded);
+        let (_scene, labels, _hidden) =
+            build_multi_kb_chord_positions(&[empty_but_healthy], &[], 1.0, 0.6);
+        assert_eq!(labels.len(), 1);
+        assert_eq!(labels[0].node_count, 0);
+        assert!(
+            labels[0].loaded,
+            "a genuinely empty but healthy instance must still report loaded == true"
+        );
     }
 }

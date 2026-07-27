@@ -709,6 +709,19 @@ impl Editor {
                 let related: Vec<Option<String>> =
                     candidates.into_iter().take(max_related).collect();
 
+                // #479: the seed is always `loaded` by construction — `owner`
+                // (resolved above via `kb_owner_of_scoped`) only ever
+                // resolves to `Some(Some(uuid))` when `self.kb.instances`
+                // actually contains that uuid (see `kb_owner_of`'s `.find`
+                // over `self.kb.instances`), so there is no "seed instance
+                // registered but not loaded" case to represent here. Checked
+                // uniformly with the related-instance loop below anyway
+                // (rather than hardcoding `true`), so this stays correct if
+                // that invariant ever changes.
+                let seed_loaded = match kb_instance.as_deref() {
+                    None => true,
+                    Some(uuid) => self.kb.instances.contains_key(uuid),
+                };
                 let seed_diagram = mae_canvas::kb_graph::KbInstanceSubgraph {
                     instance: kb_instance.clone(),
                     name: self.kb_display_name(kb_instance.as_deref()),
@@ -716,6 +729,7 @@ impl Editor {
                     links: kb_links,
                     boundary_links: same_or_dead_boundary.iter().map(to_link_info).collect(),
                     starter_ids: vec![center.clone()],
+                    loaded: seed_loaded,
                 };
                 let mut diagrams = vec![seed_diagram];
 
@@ -750,6 +764,22 @@ impl Editor {
                         node_cap: Some(self.kb_graph_node_count_cap),
                         include_body: false,
                     };
+                    // #479: computed independently of `starters.is_empty()`
+                    // (a candidate from `GraphMultiKbScope::All` walks
+                    // `self.kb.registry.instances` — every REGISTERED
+                    // instance, not just loaded ones — so a related instance
+                    // can be registered-but-unloaded regardless of whether
+                    // it also happened to have no cross-link starters). This
+                    // is the exact `self.kb.instances.get(uuid).is_some()`
+                    // check the extraction match arm below already performs
+                    // implicitly via `.map(...).unwrap_or_else(empty_result)`
+                    // — surfaced here explicitly so a genuinely-loaded-but-
+                    // empty instance (present in `self.kb.instances`, zero
+                    // matching nodes) isn't confused with a not-loaded one.
+                    let related_loaded = match related_instance {
+                        None => true,
+                        Some(uuid) => self.kb.instances.contains_key(uuid),
+                    };
                     let related_result = if starters.is_empty() {
                         empty_result()
                     } else {
@@ -774,6 +804,7 @@ impl Editor {
                             .map(to_link_info)
                             .collect(),
                         starter_ids: starters,
+                        loaded: related_loaded,
                     });
                 }
 
@@ -822,6 +853,14 @@ impl Editor {
                 .map(|n| (n.x * n.x + n.y * n.y).sqrt())
                 .fold(0.0_f64, f64::max)
                 .max(50.0);
+            // #479: Single mode's seed is always loaded by the same
+            // `kb_owner_of_scoped` guarantee as Multi mode's seed (see
+            // `seed_loaded`'s doc comment above) — checked uniformly rather
+            // than hardcoded, for the same reason.
+            let single_loaded = match kb_instance.as_deref() {
+                None => true,
+                Some(uuid) => self.kb.instances.contains_key(uuid),
+            };
             diagram_labels = vec![mae_canvas::kb_graph::DiagramLabel {
                 instance: kb_instance.clone(),
                 name: self.kb_display_name(kb_instance.as_deref()),
@@ -829,6 +868,7 @@ impl Editor {
                 center_y: 0.0,
                 radius,
                 node_count: scene.nodes.len(),
+                loaded: single_loaded,
             }];
         }
 
@@ -5812,6 +5852,110 @@ mod tests {
             "resolved via its own default-center fallback, not left empty"
         );
         assert!(gv.cross_instance_links.is_empty(), "no cross-links exist");
+    }
+
+    #[test]
+    fn multi_mode_flags_a_registered_but_unloaded_related_instance_distinctly_from_a_loaded_empty_one(
+    ) {
+        // #479: both a genuinely-empty-but-healthy instance AND a
+        // registered-but-failed-to-load one degrade to zero extracted
+        // nodes today -- `loaded` is the ONLY signal that distinguishes
+        // them. `All` scope (not `Linked`) so every registered instance is
+        // a candidate regardless of cross-links, mirroring how a real
+        // unloaded instance can surface (`candidate_related_instances`
+        // walks `self.kb.registry.instances`, not `self.kb.instances`).
+        let mut editor = ed_with_kb_node("concept:seed", "Seed", "");
+        register_plain_instance(
+            &mut editor,
+            "alive",
+            vec![mae_kb::Node::new(
+                "concept:alive",
+                "Alive",
+                mae_kb::NodeKind::Concept,
+                "",
+            )],
+        );
+        // Registered + present in `kb.instances`, but zero nodes: the
+        // "empty and healthy" case that must NOT be confused with "not
+        // loaded".
+        register_plain_instance(&mut editor, "empty", vec![]);
+        // Registered, but then evicted from the live `kb.instances` map --
+        // simulates a federated store that failed to load/open after
+        // registration.
+        let dead_uuid = register_plain_instance(
+            &mut editor,
+            "dead",
+            vec![mae_kb::Node::new(
+                "concept:dead",
+                "Dead",
+                mae_kb::NodeKind::Concept,
+                "",
+            )],
+        );
+        editor.kb.instances.remove(&dead_uuid);
+
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_multi_kb_scope = GraphMultiKbScope::All;
+
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(1));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+
+        assert_eq!(
+            gv.diagram_labels.len(),
+            4,
+            "seed + alive + empty + dead, all rendered (unloaded is not silently dropped)"
+        );
+
+        let find = |name: &str| {
+            gv.diagram_labels
+                .iter()
+                .find(|d| d.name == name)
+                .unwrap_or_else(|| panic!("expected a diagram named {name}"))
+        };
+        assert!(find("Primary").loaded, "seed must report loaded");
+        assert!(
+            find("alive").loaded,
+            "a healthy related instance must report loaded"
+        );
+        let empty = find("empty");
+        assert!(
+            empty.loaded,
+            "an instance present in kb.instances but with zero matching nodes must still be loaded == true"
+        );
+        assert_eq!(empty.node_count, 0);
+        let dead = find("dead");
+        assert!(
+            !dead.loaded,
+            "a registered-but-unloaded instance must be flagged loaded == false"
+        );
+        assert_eq!(
+            dead.node_count, 0,
+            "an unloaded instance safely degrades to an empty diagram, not a panic"
+        );
+
+        // End-to-end through `describe_state()` too -- the Scheme/MCP-facing
+        // path (`(kb-graph-view-state)` / `kb_graph_view_state` tool) must
+        // carry the same distinction, not just the internal `GraphView`.
+        let state = gv.describe_state();
+        let dead_state = state
+            .diagrams
+            .iter()
+            .find(|d| d.name == "dead")
+            .expect("dead diagram must appear in describe_state() too");
+        assert!(!dead_state.loaded);
+        let alive_state = state
+            .diagrams
+            .iter()
+            .find(|d| d.name == "alive")
+            .expect("alive diagram must appear in describe_state() too");
+        assert!(alive_state.loaded);
+        let empty_state = state
+            .diagrams
+            .iter()
+            .find(|d| d.name == "empty")
+            .expect("empty diagram must appear in describe_state() too");
+        assert!(empty_state.loaded);
     }
 
     #[test]
