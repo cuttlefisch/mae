@@ -194,6 +194,57 @@ async fn main() {
         }
     }
 
+    // ADR-060 (issue #460): load federated KB instances from kb-registry.toml
+    // and open each one's store — before this, NOTHING did this for the
+    // daemon binary, so Phase A-D's whole per-tenant instance-addressing
+    // mechanism (instance_stores, per-tenant quotas, tenant-boundary role
+    // isolation) was unreachable in a real running daemon process:
+    // `state.registry` stayed permanently empty and every `instance_addr`-
+    // scoped request resolved to `DaemonError::UnknownInstance`, no matter
+    // what was configured on disk. Scoped down from the editor's own
+    // federation bootstrap (`crates/mae/src/bootstrap.rs::init_kb_federation`):
+    // no org-dir-import fallback (the daemon serves CozoDB stores, it
+    // doesn't own org-file editing) and no ADR-020 stranded-instance
+    // recovery reconstruction (an editor-specific robustness concern for a
+    // human-driven session) — just the core "load the registry, open each
+    // enabled non-primary instance's CozoDB store" path, which is what the
+    // addressing mechanism actually needs to be reachable. A missing/failed
+    // instance store is logged and skipped, not fatal — one bad instance
+    // must not prevent the primary store (already open above) from serving.
+    {
+        let registry = mae_kb::federation::KbRegistry::load(&data_dir);
+        let mut s = state.lock().await;
+        for inst in &registry.instances {
+            if inst.primary || !inst.enabled {
+                // The primary is already opened above via --data-dir; opening
+                // it a second time here would double-open the same file.
+                continue;
+            }
+            if !inst.db_path.exists() {
+                tracing::warn!(
+                    name = %inst.name, uuid = %inst.uuid, db = %inst.db_path.display(),
+                    "federated KB instance has no on-disk CozoDB store, skipping"
+                );
+                continue;
+            }
+            match CozoKbStore::open_with_engine(&inst.db_path, "sqlite") {
+                Ok(inst_store) => {
+                    tracing::info!(name = %inst.name, uuid = %inst.uuid, "federated KB instance opened");
+                    s.instance_stores
+                        .insert(inst.uuid.clone(), Arc::new(inst_store));
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        name = %inst.name, uuid = %inst.uuid, error = %e,
+                        "failed to open federated KB instance, skipping"
+                    );
+                }
+            }
+        }
+        s.registry = registry;
+        s.rebuild_query_layer();
+    }
+
     // Clean stale socket
     let socket_path = &config.socket;
     if socket_path.exists() {

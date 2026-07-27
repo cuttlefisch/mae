@@ -875,3 +875,47 @@ test`) green, clippy/fmt clean.
 `assets/mae-daemon@.service` ships no macOS/Windows equivalent, matching `mae-headless@.service`'s
 existing precedent and the ADR's own explicit "no `launchd`/Service-Control-Manager
 equivalent" framing.
+
+## Implementation note (added while scoping Phase F, principle #15 — a genuine drift finding, not the phase it was found under)
+
+While scoping Phase F's N-tenant benchmark, a load-bearing gap surfaced: **`daemon/src/main.rs`
+never loaded a KB registry or opened any federated instance store at startup.**
+`DaemonState.registry` was unconditionally initialized to `KbRegistry::default()` (empty), and
+`instance_stores` was populated ONLY inside `#[cfg(test)]` code across the whole daemon crate —
+confirmed by direct grep, not assumed. This means Phase A's own premise — "reusing the
+already-partitioned `instance_stores`... as the address space" — was true of the *data
+structure*, but the structure itself was never populated in a real running process: every
+`instance`-addressed request against a genuinely deployed `mae-daemon` resolved to
+`DaemonError::UnknownInstance`, no matter what a `kb-registry.toml` on disk said. Phases A-D's
+entire addressing/quota/isolation mechanism (all shipped and tested this session) was reachable
+only through the test suite's synthetic in-process `DaemonState` construction, never through a
+real spawned binary. Filed as issue #460 and fixed in the same pass rather than left for a
+separate investigation, once root-caused as a genuine omission (not, per one hypothesis
+considered and ruled out, an intentional design where Phase E's process-per-tenant model was
+meant to supersede Phases A-D's in-process addressing — Phase A's own design text assumes
+`instance_stores` already works, ruling that reading out).
+
+**Fix:** `main.rs` now loads `KbRegistry::load(&data_dir)` immediately after the primary store
+opens, and opens each enabled, non-primary instance's `CozoKbStore`, mirroring the editor's own
+federation bootstrap (`crates/mae/src/bootstrap.rs::init_kb_federation`'s CozoDB-first path)
+but deliberately scoped down: no org-dir-import fallback (the daemon serves CozoDB stores, it
+doesn't own org-file editing) and no ADR-020 stranded-instance recovery reconstruction (an
+editor-specific, human-session robustness concern) — just the core "load the registry, open
+each instance" path Phase A-D's addressing mechanism actually needs to be reachable. A
+missing/failed instance store is logged and skipped, never fatal to the primary.
+
+**The adversarial test**
+(`daemon/tests/federated_instance_startup_e2e.rs::real_daemon_opens_federated_instances_from_kb_registry_toml_at_startup`)
+proves this against a real spawned `mae-daemon` binary, not synthetic state: a primary store and
+a separately-registered federated instance store, each with distinctly-named content; an
+`instance`-addressed `kb/get` for the federated-only node succeeds and returns the right node
+(the property that was broken); a negative control confirms the instance-scoped view never sees
+the primary's own content (real isolation, not a leaky federated view); and — a genuinely
+useful thing this investigation surfaced along the way — an *unaddressed* `kb/get` now finds
+content from the federated instance too, because `None` routes through `rebuild_query_layer`'s
+`FederatedQuery`, which spans the primary plus every `instance_stores` entry. That federated
+layer already existed in the code; before this fix it silently had only one member (the
+primary) in every real deployment, making federation a no-op regardless of what a
+`kb-registry.toml` claimed. This fix is therefore also the first time federated *search* across
+multiple daemon-hosted KB instances becomes real in production, not just addressing to one
+instance at a time.
