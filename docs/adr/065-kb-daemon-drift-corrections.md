@@ -190,3 +190,48 @@ whatever's actually registered (correctly a no-op today against the daemon's rea
 `daemon-kb.cozo` primary store, which is populated via collaborative RPC writes, not an org
 directory) and activate automatically the moment a federated, org-directory-backed instance is
 ever registered — no further changes needed when that lands (tracked separately under ADR-060).
+
+## Addendum: issue #474 — a second, distinct drift correction in `health_report`
+
+Item 1's original fix made `FederatedQuery::health_report` iterate `self.instances` and merge
+per-instance reports instead of silently returning only the primary. It did not, however,
+reconcile the *content* of the merged orphan/broken-link/hub detections across instance
+boundaries — each instance's own `CozoKbStore::health_report()` still runs its orphan/broken-link/
+hub Datalog scoped ENTIRELY to that one store's own `*nodes`/`*links` relations (no cross-engine
+Datalog query is possible — cozo 0.7.6 has no attach/union primitive; each registered instance is
+a fully separate embedded engine). Consequences: a link whose target is a real node in a
+*different* federated instance was wrongly reported broken, and a node whose only real incoming
+link comes from a sibling instance was wrongly reported as an orphan. This was a confirmed
+data-loss vector: `Editor::kb_cleanup_orphans` (`crates/core/src/editor/kb_ops/watchers.rs`)
+actually deletes nodes based on the buggy `orphan_ids` list.
+
+Fixed by reconciling the merge, without adding new query cost (principle #8: reusing
+`health_report`'s own hub-node in-degree computation instead of a second pass) or an
+O(candidates × instances × total_links) hot-path cost (principle #9):
+
+- **Orphan detection**: a federation-wide node-id → incoming-link-count map (summed across
+  primary + every instance, via a new `KbQueryLayer::linked_in_degree`) is used to filter out any
+  orphan candidate that has a real incoming link somewhere in the federation. Only the
+  incoming-link half needs this check — a node's own outgoing links can only ever be recorded in
+  its own owning instance.
+- **Broken-link detection**: a candidate is dropped if `self.contains(&link.target)` resolves true
+  anywhere in the federation (a cheap keyed lookup per store, already dispatching across primary +
+  instances).
+- **Hub-node ranking**: the top-10 is rebuilt fresh from the same federation-wide summed in-degree
+  map, replacing the old "union of each instance's own already-locally-truncated top-10, then
+  re-sort/truncate" approach — which could silently drop a node whose true combined rank qualifies
+  but whose per-instance share never made any single instance's own local top-10.
+- Also fixed alongside, for consistency with every other aggregation method on `FederatedQuery`
+  (`search`/`agenda`/`list_ids`/etc.): the instance loop now uses `priority_ordered_instances()`
+  (respecting `max_fanout_instances`) instead of iterating `&self.instances` directly, which
+  `health_report` alone had never picked up.
+
+`FederatedQuery::degraded()` was also given a real override (previously falling through to the
+trait's unconditional `false` default) and `related()`'s doc comment was corrected — it still
+computes relatedness within one owning instance only (a known, documented approximation, not fixed
+here; cross-instance links are real, see the multi-KB chord graph view work for issue #462).
+
+Tracking: issue #474. Verified adversarially (CLAUDE.md principle #14) in
+`shared/kb/src/query.rs`'s test module — up to 3-way instance topologies, explicit "still
+genuinely broken/orphaned" negative cases alongside the "false positive resolved" positive cases,
+and a byte-identical-output regression guard for the single-instance case.
