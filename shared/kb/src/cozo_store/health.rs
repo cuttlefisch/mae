@@ -6,6 +6,31 @@ use super::util::cozo_err;
 use super::*;
 
 impl CozoKbStore {
+    /// Full (untruncated) node-id -> incoming-link-count map, computed via a single
+    /// Datalog query over `*links`. Extracted from `health_report`'s hub-node
+    /// computation (which truncates this to the top 10) so `KbQueryLayer::linked_in_degree`
+    /// can reuse the SAME query instead of duplicating it (CLAUDE.md principle #8) — this is
+    /// exactly the data `health_report` already computes and previously discarded after
+    /// truncation. `pub(crate)` so `CozoQueryLayer` (in `query.rs`, a sibling module) can call
+    /// it without re-deriving the Datalog string. See issue #474:
+    /// `FederatedQuery::health_report` needs the FULL map (not top-10) from every
+    /// participating instance to sum true cross-instance in-degree before ranking.
+    pub(crate) fn compute_in_degree_map(
+        &self,
+    ) -> Result<std::collections::HashMap<String, usize>, KbStoreError> {
+        let hub_result = self
+            .run_immut("in_deg[dst, id] := *links{dst, src: id}\n?[dst, id] := in_deg[dst, id]")
+            .map_err(cozo_err)?;
+        let mut hub_map: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for row in &hub_result.rows {
+            if let Some(dst) = row.first().and_then(|v| v.get_str()) {
+                *hub_map.entry(dst.to_string()).or_default() += 1;
+            }
+        }
+        Ok(hub_map)
+    }
+
     /// Compute a structured health report using Datalog queries.
     pub fn health_report(&self) -> Result<HealthReport, KbStoreError> {
         use crate::store::{BrokenLinkInfo, BrokenLinkReason};
@@ -99,17 +124,7 @@ impl CozoKbStore {
             .collect();
 
         // Hub nodes (highest in-degree, top 10)
-        let hub_result = self
-            .run_immut("in_deg[dst, id] := *links{dst, src: id}\n?[dst, id] := in_deg[dst, id]")
-            .map_err(cozo_err)?;
-        let mut hub_map: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
-        for row in &hub_result.rows {
-            if let Some(dst) = row.first().and_then(|v| v.get_str()) {
-                *hub_map.entry(dst.to_string()).or_default() += 1;
-            }
-        }
-        let mut hubs: Vec<(String, usize)> = hub_map.into_iter().collect();
+        let mut hubs: Vec<(String, usize)> = self.compute_in_degree_map()?.into_iter().collect();
         hubs.sort_by_key(|h| std::cmp::Reverse(h.1));
         hubs.truncate(10);
 

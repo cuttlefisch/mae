@@ -380,3 +380,132 @@ fn batched_kb_collab_actions_do_not_collapse_to_the_last() {
         .collect();
     assert_eq!(members, vec!["SHA256:a", "SHA256:b", "SHA256:c"]);
 }
+
+// --- Issue #474: kb_cleanup_orphans must use federation-reconciled orphan detection ---
+//
+// `kb_cleanup_orphans` is destructive (`Editor::kb.primary.remove(id)`), which is exactly why
+// the `FederatedQuery::health_report` orphan-detection bug (a node whose only real incoming
+// link lives in a sibling federated instance was wrongly reported orphaned) was a real
+// data-loss vector, not just a cosmetic health-report inaccuracy. These are the first tests
+// for `kb_cleanup_orphans` (previously zero coverage) and are deliberately adversarial (CLAUDE.md
+// principle #14): the positive "must NOT delete" case is paired with a negative "must STILL
+// delete a genuine orphan" case in the identical federated topology, so the fix can't be
+// proven merely by becoming universally lenient.
+
+/// Build a primary CozoDB store + one federated instance store, wire them into `editor.kb`,
+/// and rebuild the query layer — the minimum federation shape needed for `kb_cleanup_orphans`
+/// to route its orphan detection through `FederatedQuery::health_report` (via
+/// `self.kb.query_layer()`) instead of falling back to the primary's own un-federated
+/// in-memory `health_report()`.
+fn setup_federated_primary_and_instance(
+    editor: &mut Editor,
+    tmp: &TempDir,
+) -> (
+    std::sync::Arc<mae_kb::CozoKbStore>,
+    std::sync::Arc<mae_kb::CozoKbStore>,
+) {
+    let primary_store =
+        std::sync::Arc::new(mae_kb::CozoKbStore::open(tmp.path().join("primary.cozo")).unwrap());
+    let inst_store =
+        std::sync::Arc::new(mae_kb::CozoKbStore::open(tmp.path().join("inst.cozo")).unwrap());
+    editor.kb.primary_cozo = Some(primary_store.clone());
+    editor
+        .kb
+        .instance_stores
+        .insert("inst-uuid".to_string(), inst_store.clone());
+    editor.kb.rebuild_query_layer();
+    assert!(
+        editor.kb.query_layer().is_some(),
+        "sanity: federated query layer must be active for this test to exercise the real bug"
+    );
+    (primary_store, inst_store)
+}
+
+#[test]
+fn kb_cleanup_orphans_does_not_delete_primary_node_with_genuine_cross_instance_incoming_link() {
+    let mut editor = Editor::new();
+    let tmp = TempDir::new().unwrap();
+    let (primary_store, inst_store) = setup_federated_primary_and_instance(&mut editor, &tmp);
+
+    // A primary node with zero LOCAL links, but a real inbound link recorded only in the
+    // federated instance — the exact false-positive shape issue #474 fixes.
+    let survivor = mae_kb::Node::new(
+        "user:survivor",
+        "Survivor",
+        mae_kb::NodeKind::Note,
+        "no local links",
+    );
+    primary_store.insert_node(&survivor).unwrap();
+    editor.kb.primary.insert(survivor);
+
+    inst_store
+        .insert_node(&mae_kb::Node::new(
+            "inst:linker",
+            "Linker",
+            mae_kb::NodeKind::Note,
+            "",
+        ))
+        .unwrap();
+    inst_store
+        .add_typed_link("inst:linker", "user:survivor", "references", 1.0)
+        .unwrap();
+
+    editor.kb_cleanup_orphans();
+
+    assert!(
+        editor.kb.primary.contains("user:survivor"),
+        "a primary node with a real incoming link from a federated instance must NOT be \
+         deleted by kb_cleanup_orphans"
+    );
+}
+
+#[test]
+fn kb_cleanup_orphans_still_removes_a_genuine_orphan_in_a_federated_setup() {
+    let mut editor = Editor::new();
+    let tmp = TempDir::new().unwrap();
+    let (primary_store, inst_store) = setup_federated_primary_and_instance(&mut editor, &tmp);
+
+    // Adversarial complement, same federation topology: a DIFFERENT primary node that is
+    // genuinely unlinked everywhere — proves the fix didn't make cleanup overly lenient.
+    let genuine_orphan = mae_kb::Node::new(
+        "user:genuine-orphan",
+        "Genuinely alone",
+        mae_kb::NodeKind::Note,
+        "",
+    );
+    primary_store.insert_node(&genuine_orphan).unwrap();
+    editor.kb.primary.insert(genuine_orphan);
+
+    // Unrelated instance content, touching neither node above.
+    inst_store
+        .insert_node(&mae_kb::Node::new(
+            "inst:unrelated-a",
+            "A",
+            mae_kb::NodeKind::Note,
+            "",
+        ))
+        .unwrap();
+    inst_store
+        .insert_node(&mae_kb::Node::new(
+            "inst:unrelated-b",
+            "B",
+            mae_kb::NodeKind::Note,
+            "",
+        ))
+        .unwrap();
+    inst_store
+        .add_typed_link("inst:unrelated-a", "inst:unrelated-b", "references", 1.0)
+        .unwrap();
+
+    let removed = editor.kb_cleanup_orphans();
+
+    assert!(
+        !editor.kb.primary.contains("user:genuine-orphan"),
+        "a node with genuinely zero links anywhere in the federation must still be removed \
+         by kb_cleanup_orphans"
+    );
+    assert!(
+        removed >= 1,
+        "expected at least the genuine orphan to be counted as removed, got {removed}"
+    );
+}
