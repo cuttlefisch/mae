@@ -71,6 +71,17 @@ pub trait KbQueryLayer: Send + Sync {
         Vec::new()
     }
 
+    /// Full per-instance node-id -> incoming-link-count map (NOT truncated to any top-N —
+    /// see CozoKbStore::compute_in_degree_map). Used by FederatedQuery::health_report to
+    /// reconcile orphan/hub detection across instances without adding new query cost (issue
+    /// #474) — this is the same data health_report's own hub computation already builds
+    /// before truncating it away. Default empty, mirroring related()/neighborhood()'s
+    /// existing graceful-degrade contract (e.g. RemoteHubQueryLayer, which already can't
+    /// participate in health_report at all).
+    fn linked_in_degree(&self) -> std::collections::HashMap<String, usize> {
+        std::collections::HashMap::new()
+    }
+
     /// Evict cached entries for node `id` (Phase D3b). A no-op for layers without a
     /// cache (`CozoQueryLayer`, `FederatedQuery`); `LruQueryLayer` overrides it. The
     /// editor calls this when a KB node changes remotely (a `sync_update` from the
@@ -198,6 +209,10 @@ impl KbQueryLayer for CozoQueryLayer {
 
     fn related(&self, id: &str, limit: usize) -> Vec<(String, f64)> {
         self.store.related(id, limit).unwrap_or_default()
+    }
+
+    fn linked_in_degree(&self) -> std::collections::HashMap<String, usize> {
+        self.store.compute_in_degree_map().unwrap_or_default()
     }
 
     fn todo_nodes(&self) -> Vec<Node> {
@@ -508,6 +523,17 @@ impl KbQueryLayer for FederatedQuery {
         // merge, each instance's contribution is also recorded in `by_instance` so a
         // corrupted/unreachable instance shows up as `reachable: false` instead of being
         // indistinguishable from "this instance is empty and healthy".
+        //
+        // Issue #474 (ADR-065 addendum): each instance's own orphan/broken-link/hub
+        // detection is scoped ENTIRELY to that instance's own `*nodes`/`*links` — no
+        // cross-engine Datalog query is possible (cozo 0.7.6 has no attach/union
+        // primitive; each registered instance is a fully separate embedded engine). A
+        // link whose target is a real node in a DIFFERENT instance was therefore wrongly
+        // reported broken, and a node whose only real incoming link comes from a sibling
+        // instance was wrongly reported orphaned. Fixed below by reconciling against a
+        // federation-wide in-degree map + `contains` check, without adding
+        // O(candidates × instances × total_links) cost (principle #9) — see the comments
+        // at each fix site.
         let mut merged = self.primary.health_report()?;
         let mut by_instance: std::collections::HashMap<String, crate::store::InstanceHealth> =
             std::collections::HashMap::new();
@@ -521,7 +547,26 @@ impl KbQueryLayer for FederatedQuery {
             },
         );
 
-        for (name, _, inst) in &self.instances {
+        // Federation-wide node-id -> incoming-link-count, summed across primary + every
+        // participating instance (issue #474). Reuses `linked_in_degree` — the SAME
+        // Datalog query `health_report`'s own hub computation already runs per instance
+        // (CLAUDE.md principle #8: no new query cost, just no longer throwing the full
+        // map away after truncating it to top-10). Built once, O(instances) calls each
+        // O(nodes-with-incoming-links) — not multiplied by candidate count.
+        let mut global_in_degree: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        for (id, count) in self.primary.linked_in_degree() {
+            *global_in_degree.entry(id).or_default() += count;
+        }
+
+        // `priority_ordered_instances()` (respects `max_fanout_instances`), not the raw
+        // `&self.instances` this loop used before — every OTHER aggregation method on this
+        // type (search/agenda/list_ids/id_title_pairs/id_title_body_triples/todo_nodes)
+        // already iterates instances this way; `health_report` iterating `&self.instances`
+        // directly was an inconsistency (and meant health_report alone ignored the fan-out
+        // cap) fixed here alongside the orphan/hub/broken-link reconciliation, not treated
+        // as a separate PR.
+        for (name, _, inst) in self.priority_ordered_instances() {
             match inst.health_report() {
                 Some(report) => {
                     by_instance.insert(
@@ -546,7 +591,8 @@ impl KbQueryLayer for FederatedQuery {
                     }
                     merged.orphan_ids.extend(report.orphan_ids);
                     merged.broken_links.extend(report.broken_links);
-                    merged.hub_nodes.extend(report.hub_nodes);
+                    // hub_nodes deliberately NOT extended here — see the fresh rebuild
+                    // from `global_in_degree` below.
                 }
                 None => {
                     // Instance failed to report — surface it as unreachable rather than
@@ -563,12 +609,51 @@ impl KbQueryLayer for FederatedQuery {
                     );
                 }
             }
+            for (id, count) in inst.linked_in_degree() {
+                *global_in_degree.entry(id).or_default() += count;
+            }
         }
 
-        // Re-rank hub nodes across the merged set (a node hub-ranked within one instance
-        // may not be a global top-10 once other instances' in-degrees are combined).
-        merged.hub_nodes.sort_by_key(|h| std::cmp::Reverse(h.1));
-        merged.hub_nodes.truncate(10);
+        // Orphan fix (issue #474): only the incoming-link half of each instance's local
+        // orphan check needs federation-wide reconciliation. A node's own OUTGOING links
+        // can only ever be recorded in its own owning instance — they're extracted from
+        // that node's own content at ingest time, never from a sibling instance's data —
+        // so each instance's local "no outgoing links" half is already trustworthy as-is.
+        // The "no incoming links" half is the one that can be a false positive: the real
+        // inbound link may live in a sibling instance's `*links` relation, invisible to
+        // this instance's own Datalog query. `global_in_degree` is exactly the
+        // federation-wide answer to "does ANY instance record an incoming link to this
+        // id" — an id with an entry there has a real incoming link somewhere, so it's not
+        // actually an orphan.
+        merged
+            .orphan_ids
+            .retain(|id| !global_in_degree.contains_key(id));
+
+        // Broken-link fix (issue #474): a link is only genuinely broken if its target
+        // resolves NOWHERE in the federation, not just in its own owning instance.
+        // `self.contains` already dispatches across primary + every instance and is a
+        // cheap keyed lookup per store (`nodes` keyed by id) — O(candidates × instances),
+        // not O(candidates × instances × total_links).
+        merged
+            .broken_links
+            .retain(|link| !self.contains(&link.target));
+
+        // Hub-node fix (issue #474): rebuild the top-10 fresh from the summed
+        // federation-wide in-degree map, instead of re-sorting/truncating the union of
+        // already-locally-truncated per-instance top-10 lists. That naive approach can
+        // silently drop a node whose COMBINED global rank qualifies for the federated
+        // top-10 but whose per-instance share never made any single instance's own local
+        // top-10 ranking (see
+        // `federated_health_report_hub_node_recovers_node_absent_from_every_instances_own_local_top_10`).
+        // Single-instance case (`self.instances` empty): `global_in_degree` is exactly
+        // primary's own full in-degree map (nothing summed in), so this reproduces
+        // byte-identical top-10 output to before this fix (see
+        // `federated_health_report_single_instance_unchanged_by_hub_fix`).
+        let mut hubs: Vec<(String, usize)> = global_in_degree.into_iter().collect();
+        hubs.sort_by_key(|h| std::cmp::Reverse(h.1));
+        hubs.truncate(10);
+        merged.hub_nodes = hubs;
+
         merged.by_instance = by_instance;
         Some(merged)
     }
@@ -586,8 +671,18 @@ impl KbQueryLayer for FederatedQuery {
     }
 
     fn related(&self, id: &str, limit: usize) -> Vec<(String, f64)> {
-        // Per-instance, like `neighborhood`: relatedness is computed within the
-        // instance that owns the node (graph edges don't cross instances).
+        // Per-instance, like `neighborhood`: relatedness is computed within the instance
+        // that owns the node. KNOWN APPROXIMATION (issue #474 review): cross-instance links
+        // ARE real — a node's true structural neighbors can live in a sibling federated
+        // instance (see the `CrossInstanceLink`/`partition_boundary_links_by_instance` work
+        // for issue #462's multi-KB chord graph view, which surfaces exactly these edges for
+        // display) — so this stays scoped to the owning instance's own graph and undercounts
+        // relatedness whenever a node's real co-citation/tag-sharing neighbors sit in another
+        // instance. A full fix would blend the owning instance's own relatedness score with a
+        // cross-instance signal; that's real design work (weighting, dedup, cost of fanning
+        // out a `related()` call to every instance for every candidate), not attempted here —
+        // out of scope for this change, unlike `health_report`'s orphan/hub/broken-link
+        // reconciliation, which this change does fix.
         if self.primary.contains(id) {
             return self.primary.related(id, limit);
         }
@@ -597,6 +692,14 @@ impl KbQueryLayer for FederatedQuery {
             }
         }
         Vec::new()
+    }
+
+    /// Scoped specifically to the last `search()` call — `last_query_partial` is only ever
+    /// set inside `search()` on this type, not by any other method (`health_report`,
+    /// `links_to`, etc. never touch it). Do not read this as "was the last call of any kind
+    /// degraded."
+    fn degraded(&self) -> bool {
+        self.last_query_was_partial()
     }
 
     fn todo_nodes(&self) -> Vec<Node> {
@@ -727,6 +830,14 @@ impl KbQueryLayer for InMemoryQueryLayer {
 
     fn related(&self, id: &str, limit: usize) -> Vec<(String, f64)> {
         self.kb.lock().unwrap().related(id, limit)
+    }
+
+    fn linked_in_degree(&self) -> std::collections::HashMap<String, usize> {
+        // `KnowledgeBase` already maintains a `links_in` reverse index for `links_to` —
+        // a real, correct implementation costs nothing beyond what's already tracked
+        // (unlike `RemoteHubQueryLayer`, which has no such structure and falls through to
+        // the trait default).
+        self.kb.lock().unwrap().linked_in_degree()
     }
 
     fn todo_nodes(&self) -> Vec<Node> {
@@ -1026,6 +1137,493 @@ mod tests {
             !corrupted_health.reachable,
             "a corrupted/unreadable instance must be surfaced as unreachable, \
              not silently omitted from the federated health report"
+        );
+    }
+
+    // --- Issue #474: cross-instance orphan/broken-link/hub reconciliation ---
+    //
+    // `CozoKbStore::health_report`'s orphan/broken-link/hub detection is scoped ENTIRELY
+    // to that one store's own `*nodes`/`*links` relations (no cross-engine Datalog query
+    // is possible — cozo 0.7.6 has no attach/union primitive; each federated instance is a
+    // fully separate embedded engine). `FederatedQuery::health_report` merged those
+    // per-instance reports with zero reconciliation, so a link whose target is a real node
+    // in a *different* instance was wrongly reported broken, and a node whose only real
+    // incoming link comes from a sibling instance was wrongly reported orphaned. These
+    // tests are adversarial per CLAUDE.md principle #14: real multi-instance topologies (up
+    // to 3-way, not just 2-way), explicit negative/"still genuinely broken" cases alongside
+    // the positive "false positive resolved" cases, and a regression guard proving the
+    // single-instance case is byte-identical to before.
+
+    #[test]
+    fn federated_health_report_orphan_false_positive_resolved_via_cross_instance_incoming_link() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary_store = Arc::new(CozoKbStore::open(tmp.path().join("primary.cozo")).unwrap());
+        primary_store
+            .insert_node(&Node::new(
+                "primary:no-outgoing",
+                "No local links",
+                NodeKind::Note,
+                "",
+            ))
+            .unwrap();
+
+        let inst_store = Arc::new(CozoKbStore::open(tmp.path().join("inst.cozo")).unwrap());
+        inst_store
+            .insert_node(&Node::new("inst:linker", "Linker", NodeKind::Note, ""))
+            .unwrap();
+        // The only real incoming link to primary:no-outgoing lives in a SIBLING
+        // instance's *links relation — invisible to primary's own local orphan query.
+        inst_store
+            .add_typed_link("inst:linker", "primary:no-outgoing", "references", 1.0)
+            .unwrap();
+
+        // Sanity: primary's own local health_report (the pre-federation-fix view) DOES
+        // wrongly flag it as an orphan — proving this test would actually catch a
+        // regression back to the old per-instance-only behavior.
+        let local_report = primary_store.health_report().unwrap();
+        assert!(
+            local_report
+                .orphan_ids
+                .contains(&"primary:no-outgoing".to_string()),
+            "sanity: primary's own local view must NOT see the cross-instance link"
+        );
+
+        let primary = Arc::new(CozoQueryLayer::new(primary_store));
+        let mut federated = FederatedQuery::new(primary);
+        federated.add_instance("inst".into(), 0, Arc::new(CozoQueryLayer::new(inst_store)));
+
+        let report = federated.health_report().unwrap();
+        assert!(
+            !report
+                .orphan_ids
+                .contains(&"primary:no-outgoing".to_string()),
+            "a node with a real incoming link from a sibling federated instance must not \
+             be reported as an orphan: {:?}",
+            report.orphan_ids
+        );
+    }
+
+    #[test]
+    fn federated_health_report_broken_link_false_positive_resolved_via_cross_instance_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary_store = Arc::new(CozoKbStore::open(tmp.path().join("primary.cozo")).unwrap());
+        primary_store
+            .insert_node(&Node::new("primary:seed", "Seed", NodeKind::Note, ""))
+            .unwrap();
+
+        let store_a = Arc::new(CozoKbStore::open(tmp.path().join("a.cozo")).unwrap());
+        store_a
+            .insert_node(&Node::new("a:linker", "Linker", NodeKind::Note, ""))
+            .unwrap();
+        // Targets a node that only exists in instance B — locally, instance A's own
+        // health_report has no way to know it resolves elsewhere.
+        store_a
+            .add_typed_link("a:linker", "b:target", "references", 1.0)
+            .unwrap();
+
+        let store_b = Arc::new(CozoKbStore::open(tmp.path().join("b.cozo")).unwrap());
+        store_b
+            .insert_node(&Node::new("b:target", "Target", NodeKind::Note, ""))
+            .unwrap();
+
+        let local_a_report = store_a.health_report().unwrap();
+        assert!(
+            local_a_report
+                .broken_links
+                .iter()
+                .any(|l| l.target == "b:target"),
+            "sanity: instance A's own local view must see the link as broken"
+        );
+
+        let primary = Arc::new(CozoQueryLayer::new(primary_store));
+        let mut federated = FederatedQuery::new(primary);
+        federated.add_instance("a".into(), 0, Arc::new(CozoQueryLayer::new(store_a)));
+        federated.add_instance("b".into(), 0, Arc::new(CozoQueryLayer::new(store_b)));
+
+        let report = federated.health_report().unwrap();
+        assert!(
+            !report.broken_links.iter().any(|l| l.target == "b:target"),
+            "a link whose target exists in a sibling federated instance must not be \
+             reported as broken: {:?}",
+            report.broken_links
+        );
+    }
+
+    #[test]
+    fn federated_health_report_orphan_still_reported_when_genuinely_unlinked_across_all_instances()
+    {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary_store = Arc::new(CozoKbStore::open(tmp.path().join("primary.cozo")).unwrap());
+        primary_store
+            .insert_node(&Node::new(
+                "primary:truly-orphan",
+                "Truly alone",
+                NodeKind::Note,
+                "",
+            ))
+            .unwrap();
+
+        // Two sibling instances with real content and links of their own, but NOTHING
+        // touching primary:truly-orphan — the negative case that must survive the fix.
+        let store_b1 = Arc::new(CozoKbStore::open(tmp.path().join("b1.cozo")).unwrap());
+        store_b1
+            .insert_node(&Node::new("b1:x", "X", NodeKind::Note, ""))
+            .unwrap();
+        store_b1
+            .insert_node(&Node::new("b1:y", "Y", NodeKind::Note, ""))
+            .unwrap();
+        store_b1
+            .add_typed_link("b1:x", "b1:y", "references", 1.0)
+            .unwrap();
+
+        let store_b2 = Arc::new(CozoKbStore::open(tmp.path().join("b2.cozo")).unwrap());
+        store_b2
+            .insert_node(&Node::new("b2:x", "X", NodeKind::Note, ""))
+            .unwrap();
+        store_b2
+            .insert_node(&Node::new("b2:y", "Y", NodeKind::Note, ""))
+            .unwrap();
+        store_b2
+            .add_typed_link("b2:x", "b2:y", "references", 1.0)
+            .unwrap();
+
+        let primary = Arc::new(CozoQueryLayer::new(primary_store));
+        let mut federated = FederatedQuery::new(primary);
+        federated.add_instance("b1".into(), 0, Arc::new(CozoQueryLayer::new(store_b1)));
+        federated.add_instance("b2".into(), 0, Arc::new(CozoQueryLayer::new(store_b2)));
+
+        let report = federated.health_report().unwrap();
+        assert!(
+            report
+                .orphan_ids
+                .contains(&"primary:truly-orphan".to_string()),
+            "a node with genuinely zero links anywhere across the whole federation must \
+             still be reported as an orphan — the fix must not become overly lenient: {:?}",
+            report.orphan_ids
+        );
+    }
+
+    #[test]
+    fn federated_health_report_broken_link_still_reported_when_target_missing_everywhere() {
+        let tmp = tempfile::tempdir().unwrap();
+        let primary_store = Arc::new(CozoKbStore::open(tmp.path().join("primary.cozo")).unwrap());
+        primary_store
+            .insert_node(&Node::new("primary:linker", "Linker", NodeKind::Note, ""))
+            .unwrap();
+        primary_store
+            .add_typed_link("primary:linker", "nowhere:missing", "references", 1.0)
+            .unwrap();
+
+        let store_b1 = Arc::new(CozoKbStore::open(tmp.path().join("b1.cozo")).unwrap());
+        store_b1
+            .insert_node(&Node::new("b1:x", "X", NodeKind::Note, ""))
+            .unwrap();
+        let store_b2 = Arc::new(CozoKbStore::open(tmp.path().join("b2.cozo")).unwrap());
+        store_b2
+            .insert_node(&Node::new("b2:x", "X", NodeKind::Note, ""))
+            .unwrap();
+
+        let primary = Arc::new(CozoQueryLayer::new(primary_store));
+        let mut federated = FederatedQuery::new(primary);
+        federated.add_instance("b1".into(), 0, Arc::new(CozoQueryLayer::new(store_b1)));
+        federated.add_instance("b2".into(), 0, Arc::new(CozoQueryLayer::new(store_b2)));
+
+        let report = federated.health_report().unwrap();
+        assert!(
+            report
+                .broken_links
+                .iter()
+                .any(|l| l.target == "nowhere:missing"),
+            "a link whose target is missing from EVERY instance in the federation must \
+             still be reported as broken: {:?}",
+            report.broken_links
+        );
+    }
+
+    #[test]
+    fn federated_health_report_broken_link_resolves_against_third_instance_not_first_checked() {
+        // 3 non-primary instances (A holds the link, B is an unrelated sibling that does
+        // NOT have the target, C is where the target actually lives) — proves the fix
+        // doesn't short-circuit its resolution check after the first sibling it looks at.
+        let tmp = tempfile::tempdir().unwrap();
+        let primary_store = Arc::new(CozoKbStore::open(tmp.path().join("primary.cozo")).unwrap());
+        primary_store
+            .insert_node(&Node::new("primary:seed", "Seed", NodeKind::Note, ""))
+            .unwrap();
+
+        let store_a = Arc::new(CozoKbStore::open(tmp.path().join("a.cozo")).unwrap());
+        store_a
+            .insert_node(&Node::new("a:linker", "Linker", NodeKind::Note, ""))
+            .unwrap();
+        store_a
+            .add_typed_link("a:linker", "c:target", "references", 1.0)
+            .unwrap();
+
+        let store_b = Arc::new(CozoKbStore::open(tmp.path().join("b.cozo")).unwrap());
+        store_b
+            .insert_node(&Node::new("b:unrelated", "Unrelated", NodeKind::Note, ""))
+            .unwrap();
+
+        let store_c = Arc::new(CozoKbStore::open(tmp.path().join("c.cozo")).unwrap());
+        store_c
+            .insert_node(&Node::new("c:target", "Target", NodeKind::Note, ""))
+            .unwrap();
+
+        let primary = Arc::new(CozoQueryLayer::new(primary_store));
+        let mut federated = FederatedQuery::new(primary);
+        federated.add_instance("a".into(), 0, Arc::new(CozoQueryLayer::new(store_a)));
+        federated.add_instance("b".into(), 0, Arc::new(CozoQueryLayer::new(store_b)));
+        federated.add_instance("c".into(), 0, Arc::new(CozoQueryLayer::new(store_c)));
+
+        let report = federated.health_report().unwrap();
+        assert!(
+            !report.broken_links.iter().any(|l| l.target == "c:target"),
+            "a link resolving against the THIRD instance checked must still be recognized \
+             as resolved, not just one that happens to resolve against the first sibling: \
+             {:?}",
+            report.broken_links
+        );
+    }
+
+    #[test]
+    fn federated_health_report_hub_node_reflects_true_global_in_degree_spanning_multiple_instances()
+    {
+        // A node with SOME incoming links recorded in each of 3 different instances
+        // (primary + 2 federated instances) — the merged hub count must be the TRUE SUM
+        // (3), not any single instance's local count (1 each).
+        let tmp = tempfile::tempdir().unwrap();
+        let primary_store = Arc::new(CozoKbStore::open(tmp.path().join("primary.cozo")).unwrap());
+        primary_store
+            .add_typed_link("primary:src", "shared:hub", "references", 1.0)
+            .unwrap();
+
+        let store_a = Arc::new(CozoKbStore::open(tmp.path().join("a.cozo")).unwrap());
+        store_a
+            .add_typed_link("a:src", "shared:hub", "references", 1.0)
+            .unwrap();
+
+        let store_b = Arc::new(CozoKbStore::open(tmp.path().join("b.cozo")).unwrap());
+        store_b
+            .add_typed_link("b:src", "shared:hub", "references", 1.0)
+            .unwrap();
+
+        // Sanity: no SINGLE instance sees more than its own local contribution.
+        assert_eq!(
+            primary_store
+                .health_report()
+                .unwrap()
+                .hub_nodes
+                .iter()
+                .find(|(id, _)| id == "shared:hub")
+                .map(|(_, c)| *c),
+            Some(1)
+        );
+
+        let primary = Arc::new(CozoQueryLayer::new(primary_store));
+        let mut federated = FederatedQuery::new(primary);
+        federated.add_instance("a".into(), 0, Arc::new(CozoQueryLayer::new(store_a)));
+        federated.add_instance("b".into(), 0, Arc::new(CozoQueryLayer::new(store_b)));
+
+        let report = federated.health_report().unwrap();
+        let hub_count = report
+            .hub_nodes
+            .iter()
+            .find(|(id, _)| id == "shared:hub")
+            .map(|(_, c)| *c);
+        assert_eq!(
+            hub_count,
+            Some(3),
+            "merged hub-node in-degree must be the TRUE SUM across all 3 instances, not \
+             any single instance's local count: {:?}",
+            report.hub_nodes
+        );
+    }
+
+    #[test]
+    fn federated_health_report_hub_node_recovers_node_absent_from_every_instances_own_local_top_10()
+    {
+        // Proves the "sum full maps, then truncate once" design over a naive "union of
+        // each instance's own already-truncated local top-10" design. `shared:sneaky-hub`
+        // gets in-degree 2 in EACH of instances A and B (combined global in-degree 4), but
+        // in EACH instance individually it's beaten by 10 "noise" nodes each with a HIGHER
+        // local-only in-degree of 3 — so `shared:sneaky-hub` never makes either instance's
+        // own local top-10 and is invisible to a naive union-of-locally-truncated-lists
+        // merge. Its true combined score (4) is still higher than any single noise node's
+        // global score (3, since noise nodes are per-instance-only), so a correct
+        // federation-wide ranking must surface it.
+        let tmp = tempfile::tempdir().unwrap();
+        let primary_store = Arc::new(CozoKbStore::open(tmp.path().join("primary.cozo")).unwrap());
+        primary_store
+            .insert_node(&Node::new("primary:seed", "Seed", NodeKind::Note, ""))
+            .unwrap();
+
+        let store_a = Arc::new(CozoKbStore::open(tmp.path().join("a.cozo")).unwrap());
+        for i in 0..10 {
+            for src in ["src0", "src1", "src2"] {
+                store_a
+                    .add_typed_link(
+                        &format!("a:{src}"),
+                        &format!("a:noise-{i}"),
+                        "references",
+                        1.0,
+                    )
+                    .unwrap();
+            }
+        }
+        store_a
+            .add_typed_link("a:sneaky-src1", "shared:sneaky-hub", "references", 1.0)
+            .unwrap();
+        store_a
+            .add_typed_link("a:sneaky-src2", "shared:sneaky-hub", "references", 1.0)
+            .unwrap();
+
+        let store_b = Arc::new(CozoKbStore::open(tmp.path().join("b.cozo")).unwrap());
+        for i in 0..10 {
+            for src in ["src0", "src1", "src2"] {
+                store_b
+                    .add_typed_link(
+                        &format!("b:{src}"),
+                        &format!("b:noise-{i}"),
+                        "references",
+                        1.0,
+                    )
+                    .unwrap();
+            }
+        }
+        store_b
+            .add_typed_link("b:sneaky-src1", "shared:sneaky-hub", "references", 1.0)
+            .unwrap();
+        store_b
+            .add_typed_link("b:sneaky-src2", "shared:sneaky-hub", "references", 1.0)
+            .unwrap();
+
+        // Sanity: shared:sneaky-hub is NOT in either instance's own local top-10.
+        for store in [&store_a, &store_b] {
+            let local_hubs = store.health_report().unwrap().hub_nodes;
+            assert!(
+                !local_hubs.iter().any(|(id, _)| id == "shared:sneaky-hub"),
+                "sanity: shared:sneaky-hub must be excluded from this instance's own \
+                 local top-10: {local_hubs:?}"
+            );
+            assert_eq!(
+                local_hubs.len(),
+                10,
+                "sanity: local top-10 is full of noise nodes"
+            );
+        }
+
+        let primary = Arc::new(CozoQueryLayer::new(primary_store));
+        let mut federated = FederatedQuery::new(primary);
+        federated.add_instance("a".into(), 0, Arc::new(CozoQueryLayer::new(store_a)));
+        federated.add_instance("b".into(), 0, Arc::new(CozoQueryLayer::new(store_b)));
+
+        let report = federated.health_report().unwrap();
+        let hub_count = report
+            .hub_nodes
+            .iter()
+            .find(|(id, _)| id == "shared:sneaky-hub")
+            .map(|(_, c)| *c);
+        assert_eq!(
+            hub_count,
+            Some(4),
+            "a node absent from every instance's own local top-10 must still surface in \
+             the federation-wide top-10 once its true combined in-degree qualifies: {:?}",
+            report.hub_nodes
+        );
+    }
+
+    #[test]
+    fn federated_health_report_single_instance_unchanged_by_hub_fix() {
+        // Regression guard: with zero registered instances, hub_nodes must be
+        // byte-identical to calling the underlying store's own health_report directly
+        // (which is exactly what pre-fix FederatedQuery::health_report reduced to for the
+        // single-instance case). Distinct in-degrees (no ties) so ordering is unambiguous.
+        let tmp = tempfile::tempdir().unwrap();
+        let store = Arc::new(CozoKbStore::open(tmp.path().join("solo.cozo")).unwrap());
+        for src in ["s0", "s1", "s2", "s3", "s4"] {
+            store
+                .add_typed_link(src, "solo:hub-5", "references", 1.0)
+                .unwrap();
+        }
+        for src in ["t0", "t1", "t2"] {
+            store
+                .add_typed_link(src, "solo:hub-3", "references", 1.0)
+                .unwrap();
+        }
+        store
+            .add_typed_link("u0", "solo:hub-1", "references", 1.0)
+            .unwrap();
+
+        let direct_report = store.health_report().unwrap();
+
+        let primary = Arc::new(CozoQueryLayer::new(store));
+        let federated = FederatedQuery::new(primary);
+        let fed_report = federated.health_report().unwrap();
+
+        assert_eq!(
+            fed_report.hub_nodes, direct_report.hub_nodes,
+            "a federation with zero registered instances must produce byte-identical \
+             hub_nodes output to the underlying store's own health_report"
+        );
+    }
+
+    /// A test-only `KbQueryLayer` whose `degraded()` unconditionally reports `true` —
+    /// stands in for a real degraded source (e.g. a timed-out `RemoteHubQueryLayer`,
+    /// ADR-062 Phase E) without needing to spawn a mock network server, since the only
+    /// thing under test here is that `FederatedQuery::degraded()` (issue #474) actually
+    /// reads `last_query_was_partial()` instead of falling through to the trait's
+    /// unconditional `false` default.
+    struct AlwaysDegradedLayer;
+    impl KbQueryLayer for AlwaysDegradedLayer {
+        fn get(&self, _id: &str) -> Option<Node> {
+            None
+        }
+        fn contains(&self, _id: &str) -> bool {
+            false
+        }
+        fn search(&self, _query: &str, _limit: usize) -> Vec<SearchHit> {
+            Vec::new()
+        }
+        fn links_from(&self, _id: &str) -> Vec<Link> {
+            Vec::new()
+        }
+        fn links_to(&self, _id: &str) -> Vec<Link> {
+            Vec::new()
+        }
+        fn list_ids(&self, _prefix: Option<&str>) -> Vec<String> {
+            Vec::new()
+        }
+        fn id_title_pairs(&self, _prefix: Option<&str>) -> Vec<(String, String)> {
+            Vec::new()
+        }
+        fn health_report(&self) -> Option<HealthReport> {
+            None
+        }
+        fn neighborhood(&self, _id: &str, _depth: u32) -> Option<SubGraph> {
+            None
+        }
+        fn degraded(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn federated_query_layer_degraded_reflects_last_search_partial() {
+        let primary = Arc::new(InMemoryQueryLayer::new(crate::KnowledgeBase::new()));
+        let mut federated = FederatedQuery::new(primary);
+        federated.add_instance("flaky".into(), 0, Arc::new(AlwaysDegradedLayer));
+
+        // Trigger a search — this is what actually sets last_query_partial (see
+        // FederatedQuery::search's own doc comment above).
+        let _ = federated.search("anything", 5);
+
+        // Called via `&dyn KbQueryLayer`, not any inherent method — proves the trait
+        // override itself works, not just the underlying `last_query_was_partial()`.
+        let layer: &dyn KbQueryLayer = &federated;
+        assert!(
+            layer.degraded(),
+            "FederatedQuery::degraded() must reflect a degraded fan-out source from the \
+             most recent search() call"
         );
     }
 

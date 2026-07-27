@@ -1913,6 +1913,18 @@ impl KnowledgeBase {
         v
     }
 
+    /// Full (untruncated) node-id -> incoming-link-count map, trivially derived from the
+    /// existing `links_in` reverse index (no new storage — CLAUDE.md principle #8). The
+    /// in-memory mirror of `CozoKbStore::compute_in_degree_map`, used by
+    /// `InMemoryQueryLayer::linked_in_degree` so `FederatedQuery::health_report` can fold a
+    /// federated in-memory instance's in-degree into the federation-wide sum (issue #474).
+    pub fn linked_in_degree(&self) -> HashMap<String, usize> {
+        self.links_in
+            .iter()
+            .map(|(id, sources)| (id.clone(), sources.len()))
+            .collect()
+    }
+
     /// Detect nodes whose `source_file` points to a path that no longer exists.
     /// This is intentionally lazy — call on-demand (health report, reimport),
     /// not on every drain tick (filesystem stat per node is expensive).
