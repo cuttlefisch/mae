@@ -36,6 +36,41 @@ inputs:
       stays additive rather than a default every caller pays for.
     required: false
     default: "false"
+  sccache:
+    description: >
+      Enable mozilla-actions/sccache-action with the GitHub-Actions-cache
+      backend (issue #491). Opt-in (default "false"). Unlike
+      Swatinem/rust-cache (scoped per-job), sccache caches at the compiled-
+      object level against a backend shared ACROSS jobs and runs -- the real
+      gap identified in #491, since 5+ ci.yml jobs independently recompile
+      overlapping parts of the same crate graph with zero cross-job sharing
+      today. Sets RUSTC_WRAPPER=sccache + SCCACHE_GHA_ENABLED=true for every
+      subsequent step in the calling job. sccache is incompatible with
+      incremental compilation (non-cacheable per-build-unique artifacts) --
+      callers building in debug profile should also pass `incremental:
+      "false"` alongside this; release builds don't use incremental
+      compilation by default so this is a non-issue for `--release` steps.
+    required: false
+    default: "false"
+  incremental:
+    description: >
+      When "false", sets CARGO_INCREMENTAL=0 for the job. Required alongside
+      `sccache: "true"` for any DEBUG-profile build step (sccache cannot
+      cache incremental artifacts) -- release steps don't need this since
+      `cargo build --release` skips incremental compilation by default
+      regardless. Default "true" (cargo's own default -- no override).
+    required: false
+    default: "true"
+  mold:
+    description: >
+      Install the mold linker (rui314/mold) and set RUSTFLAGS to use it via
+      -fuse-ld=mold (issue #491). Opt-in (default "false"). Linux-only: mold
+      has no free macOS build (a separate commercial product) and no Windows
+      support at all -- callers on non-Linux runners must not set this.
+      Generally the fastest linker available for large Linux link jobs,
+      which MAE's GUI-featured `mae` binary (Skia + tokio + cozo) is.
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -48,3 +83,24 @@ runs:
         workspaces: ${{ inputs.workspaces }}
     - uses: taiki-e/install-action@nextest
       if: inputs.nextest == 'true'
+    - uses: mozilla-actions/sccache-action@v0.0.10
+      if: inputs.sccache == 'true'
+    - name: Configure sccache env
+      if: inputs.sccache == 'true'
+      shell: bash
+      run: |
+        echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+        echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+    - name: Disable incremental compilation
+      if: inputs.incremental == 'false'
+      shell: bash
+      run: echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+    - name: Install mold linker
+      if: inputs.mold == 'true'
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y mold
+    - name: Configure mold as linker
+      if: inputs.mold == 'true'
+      shell: bash
+      run: |
+        echo "RUSTFLAGS=${RUSTFLAGS} -C link-arg=-fuse-ld=mold" >> "$GITHUB_ENV"

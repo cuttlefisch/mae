@@ -102,6 +102,13 @@ jobs:
           # Issue #470: only the test leg actually runs `cargo nextest run` —
           # clippy/fmt legs never touch it, so skip the install there.
           nextest: ${{ matrix.step == 'test' && 'true' || 'false' }}
+          # Issue #491: test + clippy legs both do a full workspace compile
+          # (`--release --features gui` / `--all-targets`) -- fmt doesn't
+          # compile anything, so it's excluded. Both legs use --release (or
+          # clippy's own non-incremental default), so `incremental` stays at
+          # its default "true" (no-op) rather than needing an override.
+          sccache: ${{ matrix.step != 'fmt' && 'true' || 'false' }}
+          mold: ${{ matrix.step != 'fmt' && 'true' || 'false' }}
 
       - uses: ./.github/actions/install-gui-deps
         if: matrix.step != 'fmt'
@@ -430,6 +437,13 @@ jobs:
         with:
           workspaces: "daemon -> daemon/target"
           nextest: "true"
+          # Issue #491: clippy + test build in debug profile here (only the
+          # final "Build release binary" step below is --release), so
+          # incremental compilation is disabled to make sccache effective
+          # for those debug-profile steps too.
+          sccache: "true"
+          incremental: "false"
+          mold: "true"
       - name: clippy
         run: cd daemon && cargo clippy --all-targets -- -D warnings
       - name: test
@@ -479,6 +493,11 @@ jobs:
         with:
           toolchain: "1.95"
           nextest: "true"
+          # Issue #491: this leg builds in debug profile (no --release), so
+          # incremental compilation is disabled to make sccache effective.
+          sccache: "true"
+          incremental: "false"
+          mold: "true"
       - uses: ./.github/actions/install-gui-deps
       - name: cargo build (MSRV)
         run: cargo build --workspace --features gui
@@ -501,6 +520,12 @@ jobs:
           workspaces: |
             .
             daemon -> daemon/target
+          # Issue #491: every build step in this job is debug profile (no
+          # --release anywhere), so incremental compilation is disabled to
+          # make sccache effective.
+          sccache: "true"
+          incremental: "false"
+          mold: "true"
       - name: Multi-client integration tests
         run: cargo test --package mae-mcp --lib -- --test-threads=1
         timeout-minutes: 5
@@ -707,6 +732,12 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           nextest: "true"
+          # Issue #491: every `cargo nextest run` step below is debug
+          # profile (no --release), so incremental compilation is disabled
+          # to make sccache effective.
+          sccache: "true"
+          incremental: "false"
+          mold: "true"
       - name: R7RS compliance tests
         run: cargo nextest run -p mae-scheme --test r7rs_compliance --nocapture
         timeout-minutes: 10
@@ -892,6 +923,11 @@ jobs:
             .
             daemon -> daemon/target
           nextest: "true"
+          # Issue #491: sccache-action itself is cross-platform and every
+          # build step below is --release, so no `incremental` override is
+          # needed here. `mold` is deliberately NOT set -- it's Linux-only
+          # (no free macOS build exists).
+          sccache: "true"
 
       # Unlike Linux (install-gui-deps' apt-get step for fontconfig/
       # freetype), macOS needs ZERO extra system packages for --features gui
