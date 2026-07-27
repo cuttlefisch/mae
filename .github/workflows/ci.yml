@@ -99,6 +99,16 @@ jobs:
           workspaces: |
             .
             daemon -> daemon/target
+          # Issue #470: only the test leg actually runs `cargo nextest run` —
+          # clippy/fmt legs never touch it, so skip the install there.
+          nextest: ${{ matrix.step == 'test' && 'true' || 'false' }}
+          # Issue #491: test + clippy legs both do a full workspace compile
+          # (`--release --features gui` / `--all-targets`) -- fmt doesn't
+          # compile anything, so it's excluded. Both legs use --release (or
+          # clippy's own non-incremental default), so `incremental` stays at
+          # its default "true" (no-op) rather than needing an override.
+          sccache: ${{ matrix.step != 'fmt' && 'true' || 'false' }}
+          mold: ${{ matrix.step != 'fmt' && 'true' || 'false' }}
 
       - uses: ./.github/actions/install-gui-deps
         if: matrix.step != 'fmt'
@@ -120,8 +130,16 @@ jobs:
       - name: cargo test
         if: matrix.step == 'test'
         timeout-minutes: 30
+        # Issue #470: cargo-nextest as the runner (real parallel-process test
+        # execution, global scheduling across every test binary in the
+        # workspace instead of cargo test's own one-binary-at-a-time
+        # sequencing -- the single biggest lever on this job's wall-clock
+        # time). nextest does NOT run doctests at all, so `cargo test --doc`
+        # still runs separately, unchanged. See .config/nextest.toml for the
+        # one named, cross-linked retry override (#487) -- no blanket retry
+        # policy.
         run: |
-          cargo test --workspace --release --features gui
+          cargo nextest run --workspace --release --features gui
           cargo test --doc --workspace --release --features gui
 
       - name: cargo clippy
@@ -418,10 +436,24 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           workspaces: "daemon -> daemon/target"
+          nextest: "true"
+          # Issue #491: clippy + test build in debug profile here (only the
+          # final "Build release binary" step below is --release), so
+          # incremental compilation is disabled to make sccache effective
+          # for those debug-profile steps too.
+          sccache: "true"
+          incremental: "false"
+          mold: "true"
       - name: clippy
         run: cd daemon && cargo clippy --all-targets -- -D warnings
       - name: test
-        run: cd daemon && cargo test
+        # Issue #470: the daemon workspace's real socket tests already bind
+        # ephemeral ports (127.0.0.1:0), confirmed by direct grep of
+        # daemon/tests/{network_e2e,oauth_e2e}.rs -- exactly the pattern
+        # nextest's process-per-test model needs to avoid port collisions,
+        # so this conversion carries materially lower risk than it would for
+        # a fixed-port test suite.
+        run: cd daemon && cargo nextest run
         timeout-minutes: 5
       - name: fmt
         run: cd daemon && cargo fmt --check
@@ -460,11 +492,19 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           toolchain: "1.95"
+          nextest: "true"
+          # Issue #491: this leg builds in debug profile (no --release), so
+          # incremental compilation is disabled to make sccache effective.
+          sccache: "true"
+          incremental: "false"
+          mold: "true"
       - uses: ./.github/actions/install-gui-deps
       - name: cargo build (MSRV)
         run: cargo build --workspace --features gui
       - name: cargo test (MSRV -- lib + bins only, fast signal; full suite already covered on stable)
-        run: cargo test --workspace --lib --bins --features gui
+        # nextest is a prebuilt binary (taiki-e/install-action), not compiled
+        # against the 1.95 toolchain under test -- no MSRV interaction.
+        run: cargo nextest run --workspace --lib --bins --features gui
 
   server-client:
     name: Server-Client Integration
@@ -480,6 +520,12 @@ jobs:
           workspaces: |
             .
             daemon -> daemon/target
+          # Issue #491: every build step in this job is debug profile (no
+          # --release anywhere), so incremental compilation is disabled to
+          # make sccache effective.
+          sccache: "true"
+          incremental: "false"
+          mold: "true"
       - name: Multi-client integration tests
         run: cargo test --package mae-mcp --lib -- --test-threads=1
         timeout-minutes: 5
@@ -684,23 +730,31 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
+        with:
+          nextest: "true"
+          # Issue #491: every `cargo nextest run` step below is debug
+          # profile (no --release), so incremental compilation is disabled
+          # to make sccache effective.
+          sccache: "true"
+          incremental: "false"
+          mold: "true"
       - name: R7RS compliance tests
-        run: cargo test -p mae-scheme --test r7rs_compliance -- --nocapture
+        run: cargo nextest run -p mae-scheme --test r7rs_compliance --nocapture
         timeout-minutes: 10
       - name: Scheme torture tests
-        run: cargo test -p mae-scheme --test scheme_torture -- --nocapture
+        run: cargo nextest run -p mae-scheme --test scheme_torture --nocapture
         timeout-minutes: 5
       - name: Scheme benchmark tests
-        run: cargo test -p mae-scheme --test scheme_benchmarks -- --nocapture
+        run: cargo nextest run -p mae-scheme --test scheme_benchmarks --nocapture
         timeout-minutes: 10
       - name: Scheme real programs
-        run: cargo test -p mae-scheme --test scheme_programs -- --nocapture
+        run: cargo nextest run -p mae-scheme --test scheme_programs --nocapture
         timeout-minutes: 5
       - name: Scheme IO port tests
-        run: cargo test -p mae-scheme --test scheme_io_ports -- --nocapture
+        run: cargo nextest run -p mae-scheme --test scheme_io_ports --nocapture
         timeout-minutes: 5
       - name: Unit tests
-        run: cargo test -p mae-scheme --lib
+        run: cargo nextest run -p mae-scheme --lib
         timeout-minutes: 5
 
   collab-e2e:
@@ -852,6 +906,108 @@ jobs:
           ! test -f "$HOME/.local/bin/mae"         && echo "OK: mae removed"
           ! test -f "$HOME/.local/bin/mae-daemon"  && echo "OK: mae-daemon removed"
           echo "OK: Makefile uninstall clean"
+
+  macos:
+    name: macOS / build + test + install + collab e2e
+    runs-on: macos-latest
+    # First-appearance posture, matching windows-remote-e2e/msrv's own
+    # established precedent exactly: promote to hard-blocking only once
+    # proven stable across a few real runs, not a permanent leniency.
+    # Issues #345/#389.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-rust
+        with:
+          workspaces: |
+            .
+            daemon -> daemon/target
+          nextest: "true"
+          # Issue #491: sccache-action itself is cross-platform and every
+          # build step below is --release, so no `incremental` override is
+          # needed here. `mold` is deliberately NOT set -- it's Linux-only
+          # (no free macOS build exists).
+          sccache: "true"
+
+      # Unlike Linux (install-gui-deps' apt-get step for fontconfig/
+      # freetype), macOS needs ZERO extra system packages for --features gui
+      # -- confirmed against release.yml's existing build-macos-arm job,
+      # which builds the same feature set with no `brew install` at all
+      # (skia-safe uses native CoreText/CoreGraphics here instead).
+      - name: Build editor workspace (release, GUI)
+        run: cargo build --release --workspace --features gui
+
+      - name: Build daemon workspace (release)
+        run: cd daemon && cargo build --release
+
+      - name: Build manual KB + mae-mcp-shim
+        run: |
+          ./target/release/build-manual-kb assets/mae-manual.cozo
+          cargo build --release --package mae-mcp
+
+      # Bounded, fast-signal subset -- mirrors the MSRV job's own established
+      # "lib + bins only" pattern, not the full stable/test-equivalent suite.
+      # Both issues #345/#389 explicitly say this doesn't need to be the
+      # full matrix on day one; macOS runner-minutes cost more than Linux.
+      - name: cargo nextest run (lib + bins, fast signal)
+        run: cargo nextest run --workspace --lib --bins --release --features gui
+
+      # Issue #389: assets/install.sh already has a full Darwin/launchd
+      # branch, never exercised in CI. Reuses the exact package-assembly
+      # shape install-test (Linux) already does -- install.sh's own
+      # runtime OS detection (`uname -s` = Darwin) does the rest.
+      - name: Assemble install package
+        run: |
+          mkdir -p /tmp/mae-pkg
+          cp target/release/mae /tmp/mae-pkg/mae
+          cp target/release/mae-mcp-shim /tmp/mae-pkg/mae-mcp-shim
+          cp daemon/target/release/mae-daemon /tmp/mae-pkg/mae-daemon
+          chmod +x /tmp/mae-pkg/mae /tmp/mae-pkg/mae-mcp-shim /tmp/mae-pkg/mae-daemon
+          cp -r assets/mae-manual.cozo /tmp/mae-pkg/mae-manual.cozo
+          cp assets/mae-manual.cozo.sha256 /tmp/mae-pkg/mae-manual.cozo.sha256
+          cp -r modules /tmp/mae-pkg/modules
+          cp assets/sample-config.toml /tmp/mae-pkg/sample-config.toml
+          cp assets/daemon-config.toml /tmp/mae-pkg/daemon-config.toml
+          cp assets/mae-daemon.service /tmp/mae-pkg/mae-daemon.service
+          cp assets/com.cuttlefisch.mae-daemon.plist /tmp/mae-pkg/com.cuttlefisch.mae-daemon.plist
+          cp assets/install.sh /tmp/mae-pkg/install.sh
+          chmod +x /tmp/mae-pkg/install.sh
+
+      - name: Install (fresh) + verify launchd unit
+        run: |
+          set -e
+          cd /tmp/mae-pkg
+          ./install.sh "$HOME/.local"
+          test -x "$HOME/.local/bin/mae" && echo "OK: mae"
+          test -x "$HOME/.local/bin/mae-daemon" && echo "OK: mae-daemon"
+          test -f "$HOME/Library/LaunchAgents/com.cuttlefisch.mae-daemon.plist" && echo "OK: launchd plist installed"
+          "$HOME/.local/bin/mae" --version
+          "$HOME/.local/bin/mae" --check-config
+
+      - name: Uninstall + verify launchd unit removed
+        run: |
+          set -e
+          cd /tmp/mae-pkg
+          ./install.sh --uninstall "$HOME/.local"
+          ! test -f "$HOME/.local/bin/mae" && echo "OK: mae removed"
+          ! test -f "$HOME/Library/LaunchAgents/com.cuttlefisch.mae-daemon.plist" && echo "OK: launchd plist removed"
+
+      - name: Reinstall (round-trip complete)
+        run: |
+          set -e
+          cd /tmp/mae-pkg
+          ./install.sh "$HOME/.local"
+          "$HOME/.local/bin/mae" --version && echo "OK: clean reinstall works"
+
+      # Issue #345's explicit minimum ask. The script already carries its
+      # own portable fallback chains (ss->lsof->netstat, timeout->gtimeout)
+      # built specifically for this -- only the CI leg was missing. Reuses
+      # the release binaries built above; no second, redundant compile.
+      - name: Collab mTLS e2e (macOS-native binaries)
+        env:
+          MAE_BIN: ${{ github.workspace }}/target/release/mae
+          MAE_DAEMON_BIN: ${{ github.workspace }}/daemon/target/release/mae-daemon
+        run: scripts/collab-mtls-e2e.sh
 
   code-map:
     name: code-map freshness
