@@ -481,6 +481,12 @@ impl Editor {
             max_depth: depth,
             include_backlinks: self.kb_graph_include_backlinks,
             node_cap: Some(self.kb_graph_node_count_cap),
+            // The graph view's canvas conversion below only ever reads
+            // id/title/kind/source (via `is_residency_exempt`) — never
+            // body/properties/source_file/crdt_doc — so this is the one
+            // caller confirmed safe to opt out of cloning those heavy
+            // fields for every node in the (pre-cap) reachable set.
+            include_body: false,
         };
         let owner = self.kb_owner_of_scoped(&center);
         let empty_result = || mae_kb::SubgraphResult {

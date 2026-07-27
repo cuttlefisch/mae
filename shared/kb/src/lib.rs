@@ -171,7 +171,28 @@ pub struct SubgraphSpec {
     /// like a depth cutoff (see `extract_subgraph`), so the existing
     /// "... (+N)" boundary-stub rendering already handles it — no new
     /// render path needed.
+    ///
+    /// Note: the cap is deliberately applied POST-HOC, after the BFS has
+    /// already walked to full depth-bounded completion (see
+    /// `extract_subgraph`) — NOT as an early BFS stopping condition. An
+    /// early-stopping BFS would change WHICH nodes get selected (traversal-
+    /// order-biased) instead of today's exact global degree-sort over the
+    /// full reachable set. This was considered and deliberately declined as
+    /// a real selection-semantics change, not just a performance one.
     pub node_cap: Option<usize>,
+    /// When `false`, collected `Node`s have their heavy fields
+    /// (`body`, `properties`, `source_file`, `crdt_doc`) stripped to their
+    /// lightest legitimate values before being cloned into
+    /// `SubgraphResult.nodes`. `Node::body` can carry an entire org-mode
+    /// document, `properties` a full drawer, and `crdt_doc` an encoded yrs
+    /// document — none of which the KB graph view ever reads (it only
+    /// needs `id`/`title`/`kind`/`source` for rendering). The BFS walk
+    /// itself always uses the full node data (link extraction reads
+    /// `body`) regardless of this flag — only the *collected* clones pushed
+    /// into the result are affected. Defaults to `true` (preserves every
+    /// pre-existing caller's behavior exactly); set `false` only when the
+    /// caller is confirmed to need metadata alone.
+    pub include_body: bool,
 }
 
 /// A typed link within a `SubgraphResult` — carries the ADR-030
@@ -1239,8 +1260,35 @@ impl KnowledgeBase {
 
         for id in &included {
             if let Some(node) = self.nodes.get(id) {
-                nodes.push(node.clone());
-                for (target, rel_type, weight) in node.links_typed() {
+                // `links_typed()` reads `node.body` — must be computed from
+                // the full node BEFORE any lightweight stripping below, so
+                // `include_body: false` never affects which links surface.
+                let typed_links = node.links_typed();
+                if spec.include_body {
+                    nodes.push(node.clone());
+                } else {
+                    // Keep every cheap scalar/small-Vec field (some are read
+                    // downstream — e.g. `source` by `is_residency_exempt`,
+                    // `kind` by the canvas conversion); drop only the
+                    // confirmed-heavy fields (body/properties/source_file/
+                    // crdt_doc) that the graph view never reads.
+                    nodes.push(Node {
+                        id: node.id.clone(),
+                        title: node.title.clone(),
+                        kind: node.kind,
+                        body: String::new(),
+                        tags: node.tags.clone(),
+                        todo_state: node.todo_state.clone(),
+                        priority: node.priority,
+                        source: node.source,
+                        source_version: node.source_version,
+                        aliases: node.aliases.clone(),
+                        properties: HashMap::new(),
+                        source_file: None,
+                        crdt_doc: None,
+                    });
+                }
+                for (target, rel_type, weight) in typed_links {
                     let link = SubgraphLink {
                         source: id.clone(),
                         target: target.clone(),
@@ -3731,6 +3779,7 @@ mod tests {
             max_depth,
             include_backlinks,
             node_cap: None,
+            include_body: true,
         }
     }
 
@@ -3853,5 +3902,164 @@ mod tests {
         let result = kb.extract_subgraph(&s);
         assert_eq!(result.nodes.len(), 2);
         assert_eq!(result.hidden_node_count, 0);
+    }
+
+    #[test]
+    fn extract_subgraph_include_body_false_strips_heavy_fields_without_changing_cap_selection() {
+        // "popular" carries a large body + non-empty properties + a
+        // source_file — the fields we're stripping — and is also the
+        // higher-degree node (two backlinks) that must survive a cap of 2
+        // (starter + 1) over "lonely" (degree 0). Real (not unicorn) sizes:
+        // a few KB of body text, a populated property drawer.
+        let big_body = "x".repeat(5_000);
+        let mut props = HashMap::new();
+        props.insert("last-accessed".to_string(), "2026-01-01".to_string());
+
+        let make_kb = || {
+            kb_with(vec![
+                Node::new("start", "Start", NodeKind::Note, "[[popular]] [[lonely]]"),
+                Node::new("ref1", "Ref1", NodeKind::Note, "[[popular]]"),
+                Node::new("ref2", "Ref2", NodeKind::Note, "[[popular]]"),
+                Node::new("popular", "Popular", NodeKind::Note, big_body.clone())
+                    .with_properties(props.clone())
+                    .with_source_file("/tmp/popular.org"),
+                Node::new("lonely", "Lonely", NodeKind::Note, ""),
+            ])
+        };
+
+        let mut s_light = spec("start", 1, false);
+        s_light.node_cap = Some(2);
+        s_light.include_body = false;
+        let light = make_kb().extract_subgraph(&s_light);
+
+        let mut s_full = spec("start", 1, false);
+        s_full.node_cap = Some(2);
+        // spec()'s include_body defaults to true.
+        let full = make_kb().extract_subgraph(&s_full);
+
+        // The selection (which nodes survive the cap vs. get demoted to a
+        // boundary stub) must be byte-for-byte identical regardless of
+        // include_body — stripping heavy fields must never bias which
+        // nodes get kept. Cap selection happens on the KB's own stored
+        // nodes/degree table before the collection loop, so this is a
+        // regression guard, not a coincidence.
+        let mut light_ids: Vec<&str> = light.nodes.iter().map(|n| n.id.as_str()).collect();
+        let mut full_ids: Vec<&str> = full.nodes.iter().map(|n| n.id.as_str()).collect();
+        light_ids.sort();
+        full_ids.sort();
+        assert_eq!(
+            light_ids, full_ids,
+            "include_body must not change which nodes the cap keeps"
+        );
+        assert_eq!(light.hidden_node_count, full.hidden_node_count);
+        assert!(light_ids.contains(&"popular"));
+        assert!(!light_ids.contains(&"lonely"));
+
+        let popular_light = light.nodes.iter().find(|n| n.id == "popular").unwrap();
+        assert_eq!(popular_light.title, "Popular");
+        assert_eq!(popular_light.kind, NodeKind::Note);
+        assert_eq!(popular_light.body, "", "body must be stripped");
+        assert!(
+            popular_light.properties.is_empty(),
+            "properties must be stripped"
+        );
+        assert_eq!(
+            popular_light.source_file, None,
+            "source_file must be stripped"
+        );
+        assert_eq!(popular_light.crdt_doc, None, "crdt_doc must be stripped");
+
+        // The include_body: true path (existing default behavior) must be
+        // completely unaffected — full body/properties/source_file intact.
+        let popular_full = full.nodes.iter().find(|n| n.id == "popular").unwrap();
+        assert_eq!(popular_full.body, big_body);
+        assert_eq!(popular_full.properties, props);
+        assert_eq!(
+            popular_full.source_file,
+            Some(std::path::PathBuf::from("/tmp/popular.org"))
+        );
+    }
+
+    #[test]
+    fn extract_subgraph_include_body_true_clones_every_field_byte_identical() {
+        // Regression guard for principle #14: the pre-existing (default)
+        // behavior must be provably unchanged by this PR, not just
+        // "looks empty by coincidence" — every field on the returned Node
+        // must match the originally-inserted Node exactly.
+        let big_body = "y".repeat(500);
+        let mut props = HashMap::new();
+        props.insert("k".to_string(), "v".to_string());
+        let original = Node::new("a", "A", NodeKind::Concept, big_body.clone())
+            .with_properties(props.clone())
+            .with_tags(vec!["t1", "t2"])
+            .with_aliases(vec!["alias1"])
+            .with_todo_state("TODO")
+            .with_priority('A')
+            .with_source(NodeSource::UserOrg, 3);
+
+        let kb = kb_with(vec![original.clone()]);
+        let result = kb.extract_subgraph(&spec("a", 0, false));
+        assert_eq!(result.nodes.len(), 1);
+        let got = &result.nodes[0];
+        assert_eq!(got.id, original.id);
+        assert_eq!(got.title, original.title);
+        assert_eq!(got.kind, original.kind);
+        assert_eq!(got.body, original.body);
+        assert_eq!(got.tags, original.tags);
+        assert_eq!(got.todo_state, original.todo_state);
+        assert_eq!(got.priority, original.priority);
+        assert_eq!(got.source, original.source);
+        assert_eq!(got.source_version, original.source_version);
+        assert_eq!(got.aliases, original.aliases);
+        assert_eq!(got.properties, original.properties);
+        assert_eq!(got.source_file, original.source_file);
+        assert_eq!(got.crdt_doc, original.crdt_doc);
+    }
+
+    #[test]
+    fn extract_subgraph_include_body_false_avoids_cloning_heavy_body_text_at_scale() {
+        // Proxy for the memory-scaling claim: N=250 nodes each with a
+        // several-KB body, chained so a single BFS walk reaches all of
+        // them (mirroring "near-whole-KB subgraph for a well-connected
+        // node" from kb_graph_node_count_cap's own doc string). Asserting
+        // the summed body length is ~0 proves the heavy field genuinely
+        // isn't cloned, not merely that it happens to look empty.
+        const N: usize = 250;
+        const BODY_BYTES: usize = 4096;
+        let body = "z".repeat(BODY_BYTES);
+
+        let mut nodes = Vec::with_capacity(N);
+        for i in 0..N {
+            let link = if i + 1 < N {
+                format!("[[n{}]]", i + 1)
+            } else {
+                String::new()
+            };
+            let node_body = format!("{body}\n{link}");
+            nodes.push(Node::new(
+                format!("n{i}"),
+                format!("N{i}"),
+                NodeKind::Note,
+                node_body,
+            ));
+        }
+        let kb = kb_with(nodes);
+
+        let mut s = spec("n0", N, false);
+        s.include_body = false;
+        let result = kb.extract_subgraph(&s);
+
+        assert_eq!(
+            result.nodes.len(),
+            N,
+            "sanity: BFS must actually walk the full chain"
+        );
+        let total_body_bytes: usize = result.nodes.iter().map(|n| n.body.len()).sum();
+        assert!(
+            total_body_bytes < 1024,
+            "include_body: false must not clone body text at scale — got \
+             {total_body_bytes} bytes across {N} nodes that each have a \
+             {BODY_BYTES}-byte body"
+        );
     }
 }
