@@ -1486,6 +1486,63 @@ impl KnowledgeBase {
             .cloned()
     }
 
+    /// Hop-distance from `focus` to every node reachable from it (ADR-068
+    /// Phase B3 — Furnas Degree-of-Interest's `D(x, focus)` term), walking
+    /// BOTH outgoing (`Node::links()`) and incoming (`links_in`) adjacency —
+    /// i.e. undirected reachability. Deliberately does NOT gate on
+    /// `SubgraphSpec::include_backlinks` the way `extract_subgraph`'s BFS
+    /// does: that flag steers what a BFS-based EXTRACTION pulls in, whereas
+    /// "how far is this node from the user's focus" for render-time
+    /// tiering is a pure topology question that shouldn't silently change
+    /// shape depending on an unrelated extraction setting.
+    ///
+    /// `focus` itself is distance `0` (only when it's an actual node id in
+    /// this KB — an unknown `focus` returns an empty map, never panics).
+    /// Every other key present is reachable, at its shortest hop count; an
+    /// id NOT present in the returned map is unreachable from `focus`
+    /// within this KB (the caller should treat a missing entry as "no
+    /// bound" — see `Editor::graph_view_doi_distances`, the one production
+    /// caller, which maps a missing entry to `None`).
+    ///
+    /// O(V+E) — one BFS frontier expansion per hop, each node visited
+    /// exactly once (the `distances.contains_key` guard below). Callers
+    /// needing a MULTI-source distance (e.g. a diagram with several
+    /// cross-link landing points) call this once per source id and merge
+    /// via per-id minimum — kept a single-source primitive here rather than
+    /// accepting a `&[String]` itself, since every other extraction helper
+    /// in this module (`extract_subgraph`, `extract_full_corpus`) already
+    /// puts multi-id/merge concerns on the CALLER, not this crate.
+    pub fn hop_distances_from(&self, focus: &str) -> HashMap<String, usize> {
+        let mut distances = HashMap::new();
+        if !self.nodes.contains_key(focus) {
+            return distances;
+        }
+        distances.insert(focus.to_string(), 0);
+        let mut frontier = vec![focus.to_string()];
+        let mut depth = 0usize;
+        while !frontier.is_empty() {
+            let mut next_frontier = Vec::new();
+            for id in &frontier {
+                let mut neighbors: Vec<String> = Vec::new();
+                if let Some(node) = self.nodes.get(id) {
+                    neighbors.extend(node.links());
+                }
+                if let Some(sources) = self.links_in.get(id) {
+                    neighbors.extend(sources.iter().cloned());
+                }
+                for n in neighbors {
+                    if !distances.contains_key(&n) {
+                        distances.insert(n.clone(), depth + 1);
+                        next_frontier.push(n);
+                    }
+                }
+            }
+            frontier = next_frontier;
+            depth += 1;
+        }
+        distances
+    }
+
     /// Remove multiple nodes at once. Returns the removed nodes.
     pub fn remove_nodes(&mut self, node_ids: &[String]) -> Vec<Node> {
         node_ids.iter().filter_map(|id| self.remove(id)).collect()
@@ -4388,5 +4445,76 @@ mod tests {
 
         let result_full = kb.extract_full_corpus(None, &HashSet::new(), true);
         assert_eq!(result_full.nodes[0].body, big_body);
+    }
+
+    // --- hop_distances_from (ADR-068 Phase B3) ---
+
+    #[test]
+    fn hop_distances_from_focus_itself_is_zero_and_neighbors_grow_by_one_hop() {
+        // a -> b -> c, a straight chain: focus a is 0, b is 1, c is 2.
+        let kb = kb_with(vec![
+            Node::new("a", "A", NodeKind::Note, "[[b]]"),
+            Node::new("b", "B", NodeKind::Note, "[[c]]"),
+            Node::new("c", "C", NodeKind::Note, ""),
+        ]);
+        let dist = kb.hop_distances_from("a");
+        assert_eq!(dist.get("a"), Some(&0));
+        assert_eq!(dist.get("b"), Some(&1));
+        assert_eq!(dist.get("c"), Some(&2));
+    }
+
+    #[test]
+    fn hop_distances_from_walks_incoming_links_too_not_just_outgoing() {
+        // a links to b (a -> b); distance FROM b must still find a at hop 1
+        // via the incoming/backlink side -- distance is undirected
+        // reachability, unlike extract_subgraph's include_backlinks-gated
+        // BFS.
+        let kb = kb_with(vec![
+            Node::new("a", "A", NodeKind::Note, "[[b]]"),
+            Node::new("b", "B", NodeKind::Note, ""),
+        ]);
+        let dist = kb.hop_distances_from("b");
+        assert_eq!(dist.get("b"), Some(&0));
+        assert_eq!(
+            dist.get("a"),
+            Some(&1),
+            "distance must walk the incoming-link side too: {dist:?}"
+        );
+    }
+
+    #[test]
+    fn hop_distances_from_takes_the_shortest_of_multiple_paths() {
+        // a -> b -> d (2 hops) and a -> c -> nothing, but ALSO a -> d
+        // directly (1 hop) -- the direct edge must win, not the longer path
+        // discovered on the same BFS frontier.
+        let kb = kb_with(vec![
+            Node::new("a", "A", NodeKind::Note, "[[b]] [[d]]"),
+            Node::new("b", "B", NodeKind::Note, "[[d]]"),
+            Node::new("d", "D", NodeKind::Note, ""),
+        ]);
+        let dist = kb.hop_distances_from("a");
+        assert_eq!(dist.get("d"), Some(&1));
+    }
+
+    #[test]
+    fn hop_distances_from_unreachable_node_is_absent_not_panicking() {
+        let kb = kb_with(vec![
+            Node::new("a", "A", NodeKind::Note, ""),
+            Node::new("island", "Island", NodeKind::Note, ""),
+        ]);
+        let dist = kb.hop_distances_from("a");
+        assert_eq!(dist.get("a"), Some(&0));
+        assert_eq!(
+            dist.get("island"),
+            None,
+            "a node with no path to/from focus must be absent, not zero/panic: {dist:?}"
+        );
+    }
+
+    #[test]
+    fn hop_distances_from_unknown_focus_id_returns_empty_map() {
+        let kb = kb_with(vec![Node::new("a", "A", NodeKind::Note, "")]);
+        let dist = kb.hop_distances_from("does-not-exist");
+        assert!(dist.is_empty());
     }
 }
