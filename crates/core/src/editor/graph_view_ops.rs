@@ -104,7 +104,14 @@ impl Editor {
 
     /// Resolve the node id to center the graph on: an explicit `center`,
     /// else whichever KB node the (first) open `*KB*` buffer is currently
-    /// displaying, else `"index"`.
+    /// displaying, else the active project's own registered KB instance's
+    /// default node (see `resolve_project_default_center`), else `"index"`.
+    ///
+    /// #462 Part 1: the project-default step sits AFTER the open-`*KB*`-
+    /// buffer check (explicit navigation always outranks an inferred
+    /// default) and BEFORE the literal `"index"` fallback (which remains
+    /// the final safety net — e.g. no active project, or no `Project`-kind
+    /// instance registered for it).
     fn resolve_graph_center(&self, center: Option<String>) -> String {
         center
             .or_else(|| {
@@ -112,6 +119,7 @@ impl Editor {
                     .iter()
                     .find_map(|b| b.kb_view().map(|kv| kv.current.clone()))
             })
+            .or_else(|| self.resolve_project_default_center())
             .unwrap_or_else(|| "index".to_string())
     }
 
@@ -145,7 +153,23 @@ impl Editor {
             return None;
         }
         let entry = self.kb.registry.find(scope)?;
-        let kb = self.kb.instances.get(&entry.uuid)?;
+        self.default_center_within_instance(&entry.uuid)
+    }
+
+    /// The default center node WITHIN a single already-identified instance
+    /// (by uuid): its own `"index"` node if it has one, else a
+    /// `NodeKind::Index`-tagged node if it tags one that way, else its
+    /// highest-degree node (`hub_node_id` — the standard org-roam-ui/
+    /// Obsidian "land on the hub" heuristic). `None` if the uuid doesn't
+    /// resolve to a loaded instance, or the instance has no nodes at all.
+    ///
+    /// Extracted from `resolve_scoped_default_center` (#462 Part 1) so
+    /// `resolve_project_default_center` can share the exact same per-instance
+    /// fallback chain instead of duplicating it — `resolve_scoped_default_center`
+    /// is now a thin wrapper: resolve the scope token to a uuid, then delegate
+    /// here. Behavior is unchanged (see that method's own tests).
+    fn default_center_within_instance(&self, uuid: &str) -> Option<String> {
+        let kb = self.kb.instances.get(uuid)?;
         if kb.contains("index") {
             return Some("index".to_string());
         }
@@ -153,6 +177,37 @@ impl Editor {
             return Some(id.clone());
         }
         kb.hub_node_id()
+    }
+
+    /// A default center scoped to the KB instance registered for the ACTIVE
+    /// PROJECT (#462 Part 1 — issue #462, "make the graph view default to
+    /// the project-relevant KB, not primary/seeded-manual"). Mirrors
+    /// `Editor::kb_init_project`'s exact active-project-root → canonicalize
+    /// → find-matching-`Project`-kind-instance lookup (not reimplemented —
+    /// same pattern, so the two can never silently drift on what "the
+    /// project's KB instance" means), then resolves within it via
+    /// `default_center_within_instance` (the same per-instance fallback
+    /// `resolve_scoped_default_center` uses for an explicitly-scoped
+    /// instance).
+    ///
+    /// Every step is fallible and gracefully falls through to `None` —
+    /// never panics — on: no active project root, a root that fails to
+    /// canonicalize (e.g. deleted since detection), no registered `Project`-
+    /// kind instance matching it (`KbInstance::matches_project_root` already
+    /// guards `effective_kind() == Project`, so a same-path-but-different-kind
+    /// instance is correctly excluded here too), or a matched instance with
+    /// no nodes. `resolve_graph_center` falls through to `"index"` in every
+    /// such case.
+    pub(crate) fn resolve_project_default_center(&self) -> Option<String> {
+        let root = self.active_project_root()?;
+        let canonical_root = root.canonicalize().ok()?;
+        let entry = self
+            .kb
+            .registry
+            .instances
+            .iter()
+            .find(|i| i.matches_project_root(&canonical_root))?;
+        self.default_center_within_instance(&entry.uuid)
     }
 
     /// Build `GraphStyleOptions` from the current option values + theme.
@@ -1718,6 +1773,246 @@ mod tests {
     fn resolve_scoped_default_center_is_none_when_the_instance_is_empty() {
         let editor = ed_scoped_to_a_registered_instance("proj", vec![]);
         assert_eq!(editor.resolve_scoped_default_center(), None);
+    }
+
+    /// Registers a `Project`-kind `KbInstance` scoped to `canonical_root` (already
+    /// canonicalized by the caller — `tempfile::tempdir()` real dirs, mirroring
+    /// `kb_ops_search_federation_tests.rs`'s established `editor.project = Some(Project::
+    /// from_root(...))` fixture pattern) with the given nodes, WITHOUT setting
+    /// `editor.project` — callers compose that separately so multi-instance tests can
+    /// register several instances before choosing which project root is "active".
+    fn register_project_instance(
+        editor: &mut Editor,
+        instance_name: &str,
+        canonical_root: &std::path::Path,
+        kind: mae_kb::federation::KbInstanceKind,
+        nodes: Vec<mae_kb::Node>,
+    ) -> String {
+        let mut inst = mae_kb::KnowledgeBase::new();
+        for n in nodes {
+            inst.insert(n);
+        }
+        let uuid = format!("uuid-{instance_name}");
+        editor.kb.instances.insert(uuid.clone(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: uuid.clone(),
+                name: instance_name.to_string(),
+                org_dir: canonical_root.join(".mae-kb"),
+                db_path: canonical_root.join(".mae-kb.db"),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: Some(canonical_root.to_path_buf()),
+                kind,
+                priority: 0,
+                remote_hub: None,
+            });
+        uuid
+    }
+
+    #[test]
+    fn resolve_project_default_center_picks_the_matching_instance_among_several() {
+        // Non-cherry-picked multi-instance case (#462 Part 1, adversarial requirement):
+        // register TWO distinct project-scoped instances at different canonical roots,
+        // set the active project root to the SECOND one, and confirm its default center
+        // (not the first-registered instance's) is what resolves.
+        let tmp_a = tempfile::tempdir().unwrap();
+        let tmp_b = tempfile::tempdir().unwrap();
+        let root_a = tmp_a.path().canonicalize().unwrap();
+        let root_b = tmp_b.path().canonicalize().unwrap();
+
+        let mut editor = Editor::new();
+        register_project_instance(
+            &mut editor,
+            "proj-a",
+            &root_a,
+            mae_kb::federation::KbInstanceKind::Project,
+            vec![mae_kb::Node::new(
+                "index",
+                "Proj A Index",
+                mae_kb::NodeKind::Index,
+                "",
+            )],
+        );
+        register_project_instance(
+            &mut editor,
+            "proj-b",
+            &root_b,
+            mae_kb::federation::KbInstanceKind::Project,
+            vec![
+                mae_kb::Node::new("b-hub", "Proj B Hub", mae_kb::NodeKind::Note, "[[b-leaf]]"),
+                mae_kb::Node::new("b-leaf", "Proj B Leaf", mae_kb::NodeKind::Note, ""),
+            ],
+        );
+        editor.project = Some(crate::project::Project::from_root(root_b.clone()));
+
+        assert_eq!(
+            editor.resolve_project_default_center(),
+            Some("b-hub".to_string()),
+            "must resolve within proj-b (the active project's own instance), not proj-a"
+        );
+    }
+
+    #[test]
+    fn resolve_project_default_center_is_none_with_no_active_project() {
+        let editor = Editor::new();
+        assert_eq!(editor.active_project_root(), None);
+        assert_eq!(editor.resolve_project_default_center(), None);
+    }
+
+    #[test]
+    fn resolve_project_default_center_is_none_when_no_instance_matches_the_project_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let other_tmp = tempfile::tempdir().unwrap();
+        let other_root = other_tmp.path().canonicalize().unwrap();
+
+        let mut editor = Editor::new();
+        // Register an instance for a DIFFERENT root — the active project's own root has
+        // no registered instance at all.
+        register_project_instance(
+            &mut editor,
+            "unrelated-proj",
+            &other_root,
+            mae_kb::federation::KbInstanceKind::Project,
+            vec![mae_kb::Node::new(
+                "index",
+                "Unrelated Index",
+                mae_kb::NodeKind::Index,
+                "",
+            )],
+        );
+        editor.project = Some(crate::project::Project::from_root(root));
+
+        assert_eq!(editor.resolve_project_default_center(), None);
+    }
+
+    #[test]
+    fn resolve_project_default_center_rejects_a_non_project_kind_instance_at_the_same_path() {
+        // Adversarial (#462 Part 1): a Manual/RemoteHub-kind instance whose `org_dir`
+        // (or, here, whose registered `project_root` field) happens to equal the active
+        // project's own root must NOT be matched — only a genuine `Project`-kind instance
+        // should ever resolve here. Confirms `matches_project_root`'s `effective_kind() ==
+        // Project` guard actually holds through this new call path, not just in isolation.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+
+        let mut editor = Editor::new();
+        register_project_instance(
+            &mut editor,
+            "coincidental-manual",
+            &root,
+            mae_kb::federation::KbInstanceKind::UserRegistered,
+            vec![mae_kb::Node::new(
+                "index",
+                "Coincidental Index",
+                mae_kb::NodeKind::Index,
+                "",
+            )],
+        );
+        editor.project = Some(crate::project::Project::from_root(root));
+
+        assert_eq!(
+            editor.resolve_project_default_center(),
+            None,
+            "a non-Project-kind instance must never be matched, even at the same root"
+        );
+    }
+
+    #[test]
+    fn resolve_project_default_center_is_none_when_the_matched_instance_is_empty() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+
+        let mut editor = Editor::new();
+        register_project_instance(
+            &mut editor,
+            "empty-proj",
+            &root,
+            mae_kb::federation::KbInstanceKind::Project,
+            vec![],
+        );
+        editor.project = Some(crate::project::Project::from_root(root));
+
+        assert_eq!(editor.resolve_project_default_center(), None);
+    }
+
+    #[test]
+    fn resolve_graph_center_falls_through_to_index_with_no_project_match() {
+        // Same ordering guarantee `open_defaults_center_to_index_when_no_kb_view` proves for
+        // a plain Editor::new() (no project at all) — re-verified here with an active
+        // project root set but genuinely unmatched, to prove the new project-default step
+        // doesn't change the "index" fallback's applicability.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let mut editor = Editor::new();
+        editor.project = Some(crate::project::Project::from_root(root));
+
+        editor.kb_graph_view_open(None, None);
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        assert_eq!(
+            editor.buffers[idx]
+                .graph_view()
+                .unwrap()
+                .center_node
+                .as_deref(),
+            Some("index")
+        );
+    }
+
+    #[test]
+    fn resolve_graph_center_prefers_an_already_open_kb_view_over_the_project_default() {
+        // Regression guard for the chosen ordering (#462 Part 1): an already-open `*KB*`
+        // buffer showing a DIFFERENT node, with a matching project instance ALSO
+        // registered, must still have the open buffer's node win — explicit navigation
+        // outranks the new inferred project default.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        register_project_instance(
+            &mut editor,
+            "active-proj",
+            &root,
+            mae_kb::federation::KbInstanceKind::Project,
+            vec![mae_kb::Node::new(
+                "proj-index",
+                "Proj Index",
+                mae_kb::NodeKind::Index,
+                "",
+            )],
+        );
+        editor.project = Some(crate::project::Project::from_root(root));
+        editor.buffers.push(Buffer::new_kb("concept:buffer"));
+
+        editor.kb_graph_view_open(None, None);
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        assert_eq!(
+            editor.buffers[idx]
+                .graph_view()
+                .unwrap()
+                .center_node
+                .as_deref(),
+            Some("concept:buffer"),
+            "an already-open KB buffer's node must still outrank the project default"
+        );
     }
 
     #[test]

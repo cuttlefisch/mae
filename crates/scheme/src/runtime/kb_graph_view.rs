@@ -27,7 +27,7 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
     let s = shared.clone();
     vm.register_fn(
         "kb-graph-view-open",
-        "Open the native KB graph view, centered on ID (default: whichever KB node the *KB* buffer is currently showing, else \"index\"), at DEPTH hops (default: kb_graph_default_depth option). Reuses the existing graph window if already open.",
+        "Open the native KB graph view, centered on ID (default: whichever KB node the *KB* buffer is currently showing, else the active project's own registered KB instance's default node if one is registered for it, else \"index\"), at DEPTH hops (default: kb_graph_default_depth option). Reuses the existing graph window if already open.",
         Arity::Variadic(0),
         move |args: &[Value]| {
             let center = if !args.is_empty() {
