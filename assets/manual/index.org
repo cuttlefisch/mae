@@ -13,6 +13,7 @@ Welcome to MAE's built-in help. This knowledge base is the same data surface the
 - [[concept:command][Command]] -- the shared API between human, Scheme, and AI
 - [[concept:ai-as-peer][The AI as Peer Actor]] -- the fundamental design stance
 - [[concept:knowledge-base][Knowledge Base]] -- this page, and why it exists
+- [[concept:kb-graph-view][Native KB Graph View]] -- chord/force-directed ego-network panel, single- and multi-KB modes
 - [[concept:terminal][Embedded Terminal]] -- full terminal emulator inside MAE + MCP bridge
 - [[concept:hooks][Hooks]] -- Scheme extension points for editor events
 - [[concept:options][Editor Options]] -- configuring MAE from Scheme

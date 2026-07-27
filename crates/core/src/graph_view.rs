@@ -451,6 +451,32 @@ impl GraphView {
     /// `(kb-graph-view-state)` Scheme primitive (hand-converted to a
     /// `Value`, snapshot-injected — see `crates/scheme/src/runtime/
     /// state_sync_inject_kb.rs`) — parity at the data-shape level.
+    ///
+    /// @ai-caution: [api-stability] `nodes`/`edges` below are emitted in
+    /// `self.scene.nodes`/`self.scene.edges` order, UNMODIFIED (map, not
+    /// sort/filter/regroup). In `GraphViewMode::Multi`, `self.scene.nodes`
+    /// itself was assembled by `mae_canvas::kb_graph::
+    /// build_multi_kb_chord_positions` as CONTIGUOUS per-diagram blocks in
+    /// `self.diagram_labels`' order (diagram 0's `node_count` nodes, then
+    /// diagram 1's, ...) — see that field's doc comment and function's
+    /// doc comment for the construction-side half of this contract. This
+    /// method is the OTHER half: it is a documented, tested contract
+    /// (`nodes_and_edges_stay_in_contiguous_per_diagram_blocks_in_multi_mode`
+    /// below) that this pass-through must never reorder, sort, or
+    /// otherwise regroup `nodes`/`edges` relative to `scene`'s own order —
+    /// `render_graph_view_as_text`'s TUI grouping and any external
+    /// consumer of `(kb-graph-view-state)` are entitled to reconstruct
+    /// "which diagram is node N in" purely positionally, by walking
+    /// `diagrams`' `node_count`s cumulatively, WITHOUT a per-node instance
+    /// tag. If a future change needs to reorder/filter nodes here (e.g. a
+    /// density/LOD pass, or residency filtering moving into this path —
+    /// see the tracked follow-up on Scheme primitives bypassing AI-residency
+    /// filtering), it MUST either preserve this contiguity (recomputing
+    /// `diagram_labels[i].node_count` to match surviving nodes, exactly as
+    /// `execute_kb_graph_view_state`'s AI-residency filter already does for
+    /// its own separate JSON response — see `crates/ai/src/tool_impls/
+    /// kb.rs`) or add an explicit per-node/per-edge instance tag instead of
+    /// silently breaking positional inference.
     pub fn describe_state(&self) -> GraphViewState {
         let node_id = |i: usize| self.scene.nodes.get(i).map(|n| n.id.clone());
         GraphViewState {
@@ -4259,5 +4285,95 @@ mod tests {
         let state = gv.describe_state();
 
         assert!(state.edges.is_empty());
+    }
+
+    #[test]
+    fn nodes_and_edges_stay_in_contiguous_per_diagram_blocks_in_multi_mode() {
+        // #462 PR4b (docs/API-parity pass): `(kb-graph-view-state)` /
+        // `GraphViewState.nodes` document (see `describe_state`'s
+        // `@ai-caution: [api-stability]` comment and `GraphViewState.
+        // diagrams`'s doc comment) that a consumer can determine which
+        // composed KB instance a node/edge belongs to PURELY positionally
+        // — by walking `diagrams`' `node_count`s cumulatively — rather than
+        // needing a per-node/per-edge instance tag. This test exercises the
+        // REAL construction path end-to-end (`mae_canvas::kb_graph::
+        // build_multi_kb_chord_positions`, not a hand-built already-sorted
+        // fixture) with THREE diagrams of differing sizes (2/3/1 nodes —
+        // varied, not a cherry-picked uniform size, per CLAUDE.md #14), so a
+        // future change that re-sorts/regroups `scene.nodes` (e.g. a
+        // density/LOD pass) would fail this test loudly instead of silently
+        // breaking every consumer relying on the documented contract.
+        use mae_canvas::kb_graph::{
+            build_multi_kb_chord_positions, KbInstanceSubgraph, KbNodeInfo,
+        };
+
+        let subgraph = |instance: Option<&str>, name: &str, ids: &[&str]| KbInstanceSubgraph {
+            instance: instance.map(str::to_string),
+            name: name.to_string(),
+            nodes: ids
+                .iter()
+                .map(|id| KbNodeInfo {
+                    id: id.to_string(),
+                    title: id.to_string(),
+                    kind: NodeKind::Concept,
+                    is_seed: false,
+                })
+                .collect(),
+            links: Vec::new(),
+            boundary_links: Vec::new(),
+            starter_ids: Vec::new(),
+        };
+
+        let diagrams = vec![
+            subgraph(None, "Primary", &["seed:a", "seed:b"]),
+            subgraph(
+                Some("uuid-alpha"),
+                "Alpha",
+                &["alpha:a", "alpha:b", "alpha:c"],
+            ),
+            subgraph(Some("uuid-beta"), "Beta", &["beta:a"]),
+        ];
+        let (scene, labels, hidden) = build_multi_kb_chord_positions(&diagrams, &[], 1.0);
+        assert_eq!(hidden, 0);
+        assert_eq!(scene.nodes.len(), 6, "2 + 3 + 1 nodes across 3 diagrams");
+
+        let mut gv = GraphView::new();
+        gv.mode = GraphViewMode::Multi;
+        gv.scene = scene;
+        gv.diagram_labels = labels;
+
+        let state = gv.describe_state();
+        assert_eq!(state.mode, "multi");
+        assert_eq!(state.diagrams.len(), 3);
+        assert_eq!(state.nodes.len(), 6);
+
+        // Walk `diagrams`' node_counts cumulatively — exactly the recipe
+        // the docstring/`@ai-caution` comment promise a consumer can use —
+        // and confirm each block's node ids are precisely that diagram's
+        // own ids, in the diagram's own order, with no interleaving.
+        let expected_blocks: [&[&str]; 3] = [
+            &["seed:a", "seed:b"],
+            &["alpha:a", "alpha:b", "alpha:c"],
+            &["beta:a"],
+        ];
+        let mut offset = 0usize;
+        for (diagram, expected_ids) in state.diagrams.iter().zip(expected_blocks.iter()) {
+            assert_eq!(diagram.node_count, expected_ids.len());
+            let block: Vec<&str> = state.nodes[offset..offset + diagram.node_count]
+                .iter()
+                .map(|n| n.id.as_str())
+                .collect();
+            assert_eq!(
+                &block, expected_ids,
+                "node block for diagram {:?} must be contiguous and match its own ids exactly",
+                diagram.name
+            );
+            offset += diagram.node_count;
+        }
+        assert_eq!(
+            offset,
+            state.nodes.len(),
+            "blocks must cover every node exactly once"
+        );
     }
 }

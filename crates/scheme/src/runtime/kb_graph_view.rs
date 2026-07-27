@@ -190,6 +190,13 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
     //   edges: list of (source-id target-id boundary? label-or-#f)
     //   mode: "single" | "multi" (#462 PR4)
     //   diagrams: list of (instance-or-#f name node-count)
+    // In "multi" mode, nodes/edges are laid out in CONTIGUOUS per-diagram
+    // blocks matching diagrams' order (diagram 0's node-count nodes, then
+    // diagram 1's, ...) — no separate per-node/per-edge instance tag; a
+    // consumer walks diagrams' node-counts cumulatively instead. See
+    // `GraphView::describe_state`'s `@ai-caution: [api-stability]` comment
+    // (`crates/core/src/graph_view.rs`) for the construction-side contract
+    // this relies on.
     // Read-only, so — unlike every other primitive in this file — this
     // does NOT queue a GraphViewIntent; it reads the SharedState snapshot
     // `inject_graph_view_state` (`state_sync_inject_kb.rs`) populates fresh
@@ -200,7 +207,7 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
     let s = shared.clone();
     vm.register_fn(
         "kb-graph-view-state",
-        "Structured introspection snapshot of the open native KB graph view: which node is hovered, which is selected, every node currently rendered (the ego-network), and every edge/link shown between them. Returns #f if no graph view is open. Returns (center depth kb-instance follow-current? selected-node hovered-node nodes edges mode hidden-cross-instance-link-count diagrams hidden-related-instance-count) — nodes: list of (id title kind x y pinned? selected? hovered?); edges: list of (source-id target-id boundary? label-or-#f); mode: \"single\"|\"multi\" (#462); diagrams: list of (instance-or-#f name node-count), one entry per composed KB instance; hidden-related-instance-count: how many candidate related instances kb_graph_multi_kb_max_related_instances capped away.",
+        "Structured introspection snapshot of the open native KB graph view: which node is hovered, which is selected, every node currently rendered (the ego-network), and every edge/link shown between them. Returns #f if no graph view is open. Returns (center depth kb-instance follow-current? selected-node hovered-node nodes edges mode hidden-cross-instance-link-count diagrams hidden-related-instance-count) — nodes: list of (id title kind x y pinned? selected? hovered?); edges: list of (source-id target-id boundary? label-or-#f); mode: \"single\"|\"multi\" (#462); diagrams: list of (instance-or-#f name node-count), one entry per composed KB instance; hidden-related-instance-count: how many candidate related instances kb_graph_multi_kb_max_related_instances capped away. In \"multi\" mode, nodes/edges appear in CONTIGUOUS per-diagram blocks matching diagrams' order — diagram 0's node-count nodes come first, then diagram 1's, etc. — so a consumer can determine a node's/edge's owning KB instance purely positionally, by walking diagrams' node-counts cumulatively, with no separate per-node/per-edge instance tag needed.",
         Arity::Fixed(0),
         move |_args: &[Value]| {
             let state = s.lock();

@@ -75,7 +75,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         // --- Native KB graph view (Part C Phase 1) ---
         ToolDefBuilder::new(
             "kb_graph_view_open",
-            "Open the native KB graph view — a force-directed local ego-network panel around a KB node, distinct from kb_graph (which just answers a raw BFS query). Centers on `id` (default: whichever KB node the *KB* buffer is currently showing, else \"index\") at `depth` hops (default: the kb_graph_default_depth option). Reuses the existing graph window if already open.",
+            "Open the native KB graph view — a force-directed local ego-network panel around a KB node, distinct from kb_graph (which just answers a raw BFS query). Centers on `id` (default: whichever KB node the *KB* buffer is currently showing, else the active project's own registered KB instance's default node if one is registered for it, else \"index\") at `depth` hops (default: the kb_graph_default_depth option). Composes one KB instance's subgraph in \"single\" mode (default) or the seed plus related instances — scoped by kb_graph_multi_kb_scope, capped by kb_graph_multi_kb_max_related_instances — as a grid of chord diagrams in \"multi\" mode (kb_graph_view_mode option). Reuses the existing graph window if already open.",
         )
         .prop("id", "string", "KB node id to center the graph on")
         .prop("depth", "integer", "Hop radius (default: kb_graph_default_depth option)")
@@ -152,7 +152,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .build(),
         ToolDefBuilder::new(
             "kb_graph_view_state",
-            "Structured introspection snapshot of the open native KB graph view: which node is hovered, which is selected, every node currently rendered (the ego-network), and every edge/link shown between them. Returns null if no graph view is open. Same data both the human's visual rendering and the (kb-graph-view-state) Scheme primitive read from — use this to reason about or narrate what the graph currently looks like.",
+            "Structured introspection snapshot of the open native KB graph view: which node is hovered, which is selected, every node currently rendered (the ego-network), and every edge/link shown between them. Returns null if no graph view is open. Reports whether the view is in \"single\" (one KB instance) or \"multi\" (seed plus related instances) mode, with a per-instance diagram breakdown in the latter. Same data both the human's visual rendering and the (kb-graph-view-state) Scheme primitive read from — use this to reason about or narrate what the graph currently looks like.",
         )
         .permission(PermissionTier::ReadOnly)
         .build(),

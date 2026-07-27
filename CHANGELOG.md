@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+
+### Bug Fixes
+
+- *(graph-view)* Audit fixes for stale layout race, label-cache, dedup, dead code, self-links (#462 PR1) ([b12f779](https://github.com/cuttlefisch/mae/commit/b12f779b9cf7dcbf2b6af20318e41c68c6961ab8))
+- *(kb)* Opt-in lightweight subgraph extraction (#462 PR3) ([ae936a6](https://github.com/cuttlefisch/mae/commit/ae936a6afbd6f0cd440ce886404562ca1d858966))
+- *(kb)* Recompute per-diagram node_count after residency filter (#462 access-model review) ([aab54dd](https://github.com/cuttlefisch/mae/commit/aab54dd6e168ddadaf62370aad3bb46741c26432))
+
+### Features
+
+- *(graph-view)* Default center to active project's KB instance (#462 Part 1 / PR2) ([afc7c3c](https://github.com/cuttlefisch/mae/commit/afc7c3cfbc2e3fa008a4873ea72146c4494e1bab))
+- *(kb)* Cross-instance link detection for multi-KB graph view (#462 PR4 Part 1) ([f4ec9a3](https://github.com/cuttlefisch/mae/commit/f4ec9a3ee60a25877286e119e023b4d7ce1d706f))
+- *(kb)* Multi-KB chord graph view composition (#462 PR4 Part 2/3) ([783c4e5](https://github.com/cuttlefisch/mae/commit/783c4e5be30f3566151c7690542831618bdcac63))
+- *(kb)* TUI parity for multi-KB graph view (#462 PR4 Part 4) ([4e31524](https://github.com/cuttlefisch/mae/commit/4e3152410ec01c72a5da2d6e35ca3713247d5bef))
+
 ## [0.14.56] - 2026-07-27
 
 ### Bug Fixes
