@@ -7,7 +7,7 @@ use yrs::updates::decoder::Decode;
 use yrs::{Map, MapPrelim, MapRef, Out, ReadTxn, Transact};
 
 use super::*;
-use crate::membership::{MembershipAction, MembershipOp, SignedMembershipOp};
+use crate::membership::{MembershipAction, MembershipOp, ReplicationPolicy, SignedMembershipOp};
 
 impl KbCollectionDoc {
     // --- ADR-026 signed membership op-log (the v3 source of truth) ---
@@ -75,6 +75,14 @@ impl KbCollectionDoc {
                     .filter(|s| !s.is_empty())
                     .and_then(|s| hex::decode(s).ok())
                     .and_then(|b| b.try_into().ok()),
+                // ADR-067: absent or unparseable -> Full (the safe default; an attacker
+                // corrupting/stripping this field can only ever widen it back to Full,
+                // which then fails the op's v5 signature check and gets dropped by
+                // `verify_signed` -- it can never be used to smuggle a QueryOnly
+                // restriction that the signature doesn't actually cover).
+                replication: get(OP_REPLICATION_KEY)
+                    .and_then(|s| ReplicationPolicy::parse(&s))
+                    .unwrap_or_default(),
             },
             sig,
             author_pubkey: pubkey,
@@ -179,6 +187,10 @@ impl KbCollectionDoc {
             new_wrap_pubkey: None,
             // ADR-040 §Recovery: the caller sets this on a RegisterRecoveryKey (then signs).
             recovery_pubkey: None,
+            // ADR-067: the caller sets this on an Admit/SetRole (then signs) when
+            // restricting a member to QueryOnly; every other flow leaves it at the
+            // default Full (v1/v2/v3/v4, unchanged).
+            replication: ReplicationPolicy::default(),
         }
     }
 
@@ -245,6 +257,14 @@ impl KbCollectionDoc {
         // ADR-040 §Recovery: only written for a RegisterRecoveryKey (absent ⇒ unchanged).
         if let Some(rpk) = &op.recovery_pubkey {
             rec.insert(&mut txn, OP_RECOVERY_PUBKEY_KEY, hex::encode(rpk));
+        }
+        // ADR-067: only written when QueryOnly (absent ⇒ decodes back to Full, unchanged).
+        if op.replication == ReplicationPolicy::QueryOnly {
+            rec.insert(
+                &mut txn,
+                OP_REPLICATION_KEY,
+                ReplicationPolicy::QueryOnly.as_str(),
+            );
         }
         txn.encode_update_v1()
     }

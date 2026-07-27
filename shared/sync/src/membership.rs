@@ -73,6 +73,36 @@ pub enum MembershipAction {
     RegisterRecoveryKey,
 }
 
+/// ADR-067: whether a member may take a durable, offline, full local replica
+/// (`Full`, the status-quo default) or may only read this KB live over the
+/// network, never replicating a local copy (`QueryOnly`). An access-control
+/// axis, orthogonal to [`Role`] — a `QueryOnly` member can still hold any
+/// role up to what they were granted; this governs *replication*, not
+/// *capability*. Assigned per-subject on `Admit`/`SetRole`, the same way
+/// `role` itself is assigned (not a KB-wide governance toggle).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ReplicationPolicy {
+    #[default]
+    Full,
+    QueryOnly,
+}
+
+impl ReplicationPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ReplicationPolicy::Full => "full",
+            ReplicationPolicy::QueryOnly => "query_only",
+        }
+    }
+    pub fn parse(s: &str) -> Option<ReplicationPolicy> {
+        match s {
+            "full" => Some(ReplicationPolicy::Full),
+            "query_only" => Some(ReplicationPolicy::QueryOnly),
+            _ => None,
+        }
+    }
+}
+
 impl MembershipAction {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -156,6 +186,13 @@ pub struct MembershipOp {
     /// key is part of the signed bytes). `None` everywhere else keeps `v1`/`v2`/`v3`
     /// byte-identical.
     pub recovery_pubkey: Option<[u8; 32]>,
+    /// ADR-067: replication restriction assigned to `subject`, on `Admit`/`SetRole`. Plain
+    /// (not `Option`) with `#[default] Full` — same shape as `can_invite: bool`, meaningful
+    /// only for the actions that assign it, harmlessly `Full` everywhere else. Present in the
+    /// signed bytes (`maememb/v5`) only when `QueryOnly`, so every pre-ADR-067 op stays
+    /// byte-identical `v1`/`v2`/`v3`/`v4` and every existing signature keeps verifying
+    /// unmodified — a strictly additive schema change.
+    pub replication: ReplicationPolicy,
 }
 
 impl MembershipOp {
@@ -173,11 +210,21 @@ impl MembershipOp {
         // both new keys; a `wrapped_key`-bearing op (ADR-037) is `v2` and appends the wrapped
         // key; an op without either emits BYTE-IDENTICAL `v1` bytes, so every signature
         // created before encryption/rotation still verifies. (Rebind never carries a
-        // wrapped_key, and only Rebind carries the new keys, so the three are disjoint.)
+        // wrapped_key, and only Rebind carries the new keys, so v1/v2/v3/v4 are disjoint.)
+        //
+        // v5 (ADR-067, `replication == QueryOnly`) is NOT disjoint from v2 the same way --
+        // an Admit onto an E2E-encrypted KB can carry BOTH a `wrapped_key` (so the restricted
+        // member can still decrypt what they're allowed to read live, via Phase C's
+        // `kb/query.my_wrapped_key`) AND `replication: QueryOnly` at once. v5 is therefore a
+        // strict SUPERSET of v2's field (checked before v2 below, and its field-appending
+        // arm below emits the wrapped_key bytes too, not just the replication marker) --
+        // never a sibling version like v3/v4 are.
         let version = if self.action == MembershipAction::Rebind {
             "maememb/v3"
         } else if self.action == MembershipAction::RegisterRecoveryKey {
             "maememb/v4"
+        } else if self.replication == ReplicationPolicy::QueryOnly {
+            "maememb/v5"
         } else if self.wrapped_key.is_some() {
             "maememb/v2"
         } else {
@@ -214,6 +261,23 @@ impl MembershipOp {
                 &mut b,
                 &self.recovery_pubkey.map(hex::encode).unwrap_or_default(),
             );
+        } else if self.replication == ReplicationPolicy::QueryOnly {
+            // v5: a strict superset of v2's field -- the wrapped_key (if any; empty string
+            // if not, matching v2's own encoding of an absent key) is part of the signed
+            // bytes FIRST, in the same position v2 would put it, followed by the
+            // replication marker. This is what lets a QueryOnly-restricted Admit on an
+            // E2E-encrypted KB still carry a real wrapped_key that's bound into the
+            // signature -- an attacker flipping either field without a fresh owner
+            // signature is caught the same way a plain v2 op's wrapped_key already is.
+            field(
+                &mut b,
+                &self
+                    .wrapped_key
+                    .as_ref()
+                    .map(hex::encode)
+                    .unwrap_or_default(),
+            );
+            field(&mut b, self.replication.as_str());
         } else if let Some(wk) = &self.wrapped_key {
             field(&mut b, &hex::encode(wk));
         }
@@ -304,6 +368,14 @@ pub struct ValidMember {
     pub invited_by: String,
     /// ADR-023 authorization epoch assigned by the latest authorizing op.
     pub epoch: u64,
+    /// ADR-067: current replication restriction, overlaid by causally-later
+    /// `SetRole` ops exactly like `role`/`epoch` are (see `build_members`) --
+    /// a `SetRole` for an unrelated reason (e.g. a plain role promotion)
+    /// must still carry the subject's intended replication value explicitly,
+    /// the same way it must already carry the intended role: this field has
+    /// no independent "unless specified, preserve the old value" behavior,
+    /// matching how `role` itself works today.
+    pub replication: ReplicationPolicy,
 }
 
 /// What happens to a removed inviter's downstream members (ADR-026 §A3 cascade).
@@ -1108,6 +1180,7 @@ fn build_members(
             can_invite: is_genesis || op.can_invite,
             invited_by: op.author.clone(),
             epoch: op.epoch,
+            replication: op.replication,
         };
         // Overlay causally-later valid SetRoles (causal order ⇒ higher hash last).
         for sh in order {
@@ -1122,6 +1195,13 @@ fn build_members(
                 if let Some(nr) = s.role {
                     entry.role = nr;
                     entry.epoch = s.epoch;
+                    // ADR-067: replication is overlaid unconditionally alongside role on
+                    // every valid, causally-later SetRole -- same "latest op wins"
+                    // semantics as role/epoch, not an independent "preserve unless
+                    // mentioned" field. A caller constructing a SetRole for an unrelated
+                    // reason must carry the subject's intended replication value
+                    // explicitly, exactly as it must already carry the intended role.
+                    entry.replication = s.replication;
                 }
             }
         }
@@ -1254,6 +1334,7 @@ mod tests {
             new_pubkey: None,
             new_wrap_pubkey: None,
             recovery_pubkey: None,
+            replication: ReplicationPolicy::Full,
         }
     }
 
@@ -1427,6 +1508,7 @@ mod tests {
             new_pubkey: None,
             new_wrap_pubkey: None,
             recovery_pubkey: None,
+            replication: ReplicationPolicy::Full,
         };
         let sig = op.sign(&author.secret);
         SignedMembershipOp {
@@ -1458,6 +1540,7 @@ mod tests {
             new_pubkey: None,
             new_wrap_pubkey: None,
             recovery_pubkey: None,
+            replication: ReplicationPolicy::Full,
         };
         let sig = op.sign(&author.secret);
         SignedMembershipOp {
@@ -1465,6 +1548,203 @@ mod tests {
             sig,
             author_pubkey: author.pubkey,
         }
+    }
+
+    /// Build + sign an Admit/SetRole carrying ADR-067's replication policy (a v5 op
+    /// when `QueryOnly`), mirroring `make_wrapped`'s pattern of building the full
+    /// literal with the field set BEFORE signing -- mutating `.replication` on an
+    /// already-signed op would just break its own signature, not exercise the
+    /// causal-order overlay this is meant to test.
+    fn make_with_replication(
+        author: &Id,
+        action: MembershipAction,
+        subject: &str,
+        role: Option<Role>,
+        replication: ReplicationPolicy,
+        prev: &str,
+    ) -> SignedMembershipOp {
+        let op = MembershipOp {
+            kb_id: "KB".into(),
+            action,
+            subject: subject.into(),
+            role,
+            can_invite: false,
+            author: author.fp.clone(),
+            issued_at: 1,
+            expires_at: None,
+            epoch: 0,
+            prev_hash: prev.into(),
+            wrapped_key: None,
+            new_pubkey: None,
+            new_wrap_pubkey: None,
+            recovery_pubkey: None,
+            replication,
+        };
+        let sig = op.sign(&author.secret);
+        SignedMembershipOp {
+            op,
+            sig,
+            author_pubkey: author.pubkey,
+        }
+    }
+
+    #[test]
+    fn adr_067_full_replication_op_stays_v1_byte_identical() {
+        // Explicit ADR-067-labeled backward-compat guard, distinct from the
+        // pre-existing ADR-037 v1/v2 test below: a `Full`-replication op (the
+        // default -- every op signed before this ADR landed) must still emit
+        // BYTE-IDENTICAL v1 bytes and verify under its original signature.
+        let owner = id(1);
+        let m = id(2);
+        let op = make_with_replication(
+            &owner,
+            MembershipAction::Admit,
+            &m.fp,
+            Some(Role::Viewer),
+            ReplicationPolicy::Full,
+            "",
+        );
+        assert!(
+            op.op.canonical_bytes().starts_with(b"maememb/v1\0"),
+            "Full replication (the default) must not perturb the v1 encoding"
+        );
+        assert!(
+            op.verify_signed(),
+            "a Full-replication op verifies normally"
+        );
+    }
+
+    #[test]
+    fn adr_067_forged_replication_downgrade_without_owner_signature_is_rejected() {
+        // The exact adversarial case ADR-067 Phase A's Verification names: an op
+        // flipping a member from QueryOnly back to Full WITHOUT the owner's
+        // signature must be rejected -- an attacker (including a compromised or
+        // malicious relay) cannot restore their own replication rights by
+        // tampering with an already-signed op.
+        let owner = id(1);
+        let m = id(2);
+        let restricted = make_with_replication(
+            &owner,
+            MembershipAction::SetRole,
+            &m.fp,
+            Some(Role::Viewer),
+            ReplicationPolicy::QueryOnly,
+            "",
+        );
+        assert!(
+            restricted.op.canonical_bytes().starts_with(b"maememb/v5\0"),
+            "QueryOnly ⇒ v5"
+        );
+        assert!(
+            restricted.verify_signed(),
+            "a genuinely owner-signed v5 op verifies"
+        );
+
+        let mut forged = restricted.clone();
+        forged.op.replication = ReplicationPolicy::Full;
+        assert!(
+            !forged.verify_signed(),
+            "flipping QueryOnly back to Full without a fresh owner signature must fail verification"
+        );
+    }
+
+    #[test]
+    fn adr_067_replayed_stale_full_admit_after_query_only_setrole_does_not_win() {
+        // ADR-067 Phase A's replay-resistance case, constructed as a real 3-op DAG
+        // (not a hand-picked 2-op case that could pass by only exercising the
+        // common path): Admit(Full) -> SetRole(QueryOnly) -> the SAME original
+        // Admit(Full) op re-appended to the INPUT ARRAY after the SetRole. Its own
+        // prev_hash still points to genesis (its true causal position, fixed at
+        // signing time and unforgeable without the owner's key) -- proving
+        // `derive_valid_members` follows the causal (prev_hash) DAG, not input
+        // array order, so a malicious relay re-sending an old, validly-signed op
+        // later in a message stream cannot resurrect its old state.
+        let owner = id(1);
+        let m = id(2);
+        let g = genesis(&owner);
+        let admit = make(
+            &owner,
+            MembershipAction::Admit,
+            &m.fp,
+            Some(Role::Viewer),
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        let set_role = make_with_replication(
+            &owner,
+            MembershipAction::SetRole,
+            &m.fp,
+            Some(Role::Viewer),
+            ReplicationPolicy::QueryOnly,
+            &admit.chain_hash(),
+        );
+        let ops = vec![g, admit.clone(), set_role, admit];
+        let members = derive_valid_members(&ops, &owner.pubkey, 100);
+        assert_eq!(
+            members.get(&m.fp).map(|mem| mem.replication),
+            Some(ReplicationPolicy::QueryOnly),
+            "the replayed stale Full admit (re-appended after the SetRole in the input \
+             array, but still causally BEFORE it via prev_hash) must not win"
+        );
+    }
+
+    #[test]
+    fn adr_067_query_only_admit_can_still_carry_a_wrapped_key_bound_into_v5() {
+        // v5 is NOT disjoint from v2 the way v3/v4 are: an Admit onto an
+        // E2E-encrypted KB can carry BOTH a wrapped_key AND replication:QueryOnly
+        // at once, so the restricted member can still decrypt what they're
+        // allowed to read live (the future kb/query.my_wrapped_key). Both fields
+        // must be part of the v5 signed bytes -- tampering with EITHER
+        // independently must break verification, not just one of them.
+        let owner = id(1);
+        let m = id(2);
+        let op = MembershipOp {
+            kb_id: "KB".into(),
+            action: MembershipAction::Admit,
+            subject: m.fp.clone(),
+            role: Some(Role::Viewer),
+            can_invite: false,
+            author: owner.fp.clone(),
+            issued_at: 1,
+            expires_at: None,
+            epoch: 0,
+            prev_hash: "".into(),
+            wrapped_key: Some(vec![1, 2, 3, 4]),
+            new_pubkey: None,
+            new_wrap_pubkey: None,
+            recovery_pubkey: None,
+            replication: ReplicationPolicy::QueryOnly,
+        };
+        let sig = op.sign(&owner.secret);
+        let signed = SignedMembershipOp {
+            op,
+            sig,
+            author_pubkey: owner.pubkey,
+        };
+        assert!(
+            signed.op.canonical_bytes().starts_with(b"maememb/v5\0"),
+            "wrapped_key + QueryOnly together ⇒ v5 (not v2)"
+        );
+        assert!(
+            signed.verify_signed(),
+            "a genuinely owner-signed v5 op with both fields verifies"
+        );
+
+        let mut tampered_key = signed.clone();
+        tampered_key.op.wrapped_key = Some(vec![9, 9, 9, 9]);
+        assert!(
+            !tampered_key.verify_signed(),
+            "tampering the wrapped key on a v5 op must still break the signature"
+        );
+
+        let mut tampered_policy = signed.clone();
+        tampered_policy.op.replication = ReplicationPolicy::Full;
+        assert!(
+            !tampered_policy.verify_signed(),
+            "tampering the replication policy on a v5 op must break the signature, \
+             even though the wrapped_key field is untouched"
+        );
     }
 
     #[test]
@@ -2914,6 +3194,7 @@ mod tests {
             new_pubkey: Some(new.pubkey),
             new_wrap_pubkey: Some(new.wrap_pub()),
             recovery_pubkey: None,
+            replication: ReplicationPolicy::Full,
         };
         let sig = op.sign(&old.secret);
         SignedMembershipOp {
@@ -3149,6 +3430,7 @@ mod tests {
             new_pubkey: Some(owner.pubkey),
             new_wrap_pubkey: Some(owner.wrap_pub()),
             recovery_pubkey: None,
+            replication: ReplicationPolicy::Full,
         };
         let sig = op.sign(&bob.secret);
         let attack = SignedMembershipOp {
@@ -3202,6 +3484,7 @@ mod tests {
             new_pubkey: Some(actual.pubkey), // mismatched: fp(actual) != claimed.fp
             new_wrap_pubkey: Some(actual.wrap_pub()),
             recovery_pubkey: None,
+            replication: ReplicationPolicy::Full,
         };
         let sig = op.sign(&bob.secret);
         let bad = SignedMembershipOp {

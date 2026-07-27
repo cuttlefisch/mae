@@ -194,7 +194,43 @@ order overlay — constructed as a real 3-op DAG (`Admit(Full)` → `SetRole(Que
 replayed stale `Admit(Full)`), asserting the final derived state is `QueryOnly`, not a
 hand-picked 2-op case that could pass by only exercising the common path.
 
-### Phase B — `kb_access` Join/Read split + `kb_join` enforcement
+## Implementation note (Phase A, principle #15)
+
+`ReplicationPolicy` (`Full`/`QueryOnly`, `#[default] Full`) added to `shared/sync/src/
+membership.rs`'s `MembershipOp` as a plain field (not `Option`) — the same shape as
+`can_invite: bool`, meaningful only on `Admit`/`SetRole`, harmlessly `Full` everywhere else.
+Threaded through `ValidMember` and `build_members`'s existing causal-order "latest op wins"
+overlay with the exact same semantics as `role`/`epoch`: a `SetRole` for an unrelated reason
+must still carry the subject's intended replication value explicitly (no independent
+"preserve unless mentioned" behavior — matches how `role` already works). `collection_oplog.rs`'s
+encode/decode threads the field through storage (`OP_REPLICATION_KEY`, new const in `kb/mod.rs`);
+`build_membership_op`'s constructor defaults it to `Full`, so all ~40 existing call sites across
+the daemon/editor needed zero changes.
+
+**A real design subtlety resolved during implementation, not glossed over**: the Decision text's
+"mirroring the existing disjoint-field version precedent" framing undersells one real case —
+`wrapped_key` (v2) and `replication` (v5) are **not** disjoint the way v3/v4 are. An `Admit` onto
+an E2E-encrypted KB can carry BOTH a `wrapped_key` (so a `QueryOnly` member can still decrypt
+what they're allowed to read live, via the future Phase C `kb/query.my_wrapped_key`) AND
+`replication: QueryOnly` at once. `canonical_bytes()`'s v5 arm is therefore a strict **superset**
+of v2's field layout (wrapped_key bytes first, in the same position v2 would put them, then the
+replication marker) rather than a sibling version — confirmed by a dedicated test
+(`adr_067_query_only_admit_can_still_carry_a_wrapped_key_bound_into_v5`) that tampering with
+*either* field independently breaks verification, not just one.
+
+Four adversarial tests added to `shared/sync/src/membership.rs`, matching this section's own
+Verification bullets: `adr_067_full_replication_op_stays_v1_byte_identical` (backward-compat —
+a `Full`-replication op, the default every pre-ADR-067 signature was created under, stays
+byte-identical `v1` and verifies unmodified), `adr_067_forged_replication_downgrade_without_
+owner_signature_is_rejected` (an op flipping `QueryOnly`→`Full` without a fresh owner signature
+fails `verify_signed`), `adr_067_replayed_stale_full_admit_after_query_only_setrole_does_not_win`
+(the 3-op replay-resistance DAG — verified as a genuinely meaningful test, not a vacuous one, by
+confirming it would fail under a plausible bug class: if `build_members` trusted raw input-array
+order instead of the causal `prev_hash` DAG, the duplicate admit re-processed last would
+incorrectly restore `Full`), and the wrapped_key/v5-interaction test above.
+
+`cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean across both
+the editor and daemon workspaces; `cargo build --workspace --features gui` clean.
 
 Split the identical match arm at `daemon/src/collab_handler/mod.rs:1184`. `KbOp::Read`
 stays unconditional for any role, as today. `KbOp::Join` becomes conditional on the
