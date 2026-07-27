@@ -1112,6 +1112,98 @@ pub fn find_wrapped_content_key(
     latest
 }
 
+/// ADR-067 Phase E: the raw history of `replication` values ever assigned to
+/// `principal` via a valid Admit/SetRole op, in causal order — the input a caller
+/// needs to tell "restricted before ever having `Full` access" (no residual
+/// replica risk) apart from "had a real `Full`-policy window before being
+/// restricted" (a real residual risk: the member's own client had permission to
+/// `kb_join` at some point before the later restriction, so an already-replicated
+/// local copy may exist even though this ADR has no way to confirm or clear it).
+///
+/// Not a proof the member's client ever actually called `kb_join` — the signed
+/// op-log has no record of replication events, only of granted policy over time.
+/// It IS a sound, honest bound: if a member was NEVER granted `Full` at any
+/// causal point, they could never have legitimately replicated, so "no residual
+/// risk" is a safe conclusion; if they WERE granted `Full` at some point before
+/// their current `QueryOnly` restriction, the owner should treat a residual local
+/// copy as a real possibility.
+fn replication_history(
+    ops: &[SignedMembershipOp],
+    anchor_owner_pubkey: &[u8; 32],
+    principal: &str,
+) -> Vec<ReplicationPolicy> {
+    let crypto: Vec<&SignedMembershipOp> = crypto_valid(ops);
+    let by_hash: BTreeMap<String, &SignedMembershipOp> =
+        crypto.iter().map(|o| (o.chain_hash(), *o)).collect();
+    let Some(genesis) = crypto.iter().find(|o| {
+        o.op.prev_hash.is_empty()
+            && o.op.action == MembershipAction::Admit
+            && o.op.subject == o.op.author
+            && &o.author_pubkey == anchor_owner_pubkey
+    }) else {
+        return Vec::new();
+    };
+    let genesis_hash = genesis.chain_hash();
+    let order = causal_order(&by_hash, &genesis_hash);
+    order
+        .iter()
+        .filter_map(|h| {
+            let op = &by_hash[h].op;
+            let is_genesis = *h == genesis_hash;
+            let relevant = op.subject == principal
+                && (is_genesis
+                    || op.action == MembershipAction::Admit
+                    || op.action == MembershipAction::SetRole);
+            relevant.then_some(op.replication)
+        })
+        .collect()
+}
+
+/// `Some(true)` iff `principal` is currently `QueryOnly` (per the causal history in
+/// [`replication_history`]) AND was granted `Full` at some earlier causal point —
+/// a real residual-replica risk. `Some(false)` iff currently `QueryOnly` but never
+/// granted `Full` at any earlier point — no residual risk, since they were
+/// restricted before they could ever have replicated. `None` if `principal` is not
+/// currently `QueryOnly` at all (nothing to report), or has no derivable history
+/// (never a member / no anchored genesis) — see `replication_history`'s doc for
+/// the honest scope of this signal.
+pub fn had_full_replication_window(
+    ops: &[SignedMembershipOp],
+    anchor_owner_pubkey: &[u8; 32],
+    principal: &str,
+) -> Option<bool> {
+    let history = replication_history(ops, anchor_owner_pubkey, principal);
+    let (last, earlier) = history.split_last()?;
+    if *last != ReplicationPolicy::QueryOnly {
+        return None;
+    }
+    Some(earlier.contains(&ReplicationPolicy::Full))
+}
+
+/// As [`had_full_replication_window`], but resolves the anchor from the op-log's
+/// own self-consistent genesis (the first crypto-valid, empty-`prev_hash` self-
+/// Admit) instead of requiring the caller to already know it externally.
+/// Appropriate ONLY for a client reading its own locally-held collection replica
+/// for a KB it owns — a soft, informational owner-facing UI signal, not an
+/// access-control decision. Every other caller in this module threads a securely
+/// pre-established anchor (from the daemon's own `kb_anchor` record) specifically
+/// to defend against a malicious relay's forged second genesis; this convenience
+/// wrapper deliberately skips that defense because the caller IS the genesis
+/// author reading their own trusted local state, not a peer relying on a relay.
+pub fn had_full_replication_window_self_anchored(
+    ops: &[SignedMembershipOp],
+    principal: &str,
+) -> Option<bool> {
+    let crypto = crypto_valid(ops);
+    let genesis = crypto.iter().find(|o| {
+        o.op.prev_hash.is_empty()
+            && o.op.action == MembershipAction::Admit
+            && o.op.subject == o.op.author
+    })?;
+    let anchor = genesis.author_pubkey;
+    had_full_replication_window(ops, &anchor, principal)
+}
+
 /// Membership as of one op's causal position — the final member map over just the
 /// **valid ancestors** of that op (its causal past, a linear chain). Used to judge
 /// capability (b). Passes the full `anc` map through so removal-dominance and
@@ -1744,6 +1836,80 @@ mod tests {
             !tampered_policy.verify_signed(),
             "tampering the replication policy on a v5 op must break the signature, \
              even though the wrapped_key field is untouched"
+        );
+    }
+
+    #[test]
+    fn adr_067_phase_e_distinguishes_joined_then_restricted_from_restricted_before_joining() {
+        // ADR-067 Phase E's own required fixture: a real timeline with TWO
+        // QueryOnly-restricted members, interleaved so a naive implementation that
+        // only checks "currently QueryOnly" (ignoring history) can't accidentally
+        // pass. Alice: Admit(Full) -> SetRole(QueryOnly) -- she had a real window
+        // to replicate before being restricted (residual risk = true). Bob:
+        // Admit(QueryOnly) directly -- never had Full access at all, so no residual
+        // copy could ever legitimately exist (residual risk = false).
+        let owner = id(1);
+        let alice = id(2);
+        let bob = id(3);
+        let g = genesis(&owner);
+
+        let alice_admit = make(
+            &owner,
+            MembershipAction::Admit,
+            &alice.fp,
+            Some(Role::Viewer),
+            false,
+            None,
+            &g.chain_hash(),
+        );
+        let bob_admit = make_with_replication(
+            &owner,
+            MembershipAction::Admit,
+            &bob.fp,
+            Some(Role::Viewer),
+            ReplicationPolicy::QueryOnly,
+            &alice_admit.chain_hash(),
+        );
+        let alice_restricted = make_with_replication(
+            &owner,
+            MembershipAction::SetRole,
+            &alice.fp,
+            Some(Role::Viewer),
+            ReplicationPolicy::QueryOnly,
+            &bob_admit.chain_hash(),
+        );
+        let ops = vec![g, alice_admit, bob_admit, alice_restricted.clone()];
+
+        assert_eq!(
+            had_full_replication_window(&ops, &owner.pubkey, &alice.fp),
+            Some(true),
+            "Alice was granted Full before her later restriction -- a real residual \
+             replica-risk window existed"
+        );
+        assert_eq!(
+            had_full_replication_window(&ops, &owner.pubkey, &bob.fp),
+            Some(false),
+            "Bob was restricted from his very first Admit -- he never had an \
+             opportunity to replicate, so no residual risk"
+        );
+        // A member currently Full has nothing to report at all (not `Some(false)`,
+        // which would conflate "no risk" with "not applicable").
+        let carol = id(4);
+        let carol_admit = make(
+            &owner,
+            MembershipAction::Admit,
+            &carol.fp,
+            Some(Role::Editor),
+            false,
+            None,
+            &alice_restricted.chain_hash(),
+        );
+        let mut ops_with_carol = ops.clone();
+        ops_with_carol.push(carol_admit);
+        assert_eq!(
+            had_full_replication_window(&ops_with_carol, &owner.pubkey, &carol.fp),
+            None,
+            "a currently-Full member has no restriction to report on at all"
         );
     }
 

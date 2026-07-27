@@ -2997,6 +2997,7 @@ dependencies = [
  "mae-kb",
  "mae-lookup",
  "mae-make",
+ "mae-mcp",
  "mae-snippets",
  "mae-spell",
  "mae-sync",

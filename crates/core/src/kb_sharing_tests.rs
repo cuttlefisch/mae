@@ -223,3 +223,163 @@ fn members_header_is_a_fold_key() {
         Some(CollapseKey::Members("team".into()))
     );
 }
+
+/// ADR-067 Phase E: a real signed-op-log timeline distinguishing "joined then
+/// later restricted" (residual replica risk) from "restricted before ever
+/// joining" (no residual risk) — the exact fixture the ADR's own Verification
+/// section requires, at the same `build_snapshot` level the buffer/MCP
+/// tool/Scheme primitive all consume.
+#[test]
+fn owner_sees_residual_replica_risk_only_for_a_member_who_had_a_prior_full_window() {
+    use mae_mcp::identity::Identity;
+    use mae_sync::membership::{MembershipAction, ReplicationPolicy};
+
+    let owner = Identity::generate("owner");
+    let owner_fp = owner.fingerprint();
+    let owner_secret = owner.secret_bytes();
+    let owner_pubkey = owner.public().to_bytes();
+
+    let mut coll = KbCollectionDoc::new_owned("Team Notes", &owner_fp, "owner");
+
+    // Genesis: owner's own self-admit anchors the signed op-log.
+    let mut genesis = coll.build_membership_op(
+        "team",
+        MembershipAction::Admit,
+        &owner_fp,
+        Some(Role::Owner),
+        true,
+        &owner_fp,
+        1000,
+        None,
+        0,
+    );
+    genesis.prev_hash = String::new();
+    let sig = genesis.sign(&owner_secret);
+    coll.append_signed_op(&genesis, &sig, &owner_pubkey);
+
+    // Alice: admitted Full, later restricted to QueryOnly -- a real window existed.
+    let alice_fp = "SHA256:alice";
+    coll.upsert_member(alice_fp, "alice", Role::Viewer);
+    let alice_admit = coll.build_membership_op(
+        "team",
+        MembershipAction::Admit,
+        alice_fp,
+        Some(Role::Viewer),
+        false,
+        &owner_fp,
+        1001,
+        None,
+        0,
+    );
+    let sig = alice_admit.sign(&owner_secret);
+    coll.append_signed_op(&alice_admit, &sig, &owner_pubkey);
+
+    let mut alice_restrict = coll.build_membership_op(
+        "team",
+        MembershipAction::SetRole,
+        alice_fp,
+        Some(Role::Viewer),
+        false,
+        &owner_fp,
+        1002,
+        None,
+        0,
+    );
+    alice_restrict.replication = ReplicationPolicy::QueryOnly;
+    let sig = alice_restrict.sign(&owner_secret);
+    coll.append_signed_op(&alice_restrict, &sig, &owner_pubkey);
+
+    // Bob: admitted directly at QueryOnly -- never had a Full window.
+    let bob_fp = "SHA256:bob";
+    coll.upsert_member(bob_fp, "bob", Role::Viewer);
+    let mut bob_admit = coll.build_membership_op(
+        "team",
+        MembershipAction::Admit,
+        bob_fp,
+        Some(Role::Viewer),
+        false,
+        &owner_fp,
+        1003,
+        None,
+        0,
+    );
+    bob_admit.replication = ReplicationPolicy::QueryOnly;
+    let sig = bob_admit.sign(&owner_secret);
+    coll.append_signed_op(&bob_admit, &sig, &owner_pubkey);
+
+    // Carol: a plain Full editor, never restricted at all.
+    coll.upsert_member("carolfp", "carol", Role::Editor);
+    let carol_admit = coll.build_membership_op(
+        "team",
+        MembershipAction::Admit,
+        "carolfp",
+        Some(Role::Editor),
+        false,
+        &owner_fp,
+        1004,
+        None,
+        0,
+    );
+    let sig = carol_admit.sign(&owner_secret);
+    coll.append_signed_op(&carol_admit, &sig, &owner_pubkey);
+
+    let state = state_with(&owner_fp, "team", &coll);
+    let snap = build_snapshot(&state);
+    let kb = &snap.kbs[0];
+
+    let alice = kb
+        .members
+        .iter()
+        .find(|m| m.fingerprint == alice_fp)
+        .expect("alice present");
+    assert_eq!(
+        alice.residual_replica_risk,
+        Some(true),
+        "alice had a real Full-policy window before her later restriction"
+    );
+
+    let bob = kb
+        .members
+        .iter()
+        .find(|m| m.fingerprint == bob_fp)
+        .expect("bob present");
+    assert_eq!(
+        bob.residual_replica_risk,
+        Some(false),
+        "bob was restricted from his very first Admit -- no window ever existed"
+    );
+
+    let carol = kb
+        .members
+        .iter()
+        .find(|m| m.fingerprint == "carolfp")
+        .expect("carol present");
+    assert_eq!(
+        carol.residual_replica_risk, None,
+        "carol is currently Full -- nothing restricted to report on"
+    );
+
+    // The buffer surfaces the annotation only for the real-risk case, never for
+    // the no-risk or not-applicable ones.
+    let (_view, text) = build_view(&snap, &HashMap::new());
+    assert!(
+        text.contains("alice") && text.contains("may hold a pre-restriction local copy"),
+        "alice's row must carry the residual-risk annotation: {text}"
+    );
+    let bob_line = text
+        .lines()
+        .find(|l| l.contains("bob ("))
+        .expect("bob's row");
+    assert!(
+        !bob_line.contains("may hold a pre-restriction local copy"),
+        "bob's row must NOT carry the annotation -- he was never at risk: {bob_line}"
+    );
+    let carol_line = text
+        .lines()
+        .find(|l| l.contains("carol ("))
+        .expect("carol's row");
+    assert!(
+        !carol_line.contains("may hold a pre-restriction local copy"),
+        "carol's row must NOT carry the annotation -- not applicable to a Full member: {carol_line}"
+    );
+}
