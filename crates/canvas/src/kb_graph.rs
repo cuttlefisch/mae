@@ -1197,7 +1197,8 @@ mod tests {
         // must reproduce `build_kb_graph_chord_positions`'s own output
         // exactly — the re-centering math must collapse to a no-op for n=1.
         let d = diagram(None, "Primary", &["a", "b", "c"]);
-        let (multi_scene, labels, hidden) = build_multi_kb_chord_positions(&[d.clone()], &[], 1.0);
+        let (multi_scene, labels, hidden) =
+            build_multi_kb_chord_positions(std::slice::from_ref(&d), &[], 1.0);
         let plain = build_kb_graph_chord_positions(&d.nodes, &d.links, &d.boundary_links, 1.0);
 
         assert_eq!(hidden, 0);
