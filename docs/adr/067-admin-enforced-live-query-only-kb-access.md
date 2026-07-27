@@ -232,6 +232,8 @@ incorrectly restore `Full`), and the wrapped_key/v5-interaction test above.
 `cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean across both
 the editor and daemon workspaces; `cargo build --workspace --features gui` clean.
 
+### Phase B — `kb_access` Join/Read split + `kb_join` enforcement
+
 Split the identical match arm at `daemon/src/collab_handler/mod.rs:1184`. `KbOp::Read`
 stays unconditional for any role, as today. `KbOp::Join` becomes conditional on the
 member's `ReplicationPolicy`: denied when `QueryOnly`. Legacy/un-anchored KBs (no signed
@@ -257,6 +259,51 @@ retroactively tear down that live subscription — stated and tested as an expli
 named limitation of this phase (session revocation is a distinct mechanism this ADR does
 not build; the policy governs future `kb_join` calls, not already-established sessions),
 not silently assumed to be handled by the same code path.
+
+## Implementation note (Phase B, principle #15)
+
+`kb_access_with_coll` (`daemon/src/collab_handler/mod.rs`) now derives `(role, replication)`
+from the **same** lookup rather than a second `derived_membership` call — the anchored/
+op-log branch reads `m.replication` off the `ValidMember` Phase A already populates; the
+legacy/un-anchored branch (plain `member_roles`, no signed op-log) defaults to `Full`
+unconditionally, matching the ADR's own named scope boundary. The `QueryOnly`-Join denial
+is checked *before* the general hierarchical RBAC match, specifically so its message
+(`"member is restricted to live-query-only access for KB '...' and may not replicate it
+locally (ADR-067)"`) is distinguishable both from a role-insufficiency denial and from the
+non-member `"not a member of KB '...'"` denial `kb_join`'s callers already see — telling a
+genuine, restricted member they're "not a member" would be actively misleading.
+
+`handle_kb_join` (`daemon/src/collab_handler/kb_membership.rs`) needed no structural change
+for the "no subscription on deny" property: its existing `Deny`/`Err` match arm already
+returns early, before the `session_docs.insert`/`track_client_connect`/`bc.subscribe_doc`
+steps further down the function — Phase B's gate reuses that same early return, so a
+denied `QueryOnly` join was already guaranteed to never reach the subscription code, no new
+plumbing required.
+
+Three adversarial tests added (`daemon/src/collab_handler/tests/
+collab_handler_replication_policy_tests.rs`), matching this section's own Verification
+bullets and each independently confirmed to fail against the pre-fix `kb_access_with_coll`
+(re-ran the suite with the fix `git stash`ed — all three failed as expected, then passed
+again once restored): `query_only_viewer_denied_join_others_allowed_with_distinguishable_
+message` (the 4-principal N-way case — Owner/Editor/Full-Viewer allowed, QueryOnly-Viewer
+denied with a message distinguishable from a genuine non-member's, constructed by
+temporarily setting the KB's join policy to `restrictive` since the default `Invite` policy
+gives a non-member `Pending`, not `Deny`, which would make the two cases trivially
+distinguishable by variant alone rather than by message content), `query_only_member_kb_
+join_never_subscribes_the_session` (registers two real sessions via `EventBroadcaster::
+subscribe` — required before `subscribe_doc` has any observable effect at all — then proves
+via a real `broadcast()` + `try_recv()` that only the allowed session's channel receives the
+event), and `mid_session_restriction_does_not_tear_down_an_already_live_session_but_blocks_
+future_joins` (the named limitation from this section's Verification bullet 3, both halves:
+an already-subscribed session survives a mid-session restriction, but a fresh `kb_join`
+attempt by the same principal afterward is correctly denied). No RPC surface exists yet to
+set `replication` on a member (out of this phase's scope — Phase B is the gate, not the
+admin command surface), so the `QueryOnly` fixture member's op is built and signed directly
+via `KbCollectionDoc::build_membership_op` + `append_signed_op`, mirroring what `kb/
+add_member`'s handler does internally for every other field.
+
+`cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean in the
+daemon workspace (159 tests passing, up from 156).
 
 ### Phase C — `kb/query.my_wrapped_key`: narrow key delivery for `QueryOnly` E2E members
 

@@ -42,6 +42,7 @@ use mae_sync::kb::{
 };
 use mae_sync::membership::{
     fingerprint_of, is_recovery_rebind, recovery_registry, Governance, MembershipAction,
+    ReplicationPolicy,
 };
 use tokio::io::{AsyncBufRead, AsyncWrite};
 use tokio::sync::mpsc;
@@ -1144,7 +1145,14 @@ async fn kb_access_with_coll(
     // join-ticket node-id) is registered — derive membership from the SIGNED op-log
     // rather than the relay-supplied `member_roles`. Owned / un-anchored KBs keep
     // the locally-authoritative legacy `member_roles` (the daemon owns that state).
-    let role = match doc_store.kb_anchor(kb_id).await {
+    // ADR-067: `replication` rides alongside `role` from the SAME lookup (not a
+    // second `derived_membership` call) -- `Full` for the legacy/un-anchored path,
+    // since that path has no signed op-log to carry the field in at all (an
+    // explicit, named scope boundary, not a silent gap: retrofitting tamper-evidence
+    // onto the unsigned `member_roles` map would be the exact spoofing risk ADR-067
+    // Phase A's signed-field design avoids).
+    let dm_scope;
+    let (role, replication) = match doc_store.kb_anchor(kb_id).await {
         Some(anchor) if coll.oplog_head().is_some() => {
             // ADR-026 §A4: read the owner-declared governance from the op-log, then
             // derive membership under it — so a `Quorum{m}` KB enforces m-of-n
@@ -1155,14 +1163,15 @@ async fn kb_access_with_coll(
             // unchanged op-log (state-vector) + anchor + timebox horizon returns the cached set
             // without re-decoding the whole op-log. This gate runs on every anchored/E2E access;
             // the cache is what keeps it O(1) at membership-churn scale.
-            doc_store
+            dm_scope = doc_store
                 .derived_membership(kb_id, coll, &anchor, now_unix())
-                .await
-                .members
-                .get(principal)
-                .map(|m| m.role)
+                .await;
+            match dm_scope.members.get(principal) {
+                Some(m) => (Some(m.role), m.replication),
+                None => (None, ReplicationPolicy::Full),
+            }
         }
-        _ => coll.role_of(principal),
+        _ => (coll.role_of(principal), ReplicationPolicy::Full),
     };
     // Per-KB transport policy (ADR-018/025): a KB is reachable over a transport
     // only if its policy exposes it there — EXCEPT the owner, who always reaches
@@ -1179,6 +1188,20 @@ async fn kb_access_with_coll(
     }
     match role {
         Some(role) => {
+            // ADR-067: a QueryOnly-restricted member has full Read access (checked
+            // below, unconditional) but may NOT replicate the KB locally via
+            // kb_join — checked BEFORE the general RBAC match so its denial message
+            // is specific and distinguishable both from a plain role-insufficiency
+            // denial (this member's role is perfectly adequate; only replication is
+            // restricted) and from the "not a member" denial a non-member joiner
+            // gets below (telling a genuine, restricted member they're "not a
+            // member" would be actively misleading).
+            if op == KbOp::Join && replication == ReplicationPolicy::QueryOnly {
+                return Ok(AccessDecision::Deny(format!(
+                    "member is restricted to live-query-only access for KB '{kb_id}' \
+                     and may not replicate it locally (ADR-067)"
+                )));
+            }
             // Hierarchical RBAC: owner ⊇ editor ⊇ viewer.
             let allowed = match op {
                 KbOp::Join | KbOp::Read => true,
