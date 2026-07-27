@@ -809,6 +809,45 @@ impl OptionRegistry {
                      else is kept by highest-degree-first, same selection rule \
                      kb_graph_node_count_cap already uses.",
                     OptionKind::Int, "5000", Some("kb-graph.full-corpus-node-cap"), &[]),
+                opt!("kb_graph_doi_zoom_threshold", &["kb-graph-doi-zoom-threshold"],
+                    "ADR-068 Phase B: below this viewport zoom level, a node elided by DOI/LOD \
+                     tiering (kb_graph_multi_kb_full_corpus) is skipped entirely (RenderTier::Hidden) \
+                     rather than folded into a visible '... (+N)' aggregate stub \
+                     (RenderTier::Clustered) — too zoomed out for even a stub label to be legible. \
+                     Mirrors kb_graph_label_zoom_threshold's exact same-family threshold pattern. \
+                     Only consulted when kb_graph_multi_kb_full_corpus is on AND \
+                     kb_graph_view_mode=multi; has no effect otherwise.",
+                    OptionKind::Float, "0.5", Some("kb-graph.doi-zoom-threshold"), &[]),
+                opt!("kb_graph_doi_distance_falloff", &["kb-graph-doi-distance-falloff"],
+                    "ADR-068 Phase B: hop-count reach from the DOI focus node (whichever KB node \
+                     the human/AI last navigated to, decoupled from the graph's own extraction \
+                     center — see kb_graph_multi_kb_full_corpus) within which a node stays fully \
+                     rendered. Bridge (cross-instance-link endpoint) and Hub (a diagram's own \
+                     default center) tier nodes are exempt entirely — always full detail \
+                     regardless of distance. A node one tier more a-priori important (Degree tier, \
+                     ranked by connection count) gets one extra hop of reach beyond this value. \
+                     Kept as one simple integer knob, not an exposed formula/weighted score — only \
+                     consulted when kb_graph_multi_kb_full_corpus is on AND \
+                     kb_graph_view_mode=multi.",
+                    OptionKind::Int, "2", Some("kb-graph.doi-distance-falloff"), &[]),
+                opt!("kb_graph_dense_cluster_threshold", &["kb-graph-dense-cluster-threshold"],
+                    "ADR-068 Phase B: minimum count of nodes elided by kb_graph_doi_distance_falloff \
+                     before clustering kicks in at all — below this, every node renders at full \
+                     detail regardless (not worth the visual overhead of an aggregate stub for a \
+                     handful of elided nodes). Subsumes issue #477's own originally-proposed option \
+                     of the same shape. Only consulted when kb_graph_multi_kb_full_corpus is on AND \
+                     kb_graph_view_mode=multi.",
+                    OptionKind::Int, "20", Some("kb-graph.dense-cluster-threshold"), &[]),
+                opt!("kb_graph_cluster_group_by", &["kb-graph-cluster-group-by"],
+                    "ADR-068 Phase B: how nodes elided by DOI/LOD tiering bucket into aggregate \
+                     '... (+N)' stubs — kind (group by NodeKind, e.g. every clustered Concept in a \
+                     diagram collapses into one stub) or degree_bucket (group by a coarse log2 \
+                     bucket of connection count — useful when a KB's node kinds are too uniform for \
+                     kind-grouping to usefully separate hubs-in-waiting from genuine leaves). Only \
+                     consulted when kb_graph_multi_kb_full_corpus is on AND \
+                     kb_graph_view_mode=multi.",
+                    OptionKind::String, "kind", Some("kb-graph.cluster-group-by"),
+                    &["kind", "degree_bucket"]),
                 // --- File tree ---
                 opt!("file_tree_focus_on_open", &["file-tree-focus-on-open"],
                     "Auto-focus the file tree window when it opens",

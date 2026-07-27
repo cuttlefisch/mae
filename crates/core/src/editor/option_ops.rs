@@ -317,6 +317,10 @@ impl super::Editor {
             }
             "kb_graph_multi_kb_full_corpus" => self.kb_graph_multi_kb_full_corpus.to_string(),
             "kb_graph_full_corpus_node_cap" => self.kb_graph_full_corpus_node_cap.to_string(),
+            "kb_graph_doi_zoom_threshold" => self.kb_graph_doi_zoom_threshold.to_string(),
+            "kb_graph_doi_distance_falloff" => self.kb_graph_doi_distance_falloff.to_string(),
+            "kb_graph_dense_cluster_threshold" => self.kb_graph_dense_cluster_threshold.to_string(),
+            "kb_graph_cluster_group_by" => self.kb_graph_cluster_group_by.as_str().to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -1376,6 +1380,30 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.kb_graph_full_corpus_node_cap = v.clamp(100, 50_000);
+            }
+            "kb_graph_doi_zoom_threshold" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_doi_zoom_threshold = v.clamp(0.0, 10.0);
+            }
+            "kb_graph_doi_distance_falloff" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_graph_doi_distance_falloff = v.clamp(0, 50);
+            }
+            "kb_graph_dense_cluster_threshold" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_graph_dense_cluster_threshold = v.clamp(1, 100_000);
+            }
+            "kb_graph_cluster_group_by" => {
+                let group_by = crate::graph_view::ClusterGroupBy::parse(value).ok_or_else(|| {
+                    format!("Invalid kb_graph_cluster_group_by '{value}' (expected kind|degree_bucket)")
+                })?;
+                self.kb_graph_cluster_group_by = group_by;
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }
@@ -3232,6 +3260,151 @@ mod graph_view_option_tests {
             .set_option("kb_graph_full_corpus_node_cap", "not-a-number")
             .is_err());
         assert_eq!(editor.kb_graph_full_corpus_node_cap, before);
+    }
+
+    // --- ADR-068 Phase B6: the 4 remaining DOI/LOD tiering options ---
+
+    #[test]
+    fn kb_graph_doi_zoom_threshold_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor.get_option("kb_graph_doi_zoom_threshold").unwrap().0,
+            "0.5"
+        );
+        assert_eq!(editor.kb_graph_doi_zoom_threshold, 0.5);
+
+        editor
+            .set_option("kb_graph_doi_zoom_threshold", "1.5")
+            .unwrap();
+        assert_eq!(editor.kb_graph_doi_zoom_threshold, 1.5);
+        assert_eq!(
+            editor.get_option("kb_graph_doi_zoom_threshold").unwrap().0,
+            "1.5"
+        );
+
+        editor
+            .set_option("kb_graph_doi_zoom_threshold", "-5.0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_doi_zoom_threshold, 0.0);
+        editor
+            .set_option("kb_graph_doi_zoom_threshold", "999.0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_doi_zoom_threshold, 10.0);
+
+        let before = editor.kb_graph_doi_zoom_threshold;
+        assert!(editor
+            .set_option("kb_graph_doi_zoom_threshold", "not-a-number")
+            .is_err());
+        assert_eq!(editor.kb_graph_doi_zoom_threshold, before);
+    }
+
+    #[test]
+    fn kb_graph_doi_distance_falloff_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor
+                .get_option("kb_graph_doi_distance_falloff")
+                .unwrap()
+                .0,
+            "2"
+        );
+        assert_eq!(editor.kb_graph_doi_distance_falloff, 2);
+
+        editor
+            .set_option("kb_graph_doi_distance_falloff", "5")
+            .unwrap();
+        assert_eq!(editor.kb_graph_doi_distance_falloff, 5);
+        assert_eq!(
+            editor
+                .get_option("kb_graph_doi_distance_falloff")
+                .unwrap()
+                .0,
+            "5"
+        );
+
+        editor
+            .set_option("kb_graph_doi_distance_falloff", "0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_doi_distance_falloff, 0);
+        editor
+            .set_option("kb_graph_doi_distance_falloff", "999999")
+            .unwrap();
+        assert_eq!(editor.kb_graph_doi_distance_falloff, 50);
+
+        let before = editor.kb_graph_doi_distance_falloff;
+        assert!(editor
+            .set_option("kb_graph_doi_distance_falloff", "not-a-number")
+            .is_err());
+        assert_eq!(editor.kb_graph_doi_distance_falloff, before);
+    }
+
+    #[test]
+    fn kb_graph_dense_cluster_threshold_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor
+                .get_option("kb_graph_dense_cluster_threshold")
+                .unwrap()
+                .0,
+            "20"
+        );
+        assert_eq!(editor.kb_graph_dense_cluster_threshold, 20);
+
+        editor
+            .set_option("kb_graph_dense_cluster_threshold", "50")
+            .unwrap();
+        assert_eq!(editor.kb_graph_dense_cluster_threshold, 50);
+        assert_eq!(
+            editor
+                .get_option("kb_graph_dense_cluster_threshold")
+                .unwrap()
+                .0,
+            "50"
+        );
+
+        editor
+            .set_option("kb_graph_dense_cluster_threshold", "0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_dense_cluster_threshold, 1);
+
+        let before = editor.kb_graph_dense_cluster_threshold;
+        assert!(editor
+            .set_option("kb_graph_dense_cluster_threshold", "not-a-number")
+            .is_err());
+        assert_eq!(editor.kb_graph_dense_cluster_threshold, before);
+    }
+
+    #[test]
+    fn kb_graph_cluster_group_by_option_roundtrips_and_rejects_invalid_values() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor.get_option("kb_graph_cluster_group_by").unwrap().0,
+            "kind"
+        );
+        assert_eq!(
+            editor.kb_graph_cluster_group_by,
+            crate::graph_view::ClusterGroupBy::Kind
+        );
+
+        editor
+            .set_option("kb_graph_cluster_group_by", "degree_bucket")
+            .unwrap();
+        assert_eq!(
+            editor.kb_graph_cluster_group_by,
+            crate::graph_view::ClusterGroupBy::DegreeBucket
+        );
+        assert_eq!(
+            editor.get_option("kb_graph_cluster_group_by").unwrap().0,
+            "degree_bucket"
+        );
+
+        assert!(editor
+            .set_option("kb_graph_cluster_group_by", "nonsense")
+            .is_err());
+        assert_eq!(
+            editor.kb_graph_cluster_group_by,
+            crate::graph_view::ClusterGroupBy::DegreeBucket
+        );
     }
 }
 
