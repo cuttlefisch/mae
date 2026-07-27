@@ -227,6 +227,20 @@ pub struct CrossInstanceLink {
     /// federated instance, matching `GraphView.kb_instance`'s convention
     /// (`crates/core/src/graph_view.rs`).
     pub target_instance: Option<String>,
+    /// Which KB instance this link's `source` belongs to — i.e. the
+    /// `owner_instance` the classifying `partition_boundary_links_by_instance`
+    /// call was made with. `None` = primary, `Some(uuid)` = a federated
+    /// instance, same convention as `target_instance`.
+    ///
+    /// @ai-caution: [correctness] Phase A2 (#462 multi-KB chord view):
+    /// `partition_boundary_links_by_instance` is now called once PER
+    /// rendered diagram (seed AND every related instance), not just once
+    /// against the seed — a real link from related-instance B to
+    /// related-instance C is only ever discovered from B's own extraction,
+    /// so its source is B, not the seed. Do NOT assume `source` is always
+    /// "the subgraph this batch was extracted from" == the seed; read this
+    /// field instead of re-deriving the source from call-site context.
+    pub source_instance: Option<String>,
 }
 
 /// Result of subgraph extraction.

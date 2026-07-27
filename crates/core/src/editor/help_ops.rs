@@ -585,10 +585,32 @@ impl Editor {
                     .find(|d| d.instance == link.target_instance)
                     .map(|d| d.name.as_str())
                     .unwrap_or("?");
-                out.push_str(&format!(
-                    "- {} -> {} [{}] (KB: {})\n",
-                    link.source, link.target, link.rel_type, target_name
-                ));
+                // Phase A2 (#462): a cross-instance link can now originate
+                // from ANY rendered diagram, not just the seed — before this
+                // fix, `source_instance` was hard-wired to the seed, so
+                // showing only the target's KB name was unambiguous. Now
+                // that a related instance can itself be a link's source,
+                // only name the source's KB when it's NOT the seed
+                // (`gv.kb_instance`) — the seed case keeps today's exact
+                // text, since that's still the overwhelmingly common case
+                // and the "obvious" diagram a reader would already assume.
+                if link.source_instance != gv.kb_instance {
+                    let source_name = gv
+                        .diagram_labels
+                        .iter()
+                        .find(|d| d.instance == link.source_instance)
+                        .map(|d| d.name.as_str())
+                        .unwrap_or("?");
+                    out.push_str(&format!(
+                        "- {} (KB: {}) -> {} [{}] (KB: {})\n",
+                        link.source, source_name, link.target, link.rel_type, target_name
+                    ));
+                } else {
+                    out.push_str(&format!(
+                        "- {} -> {} [{}] (KB: {})\n",
+                        link.source, link.target, link.rel_type, target_name
+                    ));
+                }
             }
             if gv.hidden_cross_instance_link_count > 0 {
                 out.push_str(&format!(
@@ -1670,6 +1692,109 @@ mod tests {
         assert!(
             text.contains("concept:seed") && text.contains("concept:sibling-target"),
             "the cross-KB link's endpoints must be listed: {text}"
+        );
+    }
+
+    #[test]
+    fn render_graph_view_as_text_multi_mode_names_both_endpoints_kb_when_source_is_not_the_seed() {
+        // Phase A2 (#462): once a cross-instance link's source can be ANY
+        // rendered diagram (not just the seed — the bug this phase fixes),
+        // the plain-text listing must name BOTH endpoints' KB. Before this
+        // fix, only the target's KB was ever shown, because the source was
+        // silently assumed to always be the seed. Seed A links to B; B
+        // (NOT the seed) links onward to C — the exact non-seed-source
+        // shape.
+        let mut e = Editor::new();
+        e.kb.primary.insert(mae_kb::Node::new(
+            "concept:seed",
+            "Seed",
+            mae_kb::NodeKind::Concept,
+            "[[concept:b-hub]]",
+        ));
+        let mut b = mae_kb::KnowledgeBase::new();
+        b.insert(mae_kb::Node::new(
+            "concept:b-hub",
+            "B Hub",
+            mae_kb::NodeKind::Concept,
+            "[[concept:c-target]]",
+        ));
+        e.kb.instances.insert("uuid-b".to_string(), b);
+        e.kb.registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-b".into(),
+                name: "b".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
+            });
+        let mut c = mae_kb::KnowledgeBase::new();
+        c.insert(mae_kb::Node::new(
+            "concept:c-target",
+            "C Target",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        e.kb.instances.insert("uuid-c".to_string(), c);
+        e.kb.registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-c".into(),
+                name: "c".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
+            });
+
+        e.kb_graph_view_mode = crate::graph_view::GraphViewMode::Multi;
+        // `All` scope: B's own link to C is a relationship the seed knows
+        // nothing about, and `Linked` scope's one-hop-from-the-seed
+        // candidate discovery would never find C on its own.
+        e.kb_graph_multi_kb_scope = crate::graph_view::GraphMultiKbScope::All;
+        // depth=0: sidesteps an unrelated `extract_subgraph` BFS quirk at
+        // depth>=1 — see the doc comment on the equivalent call in
+        // `graph_view_ops.rs`'s
+        // `multi_mode_detects_a_real_cross_link_between_two_non_seed_related_instances`.
+        e.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+
+        let text = e.render_graph_view_as_text();
+        assert!(text.contains("** Neighborhood (b)"));
+        assert!(text.contains("** Neighborhood (c)"));
+
+        // The seed's own A->B link keeps today's exact (target-only)
+        // format -- the overwhelmingly common case, unaffected by this fix.
+        assert!(
+            text.contains("- concept:seed -> concept:b-hub [") && text.contains("(KB: b)"),
+            "seed-sourced cross-link must keep its original target-only format: {text}"
+        );
+        // The B->C link's source (b) is NOT the seed -- both endpoints' KB
+        // names must now be named.
+        assert!(
+            text.contains("- concept:b-hub (KB: b) -> concept:c-target [")
+                && text.contains("(KB: c)"),
+            "a non-seed-sourced cross-link must name BOTH endpoints' KB: {text}"
         );
     }
 

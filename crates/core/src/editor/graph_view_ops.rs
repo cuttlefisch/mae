@@ -733,6 +733,24 @@ impl Editor {
                 };
                 let mut diagrams = vec![seed_diagram];
 
+                // Phase A2 (#462): accumulate cross-instance links from
+                // EVERY rendered diagram, not just the seed — a real link
+                // from one related instance to another (neither being the
+                // seed) is a boundary link of the SOURCE related instance's
+                // own `extract_subgraph` call, never the seed's, so it can
+                // only ever be discovered by classifying THAT diagram's own
+                // boundary links too. Starts from the seed's own
+                // `cross_links` (computed above) and grows by one
+                // `partition_boundary_links_by_instance` call per related
+                // instance, below. No double-discovery risk: a directed
+                // link is a boundary link of exactly the one diagram whose
+                // extraction included its source node and excluded its
+                // target (`include_backlinks` only steers the BFS frontier,
+                // never manufactures a `SubgraphLink`) — so concatenating
+                // every diagram's classified cross-links is safe with no
+                // dedup needed.
+                let mut all_cross_links: Vec<mae_kb::CrossInstanceLink> = cross_links.clone();
+
                 for related_instance in &related {
                     // One hop only (per `GraphMultiKbScope::Linked`'s doc
                     // comment): seed at whichever node(s) the seed's own
@@ -793,16 +811,26 @@ impl Editor {
                                 .unwrap_or_else(empty_result),
                         }
                     };
+                    // Phase A2: classify THIS related instance's own
+                    // boundary links exactly like the seed's were classified
+                    // above — a plain unclassified stub here is precisely
+                    // the original bug (a real B->C link rendered as an
+                    // ordinary same-instance-looking dashed stub inside B's
+                    // own diagram, never promoted to a cross-instance
+                    // chord).
+                    let (related_same_or_dead, related_cross_links) = self
+                        .partition_boundary_links_by_instance(
+                            related_instance.as_deref(),
+                            related_result.boundary_links.clone(),
+                        );
+                    all_cross_links.extend(related_cross_links);
+
                     diagrams.push(mae_canvas::kb_graph::KbInstanceSubgraph {
                         instance: related_instance.clone(),
                         name: self.kb_display_name(related_instance.as_deref()),
                         nodes: to_kb_nodes(&related_result.nodes),
                         links: related_result.links.iter().map(to_link_info).collect(),
-                        boundary_links: related_result
-                            .boundary_links
-                            .iter()
-                            .map(to_link_info)
-                            .collect(),
+                        boundary_links: related_same_or_dead.iter().map(to_link_info).collect(),
                         starter_ids: starters,
                         loaded: related_loaded,
                     });
@@ -810,17 +838,22 @@ impl Editor {
 
                 let rendered_instances: std::collections::HashSet<Option<String>> =
                     diagrams.iter().map(|d| d.instance.clone()).collect();
-                cross_instance_links_kept = cross_links
+                cross_instance_links_kept = all_cross_links
                     .iter()
                     .filter(|l| rendered_instances.contains(&l.target_instance))
                     .cloned()
                     .collect();
                 let cross_link_infos: Vec<mae_canvas::kb_graph::KbCrossInstanceLinkInfo> =
-                    cross_links
+                    all_cross_links
                         .iter()
                         .map(|l| mae_canvas::kb_graph::KbCrossInstanceLinkInfo {
                             source: l.source.clone(),
-                            source_instance: kb_instance.clone(),
+                            // Phase A2: each link's OWN source instance
+                            // (populated by whichever diagram's
+                            // `partition_boundary_links_by_instance` call
+                            // classified it), not hard-wired to the seed —
+                            // the bug this phase fixes.
+                            source_instance: l.source_instance.clone(),
                             target: l.target.clone(),
                             target_instance: l.target_instance.clone(),
                             rel_type: l.rel_type.clone(),
@@ -6001,5 +6034,310 @@ mod tests {
                 viewport.height
             );
         }
+    }
+
+    // --- Phase A2 (#462): cross-instance links between two NON-seed
+    // diagrams (previously invisible — only the seed's own boundary links
+    // were ever classified). ---
+
+    #[test]
+    fn multi_mode_detects_a_real_cross_link_between_two_non_seed_related_instances() {
+        // N-way (CLAUDE.md #14), not just seed+one-sibling: seed A links to
+        // B only; B links to C (neither being the seed — the exact bug);
+        // C links onward to D, which is registered but capped OUT of the
+        // rendered set by `kb_graph_multi_kb_max_related_instances` — so
+        // this one test simultaneously covers "a real B->C chord is
+        // detected with the correct (non-seed) source_instance" AND "a
+        // link whose target diagram isn't rendered is dropped WITH a
+        // count, without corrupting the B->C count".
+        let mut editor = ed_with_kb_node("concept:seed", "Seed", "[[concept:b-hub]]");
+        let uuid_b = register_plain_instance(
+            &mut editor,
+            "b",
+            vec![mae_kb::Node::new(
+                "concept:b-hub",
+                "B Hub",
+                mae_kb::NodeKind::Concept,
+                "[[concept:c-target]]",
+            )],
+        );
+        let uuid_c = register_plain_instance(
+            &mut editor,
+            "c",
+            vec![mae_kb::Node::new(
+                "concept:c-target",
+                "C Target",
+                mae_kb::NodeKind::Concept,
+                "[[concept:d-node]]",
+            )],
+        );
+        register_plain_instance(
+            &mut editor,
+            "d",
+            vec![mae_kb::Node::new(
+                "concept:d-node",
+                "D Node",
+                mae_kb::NodeKind::Concept,
+                "",
+            )],
+        );
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        // `All` scope (not the default `Linked`) — B's link to C is a
+        // relationship neither the seed knows about NOR one `Linked`
+        // scope's one-hop-from-the-seed candidate discovery would ever
+        // find; C must still be rendered as its own diagram for this
+        // bug to even be reachable.
+        editor.kb_graph_multi_kb_scope = GraphMultiKbScope::All;
+        // Registered in order b, c, d -- capping at 2 keeps b+c, excludes d
+        // (matches the plan's "D not rendered, e.g. capped by
+        // kb_graph_multi_kb_max_related_instances").
+        editor.kb_graph_multi_kb_max_related_instances = 2;
+
+        // depth=0: each diagram's own boundary-link classification only
+        // needs its starter node's OWN typed_links, computed regardless of
+        // BFS walking — depth>=1 here would let `extract_subgraph`'s BFS
+        // walk one hop past a starter into an id that exists in a
+        // DIFFERENT kb instance's node map (not this one's), which
+        // `extract_subgraph` then falsely treats as "included" (it was
+        // enqueued to the frontier and processed, even though the id was
+        // never actually found in `self.nodes`) — silently reclassifying
+        // what should be a boundary link as an "internal" link pointing at
+        // a node that's never materialized. That's a pre-existing
+        // `extract_subgraph` quirk orthogonal to this phase's classifier
+        // fix; depth=0 (matching this file's other single-hop
+        // cross-instance tests) sidesteps it entirely.
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+
+        assert_eq!(
+            gv.diagram_labels.len(),
+            3,
+            "seed + b + c rendered; d capped out"
+        );
+        assert!(!gv.diagram_labels.iter().any(|d| d.name == "d"));
+        assert_eq!(
+            gv.hidden_related_instance_count, 1,
+            "3 candidates (b,c,d) - 2 kept = 1 hidden"
+        );
+
+        // The B->C link must be recorded with source_instance == B, not
+        // hard-wired to the seed (the bug this phase fixes).
+        let b_to_c = gv
+            .cross_instance_links
+            .iter()
+            .find(|l| l.source == "concept:b-hub" && l.target == "concept:c-target")
+            .expect("B->C cross-instance link must be detected and kept");
+        assert_eq!(
+            b_to_c.source_instance.as_deref(),
+            Some(uuid_b.as_str()),
+            "B->C's source must be attributed to B, not the seed"
+        );
+        assert_eq!(b_to_c.target_instance.as_deref(), Some(uuid_c.as_str()));
+
+        // The seed's own A->B link must still be present and correctly
+        // attributed too (regression: the pre-existing seed-classification
+        // path must be untouched by this change).
+        let a_to_b = gv
+            .cross_instance_links
+            .iter()
+            .find(|l| l.source == "concept:seed" && l.target == "concept:b-hub")
+            .expect("A->B cross-instance link must still be detected");
+        assert_eq!(a_to_b.source_instance, None, "seed's source is primary");
+        assert_eq!(a_to_b.target_instance.as_deref(), Some(uuid_b.as_str()));
+
+        // C->D is a genuine cross-instance link (D is a real, loaded,
+        // registered instance) whose target diagram simply isn't among
+        // the rendered set -- dropped WITH a count, not silently lost,
+        // and not confused with the B->C link above (no double counting).
+        assert!(
+            !gv.cross_instance_links
+                .iter()
+                .any(|l| l.target == "concept:d-node"),
+            "C->D must not appear in the kept/introspectable list (D isn't rendered)"
+        );
+        assert_eq!(
+            gv.hidden_cross_instance_link_count, 1,
+            "exactly the C->D link must be hidden-with-count; B->C must not double-count \
+             into this"
+        );
+        assert_eq!(
+            gv.cross_instance_links.len(),
+            2,
+            "exactly A->B and B->C are kept; C->D is hidden"
+        );
+
+        // Exactly two REAL (non-boundary-stub) cross-instance edges reach
+        // the scene: A->B and B->C. A boundary stub is a self-loop
+        // (`source == target`) with `rel_type: None`; a real cross-
+        // instance edge has distinct endpoints and `rel_type: Some(..)`.
+        let real_cross_edges: Vec<_> = gv
+            .scene
+            .edges
+            .iter()
+            .filter(|e| e.style.dashed && e.rel_type.is_some() && e.source != e.target)
+            .collect();
+        assert_eq!(
+            real_cross_edges.len(),
+            2,
+            "expected exactly A->B and B->C as real cross-instance edges: {:?}",
+            gv.scene.edges
+        );
+    }
+
+    #[test]
+    fn multi_mode_reciprocal_links_both_directions_render_as_two_distinct_chords() {
+        // Adversarial (#14): two GENUINELY separate authored links (A->B
+        // AND B->A), not the same link read in reverse -- must not
+        // collapse/dedup into one chord. This is the concrete check that
+        // the "no double-discovery" reasoning holds: A->B is only ever
+        // discoverable from the seed's own boundary links, B->A only ever
+        // discoverable from B's own boundary links -- two distinct
+        // classifier calls, two distinct results.
+        let mut editor = ed_with_kb_node("concept:seed", "Seed", "[[concept:b-node]]");
+        let uuid_b = register_plain_instance(
+            &mut editor,
+            "b",
+            vec![mae_kb::Node::new(
+                "concept:b-node",
+                "B Node",
+                mae_kb::NodeKind::Concept,
+                "[[concept:seed]]",
+            )],
+        );
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+
+        // depth=0: see the doc comment on the equivalent call in
+        // `multi_mode_detects_a_real_cross_link_between_two_non_seed_related_instances`
+        // for why depth>=1 would trip an unrelated `extract_subgraph`
+        // BFS quirk here.
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+
+        assert_eq!(gv.diagram_labels.len(), 2, "seed + b");
+        assert_eq!(
+            gv.cross_instance_links.len(),
+            2,
+            "both A->B and B->A must be recorded as distinct links"
+        );
+
+        let a_to_b = gv
+            .cross_instance_links
+            .iter()
+            .find(|l| l.source == "concept:seed" && l.target == "concept:b-node")
+            .expect("A->B must be present");
+        assert_eq!(a_to_b.source_instance, None);
+        assert_eq!(a_to_b.target_instance.as_deref(), Some(uuid_b.as_str()));
+
+        let b_to_a = gv
+            .cross_instance_links
+            .iter()
+            .find(|l| l.source == "concept:b-node" && l.target == "concept:seed")
+            .expect(
+                "B->A must be present too -- not left as an unclassified same-instance-\
+                 looking stub in B's own diagram",
+            );
+        assert_eq!(b_to_a.source_instance.as_deref(), Some(uuid_b.as_str()));
+        assert_eq!(b_to_a.target_instance, None);
+
+        assert_eq!(gv.hidden_cross_instance_link_count, 0);
+
+        // Both render as two DISTINCT real cross-instance edges in the
+        // scene -- not collapsed into one.
+        let real_cross_edges: Vec<_> = gv
+            .scene
+            .edges
+            .iter()
+            .filter(|e| e.style.dashed && e.rel_type.is_some() && e.source != e.target)
+            .collect();
+        assert_eq!(
+            real_cross_edges.len(),
+            2,
+            "A->B and B->A must render as two separate chords, not one collapsed edge: {:?}",
+            gv.scene.edges
+        );
+        let seed_idx = 0; // seed diagram is pushed first, one node
+        let b_idx = 1; // b diagram pushed second, one node
+        assert!(
+            real_cross_edges
+                .iter()
+                .any(|e| e.source == seed_idx && e.target == b_idx),
+            "A->B edge must point seed -> b"
+        );
+        assert!(
+            real_cross_edges
+                .iter()
+                .any(|e| e.source == b_idx && e.target == seed_idx),
+            "B->A edge must point b -> seed (the reverse direction), not be dropped"
+        );
+    }
+
+    #[test]
+    fn multi_mode_a_related_instances_link_back_to_the_seed_is_promoted_not_left_as_a_stub() {
+        // Regression/negative case (#14): the ORIGINAL bug reported a real
+        // link going OUT from the seed being invisible when its target
+        // was a non-seed diagram; this is the exact same shape in
+        // reverse -- a related instance's OWN link back to the seed. Only
+        // ONE direction exists here (no forward seed->b link at all), so B
+        // can only be rendered via `All` scope's own-default-center
+        // fallback, isolating this from the reciprocal case above.
+        let mut editor = ed_with_kb_node("concept:seed", "Seed", "");
+        let uuid_b = register_plain_instance(
+            &mut editor,
+            "b",
+            vec![mae_kb::Node::new(
+                "concept:b-node",
+                "B Node",
+                mae_kb::NodeKind::Concept,
+                "[[concept:seed]]",
+            )],
+        );
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_multi_kb_scope = GraphMultiKbScope::All;
+
+        // depth=0: see the doc comment in
+        // `multi_mode_detects_a_real_cross_link_between_two_non_seed_related_instances`
+        // for why depth>=1 would trip an unrelated `extract_subgraph` BFS
+        // quirk here.
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+
+        assert_eq!(gv.diagram_labels.len(), 2, "seed + b");
+        assert_eq!(
+            gv.cross_instance_links.len(),
+            1,
+            "the B->seed link must be promoted, not silently dropped"
+        );
+        let b_to_seed = &gv.cross_instance_links[0];
+        assert_eq!(b_to_seed.source, "concept:b-node");
+        assert_eq!(b_to_seed.target, "concept:seed");
+        assert_eq!(b_to_seed.source_instance.as_deref(), Some(uuid_b.as_str()));
+        assert_eq!(b_to_seed.target_instance, None);
+        assert_eq!(gv.hidden_cross_instance_link_count, 0);
+
+        // Must NOT appear as a plain same-instance-looking boundary stub
+        // (a self-loop with rel_type: None) on B's own node -- that's the
+        // exact shape of the original bug.
+        let b_idx = 1;
+        assert!(
+            !gv.scene
+                .edges
+                .iter()
+                .any(|e| e.source == b_idx && e.target == b_idx && e.rel_type.is_none()),
+            "B->seed must not be left as an unclassified boundary stub on B's own node: {:?}",
+            gv.scene.edges
+        );
+        // Instead, it must be a real cross-instance edge connecting B's
+        // node to the seed's node.
+        assert!(
+            gv.scene.edges.iter().any(|e| e.source == b_idx
+                && e.target == 0
+                && e.style.dashed
+                && e.rel_type.is_some()),
+            "expected a real cross-instance edge from b's node to the seed: {:?}",
+            gv.scene.edges
+        );
     }
 }

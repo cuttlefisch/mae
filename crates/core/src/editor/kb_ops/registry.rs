@@ -835,6 +835,12 @@ impl Editor {
                     // Safe to unwrap: `is_cross_instance` only matched the
                     // `Some(o)` arm above.
                     target_instance: owner.unwrap(),
+                    // The instance this BATCH of boundary links was
+                    // extracted from — see Phase A2's doc comment on
+                    // `CrossInstanceLink::source_instance` for why this can
+                    // no longer be assumed to always be the seed once this
+                    // function is called per-diagram.
+                    source_instance: owner_instance.map(str::to_string),
                 });
             } else {
                 same_or_dead.push(link);
