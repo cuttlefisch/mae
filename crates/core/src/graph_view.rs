@@ -236,6 +236,58 @@ pub struct GraphView {
     /// state (unlike `scene`/`node_degrees`/etc.), just a render-path
     /// optimization detail.
     pub(crate) label_winner_cache: Option<LabelWinnerCache>,
+    /// ADR-068 Phase B3: the current DOI (Degree-of-Interest) focus node —
+    /// DISTINCT from `center_node` (the topology's BFS/extraction seed).
+    /// `None` before the first focus-follow event in full-corpus mode, or
+    /// whenever full-corpus DOI tiering isn't active for this view at all
+    /// (`kb_graph_multi_kb_full_corpus` off, or `mode != Multi`) — in
+    /// either case each diagram falls back to its own default focus set
+    /// (`diagram_focus_ids`). Updated by `Editor::maybe_follow_kb_graph_view`
+    /// WITHOUT calling `populate_graph_buffer` — the whole point of
+    /// decoupling "focus changed" from "topology changed" (see that
+    /// method's doc comment): a focus change must be cheap (no
+    /// re-extraction, no re-layout, no node-position changes), unlike a
+    /// genuine `center_node` change in non-full-corpus mode, which still
+    /// re-extracts exactly as before.
+    pub doi_focus: Option<String>,
+    /// Monotonic counter bumped whenever `doi_focus` changes (focus-follow
+    /// in full-corpus mode) AND on every `populate_graph_buffer` call (a
+    /// fresh topology implicitly invalidates whatever `doi_focus` meant
+    /// under the OLD topology — see `populate_graph_buffer`'s reset of
+    /// `doi_focus` to `None` on every populate). Mirrors `generation`'s
+    /// exact bump-and-stamp idiom, but scoped to DOI/tiering caches only
+    /// (`doi_tier_cache`) — deliberately NOT the same counter as
+    /// `generation` itself (that one is for topology/layout staleness;
+    /// this one is for "does the cached render-tier assignment still
+    /// reflect the current focus").
+    pub doi_generation: u64,
+    /// Per-node a-priori importance tier (ADR-068 Phase B2), topology-
+    /// derived — computed ONCE per `populate_graph_buffer` call (mirrors
+    /// `node_degrees`' own "compute once, cache, never per-frame" pattern)
+    /// and parallel to `scene.nodes`. Empty whenever full-corpus DOI mode
+    /// isn't active for this view (`kb_graph_multi_kb_full_corpus` off, or
+    /// `mode != Multi`) — `compute_node_tiers` treats an empty/short slice
+    /// as `ApiTier::Ordinary` for any index past its end, but in practice
+    /// callers gate the WHOLE DOI pass on the same full-corpus check
+    /// before ever reading this, so it's simply unused garbage-free `Vec::
+    /// new()` in that case, never a source of incorrect tiering.
+    pub(crate) node_api_tier: Vec<ApiTier>,
+    /// Each composed diagram's own default DOI focus set — one entry per
+    /// `diagram_labels` entry, same order (ADR-068 Phase B3). For the seed
+    /// diagram: `[center_node]`. For a related diagram (`Multi` mode):
+    /// whichever landing-point ids `populate_graph_buffer`'s related-
+    /// instance loop already resolved as that diagram's `starters` (the
+    /// seed's cross-links into it, or its own default-center fallback when
+    /// there were none) — reused verbatim, not re-derived. Consulted by
+    /// `Editor::graph_view_doi_distances` whenever `doi_focus` doesn't
+    /// name a node belonging to a given diagram (the common case for every
+    /// diagram except whichever one the user's focus currently sits in).
+    pub(crate) diagram_focus_ids: Vec<Vec<String>>,
+    /// Memoized `compute_node_tiers` result — see `DoiTierCache`'s doc
+    /// comment. `pub(crate)`, not `pub`, for the same reason as
+    /// `label_winner_cache`: an internal render-path optimization detail,
+    /// not part of `GraphView`'s externally-meaningful state.
+    pub(crate) doi_tier_cache: Option<DoiTierCache>,
 }
 
 /// An in-flight color transition for one node — see `GraphView.color_tween`.
@@ -479,6 +531,22 @@ impl GraphView {
     /// silently breaking positional inference.
     pub fn describe_state(&self) -> GraphViewState {
         let node_id = |i: usize| self.scene.nodes.get(i).map(|n| n.id.clone());
+        // ADR-068 Phase B4/B8 (cross-backend parity): read whatever tier
+        // `flatten_scene_graph_cached`'s production call site last computed
+        // and cached (`doi_tier_cache`) — NOT a fresh recomputation here,
+        // so a human's screen and the AI's introspection read the exact
+        // same underlying decision. Empty (defaulting every node to
+        // `Full`) whenever no full-corpus reflatten has populated the
+        // cache yet — the same "every node draws normally" state that
+        // predates Phase B4 entirely.
+        let render_tier_at = |i: usize| -> &'static str {
+            self.doi_tier_cache
+                .as_ref()
+                .and_then(|c| c.result.get(i))
+                .copied()
+                .unwrap_or(RenderTier::Full)
+                .as_str()
+        };
         GraphViewState {
             center_node: self.center_node.clone(),
             depth: self.depth,
@@ -515,6 +583,7 @@ impl GraphView {
                     selected: self.scene.selection == Some(i),
                     hovered: self.scene.hovered == Some(i),
                     is_seed: n.is_seed,
+                    render_tier: render_tier_at(i).to_string(),
                 })
                 .collect(),
             edges: self
@@ -607,6 +676,25 @@ pub struct GraphViewNodeState {
     pub pinned: bool,
     pub selected: bool,
     pub hovered: bool,
+    /// ADR-068 Phase B4: `"full"` (drawn normally), `"clustered"` (folded
+    /// into an aggregate "... (+N)" stub, not drawn individually), or
+    /// `"hidden"` (skipped from drawing entirely) — see `RenderTier`.
+    /// Always `"full"` whenever full-corpus DOI tiering isn't active for
+    /// this view (`kb_graph_multi_kb_full_corpus` off, `mode != Multi`, or
+    /// no reflatten has run yet to populate `doi_tier_cache`) — i.e. the
+    /// exact same "every node draws normally" state this field's absence
+    /// implied before Phase B4 existed. Sourced from `GraphView.
+    /// doi_tier_cache` (the SAME cache `flatten_scene_graph_cached`'s
+    /// production call site consults/populates), NOT recomputed here —
+    /// the house rule this codebase already enforces
+    /// (`describe_state_is_unaffected_by_culling_or_lod`) is that
+    /// introspection must never RESHAPE `nodes`/`edges` for a render-time
+    /// LOD decision (this field is purely additive, same node/index,
+    /// never reordered/filtered), but reporting an ACCURATE tier value is
+    /// exactly the AI-peer-parity contract Phase B4 requires (a human must
+    /// never be told a node is "full" while the AI reads "clustered", or
+    /// vice versa).
+    pub render_tier: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -687,6 +775,11 @@ impl GraphView {
             hidden_related_instance_count: 0,
             generation: 0,
             label_winner_cache: None,
+            doi_focus: None,
+            doi_generation: 0,
+            node_api_tier: Vec::new(),
+            diagram_focus_ids: Vec::new(),
+            doi_tier_cache: None,
         }
     }
 }
@@ -889,6 +982,108 @@ impl GraphMultiKbScope {
     }
 }
 
+/// A-priori importance tier for one node (ADR-068 Phase B2, Furnas's
+/// Degree-of-Interest `API(x)` term) — evaluated top-down, first match
+/// wins, computed ONCE per `populate_graph_buffer` call by
+/// `Editor::compute_node_api_tiers` and cached on `GraphView.node_api_tier`.
+/// Deliberately TIERED, not a weighted-sum score: a score needs tuning
+/// constants and makes "always visible" merely probabilistic; a hard tier
+/// makes `Bridge`/`Hub`'s "always full detail" guarantee a structural
+/// invariant `compute_node_tiers` can enforce by construction (never even
+/// evaluating distance/zoom for them), not a threshold that could
+/// theoretically be crossed by an aggressive option combination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ApiTier {
+    /// A cross-instance-link endpoint (source OR target side) for this
+    /// node's own diagram — see `Editor::compute_node_api_tiers`'s doc
+    /// comment. DOI is never evaluated for this tier: `compute_node_tiers`
+    /// excludes it from the clustering candidate pool entirely (ADR-068
+    /// Phase B5), guaranteeing a cross-KB `SceneEdge` always terminates at
+    /// a stable, individually-rendered position.
+    Bridge,
+    /// This diagram's own designated default center (`Editor::
+    /// default_center_for_owner`) — the "land here first" node, always
+    /// full detail for the same structural reason as `Bridge`.
+    Hub,
+    /// Top-quantile by degree within its own diagram (see
+    /// `DEGREE_TIER_QUANTILE`) — not exempt from DOI, but gets a modest
+    /// reach bonus over an `Ordinary` node at the same distance (see
+    /// `compute_node_tiers`).
+    Degree,
+    /// Every other node — governed by DOI (distance + zoom + the
+    /// clustering options) with no a-priori bonus.
+    Ordinary,
+}
+
+/// Render-time level-of-detail decision for one node (ADR-068 Phase B4) —
+/// the OUTPUT of `compute_node_tiers`, consumed by `flatten_scene_graph_
+/// cached`'s node loop. Distinct from `ApiTier` (an INPUT, topology-
+/// derived, computed once per populate): `RenderTier` also depends on the
+/// current DOI focus/zoom/threshold options, so it's recomputed (and
+/// cached via `DoiTierCache`) per reflatten instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RenderTier {
+    /// Draw normally — circle + (zoom/declutter-gated) label, exactly like
+    /// every node did before Phase B4 existed.
+    Full,
+    /// Not drawn individually — folded into one aggregate "... (+N)" stub
+    /// per (diagram, cluster-group) alongside every other `Clustered` node
+    /// sharing that bucket. Still present in `scene`/`describe_state` (see
+    /// `describe_state_is_unaffected_by_culling_or_lod`) — only the DRAW is
+    /// skipped/redirected.
+    Clustered,
+    /// Skipped from drawing entirely (too zoomed out for even an aggregate
+    /// stub to be legible — see `compute_node_tiers`'s doc comment for the
+    /// zoom-threshold rationale). Still present in `scene`/`describe_state`.
+    Hidden,
+}
+
+impl RenderTier {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            RenderTier::Full => "full",
+            RenderTier::Clustered => "clustered",
+            RenderTier::Hidden => "hidden",
+        }
+    }
+}
+
+/// How `RenderTier::Clustered` nodes bucket into aggregate stubs (ADR-068
+/// Phase B6) — configured via `kb_graph_cluster_group_by`. Mirrors
+/// `GraphLayoutAlgorithm`'s exact enum shape (`as_str`/`parse`, `Default`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ClusterGroupBy {
+    /// Group by `mae_canvas::scene::NodeKind` — e.g. every clustered
+    /// `Concept` in a diagram collapses into one stub, every clustered
+    /// `Note` into another.
+    #[default]
+    Kind,
+    /// Group by a coarse log2 bucket of the node's `node_degrees` count
+    /// (0, 1, 2-3, 4-7, 8-15, ...) — useful when a KB's `NodeKind`s are
+    /// too uniform (e.g. almost everything is `Note`) for kind-grouping to
+    /// usefully separate hubs-in-waiting from genuine leaves.
+    DegreeBucket,
+}
+
+impl ClusterGroupBy {
+    /// Stable wire/config string (matches the option's accepted values).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ClusterGroupBy::Kind => "kind",
+            ClusterGroupBy::DegreeBucket => "degree_bucket",
+        }
+    }
+
+    /// Parse a configured value.
+    pub fn parse(s: &str) -> Option<ClusterGroupBy> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "kind" => Some(ClusterGroupBy::Kind),
+            "degree_bucket" => Some(ClusterGroupBy::DegreeBucket),
+            _ => None,
+        }
+    }
+}
+
 /// Which background layout pass a `GraphLayoutIntent` requests.
 ///
 /// - `OneShot`: Phase 1/2 behavior (`kb_graph_animate = false`, the
@@ -1016,6 +1211,9 @@ pub struct GraphStyleOptions {
     /// `Force`'s perpendicular-offset-from-midpoint. Mirrors
     /// `kb_graph_layout_algorithm`.
     pub layout_algorithm: GraphLayoutAlgorithm,
+    /// How `RenderTier::Clustered` nodes bucket into aggregate stubs
+    /// (ADR-068 Phase B6). Mirrors `kb_graph_cluster_group_by`.
+    pub cluster_group_by: ClusterGroupBy,
     /// `(node_index, hex_color)` — when set, that node's color is FORCED
     /// to this value, checked before the selected/hovered/kind-color
     /// chain below. Set by the call site (not `from_editor`, which has no
@@ -1228,6 +1426,7 @@ impl GraphStyleOptions {
             edge_curvature: editor.kb_graph_edge_curvature,
             edge_alpha: editor.kb_graph_edge_alpha,
             layout_algorithm: editor.kb_graph_layout_algorithm,
+            cluster_group_by: editor.kb_graph_cluster_group_by,
             color_override: None,
             node_border_enabled: editor.kb_graph_node_border_enabled,
             node_colors,
@@ -1327,6 +1526,26 @@ pub(crate) fn node_diagram_centers(
         centers.extend(std::iter::repeat_n((d.center_x, d.center_y), d.node_count));
     }
     centers
+}
+
+/// Broadcast each diagram's ORDINAL position (`0`, `1`, ...) across its
+/// contiguous node range — same broadcast shape as `node_diagram_centers`
+/// (parallel to `scene.nodes`), used by `flatten_scene_graph_cached`'s
+/// cluster-stub aggregation (ADR-068 Phase B4) to group `RenderTier::
+/// Clustered` nodes per-DIAGRAM (never merging two different diagrams'
+/// clustered nodes into one stub, even if they happen to share a cluster-
+/// group bucket) without relying on floating-point equality between two
+/// diagrams' `(center_x, center_y)` values, which — while true by
+/// construction in the grid layout — is a fragile thing to key a
+/// `HashMap` on.
+pub(crate) fn node_diagram_indices(
+    diagram_labels: &[mae_canvas::kb_graph::DiagramLabel],
+) -> Vec<usize> {
+    let mut indices = Vec::new();
+    for (d, label) in diagram_labels.iter().enumerate() {
+        indices.extend(std::iter::repeat_n(d, label.node_count));
+    }
+    indices
 }
 
 /// Compute a node's FINAL render radius (logical px) — the single formula
@@ -1658,6 +1877,164 @@ fn label_boxes_overlap(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool
         && a.3 + LABEL_DECLUTTER_PADDING_PX > b.1
 }
 
+/// DEGREE tier cutoff (ADR-068 Phase B2) — the top `DEGREE_TIER_QUANTILE`
+/// fraction of a diagram's nodes by degree (excluding whatever already
+/// resolved to `Bridge`/`Hub`) get `ApiTier::Degree` rather than
+/// `ApiTier::Ordinary`. A plain constant, not an `OptionRegistry` entry
+/// (mirrors this module's existing `ANIMATION_*`/`MAX_CURVE_OFFSET_PX`
+/// precedent for tuning that isn't itself a user-facing behavior toggle) —
+/// the plan deliberately left this cutoff unspecified; 0.25 (top quartile)
+/// is a reasonable, simple, round-number judgment call: generous enough to
+/// give a diagram's genuinely well-connected nodes SOME DOI reach bonus
+/// (see `compute_node_tiers`), conservative enough that "Degree tier"
+/// still means something narrower than "half the diagram."
+pub(crate) const DEGREE_TIER_QUANTILE: f64 = 0.25;
+
+/// Cached inputs + result of the last `compute_node_tiers` call (ADR-068
+/// Phase B4) — same single-last-call-slot memoization shape as
+/// `LabelWinnerCache` (see that struct's doc comment for the rationale:
+/// keep this simple, not clever), just for the DOI/LOD render-tier
+/// decision instead of label-occlusion culling. Invalidated by `GraphView.
+/// doi_generation`'s bump — NOT `GraphView.generation` (topology/layout
+/// staleness) — see `doi_generation`'s own doc comment for why a fresh
+/// `populate_graph_buffer` call bumps BOTH counters (a fresh topology
+/// always invalidates any previously-cached tiering too, just via the
+/// same mechanism a focus change uses, not a second invalidation path).
+#[derive(Debug, Clone)]
+pub(crate) struct DoiTierCache {
+    doi_generation: u64,
+    node_count: usize,
+    zoom: f64,
+    doi_zoom_threshold: f32,
+    doi_distance_falloff: usize,
+    dense_cluster_threshold: usize,
+    pub(crate) result: Vec<RenderTier>,
+}
+
+impl DoiTierCache {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        doi_generation: u64,
+        node_count: usize,
+        zoom: f64,
+        doi_zoom_threshold: f32,
+        doi_distance_falloff: usize,
+        dense_cluster_threshold: usize,
+        result: Vec<RenderTier>,
+    ) -> Self {
+        DoiTierCache {
+            doi_generation,
+            node_count,
+            zoom,
+            doi_zoom_threshold,
+            doi_distance_falloff,
+            dense_cluster_threshold,
+            result,
+        }
+    }
+
+    /// Whether a fresh `compute_node_tiers` call with these exact inputs
+    /// would recompute to the SAME result this cache already holds —
+    /// mirrors `LabelWinnerCache::matches`'s exact shape.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn matches(
+        &self,
+        doi_generation: u64,
+        node_count: usize,
+        zoom: f64,
+        doi_zoom_threshold: f32,
+        doi_distance_falloff: usize,
+        dense_cluster_threshold: usize,
+    ) -> bool {
+        self.doi_generation == doi_generation
+            && self.node_count == node_count
+            && self.zoom == zoom
+            && self.doi_zoom_threshold == doi_zoom_threshold
+            && self.doi_distance_falloff == doi_distance_falloff
+            && self.dense_cluster_threshold == dense_cluster_threshold
+    }
+}
+
+/// Decide each node's `RenderTier` (ADR-068 Phase B4) from its `ApiTier`
+/// (a-priori importance, `node_api_tier`) and hop-distance-from-focus
+/// (`distances`, `None` = unreachable from this node's own diagram's
+/// focus — see `Editor::graph_view_doi_distances`).
+///
+/// Judgment calls made where the plan left the exact formula unspecified
+/// (documented here, not silently invented):
+///
+/// - **Bridge/Hub are structurally exempt** (ADR-068 Phase B5): never
+///   enter the candidate pool at all, regardless of distance/zoom/
+///   thresholds — this is what guarantees a cross-KB edge always
+///   terminates at a stable, individually-rendered node.
+/// - **Reach**: a `Degree`-tier node's effective DOI reach is
+///   `doi_distance_falloff + 1` (one extra hop of "benefit of the doubt"
+///   over an `Ordinary` node at `doi_distance_falloff`) — the concrete,
+///   simple way tiers 3/4 "combine with distance" per the plan's own
+///   language, without inventing a weighted score.
+/// - **Dense-cluster gate**: if fewer than `dense_cluster_threshold`
+///   nodes would be elided, don't bother clustering at all — render
+///   everything `Full` (matches `kb_graph_dense_cluster_threshold`'s own
+///   option doc: "minimum cluster-candidate-pool size before clustering
+///   kicks in at all; below this, just render everything at Full tier").
+/// - **Zoom decides Hidden vs. Clustered, not Full-tier membership**: below
+///   `doi_zoom_threshold`, an elided node is too small/zoomed-out for even
+///   a legible "... (+N)" stub to be worth drawing, so it's `Hidden`
+///   instead of `Clustered` — mirrors `kb_graph_label_zoom_threshold`'s
+///   own "below this zoom, don't bother drawing this at all" precedent.
+///   Deliberately does NOT let zoom override which nodes are IN the
+///   candidate pool (only what happens to nodes already there) — this
+///   keeps `RenderTier::Full` membership a pure function of `ApiTier` +
+///   distance + the two count-based thresholds, so raising zoom can never
+///   SHRINK the full-tier set (monotonic nesting, B8 test 2) — it can only
+///   ever change whether an elided node gets a visible stub or none at all.
+///
+/// Pure function of its inputs — no scene mutation, no I/O — same
+/// independent-unit-testability precedent as `compute_label_winners`.
+pub(crate) fn compute_node_tiers(
+    node_count: usize,
+    node_api_tier: &[ApiTier],
+    distances: &[Option<usize>],
+    zoom: f64,
+    doi_zoom_threshold: f32,
+    doi_distance_falloff: usize,
+    dense_cluster_threshold: usize,
+) -> Vec<RenderTier> {
+    let mut tiers = vec![RenderTier::Full; node_count];
+    let mut candidates: Vec<usize> = Vec::new();
+    for i in 0..node_count {
+        let tier = node_api_tier.get(i).copied().unwrap_or(ApiTier::Ordinary);
+        if matches!(tier, ApiTier::Bridge | ApiTier::Hub) {
+            // B5: never eligible for clustering/hiding, DOI never evaluated.
+            continue;
+        }
+        let reach = doi_distance_falloff + if tier == ApiTier::Degree { 1 } else { 0 };
+        let within_reach = distances
+            .get(i)
+            .copied()
+            .flatten()
+            .is_some_and(|d| d <= reach);
+        if !within_reach {
+            candidates.push(i);
+        }
+    }
+    if candidates.len() < dense_cluster_threshold {
+        // Too few to bother clustering — render everything Full (see this
+        // function's doc comment / `kb_graph_dense_cluster_threshold`'s
+        // option doc).
+        return tiers;
+    }
+    let elided_tier = if zoom < doi_zoom_threshold as f64 {
+        RenderTier::Hidden
+    } else {
+        RenderTier::Clustered
+    };
+    for i in candidates {
+        tiers[i] = elided_tier;
+    }
+    tiers
+}
+
 /// Cached inputs + result of the last `compute_label_winners` call — see
 /// that function's doc comment for the (up to) O(n^2) greedy-overlap cost
 /// this exists to avoid re-paying on every call. `tick_graph_color_tweens`
@@ -1859,7 +2236,20 @@ pub fn flatten_scene_graph(
     // scene's own global origin for every node, reproducing exactly the
     // behavior every one of those existing tests already asserts. See
     // `node_diagram_centers` for the real (non-empty) production array.
-    flatten_scene_graph_cached(scene, viewport, style, degrees, &[], &mut no_cache)
+    // `render_tiers`/`diagram_indices`: also empty for the same reason —
+    // an empty `render_tiers` slice makes every node resolve to
+    // `RenderTier::Full` (see the node loop below), reproducing pre-Phase-
+    // B4 behavior exactly for every one of this wrapper's existing callers.
+    flatten_scene_graph_cached(
+        scene,
+        viewport,
+        style,
+        degrees,
+        &[],
+        &[],
+        &[],
+        &mut no_cache,
+    )
 }
 
 /// Same as `flatten_scene_graph`, but reuses `label_cache`'s prior
@@ -1878,12 +2268,28 @@ pub fn flatten_scene_graph(
 /// slice (or an index past its end) falls back to the scene's own origin —
 /// exactly today's pre-A3 single-diagram behavior, which `flatten_scene_graph`
 /// relies on for its ~35 existing test call sites.
+///
+/// `render_tiers` (ADR-068 Phase B4): parallel to `degrees` — the
+/// `RenderTier` decision `Editor::graph_view_doi_render_tiers` computed (or
+/// reused from cache) for the CURRENT viewport/DOI-focus. An empty slice
+/// (or an index past its end) resolves to `RenderTier::Full` for that
+/// node — reproduces pre-Phase-B4 behavior (every node draws normally)
+/// exactly, both for `flatten_scene_graph`'s test-only callers and for any
+/// production call where full-corpus DOI mode isn't active. `diagram_indices`
+/// (`node_diagram_indices`) is REQUIRED alongside a non-empty `render_tiers`
+/// whenever any node is `Clustered` — it's how clustered nodes get grouped
+/// per-diagram into separate aggregate stubs (see the cluster-stub
+/// emission below); an empty slice groups every clustered node into
+/// diagram `0`, which is only correct for a single-diagram scene.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn flatten_scene_graph_cached(
     scene: &mae_canvas::scene::SceneGraph,
     viewport: &mae_canvas::scene::Viewport,
     style: &GraphStyleOptions,
     degrees: &[u32],
     diagram_centers: &[(f64, f64)],
+    render_tiers: &[RenderTier],
+    diagram_indices: &[usize],
     label_cache: &mut Option<LabelWinnerCache>,
 ) -> Vec<VisualElement> {
     use mae_canvas::interaction::scene_to_viewport;
@@ -2182,7 +2588,33 @@ pub(crate) fn flatten_scene_graph_cached(
             None
         };
 
+    // ADR-068 Phase B4: accumulate `RenderTier::Clustered` node indices per
+    // (diagram, cluster-group-bucket) — drawn as ONE aggregate stub AFTER
+    // this loop, instead of being drawn individually inside it. Keyed by
+    // `(diagram_index, bucket)` so two different diagrams' clustered nodes
+    // (even sharing the same kind/degree-bucket) never merge into one
+    // stub — see `node_diagram_indices`'s doc comment.
+    let mut cluster_groups: std::collections::HashMap<(usize, u32), Vec<usize>> =
+        std::collections::HashMap::new();
+
     for (i, node) in scene.nodes.iter().enumerate() {
+        let tier = render_tiers.get(i).copied().unwrap_or(RenderTier::Full);
+        if tier == RenderTier::Hidden {
+            // Skip the draw entirely — still present in `scene`/
+            // `describe_state` (see `describe_state_is_unaffected_by_
+            // culling_or_lod`), only the VISUAL is suppressed.
+            continue;
+        }
+        if tier == RenderTier::Clustered {
+            let diagram_idx = diagram_indices.get(i).copied().unwrap_or(0);
+            let degree = degrees.get(i).copied().unwrap_or(0);
+            let bucket = cluster_bucket_key(style.cluster_group_by, node.kind, degree);
+            cluster_groups
+                .entry((diagram_idx, bucket))
+                .or_default()
+                .push(i);
+            continue;
+        }
         let is_selected = scene.selection == Some(i);
         let is_hovered = scene.hovered == Some(i);
         // Selected always wins over hovered when both target the same
@@ -2263,7 +2695,75 @@ pub(crate) fn flatten_scene_graph_cached(
         }
     }
 
+    // ADR-068 Phase B4/B5: one aggregate "... (+N)" stub per (diagram,
+    // cluster-group) — reuses the SAME visual language as a boundary-link
+    // stub (`style.boundary_edge_color`/`boundary_edge_text_color`, a
+    // dashed-feeling muted marker + a count label), just anchored at the
+    // group's own centroid position rather than a real source node's
+    // (there IS no single "source" node for an aggregate of many unrelated
+    // far-from-focus nodes). Deterministic iteration order (sorted by key)
+    // so this function stays a pure, reproducible function of its inputs
+    // like the rest of this file, not dependent on `HashMap`'s
+    // per-process-hash-seed iteration order.
+    let mut group_keys: Vec<&(usize, u32)> = cluster_groups.keys().collect();
+    group_keys.sort();
+    for key in group_keys {
+        let members = &cluster_groups[key];
+        if members.is_empty() {
+            continue;
+        }
+        let (sum_x, sum_y, sum_r) = members.iter().fold((0.0f32, 0.0f32, 0.0f32), |acc, &i| {
+            (
+                acc.0 + positions[i].0,
+                acc.1 + positions[i].1,
+                acc.2 + radii[i],
+            )
+        });
+        let n = members.len() as f32;
+        let (cx, cy, r) = (sum_x / n, sum_y / n, (sum_r / n).max(1.0));
+        elements.push(VisualElement::Circle {
+            cx,
+            cy,
+            r,
+            // Hollow (no fill) — visually distinct from a real, filled
+            // node, while still using the same boundary color language a
+            // "there's more here, collapsed" signal already uses elsewhere
+            // in this function.
+            fill: None,
+            stroke: Some(style.boundary_edge_color.clone()),
+        });
+        elements.push(VisualElement::Text {
+            x: cx + r + 4.0,
+            y: cy,
+            text: format!("... (+{})", members.len()),
+            font_size: style.font_size,
+            color: style.boundary_edge_text_color.clone(),
+            rotation_degrees: 0.0,
+            right_align: false,
+        });
+    }
+
     elements
+}
+
+/// Which bucket a `RenderTier::Clustered` node's aggregate stub groups
+/// into, per `kb_graph_cluster_group_by` (ADR-068 Phase B6) — a `u32` key
+/// so it composes cheaply into the `(diagram_index, bucket)` `HashMap` key
+/// `flatten_scene_graph_cached`'s cluster-stub aggregation uses.
+fn cluster_bucket_key(
+    group_by: ClusterGroupBy,
+    kind: mae_canvas::scene::NodeKind,
+    degree: u32,
+) -> u32 {
+    match group_by {
+        ClusterGroupBy::Kind => kind as u32,
+        // Coarse log2 bucket: degree 0 -> bucket 0, 1 -> 1, 2-3 -> 2,
+        // 4-7 -> 3, 8-15 -> 4, ... — groups nodes of roughly comparable
+        // connectivity together without needing one bucket per exact
+        // degree value (which would fragment a cluster into many
+        // single-node "stubs", defeating the point of clustering).
+        ClusterGroupBy::DegreeBucket => degree.checked_ilog2().map(|v| v + 1).unwrap_or(0),
+    }
 }
 
 /// Approximate width (as a multiple of `font_size`) of one character in the
@@ -2391,6 +2891,7 @@ mod tests {
             // formula (or a straight line); new chord-mode tests build
             // their own style with `Chord` explicitly, same pattern.
             layout_algorithm: GraphLayoutAlgorithm::Force,
+            cluster_group_by: ClusterGroupBy::Kind,
             color_override: None,
             node_border_enabled: false,
             node_colors: [
@@ -3051,8 +3552,16 @@ mod tests {
         let mut cache: Option<LabelWinnerCache> = None;
 
         let before_first = label_winners_compute_count();
-        let elements1 =
-            flatten_scene_graph_cached(&scene, &viewport, &style, &degrees, &[], &mut cache);
+        let elements1 = flatten_scene_graph_cached(
+            &scene,
+            &viewport,
+            &style,
+            &degrees,
+            &[],
+            &[],
+            &[],
+            &mut cache,
+        );
         let after_first = label_winners_compute_count();
         assert_eq!(
             after_first,
@@ -3074,8 +3583,16 @@ mod tests {
         };
         let expected_text_count = text_count(&elements1);
         for _ in 0..5 {
-            let elements_n =
-                flatten_scene_graph_cached(&scene, &viewport, &style, &degrees, &[], &mut cache);
+            let elements_n = flatten_scene_graph_cached(
+                &scene,
+                &viewport,
+                &style,
+                &degrees,
+                &[],
+                &[],
+                &[],
+                &mut cache,
+            );
             assert_eq!(
                 text_count(&elements_n),
                 expected_text_count,
@@ -3100,6 +3617,8 @@ mod tests {
             &style,
             &degrees,
             &[],
+            &[],
+            &[],
             &mut cache,
         );
         let after_selection_change = label_winners_compute_count();
@@ -3117,6 +3636,8 @@ mod tests {
             &viewport,
             &style,
             &degrees,
+            &[],
+            &[],
             &[],
             &mut cache,
         );
@@ -4164,6 +4685,8 @@ mod tests {
             &style,
             &degrees,
             &diagram_centers,
+            &[],
+            &[],
             &mut cache,
         );
 
@@ -4277,6 +4800,8 @@ mod tests {
             &style,
             &degrees,
             &diagram_centers,
+            &[],
+            &[],
             &mut cache,
         );
 

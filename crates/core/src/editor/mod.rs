@@ -927,6 +927,34 @@ pub struct Editor {
     /// `kb_graph_full_corpus_node_cap`; see
     /// `KnowledgeBase::extract_full_corpus`'s `cap` parameter.
     pub kb_graph_full_corpus_node_cap: usize,
+    /// ADR-068 Phase B6: below this viewport zoom level, an elided
+    /// (non-`Full`-tier) node is drawn as `RenderTier::Hidden` (skipped
+    /// entirely) rather than `RenderTier::Clustered` (an aggregate "... (+N)"
+    /// stub) — too zoomed out for even a stub to be legible. Mirrors
+    /// `kb_graph_label_zoom_threshold`'s exact same-family threshold
+    /// pattern. Only consulted when `kb_graph_multi_kb_full_corpus` is on
+    /// AND `kb_graph_view_mode = Multi`; see `crate::graph_view::
+    /// compute_node_tiers`.
+    pub kb_graph_doi_zoom_threshold: f32,
+    /// ADR-068 Phase B6: hop-count reach from the DOI focus (`GraphView.
+    /// doi_focus`, or a diagram's own default focus when unset) within
+    /// which a `Degree`/`Ordinary`-tier node stays `RenderTier::Full`.
+    /// `Bridge`/`Hub`-tier nodes are exempt entirely (always `Full`,
+    /// regardless of distance) — see `crate::graph_view::ApiTier`. Kept as
+    /// one simple integer knob per the ADR-068 design (deliberately not an
+    /// exposed formula/weighted score).
+    pub kb_graph_doi_distance_falloff: usize,
+    /// ADR-068 Phase B6: minimum cluster-candidate-pool size (nodes beyond
+    /// `kb_graph_doi_distance_falloff`'s reach) before clustering kicks in
+    /// at all — below this, every node renders `Full` regardless (not
+    /// worth the visual overhead of a stub for a handful of elided nodes).
+    /// Subsumes issue #477's own originally-proposed option of the same
+    /// shape.
+    pub kb_graph_dense_cluster_threshold: usize,
+    /// ADR-068 Phase B6: how `RenderTier::Clustered` nodes bucket into
+    /// aggregate "... (+N)" stubs. Mirrors `kb_graph_layout_algorithm`'s
+    /// exact enum-option shape; see `crate::graph_view::ClusterGroupBy`.
+    pub kb_graph_cluster_group_by: crate::graph_view::ClusterGroupBy,
     /// Queued background layout request for the open/refreshed graph-view
     /// buffer (`mae::graph_layout_bridge`, Part C Phase 1) — drained once
     /// per GUI event-loop tick, see `crate::graph_view::GraphLayoutIntent`'s
@@ -1460,6 +1488,10 @@ impl Editor {
             kb_graph_multi_kb_grid_gap_factor: 0.6,
             kb_graph_multi_kb_full_corpus: false,
             kb_graph_full_corpus_node_cap: 5000,
+            kb_graph_doi_zoom_threshold: 0.5,
+            kb_graph_doi_distance_falloff: 2,
+            kb_graph_dense_cluster_threshold: 20,
+            kb_graph_cluster_group_by: crate::graph_view::ClusterGroupBy::Kind,
             pending_graph_layout: None,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)
             messages_synced_seq: None,

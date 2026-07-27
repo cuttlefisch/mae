@@ -297,7 +297,14 @@ impl Editor {
         let (width, height) = self.graph_viewport_pixel_size(win_id);
         let mut style = self.graph_style_options();
         let zoom_to_fit_margin = self.kb_graph_zoom_to_fit_margin as f64;
-        if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+
+        // ---- Pass 1: resolve/store this window's `Viewport` (unchanged
+        // from before ADR-068 Phase B4). ----
+        let Some(viewport) = ({
+            let Some(gv) = self.buffers[buf_idx].graph_view_mut() else {
+                self.mark_full_redraw();
+                return;
+            };
             // Merge in the active color tween's current eased color, if
             // any — `from_editor` has no per-`GraphView` knowledge, so
             // this is the call site that bridges `GraphView.color_tween`
@@ -345,7 +352,27 @@ impl Editor {
                     mae_canvas::interaction::set_zoom(gv.viewports.get_mut(&win_id).unwrap(), fit);
                 }
             }
-            let viewport = *gv.viewports.get(&win_id).unwrap();
+            gv.viewports.get(&win_id).copied()
+        }) else {
+            self.mark_full_redraw();
+            return;
+        };
+
+        // ---- Pass 2 (ADR-068 Phase B4): compute (or reuse) this window's
+        // DOI/LOD render tiers. Must run BETWEEN the two mutable-borrow
+        // passes on `GraphView` — a cache MISS needs `&self` KB access
+        // (`graph_view_doi_distances`), which can't run while `gv: &mut
+        // GraphView` (from pass 1/3) is outstanding. Empty/`None` whenever
+        // full-corpus DOI mode isn't active — see `graph_view_doi_render_
+        // tiers`'s own doc comment for why that reproduces pre-Phase-B4
+        // behavior byte-for-byte.
+        let (render_tiers, new_doi_cache) = self.graph_view_doi_render_tiers(buf_idx, &viewport);
+
+        // ---- Pass 3: flatten + cache using the tiers computed above. ----
+        if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
+            if let Some(new_cache) = new_doi_cache {
+                gv.doi_tier_cache = Some(new_cache);
+            }
             // A3: per-node diagram-local center, broadcast from
             // `gv.diagram_labels` (see `node_diagram_centers`'s doc
             // comment) — built fresh each reflatten, same as `positions`/
@@ -353,6 +380,11 @@ impl Editor {
             // an O(nodes) pass every call; this doesn't add a new
             // complexity class to that existing per-reflatten cost).
             let diagram_centers = crate::graph_view::node_diagram_centers(&gv.diagram_labels);
+            // ADR-068 Phase B4: per-node diagram ORDINAL (not center) —
+            // needed by the cluster-stub aggregation to group `Clustered`
+            // nodes per-diagram. Same broadcast shape/cost as
+            // `diagram_centers` above.
+            let diagram_indices = crate::graph_view::node_diagram_indices(&gv.diagram_labels);
             // `_cached` variant: memoizes `compute_label_winners` across
             // calls whose inputs are unchanged (e.g. every tick of a pure
             // color tween) — see `GraphView.label_winner_cache`'s doc
@@ -365,6 +397,8 @@ impl Editor {
                 &style,
                 &gv.node_degrees,
                 &diagram_centers,
+                &render_tiers,
+                &diagram_indices,
                 &mut gv.label_winner_cache,
             );
             // Per-diagram KB-name captions (#462 PR4) — a no-op when
@@ -728,6 +762,10 @@ impl Editor {
         let mut hidden_related_instance_count = 0;
         let mut cross_instance_links_kept: Vec<mae_kb::CrossInstanceLink> = Vec::new();
         let mut diagram_labels: Vec<mae_canvas::kb_graph::DiagramLabel> = Vec::new();
+        // ADR-068 Phase B3: each diagram's own default DOI focus set,
+        // parallel to `diagram_labels` (same order) — see `GraphView.
+        // diagram_focus_ids`'s doc comment.
+        let mut diagram_focus_ids: Vec<Vec<String>> = Vec::new();
         let mut queue_force_layout = false;
 
         let scene = match view_mode {
@@ -787,6 +825,14 @@ impl Editor {
                     loaded: seed_loaded,
                 };
                 let mut diagrams = vec![seed_diagram];
+                // ADR-068 Phase B3: each diagram's own default DOI focus
+                // set, parallel to `diagrams`/`diagram_labels` (same
+                // order) — the seed's is just its own extraction center;
+                // a related diagram's is pushed below once `starters` is
+                // resolved for it. Assigned to the outer `diagram_focus_ids`
+                // (declared before this `match`, same pattern as
+                // `diagram_labels`) once this arm finishes building it.
+                let mut focus_ids: Vec<Vec<String>> = vec![vec![center.clone()]];
 
                 // Phase A2 (#462): accumulate cross-instance links from
                 // EVERY rendered diagram, not just the seed — a real link
@@ -902,6 +948,10 @@ impl Editor {
                             related_result.boundary_links.clone(),
                         );
                     all_cross_links.extend(related_cross_links);
+                    // ADR-068 Phase B3: this diagram's own default DOI
+                    // focus set — same ids as `starter_ids` below (cloned
+                    // before the move into `KbInstanceSubgraph`).
+                    focus_ids.push(starters.clone());
 
                     diagrams.push(mae_canvas::kb_graph::KbInstanceSubgraph {
                         instance: related_instance.clone(),
@@ -948,6 +998,7 @@ impl Editor {
                     );
                 hidden_cross_instance_link_count = hidden_links;
                 diagram_labels = labels;
+                diagram_focus_ids = focus_ids;
                 scene
             }
         };
@@ -981,7 +1032,35 @@ impl Editor {
                 node_count: scene.nodes.len(),
                 loaded: single_loaded,
             }];
+            // ADR-068 Phase B3: mirrors `diagram_labels`' single-entry
+            // override above — Single mode's one "diagram" always focuses
+            // on its own extraction center.
+            diagram_focus_ids = vec![vec![center.clone()]];
         }
+
+        // ADR-068 Phase B2: topology-derived a-priori importance tier per
+        // node, computed ONCE here (mirrors `node_degrees`' own "compute
+        // once, cache" pattern) — gated on `full_corpus_mode` (the SAME
+        // master gate B1 already established): every other mode leaves
+        // this empty, and `compute_node_tiers`/the whole DOI render pass is
+        // never even invoked for those views (see `Editor::
+        // graph_view_doi_render_tiers`), so an empty `Vec` here is never a
+        // source of incorrect tiering, just unused. Computed from LOCAL
+        // variables (`scene`, `diagram_labels`, `cross_instance_links_kept`,
+        // `node_degrees_computed`) rather than reading them back off `gv`
+        // below, so this can run with a plain `&self` borrow before the
+        // final mutable `gv` borrow begins.
+        let node_degrees_computed = crate::graph_view::node_degrees(&scene);
+        let node_api_tier = if full_corpus_mode {
+            self.compute_node_api_tiers(
+                &scene,
+                &diagram_labels,
+                &cross_instance_links_kept,
+                &node_degrees_computed,
+            )
+        } else {
+            Vec::new()
+        };
 
         // Queue the background layout pass with a snapshot of the fresh
         // circular-layout scene BEFORE moving `scene` into the view below,
@@ -1037,7 +1116,21 @@ impl Editor {
             gv.kb_instance = kb_instance;
             gv.mode = view_mode;
             gv.scene = scene;
-            gv.node_degrees = crate::graph_view::node_degrees(&gv.scene);
+            gv.node_degrees = node_degrees_computed;
+            gv.node_api_tier = node_api_tier;
+            gv.diagram_focus_ids = diagram_focus_ids;
+            // ADR-068 Phase B3: a fresh populate always invalidates
+            // whatever `doi_focus` meant under the OLD topology (node ids
+            // may no longer even exist) — reset to `None` (falls back to
+            // each diagram's own default focus, see `diagram_focus_ids`)
+            // and bump `doi_generation` so any cached `doi_tier_cache`
+            // entry is discarded on the next reflatten. This is the ONE
+            // place `doi_generation` is bumped alongside `generation`
+            // (topology change) — `Editor::maybe_follow_kb_graph_view`'s
+            // decoupled fast path bumps `doi_generation` alone, without
+            // ever reaching this function.
+            gv.doi_focus = None;
+            gv.doi_generation = gv.doi_generation.wrapping_add(1);
             // Chord mode (and Multi mode, always chord-composed regardless
             // of algorithm) never queues a layout intent, so nothing will
             // ever arrive to settle it -- forcing `animating` false
@@ -1082,6 +1175,232 @@ impl Editor {
                 status_parts.join("; ")
             ));
         }
+    }
+
+    /// ADR-068 Phase B2 — `ApiTier` (a-priori importance) for every node in
+    /// `scene`, in the SAME order, one pass over `diagram_labels`' known
+    /// contiguous per-diagram blocks (the same invariant `node_diagram_
+    /// centers`/`node_diagram_indices` rely on):
+    ///
+    /// 1. **Bridge**: present as either a `source`/`source_instance` OR
+    ///    `target`/`target_instance` pair in `cross_instance_links` for
+    ///    THIS node's own diagram — i.e. a cross-instance-link endpoint,
+    ///    either direction. `Editor::kb_cross_instance_link_sources` (B1)
+    ///    only computed the SOURCE side (for extraction-cap protection);
+    ///    this also needs the TARGET side, since a node a link LANDS ON is
+    ///    just as much a bridge as the one it originates from.
+    /// 2. **Hub**: this diagram's own `default_center_for_owner` result —
+    ///    reused verbatim, not re-derived (same fallback chain B1's
+    ///    related-instance loop already uses).
+    /// 3. **Degree**: top `DEGREE_TIER_QUANTILE` of this diagram's nodes by
+    ///    `node_degrees` (the scene-level edge count already computed by
+    ///    the caller — reusing it here rather than a fresh `mae_kb`
+    ///    degree query keeps this a pure function of already-in-memory
+    ///    data, principle #8).
+    /// 4. **Ordinary**: everything else.
+    ///
+    /// O(cross_links + diagrams + nodes log nodes) — the per-diagram
+    /// degree-sort is the dominant term, same complexity class
+    /// `extract_full_corpus`'s own degree-sort truncation already pays.
+    fn compute_node_api_tiers(
+        &self,
+        scene: &mae_canvas::scene::SceneGraph,
+        diagram_labels: &[mae_canvas::kb_graph::DiagramLabel],
+        cross_instance_links: &[mae_kb::CrossInstanceLink],
+        node_degrees: &[u32],
+    ) -> Vec<crate::graph_view::ApiTier> {
+        use crate::graph_view::ApiTier;
+        use std::collections::HashMap;
+        use std::collections::HashSet;
+
+        // Bridge ids per diagram instance, both endpoints of every
+        // resolved cross-instance link.
+        let mut bridge_by_instance: HashMap<Option<String>, HashSet<String>> = HashMap::new();
+        for link in cross_instance_links {
+            bridge_by_instance
+                .entry(link.source_instance.clone())
+                .or_default()
+                .insert(link.source.clone());
+            bridge_by_instance
+                .entry(link.target_instance.clone())
+                .or_default()
+                .insert(link.target.clone());
+        }
+
+        let mut tiers = vec![ApiTier::Ordinary; scene.nodes.len()];
+        let mut offset = 0usize;
+        for label in diagram_labels {
+            let end = (offset + label.node_count).min(scene.nodes.len());
+            let hub_id = self.default_center_for_owner(label.instance.as_deref());
+            let bridge_ids = bridge_by_instance.get(&label.instance);
+
+            // Degree-tier cutoff: top `DEGREE_TIER_QUANTILE` of THIS
+            // diagram's nodes by degree, tie-broken by node id ascending
+            // for determinism (same tie-break convention `hub_node_id`/
+            // `extract_full_corpus`'s degree-sort already use).
+            let mut by_degree: Vec<usize> = (offset..end).collect();
+            by_degree.sort_by(|&a, &b| {
+                let deg_a = node_degrees.get(a).copied().unwrap_or(0);
+                let deg_b = node_degrees.get(b).copied().unwrap_or(0);
+                deg_b
+                    .cmp(&deg_a)
+                    .then_with(|| scene.nodes[a].id.cmp(&scene.nodes[b].id))
+            });
+            let degree_cutoff =
+                ((end - offset) as f64 * crate::graph_view::DEGREE_TIER_QUANTILE).ceil() as usize;
+            let degree_tier_ids: HashSet<&str> = by_degree
+                .iter()
+                .take(degree_cutoff)
+                .map(|&i| scene.nodes[i].id.as_str())
+                .collect();
+
+            for (i, tier_slot) in tiers.iter_mut().enumerate().take(end).skip(offset) {
+                let Some(node) = scene.nodes.get(i) else {
+                    continue;
+                };
+                *tier_slot = if bridge_ids.is_some_and(|s| s.contains(&node.id)) {
+                    ApiTier::Bridge
+                } else if hub_id.as_deref() == Some(node.id.as_str()) {
+                    ApiTier::Hub
+                } else if degree_tier_ids.contains(node.id.as_str()) {
+                    ApiTier::Degree
+                } else {
+                    ApiTier::Ordinary
+                };
+            }
+            offset = end;
+        }
+        tiers
+    }
+
+    /// ADR-068 Phase B3 — per-node hop-distance-from-focus, parallel to
+    /// `gv.scene.nodes`, computed INDEPENDENTLY per diagram (never a
+    /// unified cross-instance hop-count — see `GraphView.doi_focus`'s doc
+    /// comment): each diagram's own focus is `gv.doi_focus` when it names
+    /// a node belonging to THAT diagram, else the diagram's own default
+    /// focus set (`gv.diagram_focus_ids`). A diagram whose instance isn't
+    /// currently loaded (`gv.kb.instances` lookup miss — a registered-but-
+    /// unloaded related instance, #479) leaves every one of its nodes at
+    /// `None` rather than panicking.
+    fn graph_view_doi_distances(&self, gv: &crate::graph_view::GraphView) -> Vec<Option<usize>> {
+        let mut distances = vec![None; gv.scene.nodes.len()];
+        let mut offset = 0usize;
+        for (d, label) in gv.diagram_labels.iter().enumerate() {
+            let end = (offset + label.node_count).min(gv.scene.nodes.len());
+            let range = offset..end;
+            offset = end;
+
+            let kb: &mae_kb::KnowledgeBase = match &label.instance {
+                None => &self.kb.primary,
+                Some(uuid) => match self.kb.instances.get(uuid) {
+                    Some(kb) => kb,
+                    None => continue,
+                },
+            };
+
+            let ids_in_this_diagram: std::collections::HashSet<&str> = range
+                .clone()
+                .filter_map(|i| gv.scene.nodes.get(i))
+                .map(|n| n.id.as_str())
+                .collect();
+            let focus_set: Vec<String> = match &gv.doi_focus {
+                Some(f) if ids_in_this_diagram.contains(f.as_str()) => vec![f.clone()],
+                _ => gv.diagram_focus_ids.get(d).cloned().unwrap_or_default(),
+            };
+
+            let mut merged: std::collections::HashMap<String, usize> =
+                std::collections::HashMap::new();
+            for focus_id in &focus_set {
+                for (id, dist) in kb.hop_distances_from(focus_id) {
+                    merged
+                        .entry(id)
+                        .and_modify(|best| *best = (*best).min(dist))
+                        .or_insert(dist);
+                }
+            }
+
+            for i in range {
+                if let Some(node) = gv.scene.nodes.get(i) {
+                    distances[i] = merged.get(&node.id).copied();
+                }
+            }
+        }
+        distances
+    }
+
+    /// ADR-068 Phase B4 — compute (or reuse from `GraphView.doi_tier_cache`)
+    /// this window's DOI/LOD render tiers for `buf_idx`'s graph, at the
+    /// CURRENT `viewport` (already resolved by the caller, `graph_view_
+    /// reflatten_window`, which calls this BETWEEN its two mutable-borrow
+    /// passes over `GraphView` — a cache MISS needs `&self` KB access
+    /// (`graph_view_doi_distances`), which can't run while a `&mut
+    /// GraphView` from `self.buffers[buf_idx]` is outstanding).
+    ///
+    /// Returns `(render_tiers, cache_to_store)`. `render_tiers` is empty
+    /// whenever full-corpus DOI mode isn't active for this view
+    /// (`kb_graph_multi_kb_full_corpus` off, or `gv.mode != Multi`) — an
+    /// empty slice is `flatten_scene_graph_cached`'s own "no tiering, draw
+    /// everything Full" convention, reproducing pre-Phase-B4 behavior
+    /// byte-for-byte whenever the feature isn't active. `cache_to_store`
+    /// is `Some` only on an actual cache MISS (a fresh computation) — the
+    /// caller then stores it on `gv.doi_tier_cache`; `None` means the
+    /// existing cache already matched and needs no update.
+    fn graph_view_doi_render_tiers(
+        &self,
+        buf_idx: usize,
+        viewport: &mae_canvas::scene::Viewport,
+    ) -> (
+        Vec<crate::graph_view::RenderTier>,
+        Option<crate::graph_view::DoiTierCache>,
+    ) {
+        let Some(gv) = self.buffers[buf_idx].graph_view() else {
+            return (Vec::new(), None);
+        };
+        let full_corpus_active =
+            self.kb_graph_multi_kb_full_corpus && gv.mode == GraphViewMode::Multi;
+        if !full_corpus_active {
+            return (Vec::new(), None);
+        }
+
+        let node_count = gv.scene.nodes.len();
+        let zoom = viewport.zoom;
+        let doi_zoom_threshold = self.kb_graph_doi_zoom_threshold;
+        let doi_distance_falloff = self.kb_graph_doi_distance_falloff;
+        let dense_cluster_threshold = self.kb_graph_dense_cluster_threshold;
+
+        if let Some(cache) = &gv.doi_tier_cache {
+            if cache.matches(
+                gv.doi_generation,
+                node_count,
+                zoom,
+                doi_zoom_threshold,
+                doi_distance_falloff,
+                dense_cluster_threshold,
+            ) {
+                return (cache.result.clone(), None);
+            }
+        }
+
+        let distances = self.graph_view_doi_distances(gv);
+        let tiers = crate::graph_view::compute_node_tiers(
+            node_count,
+            &gv.node_api_tier,
+            &distances,
+            zoom,
+            doi_zoom_threshold,
+            doi_distance_falloff,
+            dense_cluster_threshold,
+        );
+        let cache = crate::graph_view::DoiTierCache::new(
+            gv.doi_generation,
+            node_count,
+            zoom,
+            doi_zoom_threshold,
+            doi_distance_falloff,
+            dense_cluster_threshold,
+            tiers.clone(),
+        );
+        (tiers, Some(cache))
     }
 
     /// Part C Phase 3: is there an open `BufferKind::Graph` buffer whose
@@ -2048,9 +2367,16 @@ impl Editor {
         else {
             return;
         };
-        let Some((follow, center_node, depth)) = self.buffers[idx]
-            .graph_view()
-            .map(|gv| (gv.follow_current, gv.center_node.clone(), gv.depth))
+        let Some((follow, center_node, depth, mode, doi_focus)) =
+            self.buffers[idx].graph_view().map(|gv| {
+                (
+                    gv.follow_current,
+                    gv.center_node.clone(),
+                    gv.depth,
+                    gv.mode,
+                    gv.doi_focus.clone(),
+                )
+            })
         else {
             return;
         };
@@ -2060,6 +2386,29 @@ impl Editor {
         let Some(current) = self.kb_view().map(|v| v.current.clone()) else {
             return;
         };
+
+        // ADR-068 Phase B3: decouple focus-follow from re-extraction/re-
+        // layout in full-corpus mode — calling `populate_graph_buffer`
+        // here would re-run the (potentially large) full-corpus BFS/
+        // degree-sort AND re-layout on every single navigation, defeating
+        // the entire point of a cheap, render-time-only DOI focus signal.
+        // Non-full-corpus behavior (the `else` branch below) is completely
+        // unchanged — this function serves both modes.
+        let full_corpus_mode =
+            self.kb_graph_multi_kb_full_corpus && matches!(mode, GraphViewMode::Multi);
+        if full_corpus_mode {
+            let effective_focus = doi_focus.as_deref().or(center_node.as_deref());
+            if effective_focus == Some(current.as_str()) {
+                return;
+            }
+            if let Some(gv) = self.buffers[idx].graph_view_mut() {
+                gv.doi_focus = Some(current);
+                gv.doi_generation = gv.doi_generation.wrapping_add(1);
+            }
+            self.graph_view_reflatten_all_windows(idx);
+            return;
+        }
+
         if center_node.as_deref() == Some(current.as_str()) {
             return;
         }
@@ -6973,6 +7322,740 @@ mod tests {
             gv.scene.nodes.iter().any(|n| n.id == "concept:bridge"),
             "the low-degree cross-instance bridge node must survive the full-corpus cap \
              even though a naive degree-only cap would cut it first"
+        );
+    }
+
+    // --- ADR-068 Phase B2-B8: DOI/LOD tiering adversarial test suite ---
+
+    #[test]
+    fn bridge_tier_node_is_full_regardless_of_focus_zoom_or_cluster_thresholds() {
+        // B8 test 1 (bridge-under-pressure): "concept:bridge" is
+        // simultaneously LOW-DEGREE (a chain leaf: in-degree 1, no outgoing
+        // links of its own), FAR from the diagram's default hub (7 hops via
+        // a chain), AND the sole target of a real cross-instance link from
+        // the seed -- exactly the combination `ApiTier::Bridge` exists to
+        // protect. Swept across several focus positions x falloff/zoom/
+        // cluster-threshold settings (CLAUDE.md #14 -- not one cherry-picked
+        // combination) and must NEVER resolve to anything but
+        // `RenderTier::Full`.
+        let mut editor = ed_with_kb_node("concept:seed", "Seed", "[[concept:bridge]]");
+        register_plain_instance(
+            &mut editor,
+            "big",
+            vec![
+                mae_kb::Node::new(
+                    "concept:hub",
+                    "Hub",
+                    mae_kb::NodeKind::Note,
+                    "[[concept:m1]] [[concept:d1]] [[concept:d2]]",
+                ),
+                mae_kb::Node::new("concept:d1", "D1", mae_kb::NodeKind::Note, ""),
+                mae_kb::Node::new("concept:d2", "D2", mae_kb::NodeKind::Note, ""),
+                mae_kb::Node::new("concept:m1", "M1", mae_kb::NodeKind::Note, "[[concept:m2]]"),
+                mae_kb::Node::new("concept:m2", "M2", mae_kb::NodeKind::Note, "[[concept:m3]]"),
+                mae_kb::Node::new("concept:m3", "M3", mae_kb::NodeKind::Note, "[[concept:m4]]"),
+                mae_kb::Node::new("concept:m4", "M4", mae_kb::NodeKind::Note, "[[concept:m5]]"),
+                mae_kb::Node::new("concept:m5", "M5", mae_kb::NodeKind::Note, "[[concept:m6]]"),
+                mae_kb::Node::new(
+                    "concept:m6",
+                    "M6",
+                    mae_kb::NodeKind::Note,
+                    "[[concept:bridge]]",
+                ),
+                mae_kb::Node::new("concept:bridge", "Bridge", mae_kb::NodeKind::Note, ""),
+            ],
+        );
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_multi_kb_full_corpus = true;
+
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+        let bridge_idx = editor.buffers[graph_idx]
+            .graph_view()
+            .unwrap()
+            .scene
+            .nodes
+            .iter()
+            .position(|n| n.id == "concept:bridge")
+            .expect("bridge node must be rendered");
+
+        for focus in [None, Some("concept:d1"), Some("concept:bridge")] {
+            for falloff in [0usize, 1, 10] {
+                for zoom in [0.1_f64, 1.0, 5.0] {
+                    for dense_threshold in [1usize, 50] {
+                        editor.kb_graph_doi_distance_falloff = falloff;
+                        editor.kb_graph_dense_cluster_threshold = dense_threshold;
+                        if let Some(gv) = editor.buffers[graph_idx].graph_view_mut() {
+                            gv.doi_focus = focus.map(str::to_string);
+                            gv.doi_generation = gv.doi_generation.wrapping_add(1);
+                        }
+                        let viewport = mae_canvas::scene::Viewport {
+                            zoom,
+                            ..Default::default()
+                        };
+                        let (tiers, _cache) =
+                            editor.graph_view_doi_render_tiers(graph_idx, &viewport);
+                        assert_eq!(
+                            tiers.get(bridge_idx).copied(),
+                            Some(crate::graph_view::RenderTier::Full),
+                            "bridge node must stay Full at focus={:?} falloff={} zoom={} \
+                             dense_threshold={}",
+                            focus,
+                            falloff,
+                            zoom,
+                            dense_threshold
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn monotonic_nesting_relaxing_thresholds_only_grows_the_full_tier_set() {
+        // B8 test 2: starting from an aggressive-DOI state (tight falloff,
+        // low zoom, a tight dense-cluster threshold), incrementally relax
+        // EACH knob one step at a time and assert the Full-tier node-id set
+        // only ever GROWS -- never shrinks -- as thresholds relax (semantic
+        // zoom's monotonic-nesting property). Note: by this module's own
+        // design (`compute_node_tiers`'s doc comment), zoom decides
+        // Hidden-vs-Clustered for an already-elided node, NOT Full-tier
+        // membership itself -- so the "relax zoom" step is expected to be a
+        // true no-op-or-grow, never a shrink; this test still exercises it
+        // to prove that invariant holds, not just assume it.
+        // Deliberately centered DIRECTLY on a node in a plain federated
+        // instance ("big"), NOT on a primary/seed node cross-linking into
+        // it — `Editor::new()`'s primary carries MAE's own real built-in
+        // manual KB (2000+ nodes), which would ALSO be full-corpus
+        // extracted as the "seed" diagram if it were the graph's center,
+        // swamping this test's small, controlled 60-node fixture. Centering
+        // directly on "big" means "big" itself is the (only) composed
+        // diagram — primary is never touched.
+        const N: usize = 60;
+        let mut editor = Editor::new();
+        let mut nodes = Vec::with_capacity(N + 1);
+        let mut hub_body = String::new();
+        for i in 0..N {
+            hub_body.push_str(&format!("[[concept:n{i}]] "));
+            nodes.push(mae_kb::Node::new(
+                format!("concept:n{i}"),
+                format!("N{i}"),
+                mae_kb::NodeKind::Note,
+                "",
+            ));
+        }
+        nodes.push(mae_kb::Node::new(
+            "concept:hub",
+            "Hub",
+            mae_kb::NodeKind::Note,
+            hub_body,
+        ));
+        register_plain_instance(&mut editor, "big", nodes);
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_multi_kb_full_corpus = true;
+
+        editor.kb_graph_view_open(Some("concept:hub".to_string()), Some(0));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+
+        let full_tier_ids = |ed: &Editor, zoom: f64| -> std::collections::HashSet<String> {
+            let viewport = mae_canvas::scene::Viewport {
+                zoom,
+                ..Default::default()
+            };
+            let (tiers, _) = ed.graph_view_doi_render_tiers(graph_idx, &viewport);
+            let gv = ed.buffers[graph_idx].graph_view().unwrap();
+            gv.scene
+                .nodes
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| {
+                    tiers.get(*i).copied() == Some(crate::graph_view::RenderTier::Full)
+                })
+                .map(|(_, n)| n.id.clone())
+                .collect()
+        };
+
+        editor.kb_graph_doi_distance_falloff = 0;
+        editor.kb_graph_dense_cluster_threshold = 1;
+        let mut previous = full_tier_ids(&editor, 0.1);
+
+        // Step 1: relax zoom.
+        let step1 = full_tier_ids(&editor, 5.0);
+        assert!(
+            previous.is_subset(&step1),
+            "relaxing zoom must not shrink the Full-tier set: lost {:?}",
+            previous.difference(&step1).collect::<Vec<_>>()
+        );
+        previous = step1;
+
+        // Step 2: relax distance falloff.
+        editor.kb_graph_doi_distance_falloff = 5;
+        let step2 = full_tier_ids(&editor, 5.0);
+        assert!(
+            previous.is_subset(&step2),
+            "relaxing distance falloff must not shrink the Full-tier set: lost {:?}",
+            previous.difference(&step2).collect::<Vec<_>>()
+        );
+        assert!(
+            step2.len() > previous.len(),
+            "sanity: relaxing falloff from 0 to 5 over a 60-node diagram must actually grow \
+             the full-tier set, not merely fail to shrink it"
+        );
+        previous = step2;
+
+        // Step 3: relax the dense-cluster threshold.
+        editor.kb_graph_dense_cluster_threshold = 1000;
+        let step3 = full_tier_ids(&editor, 5.0);
+        assert!(
+            previous.is_subset(&step3),
+            "relaxing the dense-cluster threshold must not shrink the Full-tier set: lost {:?}",
+            previous.difference(&step3).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            step3.len(),
+            editor.buffers[graph_idx]
+                .graph_view()
+                .unwrap()
+                .scene
+                .nodes
+                .len(),
+            "fully relaxed thresholds must render every node Full"
+        );
+    }
+
+    #[test]
+    fn full_corpus_cap_survivor_also_resolves_to_bridge_tier_and_renders_full() {
+        // B8 test 3 (extraction-cap-vs-bridge-protection integration, ties
+        // B1+B2 together): reuses
+        // `full_corpus_mode_protects_a_low_degree_cross_instance_bridge_node_under_a_tight_cap`'s
+        // exact adversarial scenario (a low-degree sole cross-link source
+        // under a cap far below the instance's real size) and additionally
+        // asserts the survivor resolves to `ApiTier::Bridge`/
+        // `RenderTier::Full` in the NEW render pipeline -- not just
+        // "survives extraction" (already covered by that B1 test) but
+        // "actually renders correctly" too.
+        const N: usize = 50;
+        let mut editor = ed_with_kb_node("concept:seed", "Seed", "[[concept:bridge]]");
+        let mut nodes = Vec::with_capacity(N + 2);
+        let mut hub_body = String::new();
+        for i in 0..N {
+            hub_body.push_str(&format!("[[concept:n{i}]] "));
+            nodes.push(mae_kb::Node::new(
+                format!("concept:n{i}"),
+                format!("N{i}"),
+                mae_kb::NodeKind::Concept,
+                "",
+            ));
+        }
+        nodes.push(mae_kb::Node::new(
+            "concept:hub",
+            "Hub",
+            mae_kb::NodeKind::Concept,
+            hub_body,
+        ));
+        nodes.push(mae_kb::Node::new(
+            "concept:bridge",
+            "Bridge",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        register_plain_instance(&mut editor, "big", nodes);
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_multi_kb_full_corpus = true;
+        editor.kb_graph_full_corpus_node_cap = 10;
+        // An aggressive DOI setting -- if bridge protection were somehow
+        // NOT structural (e.g. accidentally routed through the ordinary
+        // distance/degree path), this would immediately expose it.
+        editor.kb_graph_doi_distance_falloff = 0;
+        editor.kb_graph_dense_cluster_threshold = 1;
+
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        let bridge_idx = gv
+            .scene
+            .nodes
+            .iter()
+            .position(|n| n.id == "concept:bridge")
+            .expect("the bridge node must survive the cap (already covered by the B1 test)");
+        assert_eq!(
+            gv.node_api_tier.get(bridge_idx).copied(),
+            Some(crate::graph_view::ApiTier::Bridge),
+            "the surviving cross-instance bridge node must resolve to ApiTier::Bridge"
+        );
+
+        let viewport = mae_canvas::scene::Viewport {
+            zoom: 1.0,
+            ..Default::default()
+        };
+        let (tiers, _) = editor.graph_view_doi_render_tiers(graph_idx, &viewport);
+        assert_eq!(
+            tiers.get(bridge_idx).copied(),
+            Some(crate::graph_view::RenderTier::Full),
+            "the surviving cross-instance bridge node must actually RENDER Full, not just \
+             survive extraction"
+        );
+    }
+
+    #[test]
+    fn rapid_doi_focus_churn_discards_stale_tier_cache_not_the_final_focus() {
+        // B8 test 4 (rapid focus churn / staleness): mirrors
+        // `apply_layout_result_stale_generation_does_not_corrupt_a_reopened_view_reusing_the_buf_idx`'s
+        // staleness-guard pattern, applied to `DoiTierCache` instead of the
+        // background force-layout result -- fire several `doi_focus`
+        // changes faster than a hypothetical slow recompute could keep up
+        // with (never actually recomputing/caching in between), then
+        // assert the eventual recompute reflects the LAST focus, not a
+        // stale intermediate one.
+        let mut editor = ed_with_kb_node(
+            "concept:seed",
+            "Seed",
+            "[[concept:a]] [[concept:b]] [[concept:c]]",
+        );
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:a",
+            "A",
+            mae_kb::NodeKind::Note,
+            "",
+        ));
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:b",
+            "B",
+            mae_kb::NodeKind::Note,
+            "",
+        ));
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:c",
+            "C",
+            mae_kb::NodeKind::Note,
+            "",
+        ));
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_multi_kb_full_corpus = true;
+        editor.kb_graph_doi_distance_falloff = 0;
+
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(1));
+        let (graph_idx, _win_id) = graph_idx_and_win_id(&editor);
+
+        let viewport = mae_canvas::scene::Viewport::default();
+        // Establish an initial cached computation (default focus).
+        let (_tiers, cache) = editor.graph_view_doi_render_tiers(graph_idx, &viewport);
+        if let Some(gv) = editor.buffers[graph_idx].graph_view_mut() {
+            gv.doi_tier_cache = cache;
+        }
+        let generation_after_first = editor.buffers[graph_idx]
+            .graph_view()
+            .unwrap()
+            .doi_generation;
+
+        // Fire 3 rapid focus changes WITHOUT ever recomputing/caching in
+        // between.
+        for focus in ["concept:a", "concept:b", "concept:c"] {
+            if let Some(gv) = editor.buffers[graph_idx].graph_view_mut() {
+                gv.doi_focus = Some(focus.to_string());
+                gv.doi_generation = gv.doi_generation.wrapping_add(1);
+            }
+        }
+        let generation_after_churn = editor.buffers[graph_idx]
+            .graph_view()
+            .unwrap()
+            .doi_generation;
+        assert_eq!(generation_after_churn, generation_after_first + 3);
+
+        // The stale cache (stamped with the ORIGINAL generation) must be
+        // recognized as stale and force a recompute.
+        let (final_tiers, final_cache) = editor.graph_view_doi_render_tiers(graph_idx, &viewport);
+        assert!(
+            final_cache.is_some(),
+            "a genuinely stale cache generation must force a recompute, not be silently reused"
+        );
+
+        // And "concept:c" (the LAST focus) must actually resolve Full
+        // (distance 0 from itself, falloff 0) -- proving the recompute
+        // genuinely used the FINAL focus, not a stale intermediate one.
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        let c_idx = gv
+            .scene
+            .nodes
+            .iter()
+            .position(|n| n.id == "concept:c")
+            .unwrap();
+        assert_eq!(
+            final_tiers.get(c_idx).copied(),
+            Some(crate::graph_view::RenderTier::Full),
+            "the recompute must reflect concept:c (the FINAL focus), not a stale earlier one"
+        );
+    }
+
+    #[test]
+    fn degenerate_no_cross_links_case_produces_bounded_clustering_with_exact_plus_n_sums() {
+        // B8 test 5 (degenerate no-cross-links case): hundreds of nodes,
+        // ZERO cross-instance links, full-corpus mode on -- must produce
+        // SENSIBLE BOUNDED clustering (not thousands of individually-drawn
+        // circles, not everything hidden), and the cluster-stub "+N" counts
+        // must sum EXACTLY to however many nodes were actually elided
+        // (never silently dropped -- the same "surface a count, never
+        // truncate silently" house rule `hidden_node_count`/
+        // `hidden_cross_instance_link_count` already establish elsewhere).
+        // Centered directly on the "big" instance's own hub (see
+        // `monotonic_nesting_relaxing_thresholds_only_grows_the_full_tier_set`'s
+        // comment for why NOT a primary/seed node — `Editor::new()`'s
+        // primary carries MAE's real built-in manual KB, which would
+        // swamp/contaminate this test's controlled fixture if it were also
+        // part of the composed scene).
+        const N: usize = 300;
+        let mut editor = Editor::new();
+        let mut nodes = Vec::with_capacity(N + 1);
+        let mut hub_body = String::new();
+        for i in 0..N {
+            hub_body.push_str(&format!("[[concept:n{i}]] "));
+            nodes.push(mae_kb::Node::new(
+                format!("concept:n{i}"),
+                format!("N{i}"),
+                mae_kb::NodeKind::Note,
+                "",
+            ));
+        }
+        nodes.push(mae_kb::Node::new(
+            "concept:hub",
+            "Hub",
+            mae_kb::NodeKind::Note,
+            hub_body,
+        ));
+        register_plain_instance(&mut editor, "big", nodes);
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_multi_kb_full_corpus = true;
+        editor.kb_graph_full_corpus_node_cap = 5000;
+        // 0, not 1: every leaf is exactly 1 hop from the hub, so a falloff
+        // of 1 would trivially keep them ALL in reach (nothing to
+        // cluster) — 0 forces genuine elision of the (non-Degree-tier)
+        // leaves, the actual point of this test.
+        editor.kb_graph_doi_distance_falloff = 0;
+        editor.kb_graph_dense_cluster_threshold = 5;
+        editor.kb_graph_doi_zoom_threshold = 0.5;
+
+        editor.kb_graph_view_open(Some("concept:hub".to_string()), Some(0));
+        let (graph_idx, win_id) = graph_idx_and_win_id(&editor);
+        // Force a known zoom well above `kb_graph_doi_zoom_threshold` (the
+        // zoom-to-fit value on open is otherwise incidental/scene-size-
+        // dependent) so elided nodes deterministically become `Clustered`,
+        // not `Hidden` -- re-reflattens this window via the REAL production
+        // path (`kb_graph_view_zoom_to`), populating `doi_tier_cache` and
+        // `rendered` together, in sync.
+        editor.kb_graph_view_zoom_to(1.0);
+
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        let tiers = &gv
+            .doi_tier_cache
+            .as_ref()
+            .expect("full-corpus mode must have populated the DOI tier cache")
+            .result;
+        let clustered_count = tiers
+            .iter()
+            .filter(|t| **t == crate::graph_view::RenderTier::Clustered)
+            .count();
+        assert!(
+            clustered_count > 0,
+            "sanity: with a tight falloff/threshold over 300 nodes, SOME must be clustered"
+        );
+        let full_count = tiers
+            .iter()
+            .filter(|t| **t == crate::graph_view::RenderTier::Full)
+            .count();
+        assert!(
+            full_count < tiers.len(),
+            "not everything should render individually -- that's the whole point of clustering"
+        );
+
+        let elements = &gv.rendered.get(&win_id).unwrap().elements;
+        let plus_n_sum: usize = elements
+            .iter()
+            .filter_map(|e| match e {
+                VisualElement::Text { text, .. } if text.starts_with("... (+") => text
+                    .trim_start_matches("... (+")
+                    .trim_end_matches(')')
+                    .parse::<usize>()
+                    .ok(),
+                _ => None,
+            })
+            .sum();
+        assert_eq!(
+            plus_n_sum, clustered_count,
+            "the cluster-stub '+N' labels must sum EXACTLY to however many nodes were elided, \
+             never silently dropped"
+        );
+
+        // Bounded: the number of DRAWN stub circles (one per cluster group)
+        // must be small relative to N -- not one stub per elided node.
+        let stub_circle_count = elements
+            .iter()
+            .filter(|e| matches!(e, VisualElement::Circle { fill: None, .. }))
+            .count();
+        assert!(
+            stub_circle_count < clustered_count,
+            "clustering must aggregate MANY elided nodes into FEW stubs, not one stub each: \
+             {stub_circle_count} stubs for {clustered_count} elided nodes"
+        );
+    }
+
+    #[test]
+    fn changing_doi_focus_never_changes_node_positions_layout_computed_once() {
+        // B8 test 6 (position stability): two "populates" differing ONLY in
+        // DOI focus must leave `scene.nodes[i].(x,y)` byte-identical for
+        // every i -- proves layout truly happens ONCE per populate and
+        // DOI/tiering is a pure render-time overlay, never a second layout
+        // pass.
+        let mut editor = ed_with_kb_node("concept:a", "A", "[[concept:b]]");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:b",
+            "B",
+            mae_kb::NodeKind::Note,
+            "",
+        ));
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_multi_kb_full_corpus = true;
+
+        let kb_idx = editor.ensure_kb_buffer_idx("concept:a");
+        editor.kb_populate_buffer(kb_idx);
+        editor.switch_to_buffer(kb_idx);
+        let kb_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == kb_idx)
+            .map(|w| w.id)
+            .unwrap();
+
+        editor.kb_graph_view_open(Some("concept:a".to_string()), Some(1));
+        editor.window_mgr.set_focused(kb_win_id);
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+
+        let positions_before: Vec<(f64, f64)> = editor.buffers[graph_idx]
+            .graph_view()
+            .unwrap()
+            .scene
+            .nodes
+            .iter()
+            .map(|n| (n.x, n.y))
+            .collect();
+
+        // Change DOI focus via the REAL production decoupled path
+        // (navigate the KB buffer, then let follow-current pick it up).
+        editor.kb_view_mut().unwrap().navigate_to("concept:b");
+        editor.maybe_follow_kb_graph_view();
+
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        assert_eq!(
+            gv.doi_focus.as_deref(),
+            Some("concept:b"),
+            "sanity: the focus change must actually have been picked up"
+        );
+        let positions_after: Vec<(f64, f64)> = gv.scene.nodes.iter().map(|n| (n.x, n.y)).collect();
+        assert_eq!(
+            positions_before, positions_after,
+            "a DOI focus change must never move a single node -- layout is computed once"
+        );
+        assert_eq!(
+            gv.center_node.as_deref(),
+            Some("concept:a"),
+            "the topology's own extraction center must NOT change just because DOI focus did"
+        );
+    }
+
+    #[test]
+    fn full_corpus_off_leaves_every_node_reported_as_full_tier_and_skips_doi_machinery_entirely() {
+        // B8 test 7 (backward-compat guard): the DOI/tiering machinery must
+        // be a complete no-op whenever `kb_graph_multi_kb_full_corpus` is
+        // off -- Single mode AND Multi-mode-without-full-corpus both stay
+        // byte-for-byte pre-Phase-B4. (The full pre-existing Multi-mode AND
+        // Single-mode test suites also all pass unmodified alongside this
+        // targeted check -- see this session's full `cargo test -p
+        // mae-core` run.)
+        let mut editor = ed_with_kb_node("concept:seed", "Seed", "[[concept:sibling-target]]");
+        register_plain_instance(
+            &mut editor,
+            "sibling",
+            vec![mae_kb::Node::new(
+                "concept:sibling-target",
+                "Sibling Target",
+                mae_kb::NodeKind::Concept,
+                "",
+            )],
+        );
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        assert!(!editor.kb_graph_multi_kb_full_corpus, "must default to off");
+
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        assert!(
+            gv.node_api_tier.is_empty(),
+            "node_api_tier must stay empty when full-corpus is off"
+        );
+        assert!(
+            gv.doi_tier_cache.is_none(),
+            "doi_tier_cache must never populate when full-corpus is off"
+        );
+
+        let state = gv.describe_state();
+        assert!(
+            state.nodes.iter().all(|n| n.render_tier == "full"),
+            "every node must report render_tier \"full\" when DOI/LOD tiering isn't active: {:?}",
+            state
+                .nodes
+                .iter()
+                .map(|n| &n.render_tier)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn describe_state_render_tier_agrees_exactly_with_what_gets_drawn() {
+        // B8 test 8 (cross-backend/AI-peer parity): the number of
+        // individually-drawn (real, filled) node circles must equal
+        // `describe_state()`'s full-tier count EXACTLY, and the cluster-
+        // stub "+N" sum must equal the clustered-tier count EXACTLY -- the
+        // AI peer must never be told a node is "full" while the human sees
+        // it collapsed into a cluster stub, or vice versa.
+        // Centered directly on the "big" instance's own hub (see
+        // `monotonic_nesting_relaxing_thresholds_only_grows_the_full_tier_set`'s
+        // comment for why NOT a primary/seed node cross-linking into it —
+        // `Editor::new()`'s primary carries MAE's real built-in manual KB).
+        const N: usize = 60;
+        let mut editor = Editor::new();
+        let mut nodes = Vec::with_capacity(N + 1);
+        let mut hub_body = String::new();
+        for i in 0..N {
+            hub_body.push_str(&format!("[[concept:n{i}]] "));
+            nodes.push(mae_kb::Node::new(
+                format!("concept:n{i}"),
+                format!("N{i}"),
+                mae_kb::NodeKind::Note,
+                "",
+            ));
+        }
+        nodes.push(mae_kb::Node::new(
+            "concept:hub",
+            "Hub",
+            mae_kb::NodeKind::Note,
+            hub_body,
+        ));
+        register_plain_instance(&mut editor, "big", nodes);
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_multi_kb_full_corpus = true;
+        // 0, not 1 -- see the degenerate-no-cross-links test's identical
+        // comment: every leaf is exactly 1 hop from the hub, so a falloff
+        // of 1 would trivially keep them all in reach.
+        editor.kb_graph_doi_distance_falloff = 0;
+        editor.kb_graph_dense_cluster_threshold = 5;
+
+        editor.kb_graph_view_open(Some("concept:hub".to_string()), Some(0));
+        let (graph_idx, _win_id) = graph_idx_and_win_id(&editor);
+
+        // A deliberately GENEROUS, deterministic viewport (rather than
+        // depending on the headless test editor's real, tiny
+        // `last_layout_area`-derived window pixel size, which would
+        // offscreen-cull most of this chord layout's extent regardless of
+        // DOI tier — a confound unrelated to this test's actual claim; and
+        // rather than whatever incidental zoom `kb_graph_view_open`'s own
+        // zoom-to-fit produced, which could land below `kb_graph_doi_zoom_
+        // threshold` and turn every elided node `Hidden` instead of
+        // `Clustered`). Recomputes + stores the tier cache for this exact
+        // viewport BEFORE reading `describe_state`, so both this test's own
+        // direct flatten call below AND `describe_state` read the SAME
+        // freshly-computed `doi_tier_cache`.
+        let viewport = mae_canvas::scene::Viewport {
+            center_x: 0.0,
+            center_y: 0.0,
+            zoom: 1.0,
+            width: 4000.0,
+            height: 4000.0,
+        };
+        let (_, cache) = editor.graph_view_doi_render_tiers(graph_idx, &viewport);
+        if let Some(gv) = editor.buffers[graph_idx].graph_view_mut() {
+            if let Some(c) = cache {
+                gv.doi_tier_cache = Some(c);
+            }
+        }
+
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        let state = gv.describe_state();
+        // Feeds in the EXACT SAME `doi_tier_cache.result` `describe_state`
+        // itself just read (both read `GraphView.doi_tier_cache` — see
+        // `describe_state`'s `render_tier_at` closure) so this is a
+        // genuine check of whether `flatten_scene_graph_cached`'s node
+        // loop actually HONORS that tier assignment (draws a Full node's
+        // circle, folds a Clustered one into a stub, skips a Hidden one
+        // entirely) — not a vacuous "compare a value to itself".
+        let style = editor.graph_style_options();
+        let diagram_centers = crate::graph_view::node_diagram_centers(&gv.diagram_labels);
+        let diagram_indices = crate::graph_view::node_diagram_indices(&gv.diagram_labels);
+        let render_tiers = gv
+            .doi_tier_cache
+            .as_ref()
+            .expect("full-corpus mode must have populated the DOI tier cache")
+            .result
+            .clone();
+        let mut no_cache = None;
+        let elements = flatten_scene_graph_cached(
+            &gv.scene,
+            &viewport,
+            &style,
+            &gv.node_degrees,
+            &diagram_centers,
+            &render_tiers,
+            &diagram_indices,
+            &mut no_cache,
+        );
+
+        let full_tier_count = state
+            .nodes
+            .iter()
+            .filter(|n| n.render_tier == "full")
+            .count();
+        let clustered_tier_count = state
+            .nodes
+            .iter()
+            .filter(|n| n.render_tier == "clustered")
+            .count();
+        let hidden_tier_count = state
+            .nodes
+            .iter()
+            .filter(|n| n.render_tier == "hidden")
+            .count();
+        assert_eq!(
+            full_tier_count + clustered_tier_count + hidden_tier_count,
+            state.nodes.len()
+        );
+        assert!(
+            clustered_tier_count > 0,
+            "sanity: this fixture must actually produce some clustering"
+        );
+
+        let drawn_node_circles = elements
+            .iter()
+            .filter(|e| matches!(e, VisualElement::Circle { fill: Some(_), .. }))
+            .count();
+        assert_eq!(
+            drawn_node_circles, full_tier_count,
+            "the number of individually-drawn node circles must equal describe_state()'s \
+             full-tier count exactly -- a human/AI parity mismatch would show up as a \
+             difference here"
+        );
+
+        let plus_n_sum: usize = elements
+            .iter()
+            .filter_map(|e| match e {
+                VisualElement::Text { text, .. } if text.starts_with("... (+") => text
+                    .trim_start_matches("... (+")
+                    .trim_end_matches(')')
+                    .parse::<usize>()
+                    .ok(),
+                _ => None,
+            })
+            .sum();
+        assert_eq!(
+            plus_n_sum, clustered_tier_count,
+            "the cluster-stub '+N' sum must equal describe_state()'s clustered-tier count exactly"
         );
     }
 
