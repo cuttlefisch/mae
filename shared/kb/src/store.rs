@@ -492,6 +492,39 @@ pub trait KbStore: Send + Sync {
         ))
     }
 
+    /// ADR-061 Phase B/C/E: look up a previously-computed embedding by its
+    /// content-addressed cache key `(content_hash, model, chunk_version)`. On
+    /// the trait (not just as a `CozoKbStore` inherent method) so
+    /// `mae_kb::enrichment`'s sweep functions can operate against an
+    /// `Arc<dyn KbStore>` handle (the editor's `KbState::store` field, which
+    /// only ever concretely holds a `CozoKbStore` today, but is stored as a
+    /// trait object) without needing a downcast.
+    fn get_cached_embedding(
+        &self,
+        _content_hash: &str,
+        _model: &str,
+        _chunk_version: i64,
+    ) -> Result<Option<Vec<f32>>, KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "embedding cache requires CozoDB backend".into(),
+        ))
+    }
+
+    /// ADR-061 Phase B/C/E: record a freshly-computed embedding under its
+    /// content-addressed cache key. See `get_cached_embedding`'s doc for why
+    /// this is a trait method, not only a `CozoKbStore` inherent one.
+    fn put_cached_embedding(
+        &self,
+        _content_hash: &str,
+        _model: &str,
+        _chunk_version: i64,
+        _vec: &[f32],
+    ) -> Result<(), KbStoreError> {
+        Err(KbStoreError::NotSupported(
+            "embedding cache requires CozoDB backend".into(),
+        ))
+    }
+
     // --- Health ---
 
     /// Compute a structured health report from the backing store.

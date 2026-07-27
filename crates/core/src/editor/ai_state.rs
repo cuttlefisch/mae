@@ -130,6 +130,20 @@ pub struct AiState {
     /// Reasoning/thinking mode override for supported providers:
     /// "true", "false", "high", "medium", "low". Empty = provider default.
     pub thinking: String,
+    /// ADR-061 Phase E: KB enrichment embedding provider (only "ollama" is
+    /// supported today).
+    pub embedding_provider: String,
+    /// ADR-061 Phase E: embedding model name.
+    pub embedding_model: String,
+    /// ADR-061 Phase E: base URL override for the embedding provider's API.
+    pub embedding_base_url: String,
+    /// ADR-061 Phase E: shell command whose stdout is the embedding
+    /// provider's API key. Empty = none.
+    pub embedding_api_key_command: String,
+    /// ADR-061 Phase E: ADR-031 cache-key third component. Must match the
+    /// daemon's own `[enrichment] chunk_version` to share cache entries with
+    /// its background sweep.
+    pub embedding_chunk_version: i64,
     /// Active prompt profile name.
     pub profile: String,
     /// True while the AI session is actively streaming.
@@ -186,6 +200,11 @@ impl AiState {
             base_url: String::new(),
             mode: "standard".to_string(),
             thinking: String::new(),
+            embedding_provider: "ollama".to_string(),
+            embedding_model: "nomic-embed-text".to_string(),
+            embedding_base_url: String::new(),
+            embedding_api_key_command: String::new(),
+            embedding_chunk_version: 1,
             profile: "pair-programmer".to_string(),
             streaming: false,
             cancel_requested: false,

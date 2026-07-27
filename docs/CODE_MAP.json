@@ -665,6 +665,14 @@
           "kind": "mod"
         },
         {
+          "name": "embedding_client",
+          "kind": "mod"
+        },
+        {
+          "name": "enrichment",
+          "kind": "mod"
+        },
+        {
           "name": "export",
           "kind": "mod"
         },

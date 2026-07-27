@@ -334,3 +334,147 @@ clean across the editor and daemon workspaces; `cargo build --workspace --featur
 backs_up}` -- confirmed via `git stash` to fail identically on a clean checkout, an environmental
 gap where this local build's editor-workspace `mae-kb` doesn't have the sqlite cozo engine
 compiled in; not a regression from this phase.)
+
+## Implementation note (Phase C, principle #15)
+
+**A structural constraint found during implementation, not anticipated by the Decision text**:
+the daemon workspace has ZERO dependency on `crates/ai` (or `mae-core`) — confirmed by grep,
+zero hits for `AgentProvider`/`OllamaProvider`/`embed(` anywhere in `daemon/src/`. This is by
+design (ADR-014's editor/daemon workspace split exists specifically so the daemon doesn't pull in
+`mae-core`'s large, editor-shaped dependency graph), but it means Phase C cannot simply call
+`crates/ai::OllamaProvider::embed()` the way Phase A's own chat-adjacent embed path does. Resolved
+the same way Phase A's own implementation note resolved an identical wall for
+`is_local_provider`/`residency_permits_provider`: split the Ollama `/api/embed` call into a pure,
+dependency-light half (`mae_kb::embedding_client::{build_ollama_embed_request,
+parse_ollama_embed_response}` — request/response JSON shaping, zero I/O, no `reqwest` dependency
+at all) shared by every caller, plus a per-caller HTTP-transport half using whichever client that
+caller already owns: `crates/ai::OllamaProvider::embed()` now delegates its request-building and
+response-parsing to the shared functions (removing ~50 lines of duplicated logic, principle #8)
+while keeping its own async `reqwest::Client`; the daemon's new `OllamaEmbedBackend`
+(`daemon/src/enrichment.rs`) builds its OWN async `reqwest::Client` (the daemon already depends on
+`reqwest` directly for its OAuth listener) around the same shared shaping functions.
+
+The store-facing sweep logic (list nodes → hash → check cache → collect misses; write results back
+to the cache) lives in `shared/kb/src/enrichment.rs` as two plain, synchronous functions —
+`plan_enrichment_scan`/`apply_enrichment_results` — deliberately NOT taking an injected embed
+callback/trait: this keeps `mae-kb` free of any async-runtime or `async-trait` dependency (a real
+risk otherwise, since some `mae-kb` callers, e.g. `build_manual_kb`/`build_practices_kb`, are plain
+synchronous binaries with no tokio runtime running at all). The actual embed step is entirely
+owned by the caller between the two blocking calls. `plan_enrichment_scan` takes `&dyn KbStore`
+(not the concrete `CozoKbStore`) so it works against the editor's own `KbState::store: Option<Arc<
+dyn KbStore>>` handle (needed for Phase E below) without a downcast — this required promoting
+`get_cached_embedding`/`put_cached_embedding` from `CozoKbStore` inherent methods to `KbStore`
+trait methods (with a `NotSupported` default, mirroring the existing `store_embedding`/
+`vector_search` precedent on the same trait) and adding the `CozoKbStore` override.
+
+`daemon/src/enrichment.rs`'s `run_enrichment_sweep` orchestrates one full sweep of one store:
+`plan_enrichment_scan` runs inside `tokio::task::spawn_blocking` (ADR-054 — never a synchronous
+CozoDB scan inline on the async executor, matching the sibling `health_tick`/`run_maintenance_scan`
+pattern exactly), the batched `/api/embed` calls run directly on the async executor between the two
+blocking passes (genuinely async, no `Handle::block_on` bridging needed since nothing here runs
+inside a `spawn_blocking` closure itself), then `apply_enrichment_results` runs in a second
+`spawn_blocking`. Wired into `daemon/src/scheduler.rs`'s `run_maintenance_tick` as a SEPARATE pass
+after the existing deterministic maintenance loop (not folded into the same loop), gated by a new
+`[enrichment]` section in `daemon/src/config.rs`'s `DaemonConfig` (`enabled: bool`, default
+`false` — an operator must opt in explicitly, since this is real external API cost/time on a
+background tick, exactly as this ADR's own Costs section already named). Residency is resolved
+per-store from the SAME `KbRegistry` the daemon's other access checks already read
+(`primary_ai_residency` for the primary store, `KbInstance.ai_residency` for named instances) and
+checked BEFORE any node's content is read (`plan_enrichment_scan`'s own structural guarantee) —
+never a second, independently-implemented residency check.
+
+**Verification C, addressed precisely**: "kill mid-sweep and restart; resumption must not
+double-process nodes already completed, must not lose nodes still pending" is satisfied FOR FREE
+by Phase B's own content-addressed cache — a killed/restarted sweep's next `plan_enrichment_scan`
+call naturally sees already-cached content-hashes as hits (skipped) and not-yet-cached ones as
+targets (retried), with no separate checkpoint/resume bookkeeping needed. Two adversarial test
+suites prove this at two layers: `shared/kb/src/enrichment.rs`'s
+`resuming_after_a_partial_prior_run_only_targets_the_still_unembedded_nodes` (pure plan/apply
+layer, a pre-populated single cache entry simulating a kill-after-one-node) and `daemon/src/
+enrichment.rs`'s `a_batch_failure_does_not_lose_or_duplicate_other_batches_work` (the full
+orchestration layer, using an injectable `EmbedBackend` trait with a fake backend that fails for
+one specific batch — proving the SAME resumption property holds when the interruption is a
+mid-sweep provider failure, not just a killed process, and that OTHER batches' work is neither
+lost nor duplicated). Two more daemon-level tests (`maintenance_tick_does_not_touch_the_cache_
+when_enrichment_is_disabled`, `maintenance_tick_skips_enrichment_for_a_local_models_only_primary_
+kb_against_a_hosted_provider`) exercise the actual `run_maintenance_tick` wiring, not just the
+lower-level sweep function in isolation — the second one points `base_url` at an address nothing
+listens on and asserts the tick completes without ever attempting to reach it, proving the
+residency gate runs before any network call, not merely before any *successful* one.
+
+**Explicitly out of scope for this phase, named rather than silently absent**: Phase D's
+lease-coordinated multi-daemon dedup. With a single daemon per KB (today's only real topology —
+ADR-060's multi-tenant work shares one daemon process across tenants, not multiple daemons racing
+on the same KB), there is no concurrent-claim race to coordinate, only the restart-resume case
+Phase B's cache already handles.
+
+`cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean across both
+workspaces; `cargo build --workspace --features gui` clean.
+
+## Implementation note (Phase E, principle #15)
+
+Re-read the Decision text carefully before implementing: it specifies the enrich-now path runs
+"synchronously with respect to the invoking command" — a genuinely blocking call, not an
+async-bridged one. This resolved what would otherwise have been a hard architectural question
+(how does a plain synchronous AI-tool executor, `crates/ai/src/tool_impls/kb.rs`'s
+`execute_kb_enrich`, reach an async embedding call without risking a "cannot start a runtime from
+within a runtime" panic depending on the calling thread's own execution context): use a genuinely
+BLOCKING HTTP client (`reqwest::blocking::Client`, via a new `mae_kb::embedding_client::
+ollama_embed_blocking`, gated behind the existing `remote-hub` Cargo feature that already unlocks
+`reqwest`'s optional `blocking` feature for ADR-062's `RemoteHubQueryLayer`) rather than bridging
+into the async `OllamaProvider::embed` used for chat. `crates/ai/Cargo.toml` now enables `mae-kb`'s
+`remote-hub` feature UNCONDITIONALLY (not behind `mae-ai`'s own opt-in flag) — `mae-ai` is already
+an unconditional dependency of the shipped `mae` binary, so this guarantees the enrich-now path
+compiles into every standard build without needing an extra opt-in flag most users would never
+pass, matching principle #12's "genuinely usable floor" requirement.
+
+Implemented as a new AI tool, `kb_enrich` (`crates/ai/src/tools/kb_tools.rs` + `crates/ai/src/
+executor/kb_exec.rs` + `crates/ai/src/tool_impls/kb.rs::execute_kb_enrich`), not a plain
+`crates/core` editor command — a deliberate scope decision, not an oversight: reaching an embedding
+provider requires `crates/ai` (`mae-core` has no AI-provider access at all, by design, to avoid a
+circular dependency), so the tool naturally lives where the provider access already exists. New
+Scheme-configurable options (`ai_embedding_provider`/`ai_embedding_model`/`ai_embedding_base_url`/
+`ai_embedding_api_key_command`/`ai_embedding_chunk_version`, mirroring the existing `ai_provider`/
+`ai_model`/etc. naming) back new fields on `AiState`, following the exact same registry-def +
+`get_option`/`set_option` match-arm pattern every other option already uses (principle #7 — no
+config.toml-only or hardcoded settings).
+
+**Scoped to the primary KB only, named rather than silently absent**: federated instances
+(`editor.kb.instances`) are held as in-memory `KnowledgeBase` values in the editor process, not
+`Arc<dyn KbStore>` handles — there is no store to enrich for them from this process today. Extending
+enrich-now to federated instances is a real follow-up, not attempted here.
+
+**A second, layered residency check, not a duplicate of the first**: `execute_kb_enrich`'s own
+internal `plan_enrichment_scan` call already gates on the `ai_embedding_provider` config (which
+model actually processes the content — the same axis Phase A/C gate on). Separately, `crates/mae/
+src/ai_residency.rs`'s `check_kb_residency` (the REQUESTER-facing gate, run before any `kb_*` tool
+call reaches its executor at all) needed a new `"kb_enrich" => PrimaryOnly` classification — a
+DIFFERENT axis: whether the calling AI agent itself (`requester_provider`, e.g. a hosted Claude
+session driving the tool call) may even invoke `kb_enrich` and see its output at all, since a
+failed node's id can appear in the returned `errors` array (real node-identity leakage, not
+content, but enough that "no per-row filter" `PrimaryOnly` applies, matching `kb_raw_query`'s own
+precedent). Missing this classification was caught immediately by the existing `every_kb_tool_and_
+help_open_is_explicitly_classified` regression guard (fails CLOSED for any unclassified `kb_*`
+tool, per that module's own design) — confirming the guard does exactly the job it was built for.
+Three new adversarial tests added there matching the existing `kb_raw_query`/`kb_view_query`
+pattern: denied for a non-local requester against a restricted primary, allowed for a local
+requester, allowed when the primary is unrestricted.
+
+**Verification E, addressed precisely**: "verify zero background timer or thread exists at all
+when `daemon_mode=off`" is satisfied structurally — `execute_kb_enrich` is a plain synchronous
+function with no `std::thread::spawn`/`tokio::spawn`/interval anywhere in its call chain (the
+BLOCKING HTTP client, not the daemon's `DaemonScheduler`, which only ever runs inside the separate
+`mae-daemon` binary and is never constructed by the editor when `daemon_mode=off`). Verified by
+`kb_enrich_is_a_plain_synchronous_call_with_no_background_thread_or_timer`, which asserts the call
+returns near-instantly for an empty KB rather than merely asserting on some indirect proxy. Five
+more tests cover the working path end to end without a live Ollama server (an unreachable
+`127.0.0.1:1` `ai_embedding_base_url` stands in for "the provider is down/misconfigured"): the
+no-store error case, the residency-blocked case (asserted via the same unreachable-address
+technique — if residency were bypassed, the call would fail trying to actually reach it instead of
+returning the clean pre-embed "skipped" result), the fully-cached "up to date, zero network
+attempts" case, a genuine provider-failure case (asserts the failure is reported in the `errors`
+array, not silently dropped or panicked), and the `limit` argument correctly capping how many
+nodes are attempted.
+
+`cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean across both
+workspaces; `cargo build --workspace --features gui` clean.
