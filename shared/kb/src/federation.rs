@@ -29,6 +29,35 @@ pub enum AiResidency {
     LocalModelsOnly,
 }
 
+/// AI provider names MAE classifies as local (self-hosted). Single source of truth —
+/// relocated here from `mae-core` (ADR-061 Phase A) so the daemon workspace, which does not
+/// depend on `mae-core` (ADR-014's two-workspace split), can also consult it: enrichment's
+/// embedding-provider residency gate must run from `daemon/src/scheduler.rs`'s background
+/// sweep, which has no `Editor` and cannot reach `crates/core`. `shared/kb` (`mae-kb`) is the
+/// closest common crate both the editor workspace (via `mae-core`) and the daemon workspace
+/// already depend on directly, and it already owns `AiResidency` — so the provider-residency
+/// predicate now lives right next to the policy enum it decides against. `mae-core::ai_
+/// residency` re-exports this rather than duplicating it.
+pub const LOCAL_AI_PROVIDERS: &[&str] = &["ollama"];
+
+/// Is `provider` one MAE classifies as local (self-hosted)?
+pub fn is_local_provider(provider: &str) -> bool {
+    LOCAL_AI_PROVIDERS.contains(&provider)
+}
+
+/// Does `residency` permit `provider` to read/write this KB's content? The core
+/// provider-vs-residency decision, usable from both the editor (via `mae-core::ai_residency::
+/// check_kb_residency`, which already has KB/tool context to gather `residency` from) and the
+/// daemon (which can read a `KbInstance`'s `ai_residency` field directly, with no `Editor` in
+/// the loop at all). `Open` always permits; `LocalModelsOnly` permits only a locally-classified
+/// provider.
+pub fn residency_permits_provider(residency: AiResidency, provider: &str) -> bool {
+    match residency {
+        AiResidency::Open => true,
+        AiResidency::LocalModelsOnly => is_local_provider(provider),
+    }
+}
+
 /// What role a registered `KbInstance` plays (ADR-058 Phase A). Purely descriptive — nothing
 /// in the query/storage layer branches on it yet; `KbScope::Project` (Phase C) is the first
 /// consumer. `#[serde(default)]` on the `kind` field below means every registry file written
@@ -1050,6 +1079,54 @@ pub fn parse_eor_link(link: &str) -> (Option<&str>, &str) {
 mod tests {
     use super::*;
     use crate::NodeKind;
+
+    // ADR-061 Phase A: provider-residency gate, relocated from mae-core so
+    // the daemon (which has no Editor and doesn't depend on mae-core) can
+    // also consult it for enrichment's embedding-provider check.
+
+    #[test]
+    fn is_local_provider_recognizes_ollama_only() {
+        assert!(is_local_provider("ollama"));
+        assert!(!is_local_provider("claude"));
+        assert!(!is_local_provider("openai"));
+        assert!(!is_local_provider("gemini"));
+        assert!(!is_local_provider("deepseek"));
+        assert!(!is_local_provider(""));
+    }
+
+    #[test]
+    fn residency_permits_provider_open_allows_any_provider() {
+        assert!(residency_permits_provider(AiResidency::Open, "claude"));
+        assert!(residency_permits_provider(AiResidency::Open, "ollama"));
+        assert!(residency_permits_provider(AiResidency::Open, "anything"));
+    }
+
+    #[test]
+    fn residency_permits_provider_local_models_only_denies_hosted_provider() {
+        // This is the exact adversarial case ADR-061 Phase A's own
+        // Verification names: "a hosted-provider configuration pointed at
+        // a LocalModelsOnly-residency KB must be rejected."
+        assert!(!residency_permits_provider(
+            AiResidency::LocalModelsOnly,
+            "claude"
+        ));
+        assert!(!residency_permits_provider(
+            AiResidency::LocalModelsOnly,
+            "openai"
+        ));
+        assert!(!residency_permits_provider(
+            AiResidency::LocalModelsOnly,
+            "gemini"
+        ));
+    }
+
+    #[test]
+    fn residency_permits_provider_local_models_only_allows_ollama() {
+        assert!(residency_permits_provider(
+            AiResidency::LocalModelsOnly,
+            "ollama"
+        ));
+    }
 
     #[test]
     fn kb_scope_parse_tokens() {

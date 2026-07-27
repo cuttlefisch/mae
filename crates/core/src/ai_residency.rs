@@ -27,15 +27,11 @@
 use crate::Editor;
 use mae_kb::federation::AiResidency;
 
-/// AI provider names MAE classifies as local (self-hosted). Single source
-/// of truth — reused by the gate in `crates/mae/src/ai_residency.rs` so
-/// both the gate and this filter agree on exactly one definition.
-pub const LOCAL_AI_PROVIDERS: &[&str] = &["ollama"];
-
-/// Is `provider` one MAE classifies as local (self-hosted)?
-pub fn is_local_provider(provider: &str) -> bool {
-    LOCAL_AI_PROVIDERS.contains(&provider)
-}
+/// Relocated to `mae_kb::federation` (ADR-061 Phase A) so the daemon workspace can also
+/// consult it — see that module's doc comment for the full crate-graph rationale. Re-exported
+/// here, not duplicated, so every existing caller of `crate::ai_residency::is_local_provider`/
+/// `LOCAL_AI_PROVIDERS` keeps working unmodified.
+pub use mae_kb::federation::{is_local_provider, LOCAL_AI_PROVIDERS};
 
 /// Is `node` exempt from AI-residency gating regardless of its owning KB's
 /// policy? Currently: MAE's own seeded/built-in content (#358).

@@ -153,6 +153,51 @@ impl OllamaProvider {
         serde_json::Value::Array(result)
     }
 
+    /// Parse Ollama's native `/api/embed` response body into a list of
+    /// embedding vectors, one per input, in the same order as the request's
+    /// `input` array (per Ollama's own documented ordering guarantee).
+    /// Extracted as a pure function (mirroring `parse_response` below) so
+    /// the response-shape parsing is unit-testable without a real HTTP
+    /// round trip -- this crate has no existing HTTP-mocking test harness,
+    /// so keeping wire-parsing logic pure and separate from the `reqwest`
+    /// call is how every other response type in this file is tested too.
+    pub fn parse_embed_response(body: &serde_json::Value) -> Result<Vec<Vec<f32>>, ProviderError> {
+        let embeddings = body
+            .get("embeddings")
+            .and_then(|v| v.as_array())
+            .ok_or_else(|| ProviderError {
+                message: format!(
+                    "Ollama embed response missing 'embeddings' array (body: {})",
+                    body
+                ),
+                retryable: false,
+                kind: ErrorKind::Unknown,
+            })?;
+
+        embeddings
+            .iter()
+            .map(|vec_val| {
+                vec_val
+                    .as_array()
+                    .ok_or_else(|| ProviderError {
+                        message: "Ollama embed response entry was not an array".to_string(),
+                        retryable: false,
+                        kind: ErrorKind::Unknown,
+                    })?
+                    .iter()
+                    .map(|n| {
+                        n.as_f64().map(|f| f as f32).ok_or_else(|| ProviderError {
+                            message: "Ollama embed response contained a non-numeric component"
+                                .to_string(),
+                            retryable: false,
+                            kind: ErrorKind::Unknown,
+                        })
+                    })
+                    .collect::<Result<Vec<f32>, ProviderError>>()
+            })
+            .collect()
+    }
+
     /// Parse Ollama's native `/api/chat` response into canonical ProviderResponse.
     pub fn parse_response(body: &serde_json::Value) -> Result<ProviderResponse, ProviderError> {
         let message = body.get("message").ok_or_else(|| ProviderError {
@@ -378,6 +423,94 @@ impl AgentProvider for OllamaProvider {
         Self::parse_response(&resp_body)
     }
 
+    /// Ollama's current native embeddings endpoint (ADR-061 Phase A). Uses
+    /// `/api/embed` (not the legacy singular `/api/embeddings`) since it
+    /// accepts a batch `input` array directly and returns `embeddings`
+    /// (plural) in the same order as the input list — verified against
+    /// Ollama's own API docs rather than assumed, since getting the
+    /// request/response shape wrong here would silently corrupt every
+    /// cached vector downstream.
+    async fn embed(&self, model: &str, inputs: &[String]) -> Result<Vec<Vec<f32>>, ProviderError> {
+        let url = format!(
+            "{}/api/embed",
+            self.config
+                .base_url
+                .as_deref()
+                .unwrap_or("http://localhost:11434")
+        );
+
+        let body = json!({
+            "model": model,
+            "input": inputs,
+        });
+
+        debug!(model = %model, url = %url, input_count = inputs.len(), "sending Ollama embed request");
+
+        let mut request = self
+            .client
+            .post(&url)
+            .header("content-type", "application/json");
+        if let Some(key) = self.config.api_key.as_deref().filter(|k| !k.is_empty()) {
+            request = request.header("Authorization", format!("Bearer {}", key));
+        }
+
+        let response = request.json(&body).send().await.map_err(|e| {
+            warn!(error = %e, is_timeout = e.is_timeout(), "Ollama embed HTTP error");
+            ProviderError {
+                message: format!("HTTP error: {}", e),
+                retryable: e.is_timeout(),
+                kind: ErrorKind::Transport,
+            }
+        })?;
+
+        let status = response.status();
+        let raw_body = response.bytes().await.map_err(|e| ProviderError {
+            message: format!("Failed to read response body: {}", e),
+            retryable: false,
+            kind: ErrorKind::Transport,
+        })?;
+
+        if !status.is_success() {
+            let retryable = status.as_u16() == 429 || status.as_u16() >= 500;
+            let body_preview = String::from_utf8_lossy(&raw_body);
+            let body_preview = if body_preview.len() > 500 {
+                format!("{}...", &body_preview[..500])
+            } else {
+                body_preview.to_string()
+            };
+            let kind = if status.as_u16() == 401 || status.as_u16() == 403 {
+                ErrorKind::Auth
+            } else if status.as_u16() == 429 {
+                ErrorKind::RateLimit
+            } else if status.as_u16() == 404 {
+                // A common real-world failure mode: the requested embedding
+                // model isn't pulled locally. Ollama returns 404 with a
+                // "model ... not found" body, not a 4xx auth/rate-limit
+                // shape -- surface it as Unknown (not Unsupported, which
+                // means "this provider can never do this") since pulling
+                // the model would make a retry succeed.
+                ErrorKind::Unknown
+            } else {
+                ErrorKind::Unknown
+            };
+            warn!(status = %status, retryable, "Ollama embed API error response");
+            return Err(ProviderError {
+                message: format!("API error {}: {}", status, body_preview),
+                retryable,
+                kind,
+            });
+        }
+
+        let resp_body: serde_json::Value =
+            serde_json::from_slice(&raw_body).map_err(|e| ProviderError {
+                message: format!("JSON parse error: {}", e),
+                retryable: false,
+                kind: ErrorKind::Transport,
+            })?;
+
+        Self::parse_embed_response(&resp_body)
+    }
+
     fn name(&self) -> &str {
         "ollama"
     }
@@ -546,5 +679,57 @@ mod tests {
     fn parse_response_missing_message_errors() {
         let body = json!({"done": true});
         assert!(OllamaProvider::parse_response(&body).is_err());
+    }
+
+    // ADR-061 Phase A: embedding response parsing.
+
+    #[test]
+    fn parse_embed_response_single_input() {
+        let body = json!({
+            "model": "all-minilm",
+            "embeddings": [[0.1, -0.2, 0.3]],
+        });
+        let vecs = OllamaProvider::parse_embed_response(&body).unwrap();
+        assert_eq!(vecs, vec![vec![0.1_f32, -0.2, 0.3]]);
+    }
+
+    #[test]
+    fn parse_embed_response_batch_preserves_order() {
+        // Real, distinct vectors (not a single hand-picked value repeated)
+        // so a transposition/reordering bug would actually be caught.
+        let body = json!({
+            "embeddings": [
+                [1.0, 2.0],
+                [3.0, 4.0],
+                [5.0, 6.0],
+            ],
+        });
+        let vecs = OllamaProvider::parse_embed_response(&body).unwrap();
+        assert_eq!(
+            vecs,
+            vec![vec![1.0_f32, 2.0], vec![3.0, 4.0], vec![5.0, 6.0]],
+            "batch order must match the request's input order, not be silently reshuffled"
+        );
+    }
+
+    #[test]
+    fn parse_embed_response_missing_embeddings_field_errors() {
+        let body = json!({"model": "all-minilm"});
+        let err = OllamaProvider::parse_embed_response(&body).unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Unknown);
+        assert!(!err.retryable);
+    }
+
+    #[test]
+    fn parse_embed_response_non_numeric_component_errors() {
+        let body = json!({"embeddings": [[0.1, "not-a-number", 0.3]]});
+        assert!(OllamaProvider::parse_embed_response(&body).is_err());
+    }
+
+    #[test]
+    fn parse_embed_response_empty_batch_is_empty_not_an_error() {
+        let body = json!({"embeddings": []});
+        let vecs = OllamaProvider::parse_embed_response(&body).unwrap();
+        assert!(vecs.is_empty());
     }
 }
