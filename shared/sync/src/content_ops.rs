@@ -277,6 +277,7 @@ mod tests {
             can_invite: false,
             invited_by: "owner".to_string(),
             epoch,
+            replication: crate::membership::ReplicationPolicy::Full,
         }
     }
 
