@@ -1,8 +1,8 @@
 # ADR-066: Native Windows Support for MAE Clients
 
-**Status:** In progress (Phases A/B/C landed and verified GREEN on real `windows-latest`
-CI — see "Status note" at the end of this document; Phases D/E remain, tracked as real
-follow-on work, not silently deferred).
+**Status:** In progress (Phases A/B/C/E landed and verified GREEN on real `windows-latest`
+CI — see "Status note" at the end of this document; Phase D remains, tracked as real
+follow-on work (issue #445), not silently deferred).
 **Extends:** ADR-014, ADR-055, ADR-057.
 **Relates to:** issue #386 (existing Windows/WSL scoping issue in cuttlefisch/mae, resolved
 by this ADR rather than left open-ended), cuttlefisch/mae-vscode issue #1 (concrete,
@@ -310,10 +310,16 @@ simulated input, not absence-of-crash) hasn't landed, and shipping an unverified
 Deliberately NOT wired into the `release`/`update-homebrew` jobs' `needs`/artifact list
 yet — that integration (checksums, download guide, Homebrew/winget-equivalent
 packaging) is real follow-on work once this artifact is proven stable, not assumed
-correct on day one. **Also not yet exercised by any real CI run** — `release.yml` only
-triggers on `v*` tags, not on this PR, so this job's first real execution will be
-whenever this branch's work is actually tagged for release; its YAML is written to the
-same pattern as the three already-working platform jobs but is unverified until then.
+correct on day one.
+
+**Exercised by real CI, confirmed rather than assumed (~2026-07-27):** the original text
+above predicted this job's first real execution would be "whenever this branch's work is
+actually tagged for release" — since verified directly against `gh api
+.../actions/runs/30247547760/jobs` (the `v0.14.55` version-bump tag push): `Build
+windows-x86_64` ran end to end, including the "Launch smoke test (real process execution,
+not just a successful build)" step, both green. Not a one-off either — every subsequent
+version-bump tag push exercises the same job. The `needs`/artifact-list integration into
+`release`/`update-homebrew` remains real, separate follow-on work (issue #472).
 
 **Phase C — scoped down from "the editor-workspace test matrix" to a narrower,
 evidence-based first leg.** Added a `windows-latest` job to `ci.yml`: `cargo build
