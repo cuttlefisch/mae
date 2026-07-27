@@ -796,6 +796,53 @@ impl Editor {
         self.kb_resolve_anywhere(id).map(|(node, _)| node)
     }
 
+    /// Split a subgraph's boundary links (`SubgraphResult::boundary_links`)
+    /// into "same instance (or unresolvable)" vs "genuinely crosses into a
+    /// DIFFERENT registered KB instance" — the multi-KB chord view's (#462)
+    /// building block for turning a fringe/boundary stub into a real
+    /// cross-diagram edge. `owner_instance` is the KB instance the subgraph
+    /// was extracted FROM (`None` = primary, `Some(uuid)` = federated —
+    /// matches `GraphView.kb_instance`'s convention), so a link whose
+    /// target resolves to that SAME instance is correctly kept as a plain
+    /// boundary stub (it's just outside the depth/cap cutoff, not a
+    /// cross-KB relationship).
+    ///
+    /// @ai-caution: [correctness] "Not found anywhere" (`kb_owner_of`
+    /// returns `None` — a genuinely dead/unresolvable link) and "found, but
+    /// in the SAME instance the subgraph was extracted from" (truncated by
+    /// `max_depth`/`node_cap`, not actually missing) are deliberately NOT
+    /// distinguished by this split — both land in the plain `SubgraphLink`
+    /// bucket returned as `.0`. A future feature that needs to tell a dead
+    /// link apart from a same-instance link merely hidden by today's BFS
+    /// truncation must NOT assume this two-way split is exhaustive; it
+    /// isn't — a third bucket would be needed for that.
+    pub(crate) fn partition_boundary_links_by_instance(
+        &self,
+        owner_instance: Option<&str>,
+        boundary_links: Vec<mae_kb::SubgraphLink>,
+    ) -> (Vec<mae_kb::SubgraphLink>, Vec<mae_kb::CrossInstanceLink>) {
+        let mut same_or_dead = Vec::with_capacity(boundary_links.len());
+        let mut cross = Vec::new();
+        for link in boundary_links {
+            let owner = self.kb_owner_of(&link.target);
+            let is_cross_instance = matches!(&owner, Some(o) if o.as_deref() != owner_instance);
+            if is_cross_instance {
+                cross.push(mae_kb::CrossInstanceLink {
+                    source: link.source,
+                    target: link.target,
+                    rel_type: link.rel_type,
+                    weight: link.weight,
+                    // Safe to unwrap: `is_cross_instance` only matched the
+                    // `Some(o)` arm above.
+                    target_instance: owner.unwrap(),
+                });
+            } else {
+                same_or_dead.push(link);
+            }
+        }
+        (same_or_dead, cross)
+    }
+
     /// Like [`Self::kb_get_node_anywhere`], but also reports WHICH tier the
     /// node resolved through (query layer / in-memory primary / a specific
     /// federated instance by uuid). Callers that need more than just the
@@ -924,5 +971,205 @@ mod scoped_owner_tests {
                 "keyword scope '{scope}' must behave identically to the unscoped lookup"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod partition_boundary_links_by_instance_tests {
+    use crate::editor::Editor;
+    use mae_kb::{KnowledgeBase, Node, NodeKind, SubgraphLink};
+
+    fn link(source: &str, target: &str) -> SubgraphLink {
+        SubgraphLink {
+            source: source.to_string(),
+            target: target.to_string(),
+            rel_type: "references".to_string(),
+            weight: 1.0,
+        }
+    }
+
+    fn register_instance<'a>(
+        editor: &'a mut Editor,
+        uuid: &str,
+        name: &str,
+    ) -> &'a mut KnowledgeBase {
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: uuid.to_string(),
+                name: name.to_string(),
+                org_dir: std::path::PathBuf::from(format!("/tmp/{name}")),
+                db_path: std::path::PathBuf::from(format!("/tmp/{name}.db")),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
+            });
+        editor
+            .kb
+            .instances
+            .entry(uuid.to_string())
+            .or_insert_with(KnowledgeBase::new)
+    }
+
+    /// Three registered instances (primary + two siblings, "alpha" and
+    /// "beta"), fanning boundary links out to BOTH siblings from a primary
+    /// seed — the adversarial N-way case (CLAUDE.md #14: not just a single
+    /// cherry-picked sibling).
+    fn three_instance_editor() -> Editor {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(Node::new(
+            "concept:seed",
+            "Seed",
+            NodeKind::Concept,
+            "seed body",
+        ));
+        editor.kb.primary.insert(Node::new(
+            "concept:same-instance-truncated",
+            "Truncated",
+            NodeKind::Concept,
+            "",
+        ));
+        let alpha = register_instance(&mut editor, "uuid-alpha", "alpha");
+        alpha.insert(Node::new(
+            "concept:alpha-target",
+            "Alpha Target",
+            NodeKind::Concept,
+            "",
+        ));
+        let beta = register_instance(&mut editor, "uuid-beta", "beta");
+        beta.insert(Node::new(
+            "concept:beta-target",
+            "Beta Target",
+            NodeKind::Concept,
+            "",
+        ));
+        editor
+    }
+
+    #[test]
+    fn fans_out_to_two_distinct_sibling_instances_correctly_attributed() {
+        let editor = three_instance_editor();
+        let boundary = vec![
+            link("concept:seed", "concept:alpha-target"),
+            link("concept:seed", "concept:beta-target"),
+        ];
+        let (same_or_dead, cross) = editor.partition_boundary_links_by_instance(None, boundary);
+        assert!(
+            same_or_dead.is_empty(),
+            "both links genuinely cross into a different instance"
+        );
+        assert_eq!(cross.len(), 2);
+        let alpha = cross
+            .iter()
+            .find(|l| l.target == "concept:alpha-target")
+            .expect("alpha-target link must survive");
+        assert_eq!(alpha.target_instance.as_deref(), Some("uuid-alpha"));
+        let beta = cross
+            .iter()
+            .find(|l| l.target == "concept:beta-target")
+            .expect("beta-target link must survive");
+        assert_eq!(beta.target_instance.as_deref(), Some("uuid-beta"));
+    }
+
+    #[test]
+    fn same_instance_truncated_link_stays_in_the_boundary_bucket_unchanged() {
+        let editor = three_instance_editor();
+        let boundary = vec![link("concept:seed", "concept:same-instance-truncated")];
+        let (same_or_dead, cross) =
+            editor.partition_boundary_links_by_instance(None, boundary.clone());
+        assert!(cross.is_empty());
+        assert_eq!(same_or_dead.len(), 1);
+        assert_eq!(same_or_dead[0].target, boundary[0].target);
+    }
+
+    #[test]
+    fn dead_unresolvable_link_stays_in_the_boundary_bucket_not_dropped_not_misclassified() {
+        let editor = three_instance_editor();
+        let boundary = vec![link("concept:seed", "concept:nowhere")];
+        let (same_or_dead, cross) = editor.partition_boundary_links_by_instance(None, boundary);
+        assert!(
+            cross.is_empty(),
+            "an unresolvable target is never cross-instance"
+        );
+        assert_eq!(
+            same_or_dead.len(),
+            1,
+            "an unresolvable target must not be silently dropped"
+        );
+    }
+
+    #[test]
+    fn federated_source_pointing_back_into_primary_resolves_the_none_direction() {
+        // Adversarial (#14): verify the `target_instance: None` direction
+        // specifically, not just the `Some(uuid)` direction exercised by
+        // the other tests above — a federated instance's own boundary link
+        // pointing back into PRIMARY must promote to `CrossInstanceLink`
+        // with `target_instance: None`.
+        let mut editor = three_instance_editor();
+        let alpha = editor.kb.instances.get_mut("uuid-alpha").unwrap();
+        alpha.insert(Node::new(
+            "concept:alpha-seed",
+            "Alpha Seed",
+            NodeKind::Concept,
+            "",
+        ));
+        let boundary = vec![link("concept:alpha-seed", "concept:seed")];
+        let (same_or_dead, cross) =
+            editor.partition_boundary_links_by_instance(Some("uuid-alpha"), boundary);
+        assert!(same_or_dead.is_empty());
+        assert_eq!(cross.len(), 1);
+        assert_eq!(
+            cross[0].target_instance, None,
+            "a link resolving back to PRIMARY must carry target_instance: None, not be \
+             mistaken for unresolvable"
+        );
+    }
+
+    #[test]
+    fn unregistering_the_target_instance_between_detection_and_a_later_render_never_panics() {
+        // Simulates the narrow race the plan calls out: detect a
+        // cross-instance link while the target instance is still
+        // registered, then the instance is unregistered before a
+        // hypothetical re-render reads the stale `CrossInstanceLink`.
+        // Nothing in this crate dereferences `target_instance` back into
+        // the registry without a fallible lookup, so this must simply not
+        // panic — a live TOCTOU-shaped scenario, not just a static check.
+        let mut editor = three_instance_editor();
+        let boundary = vec![link("concept:seed", "concept:alpha-target")];
+        let (_, cross) = editor.partition_boundary_links_by_instance(None, boundary);
+        assert_eq!(cross.len(), 1);
+        let stale_uuid = cross[0].target_instance.clone();
+
+        // Unregister "alpha" entirely.
+        editor.kb.instances.remove("uuid-alpha");
+        editor
+            .kb
+            .registry
+            .instances
+            .retain(|i| i.uuid != "uuid-alpha");
+
+        // A later lookup against the now-stale uuid must resolve to
+        // nothing, not panic.
+        assert!(editor
+            .kb
+            .registry
+            .find(stale_uuid.as_deref().unwrap())
+            .is_none());
+        assert!(editor
+            .kb
+            .instances
+            .get(stale_uuid.as_deref().unwrap())
+            .is_none());
     }
 }

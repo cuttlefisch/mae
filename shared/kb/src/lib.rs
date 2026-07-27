@@ -208,6 +208,27 @@ pub struct SubgraphLink {
     pub weight: f64,
 }
 
+/// A boundary link promoted to "genuinely crosses into a DIFFERENT
+/// registered KB instance" — see `Editor::partition_boundary_links_by_instance`
+/// (`crates/core/src/editor/kb_ops/registry.rs`), the multi-KB chord view's
+/// (#462) sole producer of this type. A plain `SubgraphLink` boundary link
+/// only ever carries `(source, target, rel_type, weight)` with no notion of
+/// WHICH KB the target lives in — this adds exactly that, so a caller can
+/// tell "this is a real cross-instance relationship, render an edge to the
+/// other diagram" apart from "this is just outside the depth/cap cutoff, or
+/// unresolvable" (both of which stay plain `SubgraphLink`s).
+#[derive(Debug, Clone)]
+pub struct CrossInstanceLink {
+    pub source: String,
+    pub target: String,
+    pub rel_type: String,
+    pub weight: f64,
+    /// Which KB instance owns `target` — `None` = primary, `Some(uuid)` = a
+    /// federated instance, matching `GraphView.kb_instance`'s convention
+    /// (`crates/core/src/graph_view.rs`).
+    pub target_instance: Option<String>,
+}
+
 /// Result of subgraph extraction.
 #[derive(Debug, Clone)]
 pub struct SubgraphResult {
