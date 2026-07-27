@@ -427,7 +427,7 @@ impl OptionRegistry {
                     OptionKind::String, "relevance", Some("kb.search_sort"),
                     &["relevance", "activity", "alphabetical", "recency"]),
                 opt!("kb_search_scope", &["kb-search-scope"],
-                    "Default KB search scope: all (primary + federated), local (primary only), remote (shared/collaborative instances only), or a specific instance name",
+                    "Default KB search scope: all (primary + federated), local (primary only), remote (shared/collaborative instances only), project/project-only (only the instance registered for the current project root, ADR-058 Phase C — falls back to all if no project root can be detected), or a specific instance name",
                     OptionKind::String, "all", Some("kb.search_scope"), &[]),
                 opt!("kb_federated_max_fanout_instances", &["kb-federated-max-fanout-instances"],
                     "Max federated KB instances queried per search/agenda/list fan-out (ADR-062 Phase B). Every participating instance costs a full store query, so this bounds worst-case per-query cost; if a registry exceeds it, the lowest-priority instances (kb_instances priority) are excluded from that query, not an arbitrary subset.",
@@ -561,11 +561,17 @@ impl OptionRegistry {
                      outgoing links.",
                     OptionKind::Bool, "true", Some("kb-graph.include-backlinks"), &[]),
                 opt!("kb_graph_node_count_cap", &["kb-graph-node-count-cap"],
-                    "Safety-net cap on the graph view's total node count (SubgraphSpec::node_cap), \
+                    "Safety-net cap on a single diagram's node count (SubgraphSpec::node_cap), \
                      independent of kb_graph_default_depth/kb_graph_include_backlinks. When a walk \
                      would exceed this, starter nodes plus the highest-degree remaining nodes are \
                      kept and the rest surface as boundary-stub \"... (+N)\" links, same as a \
-                     depth cutoff. Mirrors Neo4j Browser's default 300-node initial display cap.",
+                     depth cutoff. Mirrors Neo4j Browser's default 300-node initial display cap. \
+                     In kb_graph_view_mode=single this IS the view's total node count. In \
+                     kb_graph_view_mode=multi it is applied INDEPENDENTLY per diagram — once for \
+                     the seed instance's own SubgraphSpec, and again for EACH related instance's \
+                     own SubgraphSpec — so the real worst-case total across every diagram in the \
+                     merged multi-KB scene is cap × (1 + related-instance-count), not this value \
+                     alone; see kb_graph_multi_kb_max_related_instances for that count's own cap.",
                     OptionKind::Int, "300", Some("kb-graph.node-count-cap"), &[]),
                 opt!("kb_graph_node_radius", &["kb-graph-node-radius"],
                     "Base node circle radius in logical pixels for the graph view's GUI \
@@ -763,6 +769,18 @@ impl OptionRegistry {
                      kb_graph_multi_kb_max_related_instances.",
                     OptionKind::String, "linked", Some("kb-graph.multi-kb-scope"),
                     &["linked", "all"]),
+                opt!("kb_graph_multi_kb_grid_gap_factor",
+                    &["kb-graph-multi-kb-grid-gap-factor"],
+                    "Extra spacing between adjacent grid cells in kb_graph_view_mode=multi's \
+                     small-multiples chord grid, as a FRACTION of the larger-radius diagram \
+                     sharing that row/column boundary — never a fixed pixel gap, so the \
+                     breathing room (needed for each diagram's own name caption, drawn just \
+                     above it) scales the same sub-linear way every other distance in the chord \
+                     layout does. Independent of kb_graph_layout_spacing_scale, which only scales \
+                     each diagram's OWN internal ring radius, not the gap BETWEEN diagrams. 0.0 \
+                     packs adjacent diagrams edge-to-edge with no gap; the default of 0.6 \
+                     matches this option's pre-existing hardcoded behavior exactly.",
+                    OptionKind::Float, "0.6", Some("kb-graph.multi-kb-grid-gap-factor"), &[]),
                 // --- File tree ---
                 opt!("file_tree_focus_on_open", &["file-tree-focus-on-open"],
                     "Auto-focus the file tree window when it opens",

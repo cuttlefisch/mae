@@ -802,6 +802,7 @@ impl Editor {
                         &diagrams,
                         &cross_link_infos,
                         self.kb_graph_layout_spacing_scale as f64,
+                        self.kb_graph_multi_kb_grid_gap_factor as f64,
                     );
                 hidden_cross_instance_link_count = hidden_links;
                 diagram_labels = labels;

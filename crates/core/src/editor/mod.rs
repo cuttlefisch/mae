@@ -907,6 +907,14 @@ pub struct Editor {
     /// Mirrors `kb_graph_multi_kb_scope`; see
     /// `crate::graph_view::GraphMultiKbScope`.
     pub kb_graph_multi_kb_scope: crate::graph_view::GraphMultiKbScope,
+    /// Extra spacing between adjacent grid cells in `kb_graph_view_mode =
+    /// Multi`'s small-multiples chord grid, as a fraction of the
+    /// larger-radius diagram sharing that row/column boundary. Mirrors
+    /// `kb_graph_multi_kb_grid_gap_factor`; threaded into
+    /// `mae_canvas::kb_graph::build_multi_kb_chord_positions` as a function
+    /// parameter (mirroring `kb_graph_layout_spacing_scale`'s own plumbing)
+    /// since `mae-canvas` has no `OptionRegistry`/`Editor` access.
+    pub kb_graph_multi_kb_grid_gap_factor: f32,
     /// Queued background layout request for the open/refreshed graph-view
     /// buffer (`mae::graph_layout_bridge`, Part C Phase 1) — drained once
     /// per GUI event-loop tick, see `crate::graph_view::GraphLayoutIntent`'s
@@ -1437,6 +1445,7 @@ impl Editor {
             kb_graph_view_mode: crate::graph_view::GraphViewMode::Single,
             kb_graph_multi_kb_max_related_instances: 6,
             kb_graph_multi_kb_scope: crate::graph_view::GraphMultiKbScope::Linked,
+            kb_graph_multi_kb_grid_gap_factor: 0.6,
             pending_graph_layout: None,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)
             messages_synced_seq: None,

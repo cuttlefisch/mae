@@ -4333,7 +4333,7 @@ mod tests {
             ),
             subgraph(Some("uuid-beta"), "Beta", &["beta:a"]),
         ];
-        let (scene, labels, hidden) = build_multi_kb_chord_positions(&diagrams, &[], 1.0);
+        let (scene, labels, hidden) = build_multi_kb_chord_positions(&diagrams, &[], 1.0, 0.6);
         assert_eq!(hidden, 0);
         assert_eq!(scene.nodes.len(), 6, "2 + 3 + 1 nodes across 3 diagrams");
 

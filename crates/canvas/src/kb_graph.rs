@@ -406,13 +406,6 @@ pub struct DiagramLabel {
     pub node_count: usize,
 }
 
-/// Extra spacing between adjacent grid cells, as a FRACTION of the
-/// larger-radius diagram sharing that row/column boundary — never a fixed
-/// pixel gap, so the breathing room (needed for each diagram's own name
-/// caption, drawn just above it) scales the same sub-linear way every other
-/// distance in this module does (see `sqrt_area_radius`'s doc comment).
-const DIAGRAM_GRID_GAP_FACTOR: f64 = 0.6;
-
 /// Build ONE merged `SceneGraph` composing N KB instances' subgraphs as a
 /// grid of "small multiples" chord diagrams — issue #462's multi-KB graph
 /// view. Each `diagrams[i]` gets its own chord ring (identical trig to
@@ -446,10 +439,22 @@ const DIAGRAM_GRID_GAP_FACTOR: f64 = 0.6;
 /// `SceneEdge`'s index is only ever valid within its OWN `SceneGraph`; a
 /// per-diagram-local index is meaningless once nodes from multiple diagrams
 /// share one `nodes` vec.
+///
+/// `grid_gap_factor` is the extra spacing between adjacent grid cells, as a
+/// FRACTION of the larger-radius diagram sharing that row/column boundary —
+/// never a fixed pixel gap, so the breathing room (needed for each diagram's
+/// own name caption, drawn just above it) scales the same sub-linear way
+/// every other distance in this module does (see `sqrt_area_radius`'s doc
+/// comment). Mirrors `spacing_scale`'s own plumbing: `mae-canvas` has no
+/// `OptionRegistry`/`Editor` access, so this is threaded in as a plain
+/// function parameter — the caller (`kb_graph_multi_kb_grid_gap_factor`
+/// option, `crates/core/src/editor/graph_view_ops.rs`) is the one place that
+/// can read it from the registry.
 pub fn build_multi_kb_chord_positions(
     diagrams: &[KbInstanceSubgraph],
     cross_instance_links: &[KbCrossInstanceLinkInfo],
     spacing_scale: f64,
+    grid_gap_factor: f64,
 ) -> (SceneGraph, Vec<DiagramLabel>, usize) {
     if diagrams.is_empty() {
         return (SceneGraph::new(), Vec::new(), cross_instance_links.len());
@@ -472,22 +477,22 @@ pub fn build_multi_kb_chord_positions(
 
     // Cumulative cell centers along each axis: column `c`'s center sits
     // `col_max[c]` past the previous column's far edge, then the cursor
-    // advances by `col_max[c] * (1 + GAP_FACTOR)` to clear this column's
-    // far edge plus breathing room before the next one. Rows mirror this
-    // exactly.
+    // advances by `col_max[c] * (1 + grid_gap_factor)` to clear this
+    // column's far edge plus breathing room before the next one. Rows
+    // mirror this exactly.
     let mut col_x = vec![0.0_f64; cols];
     let mut cursor = 0.0_f64;
     for (c, slot) in col_x.iter_mut().enumerate() {
         cursor += col_max[c];
         *slot = cursor;
-        cursor += col_max[c] * (1.0 + DIAGRAM_GRID_GAP_FACTOR);
+        cursor += col_max[c] * (1.0 + grid_gap_factor);
     }
     let mut row_y = vec![0.0_f64; rows];
     let mut cursor = 0.0_f64;
     for (r, slot) in row_y.iter_mut().enumerate() {
         cursor += row_max[r];
         *slot = cursor;
-        cursor += row_max[r] * (1.0 + DIAGRAM_GRID_GAP_FACTOR);
+        cursor += row_max[r] * (1.0 + grid_gap_factor);
     }
 
     // Re-center the whole grid's bounding box on the origin — see this
@@ -1198,7 +1203,7 @@ mod tests {
         // exactly — the re-centering math must collapse to a no-op for n=1.
         let d = diagram(None, "Primary", &["a", "b", "c"]);
         let (multi_scene, labels, hidden) =
-            build_multi_kb_chord_positions(std::slice::from_ref(&d), &[], 1.0);
+            build_multi_kb_chord_positions(std::slice::from_ref(&d), &[], 1.0, 0.6);
         let plain = build_kb_graph_chord_positions(&d.nodes, &d.links, &d.boundary_links, 1.0);
 
         assert_eq!(hidden, 0);
@@ -1211,10 +1216,43 @@ mod tests {
     }
 
     #[test]
+    fn multi_kb_grid_gap_factor_actually_widens_inter_diagram_spacing() {
+        // A6 config-gap fix: `grid_gap_factor` replaced a hardcoded
+        // `DIAGRAM_GRID_GAP_FACTOR = 0.6` constant. This proves the
+        // parameter is genuinely wired into the layout math (not merely
+        // accepted and ignored) — a larger factor must strictly widen the
+        // gap between adjacent diagrams' label centers, and 0.0 must pack
+        // them tighter than the old 0.6 default.
+        let diagrams = || {
+            vec![
+                diagram(None, "Primary", &["a1", "a2", "a3"]),
+                diagram(Some("uuid-b"), "Notes", &["b1", "b2", "b3"]),
+            ]
+        };
+        let center_gap = |gap_factor: f64| {
+            let (_, labels, _) = build_multi_kb_chord_positions(&diagrams(), &[], 1.0, gap_factor);
+            assert_eq!(labels.len(), 2);
+            (labels[0].center_x - labels[1].center_x).abs()
+        };
+
+        let gap_zero = center_gap(0.0);
+        let gap_default = center_gap(0.6);
+        let gap_wide = center_gap(2.0);
+        assert!(
+            gap_zero < gap_default,
+            "0.0 gap ({gap_zero}) must pack tighter than the 0.6 default ({gap_default})"
+        );
+        assert!(
+            gap_default < gap_wide,
+            "the 0.6 default ({gap_default}) must be tighter than a 2.0 gap ({gap_wide})"
+        );
+    }
+
+    #[test]
     fn multi_kb_two_instances_do_not_overlap() {
         let a = diagram(None, "Primary", &["a1", "a2", "a3"]);
         let b = diagram(Some("uuid-b"), "Notes", &["b1", "b2", "b3"]);
-        let (scene, labels, hidden) = build_multi_kb_chord_positions(&[a, b], &[], 1.0);
+        let (scene, labels, hidden) = build_multi_kb_chord_positions(&[a, b], &[], 1.0, 0.6);
         assert_eq!(hidden, 0);
         assert_eq!(labels.len(), 2);
         assert_eq!(scene.nodes.len(), 6);
@@ -1249,7 +1287,7 @@ mod tests {
             diagram(Some("uuid-b"), "Beta", &["b"]),
             diagram(Some("uuid-c"), "Gamma", &["c"]),
         ];
-        let (scene, labels, hidden) = build_multi_kb_chord_positions(&diagrams, &[], 1.0);
+        let (scene, labels, hidden) = build_multi_kb_chord_positions(&diagrams, &[], 1.0, 0.6);
         assert_eq!(hidden, 0);
         assert_eq!(scene.nodes.len(), 3);
         assert_eq!(labels.len(), 3);
@@ -1276,7 +1314,7 @@ mod tests {
         let a = diagram(None, "Primary", &["a1", "a2"]);
         let b = diagram(Some("uuid-b"), "Notes", &["b1", "b2"]);
         let links = vec![cross_link("a1", None, "b2", Some("uuid-b"))];
-        let (scene, _labels, hidden) = build_multi_kb_chord_positions(&[a, b], &links, 1.0);
+        let (scene, _labels, hidden) = build_multi_kb_chord_positions(&[a, b], &links, 1.0, 0.6);
         assert_eq!(hidden, 0);
         // Global layout: diagram a occupies [0,2), diagram b occupies [2,4).
         // a1 -> index 0, b2 -> index 3.
@@ -1295,7 +1333,7 @@ mod tests {
         // Target instance "uuid-ghost" is not among the rendered diagrams —
         // simulates a stale/unregistered/filtered-out related instance.
         let links = vec![cross_link("a1", None, "ghost-node", Some("uuid-ghost"))];
-        let (scene, labels, hidden) = build_multi_kb_chord_positions(&[a], &links, 1.0);
+        let (scene, labels, hidden) = build_multi_kb_chord_positions(&[a], &links, 1.0, 0.6);
         assert_eq!(
             hidden, 1,
             "the dangling cross-link must be counted, not silently lost"
@@ -1311,7 +1349,7 @@ mod tests {
     #[test]
     fn multi_kb_empty_diagrams_produces_an_empty_scene_and_counts_every_link_as_hidden() {
         let links = vec![cross_link("a1", None, "b1", Some("uuid-b"))];
-        let (scene, labels, hidden) = build_multi_kb_chord_positions(&[], &links, 1.0);
+        let (scene, labels, hidden) = build_multi_kb_chord_positions(&[], &links, 1.0, 0.6);
         assert!(scene.nodes.is_empty());
         assert!(labels.is_empty());
         assert_eq!(hidden, 1);

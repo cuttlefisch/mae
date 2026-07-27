@@ -312,6 +312,9 @@ impl super::Editor {
                 self.kb_graph_multi_kb_max_related_instances.to_string()
             }
             "kb_graph_multi_kb_scope" => self.kb_graph_multi_kb_scope.as_str().to_string(),
+            "kb_graph_multi_kb_grid_gap_factor" => {
+                self.kb_graph_multi_kb_grid_gap_factor.to_string()
+            }
             _ => return None,
         };
         Some((value, def))
@@ -824,16 +827,27 @@ impl super::Editor {
                 }
             },
             "kb_search_scope" => {
-                // Freeform: "all" / "local" / "remote" / "<instance-name>".
+                // Freeform: "all" / "local" / "remote" / "project" / "<instance-name>".
                 // A named instance must exist; the keywords always validate.
+                // "project"/"project-only" mirror `resolve_kb_scope`'s own
+                // token-matching exactly (case-insensitive, both spellings
+                // accepted) — without both spellings here, the setter would
+                // reject a token `resolve_kb_scope` fully supports and has
+                // an existing test for.
                 let trimmed = value.trim();
                 let keyword = matches!(
                     trimmed.to_ascii_lowercase().as_str(),
-                    "" | "all" | "local" | "local-only" | "remote" | "remote-only"
+                    "" | "all"
+                        | "local"
+                        | "local-only"
+                        | "remote"
+                        | "remote-only"
+                        | "project"
+                        | "project-only"
                 );
                 if !keyword && self.kb.registry.find(trimmed).is_none() {
                     return Err(format!(
-                        "Invalid kb_search_scope: no KB instance named '{}' (expected: all, local, remote, or a registered instance name)",
+                        "Invalid kb_search_scope: no KB instance named '{}' (expected: all, local, remote, project, or a registered instance name)",
                         trimmed
                     ));
                 }
@@ -1345,6 +1359,12 @@ impl super::Editor {
                     format!("Invalid kb_graph_multi_kb_scope '{value}' (expected linked|all)")
                 })?;
                 self.kb_graph_multi_kb_scope = scope;
+            }
+            "kb_graph_multi_kb_grid_gap_factor" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_multi_kb_grid_gap_factor = v.clamp(0.0, 10.0);
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }
@@ -3082,6 +3102,51 @@ mod graph_view_option_tests {
             .set_option("kb_graph_multi_kb_scope", "nonsense")
             .is_err());
         assert_eq!(editor.kb_graph_multi_kb_scope, GraphMultiKbScope::All);
+    }
+
+    #[test]
+    fn kb_graph_multi_kb_grid_gap_factor_option_roundtrips_and_clamps() {
+        // A6 config-gap fix: DIAGRAM_GRID_GAP_FACTOR was a hardcoded 0.6
+        // constant in mae-canvas with no OptionRegistry entry at all -- this
+        // proves it's now a real, settable option whose default matches the
+        // old hardcoded behavior exactly.
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor
+                .get_option("kb_graph_multi_kb_grid_gap_factor")
+                .unwrap()
+                .0,
+            "0.6"
+        );
+        assert_eq!(editor.kb_graph_multi_kb_grid_gap_factor, 0.6);
+
+        editor
+            .set_option("kb_graph_multi_kb_grid_gap_factor", "1.5")
+            .unwrap();
+        assert_eq!(editor.kb_graph_multi_kb_grid_gap_factor, 1.5);
+        assert_eq!(
+            editor
+                .get_option("kb_graph_multi_kb_grid_gap_factor")
+                .unwrap()
+                .0,
+            "1.5"
+        );
+
+        // Out-of-range values clamp rather than error.
+        editor
+            .set_option("kb_graph_multi_kb_grid_gap_factor", "-5.0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_multi_kb_grid_gap_factor, 0.0);
+        editor
+            .set_option("kb_graph_multi_kb_grid_gap_factor", "999")
+            .unwrap();
+        assert_eq!(editor.kb_graph_multi_kb_grid_gap_factor, 10.0);
+
+        let before = editor.kb_graph_multi_kb_grid_gap_factor;
+        assert!(editor
+            .set_option("kb_graph_multi_kb_grid_gap_factor", "not-a-number")
+            .is_err());
+        assert_eq!(editor.kb_graph_multi_kb_grid_gap_factor, before);
     }
 }
 
