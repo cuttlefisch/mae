@@ -151,6 +151,38 @@ pub struct GraphView {
     /// and a one-shot status message so a truncated view is never silently
     /// mistaken for the whole neighborhood.
     pub hidden_node_count: usize,
+    /// Monotonic counter bumped by every `Editor::populate_graph_buffer`
+    /// call (a fresh topology) AND by `Editor::kb_graph_view_close` —
+    /// stamped onto every `GraphLayoutIntent` this view queues (including
+    /// the Phase 3 tick-requeue) and compared back against in
+    /// `Editor::apply_graph_layout_result`.
+    ///
+    /// @ai-caution: [architecture-debt] Fixes the stale-background-layout
+    /// race (#462 audit): a background `ForceLayout` computation is not
+    /// cancellable, so a second `populate_graph_buffer` (e.g.
+    /// `maybe_follow_kb_graph_view` re-centering) firing before the first
+    /// pass's result lands used to let whichever result arrived LAST
+    /// wholesale-replace `scene` — even carrying `hovered`/`selection`/
+    /// `pinned` forward BY INDEX against a topology that may no longer
+    /// match. `apply_graph_layout_result` now discards (no-ops) any result
+    /// whose stamped generation doesn't match this field's CURRENT value.
+    /// Starts at `0` (never populated); resets to `0` on a brand-new
+    /// `GraphView` instance (`GraphView::new()`), so a stale result from a
+    /// CLOSED view landing after a close+reopen that happens to reuse the
+    /// same `buf_idx` is caught whenever the two views' populate counts
+    /// differ — the common case for this narrow window, though not an
+    /// absolute guarantee if both experienced the exact same number of
+    /// populates before the stale result lands (a global, never-reset
+    /// per-buf_idx counter would close that residual gap; out of scope for
+    /// this pass).
+    pub generation: u64,
+    /// Memoized `compute_label_winners` result — see `LabelWinnerCache`'s
+    /// doc comment. `pub(crate)`, not `pub`: only `flatten_scene_graph_
+    /// cached`'s one real call site (`graph_view_reflatten_window`) ever
+    /// touches this; it is not part of `GraphView`'s externally-meaningful
+    /// state (unlike `scene`/`node_degrees`/etc.), just a render-path
+    /// optimization detail.
+    pub(crate) label_winner_cache: Option<LabelWinnerCache>,
 }
 
 /// An in-flight color transition for one node — see `GraphView.color_tween`.
@@ -401,7 +433,19 @@ impl GraphView {
                     Some(GraphViewEdgeState {
                         source_id: node_id(e.source)?,
                         target_id: node_id(e.target)?,
-                        boundary: e.style.dashed,
+                        // `style.dashed` alone is no longer a unique
+                        // boundary signal (#462 audit): a genuine
+                        // self-referential KB link is ALSO dashed now (see
+                        // `kb_graph::positions_to_scene`'s doc comment) so
+                        // it renders recognizably rather than as a bare
+                        // unlabeled stub. A real boundary/fringe stub
+                        // always carries `rel_type: None` (its underlying
+                        // link's type was discarded when multiple
+                        // out-of-subgraph links collapsed into one stub);
+                        // a self-link always carries its real `rel_type`
+                        // — so this combination is what actually means
+                        // "there's more graph beyond this depth, here".
+                        boundary: e.style.dashed && e.rel_type.is_none(),
                         label: e.label.clone(),
                     })
                 })
@@ -445,10 +489,12 @@ pub struct GraphViewNodeState {
 pub struct GraphViewEdgeState {
     pub source_id: String,
     pub target_id: String,
-    /// True for the dashed subgraph-fringe self-loop edges
-    /// `mae_canvas::kb_graph::build_kb_graph` emits (`edge.style.dashed`),
-    /// NOT the same as the unrelated `NodeStyle.highlighted` "starter node"
-    /// flag.
+    /// True for the dashed subgraph-fringe self-loop stub edges
+    /// `mae_canvas::kb_graph::positions_to_scene` emits — NOT simply
+    /// `edge.style.dashed` (a genuine self-referential link is ALSO
+    /// dashed, so it can render recognizably rather than as a bare
+    /// unlabeled stub; see `GraphView::describe_state`'s computation of
+    /// this field for the `rel_type`-based disambiguation).
     pub boundary: bool,
     pub label: Option<String>,
 }
@@ -510,6 +556,8 @@ impl GraphView {
             color_tween: None,
             render_epoch: HashMap::new(),
             hidden_node_count: 0,
+            generation: 0,
+            label_winner_cache: None,
         }
     }
 }
@@ -682,6 +730,14 @@ pub struct GraphLayoutIntent {
     /// (including the Phase 3 tick-requeue) must read the cached value
     /// rather than defaulting.
     pub layout_config: mae_canvas::layout::LayoutConfig,
+    /// Snapshot of `GraphView.generation` at the moment this intent was
+    /// queued — see that field's doc comment. `Editor::apply_graph_layout_
+    /// result` discards the eventual `GraphLayoutResult` unless this still
+    /// matches the view's CURRENT generation when the result lands, so a
+    /// background computation superseded by a later `populate_graph_buffer`
+    /// (or a close) can never wholesale-replace a newer scene with a
+    /// stale one.
+    pub generation: u64,
 }
 
 /// Resolved, theme-driven styling inputs for `flatten_scene_graph` — sizing
@@ -1160,9 +1216,9 @@ pub fn zoom_to_fit(
 /// `render_visual_buffer` pipeline, projected through one window's
 /// `Viewport` (issue #321 — the same shared `scene` can be flattened once
 /// per window showing it, each through its own pan/zoom/pixel-size). Edges
-/// are emitted before nodes (drawn under them); boundary edges
-/// (`SceneEdge.style.dashed`, the subgraph fringe — see
-/// `mae_canvas::kb_graph::build_kb_graph`) render as dashed lines using
+/// are emitted before nodes (drawn under them); boundary edges AND genuine
+/// self-referential links (both `SceneEdge.style.dashed` — see
+/// `mae_canvas::kb_graph::positions_to_scene`) render as dashed lines using
 /// `style.boundary_edge_color`, internal edges as solid lines using
 /// `style.edge_color`. Nodes render as a themed circle (selected node uses
 /// `style.selected_color`, others their `NodeKind`'s themed color) plus a
@@ -1360,6 +1416,101 @@ fn label_boxes_overlap(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool
         && a.3 + LABEL_DECLUTTER_PADDING_PX > b.1
 }
 
+/// Cached inputs + result of the last `compute_label_winners` call — see
+/// that function's doc comment for the (up to) O(n^2) greedy-overlap cost
+/// this exists to avoid re-paying on every call. `tick_graph_color_tweens`
+/// (`graph_view_ops.rs`) reflattens on EVERY tween tick (9-20 frames per
+/// hover/selection color transition), but the actual determinants of the
+/// label-winner set — node screen positions/radii/degrees, selection,
+/// hover, and the viewport — never change mid-tween; only the ONE tweened
+/// node's fill color does, which this computation never reads. A plain
+/// "do this call's inputs match the last one" check lets every tick after
+/// the first reuse the prior result instead of re-running the greedy
+/// overlap pass. Deliberately a single last-call slot, not a multi-entry
+/// map — see `GraphView.label_winner_cache`'s doc comment for why that's
+/// the right amount of caching here (principle #8: keep this simple, not
+/// clever).
+#[derive(Debug, Clone)]
+pub(crate) struct LabelWinnerCache {
+    positions: Vec<(f32, f32)>,
+    radii: Vec<f32>,
+    degrees: Vec<u32>,
+    selection: Option<usize>,
+    hovered: Option<usize>,
+    viewport: mae_canvas::scene::Viewport,
+    font_size: f32,
+    layout_algorithm: GraphLayoutAlgorithm,
+    result: std::collections::HashSet<usize>,
+}
+
+impl LabelWinnerCache {
+    /// Whether a fresh call with these exact inputs would recompute to the
+    /// SAME result this cache already holds. `scene.nodes.len()` stands in
+    /// for "the topology itself hasn't changed" — combined with
+    /// `positions`/`radii`/`degrees` (which are recomputed from the scene
+    /// every `flatten_scene_graph` call and would differ if any node's
+    /// position, render radius, or degree changed), this is exactly the
+    /// set of things `compute_label_winners` actually reads.
+    ///
+    /// `#[allow(too_many_arguments)]`: each parameter is a genuinely
+    /// distinct input `compute_label_winners` itself already takes (see
+    /// its signature) — bundling them into a params struct used by this
+    /// one call site wouldn't reduce complexity, just relocate the same
+    /// fields.
+    #[allow(clippy::too_many_arguments)]
+    fn matches(
+        &self,
+        node_count: usize,
+        positions: &[(f32, f32)],
+        radii: &[f32],
+        degrees: &[u32],
+        selection: Option<usize>,
+        hovered: Option<usize>,
+        viewport: &mae_canvas::scene::Viewport,
+        font_size: f32,
+        layout_algorithm: GraphLayoutAlgorithm,
+    ) -> bool {
+        self.positions.len() == node_count
+            && self.selection == selection
+            && self.hovered == hovered
+            && self.font_size == font_size
+            && self.layout_algorithm == layout_algorithm
+            && viewport_eq(&self.viewport, viewport)
+            && self.positions.as_slice() == positions
+            && self.radii.as_slice() == radii
+            && self.degrees.as_slice() == degrees
+    }
+}
+
+/// Field-by-field `Viewport` equality — `Viewport` itself doesn't derive
+/// `PartialEq` (see `mae_canvas::scene::Viewport`), so this is the one
+/// place that needs it (`LabelWinnerCache::matches`).
+fn viewport_eq(a: &mae_canvas::scene::Viewport, b: &mae_canvas::scene::Viewport) -> bool {
+    a.center_x == b.center_x
+        && a.center_y == b.center_y
+        && a.zoom == b.zoom
+        && a.width == b.width
+        && a.height == b.height
+}
+
+// Test-only instrumentation for `compute_label_winners` — see that
+// function's counter-increment call and `flatten_scene_graph_cached`'s
+// memoization test below. `thread_local!` rather than a global atomic:
+// `cargo test` runs each test on its own thread by default, so this
+// naturally starts fresh (0) per test with no cross-test interference,
+// and it costs nothing in a non-test build (the whole item is
+// `#[cfg(test)]`). A plain `//` comment, not `///` — rustdoc can't attach
+// doc comments to a `thread_local!` macro invocation's expansion.
+#[cfg(test)]
+thread_local! {
+    static LABEL_WINNERS_COMPUTE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+fn label_winners_compute_count() -> usize {
+    LABEL_WINNERS_COMPUTE_COUNT.with(|c| c.get())
+}
+
 /// Greedy priority-based label occlusion culling — the standard real-time
 /// approximation to the NP-hard optimal label-placement problem, used by
 /// cartographic renderers (e.g. city labels dropping out at low zoom
@@ -1379,6 +1530,12 @@ fn label_boxes_overlap(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool
 /// loop, which draws them unconditionally; they carry no degree/selection
 /// state and their purpose (a correctness signal: "more graph beyond this
 /// depth, here") shouldn't be silently hidden by a denser node label.
+///
+/// See `flatten_scene_graph_cached` for the memoized entry point most
+/// production callers should use instead of calling this directly on
+/// every frame — this function itself is unchanged/always-recomputes, so
+/// every existing test calling it (or `flatten_scene_graph`) directly
+/// keeps its exact prior behavior.
 fn compute_label_winners(
     scene: &mae_canvas::scene::SceneGraph,
     positions: &[(f32, f32)],
@@ -1388,6 +1545,16 @@ fn compute_label_winners(
     viewport: &mae_canvas::scene::Viewport,
     center: (f32, f32),
 ) -> std::collections::HashSet<usize> {
+    // Test-only call counter (zero cost in a non-test build — the whole
+    // block compiles away) — proves `flatten_scene_graph_cached`'s
+    // memoization actually SKIPS this function on a cache hit, which
+    // output-equality alone can't distinguish from "recomputed and
+    // happened to get the same answer" (this function is a deterministic,
+    // pure function of its inputs). See `label_winners_compute_count`.
+    #[cfg(test)]
+    {
+        LABEL_WINNERS_COMPUTE_COUNT.with(|c| c.set(c.get() + 1));
+    }
     let mut candidates: Vec<usize> = (0..scene.nodes.len())
         .filter(|&i| !node_is_offscreen(positions[i].0, positions[i].1, radii[i], viewport))
         .collect();
@@ -1428,11 +1595,37 @@ fn compute_label_winners(
     winners
 }
 
+/// Flatten a scene graph into `VisualElement`s, with NO label-winner
+/// memoization — every call recomputes `compute_label_winners` from
+/// scratch when the declutter pass runs. This is what every existing
+/// caller (all pre-existing tests, plus anywhere that doesn't have a
+/// persistent `GraphView` to hang a cache off of) keeps using unchanged.
+/// See `flatten_scene_graph_cached` for the memoized entry point real
+/// per-window rendering (`graph_view_ops.rs::graph_view_reflatten_window`)
+/// uses instead.
 pub fn flatten_scene_graph(
     scene: &mae_canvas::scene::SceneGraph,
     viewport: &mae_canvas::scene::Viewport,
     style: &GraphStyleOptions,
     degrees: &[u32],
+) -> Vec<VisualElement> {
+    let mut no_cache = None;
+    flatten_scene_graph_cached(scene, viewport, style, degrees, &mut no_cache)
+}
+
+/// Same as `flatten_scene_graph`, but reuses `label_cache`'s prior
+/// `compute_label_winners` result across calls whose inputs are identical
+/// (see `LabelWinnerCache`'s doc comment) — the memoized entry point
+/// `Editor::graph_view_reflatten_window` calls, backed by
+/// `GraphView.label_winner_cache`. Pass `&mut None` (or use
+/// `flatten_scene_graph` directly) for a one-off call with no cache to
+/// maintain, e.g. from a test or an ephemeral render.
+pub(crate) fn flatten_scene_graph_cached(
+    scene: &mae_canvas::scene::SceneGraph,
+    viewport: &mae_canvas::scene::Viewport,
+    style: &GraphStyleOptions,
+    degrees: &[u32],
+    label_cache: &mut Option<LabelWinnerCache>,
 ) -> Vec<VisualElement> {
     use mae_canvas::interaction::scene_to_viewport;
 
@@ -1485,6 +1678,14 @@ pub fn flatten_scene_graph(
         let Some(src) = scene.nodes.get(edge.source) else {
             continue;
         };
+        // `is_boundary` drives the dashed/red "stub" visual treatment —
+        // NOT a precise "this is a subgraph-fringe boundary edge" signal
+        // (that distinction lives in `GraphView::describe_state`'s
+        // `rel_type`-aware check instead). A genuine self-referential KB
+        // link is ALSO dashed (see `kb_graph::positions_to_scene`'s doc
+        // comment on why), so it shares this same rendering path — the
+        // per-edge `label` text ("... (+N)" vs "self") is what actually
+        // tells the two apart visually.
         let is_boundary = edge.style.dashed;
         let color = if is_boundary {
             style.boundary_edge_color.clone()
@@ -1493,13 +1694,15 @@ pub fn flatten_scene_graph(
         };
         let (sx1, sy1) = scene_to_viewport(viewport, src.x, src.y);
         let src_r = radii.get(edge.source).copied().unwrap_or(style.node_radius);
-        // A boundary edge is represented as a self-loop (source == target,
-        // see `build_kb_graph`) — draw a short stub off to the side instead
-        // of a zero-length line, so it's visually distinguishable. The stub
-        // offset is sized off the source node's OWN real render radius
-        // (`src_r`, computed above), so it stays proportionate to the
-        // circle it's attached to regardless of that node's degree/zoom
-        // size — not a flat, unrelated screen-space constant.
+        // A boundary edge OR a genuine self-referential link is
+        // represented as a self-loop (source == target, see
+        // `kb_graph::positions_to_scene`) — draw a short stub off to the
+        // side instead of a zero-length line, so it's visually
+        // distinguishable. The stub offset is sized off the source node's
+        // OWN real render radius (`src_r`, computed above), so it stays
+        // proportionate to the circle it's attached to regardless of that
+        // node's degree/zoom size — not a flat, unrelated screen-space
+        // constant.
         let (sx2, sy2) = if edge.target < scene.nodes.len() && edge.target != edge.source {
             let t = &scene.nodes[edge.target];
             scene_to_viewport(viewport, t.x, t.y)
@@ -1625,18 +1828,53 @@ pub fn flatten_scene_graph(
     // `compute_label_winners`'s doc comment) — computed ONCE here, gated on
     // the SAME zoom threshold that already hides all labels below it, so
     // the pass is skipped entirely (not just its result discarded) at low
-    // zoom or when the feature is disabled.
+    // zoom or when the feature is disabled. Memoized via `label_cache` (see
+    // `LabelWinnerCache`'s doc comment): reused verbatim when this call's
+    // inputs match the cache's, recomputed (and the cache replaced)
+    // otherwise — so a run of calls whose only difference is an in-flight
+    // color tween's fill color (topology/selection/hover/viewport all
+    // unchanged) pays for the greedy overlap pass exactly once.
     let label_winners: Option<std::collections::HashSet<usize>> =
         if style.label_declutter_enabled && viewport.zoom >= style.label_zoom_threshold as f64 {
-            Some(compute_label_winners(
-                scene,
-                &positions,
-                &radii,
-                degrees,
-                style,
-                viewport,
-                (center_x as f32, center_y as f32),
-            ))
+            let cache_hit = label_cache.as_ref().is_some_and(|c| {
+                c.matches(
+                    scene.nodes.len(),
+                    &positions,
+                    &radii,
+                    degrees,
+                    scene.selection,
+                    scene.hovered,
+                    viewport,
+                    style.font_size,
+                    style.layout_algorithm,
+                )
+            });
+            let winners = if cache_hit {
+                label_cache.as_ref().unwrap().result.clone()
+            } else {
+                let winners = compute_label_winners(
+                    scene,
+                    &positions,
+                    &radii,
+                    degrees,
+                    style,
+                    viewport,
+                    (center_x as f32, center_y as f32),
+                );
+                *label_cache = Some(LabelWinnerCache {
+                    positions: positions.clone(),
+                    radii: radii.clone(),
+                    degrees: degrees.to_vec(),
+                    selection: scene.selection,
+                    hovered: scene.hovered,
+                    viewport: *viewport,
+                    font_size: style.font_size,
+                    layout_algorithm: style.layout_algorithm,
+                    result: winners.clone(),
+                });
+                winners
+            };
+            Some(winners)
         } else {
             None
         };
@@ -1728,7 +1966,7 @@ pub fn flatten_scene_graph(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mae_canvas::scene::{EdgeStyle, NodeKind, NodeStyle, SceneEdge, SceneGraph, SceneNode};
+    use mae_canvas::scene::{EdgeStyle, NodeKind, SceneEdge, SceneGraph, SceneNode};
 
     fn test_style() -> GraphStyleOptions {
         GraphStyleOptions {
@@ -1840,10 +2078,7 @@ mod tests {
             label: id.to_string(),
             x,
             y,
-            width: 100.0,
-            height: 40.0,
             kind,
-            style: NodeStyle::default(),
             pinned: false,
             is_seed: false,
         }
@@ -2361,6 +2596,86 @@ mod tests {
             (0.0, 0.0),
         );
         assert_eq!(winners1, winners2);
+    }
+
+    #[test]
+    fn flatten_scene_graph_cached_reuses_label_winners_across_unchanged_ticks_and_recomputes_on_selection_change(
+    ) {
+        // #462 audit finding: `compute_label_winners`'s (up to) O(n^2)
+        // greedy overlap pass used to re-run from scratch on EVERY color-
+        // tween animation frame (9-20 ticks per hover/selection change),
+        // even though topology/selection/hover/viewport are unchanged
+        // during a pure color tween. `flatten_scene_graph_cached` must
+        // reuse the memoized result across such a run, and must still
+        // recompute the moment selection/hover genuinely changes.
+        let (scene, degrees) = overlapping_nodes_scene("hub", "leaf");
+        let style = declutter_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let mut cache: Option<LabelWinnerCache> = None;
+
+        let before_first = label_winners_compute_count();
+        let elements1 = flatten_scene_graph_cached(&scene, &viewport, &style, &degrees, &mut cache);
+        let after_first = label_winners_compute_count();
+        assert_eq!(
+            after_first,
+            before_first + 1,
+            "the first call must actually run the greedy overlap pass (empty cache)"
+        );
+        assert!(cache.is_some(), "a successful pass must populate the cache");
+
+        // Simulate several more color-tween ticks: SAME scene/viewport/
+        // degrees/style, nothing that would change label winners.
+        // `VisualElement` has no `PartialEq`, so compare the cheaper
+        // Text-element count as a proxy for "the same labels won" —
+        // sufficient here since the compute-count assertion below is what
+        // actually proves memoization, not this shape check.
+        let text_count = |els: &[VisualElement]| {
+            els.iter()
+                .filter(|e| matches!(e, VisualElement::Text { .. }))
+                .count()
+        };
+        let expected_text_count = text_count(&elements1);
+        for _ in 0..5 {
+            let elements_n =
+                flatten_scene_graph_cached(&scene, &viewport, &style, &degrees, &mut cache);
+            assert_eq!(
+                text_count(&elements_n),
+                expected_text_count,
+                "identical inputs must keep producing the same visible-label set"
+            );
+        }
+        let after_run = label_winners_compute_count();
+        assert_eq!(
+            after_run, after_first,
+            "a run of ticks with unchanged inputs must NOT re-run compute_label_winners \
+             even once — the whole point of the cache"
+        );
+
+        // Now genuinely change the selection — the winner set is priority-
+        // sensitive (selected/hovered nodes are tier 0), so this MUST bust
+        // the cache and recompute.
+        let mut reselected_scene = scene.clone();
+        reselected_scene.selection = Some(1); // was None; now "leaf" is selected
+        let _ =
+            flatten_scene_graph_cached(&reselected_scene, &viewport, &style, &degrees, &mut cache);
+        let after_selection_change = label_winners_compute_count();
+        assert_eq!(
+            after_selection_change,
+            after_run + 1,
+            "a genuine selection change must invalidate the cache and recompute exactly once"
+        );
+
+        // And hover, independently of selection.
+        let mut rehovered_scene = scene.clone();
+        rehovered_scene.hovered = Some(1);
+        let _ =
+            flatten_scene_graph_cached(&rehovered_scene, &viewport, &style, &degrees, &mut cache);
+        let after_hover_change = label_winners_compute_count();
+        assert_eq!(
+            after_hover_change,
+            after_selection_change + 1,
+            "a genuine hover change must also invalidate the cache and recompute exactly once"
+        );
     }
 
     #[test]
@@ -3660,6 +3975,45 @@ mod tests {
 
         assert_eq!(state.edges.len(), 1);
         assert!(state.edges[0].boundary);
+    }
+
+    #[test]
+    fn describe_state_does_not_mark_a_genuine_self_link_as_boundary() {
+        // #462 audit fix: a genuine self-referential KB link is ALSO
+        // dashed now (so it renders recognizably rather than as a bare
+        // unlabeled stub — see `kb_graph::positions_to_scene`), so
+        // `style.dashed` alone can no longer tell it apart from a real
+        // subgraph-fringe boundary stub. It must still resolve to
+        // `boundary: false` here — the discriminator is `rel_type`: a
+        // genuine self-link keeps its real relationship type, a boundary
+        // stub's is always `None` (its underlying link's type was
+        // discarded when multiple out-of-subgraph links collapsed into
+        // one stub).
+        let mut gv = GraphView::new();
+        gv.scene
+            .nodes
+            .push(test_node("concept:a", 0.0, 0.0, NodeKind::Concept));
+        gv.scene.edges.push(SceneEdge {
+            source: 0,
+            target: 0,
+            label: Some("self".to_string()),
+            style: EdgeStyle {
+                color: "#unused".to_string(),
+                width: 1.0,
+                dashed: true,
+            },
+            weight: 1.0,
+            rel_type: Some("references".to_string()),
+        });
+
+        let state = gv.describe_state();
+
+        assert_eq!(state.edges.len(), 1);
+        assert!(
+            !state.edges[0].boundary,
+            "a genuine self-link (real rel_type) must not be reported as a boundary stub"
+        );
+        assert_eq!(state.edges[0].label.as_deref(), Some("self"));
     }
 
     #[test]

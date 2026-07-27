@@ -23,11 +23,12 @@ pub enum Direction {
 /// screen-space render radius to scene-space (dividing by the current
 /// zoom) before calling this
 /// (`graph_view_ops.rs::graph_scene_hit_radii`) — otherwise the clickable
-/// area drifts away from the visible circle. Deliberately NOT
-/// `node.width`/`node.height` — those are leftover fields from an earlier
-/// rectangular-node model the renderer no longer uses for the KB graph
-/// view; testing against them hit a box that had already diverged from
-/// the circle actually drawn.
+/// area drifts away from the visible circle. `SceneNode` used to also
+/// carry `width`/`height` fields from an earlier rectangular-node model;
+/// they were removed (#462 audit) once confirmed dead — hit-testing never
+/// read them even before removal, since a box built from stored
+/// per-node dimensions had already diverged from the circle actually
+/// drawn by the time size started varying with degree/zoom.
 pub fn hit_test(graph: &SceneGraph, scene_x: f64, scene_y: f64, radii: &[f64]) -> Option<usize> {
     for (i, node) in graph.nodes.iter().enumerate().rev() {
         let radius = radii.get(i).copied().unwrap_or(0.0);
@@ -136,7 +137,7 @@ pub fn center_on_node(vp: &mut Viewport, node: &SceneNode) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scene::{NodeKind, NodeStyle, SceneGraph, SceneNode};
+    use crate::scene::{NodeKind, SceneGraph, SceneNode};
 
     fn test_node(id: &str, x: f64, y: f64) -> SceneNode {
         SceneNode {
@@ -144,10 +145,7 @@ mod tests {
             label: id.to_string(),
             x,
             y,
-            width: 100.0,
-            height: 40.0,
             kind: NodeKind::Concept,
-            style: NodeStyle::default(),
             pinned: false,
             is_seed: false,
         }

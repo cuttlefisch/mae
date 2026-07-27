@@ -28,6 +28,10 @@ pub struct GraphLayoutRequest {
     pub scene: SceneGraph,
     pub mode: GraphLayoutMode,
     pub layout_config: LayoutConfig,
+    /// Carried verbatim from `GraphLayoutIntent.generation` through to the
+    /// eventual `GraphLayoutResult` — see that field's doc comment and
+    /// `GraphView.generation`'s.
+    pub generation: u64,
 }
 
 impl From<GraphLayoutIntent> for GraphLayoutRequest {
@@ -37,6 +41,7 @@ impl From<GraphLayoutIntent> for GraphLayoutRequest {
             scene: intent.scene,
             mode: intent.mode,
             layout_config: intent.layout_config,
+            generation: intent.generation,
         }
     }
 }
@@ -52,6 +57,11 @@ pub struct GraphLayoutResult {
     pub buf_idx: usize,
     pub scene: SceneGraph,
     pub max_displacement: Option<f32>,
+    /// See `GraphLayoutRequest.generation`/`GraphView.generation` — checked
+    /// by `Editor::apply_graph_layout_result` against the view's CURRENT
+    /// generation, discarding this result outright if a later populate/
+    /// close superseded it while this computation was in flight.
+    pub generation: u64,
 }
 
 /// Drain `editor.pending_graph_layout` (set by `graph_view_ops.rs` on every
@@ -100,6 +110,7 @@ pub(crate) fn spawn_layout_computation(
             buf_idx: req.buf_idx,
             scene,
             max_displacement,
+            generation: req.generation,
         };
         let _ = proxy.send_event(crate::gui_event::MaeEvent::GraphLayoutEvent(result));
     });
@@ -109,7 +120,12 @@ pub(crate) fn spawn_layout_computation(
 /// Thin wrapper so `gui_app.rs`'s `user_event` match arm reads consistently
 /// with `dap_bridge::handle_dap_event`/`lsp_bridge::handle_lsp_event`.
 pub(crate) fn handle_graph_layout_event(editor: &mut mae_core::Editor, result: GraphLayoutResult) {
-    editor.apply_graph_layout_result(result.buf_idx, result.scene, result.max_displacement);
+    editor.apply_graph_layout_result(
+        result.buf_idx,
+        result.scene,
+        result.max_displacement,
+        result.generation,
+    );
 }
 
 #[cfg(test)]
@@ -123,6 +139,7 @@ mod tests {
             scene: SceneGraph::new(),
             mode: GraphLayoutMode::OneShot { iterations: 42 },
             layout_config: LayoutConfig::default(),
+            generation: 5,
         };
         let req: GraphLayoutRequest = intent.into();
         assert_eq!(req.buf_idx, 3);
@@ -130,6 +147,10 @@ mod tests {
             req.mode,
             GraphLayoutMode::OneShot { iterations: 42 }
         ));
+        assert_eq!(
+            req.generation, 5,
+            "generation must survive the Intent -> Request conversion unchanged"
+        );
     }
 
     #[test]
@@ -139,6 +160,7 @@ mod tests {
             scene: SceneGraph::new(),
             mode: GraphLayoutMode::Tick { temperature: 12.5 },
             layout_config: LayoutConfig::default(),
+            generation: 2,
         };
         let req: GraphLayoutRequest = intent.into();
         assert_eq!(req.buf_idx, 7);
@@ -168,6 +190,7 @@ mod tests {
                 kind_affinity: Some(kind_affinity),
                 ..LayoutConfig::default()
             },
+            generation: 1,
         };
         let req: GraphLayoutRequest = intent.into();
         assert_eq!(req.layout_config.kind_affinity, Some(kind_affinity));
@@ -181,6 +204,7 @@ mod tests {
             scene: SceneGraph::new(),
             mode: GraphLayoutMode::OneShot { iterations: 10 },
             layout_config: LayoutConfig::default(),
+            generation: 1,
         });
         let (tx, mut rx) = tokio::sync::mpsc::channel(4);
         drain_graph_layout_intent(&mut editor, &tx);

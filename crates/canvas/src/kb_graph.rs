@@ -14,7 +14,7 @@
 //! variant, because no such variant exists upstream).
 
 use crate::layout::{ForceLayout, LayoutConfig};
-use crate::scene::{EdgeStyle, NodeKind, NodeStyle, SceneEdge, SceneGraph, SceneNode};
+use crate::scene::{EdgeStyle, NodeKind, SceneEdge, SceneGraph, SceneNode};
 
 /// A simplified KB node for graph building (no dependency on mae-kb — see
 /// module docs on why `kind` is `crate::scene::NodeKind`, not
@@ -45,16 +45,13 @@ pub struct KbLinkInfo {
 /// - `nodes`: KB nodes with id and title
 /// - `links`: typed links within the subgraph
 /// - `boundary_links`: typed links crossing the subgraph boundary
-/// - `starter_ids`: IDs of the starting nodes (highlighted)
 pub fn build_kb_graph(
     nodes: &[KbNodeInfo],
     links: &[KbLinkInfo],
     boundary_links: &[KbLinkInfo],
-    starter_ids: &[String],
     spacing_scale: f64,
 ) -> SceneGraph {
-    let mut graph =
-        build_kb_graph_positions_only(nodes, links, boundary_links, starter_ids, spacing_scale);
+    let mut graph = build_kb_graph_positions_only(nodes, links, boundary_links, spacing_scale);
 
     // Run force layout
     let layout = ForceLayout::new(LayoutConfig {
@@ -77,7 +74,6 @@ pub fn build_kb_graph_positions_only(
     nodes: &[KbNodeInfo],
     links: &[KbLinkInfo],
     boundary_links: &[KbLinkInfo],
-    starter_ids: &[String],
     spacing_scale: f64,
 ) -> SceneGraph {
     // Build index: id -> node position
@@ -121,14 +117,7 @@ pub fn build_kb_graph_positions_only(
         })
         .collect();
 
-    positions_to_scene(
-        nodes,
-        links,
-        boundary_links,
-        starter_ids,
-        &id_to_idx,
-        &positions,
-    )
+    positions_to_scene(nodes, links, boundary_links, &id_to_idx, &positions)
 }
 
 /// Build a scene graph with nodes evenly spaced around a circle's
@@ -153,7 +142,6 @@ pub fn build_kb_graph_chord_positions(
     nodes: &[KbNodeInfo],
     links: &[KbLinkInfo],
     boundary_links: &[KbLinkInfo],
-    starter_ids: &[String],
     spacing_scale: f64,
 ) -> SceneGraph {
     let id_to_idx: std::collections::HashMap<&str, usize> = nodes
@@ -171,14 +159,7 @@ pub fn build_kb_graph_chord_positions(
         })
         .collect();
 
-    positions_to_scene(
-        nodes,
-        links,
-        boundary_links,
-        starter_ids,
-        &id_to_idx,
-        &positions,
-    )
+    positions_to_scene(nodes, links, boundary_links, &id_to_idx, &positions)
 }
 
 /// Radius of a circle/disk whose AREA is `n * IDEAL_AREA_PER_NODE *
@@ -196,14 +177,13 @@ fn sqrt_area_radius(n: usize, spacing_scale: f64) -> f64 {
 
 /// Shared node/edge assembly for every `build_kb_graph*` variant (CLAUDE.md
 /// #8) — the only thing that differs between them is HOW `positions` was
-/// computed (sunflower disk, circular ring, ...); node styling and the
-/// internal/boundary edge-building logic (including the boundary-link
-/// dedup-by-source stub collapsing) is identical regardless.
+/// computed (sunflower disk, circular ring, ...); the internal/boundary
+/// edge-building logic (including the boundary-link dedup-by-source stub
+/// collapsing) is identical regardless.
 fn positions_to_scene(
     nodes: &[KbNodeInfo],
     links: &[KbLinkInfo],
     boundary_links: &[KbLinkInfo],
-    starter_ids: &[String],
     id_to_idx: &std::collections::HashMap<&str, usize>,
     positions: &[(f64, f64)],
 ) -> SceneGraph {
@@ -211,38 +191,60 @@ fn positions_to_scene(
     let scene_nodes: Vec<SceneNode> = nodes
         .iter()
         .zip(positions.iter())
-        .map(|(node, &(x, y))| {
-            let kind = node.kind;
-            let is_starter = starter_ids.contains(&node.id);
-            let style = kind_to_style(&kind, is_starter);
-            let width = (node.title.len() as f64 * 8.0 + 20.0).clamp(80.0, 200.0);
-            SceneNode {
-                id: node.id.clone(),
-                label: node.title.clone(),
-                x,
-                y,
-                width,
-                height: 36.0,
-                kind,
-                style,
-                pinned: false,
-                is_seed: node.is_seed,
-            }
+        .map(|(node, &(x, y))| SceneNode {
+            id: node.id.clone(),
+            label: node.title.clone(),
+            x,
+            y,
+            kind: node.kind,
+            pinned: false,
+            is_seed: node.is_seed,
         })
         .collect();
 
-    // Create edges for internal links
+    // Create edges for internal links. A genuine self-referential KB link
+    // (`source == target` — an authored relationship, distinct from the
+    // boundary self-loop CONVENTION below, which uses source==target only
+    // as a "no real target to draw" placeholder) used to render with
+    // `EdgeStyle::default()` like any other edge: unlabeled and not
+    // dashed. `flatten_scene_graph`'s edge loop already special-cases
+    // ANY `source == target` edge into the same short offset-stub
+    // position as a boundary link (it can't do otherwise — there's no
+    // distinct node to draw a line TO), so an undecorated self-link was
+    // visually IDENTICAL to rendering noise/an artifact: a bare stub with
+    // no explanation (#462 audit). Reuses the boundary stub's own
+    // established visual precedent (dashed + a label) so a real self-link
+    // instead reads as recognizably intentional.
     let mut scene_edges: Vec<SceneEdge> = links
         .iter()
         .filter_map(|link| {
             let s = *id_to_idx.get(link.source.as_str())?;
             let t = *id_to_idx.get(link.target.as_str())?;
+            let is_self_link = s == t;
             Some(SceneEdge {
                 source: s,
                 target: t,
-                label: None,
-                style: EdgeStyle::default(),
+                label: if is_self_link {
+                    Some("self".to_string())
+                } else {
+                    None
+                },
+                style: if is_self_link {
+                    EdgeStyle {
+                        dashed: true,
+                        ..EdgeStyle::default()
+                    }
+                } else {
+                    EdgeStyle::default()
+                },
                 weight: link.weight,
+                // Real relationship data survives even for a self-link
+                // (unlike the boundary stub below, whose `rel_type` is
+                // always `None` — see that field's comment there and
+                // `GraphView::describe_state`'s `boundary` flag, which
+                // relies on exactly this distinction to tell a genuine
+                // self-link apart from a boundary/fringe stub even though
+                // both are dashed).
                 rel_type: Some(link.rel_type.clone()),
             })
         })
@@ -261,18 +263,31 @@ fn positions_to_scene(
     // small subgraph look like it had hundreds of edges. The count is
     // preserved in the label instead of silently dropped, so "this node
     // has N more connections beyond what's shown" is still visible.
-    let mut boundary_by_source: Vec<(&str, usize)> = Vec::new();
+    //
+    // `boundary_order` (first-seen source order, matching the previous
+    // `Vec`-scan's output byte-for-byte) + `boundary_counts` (a `HashMap`
+    // for O(1) lookup/increment) replaces the old `Vec<(&str, usize)>` +
+    // `.iter_mut().find(...)` linear scan — O(boundary_links *
+    // distinct_sources) in the worst case (a hub node with hundreds of
+    // boundary links was exactly the case this whole dedup exists to
+    // handle cheaply) — with O(boundary_links) total.
+    let mut boundary_order: Vec<&str> = Vec::new();
+    let mut boundary_counts: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
     for link in boundary_links {
-        if let Some(entry) = boundary_by_source
-            .iter_mut()
-            .find(|(s, _)| *s == link.source.as_str())
-        {
-            entry.1 += 1;
-        } else {
-            boundary_by_source.push((link.source.as_str(), 1));
+        let src = link.source.as_str();
+        match boundary_counts.entry(src) {
+            std::collections::hash_map::Entry::Occupied(mut e) => {
+                *e.get_mut() += 1;
+            }
+            std::collections::hash_map::Entry::Vacant(e) => {
+                boundary_order.push(src);
+                e.insert(1);
+            }
         }
     }
-    for (src, count) in boundary_by_source {
+    for src in boundary_order {
+        let count = boundary_counts[src];
         if let Some(&s) = id_to_idx.get(src) {
             // Boundary target is outside the graph — just show the outgoing edge
             // pointing to the edge of the source node (no target node rendered).
@@ -307,44 +322,6 @@ fn positions_to_scene(
         edges: scene_edges,
         selection: if n > 0 { Some(0) } else { None },
         hovered: None,
-    }
-}
-
-/// Map node kind to visual style. Populates `SceneNode.style`, but that
-/// field is NOT read by the GUI render path — `flatten_scene_graph`
-/// (`crates/core/src/graph_view.rs`) colors nodes via
-/// `GraphStyleOptions::color_for_kind`, theme-driven (`ui.graph.node.<kind>`
-/// keys) with `NODE_KIND_FALLBACK_HEX` as its own fallback when a theme
-/// doesn't define them — the routing this function's old TODO asked for
-/// already happened, just not through this function. Kept for
-/// `SceneNode.style`'s struct completeness (e.g. a non-KB `mae-canvas`
-/// caller building a `SceneGraph` by hand) rather than deleted outright.
-fn kind_to_style(kind: &NodeKind, highlighted: bool) -> NodeStyle {
-    let (fill, border) = match kind {
-        NodeKind::Index => ("#3a2a1a", "#ffaa4a"),
-        NodeKind::Command => ("#3a1a3a", "#ff6aff"),
-        NodeKind::Concept => ("#1a3a5c", "#4a9eff"),
-        NodeKind::Key => ("#1a2a3a", "#4aaaff"),
-        NodeKind::Note => ("#2a2d3e", "#6a6dff"),
-        NodeKind::Project => ("#1a3a3a", "#4affff"),
-        NodeKind::Category => ("#2a1a3a", "#aa4aff"),
-        NodeKind::Lesson => ("#1a3a1a", "#6aff6a"),
-        NodeKind::Tutorial => ("#1a3a1a", "#8fff8f"),
-        NodeKind::Meta => ("#3a1a1a", "#ff6a6a"),
-        NodeKind::Block => ("#2a2a1a", "#cccc4a"),
-        NodeKind::SchemeApi => ("#3a3a1a", "#ffff6a"),
-        NodeKind::Task => ("#1a2a1a", "#6aff9a"),
-        NodeKind::View => ("#2a1a2a", "#ff4aaa"),
-    };
-    NodeStyle {
-        fill: fill.to_string(),
-        border: if highlighted {
-            "#ff9933".to_string()
-        } else {
-            border.to_string()
-        },
-        border_width: if highlighted { 2.0 } else { 1.0 },
-        highlighted,
     }
 }
 
@@ -392,14 +369,14 @@ mod tests {
     #[test]
     fn build_graph_node_count() {
         let (nodes, links) = nodes_and_links();
-        let graph = build_kb_graph(&nodes, &links, &[], &[], 1.0);
+        let graph = build_kb_graph(&nodes, &links, &[], 1.0);
         assert_eq!(graph.nodes.len(), 3);
     }
 
     #[test]
     fn build_graph_edge_count() {
         let (nodes, links) = nodes_and_links();
-        let graph = build_kb_graph(&nodes, &links, &[], &[], 1.0);
+        let graph = build_kb_graph(&nodes, &links, &[], 1.0);
         assert_eq!(graph.edges.len(), 2);
     }
 
@@ -407,7 +384,7 @@ mod tests {
     fn build_graph_with_boundary() {
         let (nodes, links) = nodes_and_links();
         let boundary = vec![link("concept:buffer", "external:xyz")];
-        let graph = build_kb_graph(&nodes, &links, &boundary, &[], 1.0);
+        let graph = build_kb_graph(&nodes, &links, &boundary, 1.0);
         // 2 internal + 1 boundary edge
         assert_eq!(graph.edges.len(), 3);
         assert!(graph.edges[2].style.dashed);
@@ -427,7 +404,7 @@ mod tests {
             link("concept:buffer", "external:b"),
             link("concept:buffer", "external:c"),
         ];
-        let graph = build_kb_graph(&nodes, &links, &boundary, &[], 1.0);
+        let graph = build_kb_graph(&nodes, &links, &boundary, 1.0);
         // 2 internal + 1 collapsed boundary edge (not 3 boundary edges).
         assert_eq!(graph.edges.len(), 3);
         let boundary_edge = &graph.edges[2];
@@ -443,7 +420,7 @@ mod tests {
             link("concept:buffer", "external:a"),
             link("concept:window", "external:b"),
         ];
-        let graph = build_kb_graph(&nodes, &links, &boundary, &[], 1.0);
+        let graph = build_kb_graph(&nodes, &links, &boundary, 1.0);
         // 2 internal + 2 boundary edges (one per distinct source, each
         // with its own count-1 label — always includes the count, even at
         // 1, so the label is unambiguous rather than a bare "...").
@@ -459,11 +436,93 @@ mod tests {
     }
 
     #[test]
-    fn build_graph_starter_highlighted() {
+    fn build_graph_boundary_links_preserve_first_seen_source_order_and_per_source_counts() {
+        // Regression guard for the O(n^2)-ish `Vec` + linear-scan dedup ->
+        // `HashMap`-backed dedup swap (#462 audit finding): a `HashMap`'s
+        // OWN iteration order is unspecified, so the fix must explicitly
+        // track first-seen order in a side `Vec` rather than iterating the
+        // map directly — this pins that the boundary stub edges come out
+        // in the exact order their sources FIRST appeared in
+        // `boundary_links`, with each source's own count aggregated
+        // correctly, regardless of how the links interleave.
+        let (mut nodes, links) = nodes_and_links();
+        nodes.push(KbNodeInfo {
+            id: "concept:extra".to_string(),
+            title: "Extra".to_string(),
+            kind: NodeKind::Concept,
+            is_seed: false,
+        });
+        let boundary = vec![
+            link("concept:window", "external:a"), // window first-seen
+            link("concept:buffer", "external:b"), // buffer first-seen
+            link("concept:window", "external:c"), // window again (count 2)
+            link("concept:extra", "external:d"),  // extra first-seen
+            link("concept:buffer", "external:e"), // buffer again (count 2)
+        ];
+        let graph = build_kb_graph(&nodes, &links, &boundary, 1.0);
+        let boundary_edges: Vec<_> = graph.edges[2..].to_vec();
+        assert_eq!(
+            boundary_edges.len(),
+            3,
+            "one collapsed edge per distinct source"
+        );
+
+        let window_idx = nodes.iter().position(|n| n.id == "concept:window").unwrap();
+        let buffer_idx = nodes.iter().position(|n| n.id == "concept:buffer").unwrap();
+        let extra_idx = nodes.iter().position(|n| n.id == "concept:extra").unwrap();
+
+        assert_eq!(
+            boundary_edges[0].source, window_idx,
+            "first-seen source (window) must be the first boundary stub"
+        );
+        assert_eq!(boundary_edges[0].label.as_deref(), Some("... (+2)"));
+        assert_eq!(
+            boundary_edges[1].source, buffer_idx,
+            "second-seen source (buffer) must be the second boundary stub"
+        );
+        assert_eq!(boundary_edges[1].label.as_deref(), Some("... (+2)"));
+        assert_eq!(
+            boundary_edges[2].source, extra_idx,
+            "third-seen source (extra) must be the third boundary stub"
+        );
+        assert_eq!(boundary_edges[2].label.as_deref(), Some("... (+1)"));
+    }
+
+    #[test]
+    fn build_graph_self_link_renders_as_a_distinguishable_dashed_labeled_stub() {
+        // #462 audit fix: a genuine self-referential KB link (source ==
+        // target, an authored relationship — NOT the boundary-link
+        // convention, which uses source==target only as a "no real
+        // target to draw" placeholder) previously rendered with
+        // `EdgeStyle::default()` like any other internal link: unlabeled,
+        // not dashed — visually IDENTICAL to rendering noise, since
+        // `flatten_scene_graph` already draws any `source == target` edge
+        // as a short offset stub regardless. It must now be
+        // distinguishable: dashed, and carrying a "self" label.
         let (nodes, links) = nodes_and_links();
-        let graph = build_kb_graph(&nodes, &links, &[], &["concept:buffer".to_string()], 1.0);
-        assert!(graph.nodes[0].style.highlighted);
-        assert!(!graph.nodes[1].style.highlighted);
+        let mut links = links;
+        links.push(link("concept:buffer", "concept:buffer"));
+        let graph = build_kb_graph(&nodes, &links, &[], 1.0);
+
+        let self_link = graph
+            .edges
+            .iter()
+            .find(|e| e.source == e.target)
+            .expect("the self-link must produce an edge");
+        assert!(
+            self_link.style.dashed,
+            "a genuine self-link must be dashed, distinguishing it from a plain unlabeled stub"
+        );
+        assert_eq!(
+            self_link.label.as_deref(),
+            Some("self"),
+            "a genuine self-link must carry a recognizable label"
+        );
+        // Unlike a boundary stub (whose rel_type is always discarded/
+        // None), the self-link's real relationship type survives — this
+        // is exactly what `GraphView::describe_state` uses to tell the
+        // two apart despite both being dashed.
+        assert_eq!(self_link.rel_type.as_deref(), Some("references"));
     }
 
     #[test]
@@ -477,38 +536,8 @@ mod tests {
             kind: NodeKind::Task,
             is_seed: false,
         }];
-        let graph = build_kb_graph(&nodes, &[], &[], &[], 1.0);
+        let graph = build_kb_graph(&nodes, &[], &[], 1.0);
         assert_eq!(graph.nodes[0].kind, NodeKind::Task);
-    }
-
-    #[test]
-    fn kind_to_style_covers_every_variant() {
-        // Exhaustiveness is already enforced by the compiler (no default
-        // arm in kind_to_style's match) — this just guards against a
-        // variant silently sharing a placeholder color with the wrong
-        // neighbor by construction accident (each call must at least run
-        // without panicking for all 14 real NodeKind variants).
-        let all = [
-            NodeKind::Index,
-            NodeKind::Command,
-            NodeKind::Concept,
-            NodeKind::Key,
-            NodeKind::Note,
-            NodeKind::Project,
-            NodeKind::Category,
-            NodeKind::Lesson,
-            NodeKind::Tutorial,
-            NodeKind::Meta,
-            NodeKind::Block,
-            NodeKind::SchemeApi,
-            NodeKind::Task,
-            NodeKind::View,
-        ];
-        for kind in all {
-            let style = kind_to_style(&kind, false);
-            assert!(style.fill.starts_with('#'), "{kind:?} fill: {style:?}");
-            assert!(style.border.starts_with('#'), "{kind:?} border: {style:?}");
-        }
     }
 
     #[test]
@@ -519,7 +548,7 @@ mod tests {
         // property `graph_view_ops.rs` depends on to defer layout to the
         // background bridge.
         let (nodes, links) = nodes_and_links();
-        let graph = build_kb_graph_positions_only(&nodes, &links, &[], &[], 1.0);
+        let graph = build_kb_graph_positions_only(&nodes, &links, &[], 1.0);
         let n = nodes.len();
         let disk_radius = ((n as f64 * crate::layout::IDEAL_AREA_PER_NODE * 1.0)
             / std::f64::consts::PI)
@@ -552,7 +581,7 @@ mod tests {
                     is_seed: false,
                 })
                 .collect();
-            let graph = build_kb_graph_positions_only(&nodes, &[], &[], &[], 1.0);
+            let graph = build_kb_graph_positions_only(&nodes, &[], &[], 1.0);
             let mut min_dist = f64::MAX;
             for i in 0..graph.nodes.len() {
                 for j in (i + 1)..graph.nodes.len() {
@@ -590,8 +619,8 @@ mod tests {
                 is_seed: false,
             })
             .collect();
-        let tight = build_kb_graph_positions_only(&nodes, &[], &[], &[], 1.0);
-        let wide = build_kb_graph_positions_only(&nodes, &[], &[], &[], 4.0);
+        let tight = build_kb_graph_positions_only(&nodes, &[], &[], 1.0);
+        let wide = build_kb_graph_positions_only(&nodes, &[], &[], 4.0);
         let max_radius = |g: &SceneGraph| {
             g.nodes
                 .iter()
@@ -606,40 +635,20 @@ mod tests {
 
     #[test]
     fn positions_only_and_full_agree_on_topology() {
-        // Same node/edge count and starter highlighting either way — only
-        // the coordinates differ (before vs after layout).
+        // Same node/edge count either way — only the coordinates differ
+        // (before vs after layout).
         let (nodes, links) = nodes_and_links();
-        let positions_only = build_kb_graph_positions_only(&nodes, &links, &[], &[], 1.0);
-        let full = build_kb_graph(&nodes, &links, &[], &[], 1.0);
+        let positions_only = build_kb_graph_positions_only(&nodes, &links, &[], 1.0);
+        let full = build_kb_graph(&nodes, &links, &[], 1.0);
         assert_eq!(positions_only.nodes.len(), full.nodes.len());
         assert_eq!(positions_only.edges.len(), full.edges.len());
     }
 
     #[test]
     fn build_graph_empty() {
-        let graph = build_kb_graph(&[], &[], &[], &[], 1.0);
+        let graph = build_kb_graph(&[], &[], &[], 1.0);
         assert!(graph.nodes.is_empty());
         assert!(graph.edges.is_empty());
-    }
-
-    #[test]
-    fn node_width_scales_with_label() {
-        let nodes = vec![
-            KbNodeInfo {
-                id: "a".to_string(),
-                title: "Hi".to_string(),
-                kind: NodeKind::Note,
-                is_seed: false,
-            },
-            KbNodeInfo {
-                id: "b".to_string(),
-                title: "A Very Long Title For Testing Width".to_string(),
-                kind: NodeKind::Note,
-                is_seed: false,
-            },
-        ];
-        let graph = build_kb_graph(&nodes, &[], &[], &[], 1.0);
-        assert!(graph.nodes[1].width > graph.nodes[0].width);
     }
 
     #[test]
@@ -665,7 +674,7 @@ mod tests {
             },
         ];
         let links = vec![link("a", "b"), link("b", "c")];
-        let graph = build_kb_graph(&nodes, &links, &[], &[], 1.0);
+        let graph = build_kb_graph(&nodes, &links, &[], 1.0);
         // After layout, nodes should not be at identical positions
         let positions: Vec<(f64, f64)> = graph.nodes.iter().map(|n| (n.x, n.y)).collect();
         for i in 0..positions.len() {
@@ -683,7 +692,7 @@ mod tests {
     #[test]
     fn chord_positions_preserves_node_count() {
         let (nodes, links) = nodes_and_links();
-        let graph = build_kb_graph_chord_positions(&nodes, &links, &[], &[], 1.0);
+        let graph = build_kb_graph_chord_positions(&nodes, &links, &[], 1.0);
         assert_eq!(graph.nodes.len(), 3);
     }
 
@@ -697,7 +706,7 @@ mod tests {
                 is_seed: false,
             })
             .collect();
-        let graph = build_kb_graph_chord_positions(&nodes, &[], &[], &[], 1.0);
+        let graph = build_kb_graph_chord_positions(&nodes, &[], &[], 1.0);
         let radii: Vec<f64> = graph
             .nodes
             .iter()
@@ -728,7 +737,7 @@ mod tests {
                 is_seed: false,
             })
             .collect();
-        let graph = build_kb_graph_chord_positions(&nodes, &[], &[], &[], 1.0);
+        let graph = build_kb_graph_chord_positions(&nodes, &[], &[], 1.0);
         let angles: Vec<f64> = graph.nodes.iter().map(|n| n.y.atan2(n.x)).collect();
         let mut sorted = angles.clone();
         sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
@@ -766,7 +775,7 @@ mod tests {
                     is_seed: false,
                 })
                 .collect();
-            let graph = build_kb_graph_chord_positions(&nodes, &[], &[], &[], 1.0);
+            let graph = build_kb_graph_chord_positions(&nodes, &[], &[], 1.0);
             (graph.nodes[0].x.powi(2) + graph.nodes[0].y.powi(2)).sqrt()
         }
         // 25x the node count (8 -> 200) should grow radius by sqrt(25) = 5x,
@@ -795,15 +804,15 @@ mod tests {
             link("concept:buffer", "external:a"),
             link("concept:buffer", "external:b"),
         ];
-        let chord = build_kb_graph_chord_positions(&nodes, &links, &boundary, &[], 1.0);
-        let positions_only = build_kb_graph_positions_only(&nodes, &links, &boundary, &[], 1.0);
+        let chord = build_kb_graph_chord_positions(&nodes, &links, &boundary, 1.0);
+        let positions_only = build_kb_graph_positions_only(&nodes, &links, &boundary, 1.0);
         assert_eq!(chord.edges.len(), positions_only.edges.len());
         assert_eq!(chord.edges.len(), 3); // 2 internal + 1 collapsed boundary stub
     }
 
     #[test]
     fn chord_positions_empty_graph() {
-        let graph = build_kb_graph_chord_positions(&[], &[], &[], &[], 1.0);
+        let graph = build_kb_graph_chord_positions(&[], &[], &[], 1.0);
         assert!(graph.nodes.is_empty());
         assert!(graph.edges.is_empty());
     }

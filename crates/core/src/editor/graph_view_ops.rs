@@ -21,7 +21,7 @@
 
 use crate::buffer::{Buffer, BufferKind};
 use crate::graph_view::{
-    flatten_scene_graph, kind_affinity_from_strength, node_render_radius, GraphColorTween,
+    flatten_scene_graph_cached, kind_affinity_from_strength, node_render_radius, GraphColorTween,
     GraphLayoutAlgorithm, GraphLayoutIntent, GraphLayoutMode, GraphNavDirection, GraphStyleOptions,
     GraphView, ANIMATION_COOLING_FACTOR, ANIMATION_INITIAL_TEMPERATURE, ANIMATION_SETTLE_EPSILON,
     ANIMATION_TEMPERATURE_FLOOR,
@@ -57,11 +57,11 @@ fn graph_scene_point(gv: &GraphView, win_id: WindowId, rel_x: f32, rel_y: f32) -
 /// window's zoom, so the clickable circle always matches the drawn one
 /// exactly, at any zoom/degree combination. Without this per-node,
 /// zoom-aware conversion, a click's hit radius either stayed FIXED in
-/// scene-space (the node's now-vestigial `width`/`height` fields, a
-/// leftover from an earlier rectangular-node model) or FIXED in
-/// screen-space (this codebase's own prior single-scalar-radius fix) while
-/// the rendered circle varied by both zoom and degree — either way the two
-/// drifted apart.
+/// scene-space (`SceneNode` used to also carry `width`/`height` fields
+/// from an earlier rectangular-node model; removed once confirmed dead —
+/// #462 audit) or FIXED in screen-space (this codebase's own prior
+/// single-scalar-radius fix) while the rendered circle varied by both zoom
+/// and degree — either way the two drifted apart.
 fn graph_scene_hit_radii(gv: &GraphView, win_id: WindowId, style: &GraphStyleOptions) -> Vec<f64> {
     let viewport = gv.viewports.get(&win_id).copied().unwrap_or_default();
     let zoom = viewport.zoom.max(f64::EPSILON);
@@ -275,7 +275,19 @@ impl Editor {
                 }
             }
             let viewport = *gv.viewports.get(&win_id).unwrap();
-            let elements = flatten_scene_graph(&gv.scene, &viewport, &style, &gv.node_degrees);
+            // `_cached` variant: memoizes `compute_label_winners` across
+            // calls whose inputs are unchanged (e.g. every tick of a pure
+            // color tween) — see `GraphView.label_winner_cache`'s doc
+            // comment. Disjoint field borrows of `gv` (scene/node_degrees
+            // immutable, label_winner_cache mutable), not a method call, so
+            // this compiles as independent borrows.
+            let elements = flatten_scene_graph_cached(
+                &gv.scene,
+                &viewport,
+                &style,
+                &gv.node_degrees,
+                &mut gv.label_winner_cache,
+            );
             gv.rendered.insert(win_id, VisualBuffer { elements });
             // Bump so the GUI's per-window render cache
             // (`WindowRenderCache::graph_render_epoch`) knows this
@@ -473,14 +485,12 @@ impl Editor {
                 &kb_nodes,
                 &kb_links,
                 &kb_boundary_links,
-                std::slice::from_ref(&center),
                 self.kb_graph_layout_spacing_scale as f64,
             ),
             GraphLayoutAlgorithm::Chord => mae_canvas::kb_graph::build_kb_graph_chord_positions(
                 &kb_nodes,
                 &kb_links,
                 &kb_boundary_links,
-                std::slice::from_ref(&center),
                 self.kb_graph_layout_spacing_scale as f64,
             ),
         };
@@ -513,12 +523,23 @@ impl Editor {
             spacing_scale: self.kb_graph_layout_spacing_scale as f64,
             ..mae_canvas::layout::LayoutConfig::default()
         };
+        // Bump BEFORE constructing the intent below — see `GraphView.
+        // generation`'s doc comment. This is a fresh topology, so every
+        // intent this call queues (and any later tick-requeue chained from
+        // it) must stamp the NEW value, not whatever was current before
+        // this populate started.
+        let generation = self.buffers[buf_idx]
+            .graph_view()
+            .map(|gv| gv.generation)
+            .unwrap_or(0)
+            + 1;
         if matches!(algorithm, GraphLayoutAlgorithm::Force) {
             self.pending_graph_layout = Some(GraphLayoutIntent {
                 buf_idx,
                 scene: scene.clone(),
                 mode,
                 layout_config: layout_config.clone(),
+                generation,
             });
         }
 
@@ -538,6 +559,7 @@ impl Editor {
             gv.anim_temperature = ANIMATION_INITIAL_TEMPERATURE;
             gv.layout_config = layout_config;
             gv.hidden_node_count = hidden_node_count;
+            gv.generation = generation;
         }
         self.graph_view_reflatten_all_windows(buf_idx);
         if hidden_node_count > 0 {
@@ -671,6 +693,19 @@ impl Editor {
         else {
             return;
         };
+
+        // Bump the (about-to-be-removed) view's generation — see
+        // `GraphView.generation`'s doc comment. Any `GraphLayoutIntent`
+        // already dispatched to the background bridge before this close
+        // was requested still carries the OLD generation; even though this
+        // `GraphView` instance is destroyed below, bumping here documents
+        // the topology-invalidating event at its source and pairs with
+        // `pending_graph_layout` naturally going stale (a not-yet-drained
+        // intent for this `buf_idx` is superseded the moment a reopened
+        // view's `populate_graph_buffer` queues its own).
+        if let Some(gv) = self.buffers[idx].graph_view_mut() {
+            gv.generation += 1;
+        }
 
         let alt = self.vi.alternate_buffer_idx.unwrap_or(0);
         let target = if alt < self.buffers.len() && alt != idx {
@@ -1374,13 +1409,32 @@ impl Editor {
     /// hovered/selection: for every node currently pinned in the LIVE
     /// scene, the live position wins over the incoming one, regardless of
     /// how stale the snapshot that produced `scene` was.
+    ///
+    /// `generation` is the value `GraphLayoutIntent.generation` was stamped
+    /// with when THIS result's computation was originally queued (see
+    /// `GraphView.generation`'s doc comment) — if it no longer matches the
+    /// view's CURRENT generation (a later `populate_graph_buffer` or a
+    /// close superseded it while this computation was in flight), the
+    /// entire result is discarded as a no-op rather than applied: a stale
+    /// background pass must never wholesale-replace a newer scene, and its
+    /// `hovered`/`selection`/`pinned`-by-index carry-forward below is only
+    /// meaningful against the SAME topology it was computed from.
     pub fn apply_graph_layout_result(
         &mut self,
         buf_idx: usize,
         mut scene: mae_canvas::scene::SceneGraph,
         max_displacement: Option<f32>,
+        generation: u64,
     ) {
         if buf_idx >= self.buffers.len() || self.buffers[buf_idx].kind != BufferKind::Graph {
+            return;
+        }
+        let current_generation = self.buffers[buf_idx].graph_view().map(|gv| gv.generation);
+        if current_generation != Some(generation) {
+            // Stale result — see this method's doc comment and
+            // `GraphView.generation`. Silent no-op: this is an expected,
+            // routine race (a re-center firing before the prior tick
+            // finished), not an error condition worth surfacing.
             return;
         }
         if let Some(gv) = self.buffers[buf_idx].graph_view_mut() {
@@ -1433,6 +1487,13 @@ impl Editor {
                         scene,
                         mode: GraphLayoutMode::Tick { temperature },
                         layout_config,
+                        // Requeuing the SAME run, not a new populate — the
+                        // generation check above already confirmed
+                        // `generation` matches this buffer's current
+                        // value, so carry it forward unchanged rather than
+                        // re-reading `gv.generation` (identical value,
+                        // cheaper).
+                        generation,
                     });
                 }
             }
@@ -3212,8 +3273,11 @@ mod tests {
             (node.x, node.y)
         };
 
-        // The stale in-flight tick's result now lands.
-        editor.apply_graph_layout_result(graph_idx, stale_scene, Some(1.0));
+        // The stale in-flight tick's result now lands — same generation as
+        // the (only) populate this test ran, so it's not the *generation*
+        // race this file's other tests cover, only the drag-position one.
+        let generation = editor.buffers[graph_idx].graph_view().unwrap().generation;
+        editor.apply_graph_layout_result(graph_idx, stale_scene, Some(1.0), generation);
 
         let node = &editor.buffers[graph_idx].graph_view().unwrap().scene.nodes[0];
         assert!(
@@ -3402,10 +3466,7 @@ mod tests {
             label: id.to_string(),
             x,
             y: 0.0,
-            width: 100.0,
-            height: 40.0,
             kind: mae_canvas::scene::NodeKind::Note,
-            style: mae_canvas::scene::NodeStyle::default(),
             pinned: false,
             is_seed: false,
         }
@@ -4248,7 +4309,8 @@ mod tests {
         if let Some(n) = new_scene.nodes.first_mut() {
             n.x = 12345.0;
         }
-        editor.apply_graph_layout_result(idx, new_scene, None);
+        let generation = editor.buffers[idx].graph_view().unwrap().generation;
+        editor.apply_graph_layout_result(idx, new_scene, None, generation);
 
         assert_eq!(
             editor.buffers[idx]
@@ -4300,7 +4362,8 @@ mod tests {
             gv.scene.selection = Some(1);
         }
 
-        editor.apply_graph_layout_result(idx, stale_snapshot, Some(0.5));
+        let generation = editor.buffers[idx].graph_view().unwrap().generation;
+        editor.apply_graph_layout_result(idx, stale_snapshot, Some(0.5), generation);
 
         let gv = editor.buffers[idx].graph_view().unwrap();
         assert_eq!(
@@ -4325,11 +4388,149 @@ mod tests {
             .position(|b| b.kind == BufferKind::Graph)
             .unwrap();
         let scene = editor.buffers[idx].graph_view().unwrap().scene.clone();
+        let generation = editor.buffers[idx].graph_view().unwrap().generation;
         editor.kb_graph_view_close();
 
         // Must not panic even though `idx` now points at a different (or
-        // out-of-range) buffer.
-        editor.apply_graph_layout_result(idx, scene, None);
+        // out-of-range) buffer. The generation check never even runs here
+        // — the `kind != BufferKind::Graph`/out-of-range guard returns
+        // first.
+        editor.apply_graph_layout_result(idx, scene, None, generation);
+    }
+
+    #[test]
+    fn apply_layout_result_discards_a_result_stamped_with_a_superseded_generation() {
+        // #462 audit finding: `ForceLayout` background computations aren't
+        // cancellable, so two can be in flight for the same `buf_idx` at
+        // once (e.g. `maybe_follow_kb_graph_view` re-centering before the
+        // first tick's result has landed). Whichever one arrives LAST used
+        // to wholesale-replace `gv.scene` regardless of which populate it
+        // actually belongs to. `generation` fixes this: only a result whose
+        // stamped generation matches the view's CURRENT generation may be
+        // applied.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_layout_algorithm = GraphLayoutAlgorithm::Force;
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+
+        // Stand-in for the FIRST in-flight background computation: a
+        // snapshot taken (and generation stamped) at the moment of the
+        // first populate above.
+        let first_generation = editor.buffers[idx].graph_view().unwrap().generation;
+        let mut first_result_scene = editor.buffers[idx].graph_view().unwrap().scene.clone();
+        first_result_scene.nodes[0].x = -12345.0;
+        first_result_scene.nodes[0].y = -12345.0;
+
+        // A SECOND populate supersedes the first (e.g. a follow-current-
+        // node re-center) — bumps the generation.
+        editor.kb_graph_view_refresh_if_open();
+        let second_generation = editor.buffers[idx].graph_view().unwrap().generation;
+        assert_ne!(
+            first_generation, second_generation,
+            "sanity: a second populate must bump the generation"
+        );
+
+        // Mark the current scene with a sentinel so a wrongly-applied
+        // stale result is unmistakable.
+        if let Some(gv) = editor.buffers[idx].graph_view_mut() {
+            gv.scene.nodes[0].x = 999.0;
+            gv.scene.nodes[0].y = 999.0;
+        }
+
+        // The FIRST (now-stale) computation's result finally lands.
+        editor.apply_graph_layout_result(
+            idx,
+            first_result_scene.clone(),
+            Some(1.0),
+            first_generation,
+        );
+        let gv = editor.buffers[idx].graph_view().unwrap();
+        assert_eq!(
+            gv.scene.nodes[0].x, 999.0,
+            "a result stamped with a superseded generation must not overwrite gv.scene"
+        );
+        assert_eq!(
+            gv.generation, second_generation,
+            "a discarded stale result must not touch the generation counter either"
+        );
+
+        // Now the SECOND (current) computation's result lands — must
+        // apply normally.
+        let mut second_result_scene = first_result_scene;
+        second_result_scene.nodes[0].x = 42.0;
+        second_result_scene.nodes[0].y = 42.0;
+        editor.apply_graph_layout_result(idx, second_result_scene, Some(1.0), second_generation);
+        let gv = editor.buffers[idx].graph_view().unwrap();
+        assert_eq!(
+            gv.scene.nodes[0].x, 42.0,
+            "a result matching the CURRENT generation must be applied"
+        );
+    }
+
+    #[test]
+    fn apply_layout_result_stale_generation_does_not_corrupt_a_reopened_view_reusing_the_buf_idx() {
+        // #462 audit finding: `kb_graph_view_close` fully removes the
+        // `*KB Graph*` buffer, but a `GraphLayoutIntent` already dispatched
+        // to the background bridge before the close isn't cancelled. If
+        // the graph is reopened quickly, `ensure_graph_buffer_idx` can hand
+        // the fresh `GraphView` the SAME `buf_idx` the closed one had — a
+        // stale result from the closed view landing afterward must not
+        // corrupt the new view's scene.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_layout_algorithm = GraphLayoutAlgorithm::Force;
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        // A second populate before close so the closed view's generation
+        // is distinguishable from a freshly reopened view's (both would
+        // otherwise start their count from the same place).
+        editor.kb_graph_view_refresh_if_open();
+        let stale_scene = editor.buffers[idx].graph_view().unwrap().scene.clone();
+        let stale_generation = editor.buffers[idx].graph_view().unwrap().generation;
+        assert_eq!(stale_generation, 2, "sanity: two populates -> generation 2");
+
+        editor.kb_graph_view_close();
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let reopened_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        assert_eq!(
+            reopened_idx, idx,
+            "sanity: this scenario only exercises the bug when the buf_idx is reused"
+        );
+        let reopened_generation = editor.buffers[reopened_idx]
+            .graph_view()
+            .unwrap()
+            .generation;
+        assert_eq!(
+            reopened_generation, 1,
+            "sanity: a freshly (re)created GraphView's generation counter restarts"
+        );
+
+        // Mark the reopened view's scene with a sentinel.
+        if let Some(gv) = editor.buffers[reopened_idx].graph_view_mut() {
+            gv.scene.nodes[0].x = 777.0;
+        }
+
+        // The closed view's in-flight background result finally lands,
+        // targeting the SAME (reused) buf_idx, stamped with the closed
+        // view's (now-stale) generation.
+        editor.apply_graph_layout_result(reopened_idx, stale_scene, Some(1.0), stale_generation);
+
+        let gv = editor.buffers[reopened_idx].graph_view().unwrap();
+        assert_eq!(
+            gv.scene.nodes[0].x, 777.0,
+            "a stale result from a closed-and-reused buf_idx must not corrupt the reopened view"
+        );
     }
 
     // --- maybe_follow_kb_graph_view (Part C Phase 2, follow-current-node) ---
@@ -4633,8 +4834,9 @@ mod tests {
         // Simulate the OneShot request completing (no settlement signal) —
         // must not start animating or queue another request.
         let scene = editor.buffers[idx].graph_view().unwrap().scene.clone();
+        let generation = editor.buffers[idx].graph_view().unwrap().generation;
         editor.pending_graph_layout = None;
-        editor.apply_graph_layout_result(idx, scene, None);
+        editor.apply_graph_layout_result(idx, scene, None, generation);
         assert!(!editor.buffers[idx].graph_view().unwrap().animating);
         assert!(editor.pending_graph_layout.is_none());
         assert!(!editor.has_active_graph_animation());
@@ -4686,9 +4888,10 @@ mod tests {
             .unwrap();
 
         let scene = editor.buffers[idx].graph_view().unwrap().scene.clone();
+        let generation = editor.buffers[idx].graph_view().unwrap().generation;
         editor.pending_graph_layout = None;
         // Well above ANIMATION_SETTLE_EPSILON — still moving.
-        editor.apply_graph_layout_result(idx, scene, Some(10.0));
+        editor.apply_graph_layout_result(idx, scene, Some(10.0), generation);
 
         assert!(
             editor.buffers[idx].graph_view().unwrap().animating,
@@ -4714,9 +4917,10 @@ mod tests {
             .unwrap();
 
         let scene = editor.buffers[idx].graph_view().unwrap().scene.clone();
+        let generation = editor.buffers[idx].graph_view().unwrap().generation;
         editor.pending_graph_layout = None;
         // Well below ANIMATION_SETTLE_EPSILON — converged.
-        editor.apply_graph_layout_result(idx, scene, Some(0.01));
+        editor.apply_graph_layout_result(idx, scene, Some(0.01), generation);
 
         assert!(
             !editor.buffers[idx].graph_view().unwrap().animating,
@@ -4742,10 +4946,11 @@ mod tests {
             .position(|b| b.kind == BufferKind::Graph)
             .unwrap();
         let scene = editor.buffers[idx].graph_view().unwrap().scene.clone();
+        let generation = editor.buffers[idx].graph_view().unwrap().generation;
 
         editor.kb_graph_animate = false;
         editor.pending_graph_layout = None;
-        editor.apply_graph_layout_result(idx, scene, Some(10.0));
+        editor.apply_graph_layout_result(idx, scene, Some(10.0), generation);
 
         assert!(!editor.buffers[idx].graph_view().unwrap().animating);
         assert!(!editor.has_active_graph_animation());
