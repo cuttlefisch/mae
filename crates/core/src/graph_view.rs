@@ -1290,6 +1290,45 @@ pub fn node_degrees(scene: &mae_canvas::scene::SceneGraph) -> Vec<u32> {
     degrees
 }
 
+/// Broadcast each diagram's own `(center_x, center_y)` (scene-space,
+/// `mae_canvas::kb_graph::DiagramLabel`) across its contiguous node range in
+/// `scene.nodes` — parallel to `node_degrees` above (same shape, indexed by
+/// node index), consumed by `flatten_scene_graph_cached`'s Chord-mode
+/// edge-curvature formula so each diagram's edges bow toward ITS OWN
+/// center rather than the whole merged scene's origin (A3 fix). After
+/// `mae_canvas::kb_graph::build_multi_kb_chord_positions` composes N
+/// diagrams onto a grid, scene `(0,0)` is the grid's CENTROID, not any
+/// individual diagram's own center — only `DiagramLabel.center_x/center_y`
+/// tracks that per-diagram.
+///
+/// Relies on the already-documented contiguous-per-diagram-block invariant
+/// (`GraphView.diagram_labels`'s doc comment /
+/// `nodes_and_edges_stay_in_contiguous_per_diagram_blocks_in_multi_mode`):
+/// walks `diagram_labels` ONCE, broadcasting each entry's center over its
+/// own `node_count`-wide slice — O(diagrams) work broadcast over O(nodes)
+/// total, no Big-O regression (the caller, `graph_view_reflatten_window`,
+/// already does an O(nodes) pass every reflatten to transform node
+/// positions — see `positions`/`radii` there — so this doesn't add a new
+/// complexity class to that hot path, just one more O(nodes) pass of the
+/// same order).
+///
+/// Both `GraphViewMode::Single` and a single-diagram `GraphViewMode::Multi`
+/// scene have exactly one `diagram_labels` entry whose center is
+/// `(0.0, 0.0)` by construction (`build_multi_kb_chord_positions`'s grid
+/// re-centering step collapses to a no-op for one diagram; Single mode's
+/// own `DiagramLabel` is hardcoded to `(0.0, 0.0)`) — so this reproduces
+/// the prior single-origin behavior byte-for-byte in both of those cases,
+/// no special-casing needed here.
+pub(crate) fn node_diagram_centers(
+    diagram_labels: &[mae_canvas::kb_graph::DiagramLabel],
+) -> Vec<(f64, f64)> {
+    let mut centers = Vec::new();
+    for d in diagram_labels {
+        centers.extend(std::iter::repeat_n((d.center_x, d.center_y), d.node_count));
+    }
+    centers
+}
+
 /// Compute a node's FINAL render radius (logical px) — the single formula
 /// both drawing (`flatten_scene_graph`) and hit-testing
 /// (`graph_view_ops.rs::graph_scene_hit_radii`) share, so they can never
@@ -1813,7 +1852,14 @@ pub fn flatten_scene_graph(
     degrees: &[u32],
 ) -> Vec<VisualElement> {
     let mut no_cache = None;
-    flatten_scene_graph_cached(scene, viewport, style, degrees, &mut no_cache)
+    // Empty `diagram_centers`: every call site of this public wrapper is a
+    // test (~35 call sites, confirmed this session) exercising the
+    // single-diagram assumption directly — an empty slice makes
+    // `flatten_scene_graph_cached`'s per-edge lookup fall back to the
+    // scene's own global origin for every node, reproducing exactly the
+    // behavior every one of those existing tests already asserts. See
+    // `node_diagram_centers` for the real (non-empty) production array.
+    flatten_scene_graph_cached(scene, viewport, style, degrees, &[], &mut no_cache)
 }
 
 /// Same as `flatten_scene_graph`, but reuses `label_cache`'s prior
@@ -1823,11 +1869,21 @@ pub fn flatten_scene_graph(
 /// `GraphView.label_winner_cache`. Pass `&mut None` (or use
 /// `flatten_scene_graph` directly) for a one-off call with no cache to
 /// maintain, e.g. from a test or an ephemeral render.
+///
+/// `diagram_centers` (A3): parallel to `degrees` — `diagram_centers[i]` is
+/// node `i`'s OWN diagram's scene-space `(center_x, center_y)`, from
+/// `node_diagram_centers`. Indexed by `edge.source` in the Chord-mode
+/// curvature formula below, so each diagram's edges bow toward ITS OWN
+/// center instead of the merged scene's single global origin. An empty
+/// slice (or an index past its end) falls back to the scene's own origin —
+/// exactly today's pre-A3 single-diagram behavior, which `flatten_scene_graph`
+/// relies on for its ~35 existing test call sites.
 pub(crate) fn flatten_scene_graph_cached(
     scene: &mae_canvas::scene::SceneGraph,
     viewport: &mae_canvas::scene::Viewport,
     style: &GraphStyleOptions,
     degrees: &[u32],
+    diagram_centers: &[(f64, f64)],
     label_cache: &mut Option<LabelWinnerCache>,
 ) -> Vec<VisualElement> {
     use mae_canvas::interaction::scene_to_viewport;
@@ -1869,28 +1925,58 @@ pub(crate) fn flatten_scene_graph_cached(
         })
         .unzip();
 
-    // Scene-origin's viewport-space position — only used by the Chord
-    // edge-curve formula below, but panning/zooming shifts where scene
-    // `(0,0)` lands on screen, so it must go through the same transform as
-    // every node position (never a raw `(0,0)` in viewport space).
-    // Precomputed once, outside the edge loop, since it's identical for
-    // every edge.
+    // Scene-origin's viewport-space position — the FALLBACK the Chord
+    // edge-curve formula below uses when `diagram_centers` is empty (or
+    // doesn't cover a given node), plus what `compute_label_winners`/
+    // `node_label_placement` still key their own rotation off (unchanged,
+    // out of A3's scope). Panning/zooming shifts where scene `(0,0)` lands
+    // on screen, so it must go through the same transform as every node
+    // position (never a raw `(0,0)` in viewport space). Precomputed once,
+    // outside the edge loop, since it's identical for every edge.
     let (center_x, center_y) = scene_to_viewport(viewport, 0.0, 0.0);
+
+    // Per-node diagram-local center, transformed to viewport space ONCE
+    // here (A3) — same shape/cost class as `positions` above (one more
+    // O(nodes) pass). Looked up by `edge.source` in the Chord curvature
+    // formula below so each diagram's edges bow toward ITS OWN center,
+    // never the whole merged scene's origin. Falls back to the scene's
+    // own origin (`center_x, center_y` above) for any node index
+    // `diagram_centers` doesn't cover — reproduces today's single-origin
+    // behavior exactly for `flatten_scene_graph`'s test-only callers
+    // (which always pass an empty slice) and for the genuinely
+    // single-diagram case (whose one real diagram center IS scene origin
+    // by construction — see `node_diagram_centers`'s doc comment).
+    let diagram_center_viewport: Vec<(f64, f64)> = (0..scene.nodes.len())
+        .map(|i| {
+            diagram_centers
+                .get(i)
+                .map(|&(cx, cy)| scene_to_viewport(viewport, cx, cy))
+                .unwrap_or((center_x, center_y))
+        })
+        .collect();
 
     for edge in &scene.edges {
         let Some(src) = scene.nodes.get(edge.source) else {
             continue;
         };
-        // `is_boundary` drives the dashed/red "stub" visual treatment —
-        // NOT a precise "this is a subgraph-fringe boundary edge" signal
-        // (that distinction lives in `GraphView::describe_state`'s
-        // `rel_type`-aware check instead). A genuine self-referential KB
-        // link is ALSO dashed (see `kb_graph::positions_to_scene`'s doc
-        // comment on why), so it shares this same rendering path — the
-        // per-edge `label` text ("... (+N)" vs "self") is what actually
-        // tells the two apart visually.
-        let is_boundary = edge.style.dashed;
-        let color = if is_boundary {
+        // `is_self_link` is true for BOTH a genuine self-referential KB
+        // link AND a boundary/fringe stub — both are represented as
+        // `source == target` self-loops with no distinct second node (see
+        // `kb_graph::positions_to_scene`'s doc comment), which is exactly
+        // the condition that must render as a straight stub with
+        // boundary-style coloring/opacity, never curved. A cross-instance
+        // edge (`build_multi_kb_chord_positions`) is ALSO `edge.style.dashed`
+        // (reusing the same visual convention), but connects two REAL
+        // distinct nodes — it must NOT be swept in here. This is the
+        // deliberate difference from `GraphView::describe_state`'s
+        // `dashed && rel_type.is_none()` boundary check (appropriate for
+        // ITS OWN purpose): a verbatim copy of that formula would
+        // misclassify a genuine self-link too, since it also carries
+        // `rel_type: Some(..)` — flipping a self-loop stub into the
+        // curvature branch, where the "second endpoint" is a synthetic
+        // stub-offset position, not a real second node.
+        let is_self_link = edge.source == edge.target;
+        let color = if is_self_link {
             style.boundary_edge_color.clone()
         } else {
             style.edge_color.clone()
@@ -1906,7 +1992,7 @@ pub(crate) fn flatten_scene_graph_cached(
         // proportionate to the circle it's attached to regardless of that
         // node's degree/zoom size — not a flat, unrelated screen-space
         // constant.
-        let (sx2, sy2) = if edge.target < scene.nodes.len() && edge.target != edge.source {
+        let (sx2, sy2) = if edge.target < scene.nodes.len() && !is_self_link {
             let t = &scene.nodes[edge.target];
             scene_to_viewport(viewport, t.x, t.y)
         } else {
@@ -1915,11 +2001,14 @@ pub(crate) fn flatten_scene_graph_cached(
         if edge_is_offscreen_same_side(sx1 as f32, sy1 as f32, sx2 as f32, sy2 as f32, viewport) {
             continue;
         }
-        // Curved internal edges. Boundary/self-loop stub edges stay
-        // straight regardless of algorithm — dashing here only ever
-        // applies to those short stubs, never a distinct-node-to-node
+        // Curved internal edges — now including real cross-instance edges
+        // (A3): the only thing that keeps an edge OUT of this branch is
+        // being a self-link/boundary stub (`is_self_link`), not `dashed`
+        // alone. Boundary/self-loop stub edges stay straight regardless of
+        // algorithm — dashing on the `Line` branch below only ever applies
+        // to those short stubs in practice, never a distinct-node-to-node
         // edge, so the dash segmenter never needs to learn to dash a curve.
-        if !is_boundary && style.edge_curvature > 0.0 {
+        if !is_self_link && style.edge_curvature > 0.0 {
             let dx = sx2 - sx1;
             let dy = sy2 - sy1;
             let len = (dx * dx + dy * dy).sqrt();
@@ -1929,17 +2018,20 @@ pub(crate) fn flatten_scene_graph_cached(
                 let (ctrl_x, ctrl_y) = match style.layout_algorithm {
                     GraphLayoutAlgorithm::Chord => {
                         // Chord-diagram style: pull the control point
-                        // toward the circle's center instead of bowing
+                        // toward THIS EDGE'S OWN diagram's center (A3 —
+                        // the source node's diagram, via
+                        // `diagram_center_viewport`) instead of bowing
                         // perpendicular to the edge — the visually
                         // essential trait of a chord diagram, not just a
                         // cosmetic variant of the Force curve. Capped at
                         // `edge_curvature <= 1.0`'s natural meaning (never
                         // overshoots PAST the center itself).
                         let t = (style.edge_curvature as f64).min(1.0);
-                        (
-                            mid_x + (center_x - mid_x) * t,
-                            mid_y + (center_y - mid_y) * t,
-                        )
+                        let (dcx, dcy) = diagram_center_viewport
+                            .get(edge.source)
+                            .copied()
+                            .unwrap_or((center_x, center_y));
+                        (mid_x + (dcx - mid_x) * t, mid_y + (dcy - mid_y) * t)
                     }
                     GraphLayoutAlgorithm::Force => {
                         // A quadratic control point offset perpendicular to
@@ -1985,13 +2077,21 @@ pub(crate) fn flatten_scene_graph_cached(
             y2: sy2 as f32,
             color: color.clone(),
             thickness: edge.style.width as f32,
-            dashed: is_boundary,
+            // The raw data-level flag, NOT `is_self_link` — a real
+            // cross-instance edge is also `edge.style.dashed` (reused
+            // convention), and stays visually flagged as "not an ordinary
+            // edge" even in the rare case it falls through to this
+            // straight-line branch (`edge_curvature == 0.0`).
+            dashed: edge.style.dashed,
             // The boundary self-loop stub is sparse and a meaningful
             // correctness signal ("more graph beyond this depth, here"),
             // not part of the dense-overlapping-edges problem `edge_alpha`
             // exists to fix — it always draws fully opaque, regardless of
-            // the configured edge_alpha.
-            alpha: if is_boundary { 1.0 } else { style.edge_alpha },
+            // the configured edge_alpha. A real cross-instance edge is NOT
+            // that signal (A3) — it's an ordinary edge for density
+            // purposes, so it respects `edge_alpha` like any other
+            // non-self-link edge, even in this straight-line fallback.
+            alpha: if is_self_link { 1.0 } else { style.edge_alpha },
         });
         // A boundary stub's label ("...", or "... (+N)" for a source with
         // multiple collapsed out-of-subgraph links — see
@@ -2951,7 +3051,8 @@ mod tests {
         let mut cache: Option<LabelWinnerCache> = None;
 
         let before_first = label_winners_compute_count();
-        let elements1 = flatten_scene_graph_cached(&scene, &viewport, &style, &degrees, &mut cache);
+        let elements1 =
+            flatten_scene_graph_cached(&scene, &viewport, &style, &degrees, &[], &mut cache);
         let after_first = label_winners_compute_count();
         assert_eq!(
             after_first,
@@ -2974,7 +3075,7 @@ mod tests {
         let expected_text_count = text_count(&elements1);
         for _ in 0..5 {
             let elements_n =
-                flatten_scene_graph_cached(&scene, &viewport, &style, &degrees, &mut cache);
+                flatten_scene_graph_cached(&scene, &viewport, &style, &degrees, &[], &mut cache);
             assert_eq!(
                 text_count(&elements_n),
                 expected_text_count,
@@ -2993,8 +3094,14 @@ mod tests {
         // the cache and recompute.
         let mut reselected_scene = scene.clone();
         reselected_scene.selection = Some(1); // was None; now "leaf" is selected
-        let _ =
-            flatten_scene_graph_cached(&reselected_scene, &viewport, &style, &degrees, &mut cache);
+        let _ = flatten_scene_graph_cached(
+            &reselected_scene,
+            &viewport,
+            &style,
+            &degrees,
+            &[],
+            &mut cache,
+        );
         let after_selection_change = label_winners_compute_count();
         assert_eq!(
             after_selection_change,
@@ -3005,8 +3112,14 @@ mod tests {
         // And hover, independently of selection.
         let mut rehovered_scene = scene.clone();
         rehovered_scene.hovered = Some(1);
-        let _ =
-            flatten_scene_graph_cached(&rehovered_scene, &viewport, &style, &degrees, &mut cache);
+        let _ = flatten_scene_graph_cached(
+            &rehovered_scene,
+            &viewport,
+            &style,
+            &degrees,
+            &[],
+            &mut cache,
+        );
         let after_hover_change = label_winners_compute_count();
         assert_eq!(
             after_hover_change,
@@ -3984,6 +4097,194 @@ mod tests {
         assert!(
             dist(ctrl, (origin_x, origin_y)) < dist(mid, (origin_x, origin_y)) - 1.0,
             "must still pull toward the PANNED viewport-space origin, not the unpanned one"
+        );
+    }
+
+    /// A3 root-cause regression guard: N-way (CLAUDE.md #14), not just
+    /// seed+one-sibling. Three diagrams, each with its own center FAR from
+    /// BOTH the shared scene origin `(0,0)` AND from each other's centers —
+    /// before this fix, `flatten_scene_graph_cached` bowed EVERY diagram's
+    /// internal edges toward the single global scene origin (correct only
+    /// for the single-diagram case, where a diagram's own center coincides
+    /// with scene origin by construction). Each diagram's edge must bow
+    /// toward ITS OWN center instead.
+    #[test]
+    fn flatten_chord_mode_multi_diagram_pulls_each_edges_control_point_toward_its_own_diagram_center(
+    ) {
+        // Kept within `Viewport::default()`'s 800x600 on-screen bounds
+        // (each node offset by +/-100 from its diagram's own center) so
+        // `edge_is_offscreen_same_side` never culls a diagram's edge —
+        // still far enough apart (and from the shared scene origin) to
+        // make the own-center-vs-global-origin distinction unambiguous.
+        let diagram_centers_scene = [(150.0, 0.0), (-120.0, 130.0), (60.0, -140.0)];
+        let mut scene = SceneGraph::new();
+        let mut labels = Vec::new();
+        for (i, &(cx, cy)) in diagram_centers_scene.iter().enumerate() {
+            // Two nodes per diagram, offset from THAT diagram's own center
+            // (mirroring the existing single-diagram test's 0/90-degree
+            // ring geometry) — so each edge's straight-line midpoint sits
+            // away from its own diagram's center; otherwise "pulls toward
+            // center" would be trivially unfalsifiable (the midpoint would
+            // already BE the center).
+            let base = scene.nodes.len();
+            scene.nodes.push(test_node(
+                &format!("d{i}-a"),
+                cx + 100.0,
+                cy,
+                NodeKind::Note,
+            ));
+            scene.nodes.push(test_node(
+                &format!("d{i}-b"),
+                cx,
+                cy + 100.0,
+                NodeKind::Note,
+            ));
+            scene.edges.push(test_edge(base, base + 1));
+            labels.push(mae_canvas::kb_graph::DiagramLabel {
+                instance: None,
+                name: format!("diagram-{i}"),
+                center_x: cx,
+                center_y: cy,
+                radius: 100.0,
+                node_count: 2,
+                loaded: true,
+            });
+        }
+
+        let mut style = test_style();
+        style.edge_curvature = 0.5;
+        style.layout_algorithm = GraphLayoutAlgorithm::Chord;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let degrees = node_degrees(&scene);
+        let diagram_centers = node_diagram_centers(&labels);
+        let mut cache = None;
+        let elements = flatten_scene_graph_cached(
+            &scene,
+            &viewport,
+            &style,
+            &degrees,
+            &diagram_centers,
+            &mut cache,
+        );
+
+        let (origin_x, origin_y) = mae_canvas::interaction::scene_to_viewport(&viewport, 0.0, 0.0);
+        let dist =
+            |a: (f64, f64), b: (f64, f64)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+
+        let curves: Vec<(f64, f64, f64, f64, f64, f64)> = elements
+            .iter()
+            .filter_map(|e| match e {
+                VisualElement::Curve {
+                    x1,
+                    y1,
+                    ctrl_x,
+                    ctrl_y,
+                    x2,
+                    y2,
+                    ..
+                } => Some((
+                    *x1 as f64,
+                    *y1 as f64,
+                    *ctrl_x as f64,
+                    *ctrl_y as f64,
+                    *x2 as f64,
+                    *y2 as f64,
+                )),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            curves.len(),
+            3,
+            "expected exactly one curve per diagram's internal edge"
+        );
+
+        for (i, &(cx, cy)) in diagram_centers_scene.iter().enumerate() {
+            let (own_center_x, own_center_y) =
+                mae_canvas::interaction::scene_to_viewport(&viewport, cx, cy);
+            let (x1, y1, ctrl_x, ctrl_y, x2, y2) = curves[i];
+            let mid = ((x1 + x2) / 2.0, (y1 + y2) / 2.0);
+            let ctrl = (ctrl_x, ctrl_y);
+            assert!(
+                dist(ctrl, (own_center_x, own_center_y))
+                    < dist(mid, (own_center_x, own_center_y)) - 1.0,
+                "diagram {i}'s edge must bow toward ITS OWN center {:?}, got ctrl {:?} vs mid \
+                 {:?}",
+                (own_center_x, own_center_y),
+                ctrl,
+                mid
+            );
+            // Root-cause-specific: strictly closer to its OWN center than
+            // to the shared global scene origin — the exact grid-centroid
+            // bug this test guards against (each diagram's own center is
+            // deliberately far from `(0,0)` here).
+            assert!(
+                dist(ctrl, (own_center_x, own_center_y)) < dist(ctrl, (origin_x, origin_y)),
+                "diagram {i}'s control point must be closer to its OWN center {:?} than to the \
+                 shared global scene origin {:?} — got ctrl {:?}",
+                (own_center_x, own_center_y),
+                (origin_x, origin_y),
+                ctrl
+            );
+        }
+    }
+
+    /// A3 byte-identical regression guard at the FLATTEN level (not just
+    /// raw scene topology, which `multi_kb_single_diagram_matches_plain_
+    /// chord_positions_byte_for_byte` in `mae-canvas` already covers): a
+    /// single-diagram scene's `diagram_centers`-aware flatten must produce
+    /// the exact same output as the empty-slice fallback `flatten_scene_
+    /// graph` (the pre-A3 behavior every one of its ~35 test callers
+    /// relies on) — proving the fix is a genuine no-op whenever there's
+    /// only one diagram (Single mode, or single-diagram Multi mode), since
+    /// that one diagram's center IS scene origin `(0, 0)` by construction.
+    #[test]
+    fn flatten_scene_graph_cached_is_byte_identical_to_the_empty_slice_fallback_for_a_single_diagram(
+    ) {
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("a", 100.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("b", 0.0, 100.0, NodeKind::Note));
+        scene.edges.push(test_edge(0, 1));
+        let mut style = test_style();
+        style.edge_curvature = 0.5;
+        style.layout_algorithm = GraphLayoutAlgorithm::Chord;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let degrees = node_degrees(&scene);
+
+        // The "no diagram_centers info" path (what `flatten_scene_graph`,
+        // and every pre-A3 test caller, always used).
+        let via_wrapper = flatten_scene_graph(&scene, &viewport, &style, &degrees);
+
+        // The "real" single-diagram path: exactly one `DiagramLabel`
+        // covering both nodes, centered at scene `(0, 0)` — matching both
+        // `GraphViewMode::Single`'s hardcoded `DiagramLabel` and
+        // `build_multi_kb_chord_positions`'s single-diagram grid
+        // re-centering, per `node_diagram_centers`'s doc comment.
+        let labels = vec![mae_canvas::kb_graph::DiagramLabel {
+            instance: None,
+            name: "seed".to_string(),
+            center_x: 0.0,
+            center_y: 0.0,
+            radius: 100.0,
+            node_count: 2,
+            loaded: true,
+        }];
+        let diagram_centers = node_diagram_centers(&labels);
+        let mut cache = None;
+        let via_real_centers = flatten_scene_graph_cached(
+            &scene,
+            &viewport,
+            &style,
+            &degrees,
+            &diagram_centers,
+            &mut cache,
+        );
+
+        assert_eq!(
+            serde_json::to_string(&via_wrapper).unwrap(),
+            serde_json::to_string(&via_real_centers).unwrap(),
+            "a single diagram's own center (0,0) must reproduce the empty-slice/global-origin \
+             fallback byte-for-byte"
         );
     }
 

@@ -305,6 +305,22 @@ impl Editor {
             if let Some(tween) = &gv.color_tween {
                 style.color_override = Some((tween.node_index, tween.current_color()));
             }
+            // A3: Multi mode ALWAYS positions nodes via the chord grid
+            // (`mae_canvas::kb_graph::build_multi_kb_chord_positions`,
+            // see `populate_graph_buffer`'s doc comment) regardless of the
+            // user's global `kb_graph_layout_algorithm` preference — so the
+            // EDGE curvature formula must also always be Chord's
+            // center-bow, never Force's perpendicular-offset. Without this,
+            // a user on `Force` got Multi-mode nodes positioned by chord
+            // trig but edges curved by a formula that assumes a wholly
+            // different (force-directed) layout — a real mismatch, masked
+            // only because `Chord` is the option's default. `from_editor`
+            // has no per-`GraphView` knowledge (same reason as the color
+            // tween merge above), so this is the call site that applies
+            // the override.
+            if gv.mode == GraphViewMode::Multi {
+                style.layout_algorithm = GraphLayoutAlgorithm::Chord;
+            }
             // A freshly created (never-before-seen) per-window `Viewport`
             // defaults to `zoom: 1.0` regardless of the diagram's actual
             // size — for a dense chord/force layout this opens way too
@@ -330,6 +346,13 @@ impl Editor {
                 }
             }
             let viewport = *gv.viewports.get(&win_id).unwrap();
+            // A3: per-node diagram-local center, broadcast from
+            // `gv.diagram_labels` (see `node_diagram_centers`'s doc
+            // comment) — built fresh each reflatten, same as `positions`/
+            // `radii` inside `flatten_scene_graph_cached` itself (already
+            // an O(nodes) pass every call; this doesn't add a new
+            // complexity class to that existing per-reflatten cost).
+            let diagram_centers = crate::graph_view::node_diagram_centers(&gv.diagram_labels);
             // `_cached` variant: memoizes `compute_label_winners` across
             // calls whose inputs are unchanged (e.g. every tick of a pure
             // color tween) — see `GraphView.label_winner_cache`'s doc
@@ -341,6 +364,7 @@ impl Editor {
                 &viewport,
                 &style,
                 &gv.node_degrees,
+                &diagram_centers,
                 &mut gv.label_winner_cache,
             );
             // Per-diagram KB-name captions (#462 PR4) — a no-op when
@@ -2025,6 +2049,7 @@ impl Editor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::visual_buffer::VisualElement;
     use crate::window::SplitDirection;
 
     fn ed_with_kb_node(id: &str, title: &str, body: &str) -> Editor {
@@ -6338,6 +6363,413 @@ mod tests {
                 && e.rel_type.is_some()),
             "expected a real cross-instance edge from b's node to the seed: {:?}",
             gv.scene.edges
+        );
+    }
+
+    /// A3: a real cross-instance edge between two NON-ADJACENT (diagonal)
+    /// grid cells must curve like an ordinary internal edge, with NORMAL
+    /// edge color -- not the boundary-stub straight-line/red-tinted
+    /// treatment it got before this fix (which classified ANY
+    /// `edge.style.dashed` edge, cross-instance or not, as a non-curving
+    /// boundary stub). Reuses the exact seed/b/c 2x2-grid setup from
+    /// `multi_mode_detects_a_real_cross_link_between_two_non_seed_related_instances`:
+    /// `cols = ceil(sqrt(3)) = 2`, so diagram 1 (b, row 0 col 1) and
+    /// diagram 2 (c, row 1 col 0) are DIAGONAL corners -- the farthest-apart
+    /// pair in this grid. The B->C link is exactly this diagonal edge.
+    #[test]
+    fn multi_mode_cross_instance_edge_between_diagonal_grid_cells_curves_with_normal_color() {
+        let mut editor = ed_with_kb_node("concept:seed", "Seed", "[[concept:b-hub]]");
+        register_plain_instance(
+            &mut editor,
+            "b",
+            vec![mae_kb::Node::new(
+                "concept:b-hub",
+                "B Hub",
+                mae_kb::NodeKind::Concept,
+                "[[concept:c-target]]",
+            )],
+        );
+        register_plain_instance(
+            &mut editor,
+            "c",
+            vec![mae_kb::Node::new(
+                "concept:c-target",
+                "C Target",
+                mae_kb::NodeKind::Concept,
+                "",
+            )],
+        );
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_multi_kb_scope = GraphMultiKbScope::All;
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+
+        let (graph_idx, win_id) = graph_idx_and_win_id(&editor);
+        let style = editor.graph_style_options();
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        assert_eq!(gv.diagram_labels.len(), 3, "seed + b + c");
+
+        // Confirm this really is the diagonal (non-adjacent) pair: an
+        // adjacent pair in a grid shares exactly one axis; a diagonal pair
+        // shares neither.
+        let b_label = gv.diagram_labels.iter().find(|d| d.name == "b").unwrap();
+        let c_label = gv.diagram_labels.iter().find(|d| d.name == "c").unwrap();
+        assert_ne!(
+            b_label.center_x, c_label.center_x,
+            "diagonal cells must differ on the x axis"
+        );
+        assert_ne!(
+            b_label.center_y, c_label.center_y,
+            "diagonal cells must differ on the y axis"
+        );
+
+        let b_idx = gv
+            .scene
+            .nodes
+            .iter()
+            .position(|n| n.id == "concept:b-hub")
+            .unwrap();
+        let c_idx = gv
+            .scene
+            .nodes
+            .iter()
+            .position(|n| n.id == "concept:c-target")
+            .unwrap();
+        let b_to_c = gv
+            .scene
+            .edges
+            .iter()
+            .find(|e| e.source == b_idx && e.target == c_idx)
+            .expect("B->C cross-instance edge must exist in the scene");
+        assert!(b_to_c.style.dashed);
+        assert!(b_to_c.rel_type.is_some());
+
+        let viewport = *gv.viewports.get(&win_id).unwrap();
+        let (bx, by) = mae_canvas::interaction::scene_to_viewport(
+            &viewport,
+            gv.scene.nodes[b_idx].x,
+            gv.scene.nodes[b_idx].y,
+        );
+        let (cx, cy) = mae_canvas::interaction::scene_to_viewport(
+            &viewport,
+            gv.scene.nodes[c_idx].x,
+            gv.scene.nodes[c_idx].y,
+        );
+
+        let elements = &gv.rendered[&win_id].elements;
+        let close = |a: f32, b: f32| (a - b).abs() < 0.5;
+        let curve_color = elements
+            .iter()
+            .find_map(|e| match e {
+                VisualElement::Curve {
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    color,
+                    ..
+                } if close(*x1, bx as f32)
+                    && close(*y1, by as f32)
+                    && close(*x2, cx as f32)
+                    && close(*y2, cy as f32) =>
+                {
+                    Some(color.clone())
+                }
+                _ => None,
+            })
+            .expect(
+                "the B->C diagonal cross-instance edge must render as a Curve, not a straight \
+                 Line",
+            );
+
+        assert_eq!(
+            curve_color, style.edge_color,
+            "a real cross-instance edge must get NORMAL edge color, not boundary-stub color"
+        );
+        assert_ne!(curve_color, style.boundary_edge_color);
+    }
+
+    /// A3 regression guard for the exact self-link trap flagged during
+    /// design review: a genuine self-referential KB link ALSO carries
+    /// `rel_type: Some(..)` (like a real cross-instance edge), so a
+    /// curvature/color gate keyed on `dashed && rel_type.is_none()`
+    /// (`describe_state`'s OWN formula, appropriate for ITS OWN purpose)
+    /// would misclassify it if copied verbatim into the render path --
+    /// flipping it to "normal color + curved," nonsensical for a stub
+    /// whose "second endpoint" is a synthetic offset position, not a real
+    /// second node. Exercised in a genuinely MULTI-diagram scene (not
+    /// Single mode), per the plan's test requirement.
+    #[test]
+    fn multi_mode_a_genuine_self_link_still_renders_as_a_straight_stub_with_boundary_color() {
+        let mut editor = ed_with_kb_node("concept:seed", "Seed", "[[concept:seed]]");
+        register_plain_instance(
+            &mut editor,
+            "b",
+            vec![mae_kb::Node::new(
+                "index",
+                "B Index",
+                mae_kb::NodeKind::Index,
+                "",
+            )],
+        );
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        // `All` scope: "b" isn't linked to the seed at all, so `Linked`
+        // scope would never discover it -- this must still be a
+        // genuinely multi-diagram (2-diagram) scene, not degrade back to
+        // 1, for this to be the adversarial case the plan asks for.
+        editor.kb_graph_multi_kb_scope = GraphMultiKbScope::All;
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+
+        let (graph_idx, win_id) = graph_idx_and_win_id(&editor);
+        let style = editor.graph_style_options();
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        assert_eq!(
+            gv.diagram_labels.len(),
+            2,
+            "seed + b, a genuinely multi-diagram scene"
+        );
+
+        let seed_idx = gv
+            .scene
+            .nodes
+            .iter()
+            .position(|n| n.id == "concept:seed")
+            .unwrap();
+        assert!(
+            gv.scene
+                .edges
+                .iter()
+                .any(|e| e.source == seed_idx && e.target == seed_idx && e.rel_type.is_some()),
+            "the seed's genuine self-link must survive extraction as source==target, \
+             rel_type: Some(..): {:?}",
+            gv.scene.edges
+        );
+
+        let elements = &gv.rendered[&win_id].elements;
+        assert!(
+            !elements
+                .iter()
+                .any(|e| matches!(e, VisualElement::Curve { .. })),
+            "a genuine self-link (the only edge in this scene) must NEVER render as a curved \
+             edge -- the exact self-link trap flagged during A3 design review"
+        );
+        let dashed_stub = elements
+            .iter()
+            .find(|e| matches!(e, VisualElement::Line { dashed: true, .. }))
+            .expect("the self-link must still render as a dashed straight stub");
+        match dashed_stub {
+            VisualElement::Line { color, .. } => {
+                assert_eq!(
+                    color, &style.boundary_edge_color,
+                    "a genuine self-link must keep boundary/self-link coloring, not flip to \
+                     normal edge color"
+                );
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// A3 byte-identical regression guard, at the RENDERED-output level
+    /// (not just raw scene topology, which `multi_kb_single_diagram_
+    /// matches_plain_chord_positions_byte_for_byte` in `mae-canvas` and
+    /// `populate_graph_buffer_single_mode_is_byte_identical_even_when_a_
+    /// real_cross_instance_link_exists` above already cover): Single mode
+    /// and a single-diagram Multi mode (zero related instances discovered)
+    /// must produce byte-identical FLATTENED (`VisualElement`) output for
+    /// the same underlying KB data -- proving the new diagram-center-aware
+    /// curvature reproduces the pre-A3 single-origin behavior exactly
+    /// whenever there's only one diagram.
+    ///
+    /// depth=0, so the seed's own link resolves to a boundary stub rather
+    /// than a second real node: `extract_subgraph` collects included nodes
+    /// into a `HashSet` (order NOT insertion-preserving, and — since
+    /// `RandomState` draws fresh random keys per `HashSet` instance —
+    /// genuinely NON-deterministic run to run, even for the identical
+    /// content, confirmed live), so a 2-real-node scene here would make
+    /// which node lands at which ring position (and therefore this
+    /// test's byte-for-byte comparison) flaky for a reason ORTHOGONAL to
+    /// A3 (pre-existing, unrelated to this fix). A single real node sidesteps
+    /// that non-determinism entirely (nothing to reorder) while still
+    /// exercising the full populate -> flatten pipeline in both modes. The
+    /// curvature formula itself is covered exhaustively and
+    /// deterministically (hand-built scene, explicit array order) by
+    /// `flatten_scene_graph_cached_is_byte_identical_to_the_empty_slice_
+    /// fallback_for_a_single_diagram` in `graph_view.rs`.
+    #[test]
+    fn single_mode_and_single_diagram_multi_mode_produce_byte_identical_flattened_output() {
+        // ONE shared editor/`KnowledgeBase`, re-opened under each mode in
+        // turn -- NOT two independently-built editors, to also hold
+        // fixed which `KnowledgeBase` instance (and therefore which
+        // `HashSet` random seed) is being extracted from.
+        let mut editor = ed_with_kb_node("concept:seed", "Seed", "[[concept:leaf]]");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:leaf",
+            "Leaf",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+
+        assert_eq!(editor.kb_graph_view_mode, GraphViewMode::Single);
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+        let (idx, win_id) = graph_idx_and_win_id(&editor);
+        {
+            let gv = editor.buffers[idx].graph_view().unwrap();
+            assert_eq!(gv.diagram_labels.len(), 1);
+            assert_eq!(
+                gv.scene.nodes.len(),
+                1,
+                "depth=0: only the seed itself is extracted"
+            );
+        }
+        let json_single =
+            serde_json::to_string(&editor.buffers[idx].graph_view().unwrap().rendered[&win_id])
+                .unwrap();
+
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+        let (idx, win_id) = graph_idx_and_win_id(&editor);
+        let gv = editor.buffers[idx].graph_view().unwrap();
+        assert_eq!(
+            gv.diagram_labels.len(),
+            1,
+            "no related instances registered -- single-diagram Multi mode"
+        );
+        let json_multi = serde_json::to_string(&gv.rendered[&win_id]).unwrap();
+
+        assert_eq!(
+            json_single, json_multi,
+            "Single mode and single-diagram Multi mode must render byte-identical flattened \
+             output"
+        );
+    }
+
+    /// A3's third bug: `GraphStyleOptions::from_editor` used to read the
+    /// GLOBAL `kb_graph_layout_algorithm` option unconditionally, but Multi
+    /// mode ALWAYS positions nodes via the chord grid regardless of that
+    /// option (see `populate_graph_buffer`'s doc comment) -- so a user on
+    /// `Force` got Multi-mode nodes positioned by chord trig but edges
+    /// curved by the Force perpendicular-offset formula. This asserts the
+    /// fix: with the global option explicitly set to `Force`, Multi mode
+    /// (>=2 diagrams) must still curve internal edges with the Chord-style
+    /// center-bow formula.
+    #[test]
+    fn multi_mode_forces_chord_curvature_even_when_global_layout_algorithm_is_force() {
+        // Three nodes in the seed's OWN diagram (not two) -- a 2-node
+        // chord ring places its points diametrically opposite by
+        // construction, so a seed<->leaf edge's straight-line midpoint
+        // would trivially COINCIDE with the ring's own center, making
+        // "pulls toward center" unfalsifiable (Chord's formula would
+        // degenerate to `ctrl == mid` regardless of whether the bug this
+        // test guards against is present). Mirrors the existing
+        // single-diagram Chord tests' own "NOT diametrically opposite"
+        // reasoning.
+        let mut editor =
+            ed_with_kb_node("concept:seed", "Seed", "[[concept:leaf]] [[concept:other]]");
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:leaf",
+            "Leaf",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "concept:other",
+            "Other",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        register_plain_instance(
+            &mut editor,
+            "b",
+            vec![mae_kb::Node::new(
+                "index",
+                "B Index",
+                mae_kb::NodeKind::Index,
+                "",
+            )],
+        );
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_multi_kb_scope = GraphMultiKbScope::All;
+        editor.kb_graph_layout_algorithm = GraphLayoutAlgorithm::Force;
+
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(1));
+        let (graph_idx, win_id) = graph_idx_and_win_id(&editor);
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        assert_eq!(gv.diagram_labels.len(), 2, "seed (+leaf+other) + b");
+
+        let seed_idx = gv
+            .scene
+            .nodes
+            .iter()
+            .position(|n| n.id == "concept:seed")
+            .unwrap();
+        let leaf_idx = gv
+            .scene
+            .nodes
+            .iter()
+            .position(|n| n.id == "concept:leaf")
+            .unwrap();
+        let viewport = *gv.viewports.get(&win_id).unwrap();
+        let (seed_x, seed_y) = mae_canvas::interaction::scene_to_viewport(
+            &viewport,
+            gv.scene.nodes[seed_idx].x,
+            gv.scene.nodes[seed_idx].y,
+        );
+        let (leaf_x, leaf_y) = mae_canvas::interaction::scene_to_viewport(
+            &viewport,
+            gv.scene.nodes[leaf_idx].x,
+            gv.scene.nodes[leaf_idx].y,
+        );
+        // The seed's own diagram center in VIEWPORT space -- a 3-node
+        // (seed+leaf+other) grid cell centered away from the merged
+        // scene's own centroid.
+        let seed_label = &gv.diagram_labels[0];
+        let (own_center_x, own_center_y) = mae_canvas::interaction::scene_to_viewport(
+            &viewport,
+            seed_label.center_x,
+            seed_label.center_y,
+        );
+
+        let elements = &gv.rendered[&win_id].elements;
+        let close = |a: f32, b: f32| (a - b).abs() < 0.5;
+        let ctrl = elements
+            .iter()
+            .find_map(|e| match e {
+                VisualElement::Curve {
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    ctrl_x,
+                    ctrl_y,
+                    ..
+                } if (close(*x1, seed_x as f32) && close(*y1, seed_y as f32)
+                    || close(*x1, leaf_x as f32) && close(*y1, leaf_y as f32))
+                    && (close(*x2, seed_x as f32) && close(*y2, seed_y as f32)
+                        || close(*x2, leaf_x as f32) && close(*y2, leaf_y as f32)) =>
+                {
+                    Some((*ctrl_x as f64, *ctrl_y as f64))
+                }
+                _ => None,
+            })
+            .expect("the seed<->leaf internal edge must still render as a Curve");
+
+        let mid = ((seed_x + leaf_x) / 2.0, (seed_y + leaf_y) / 2.0);
+        let dist =
+            |a: (f64, f64), b: (f64, f64)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+        // Chord-style center-bow: the control point pulls toward the
+        // diagram's own center. Force-style perpendicular-offset would
+        // instead bow AWAY from the straight line at roughly a right
+        // angle, not measurably toward the center -- so this assertion
+        // fails under the pre-fix behavior (global Force leaking into
+        // Multi mode) and passes only once Multi mode forces Chord.
+        assert!(
+            dist(ctrl, (own_center_x, own_center_y))
+                < dist(mid, (own_center_x, own_center_y)) - 1.0,
+            "expected Chord-style center-bow toward the diagram's own center {:?} (got ctrl {:?}, \
+             mid {:?}) -- Multi mode must force Chord curvature regardless of the global \
+             kb_graph_layout_algorithm=Force option",
+            (own_center_x, own_center_y),
+            ctrl,
+            mid
         );
     }
 }
