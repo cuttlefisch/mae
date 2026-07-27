@@ -461,6 +461,24 @@ impl Editor {
     /// `render_kb_node_for_query` directly without widening that
     /// function's visibility.
     pub fn render_graph_view_as_text(&self) -> String {
+        // #462 PR4: Multi mode composes several KB instances into one
+        // merged `GraphView.scene` — the single-node "** Neighborhood"
+        // renderer below has no notion of that, so it's handled by a
+        // dedicated path that groups by instance instead. Single mode
+        // (including a graph view not yet opened at all) falls through to
+        // the ORIGINAL body below, entirely unchanged — see
+        // `render_graph_view_as_text_multi_mode_*` tests for the
+        // Single-mode-byte-identical guarantee this split preserves.
+        let mode = self
+            .buffers
+            .iter()
+            .find(|b| b.kind == BufferKind::Graph)
+            .and_then(|b| b.graph_view())
+            .map(|gv| gv.mode);
+        if mode == Some(crate::graph_view::GraphViewMode::Multi) {
+            return self.render_multi_kb_graph_view_as_text();
+        }
+
         let Some(center) = self
             .buffers
             .iter()
@@ -497,6 +515,85 @@ impl Editor {
             "* KB Graph — {}\n(no KB query layer available; graph data unavailable in this build)\n",
             center
         )
+    }
+
+    /// `Multi`-mode TUI rendering (#462 PR4): unlike Single mode (which
+    /// delegates to the existing single-node `render_kb_node_for_query`/
+    /// `render_kb_node_with_store` KB-neighborhood renderer),
+    /// `GraphView.scene` here is a MERGED scene spanning several
+    /// instances, so there is no single "the" center node to feed that
+    /// renderer. Instead, groups by `GraphView.diagram_labels` (one
+    /// "** Neighborhood (name)" heading per composed instance, listing
+    /// that diagram's node titles — sliced out of the merged `scene.nodes`
+    /// via each label's `node_count`, relying on the contiguous-block
+    /// ordering invariant documented on `GraphView.diagram_labels`), then a
+    /// "** Cross-KB links" section listing every resolved cross-instance
+    /// link (plus a hidden-count note for any that were dropped). This is
+    /// a coarser summary than Single mode's full recursive KB-node render
+    /// (no per-related-instance center id is tracked to feed that renderer
+    /// with) — sufficient for TUI parity/introspection, not a byte-for-byte
+    /// re-implementation of the single-node view N times over.
+    fn render_multi_kb_graph_view_as_text(&self) -> String {
+        let Some(gv) = self
+            .buffers
+            .iter()
+            .find(|b| b.kind == BufferKind::Graph)
+            .and_then(|b| b.graph_view())
+        else {
+            return "(KB graph view: no center node yet — open with :kb-graph-view-open)\n"
+                .to_string();
+        };
+        if gv.center_node.is_none() {
+            return "(KB graph view: no center node yet — open with :kb-graph-view-open)\n"
+                .to_string();
+        }
+
+        let mut out = String::new();
+        out.push_str("* KB Graph (multi-KB)\n");
+        let mut offset = 0usize;
+        for label in &gv.diagram_labels {
+            out.push_str(&format!("\n** Neighborhood ({})\n", label.name));
+            let end = (offset + label.node_count).min(gv.scene.nodes.len());
+            let slice = gv.scene.nodes.get(offset..end).unwrap_or(&[]);
+            if slice.is_empty() {
+                out.push_str("(no nodes)\n");
+            } else {
+                for node in slice {
+                    out.push_str(&format!("- {}\n", node.label));
+                }
+            }
+            offset = end;
+        }
+
+        if !gv.cross_instance_links.is_empty() || gv.hidden_cross_instance_link_count > 0 {
+            out.push_str("\n** Cross-KB links\n");
+            for link in &gv.cross_instance_links {
+                let target_name = gv
+                    .diagram_labels
+                    .iter()
+                    .find(|d| d.instance == link.target_instance)
+                    .map(|d| d.name.as_str())
+                    .unwrap_or("?");
+                out.push_str(&format!(
+                    "- {} -> {} [{}] (KB: {})\n",
+                    link.source, link.target, link.rel_type, target_name
+                ));
+            }
+            if gv.hidden_cross_instance_link_count > 0 {
+                out.push_str(&format!(
+                    "- ... (+{} more cross-KB link(s) hidden)\n",
+                    gv.hidden_cross_instance_link_count
+                ));
+            }
+        }
+
+        if gv.hidden_related_instance_count > 0 {
+            out.push_str(&format!(
+                "\n(+{} related KB instance(s) hidden by kb_graph_multi_kb_max_related_instances)\n",
+                gv.hidden_related_instance_count
+            ));
+        }
+        out
     }
 
     /// Generate live help text for a command, querying current keymaps and hooks.
@@ -1486,6 +1583,94 @@ mod tests {
         assert!(e.kb.query_layer().is_none());
         let text = e.render_graph_view_as_text();
         assert!(text.contains("no KB query layer"));
+    }
+
+    #[test]
+    fn render_graph_view_as_text_single_mode_is_unaffected_by_multi_mode_existing() {
+        // #462 PR4 regression guard: Single mode (the default) must render
+        // byte-identically regardless of the Multi-mode branch existing —
+        // confirmed by re-running the pre-existing in-memory-fallback
+        // assertion with `kb_graph_view_mode` explicitly left at its
+        // default.
+        let mut e = Editor::new();
+        assert_eq!(
+            e.kb_graph_view_mode,
+            crate::graph_view::GraphViewMode::Single
+        );
+        e.kb_graph_view_open(Some("index".to_string()), Some(1));
+        let text = e.render_graph_view_as_text();
+        assert!(text.contains("index"));
+        assert!(!text.contains("multi-KB"));
+    }
+
+    #[test]
+    fn render_graph_view_as_text_multi_mode_groups_by_instance_and_lists_cross_kb_links() {
+        let mut e = Editor::new();
+        e.kb.primary.insert(mae_kb::Node::new(
+            "concept:seed",
+            "Seed",
+            mae_kb::NodeKind::Concept,
+            "[[concept:sibling-target]]",
+        ));
+        let mut inst = mae_kb::KnowledgeBase::new();
+        inst.insert(mae_kb::Node::new(
+            "concept:sibling-target",
+            "Sibling Target",
+            mae_kb::NodeKind::Concept,
+            "",
+        ));
+        e.kb.instances.insert("uuid-sibling".to_string(), inst);
+        e.kb.registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-sibling".into(),
+                name: "sibling".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
+            });
+        e.kb_graph_view_mode = crate::graph_view::GraphViewMode::Multi;
+        e.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+
+        let text = e.render_graph_view_as_text();
+        assert!(text.contains("* KB Graph (multi-KB)"));
+        assert!(text.contains("** Neighborhood (Primary)"));
+        assert!(text.contains("** Neighborhood (sibling)"));
+        assert!(
+            text.contains("Seed"),
+            "Primary diagram's node title must be listed: {text}"
+        );
+        assert!(
+            text.contains("Sibling Target"),
+            "sibling diagram's node title must be listed: {text}"
+        );
+        assert!(text.contains("** Cross-KB links"));
+        assert!(
+            text.contains("concept:seed") && text.contains("concept:sibling-target"),
+            "the cross-KB link's endpoints must be listed: {text}"
+        );
+    }
+
+    #[test]
+    fn render_graph_view_as_text_multi_mode_no_center_before_open_matches_single_mode_message() {
+        let mut e = Editor::new();
+        e.kb_graph_view_mode = crate::graph_view::GraphViewMode::Multi;
+        // Graph buffer doesn't exist yet at all -- `mode` lookup finds
+        // nothing, so this falls all the way through to the same
+        // no-center-yet message Single mode gives.
+        let text = e.render_graph_view_as_text();
+        assert!(text.contains("no center node"));
     }
 
     #[test]
