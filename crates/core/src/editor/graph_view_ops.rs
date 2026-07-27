@@ -7812,11 +7812,14 @@ mod tests {
         let plus_n_sum: usize = elements
             .iter()
             .filter_map(|e| match e {
-                VisualElement::Text { text, .. } if text.starts_with("... (+") => text
-                    .trim_start_matches("... (+")
-                    .trim_end_matches(')')
-                    .parse::<usize>()
-                    .ok(),
+                VisualElement::Text { text, .. }
+                    if text.starts_with('+') && text.ends_with(" nodes") =>
+                {
+                    text.trim_start_matches('+')
+                        .trim_end_matches(" nodes")
+                        .parse::<usize>()
+                        .ok()
+                }
                 _ => None,
             })
             .sum();
@@ -8193,11 +8196,14 @@ mod tests {
         let plus_n_sum: usize = elements
             .iter()
             .filter_map(|e| match e {
-                VisualElement::Text { text, .. } if text.starts_with("... (+") => text
-                    .trim_start_matches("... (+")
-                    .trim_end_matches(')')
-                    .parse::<usize>()
-                    .ok(),
+                VisualElement::Text { text, .. }
+                    if text.starts_with('+') && text.ends_with(" nodes") =>
+                {
+                    text.trim_start_matches('+')
+                        .trim_end_matches(" nodes")
+                        .parse::<usize>()
+                        .ok()
+                }
                 _ => None,
             })
             .sum();

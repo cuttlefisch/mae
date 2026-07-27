@@ -2663,13 +2663,30 @@ pub(crate) fn flatten_scene_graph_cached(
         };
 
     // ADR-068 Phase B4: accumulate `RenderTier::Clustered` node indices per
-    // (diagram, cluster-group-bucket) — drawn as ONE aggregate stub AFTER
-    // this loop, instead of being drawn individually inside it. Keyed by
-    // `(diagram_index, bucket)` so two different diagrams' clustered nodes
-    // (even sharing the same kind/degree-bucket) never merge into one
+    // (diagram, cluster-group-bucket, angular-sector) — drawn as ONE
+    // aggregate stub AFTER this loop, instead of being drawn individually
+    // inside it. The angular-sector component (live-testing fix, see
+    // `angular_sector_of`'s doc comment) keeps a bucket's members spatially
+    // contiguous on their diagram's ring, so the aggregate stub's centroid
+    // position is always genuinely near its own members — without it, a
+    // semantic bucket (same kind/degree) can scatter evenly all the way
+    // around the ring, and its centroid cancels out to the ring's empty
+    // center: a stub that visually "points to nowhere". Keyed by
+    // `(diagram_index, bucket, sector)` so two different diagrams' clustered
+    // nodes (even sharing the same kind/degree-bucket) never merge into one
     // stub — see `node_diagram_indices`'s doc comment.
-    let mut cluster_groups: std::collections::HashMap<(usize, u32), Vec<usize>> =
+    let mut cluster_groups: std::collections::HashMap<(usize, u32, u32), Vec<usize>> =
         std::collections::HashMap::new();
+    // One pass to find each diagram's contiguous node-index range (start,
+    // len) — needed by `angular_sector_of` below. Cheap: a `HashMap` insert
+    // per node, no BFS/allocation-heavy work.
+    let mut diagram_start: std::collections::HashMap<usize, usize> =
+        std::collections::HashMap::new();
+    let mut diagram_len: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for (i, &d) in diagram_indices.iter().enumerate() {
+        diagram_start.entry(d).or_insert(i);
+        *diagram_len.entry(d).or_insert(0) += 1;
+    }
 
     for (i, node) in scene.nodes.iter().enumerate() {
         let tier = render_tiers.get(i).copied().unwrap_or(RenderTier::Full);
@@ -2683,8 +2700,11 @@ pub(crate) fn flatten_scene_graph_cached(
             let diagram_idx = diagram_indices.get(i).copied().unwrap_or(0);
             let degree = degrees.get(i).copied().unwrap_or(0);
             let bucket = cluster_bucket_key(style.cluster_group_by, node.kind, degree);
+            let start = diagram_start.get(&diagram_idx).copied().unwrap_or(0);
+            let len = diagram_len.get(&diagram_idx).copied().unwrap_or(1);
+            let sector = angular_sector_of(i, start, len);
             cluster_groups
-                .entry((diagram_idx, bucket))
+                .entry((diagram_idx, bucket, sector))
                 .or_default()
                 .push(i);
             continue;
@@ -2769,17 +2789,24 @@ pub(crate) fn flatten_scene_graph_cached(
         }
     }
 
-    // ADR-068 Phase B4/B5: one aggregate "... (+N)" stub per (diagram,
-    // cluster-group) — reuses the SAME visual language as a boundary-link
-    // stub (`style.boundary_edge_color`/`boundary_edge_text_color`, a
-    // dashed-feeling muted marker + a count label), just anchored at the
-    // group's own centroid position rather than a real source node's
-    // (there IS no single "source" node for an aggregate of many unrelated
-    // far-from-focus nodes). Deterministic iteration order (sorted by key)
+    // ADR-068 Phase B4/B5: one aggregate "+N nodes" stub per (diagram,
+    // cluster-group, angular-sector) — reuses the SAME visual language as a
+    // boundary-link stub (`style.boundary_edge_color`/
+    // `boundary_edge_text_color`, a dashed-feeling muted marker + a count
+    // label), just anchored at the group's own centroid position rather
+    // than a real source node's (there IS no single "source" node for an
+    // aggregate of many unrelated far-from-focus nodes) — the angular-
+    // sector key (above) keeps that centroid genuinely near its own
+    // members, never cancelling out to empty ring-center. The circle's
+    // radius additionally scales with the cluster's size (sub-linear, same
+    // sqrt convention `node_render_radius` uses for degree — see that
+    // function's doc comment), so a "+112" stub reads visually bigger/more
+    // significant than a "+2" one, rather than both being an
+    // indistinguishable dot. Deterministic iteration order (sorted by key)
     // so this function stays a pure, reproducible function of its inputs
     // like the rest of this file, not dependent on `HashMap`'s
     // per-process-hash-seed iteration order.
-    let mut group_keys: Vec<&(usize, u32)> = cluster_groups.keys().collect();
+    let mut group_keys: Vec<&(usize, u32, u32)> = cluster_groups.keys().collect();
     group_keys.sort();
     for key in group_keys {
         let members = &cluster_groups[key];
@@ -2794,7 +2821,12 @@ pub(crate) fn flatten_scene_graph_cached(
             )
         });
         let n = members.len() as f32;
-        let (cx, cy, r) = (sum_x / n, sum_y / n, (sum_r / n).max(1.0));
+        let (cx, cy, avg_r) = (sum_x / n, sum_y / n, (sum_r / n).max(1.0));
+        // Sub-linear (sqrt) growth with cluster size, capped at 4x the
+        // average member radius — visually communicates "more collapsed
+        // nodes here" without letting a huge cluster (e.g. +112) dwarf the
+        // diagram it belongs to.
+        let r = avg_r * n.sqrt().min(4.0);
         elements.push(VisualElement::Circle {
             cx,
             cy,
@@ -2809,7 +2841,12 @@ pub(crate) fn flatten_scene_graph_cached(
         elements.push(VisualElement::Text {
             x: cx + r + 4.0,
             y: cy,
-            text: format!("... (+{})", members.len()),
+            // Self-explanatory even out of context — a bare "... (+112)"
+            // (the earlier wording) reads as a stray rendering artifact
+            // rather than a legible count (live-testing feedback: "a
+            // circle pointing to nowhere and that text blurb doesn't
+            // communicate anything clearly").
+            text: format!("+{} nodes", members.len()),
             font_size: style.font_size,
             color: style.boundary_edge_text_color.clone(),
             rotation_degrees: 0.0,
@@ -2838,6 +2875,40 @@ fn cluster_bucket_key(
         // single-node "stubs", defeating the point of clustering).
         ClusterGroupBy::DegreeBucket => degree.checked_ilog2().map(|v| v + 1).unwrap_or(0),
     }
+}
+
+/// Number of angular slices a diagram's ring is divided into for
+/// `angular_sector_of` — coarse enough that a real hidden-node count still
+/// yields one legible stub per sector rather than fragmenting into many
+/// single-node ones, fine enough to keep each sector's members within a
+/// tight enough arc that their centroid reads as "roughly here on the
+/// ring", not "somewhere in this diagram".
+const CLUSTER_ANGULAR_SECTORS: usize = 8;
+
+/// Which angular slice of its diagram's ring node `i` falls in — live-
+/// testing found the ORIGINAL cluster grouping (by kind/degree-bucket
+/// alone) could scatter one bucket's members evenly all the way around a
+/// diagram's ring; the aggregate stub's centroid (a plain mean of member
+/// positions) then cancels out to the ring's empty center, rendering as "a
+/// circle pointing to nowhere". Folding this sector into the grouping key
+/// (see the `cluster_groups` `HashMap` above) keeps every bucket spatially
+/// contiguous, so its centroid always lands within the same arc as its own
+/// members.
+///
+/// Cheap and exact for Multi mode specifically (the only mode
+/// `RenderTier::Clustered` is ever produced in — see
+/// `Editor::graph_view_doi_render_tiers`'s doc comment): Multi mode always
+/// forces the Chord layout algorithm (A3), whose node ordering directly IS
+/// angular ordering around each diagram's own ring (`chord_ring_positions`,
+/// `crates/canvas/src/kb_graph.rs` — node `j` of `n` sits at angle
+/// `j * 2π / n`). So the node's LOCAL index within its diagram's contiguous
+/// block (`i - diagram_start`, see `node_diagram_indices`'s contiguous-
+/// block invariant) maps directly to a sector — no trigonometry or
+/// position lookup needed.
+fn angular_sector_of(global_index: usize, diagram_start: usize, diagram_len: usize) -> u32 {
+    let local_index = global_index.saturating_sub(diagram_start);
+    let len = diagram_len.max(1);
+    ((local_index * CLUSTER_ANGULAR_SECTORS) / len) as u32
 }
 
 /// Vertical gap (logical px, screen-space, NOT scene-space — captions stay
@@ -3459,6 +3530,83 @@ mod tests {
             text_present_for(&elements, 400.0 + selected_r + 4.0),
             "the selected node's label must win despite losing on degree"
         );
+    }
+
+    #[test]
+    fn cluster_stub_centroid_never_collapses_to_the_ring_center_when_members_span_the_whole_ring() {
+        // Live-testing bug: bucketing `RenderTier::Clustered` nodes ONLY by
+        // kind/degree (no spatial component) let one bucket's members
+        // scatter evenly all the way around a diagram's ring — their plain
+        // positional-mean centroid then cancels out to the ring's empty
+        // center, a stub that visually "points to nowhere" (direct user
+        // feedback). 16 same-kind, same-degree nodes evenly spaced on a
+        // ring of radius 100 around the diagram's own center (0, 0) is
+        // exactly the pathological case: the OLD code's single bucket would
+        // average to (0, 0) by symmetry.
+        const N: usize = 16;
+        const RADIUS: f64 = 100.0;
+        let mut scene = SceneGraph::new();
+        for i in 0..N {
+            let angle = i as f64 * 2.0 * std::f64::consts::PI / N as f64;
+            scene.nodes.push(test_node(
+                &format!("n{i}"),
+                RADIUS * angle.cos(),
+                RADIUS * angle.sin(),
+                NodeKind::Note,
+            ));
+        }
+        let style = test_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let degrees = vec![0u32; N];
+        let render_tiers = vec![RenderTier::Clustered; N];
+        let diagram_indices = vec![0usize; N];
+        let mut cache = None;
+        let elements = flatten_scene_graph_cached(
+            &scene,
+            &viewport,
+            &style,
+            &degrees,
+            &[],
+            &render_tiers,
+            &diagram_indices,
+            &mut cache,
+        );
+
+        let stub_centers: Vec<(f32, f32)> = elements
+            .iter()
+            .filter_map(|e| match e {
+                VisualElement::Circle {
+                    cx, cy, fill: None, ..
+                } => Some((*cx, *cy)),
+                _ => None,
+            })
+            .collect();
+        assert!(
+            !stub_centers.is_empty(),
+            "16 clustered same-kind nodes must produce at least one stub"
+        );
+        assert!(
+            stub_centers.len() > 1,
+            "16 nodes spanning the whole ring must split into MULTIPLE angular-sector stubs, \
+             not one — got {}",
+            stub_centers.len()
+        );
+
+        let (origin_x, origin_y) = mae_canvas::interaction::scene_to_viewport(&viewport, 0.0, 0.0);
+        let (ring_edge_x, ring_edge_y) =
+            mae_canvas::interaction::scene_to_viewport(&viewport, RADIUS, 0.0);
+        let ring_radius_screen =
+            ((ring_edge_x - origin_x).powi(2) + (ring_edge_y - origin_y).powi(2)).sqrt();
+        for (cx, cy) in &stub_centers {
+            let dist_from_center =
+                ((*cx as f64 - origin_x).powi(2) + (*cy as f64 - origin_y).powi(2)).sqrt();
+            assert!(
+                dist_from_center > ring_radius_screen * 0.5,
+                "a cluster stub must sit near its OWN (spatially contiguous) members on the \
+                 ring, not collapse toward the empty center — got distance {dist_from_center} \
+                 from center, ring radius is {ring_radius_screen}"
+            );
+        }
     }
 
     #[test]
