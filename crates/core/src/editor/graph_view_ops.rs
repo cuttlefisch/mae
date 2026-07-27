@@ -1377,26 +1377,66 @@ impl Editor {
                 doi_distance_falloff,
                 dense_cluster_threshold,
             ) {
+                // Truly nothing changed (not even zoom) — the existing
+                // cache is already exactly right, nothing to recompute or
+                // re-store.
                 return (cache.result.clone(), None);
+            }
+            if cache.candidates_valid(gv.doi_generation, node_count, doi_distance_falloff) {
+                // The EXPENSIVE part (BFS-derived candidates) is still
+                // valid — only zoom/dense_cluster_threshold changed, so
+                // only the cheap finalization needs to rerun. This is the
+                // path a continuous zoom gesture takes on every tick: no
+                // `graph_view_doi_distances` BFS call at all.
+                let tiers = crate::graph_view::finalize_render_tiers(
+                    node_count,
+                    &cache.candidates,
+                    zoom,
+                    doi_zoom_threshold,
+                    dense_cluster_threshold,
+                );
+                let new_cache = crate::graph_view::DoiTierCache::new(
+                    gv.doi_generation,
+                    node_count,
+                    doi_distance_falloff,
+                    cache.candidates.clone(),
+                    zoom,
+                    doi_zoom_threshold,
+                    dense_cluster_threshold,
+                    tiers.clone(),
+                );
+                // Always store (not `None`) so `GraphView.doi_tier_cache`
+                // — and therefore `describe_state()`'s cross-backend
+                // parity guarantee — stays in sync with whatever zoom
+                // level was actually just rendered, even though the
+                // expensive candidate set was reused unchanged.
+                return (tiers, Some(new_cache));
             }
         }
 
+        // Slow path: focus/topology changed (or no cache yet) — the
+        // expensive part must actually recompute.
         let distances = self.graph_view_doi_distances(gv);
-        let tiers = crate::graph_view::compute_node_tiers(
+        let candidates = crate::graph_view::compute_doi_candidates(
             node_count,
             &gv.node_api_tier,
             &distances,
+            doi_distance_falloff,
+        );
+        let tiers = crate::graph_view::finalize_render_tiers(
+            node_count,
+            &candidates,
             zoom,
             doi_zoom_threshold,
-            doi_distance_falloff,
             dense_cluster_threshold,
         );
         let cache = crate::graph_view::DoiTierCache::new(
             gv.doi_generation,
             node_count,
+            doi_distance_falloff,
+            candidates,
             zoom,
             doi_zoom_threshold,
-            doi_distance_falloff,
             dense_cluster_threshold,
             tiers.clone(),
         );
@@ -7905,6 +7945,113 @@ mod tests {
                 .iter()
                 .map(|n| &n.render_tier)
                 .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn continuous_zoom_never_recomputes_doi_candidates_only_finalizes_cheaply() {
+        // Real bug found via live user testing (not hypothesized): the
+        // original single-tier `DoiTierCache` keyed its ENTIRE cached
+        // result on raw `zoom: f64` (exact-equality). A continuous
+        // mouse-wheel zoom gesture emits many distinct zoom values in
+        // quick succession, so exact-equality almost never held frame to
+        // frame -- invalidating the WHOLE cache, including the expensive
+        // BFS-derived candidate set (`Editor::graph_view_doi_distances`,
+        // per-diagram O(V+E)), on nearly every tick. This is exactly what
+        // made interacting with a large full-corpus KB (thousands of
+        // nodes) take multiple seconds per zoom step. The fix splits the
+        // cache into an expensive, zoom-INDEPENDENT candidate set and a
+        // cheap, zoom-DEPENDENT finalization -- this test proves the split
+        // actually holds, not merely that the final `tiers` values are
+        // still correct (already covered by every other DOI test above).
+        const N: usize = 60;
+        let mut editor = Editor::new();
+        let mut nodes = Vec::with_capacity(N + 1);
+        let mut hub_body = String::new();
+        for i in 0..N {
+            hub_body.push_str(&format!("[[concept:n{i}]] "));
+            nodes.push(mae_kb::Node::new(
+                format!("concept:n{i}"),
+                format!("N{i}"),
+                mae_kb::NodeKind::Note,
+                "",
+            ));
+        }
+        nodes.push(mae_kb::Node::new(
+            "concept:hub",
+            "Hub",
+            mae_kb::NodeKind::Note,
+            hub_body,
+        ));
+        register_plain_instance(&mut editor, "big", nodes);
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_multi_kb_full_corpus = true;
+        editor.kb_graph_doi_distance_falloff = 0;
+        editor.kb_graph_dense_cluster_threshold = 1;
+
+        editor.kb_graph_view_open(Some("concept:hub".to_string()), Some(0));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+
+        // First call at any zoom establishes the cache (one real BFS).
+        let viewport_a = mae_canvas::scene::Viewport {
+            zoom: 0.3,
+            ..Default::default()
+        };
+        let (_tiers, cache) = editor.graph_view_doi_render_tiers(graph_idx, &viewport_a);
+        if let Some(gv) = editor.buffers[graph_idx].graph_view_mut() {
+            gv.doi_tier_cache = cache;
+        }
+        let count_after_first = crate::graph_view::doi_candidates_compute_count();
+        assert!(
+            count_after_first > 0,
+            "sanity: the first call must have actually computed candidates at least once"
+        );
+
+        // Simulate a real zoom gesture: many distinct zoom values, no
+        // focus/generation/falloff change in between -- exactly what a
+        // mouse-wheel zoom produces frame to frame.
+        for zoom in [0.35, 0.5, 0.72, 1.0, 1.4, 2.0, 3.3, 5.0, 0.6, 0.1] {
+            let viewport = mae_canvas::scene::Viewport {
+                zoom,
+                ..Default::default()
+            };
+            let (tiers, cache) = editor.graph_view_doi_render_tiers(graph_idx, &viewport);
+            if let Some(gv) = editor.buffers[graph_idx].graph_view_mut() {
+                if let Some(c) = cache {
+                    gv.doi_tier_cache = Some(c);
+                }
+            }
+            // The result must still be a real tiers vector every time (the
+            // cheap finalization still runs) -- the fix must never return
+            // a stale/empty result just because the expensive part was
+            // skipped.
+            assert_eq!(tiers.len(), N + 1);
+        }
+
+        assert_eq!(
+            crate::graph_view::doi_candidates_compute_count(),
+            count_after_first,
+            "a pure zoom gesture (no focus/topology/falloff change) must NEVER re-trigger the \
+             expensive BFS-derived candidate computation -- this is the actual performance bug \
+             fix; only the cheap zoom-dependent finalization may rerun"
+        );
+
+        // Now change focus (a genuine topology-relevant change) and
+        // confirm the candidate computation DOES rerun exactly once --
+        // proving the counter isn't just permanently stuck/broken.
+        if let Some(gv) = editor.buffers[graph_idx].graph_view_mut() {
+            gv.doi_focus = Some("concept:n0".to_string());
+            gv.doi_generation = gv.doi_generation.wrapping_add(1);
+        }
+        let viewport_final = mae_canvas::scene::Viewport {
+            zoom: 1.0,
+            ..Default::default()
+        };
+        let _ = editor.graph_view_doi_render_tiers(graph_idx, &viewport_final);
+        assert_eq!(
+            crate::graph_view::doi_candidates_compute_count(),
+            count_after_first + 1,
+            "a genuine focus change must still trigger exactly one fresh candidate computation"
         );
     }
 

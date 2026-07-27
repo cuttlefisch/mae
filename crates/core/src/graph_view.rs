@@ -1904,9 +1904,26 @@ pub(crate) const DEGREE_TIER_QUANTILE: f64 = 0.25;
 pub(crate) struct DoiTierCache {
     doi_generation: u64,
     node_count: usize,
+    doi_distance_falloff: usize,
+    /// The EXPENSIVE part: node indices identified as DOI-elision
+    /// candidates by `compute_doi_candidates` (which needs `distances`, an
+    /// O(V+E) BFS per diagram via `Editor::graph_view_doi_distances`).
+    /// Deliberately independent of zoom/dense_cluster_threshold/
+    /// doi_zoom_threshold — those only affect the cheap `finalize_render_
+    /// tiers` step below, so a continuous zoom gesture reuses this
+    /// unchanged instead of re-running the BFS on every tick (the actual
+    /// bug this split fixes: the previous single-tier cache keyed on raw
+    /// `zoom: f64`, so a mouse-wheel zoom's continuously-varying value
+    /// almost never matched by exact equality, invalidating the WHOLE
+    /// cache — including this expensive part — on nearly every frame of a
+    /// zoom gesture).
+    pub(crate) candidates: Vec<usize>,
+    // Last-finalized (cheap) inputs + result, purely to short-circuit a
+    // truly-unchanged repeat call (e.g. two reflattens in the same frame
+    // with no state change at all) — NOT required for the candidates
+    // reuse above, which only depends on the three fields above this.
     zoom: f64,
     doi_zoom_threshold: f32,
-    doi_distance_falloff: usize,
     dense_cluster_threshold: usize,
     pub(crate) result: Vec<RenderTier>,
 }
@@ -1916,26 +1933,43 @@ impl DoiTierCache {
     pub(crate) fn new(
         doi_generation: u64,
         node_count: usize,
+        doi_distance_falloff: usize,
+        candidates: Vec<usize>,
         zoom: f64,
         doi_zoom_threshold: f32,
-        doi_distance_falloff: usize,
         dense_cluster_threshold: usize,
         result: Vec<RenderTier>,
     ) -> Self {
         DoiTierCache {
             doi_generation,
             node_count,
+            doi_distance_falloff,
+            candidates,
             zoom,
             doi_zoom_threshold,
-            doi_distance_falloff,
             dense_cluster_threshold,
             result,
         }
     }
 
-    /// Whether a fresh `compute_node_tiers` call with these exact inputs
-    /// would recompute to the SAME result this cache already holds —
-    /// mirrors `LabelWinnerCache::matches`'s exact shape.
+    /// Whether this cache's EXPENSIVE part (`candidates`, BFS-derived) is
+    /// still valid — deliberately excludes zoom/dense_cluster_threshold/
+    /// doi_zoom_threshold, which only ever affect the cheap finalization
+    /// step and must never gate reuse of the expensive one.
+    pub(crate) fn candidates_valid(
+        &self,
+        doi_generation: u64,
+        node_count: usize,
+        doi_distance_falloff: usize,
+    ) -> bool {
+        self.doi_generation == doi_generation
+            && self.node_count == node_count
+            && self.doi_distance_falloff == doi_distance_falloff
+    }
+
+    /// Whether EVERYTHING (including the cheap zoom-dependent inputs)
+    /// matches — a genuine no-op call where not even `finalize_render_
+    /// tiers` needs to rerun.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn matches(
         &self,
@@ -1946,13 +1980,26 @@ impl DoiTierCache {
         doi_distance_falloff: usize,
         dense_cluster_threshold: usize,
     ) -> bool {
-        self.doi_generation == doi_generation
-            && self.node_count == node_count
+        self.candidates_valid(doi_generation, node_count, doi_distance_falloff)
             && self.zoom == zoom
             && self.doi_zoom_threshold == doi_zoom_threshold
-            && self.doi_distance_falloff == doi_distance_falloff
             && self.dense_cluster_threshold == dense_cluster_threshold
     }
+}
+
+// Test-only instrumentation for `compute_doi_candidates` — proves the
+// zoom/expensive-recompute split actually works (a continuous zoom
+// gesture must never bump this), not merely assumed from reading the
+// caching logic. Same `thread_local!` rationale as
+// `LABEL_WINNERS_COMPUTE_COUNT` above.
+#[cfg(test)]
+thread_local! {
+    static DOI_CANDIDATES_COMPUTE_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn doi_candidates_compute_count() -> usize {
+    DOI_CANDIDATES_COMPUTE_COUNT.with(|c| c.get())
 }
 
 /// Decide each node's `RenderTier` (ADR-068 Phase B4) from its `ApiTier`
@@ -1989,18 +2036,25 @@ impl DoiTierCache {
 ///   SHRINK the full-tier set (monotonic nesting, B8 test 2) — it can only
 ///   ever change whether an elided node gets a visible stub or none at all.
 ///
+/// The EXPENSIVE half of `compute_node_tiers`'s old body: identifies which
+/// node indices are DOI-elision CANDIDATES from `node_api_tier` +
+/// `distances` (the latter an O(V+E) BFS per diagram,
+/// `Editor::graph_view_doi_distances`) + `doi_distance_falloff`.
+/// Deliberately takes no zoom/dense-cluster-threshold input — those only
+/// decide what happens to an already-identified candidate (see
+/// `finalize_render_tiers`), so this is exactly the part `DoiTierCache`
+/// caches independent of zoom, making a continuous zoom gesture cheap.
+///
 /// Pure function of its inputs — no scene mutation, no I/O — same
 /// independent-unit-testability precedent as `compute_label_winners`.
-pub(crate) fn compute_node_tiers(
+pub(crate) fn compute_doi_candidates(
     node_count: usize,
     node_api_tier: &[ApiTier],
     distances: &[Option<usize>],
-    zoom: f64,
-    doi_zoom_threshold: f32,
     doi_distance_falloff: usize,
-    dense_cluster_threshold: usize,
-) -> Vec<RenderTier> {
-    let mut tiers = vec![RenderTier::Full; node_count];
+) -> Vec<usize> {
+    #[cfg(test)]
+    DOI_CANDIDATES_COMPUTE_COUNT.with(|c| c.set(c.get() + 1));
     let mut candidates: Vec<usize> = Vec::new();
     for i in 0..node_count {
         let tier = node_api_tier.get(i).copied().unwrap_or(ApiTier::Ordinary);
@@ -2018,6 +2072,26 @@ pub(crate) fn compute_node_tiers(
             candidates.push(i);
         }
     }
+    candidates
+}
+
+/// The CHEAP half of `compute_node_tiers`'s old body: given an
+/// already-identified candidate set (see `compute_doi_candidates`, cached
+/// across zoom changes by `DoiTierCache`), decides the final per-node
+/// `RenderTier` for the CURRENT zoom/dense-cluster-threshold. Cost is
+/// linear in `node_count` plus `candidates`' length, safe to call on
+/// every frame / every zoom tick — this is intentionally the ONLY part of
+/// the DOI pipeline that re-runs on a raw zoom-value change, so a
+/// continuous zoom gesture never re-triggers the expensive BFS that
+/// produced `candidates`.
+pub(crate) fn finalize_render_tiers(
+    node_count: usize,
+    candidates: &[usize],
+    zoom: f64,
+    doi_zoom_threshold: f32,
+    dense_cluster_threshold: usize,
+) -> Vec<RenderTier> {
+    let mut tiers = vec![RenderTier::Full; node_count];
     if candidates.len() < dense_cluster_threshold {
         // Too few to bother clustering — render everything Full (see this
         // function's doc comment / `kb_graph_dense_cluster_threshold`'s
@@ -2029,7 +2103,7 @@ pub(crate) fn compute_node_tiers(
     } else {
         RenderTier::Clustered
     };
-    for i in candidates {
+    for &i in candidates {
         tiers[i] = elided_tier;
     }
     tiers

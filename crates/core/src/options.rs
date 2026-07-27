@@ -814,8 +814,11 @@ impl OptionRegistry {
                      Off (the default) leaves kb_graph_view_mode=multi's extraction byte-for-byte \
                      unchanged — this option's mere existence changes nothing until explicitly \
                      enabled. Render-time level-of-detail (which full-corpus nodes actually draw \
-                     vs. cluster/hide) is a separate, not-yet-built layer (ADR-068 Phases B2-B5); \
-                     with this alone, EVERY node in-scope renders individually.",
+                     vs. cluster/hide) is a separate layer (ADR-068 Phases B2-B5, see \
+                     kb_graph_doi_zoom_threshold / kb_graph_doi_distance_falloff / \
+                     kb_graph_dense_cluster_threshold / kb_graph_cluster_group_by) that always runs \
+                     alongside this option — a node in-scope only draws individually when its \
+                     degree-of-interest tier keeps it above the current clustering threshold.",
                     OptionKind::Bool, "false", Some("kb-graph.multi-kb-full-corpus"), &[]),
                 opt!("kb_graph_full_corpus_node_cap", &["kb-graph-full-corpus-node-cap"],
                     "Safety-net cap on a single diagram's node count when \
