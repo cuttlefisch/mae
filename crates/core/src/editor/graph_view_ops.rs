@@ -22,9 +22,9 @@
 use crate::buffer::{Buffer, BufferKind};
 use crate::graph_view::{
     flatten_scene_graph_cached, kind_affinity_from_strength, node_render_radius, GraphColorTween,
-    GraphLayoutAlgorithm, GraphLayoutIntent, GraphLayoutMode, GraphNavDirection, GraphStyleOptions,
-    GraphView, ANIMATION_COOLING_FACTOR, ANIMATION_INITIAL_TEMPERATURE, ANIMATION_SETTLE_EPSILON,
-    ANIMATION_TEMPERATURE_FLOOR,
+    GraphLayoutAlgorithm, GraphLayoutIntent, GraphLayoutMode, GraphMultiKbScope, GraphNavDirection,
+    GraphStyleOptions, GraphView, GraphViewMode, ANIMATION_COOLING_FACTOR,
+    ANIMATION_INITIAL_TEMPERATURE, ANIMATION_SETTLE_EPSILON, ANIMATION_TEMPERATURE_FLOOR,
 };
 use crate::visual_buffer::VisualBuffer;
 use crate::window::{Rect, WindowId};
@@ -336,12 +336,22 @@ impl Editor {
             // comment. Disjoint field borrows of `gv` (scene/node_degrees
             // immutable, label_winner_cache mutable), not a method call, so
             // this compiles as independent borrows.
-            let elements = flatten_scene_graph_cached(
+            let mut elements = flatten_scene_graph_cached(
                 &gv.scene,
                 &viewport,
                 &style,
                 &gv.node_degrees,
                 &mut gv.label_winner_cache,
+            );
+            // Per-diagram KB-name captions (#462 PR4) — a no-op when
+            // `diagram_labels` is empty; see `push_diagram_labels`'s doc
+            // comment for why this is a separate call rather than a new
+            // `flatten_scene_graph_cached` parameter.
+            crate::graph_view::push_diagram_labels(
+                &mut elements,
+                &gv.diagram_labels,
+                &viewport,
+                &style,
             );
             gv.rendered.insert(win_id, VisualBuffer { elements });
             // Bump so the GUI's per-window render cache
@@ -469,12 +479,112 @@ impl Editor {
         }
     }
 
+    /// Display name for a KB instance owner (`None` = primary) — used for
+    /// multi-KB diagram captions (#462 PR4). `mae-canvas` has no
+    /// `KbRegistry` dependency (see `KbInstanceSubgraph::name`'s doc
+    /// comment), so this resolution lives here.
+    fn kb_display_name(&self, owner: Option<&str>) -> String {
+        match owner {
+            None => "Primary".to_string(),
+            Some(uuid) => self
+                .kb
+                .registry
+                .find_by_uuid(uuid)
+                .map(|inst| inst.name.clone())
+                .unwrap_or_else(|| uuid.to_string()),
+        }
+    }
+
+    /// Same per-KB default-center fallback chain as
+    /// `default_center_within_instance`, generalized to also cover PRIMARY
+    /// (`owner: None`) — #462 PR4's `kb_graph_multi_kb_scope = "all"` needs
+    /// a default seed for a related instance with no incoming
+    /// cross-instance link from the seed to anchor on, and that candidate
+    /// set includes primary itself. Delegates to
+    /// `default_center_within_instance` for the `Some(uuid)` case so the
+    /// two never drift; only the PRIMARY branch is new here.
+    fn default_center_for_owner(&self, owner: Option<&str>) -> Option<String> {
+        match owner {
+            None => {
+                if self.kb.primary.contains("index") {
+                    return Some("index".to_string());
+                }
+                if let Some((id, _)) = self
+                    .kb
+                    .primary
+                    .iter()
+                    .find(|(_, n)| n.kind == mae_kb::NodeKind::Index)
+                {
+                    return Some(id.clone());
+                }
+                self.kb.primary.hub_node_id()
+            }
+            Some(uuid) => self.default_center_within_instance(uuid),
+        }
+    }
+
+    /// Candidate related instances for `kb_graph_multi_kb_scope`, in a
+    /// stable first-seen/registration order, EXCLUDING the seed instance
+    /// itself (never a candidate for its own related set). Uncapped — the
+    /// caller applies `kb_graph_multi_kb_max_related_instances`.
+    fn candidate_related_instances(
+        &self,
+        seed_instance: Option<&str>,
+        scope: GraphMultiKbScope,
+        cross_links: &[mae_kb::CrossInstanceLink],
+    ) -> Vec<Option<String>> {
+        match scope {
+            GraphMultiKbScope::Linked => {
+                let mut seen = std::collections::HashSet::new();
+                let mut order = Vec::new();
+                for link in cross_links {
+                    if link.target_instance.as_deref() == seed_instance {
+                        continue;
+                    }
+                    if seen.insert(link.target_instance.clone()) {
+                        order.push(link.target_instance.clone());
+                    }
+                }
+                order
+            }
+            GraphMultiKbScope::All => {
+                let mut all = vec![None];
+                all.extend(
+                    self.kb
+                        .registry
+                        .instances
+                        .iter()
+                        .map(|i| Some(i.uuid.clone())),
+                );
+                all.into_iter()
+                    .filter(|o| o.as_deref() != seed_instance)
+                    .collect()
+            }
+        }
+    }
+
     /// Rebuild `GraphView.scene`/`rendered` for `buf_idx` from a fresh
     /// `extract_subgraph` around `center` at `depth` hops, resolving which
     /// KB instance owns `center` via `kb_owner_of` (federated KB scoping —
-    /// graph queries never cross instances, so this always resolves to
-    /// exactly one). Queues the force-directed layout refinement pass on
-    /// the background bridge rather than running it inline.
+    /// a single subgraph extraction never crosses instances, so this always
+    /// resolves to exactly one SEED instance either way). Branches on
+    /// `kb_graph_view_mode` (#462 PR4):
+    ///
+    /// - `Single` (default): today's original behavior, byte-for-byte
+    ///   unchanged — see `populate_graph_buffer_single_mode_is_unchanged_
+    ///   even_when_a_real_cross_instance_link_exists` for the regression
+    ///   guard. Queues the force-directed layout refinement pass on the
+    ///   background bridge (only when `kb_graph_layout_algorithm == Force`).
+    /// - `Multi`: composes the seed's subgraph PLUS related instances (per
+    ///   `kb_graph_multi_kb_scope`, capped by
+    ///   `kb_graph_multi_kb_max_related_instances`) into ONE merged
+    ///   `SceneGraph` via `mae_canvas::kb_graph::build_multi_kb_chord_positions`
+    ///   — ALWAYS a chord grid regardless of `kb_graph_layout_algorithm`
+    ///   (a deliberate scope limit: a Force-directed refinement pass across
+    ///   a merged multi-instance graph is a distinct, unscoped feature — see
+    ///   this method's own doc comment in the PR that introduced this
+    ///   branch). Never queues a `GraphLayoutIntent`, matching `Chord`
+    ///   single-mode's own "final positions, no background pass" precedent.
     fn populate_graph_buffer(&mut self, buf_idx: usize, center: String, depth: usize) {
         let spec = mae_kb::SubgraphSpec {
             starter_nodes: vec![center.clone()],
@@ -511,16 +621,31 @@ impl Editor {
         };
         let hidden_node_count = result.hidden_node_count;
 
-        let kb_nodes: Vec<mae_canvas::kb_graph::KbNodeInfo> = result
-            .nodes
-            .iter()
-            .map(|n| mae_canvas::kb_graph::KbNodeInfo {
-                id: n.id.clone(),
-                title: n.title.clone(),
-                kind: crate::graph_view_support::shared_kind_to_canvas_kind(n.kind),
-                is_seed: crate::ai_residency::is_residency_exempt(n),
-            })
-            .collect();
+        // #462 PR4 Part 1: split the seed's own boundary links into
+        // "same-instance-or-dead" vs "genuinely crosses into a different KB
+        // instance". Computed UNCONDITIONALLY — cheap, bounded by the same
+        // node_cap that already bounds `result.boundary_links` — but its
+        // output is only ever CONSUMED below when `view_mode == Multi`; in
+        // `Single` mode `kb_boundary_links` (below) is built from the FULL,
+        // unpartitioned `result.boundary_links` regardless, so Single mode's
+        // scene output is unaffected by this call's existence even when a
+        // real cross-instance link is present in the data.
+        let (same_or_dead_boundary, cross_links) = self.partition_boundary_links_by_instance(
+            kb_instance.as_deref(),
+            result.boundary_links.clone(),
+        );
+
+        let to_kb_nodes = |nodes: &[mae_kb::Node]| -> Vec<mae_canvas::kb_graph::KbNodeInfo> {
+            nodes
+                .iter()
+                .map(|n| mae_canvas::kb_graph::KbNodeInfo {
+                    id: n.id.clone(),
+                    title: n.title.clone(),
+                    kind: crate::graph_view_support::shared_kind_to_canvas_kind(n.kind),
+                    is_seed: crate::ai_residency::is_residency_exempt(n),
+                })
+                .collect()
+        };
         // Bridge from `mae_kb::SubgraphLink` to `mae_canvas::kb_graph::
         // KbLinkInfo` — `mae-canvas` deliberately has no dependency on
         // `mae-kb` (see `KbNodeInfo`'s doc comment for the same pattern
@@ -532,29 +657,179 @@ impl Editor {
             rel_type: l.rel_type.clone(),
             weight: l.weight,
         };
+        let kb_nodes = to_kb_nodes(&result.nodes);
         let kb_links: Vec<mae_canvas::kb_graph::KbLinkInfo> =
             result.links.iter().map(to_link_info).collect();
+        // Single mode: ALWAYS the full, unpartitioned boundary set — this is
+        // what makes Single mode provably byte-identical to before #462 PR4
+        // regardless of `same_or_dead_boundary`/`cross_links` above.
         let kb_boundary_links: Vec<mae_canvas::kb_graph::KbLinkInfo> =
             result.boundary_links.iter().map(to_link_info).collect();
 
-        // #367: which algorithm computes node positions. Chord is
-        // immediately final (no iterative refinement needed or wanted) —
-        // only Force queues a background layout pass at all.
         let algorithm = self.kb_graph_layout_algorithm;
-        let scene = match algorithm {
-            GraphLayoutAlgorithm::Force => mae_canvas::kb_graph::build_kb_graph_positions_only(
-                &kb_nodes,
-                &kb_links,
-                &kb_boundary_links,
-                self.kb_graph_layout_spacing_scale as f64,
-            ),
-            GraphLayoutAlgorithm::Chord => mae_canvas::kb_graph::build_kb_graph_chord_positions(
-                &kb_nodes,
-                &kb_links,
-                &kb_boundary_links,
-                self.kb_graph_layout_spacing_scale as f64,
-            ),
+        let view_mode = self.kb_graph_view_mode;
+
+        let mut hidden_cross_instance_link_count = 0;
+        let mut hidden_related_instance_count = 0;
+        let mut cross_instance_links_kept: Vec<mae_kb::CrossInstanceLink> = Vec::new();
+        let mut diagram_labels: Vec<mae_canvas::kb_graph::DiagramLabel> = Vec::new();
+        let mut queue_force_layout = false;
+
+        let scene = match view_mode {
+            GraphViewMode::Single => {
+                // #367: which algorithm computes node positions. Chord is
+                // immediately final (no iterative refinement needed or
+                // wanted) — only Force queues a background layout pass.
+                queue_force_layout = matches!(algorithm, GraphLayoutAlgorithm::Force);
+                match algorithm {
+                    GraphLayoutAlgorithm::Force => {
+                        mae_canvas::kb_graph::build_kb_graph_positions_only(
+                            &kb_nodes,
+                            &kb_links,
+                            &kb_boundary_links,
+                            self.kb_graph_layout_spacing_scale as f64,
+                        )
+                    }
+                    GraphLayoutAlgorithm::Chord => {
+                        mae_canvas::kb_graph::build_kb_graph_chord_positions(
+                            &kb_nodes,
+                            &kb_links,
+                            &kb_boundary_links,
+                            self.kb_graph_layout_spacing_scale as f64,
+                        )
+                    }
+                }
+            }
+            GraphViewMode::Multi => {
+                let scope = self.kb_graph_multi_kb_scope;
+                let max_related = self.kb_graph_multi_kb_max_related_instances;
+                let candidates =
+                    self.candidate_related_instances(kb_instance.as_deref(), scope, &cross_links);
+                hidden_related_instance_count = candidates.len().saturating_sub(max_related);
+                let related: Vec<Option<String>> =
+                    candidates.into_iter().take(max_related).collect();
+
+                let seed_diagram = mae_canvas::kb_graph::KbInstanceSubgraph {
+                    instance: kb_instance.clone(),
+                    name: self.kb_display_name(kb_instance.as_deref()),
+                    nodes: kb_nodes,
+                    links: kb_links,
+                    boundary_links: same_or_dead_boundary.iter().map(to_link_info).collect(),
+                    starter_ids: vec![center.clone()],
+                };
+                let mut diagrams = vec![seed_diagram];
+
+                for related_instance in &related {
+                    // One hop only (per `GraphMultiKbScope::Linked`'s doc
+                    // comment): seed at whichever node(s) the seed's own
+                    // cross-links landed on for this instance; a related
+                    // instance's OWN boundary/cross links are never
+                    // transitively walked.
+                    let mut starters: Vec<String> = cross_links
+                        .iter()
+                        .filter(|l| l.target_instance == *related_instance)
+                        .map(|l| l.target.clone())
+                        .collect();
+                    starters.sort();
+                    starters.dedup();
+                    if starters.is_empty() {
+                        // "all"-scope instance with no incoming cross-link —
+                        // fall back to its own default center (mirrors
+                        // `resolve_scoped_default_center`'s per-instance
+                        // chain).
+                        if let Some(default_center) =
+                            self.default_center_for_owner(related_instance.as_deref())
+                        {
+                            starters.push(default_center);
+                        }
+                    }
+                    let related_spec = mae_kb::SubgraphSpec {
+                        starter_nodes: starters.clone(),
+                        max_depth: depth,
+                        include_backlinks: self.kb_graph_include_backlinks,
+                        node_cap: Some(self.kb_graph_node_count_cap),
+                        include_body: false,
+                    };
+                    let related_result = if starters.is_empty() {
+                        empty_result()
+                    } else {
+                        match related_instance {
+                            None => self.kb.primary.extract_subgraph(&related_spec),
+                            Some(uuid) => self
+                                .kb
+                                .instances
+                                .get(uuid)
+                                .map(|kb| kb.extract_subgraph(&related_spec))
+                                .unwrap_or_else(empty_result),
+                        }
+                    };
+                    diagrams.push(mae_canvas::kb_graph::KbInstanceSubgraph {
+                        instance: related_instance.clone(),
+                        name: self.kb_display_name(related_instance.as_deref()),
+                        nodes: to_kb_nodes(&related_result.nodes),
+                        links: related_result.links.iter().map(to_link_info).collect(),
+                        boundary_links: related_result
+                            .boundary_links
+                            .iter()
+                            .map(to_link_info)
+                            .collect(),
+                        starter_ids: starters,
+                    });
+                }
+
+                let rendered_instances: std::collections::HashSet<Option<String>> =
+                    diagrams.iter().map(|d| d.instance.clone()).collect();
+                cross_instance_links_kept = cross_links
+                    .iter()
+                    .filter(|l| rendered_instances.contains(&l.target_instance))
+                    .cloned()
+                    .collect();
+                let cross_link_infos: Vec<mae_canvas::kb_graph::KbCrossInstanceLinkInfo> =
+                    cross_links
+                        .iter()
+                        .map(|l| mae_canvas::kb_graph::KbCrossInstanceLinkInfo {
+                            source: l.source.clone(),
+                            source_instance: kb_instance.clone(),
+                            target: l.target.clone(),
+                            target_instance: l.target_instance.clone(),
+                            rel_type: l.rel_type.clone(),
+                            weight: l.weight,
+                        })
+                        .collect();
+
+                let (scene, labels, hidden_links) =
+                    mae_canvas::kb_graph::build_multi_kb_chord_positions(
+                        &diagrams,
+                        &cross_link_infos,
+                        self.kb_graph_layout_spacing_scale as f64,
+                    );
+                hidden_cross_instance_link_count = hidden_links;
+                diagram_labels = labels;
+                scene
+            }
         };
+        // Single mode's own caption: exactly one entry, the seed KB's own
+        // name — a small parity bonus (#462 PR4), never load-bearing for
+        // Single mode's rendering. Derived from the scene's own node extent
+        // (not `mae_canvas::kb_graph`'s private `sqrt_area_radius`, to avoid
+        // exposing that helper just for this) so it works regardless of
+        // which layout algorithm produced `scene`.
+        if matches!(view_mode, GraphViewMode::Single) {
+            let radius = scene
+                .nodes
+                .iter()
+                .map(|n| (n.x * n.x + n.y * n.y).sqrt())
+                .fold(0.0_f64, f64::max)
+                .max(50.0);
+            diagram_labels = vec![mae_canvas::kb_graph::DiagramLabel {
+                instance: kb_instance.clone(),
+                name: self.kb_display_name(kb_instance.as_deref()),
+                center_x: 0.0,
+                center_y: 0.0,
+                radius,
+                node_count: scene.nodes.len(),
+            }];
+        }
 
         // Queue the background layout pass with a snapshot of the fresh
         // circular-layout scene BEFORE moving `scene` into the view below,
@@ -565,7 +840,7 @@ impl Editor {
         // subsequent tick from there. When off (the default), this is
         // byte-for-byte the same one-shot `OneShot` request Phase 1/2 always
         // sent.
-        let mode = if self.kb_graph_animate {
+        let layout_mode = if self.kb_graph_animate {
             GraphLayoutMode::Tick {
                 temperature: ANIMATION_INITIAL_TEMPERATURE,
             }
@@ -594,11 +869,11 @@ impl Editor {
             .map(|gv| gv.generation)
             .unwrap_or(0)
             + 1;
-        if matches!(algorithm, GraphLayoutAlgorithm::Force) {
+        if queue_force_layout {
             self.pending_graph_layout = Some(GraphLayoutIntent {
                 buf_idx,
                 scene: scene.clone(),
-                mode,
+                mode: layout_mode,
                 layout_config: layout_config.clone(),
                 generation,
             });
@@ -608,25 +883,51 @@ impl Editor {
             gv.center_node = Some(center);
             gv.depth = depth;
             gv.kb_instance = kb_instance;
+            gv.mode = view_mode;
             gv.scene = scene;
             gv.node_degrees = crate::graph_view::node_degrees(&gv.scene);
-            // Chord mode never queues a layout intent, so nothing will ever
-            // arrive to settle it -- forcing `animating` false regardless
-            // of `kb_graph_animate` avoids permanently pinning the 60fps
-            // animation wake-up cadence (`has_active_graph_animation`) for
-            // a buffer that will never receive a `GraphLayoutResult`.
-            gv.animating =
-                matches!(algorithm, GraphLayoutAlgorithm::Force) && self.kb_graph_animate;
+            // Chord mode (and Multi mode, always chord-composed regardless
+            // of algorithm) never queues a layout intent, so nothing will
+            // ever arrive to settle it -- forcing `animating` false
+            // regardless of `kb_graph_animate` avoids permanently pinning
+            // the 60fps animation wake-up cadence
+            // (`has_active_graph_animation`) for a buffer that will never
+            // receive a `GraphLayoutResult`.
+            gv.animating = queue_force_layout && self.kb_graph_animate;
             gv.anim_temperature = ANIMATION_INITIAL_TEMPERATURE;
             gv.layout_config = layout_config;
             gv.hidden_node_count = hidden_node_count;
+            gv.diagram_labels = diagram_labels;
+            gv.hidden_cross_instance_link_count = hidden_cross_instance_link_count;
+            gv.cross_instance_links = cross_instance_links_kept;
+            gv.hidden_related_instance_count = hidden_related_instance_count;
             gv.generation = generation;
         }
         self.graph_view_reflatten_all_windows(buf_idx);
+
+        let mut status_parts = Vec::new();
         if hidden_node_count > 0 {
+            status_parts.push(format!(
+                "{hidden_node_count} more node(s) hidden by kb_graph_node_count_cap"
+            ));
+        }
+        if hidden_related_instance_count > 0 {
+            status_parts.push(format!(
+                "{hidden_related_instance_count} related KB instance(s) hidden by \
+                 kb_graph_multi_kb_max_related_instances"
+            ));
+        }
+        if hidden_cross_instance_link_count > 0 {
+            status_parts.push(format!(
+                "{hidden_cross_instance_link_count} cross-KB link(s) hidden (target instance not \
+                 shown)"
+            ));
+        }
+        if !status_parts.is_empty() {
             self.set_status(format!(
-                "KB graph: {hidden_node_count} more node(s) hidden by kb_graph_node_count_cap \
-                 — narrow your view (lower depth, disable backlinks, or raise the cap) to see them."
+                "KB graph: {} — narrow your view (lower depth, disable backlinks, raise the \
+                 relevant cap) to see them.",
+                status_parts.join("; ")
             ));
         }
     }
@@ -5256,5 +5557,304 @@ mod tests {
         assert!(!editor.buffers[idx].graph_view().unwrap().animating);
         assert!(!editor.has_active_graph_animation());
         assert!(editor.pending_graph_layout.is_none());
+    }
+
+    // --- #462 PR4: multi-KB chord view ---
+
+    /// Registers `instance_name` (with `nodes`) as a plain, non-project
+    /// federated KB instance — both in `kb.instances` (the actual data) and
+    /// `kb.registry.instances` (so `GraphMultiKbScope::All`'s registry scan
+    /// and `kb_display_name`'s lookup both see it). Mirrors
+    /// `register_project_instance` minus the project-root plumbing.
+    fn register_plain_instance(
+        editor: &mut Editor,
+        instance_name: &str,
+        nodes: Vec<mae_kb::Node>,
+    ) -> String {
+        let mut inst = mae_kb::KnowledgeBase::new();
+        for n in nodes {
+            inst.insert(n);
+        }
+        let uuid = format!("uuid-{instance_name}");
+        editor.kb.instances.insert(uuid.clone(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: uuid.clone(),
+                name: instance_name.to_string(),
+                org_dir: std::path::PathBuf::from(format!("/tmp/{instance_name}")),
+                db_path: std::path::PathBuf::from(format!("/tmp/{instance_name}.db")),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
+            });
+        uuid
+    }
+
+    fn graph_idx_and_win_id(editor: &Editor) -> (usize, WindowId) {
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .unwrap()
+            .id;
+        (graph_idx, win_id)
+    }
+
+    #[test]
+    fn populate_graph_buffer_single_mode_is_byte_identical_even_when_a_real_cross_instance_link_exists(
+    ) {
+        // The core Single-mode regression guard (#462 PR4): a real
+        // cross-instance link in the underlying data must NOT change
+        // Single mode's rendered scene at all — the boundary link still
+        // renders as a plain "... (+N)" stub, exactly as if
+        // `partition_boundary_links_by_instance` were never called.
+        let mut editor = ed_with_kb_node("concept:seed", "Seed", "[[concept:sibling-target]]");
+        register_plain_instance(
+            &mut editor,
+            "sibling",
+            vec![mae_kb::Node::new(
+                "concept:sibling-target",
+                "Sibling Target",
+                mae_kb::NodeKind::Concept,
+                "",
+            )],
+        );
+        assert_eq!(editor.kb_graph_view_mode, GraphViewMode::Single);
+
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+
+        assert_eq!(gv.mode, GraphViewMode::Single);
+        assert_eq!(
+            gv.scene.nodes.len(),
+            1,
+            "the cross-instance target must NOT be pulled into Single mode's scene"
+        );
+        assert_eq!(gv.scene.edges.len(), 1, "exactly one boundary stub edge");
+        assert!(gv.scene.edges[0].style.dashed);
+        assert_eq!(
+            gv.scene.edges[0].label.as_deref(),
+            Some("... (+1)"),
+            "renders as an ordinary boundary stub, not specially split out"
+        );
+        assert_eq!(
+            gv.hidden_cross_instance_link_count, 0,
+            "Single mode never surfaces a cross-instance count"
+        );
+        assert!(
+            gv.cross_instance_links.is_empty(),
+            "Single mode never populates cross_instance_links"
+        );
+        assert_eq!(
+            gv.diagram_labels.len(),
+            1,
+            "Single mode's parity-bonus caption is exactly one entry"
+        );
+    }
+
+    #[test]
+    fn multi_mode_includes_a_related_instances_nodes_and_a_real_cross_link_edge() {
+        let mut editor = ed_with_kb_node("concept:seed", "Seed", "[[concept:sibling-target]]");
+        register_plain_instance(
+            &mut editor,
+            "sibling",
+            vec![mae_kb::Node::new(
+                "concept:sibling-target",
+                "Sibling Target",
+                mae_kb::NodeKind::Concept,
+                "",
+            )],
+        );
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+
+        assert_eq!(gv.mode, GraphViewMode::Multi);
+        assert_eq!(
+            gv.scene.nodes.len(),
+            2,
+            "seed + sibling's node both present"
+        );
+        assert_eq!(gv.diagram_labels.len(), 2);
+        assert!(gv.diagram_labels.iter().any(|d| d.name == "Primary"));
+        assert!(gv.diagram_labels.iter().any(|d| d.name == "sibling"));
+        assert_eq!(gv.hidden_cross_instance_link_count, 0);
+        assert_eq!(
+            gv.cross_instance_links.len(),
+            1,
+            "the resolved cross-instance link must be recorded for introspection/TUI"
+        );
+        assert_eq!(
+            gv.cross_instance_links[0].target_instance.as_deref(),
+            Some("uuid-sibling")
+        );
+        // The cross-link resolved into a real edge (dashed, carrying its
+        // real rel_type) connecting the two diagrams' nodes.
+        assert!(
+            gv.scene
+                .edges
+                .iter()
+                .any(|e| e.style.dashed && e.rel_type.is_some()),
+            "expected a real (non-boundary-stub) cross-instance edge"
+        );
+    }
+
+    #[test]
+    fn multi_mode_respects_the_max_related_instances_cap_with_a_surfaced_overflow_count() {
+        let mut editor = ed_with_kb_node(
+            "concept:seed",
+            "Seed",
+            "[[concept:b]] [[concept:c]] [[concept:d]]",
+        );
+        for name in ["b", "c", "d"] {
+            register_plain_instance(
+                &mut editor,
+                name,
+                vec![mae_kb::Node::new(
+                    format!("concept:{name}"),
+                    name,
+                    mae_kb::NodeKind::Concept,
+                    "",
+                )],
+            );
+        }
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_multi_kb_max_related_instances = 2;
+
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+
+        assert_eq!(
+            gv.diagram_labels.len(),
+            3,
+            "seed + 2 capped related instances"
+        );
+        assert_eq!(
+            gv.hidden_related_instance_count, 1,
+            "3 candidates - 2 kept = 1 hidden"
+        );
+        assert!(
+            editor.status_msg.contains('1') && editor.status_msg.contains("related KB instance"),
+            "a capped related-instance set must surface a status message: {:?}",
+            editor.status_msg
+        );
+    }
+
+    #[test]
+    fn multi_mode_with_zero_related_instances_degrades_to_exactly_one_diagram_without_erroring() {
+        // Linked scope (default), seed has no cross-instance links at all —
+        // must simply behave like Single mode's own topology, not error or
+        // produce a degenerate empty scene.
+        let mut editor = ed_with_kb_node("concept:seed", "Seed", "");
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        assert_eq!(editor.kb_graph_multi_kb_scope, GraphMultiKbScope::Linked);
+
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(1));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+
+        assert_eq!(gv.diagram_labels.len(), 1);
+        assert_eq!(gv.scene.nodes.len(), 1);
+        assert_eq!(gv.hidden_related_instance_count, 0);
+        assert!(gv.cross_instance_links.is_empty());
+    }
+
+    #[test]
+    fn multi_mode_all_scope_includes_an_unlinked_instance_as_its_own_isolated_diagram() {
+        let mut editor = ed_with_kb_node("concept:seed", "Seed", ""); // no links at all
+        register_plain_instance(
+            &mut editor,
+            "isolated",
+            vec![mae_kb::Node::new(
+                "index",
+                "Isolated Index",
+                mae_kb::NodeKind::Index,
+                "",
+            )],
+        );
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_multi_kb_scope = GraphMultiKbScope::All;
+
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(1));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+
+        assert_eq!(gv.diagram_labels.len(), 2, "seed + the isolated instance");
+        let isolated = gv
+            .diagram_labels
+            .iter()
+            .find(|d| d.name == "isolated")
+            .expect("the unlinked instance must still appear as its own diagram");
+        assert_eq!(
+            isolated.node_count, 1,
+            "resolved via its own default-center fallback, not left empty"
+        );
+        assert!(gv.cross_instance_links.is_empty(), "no cross-links exist");
+    }
+
+    #[test]
+    fn multi_kb_zoom_to_fit_on_open_fits_every_diagrams_nodes_within_the_viewport() {
+        // Confirms (not just assumes) that zoom_to_fit's scene-agnostic
+        // math actually gets exercised against the FULL merged multi-
+        // instance scene on open — every node from EVERY diagram must
+        // project inside the viewport's pixel bounds, not just the seed's.
+        let mut editor = ed_with_kb_node("concept:seed", "Seed", "[[concept:sibling-target]]");
+        register_plain_instance(
+            &mut editor,
+            "sibling",
+            vec![mae_kb::Node::new(
+                "concept:sibling-target",
+                "Sibling Target",
+                mae_kb::NodeKind::Concept,
+                "",
+            )],
+        );
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+        let (graph_idx, win_id) = graph_idx_and_win_id(&editor);
+
+        let style = editor.graph_style_options();
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        let viewport = *gv.viewports.get(&win_id).unwrap();
+        assert_eq!(gv.scene.nodes.len(), 2);
+
+        for (i, node) in gv.scene.nodes.iter().enumerate() {
+            let (sx, sy) = mae_canvas::interaction::scene_to_viewport(&viewport, node.x, node.y);
+            let degree = gv.node_degrees.get(i).copied().unwrap_or(0);
+            let r = node_render_radius(&style, degree, viewport.zoom) as f64;
+            assert!(
+                sx - r >= -1.0 && sx + r <= viewport.width + 1.0,
+                "diagram node {i} at screen x={sx} (r={r}) falls outside the {}px-wide viewport \
+                 — zoom-to-fit did not account for every diagram",
+                viewport.width
+            );
+            assert!(
+                sy - r >= -1.0 && sy + r <= viewport.height + 1.0,
+                "diagram node {i} at screen y={sy} (r={r}) falls outside the {}px-tall viewport",
+                viewport.height
+            );
+        }
     }
 }

@@ -734,6 +734,35 @@ impl OptionRegistry {
                      (kb-graph-view-toggle-overlay), so underlying text stays legible but \
                      visually de-emphasized while the graph is on top.",
                     OptionKind::Float, "0.6", Some("kb-graph.view-overlay-dim-opacity"), &[]),
+                opt!("kb_graph_view_mode", &["kb-graph-view-mode"],
+                    "Whether the graph view composes a single KB instance's subgraph (default) \
+                     or several at once (multi) — issue #462's multi-KB chord view. In multi \
+                     mode, the seed instance's own related instances (per \
+                     kb_graph_multi_kb_scope, capped by \
+                     kb_graph_multi_kb_max_related_instances) are laid out as a grid of \
+                     small-multiple chord diagrams in ONE merged scene, with real cross-instance \
+                     links resolved into edges between them. Single mode's own output is \
+                     byte-for-byte unchanged by this option's existence.",
+                    OptionKind::String, "single", Some("kb-graph.view-mode"),
+                    &["single", "multi"]),
+                opt!("kb_graph_multi_kb_max_related_instances",
+                    &["kb-graph-multi-kb-max-related-instances"],
+                    "Safety-net cap on how many related KB instances kb_graph_view_mode=multi \
+                     composes alongside the seed instance. When the candidate set (per \
+                     kb_graph_multi_kb_scope) exceeds this, the overflow is surfaced as a count \
+                     (never silently truncated) rather than composing an unbounded number of \
+                     diagrams into one scene.",
+                    OptionKind::Int, "6", Some("kb-graph.multi-kb-max-related-instances"), &[]),
+                opt!("kb_graph_multi_kb_scope", &["kb-graph-multi-kb-scope"],
+                    "Which related KB instances kb_graph_view_mode=multi pulls in alongside the \
+                     seed instance. linked (default): the set of instances the seed's own \
+                     cross-instance links point to, one hop only — the related instances' OWN \
+                     cross-links are not transitively re-walked. all: every registered KB \
+                     instance (including primary), regardless of whether it's actually linked \
+                     from the seed. Both are capped by \
+                     kb_graph_multi_kb_max_related_instances.",
+                    OptionKind::String, "linked", Some("kb-graph.multi-kb-scope"),
+                    &["linked", "all"]),
                 // --- File tree ---
                 opt!("file_tree_focus_on_open", &["file-tree-focus-on-open"],
                     "Auto-focus the file tree window when it opens",

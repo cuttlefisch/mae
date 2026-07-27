@@ -307,6 +307,11 @@ impl super::Editor {
             "kb_graph_view_overlay_dim_opacity" => {
                 self.kb_graph_view_overlay_dim_opacity.to_string()
             }
+            "kb_graph_view_mode" => self.kb_graph_view_mode.as_str().to_string(),
+            "kb_graph_multi_kb_max_related_instances" => {
+                self.kb_graph_multi_kb_max_related_instances.to_string()
+            }
+            "kb_graph_multi_kb_scope" => self.kb_graph_multi_kb_scope.as_str().to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -1322,6 +1327,24 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.kb_graph_view_overlay_dim_opacity = v.clamp(0.0, 1.0);
+            }
+            "kb_graph_view_mode" => {
+                let mode = crate::graph_view::GraphViewMode::parse(value).ok_or_else(|| {
+                    format!("Invalid kb_graph_view_mode '{value}' (expected single|multi)")
+                })?;
+                self.kb_graph_view_mode = mode;
+            }
+            "kb_graph_multi_kb_max_related_instances" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_graph_multi_kb_max_related_instances = v.clamp(1, 50);
+            }
+            "kb_graph_multi_kb_scope" => {
+                let scope = crate::graph_view::GraphMultiKbScope::parse(value).ok_or_else(|| {
+                    format!("Invalid kb_graph_multi_kb_scope '{value}' (expected linked|all)")
+                })?;
+                self.kb_graph_multi_kb_scope = scope;
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }
@@ -2984,6 +3007,81 @@ mod graph_view_option_tests {
             editor.kb_graph_layout_algorithm,
             GraphLayoutAlgorithm::Chord
         );
+    }
+
+    #[test]
+    fn kb_graph_view_mode_option_roundtrips_and_rejects_invalid_values() {
+        use crate::graph_view::GraphViewMode;
+
+        let mut editor = Editor::new();
+        assert_eq!(editor.get_option("kb_graph_view_mode").unwrap().0, "single");
+        assert_eq!(editor.kb_graph_view_mode, GraphViewMode::Single);
+
+        editor.set_option("kb_graph_view_mode", "multi").unwrap();
+        assert_eq!(editor.get_option("kb_graph_view_mode").unwrap().0, "multi");
+        assert_eq!(editor.kb_graph_view_mode, GraphViewMode::Multi);
+
+        editor.set_option("kb_graph_view_mode", "single").unwrap();
+        assert_eq!(editor.kb_graph_view_mode, GraphViewMode::Single);
+
+        assert!(editor.set_option("kb_graph_view_mode", "nonsense").is_err());
+        assert_eq!(editor.kb_graph_view_mode, GraphViewMode::Single);
+    }
+
+    #[test]
+    fn kb_graph_multi_kb_max_related_instances_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor
+                .get_option("kb_graph_multi_kb_max_related_instances")
+                .unwrap()
+                .0,
+            "6"
+        );
+
+        editor
+            .set_option("kb_graph_multi_kb_max_related_instances", "20")
+            .unwrap();
+        assert_eq!(editor.kb_graph_multi_kb_max_related_instances, 20);
+
+        editor
+            .set_option("kb_graph_multi_kb_max_related_instances", "0")
+            .unwrap();
+        assert_eq!(
+            editor.kb_graph_multi_kb_max_related_instances, 1,
+            "clamped to the floor, not zero"
+        );
+
+        editor
+            .set_option("kb_graph_multi_kb_max_related_instances", "999")
+            .unwrap();
+        assert_eq!(editor.kb_graph_multi_kb_max_related_instances, 50);
+
+        let before = editor.kb_graph_multi_kb_max_related_instances;
+        assert!(editor
+            .set_option("kb_graph_multi_kb_max_related_instances", "not-a-number")
+            .is_err());
+        assert_eq!(editor.kb_graph_multi_kb_max_related_instances, before);
+    }
+
+    #[test]
+    fn kb_graph_multi_kb_scope_option_roundtrips_and_rejects_invalid_values() {
+        use crate::graph_view::GraphMultiKbScope;
+
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor.get_option("kb_graph_multi_kb_scope").unwrap().0,
+            "linked"
+        );
+        assert_eq!(editor.kb_graph_multi_kb_scope, GraphMultiKbScope::Linked);
+
+        editor.set_option("kb_graph_multi_kb_scope", "all").unwrap();
+        assert_eq!(editor.kb_graph_multi_kb_scope, GraphMultiKbScope::All);
+
+        assert!(editor
+            .set_option("kb_graph_multi_kb_scope", "nonsense")
+            .is_err());
+        assert_eq!(editor.kb_graph_multi_kb_scope, GraphMultiKbScope::All);
     }
 }
 

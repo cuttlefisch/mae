@@ -184,9 +184,12 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
 
     // (kb-graph-view-state) → #f if no graph view is open, else
     // (center depth kb-instance follow-current? selected-node hovered-node
-    //  nodes edges)
+    //  nodes edges mode hidden-cross-instance-link-count diagrams
+    //  hidden-related-instance-count)
     //   nodes: list of (id title kind x y pinned? selected? hovered?)
     //   edges: list of (source-id target-id boundary? label-or-#f)
+    //   mode: "single" | "multi" (#462 PR4)
+    //   diagrams: list of (instance-or-#f name node-count)
     // Read-only, so — unlike every other primitive in this file — this
     // does NOT queue a GraphViewIntent; it reads the SharedState snapshot
     // `inject_graph_view_state` (`state_sync_inject_kb.rs`) populates fresh
@@ -197,7 +200,7 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
     let s = shared.clone();
     vm.register_fn(
         "kb-graph-view-state",
-        "Structured introspection snapshot of the open native KB graph view: which node is hovered, which is selected, every node currently rendered (the ego-network), and every edge/link shown between them. Returns #f if no graph view is open. Returns (center depth kb-instance follow-current? selected-node hovered-node nodes edges) — nodes: list of (id title kind x y pinned? selected? hovered?); edges: list of (source-id target-id boundary? label-or-#f).",
+        "Structured introspection snapshot of the open native KB graph view: which node is hovered, which is selected, every node currently rendered (the ego-network), and every edge/link shown between them. Returns #f if no graph view is open. Returns (center depth kb-instance follow-current? selected-node hovered-node nodes edges mode hidden-cross-instance-link-count diagrams hidden-related-instance-count) — nodes: list of (id title kind x y pinned? selected? hovered?); edges: list of (source-id target-id boundary? label-or-#f); mode: \"single\"|\"multi\" (#462); diagrams: list of (instance-or-#f name node-count), one entry per composed KB instance; hidden-related-instance-count: how many candidate related instances kb_graph_multi_kb_max_related_instances capped away.",
         Arity::Fixed(0),
         move |_args: &[Value]| {
             let state = s.lock();
@@ -242,6 +245,18 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
                     })
                     .collect::<Vec<_>>(),
             );
+            let diagrams = Value::list(
+                gv.diagrams
+                    .iter()
+                    .map(|d| {
+                        Value::list(vec![
+                            opt_string(&d.instance),
+                            Value::string(d.name.clone()),
+                            Value::Int(d.node_count as i64),
+                        ])
+                    })
+                    .collect::<Vec<_>>(),
+            );
 
             Ok(Value::list(vec![
                 opt_string(&gv.center_node),
@@ -252,6 +267,10 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
                 opt_string(&gv.hovered_node),
                 nodes,
                 edges,
+                Value::string(gv.mode.clone()),
+                Value::Int(gv.hidden_cross_instance_link_count as i64),
+                diagrams,
+                Value::Int(gv.hidden_related_instance_count as i64),
             ]))
         },
     );

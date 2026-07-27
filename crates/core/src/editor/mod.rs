@@ -895,6 +895,18 @@ pub struct Editor {
     /// Opacity (0.0-1.0) of the dimming scrim drawn behind the graph view
     /// when `kb_graph_view_overlay_active` is true.
     pub kb_graph_view_overlay_dim_opacity: f32,
+    /// Whether the graph view composes one KB instance or several (#462
+    /// PR4). Mirrors `kb_graph_view_mode`; see
+    /// `crate::graph_view::GraphViewMode`.
+    pub kb_graph_view_mode: crate::graph_view::GraphViewMode,
+    /// Safety-net cap on how many related instances `kb_graph_view_mode =
+    /// Multi` composes alongside the seed. Mirrors
+    /// `kb_graph_multi_kb_max_related_instances`.
+    pub kb_graph_multi_kb_max_related_instances: usize,
+    /// Which related KB instances `kb_graph_view_mode = Multi` pulls in.
+    /// Mirrors `kb_graph_multi_kb_scope`; see
+    /// `crate::graph_view::GraphMultiKbScope`.
+    pub kb_graph_multi_kb_scope: crate::graph_view::GraphMultiKbScope,
     /// Queued background layout request for the open/refreshed graph-view
     /// buffer (`mae::graph_layout_bridge`, Part C Phase 1) — drained once
     /// per GUI event-loop tick, see `crate::graph_view::GraphLayoutIntent`'s
@@ -1422,6 +1434,9 @@ impl Editor {
             kb_graph_hover_enabled: true,
             kb_graph_view_overlay_active: false,
             kb_graph_view_overlay_dim_opacity: 0.6,
+            kb_graph_view_mode: crate::graph_view::GraphViewMode::Single,
+            kb_graph_multi_kb_max_related_instances: 6,
+            kb_graph_multi_kb_scope: crate::graph_view::GraphMultiKbScope::Linked,
             pending_graph_layout: None,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)
             messages_synced_seq: None,

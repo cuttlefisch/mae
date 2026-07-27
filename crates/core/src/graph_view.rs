@@ -47,7 +47,15 @@ pub struct GraphView {
     pub depth: usize,
     /// Which KB instance owns `center_node`: `None` = primary,
     /// `Some(uuid)` = a federated instance (see `Editor::kb_owner_of`).
+    /// In `GraphViewMode::Multi`, this is still just the SEED instance —
+    /// see `diagram_labels` for the full composed set.
     pub kb_instance: Option<String>,
+    /// Whether this view composes ONE KB instance's subgraph or several
+    /// (#462 PR4). Snapshotted from `kb_graph_view_mode` by
+    /// `Editor::populate_graph_buffer` on every (re)populate — read back by
+    /// `describe_state`, `render_graph_view_as_text`'s TUI grouping, and
+    /// `execute_kb_graph_view_state`'s per-diagram AI-residency filtering.
+    pub mode: GraphViewMode,
     /// Phase 2 (not wired yet): whether the graph should re-center itself
     /// when the human/AI navigates to a different KB node elsewhere.
     /// Snapshotted from `kb_graph_follow_current_node` on open.
@@ -56,6 +64,17 @@ pub struct GraphView {
     /// is buffer-level/shared topology, legitimately the SAME for every
     /// window showing this graph buffer (see `viewports`/`rendered` below
     /// for the per-window state a second window needs its own copy of).
+    ///
+    /// @ai-caution: [window-lifecycle] Multi-KB mode (`GraphViewMode::Multi`,
+    /// #462 PR4) populates this SAME field with one merged `SceneGraph`
+    /// spanning every composed instance — it does NOT add a new per-window
+    /// or per-instance map. `viewports`/`rendered`/`render_epoch` below are
+    /// populated exactly the same way in both modes. If a future change
+    /// adds a genuinely new per-window map for multi-KB (e.g. per-diagram
+    /// collapse state), it MUST be added to `Editor::
+    /// prune_closed_window_graph_state`'s retain block — see this struct's
+    /// own top-level doc comment for why that's the one canonical prune
+    /// site.
     pub scene: mae_canvas::scene::SceneGraph,
     /// Per-window pan/zoom/pixel-size (issue #321). A graph buffer can be
     /// shown in more than one window (`:split-vertical` while it's focused
@@ -151,6 +170,40 @@ pub struct GraphView {
     /// and a one-shot status message so a truncated view is never silently
     /// mistaken for the whole neighborhood.
     pub hidden_node_count: usize,
+    /// Per-diagram caption metadata (#462 PR4) — populated in BOTH
+    /// `GraphViewMode::Single` (exactly one entry, the seed KB's own name —
+    /// a small parity bonus, not load-bearing for Single mode's own
+    /// rendering) and `GraphViewMode::Multi` (one entry per composed
+    /// instance, in the SAME order `mae_canvas::kb_graph::
+    /// build_multi_kb_chord_positions` appended their nodes into the merged
+    /// `scene` — i.e. `diagram_labels[i]`'s node block occupies a
+    /// CONTIGUOUS `node_count`-wide slice of `scene.nodes`, starting right
+    /// after the previous entry's slice ends. `render_graph_view_as_text`'s
+    /// Multi-mode grouping and `push_diagram_labels`'s GUI caption
+    /// rendering both rely on this ordering/contiguity invariant).
+    pub diagram_labels: Vec<mae_canvas::kb_graph::DiagramLabel>,
+    /// How many `Multi`-mode cross-instance links `build_multi_kb_chord_
+    /// positions` had to drop because their `target_instance` wasn't among
+    /// the actually-rendered diagrams (stale/unregistered/filtered by
+    /// `kb_graph_multi_kb_max_related_instances`) — parallel to
+    /// `hidden_node_count` above (same "surface a count, never silently
+    /// truncate" contract). Always `0` in `Single` mode.
+    pub hidden_cross_instance_link_count: usize,
+    /// The cross-instance links that WERE successfully resolved into
+    /// `scene` edges in `Multi` mode — semantic (source/target ids +
+    /// target instance + rel_type), NOT scene indices, so
+    /// `render_graph_view_as_text`'s "** Cross-KB links" section (and any
+    /// future MCP/Scheme introspection) can resolve titles/format however
+    /// it needs without reverse-engineering which merged `scene.edges`
+    /// entries happen to be cross-instance ones. Always empty in `Single`
+    /// mode.
+    pub cross_instance_links: Vec<mae_kb::CrossInstanceLink>,
+    /// How many candidate related instances (per `kb_graph_multi_kb_scope`)
+    /// were NOT composed because `kb_graph_multi_kb_max_related_instances`
+    /// capped the set — same "surface a count, never silently truncate"
+    /// contract as `hidden_node_count`/`hidden_cross_instance_link_count`.
+    /// Always `0` in `Single` mode.
+    pub hidden_related_instance_count: usize,
     /// Monotonic counter bumped by every `Editor::populate_graph_buffer`
     /// call (a fresh topology) AND by `Editor::kb_graph_view_close` —
     /// stamped onto every `GraphLayoutIntent` this view queues (including
@@ -404,8 +457,20 @@ impl GraphView {
             center_node: self.center_node.clone(),
             depth: self.depth,
             kb_instance: self.kb_instance.clone(),
+            mode: self.mode.as_str().to_string(),
             follow_current: self.follow_current,
             hidden_node_count: self.hidden_node_count,
+            hidden_cross_instance_link_count: self.hidden_cross_instance_link_count,
+            hidden_related_instance_count: self.hidden_related_instance_count,
+            diagrams: self
+                .diagram_labels
+                .iter()
+                .map(|d| GraphViewDiagramState {
+                    instance: d.instance.clone(),
+                    name: d.name.clone(),
+                    node_count: d.node_count,
+                })
+                .collect(),
             selected_node: self.scene.selection.and_then(node_id),
             hovered_node: self.scene.hovered.and_then(node_id),
             nodes: self
@@ -461,12 +526,36 @@ pub struct GraphViewState {
     pub center_node: Option<String>,
     pub depth: usize,
     pub kb_instance: Option<String>,
+    /// `"single"` or `"multi"` — see `GraphViewMode::as_str`.
+    pub mode: String,
     pub follow_current: bool,
     pub hidden_node_count: usize,
+    /// Always `0` when `mode == "single"`. See `GraphView.
+    /// hidden_cross_instance_link_count`'s doc comment.
+    pub hidden_cross_instance_link_count: usize,
+    /// Always `0` when `mode == "single"`. See `GraphView.
+    /// hidden_related_instance_count`'s doc comment.
+    pub hidden_related_instance_count: usize,
+    /// One entry per composed KB instance — exactly one (the seed) when
+    /// `mode == "single"`; N entries in `"multi"`, in the SAME order as
+    /// `nodes`' contiguous per-diagram blocks (`diagrams[i].node_count`
+    /// nodes, then `diagrams[i+1]`'s, ...) — see `GraphView.diagram_labels`'s
+    /// doc comment for this ordering/contiguity invariant.
+    pub diagrams: Vec<GraphViewDiagramState>,
     pub selected_node: Option<String>,
     pub hovered_node: Option<String>,
     pub nodes: Vec<GraphViewNodeState>,
     pub edges: Vec<GraphViewEdgeState>,
+}
+
+/// One composed diagram's introspection summary — see `GraphViewState.
+/// diagrams`'s doc comment for the ordering/contiguity invariant this
+/// relies on.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GraphViewDiagramState {
+    pub instance: Option<String>,
+    pub name: String,
+    pub node_count: usize,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -544,6 +633,7 @@ impl GraphView {
             center_node: None,
             depth: 2,
             kb_instance: None,
+            mode: GraphViewMode::default(),
             follow_current: true,
             scene: mae_canvas::scene::SceneGraph::new(),
             viewports: HashMap::new(),
@@ -556,6 +646,10 @@ impl GraphView {
             color_tween: None,
             render_epoch: HashMap::new(),
             hidden_node_count: 0,
+            diagram_labels: Vec::new(),
+            hidden_cross_instance_link_count: 0,
+            cross_instance_links: Vec::new(),
+            hidden_related_instance_count: 0,
             generation: 0,
             label_winner_cache: None,
         }
@@ -681,6 +775,80 @@ impl GraphLayoutAlgorithm {
         match s.trim().to_ascii_lowercase().as_str() {
             "force" => Some(GraphLayoutAlgorithm::Force),
             "chord" => Some(GraphLayoutAlgorithm::Chord),
+            _ => None,
+        }
+    }
+}
+
+/// Which KB instances a `BufferKind::Graph` buffer composes — orthogonal to
+/// [`GraphLayoutAlgorithm`] (which computes positions for whatever set of
+/// nodes ends up in `GraphView.scene` either way). Configured via the
+/// `kb_graph_view_mode` option; see `Editor::populate_graph_buffer`'s
+/// `Single`/`Multi` branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GraphViewMode {
+    /// One KB instance's subgraph — today's behavior, unchanged (#462 PR4).
+    #[default]
+    Single,
+    /// The seed instance's subgraph PLUS related instances (per
+    /// `kb_graph_multi_kb_scope`), composed into one merged `SceneGraph` via
+    /// `mae_canvas::kb_graph::build_multi_kb_chord_positions` — issue #462.
+    Multi,
+}
+
+impl GraphViewMode {
+    /// Stable wire/config string (matches the option's accepted values).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GraphViewMode::Single => "single",
+            GraphViewMode::Multi => "multi",
+        }
+    }
+
+    /// Parse a configured value.
+    pub fn parse(s: &str) -> Option<GraphViewMode> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "single" => Some(GraphViewMode::Single),
+            "multi" => Some(GraphViewMode::Multi),
+            _ => None,
+        }
+    }
+}
+
+/// Which related KB instances `GraphViewMode::Multi` pulls in alongside the
+/// seed instance — configured via the `kb_graph_multi_kb_scope` option; see
+/// `Editor::populate_graph_buffer`'s `Multi` branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum GraphMultiKbScope {
+    /// One hop only: the set of `target_instance` values among the seed's
+    /// OWN `CrossInstanceLink`s (from `partition_boundary_links_by_instance`).
+    /// Deliberately does NOT transitively re-walk each related instance's
+    /// own cross-links — a scope limit, not an oversight (see that method's
+    /// call site in `populate_graph_buffer` for why: an unbounded
+    /// transitive walk has no natural stopping point short of "the whole
+    /// federation graph").
+    #[default]
+    Linked,
+    /// Every registered `KbRegistry` instance (including primary),
+    /// regardless of whether it's actually linked from the seed — capped by
+    /// `kb_graph_multi_kb_max_related_instances` the same way `Linked` is.
+    All,
+}
+
+impl GraphMultiKbScope {
+    /// Stable wire/config string (matches the option's accepted values).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            GraphMultiKbScope::Linked => "linked",
+            GraphMultiKbScope::All => "all",
+        }
+    }
+
+    /// Parse a configured value.
+    pub fn parse(s: &str) -> Option<GraphMultiKbScope> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "linked" => Some(GraphMultiKbScope::Linked),
+            "all" => Some(GraphMultiKbScope::All),
             _ => None,
         }
     }
@@ -1961,6 +2129,63 @@ pub(crate) fn flatten_scene_graph_cached(
     }
 
     elements
+}
+
+/// Approximate width (as a multiple of `font_size`) of one character in the
+/// GUI's proportional font — used only to roughly horizontally CENTER a
+/// diagram caption above its circle. `VisualElement::Text` has no
+/// width-measurement/centering affordance (its `right_align` flag only
+/// supports the two endpoints, not a true center — see that field's doc
+/// comment), so this is a deliberate approximation, not a precise text
+/// metric; a caption a few pixels off-center is cosmetically harmless.
+const DIAGRAM_LABEL_CHAR_WIDTH_EM: f32 = 0.3;
+/// Vertical gap (logical px, screen-space, NOT scene-space — captions stay
+/// a fixed screen size regardless of zoom, like every other UI-chrome text
+/// in this module) between a diagram's bounding circle and its caption.
+const DIAGRAM_LABEL_OFFSET_PX: f32 = 10.0;
+
+/// Append one `VisualElement::Text` per `GraphView.diagram_labels` entry,
+/// anchored above that diagram's bounding circle — the multi-KB chord
+/// view's (#462 PR4) per-diagram KB-name caption. A separate function
+/// called right after `flatten_scene_graph_cached` at the one real
+/// per-window render call site (`Editor::graph_view_reflatten_window`),
+/// rather than a new parameter threaded through `flatten_scene_graph`/
+/// `_cached` themselves (CLAUDE.md #9 — minimal footprint: threading it
+/// through would touch ~40 existing test call sites in this module for an
+/// orthogonal concern). A no-op for an empty `diagram_labels` slice — every
+/// existing `flatten_scene_graph`/`_cached` caller is therefore completely
+/// unaffected by this function existing.
+///
+/// Reuses `style.font_size` (no new `kb_graph_*` option) — see this
+/// function's own call site for why a dedicated diagram-caption font-size
+/// option was judged unnecessary.
+pub fn push_diagram_labels(
+    elements: &mut Vec<VisualElement>,
+    diagram_labels: &[mae_canvas::kb_graph::DiagramLabel],
+    viewport: &mae_canvas::scene::Viewport,
+    style: &GraphStyleOptions,
+) {
+    use mae_canvas::interaction::scene_to_viewport;
+    for label in diagram_labels {
+        let (cx, top_y) =
+            scene_to_viewport(viewport, label.center_x, label.center_y - label.radius);
+        let color = ensure_min_contrast(
+            &style.edge_color,
+            &style.background_color,
+            WCAG_AA_TEXT_CONTRAST,
+        );
+        let approx_half_width =
+            label.name.chars().count() as f32 * style.font_size * DIAGRAM_LABEL_CHAR_WIDTH_EM;
+        elements.push(VisualElement::Text {
+            x: cx as f32 - approx_half_width,
+            y: top_y as f32 - DIAGRAM_LABEL_OFFSET_PX,
+            text: label.name.clone(),
+            font_size: style.font_size,
+            color,
+            rotation_degrees: 0.0,
+            right_align: false,
+        });
+    }
 }
 
 #[cfg(test)]
