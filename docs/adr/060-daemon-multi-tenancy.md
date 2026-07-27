@@ -1,11 +1,13 @@
 # ADR-060: Daemon multi-tenancy
 
-**Status:** In progress (Phases A/B/C/D landed — see "Implementation note" sections below;
+**Status:** In progress (Phases A/B/C/D/E landed — see "Implementation note" sections below;
 Phase C's collab/OAuth-side principal-keyed wiring is explicitly deferred, tracked as issue
-#456, not silently gapped. Phases E–G remain, tracked as real follow-on work.)
+#456, not silently gapped. Phases F–G remain, tracked as real follow-on work.)
 **Extends:** ADR-035, ADR-054, ADR-057.
 **Relates to:** ADR-017, ADR-018, ADR-025.
-**Tracking:** issue #375 (epic tracker).
+**Tracking:** issue #408 (epic tracker) — corrected from a stale "#375" reference (that issue
+is the unrelated external-editor MCP pairing epic; found via a direct cross-check while
+closing out Phase E, not left uncorrected once noticed).
 
 ## Context
 
@@ -835,3 +837,41 @@ Context:**
   mode this test is built to falsify is the untested middle ground: a config change that
   silently fails to take effect with no error surfaced anywhere, leaving an operator
   believing a quota or tenant registration is active when it is not.
+
+## Implementation note (added during Phase E implementation, principle #15)
+
+Shipped as designed, no corrections needed this time (unlike Phases B/C/D, each of which
+found and corrected a false premise during implementation) — Phase E's design text already
+correctly scoped this as "reuse the already-shipped `mae-headless@.service` pattern," and
+that reuse held up exactly as described.
+
+**What shipped:** `assets/mae-daemon@.service` — a systemd template unit, parameterized by
+tenant name (`%i`), giving each instantiation its own PID, its own `--config`-pointed
+`daemon.toml`, and its own `--data-dir`. Documented in `docs/DAEMON_ADMIN.md`'s new "Multi-tenant
+deployment" section alongside the existing single-process `mae-daemon.service`, framed as two
+supported deployment shapes rather than one superseding the other — most tenants share one
+process (Phases A-D's software-enforced isolation), a tenant needing genuine failure-domain
+separation gets its own instantiation.
+
+**The adversarial test**
+(`daemon/tests/multi_tenant_process_isolation_e2e.rs::sigkilling_one_tenant_process_has_zero_observable_impact_on_another`)
+proves exactly the property this phase exists for, using two real `mae-daemon` child
+processes (not simulated) and a real `SIGKILL` (via `tokio::process::Child::kill()`, which
+sends `SIGKILL` on Unix — not a graceful shutdown, so the result doesn't depend on tenant A
+getting a chance to clean up first). Includes the negative control this ADR's own testing
+discipline (principle #14) calls for: confirms tenant A's port genuinely stops accepting
+connections after the kill (proving the kill wasn't a no-op that would make "zero impact on
+B" vacuously true), and confirms tenant A was genuinely alive and responsive *before* the
+kill (proving the isolation being measured isn't against an already-dead process). Ten
+post-kill requests against tenant B, all succeeding within the same generous CI-tolerant
+latency bound (10x pre-kill baseline, floored at 50ms) this ADR's Phase B ceiling test
+already established as the right shape for this class of assertion. Gated behind
+`MAE_TCP_E2E=1`, which `daemon`'s existing CI step already sets unconditionally for its bare
+`cargo test` invocation — no CI workflow changes needed, the new test file was picked up
+automatically. 8/8 local stress runs, full `daemon` workspace suite (`MAE_TCP_E2E=1 cargo
+test`) green, clippy/fmt clean.
+
+**Scope confirmed, not re-litigated:** Linux-only, per this phase's own text and Gate W —
+`assets/mae-daemon@.service` ships no macOS/Windows equivalent, matching `mae-headless@.service`'s
+existing precedent and the ADR's own explicit "no `launchd`/Service-Control-Manager
+equivalent" framing.
