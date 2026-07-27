@@ -229,6 +229,34 @@ test-daemon:
 test-tui:
 	$(CARGO) test --workspace --exclude mae-gui
 
+## test-nextest: run all workspace tests via cargo-nextest (issue #470) --
+## opt-in, not the default `test` target. nextest's process-per-test global
+## scheduling is what makes CI's `stable / test` leg much faster, and CI
+## uses --release there (proven clean on a full run); a plain DEBUG build
+## under nextest's default full-machine concurrency was empirically observed
+## to be more prone to transient resource contention for the handful of
+## tests that spawn a real `mae --headless` subprocess and assert on its
+## resource usage (see .config/nextest.toml's `heavy-subprocess-e2e` group
+## for the details/mitigation) -- every one of those tests passes cleanly in
+## isolation or under --release, so this is a real machine-load tradeoff,
+## not a logic bug. Requires `cargo install cargo-nextest`. Prefer
+## `test-nextest-release` if you hit contention locally.
+test-nextest:
+	$(CARGO) nextest run --workspace
+
+## test-nextest-release: as test-nextest, but --release --features gui --
+## the exact configuration CI's `stable / test` leg uses, and the one
+## actually validated clean on a full run.
+test-nextest-release:
+	$(CARGO) nextest run --workspace --release --features gui
+
+## test-daemon-nextest: run daemon workspace tests via cargo-nextest --
+## opt-in; the daemon workspace's real socket tests already use ephemeral
+## ports and showed no contention issues locally, unlike the editor
+## workspace's headless-subprocess e2e tests.
+test-daemon-nextest:
+	cd daemon && $(CARGO) nextest run
+
 ## check: fast type-check without producing a binary
 check:
 	$(CARGO) check $(FEAT_FLAG)
@@ -260,7 +288,7 @@ clippy-daemon:
 ci: fmt-check
 	$(CARGO) clippy --workspace --all-targets -- -D warnings
 	$(CARGO) check --workspace --all-targets
-	$(CARGO) test --workspace
+	$(MAKE) test
 	@echo "==> Scheme editor tests..."
 	./target/debug/mae --test tests/editor/
 	@echo "==> Config validation..."

@@ -28,6 +28,14 @@ inputs:
           daemon -> daemon/target
     required: false
     default: ""
+  nextest:
+    description: >
+      Install cargo-nextest (issue #470) via taiki-e/install-action. Opt-in
+      (default "false") -- most callers of this action don't run tests at
+      all (clippy/fmt-only legs) or aren't yet converted to nextest, so this
+      stays additive rather than a default every caller pays for.
+    required: false
+    default: "false"
 runs:
   using: composite
   steps:
@@ -38,3 +46,5 @@ runs:
     - uses: Swatinem/rust-cache@v2
       with:
         workspaces: ${{ inputs.workspaces }}
+    - uses: taiki-e/install-action@nextest
+      if: inputs.nextest == 'true'
