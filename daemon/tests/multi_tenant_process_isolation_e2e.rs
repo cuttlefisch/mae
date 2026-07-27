@@ -65,7 +65,10 @@ async fn spawn_tenant_process() -> Option<TenantProcess> {
     panic!("mae-daemon did not start within 5s on {addr}");
 }
 
-async fn read_framed(stream: &mut tokio::net::TcpStream, timeout_ms: u64) -> Option<serde_json::Value> {
+async fn read_framed(
+    stream: &mut tokio::net::TcpStream,
+    timeout_ms: u64,
+) -> Option<serde_json::Value> {
     let result = tokio::time::timeout(Duration::from_millis(timeout_ms), async {
         let mut header_buf = Vec::new();
         let mut byte = [0u8; 1];
@@ -140,7 +143,10 @@ async fn sigkilling_one_tenant_process_has_zero_observable_impact_on_another() {
     // Confirm tenant A is genuinely up (not testing against a dead process
     // that never started -- a vacuous pass).
     let a_before = ping(tenant_a.addr).await;
-    assert!(a_before < Duration::from_secs(5), "tenant A must be alive before the kill");
+    assert!(
+        a_before < Duration::from_secs(5),
+        "tenant A must be alive before the kill"
+    );
 
     // The real adversarial action: SIGKILL, not a graceful shutdown --
     // proves this doesn't depend on tenant A getting a chance to clean up.
@@ -150,7 +156,10 @@ async fn sigkilling_one_tenant_process_has_zero_observable_impact_on_another() {
         .await
         .expect("tenant A's process must actually exit after SIGKILL")
         .expect("wait() must succeed");
-    assert!(!wait_result.success(), "a SIGKILL'd process must not report a clean exit");
+    assert!(
+        !wait_result.success(),
+        "a SIGKILL'd process must not report a clean exit"
+    );
 
     // A genuinely dead process, not "still technically listening" -- the
     // negative control that proves the kill actually took effect, so the

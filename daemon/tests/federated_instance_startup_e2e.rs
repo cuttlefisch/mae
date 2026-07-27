@@ -127,7 +127,11 @@ async fn spawn_daemon(tmp: &tempfile::TempDir) -> DaemonHandle {
     panic!("mae-daemon did not bind its KB socket within 10s");
 }
 
-async fn kb_get(socket_path: &std::path::Path, id: &str, instance: Option<&str>) -> serde_json::Value {
+async fn kb_get(
+    socket_path: &std::path::Path,
+    id: &str,
+    instance: Option<&str>,
+) -> serde_json::Value {
     let mut stream = UnixStream::connect(socket_path).await.expect("connect");
     let (r, mut w) = stream.split();
     let mut reader = tokio::io::BufReader::new(r);

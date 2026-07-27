@@ -58,7 +58,11 @@ async fn spawn_daemon(tmp: &tempfile::TempDir, config_path: &std::path::Path) ->
     panic!("mae-daemon did not bind its KB socket within 10s");
 }
 
-async fn kb_get(socket_path: &std::path::Path, id: &str, instance: Option<&str>) -> serde_json::Value {
+async fn kb_get(
+    socket_path: &std::path::Path,
+    id: &str,
+    instance: Option<&str>,
+) -> serde_json::Value {
     let mut stream = UnixStream::connect(socket_path).await.expect("connect");
     let (r, mut w) = stream.split();
     let mut reader = tokio::io::BufReader::new(r);
@@ -136,7 +140,10 @@ enabled = true
     // unrestricted (TenantOutcome::Unconfigured).
     for _ in 0..5 {
         let resp = kb_get(&daemon.socket_path, "probe-node", Some(&uuid)).await;
-        assert!(resp.get("error").is_none(), "baseline request must succeed: {resp:?}");
+        assert!(
+            resp.get("error").is_none(),
+            "baseline request must succeed: {resp:?}"
+        );
     }
 
     // The config-change under test: register a tenant owning this instance

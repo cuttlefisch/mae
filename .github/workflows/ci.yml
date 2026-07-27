@@ -255,40 +255,44 @@ jobs:
             --resource "https://127.0.0.1:39443/mcp")
           echo "PHASE_E_JWT=$jwt" >> "$GITHUB_ENV"
 
-      - name: Confirm WSL2 is available
-        run: wsl --status
+      # `windows-latest` has the WSL2 KERNEL FEATURE enabled but ships with
+      # NO distro installed -- confirmed the hard way by a real CI run
+      # ("wsl --status" printing "Windows Subsystem for Linux has no
+      # installed distributions", and a follow-on "wslpath: command not
+      # found" because `wslpath` only exists INSIDE a WSL distro, not on
+      # the host git-bash side that a bare `wsl bash "$(wslpath ...)"`
+      # invocation runs from). Vampire/setup-wsl installs a real Ubuntu
+      # distro (a lightweight rootfs import, no interactive `wsl --install`
+      # / reboot cycle) and additionally provides a `wsl-bash` shell that
+      # runs a step's `run:` block genuinely INSIDE that distro -- so
+      # `wslpath` (used below to translate the Windows checkout path into
+      # its WSL-visible /mnt/... form) is called from the correct side.
+      - uses: Vampire/setup-wsl@v7
+        with:
+          distribution: Ubuntu-22.04
+          additional-packages: build-essential python3
 
-      # Both WSL-side steps below write their script to a plain .sh file
-      # first, then run `wsl bash script.sh`, rather than inlining the
-      # script as a `wsl bash -c "..."` string -- nesting a multi-line
-      # script (with its own heredocs/quoting) inside a YAML block scalar
-      # inside a shell -c string is a real, needless source of escaping
-      # bugs; a plain file sidesteps all of it.
+      - name: Confirm WSL2 distro is available
+        shell: wsl-bash {0}
+        run: lsb_release -a
 
       # Real Rust toolchain + a real build of mae-daemon FROM THE SAME
       # CHECKED-OUT SOURCE, entirely inside WSL2 -- genuinely Linux-built,
       # not cross-compiled or downloaded. WSL2 exposes the Windows checkout
-      # via /mnt/<drive>/..., so no second checkout is needed.
+      # via /mnt/<drive>/..., so no second checkout is needed. `${{
+      # github.workspace }}` is substituted by GH Actions as a literal
+      # Windows path (e.g. `D:\a\mae\mae`) before this script ever runs;
+      # `wslpath` (now genuinely available under `wsl-bash`) converts it.
       - name: Build mae-daemon inside WSL2 (genuinely Linux-built)
-        shell: bash
+        shell: wsl-bash {0}
         run: |
-          cat > daemon/phase-e-build.sh <<'SCRIPT'
           set -euo pipefail
-          # build-essential (a C linker/compiler): unverified whether GH's
-          # windows-latest WSL2 Ubuntu image has this preinstalled -- every
-          # OTHER Linux CI leg in this repo runs on a full ubuntu-latest
-          # GH-hosted runner (which does), so this is the first time that
-          # assumption is actually being tested. Cheap and idempotent to
-          # just ensure it either way.
-          sudo apt-get update -qq && sudo apt-get install -y -qq build-essential python3
           if ! command -v cargo >/dev/null 2>&1; then
             curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
           fi
           source "$HOME/.cargo/env"
           cd "$(wslpath '${{ github.workspace }}')/daemon"
           cargo build --bin mae-daemon
-          SCRIPT
-          wsl bash "$(wslpath '${{ github.workspace }}')/daemon/phase-e-build.sh"
 
       # Start the real Linux-built daemon inside WSL2, bound to
       # 127.0.0.1:39443 -- WSL2's automatic localhost port-forwarding makes
@@ -300,14 +304,13 @@ jobs:
       # jwks_url must be http(s):// -- reqwest::Client::new() (daemon/src/oauth.rs's
       # JWKS fetcher) does not support file:// URLs, confirmed by direct
       # source read rather than assumed and left to fail in CI. A tiny
-      # Python http.server (pre-installed on Ubuntu WSL images) serves the
-      # generated jwks.json entirely WITHIN WSL's own network namespace --
-      # both it and the daemon that fetches from it run inside WSL, so this
-      # never needs to cross the Windows/WSL boundary at all.
+      # Python http.server (installed via additional-packages above) serves
+      # the generated jwks.json entirely WITHIN WSL's own network namespace
+      # -- both it and the daemon that fetches from it run inside WSL, so
+      # this never needs to cross the Windows/WSL boundary at all.
       - name: Start mae-daemon inside WSL2 (collab TCP + OAuth/HTTPS)
-        shell: bash
+        shell: wsl-bash {0}
         run: |
-          cat > daemon/phase-e-start.sh <<'SCRIPT'
           set -euo pipefail
           source "$HOME/.cargo/env"
           root="$(wslpath '${{ github.workspace }}')/daemon"
@@ -354,8 +357,6 @@ jobs:
             sleep 0.2
           done
           echo 'daemon did not come up within 10s'; cat /tmp/mae-daemon-phase-e.log; exit 1
-          SCRIPT
-          wsl bash "$(wslpath '${{ github.workspace }}')/daemon/phase-e-start.sh"
 
       - name: Run Windows-native verification client against the WSL2-hosted daemon
         shell: bash
@@ -367,8 +368,8 @@ jobs:
 
       - name: Daemon log (always, for diagnosis)
         if: always()
-        shell: bash
-        run: wsl cat /tmp/mae-daemon-phase-e.log || true
+        shell: wsl-bash {0}
+        run: cat /tmp/mae-daemon-phase-e.log || true
 
   daemon:
     name: daemon / check + test

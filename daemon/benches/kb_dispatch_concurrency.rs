@@ -426,10 +426,7 @@ fn bench_kb_dispatch_multi_tenant_concurrency(c: &mut Criterion) {
         let total = tenant_count * per_tenant;
 
         group.bench_with_input(
-            BenchmarkId::new(
-                "tenants",
-                format!("{tenant_count}x{per_tenant}={total}"),
-            ),
+            BenchmarkId::new("tenants", format!("{tenant_count}x{per_tenant}={total}")),
             &(tenant_count, per_tenant),
             |b, &(tenant_count, per_tenant)| {
                 b.to_async(&rt).iter(|| {

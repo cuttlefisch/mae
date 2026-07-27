@@ -82,11 +82,8 @@ fn gen_material(dir: &Path, resource: &str) {
     let cert_key = rcgen::generate_simple_self_signed(vec!["127.0.0.1".to_string()])
         .expect("rcgen self-signed cert");
     std::fs::write(dir.join("cert.pem"), cert_key.cert.pem()).expect("write cert.pem");
-    std::fs::write(
-        dir.join("key.pem"),
-        cert_key.signing_key.serialize_pem(),
-    )
-    .expect("write key.pem");
+    std::fs::write(dir.join("key.pem"), cert_key.signing_key.serialize_pem())
+        .expect("write key.pem");
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -206,8 +203,8 @@ async fn main() {
     let args: Vec<String> = std::env::args().collect();
 
     if let Some(dir) = arg_value(&args, "--gen-material") {
-        let resource = arg_value(&args, "--resource")
-            .expect("--gen-material requires --resource <uri>");
+        let resource =
+            arg_value(&args, "--resource").expect("--gen-material requires --resource <uri>");
         gen_material(Path::new(&dir), &resource);
         return;
     }
