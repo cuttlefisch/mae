@@ -1,6 +1,8 @@
 //! KB instance registry: register/unregister/reimport, instance store
 //! adoption, and instance-persistence plumbing.
 
+use std::collections::HashSet;
+
 use super::*;
 
 impl Editor {
@@ -849,6 +851,52 @@ impl Editor {
         (same_or_dead, cross)
     }
 
+    /// Phase B1 (#462 full-corpus retrieval): every node id in `instance`'s
+    /// own KB (`None` = primary, `Some(uuid)` = a federated instance) that
+    /// has at least one outgoing link whose target resolves to a
+    /// DIFFERENT registered KB instance — i.e. every node that would ever
+    /// produce a `CrossInstanceLink` if this instance's boundary links were
+    /// classified via `partition_boundary_links_by_instance`. This is the
+    /// "bridge" half of `KnowledgeBase::extract_full_corpus`'s `protected`
+    /// set: cutting one of these nodes under a full-corpus node cap would
+    /// silently sever the only connection between two rendered diagrams,
+    /// which is exactly the failure mode `extract_full_corpus`'s exemption
+    /// mechanism exists to prevent.
+    ///
+    /// Deliberately lives here (`mae-core`), not on `KnowledgeBase` itself
+    /// (`shared/kb`) — resolving "which instance owns this link's target"
+    /// requires `kb_owner_of` and `self.kb.instances`, neither of which
+    /// `mae-kb` has access to (it has no notion of a federation registry at
+    /// all). `extract_full_corpus` only knows "here is a protected id set,
+    /// exempt it from truncation"; this is where that set gets computed.
+    ///
+    /// Cost: O(nodes-in-instance × avg-out-degree), each outgoing link
+    /// resolved via one `kb_owner_of` call (O(#registered instances) each,
+    /// not O(#nodes) — bounded, cheap even for a many-thousand-node
+    /// instance). Meant to be called ONCE per instance per
+    /// `populate_graph_buffer` call, not once per node-cap truncation.
+    pub(crate) fn kb_cross_instance_link_sources(&self, instance: Option<&str>) -> HashSet<String> {
+        let kb: &mae_kb::KnowledgeBase = match instance {
+            None => &self.kb.primary,
+            Some(uuid) => match self.kb.instances.get(uuid) {
+                Some(kb) => kb,
+                None => return HashSet::new(),
+            },
+        };
+        let mut sources = HashSet::new();
+        for (id, node) in kb.iter() {
+            for (target, _rel_type, _weight) in node.links_typed() {
+                if let Some(owner) = self.kb_owner_of(&target) {
+                    if owner.as_deref() != instance {
+                        sources.insert(id.clone());
+                        break;
+                    }
+                }
+            }
+        }
+        sources
+    }
+
     /// Like [`Self::kb_get_node_anywhere`], but also reports WHICH tier the
     /// node resolved through (query layer / in-memory primary / a specific
     /// federated instance by uuid). Callers that need more than just the
@@ -1172,5 +1220,72 @@ mod partition_boundary_links_by_instance_tests {
             .kb
             .instances
             .contains_key(stale_uuid.as_deref().unwrap()));
+    }
+
+    // --- kb_cross_instance_link_sources (Phase B1, #462 full-corpus retrieval) ---
+
+    #[test]
+    fn kb_cross_instance_link_sources_finds_a_node_with_a_real_cross_instance_link() {
+        let mut editor = three_instance_editor();
+        // Re-upsert "concept:seed" (primary) with a real link into alpha —
+        // KnowledgeBase::insert overwrites in place, rebuilding indexes.
+        editor.kb.primary.insert(Node::new(
+            "concept:seed",
+            "Seed",
+            NodeKind::Concept,
+            "see [[concept:alpha-target]]",
+        ));
+        let sources = editor.kb_cross_instance_link_sources(None);
+        assert!(
+            sources.contains("concept:seed"),
+            "a node with a real cross-instance link must be in the protected set: {sources:?}"
+        );
+    }
+
+    #[test]
+    fn kb_cross_instance_link_sources_excludes_a_node_with_only_same_instance_links() {
+        let mut editor = three_instance_editor();
+        editor.kb.primary.insert(Node::new(
+            "concept:seed",
+            "Seed",
+            NodeKind::Concept,
+            "see [[concept:same-instance-truncated]]",
+        ));
+        let sources = editor.kb_cross_instance_link_sources(None);
+        assert!(
+            !sources.contains("concept:seed"),
+            "a node whose only links stay within the SAME instance must not be \
+             misclassified as a cross-instance bridge: {sources:?}"
+        );
+    }
+
+    #[test]
+    fn kb_cross_instance_link_sources_works_for_a_federated_instance_too_not_just_primary() {
+        // Adversarial (#14): the pre-pass must work uniformly for a
+        // federated instance's own KB, not only primary — the Multi-mode
+        // wiring calls this for the seed AND every related instance.
+        let mut editor = three_instance_editor();
+        let alpha = editor.kb.instances.get_mut("uuid-alpha").unwrap();
+        alpha.insert(Node::new(
+            "concept:alpha-seed",
+            "Alpha Seed",
+            NodeKind::Concept,
+            "see [[concept:seed]]", // points back into primary
+        ));
+        let sources = editor.kb_cross_instance_link_sources(Some("uuid-alpha"));
+        assert!(
+            sources.contains("concept:alpha-seed"),
+            "a federated instance's own bridge node must be found too: {sources:?}"
+        );
+    }
+
+    #[test]
+    fn kb_cross_instance_link_sources_is_empty_for_an_unregistered_or_unloaded_instance() {
+        let editor = three_instance_editor();
+        let sources = editor.kb_cross_instance_link_sources(Some("uuid-does-not-exist"));
+        assert!(
+            sources.is_empty(),
+            "an unloaded/unregistered instance must yield an empty protected set, not panic"
+        );
     }
 }

@@ -915,6 +915,18 @@ pub struct Editor {
     /// parameter (mirroring `kb_graph_layout_spacing_scale`'s own plumbing)
     /// since `mae-canvas` has no `OptionRegistry`/`Editor` access.
     pub kb_graph_multi_kb_grid_gap_factor: f32,
+    /// Master opt-in switch (ADR-068 Phase B) for full-corpus retrieval in
+    /// `kb_graph_view_mode = Multi` — when `true`, `populate_graph_buffer`
+    /// extracts each diagram via `KnowledgeBase::extract_full_corpus`
+    /// instead of `extract_subgraph`. Mirrors `kb_graph_multi_kb_full_corpus`;
+    /// `false` (the default) leaves Multi mode's extraction byte-for-byte
+    /// unchanged.
+    pub kb_graph_multi_kb_full_corpus: bool,
+    /// Safety-net node-count cap applied per diagram when
+    /// `kb_graph_multi_kb_full_corpus` is on. Mirrors
+    /// `kb_graph_full_corpus_node_cap`; see
+    /// `KnowledgeBase::extract_full_corpus`'s `cap` parameter.
+    pub kb_graph_full_corpus_node_cap: usize,
     /// Queued background layout request for the open/refreshed graph-view
     /// buffer (`mae::graph_layout_bridge`, Part C Phase 1) — drained once
     /// per GUI event-loop tick, see `crate::graph_view::GraphLayoutIntent`'s
@@ -1446,6 +1458,8 @@ impl Editor {
             kb_graph_multi_kb_max_related_instances: 6,
             kb_graph_multi_kb_scope: crate::graph_view::GraphMultiKbScope::Linked,
             kb_graph_multi_kb_grid_gap_factor: 0.6,
+            kb_graph_multi_kb_full_corpus: false,
+            kb_graph_full_corpus_node_cap: 5000,
             pending_graph_layout: None,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)
             messages_synced_seq: None,

@@ -629,19 +629,50 @@ impl Editor {
             boundary_links: Vec::new(),
             hidden_node_count: 0,
         };
-        let result = match &owner {
-            Some(None) => self.kb.primary.extract_subgraph(&spec),
-            Some(Some(uuid)) => self
-                .kb
-                .instances
-                .get(uuid)
-                .map(|kb| kb.extract_subgraph(&spec))
-                .unwrap_or_else(empty_result),
-            None => empty_result(),
-        };
-        let kb_instance = match owner {
-            Some(Some(uuid)) => Some(uuid),
+        // Computed BEFORE `result` (moved up from its original position
+        // right after `result`) so the full-corpus branch below can read it
+        // — a pure derivation of `owner` with no other side effects, so
+        // this reordering changes nothing else.
+        let kb_instance = match &owner {
+            Some(Some(uuid)) => Some(uuid.clone()),
             _ => None,
+        };
+        // Phase B1 (#462 full-corpus retrieval, ADR-068): gated on BOTH the
+        // master opt-in AND Multi mode — `result` (computed here) also
+        // backs Single mode's rendering further down, so this must never
+        // change Single mode's extraction regardless of the option's value.
+        let full_corpus_mode = self.kb_graph_multi_kb_full_corpus
+            && matches!(self.kb_graph_view_mode, GraphViewMode::Multi);
+        let result = if full_corpus_mode {
+            // Protected set: the seed's own focus node plus every node in
+            // this instance that sources a real cross-instance link (a
+            // "bridge" — see `kb_cross_instance_link_sources`'s doc
+            // comment). Computed once per populate, not per truncation.
+            let mut protected: std::collections::HashSet<String> =
+                self.kb_cross_instance_link_sources(kb_instance.as_deref());
+            protected.insert(center.clone());
+            let cap = Some(self.kb_graph_full_corpus_node_cap);
+            match &owner {
+                Some(None) => self.kb.primary.extract_full_corpus(cap, &protected, false),
+                Some(Some(uuid)) => self
+                    .kb
+                    .instances
+                    .get(uuid)
+                    .map(|kb| kb.extract_full_corpus(cap, &protected, false))
+                    .unwrap_or_else(empty_result),
+                None => empty_result(),
+            }
+        } else {
+            match &owner {
+                Some(None) => self.kb.primary.extract_subgraph(&spec),
+                Some(Some(uuid)) => self
+                    .kb
+                    .instances
+                    .get(uuid)
+                    .map(|kb| kb.extract_subgraph(&spec))
+                    .unwrap_or_else(empty_result),
+                None => empty_result(),
+            }
         };
         let hidden_node_count = result.hidden_node_count;
 
@@ -822,7 +853,30 @@ impl Editor {
                         None => true,
                         Some(uuid) => self.kb.instances.contains_key(uuid),
                     };
-                    let related_result = if starters.is_empty() {
+                    // Phase B1 (#462 full-corpus retrieval, ADR-068): when
+                    // enabled, every related instance is ALSO pulled via
+                    // `extract_full_corpus` rather than a BFS from
+                    // `starters` — full-corpus mode has no BFS-seed concept
+                    // at all, so (unlike the `else` branch) an empty
+                    // `starters` is not a reason to skip this instance
+                    // entirely; `starters` (plus its own default-center
+                    // fallback above) is reused unchanged as this diagram's
+                    // protected "focus" set instead.
+                    let related_result = if full_corpus_mode {
+                        let mut protected: std::collections::HashSet<String> =
+                            self.kb_cross_instance_link_sources(related_instance.as_deref());
+                        protected.extend(starters.iter().cloned());
+                        let cap = Some(self.kb_graph_full_corpus_node_cap);
+                        match related_instance {
+                            None => self.kb.primary.extract_full_corpus(cap, &protected, false),
+                            Some(uuid) => self
+                                .kb
+                                .instances
+                                .get(uuid)
+                                .map(|kb| kb.extract_full_corpus(cap, &protected, false))
+                                .unwrap_or_else(empty_result),
+                        }
+                    } else if starters.is_empty() {
                         empty_result()
                     } else {
                         match related_instance {
@@ -6770,6 +6824,155 @@ mod tests {
             (own_center_x, own_center_y),
             ctrl,
             mid
+        );
+    }
+
+    // --- Phase B1: full-corpus retrieval (`kb_graph_multi_kb_full_corpus`,
+    // ADR-068) ---
+
+    #[test]
+    fn full_corpus_mode_off_by_default_leaves_multi_mode_byte_identical() {
+        // Backward-compat guard (CLAUDE.md #9): re-run an existing
+        // Multi-mode scenario with the new option explicitly confirmed at
+        // its default (false) and check the result matches exactly what
+        // `multi_mode_includes_a_related_instances_nodes_and_a_real_cross_link_edge`
+        // already asserts — this phase must not have moved anything when
+        // left off.
+        let mut editor = ed_with_kb_node("concept:seed", "Seed", "[[concept:sibling-target]]");
+        register_plain_instance(
+            &mut editor,
+            "sibling",
+            vec![mae_kb::Node::new(
+                "concept:sibling-target",
+                "Sibling Target",
+                mae_kb::NodeKind::Concept,
+                "",
+            )],
+        );
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        assert!(!editor.kb_graph_multi_kb_full_corpus, "must default to off");
+
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        assert_eq!(
+            gv.scene.nodes.len(),
+            2,
+            "seed + sibling's node, exactly as before this phase existed"
+        );
+        assert_eq!(gv.diagram_labels.len(), 2);
+    }
+
+    #[test]
+    fn full_corpus_mode_pulls_every_node_of_an_over_node_count_cap_related_instance() {
+        // The related instance has MORE nodes than kb_graph_node_count_cap
+        // (300) but fewer than kb_graph_full_corpus_node_cap (5000, the
+        // default) — proves full-corpus mode actually delivers "full
+        // corpus" (not truncated to 300, today's Multi-mode cap) once
+        // enabled.
+        const N: usize = 350;
+        let mut editor = ed_with_kb_node("concept:seed", "Seed", "[[concept:hub]]");
+        let mut nodes = Vec::with_capacity(N + 1);
+        let mut hub_body = String::new();
+        for i in 0..N {
+            hub_body.push_str(&format!("[[concept:n{i}]] "));
+            nodes.push(mae_kb::Node::new(
+                format!("concept:n{i}"),
+                format!("N{i}"),
+                mae_kb::NodeKind::Concept,
+                "",
+            ));
+        }
+        nodes.push(mae_kb::Node::new(
+            "concept:hub",
+            "Hub",
+            mae_kb::NodeKind::Concept,
+            hub_body,
+        ));
+        register_plain_instance(&mut editor, "big", nodes);
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_multi_kb_full_corpus = true;
+
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+
+        let big_diagram_node_count = gv
+            .diagram_labels
+            .iter()
+            .find(|d| d.name == "big")
+            .map(|d| d.node_count)
+            .expect("the 'big' related instance must be rendered");
+        assert_eq!(
+            big_diagram_node_count,
+            N + 1,
+            "full-corpus mode must include every node of the related instance ({}), not \
+             truncate it to kb_graph_node_count_cap (300)",
+            N + 1
+        );
+    }
+
+    #[test]
+    fn full_corpus_mode_protects_a_low_degree_cross_instance_bridge_node_under_a_tight_cap() {
+        // Adversarial (CLAUDE.md #14): "concept:bridge" is the node the
+        // seed's cross-link actually lands on in the related instance —
+        // deliberately given NO in-instance links of its own (lowest degree
+        // in that KB), unlike the hub-and-leaves majority. A naive
+        // degree-only cap would cut it first; as the diagram's own
+        // focus/starter node it must be exempt. `kb_graph_full_corpus_node_cap`
+        // is set far below the instance's real size to force real
+        // truncation, not a coincidental no-op.
+        const N: usize = 50;
+        let mut editor = ed_with_kb_node("concept:seed", "Seed", "[[concept:bridge]]");
+        let mut nodes = Vec::with_capacity(N + 2);
+        let mut hub_body = String::new();
+        for i in 0..N {
+            hub_body.push_str(&format!("[[concept:n{i}]] "));
+            nodes.push(mae_kb::Node::new(
+                format!("concept:n{i}"),
+                format!("N{i}"),
+                mae_kb::NodeKind::Concept,
+                "",
+            ));
+        }
+        nodes.push(mae_kb::Node::new(
+            "concept:hub",
+            "Hub",
+            mae_kb::NodeKind::Concept,
+            hub_body,
+        ));
+        nodes.push(mae_kb::Node::new(
+            "concept:bridge",
+            "Bridge",
+            mae_kb::NodeKind::Concept,
+            "", // no outgoing/incoming in-instance links: lowest degree
+        ));
+        register_plain_instance(&mut editor, "big", nodes);
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_multi_kb_full_corpus = true;
+        editor.kb_graph_full_corpus_node_cap = 10;
+
+        editor.kb_graph_view_open(Some("concept:seed".to_string()), Some(0));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+
+        let big_diagram_node_count = gv
+            .diagram_labels
+            .iter()
+            .find(|d| d.name == "big")
+            .map(|d| d.node_count)
+            .expect("the 'big' related instance must be rendered");
+        assert_eq!(
+            big_diagram_node_count,
+            10,
+            "sanity: the low cap must have actually truncated (hub + {N} leaves + bridge \
+             = {} total, capped to 10)",
+            N + 2
+        );
+        assert!(
+            gv.scene.nodes.iter().any(|n| n.id == "concept:bridge"),
+            "the low-degree cross-instance bridge node must survive the full-corpus cap \
+             even though a naive degree-only cap would cut it first"
         );
     }
 

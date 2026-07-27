@@ -1288,18 +1288,51 @@ impl KnowledgeBase {
             _ => 0,
         };
 
-        // Collect nodes and categorize links
+        // Collect nodes and categorize links.
+        let (nodes, internal_links, boundary_links) =
+            self.collect_and_categorize(&included, spec.include_body);
+
+        SubgraphResult {
+            nodes,
+            links: internal_links,
+            boundary_links,
+            hidden_node_count,
+        }
+    }
+
+    /// Shared node-collection/link-categorization block, factored out of
+    /// `extract_subgraph` (Phase B1, #462 full-corpus retrieval) so
+    /// `extract_full_corpus` can reuse it verbatim instead of duplicating
+    /// the same clone/strip-fields/internal-vs-boundary logic a second time.
+    /// `extract_subgraph` itself passes its own BFS-produced `included` set
+    /// here unchanged — behavior is byte-identical to before this refactor
+    /// (see the `extract_subgraph_*` test suite, which exercises this
+    /// indirectly and is unmodified by this split).
+    ///
+    /// For every id in `included` that resolves to a real stored `Node`,
+    /// clones it (heavy fields stripped when `include_body` is `false` —
+    /// see `SubgraphSpec::include_body`'s doc comment for exactly which
+    /// fields), then walks its typed links, sorting each into `internal`
+    /// (target also in `included`) or `boundary` (target outside). Ids in
+    /// `included` with no matching stored node (e.g. a phantom BFS starter)
+    /// are silently skipped, matching `extract_subgraph`'s pre-existing
+    /// behavior.
+    fn collect_and_categorize(
+        &self,
+        included: &HashSet<String>,
+        include_body: bool,
+    ) -> (Vec<Node>, Vec<SubgraphLink>, Vec<SubgraphLink>) {
         let mut nodes = Vec::new();
         let mut internal_links = Vec::new();
         let mut boundary_links = Vec::new();
 
-        for id in &included {
+        for id in included {
             if let Some(node) = self.nodes.get(id) {
                 // `links_typed()` reads `node.body` — must be computed from
                 // the full node BEFORE any lightweight stripping below, so
                 // `include_body: false` never affects which links surface.
                 let typed_links = node.links_typed();
-                if spec.include_body {
+                if include_body {
                     nodes.push(node.clone());
                 } else {
                     // Keep every cheap scalar/small-Vec field (some are read
@@ -1338,6 +1371,84 @@ impl KnowledgeBase {
                 }
             }
         }
+
+        (nodes, internal_links, boundary_links)
+    }
+
+    /// Full-corpus extraction (Phase B1, #462): every node in this KB, not a
+    /// depth/breadth-bounded BFS from a seed. The naive version of this —
+    /// `extract_subgraph` with `node_cap: None` and `starter_nodes:
+    /// list_ids(None)` — genuinely works (BFS-from-every-node collapses to
+    /// "include everything reachable"), BUT `extract_subgraph`'s node_cap
+    /// truncation unconditionally exempts every `starter_node`, so making
+    /// every node a starter would defeat the one safety net a pathological-
+    /// scale KB needs most. This method sidesteps that entirely: it never
+    /// runs a BFS, so there is no starter-node concept to abuse — the only
+    /// exemption is the caller-supplied `protected` set.
+    ///
+    /// `cap`: safety-net truncation exactly like `SubgraphSpec::node_cap`
+    /// (same degree-sort-descending, tie-break-by-id-ascending selection
+    /// logic, same `hidden_node_count` meaning) — `None` disables it.
+    ///
+    /// `protected`: ids exempt from truncation. Unlike `extract_subgraph`'s
+    /// starter-node exemption (which is total — the whole `starter_nodes`
+    /// list, by construction usually small), the CALLER decides what's
+    /// protected here — e.g. the current focus node plus every node this
+    /// instance uses as a cross-instance-link source (a "bridge" — cutting
+    /// it would silently sever the only connection between two diagrams).
+    /// This function does not know or care what makes an id worth
+    /// protecting; that's a cross-instance/DOI-tiering concern that belongs
+    /// to the caller (`mae-core`, which has `Editor::kb_owner_of` and
+    /// registry access — this crate deliberately has neither). An id in
+    /// `protected` that isn't actually present in this KB is silently
+    /// ignored (never inflates the effective cap), matching `list_ids`'
+    /// "only ids that actually exist" contract.
+    ///
+    /// `include_body`: forwarded to `collect_and_categorize` unchanged —
+    /// same meaning as `SubgraphSpec::include_body`.
+    pub fn extract_full_corpus(
+        &self,
+        cap: Option<usize>,
+        protected: &HashSet<String>,
+        include_body: bool,
+    ) -> SubgraphResult {
+        let mut included: HashSet<String> = self.list_ids(None).into_iter().collect();
+
+        let hidden_node_count = match cap {
+            Some(cap) if included.len() > cap => {
+                // Only ids BOTH caller-protected AND actually present in this
+                // KB count against the exemption budget — an id the caller
+                // protected because it matters in a DIFFERENT instance must
+                // not silently shrink how many of THIS instance's own nodes
+                // get to survive the cap.
+                let protected_in_scope: HashSet<&String> = included
+                    .iter()
+                    .filter(|id| protected.contains(id.as_str()))
+                    .collect();
+                let mut candidates: Vec<&String> = included
+                    .iter()
+                    .filter(|id| !protected_in_scope.contains(id))
+                    .collect();
+                candidates.sort_by(|a, b| {
+                    let deg_a = self.node_degree(a);
+                    let deg_b = self.node_degree(b);
+                    deg_b.cmp(&deg_a).then_with(|| a.cmp(b))
+                });
+                let keep_budget = cap.saturating_sub(protected_in_scope.len());
+                let kept: HashSet<String> = protected_in_scope
+                    .iter()
+                    .map(|s| (*s).clone())
+                    .chain(candidates.into_iter().take(keep_budget).cloned())
+                    .collect();
+                let hidden = included.len() - kept.len();
+                included = kept;
+                hidden
+            }
+            _ => 0,
+        };
+
+        let (nodes, internal_links, boundary_links) =
+            self.collect_and_categorize(&included, include_body);
 
         SubgraphResult {
             nodes,
@@ -4108,5 +4219,174 @@ mod tests {
              {total_body_bytes} bytes across {N} nodes that each have a \
              {BODY_BYTES}-byte body"
         );
+    }
+
+    /// Build a KB of `n` nodes with varying degree: node 0 is a hub linking
+    /// to every other node (giving it the highest degree by construction);
+    /// the rest have no outgoing links of their own, so their only degree
+    /// comes from that one incoming edge (all tied at degree 1) — except
+    /// `low_degree_id`, which additionally gets NO backlink from the hub
+    /// (degree 0), making it the single lowest-degree node a naive
+    /// degree-only cap would always cut first.
+    fn kb_with_hub_and_low_degree_outlier(n: usize, low_degree_id: &str) -> KnowledgeBase {
+        let mut nodes = Vec::with_capacity(n);
+        let mut hub_body = String::new();
+        for i in 0..n {
+            let id = format!("n{i}");
+            if id != low_degree_id {
+                hub_body.push_str(&format!("[[{id}]] "));
+            }
+        }
+        nodes.push(Node::new("hub", "Hub", NodeKind::Note, hub_body));
+        for i in 0..n {
+            nodes.push(Node::new(
+                format!("n{i}"),
+                format!("N{i}"),
+                NodeKind::Note,
+                "",
+            ));
+        }
+        kb_with(nodes)
+    }
+
+    #[test]
+    fn extract_full_corpus_no_cap_includes_literally_every_node() {
+        // 20+ nodes across varying degree (a hub + everything else), no cap
+        // — every single node must survive, proving this pulls the WHOLE
+        // corpus rather than any BFS-reachable subset.
+        const N: usize = 24;
+        let kb = kb_with_hub_and_low_degree_outlier(N, "n0");
+        let result = kb.extract_full_corpus(None, &HashSet::new(), true);
+        assert_eq!(
+            result.nodes.len(),
+            N + 1,
+            "must include every node (hub + {N} leaves), not a truncated subset"
+        );
+        assert_eq!(result.hidden_node_count, 0);
+        let ids: HashSet<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains("hub"));
+        for i in 0..N {
+            assert!(
+                ids.contains(format!("n{i}").as_str()),
+                "n{i} must be present"
+            );
+        }
+    }
+
+    #[test]
+    fn extract_full_corpus_cap_exempts_only_the_protected_low_degree_bridge_node() {
+        // Adversarial case (CLAUDE.md #14): "lonely_bridge" is deliberately
+        // the LOWEST-degree node in the KB (no incoming link from the hub,
+        // unlike every other leaf) — a naive degree-only cap would always
+        // cut it first. It's also the sole cross-instance-link source in
+        // this scenario (simulated here by the caller marking it
+        // `protected`), so it MUST survive truncation anyway, while OTHER
+        // equally-unprotected low-degree nodes (n1, n2, ... ordinary leaves)
+        // DO get cut to make room.
+        const N: usize = 30;
+        // "unused" never appears in any n{i} id, so the hub links to every
+        // n{i} (each getting degree 1) while "lonely_bridge", added below,
+        // gets zero incoming links — the deliberately lowest-degree node.
+        let base = kb_with_hub_and_low_degree_outlier(N, "unused");
+        let mut nodes: Vec<Node> = base.iter().map(|(_, n)| n.clone()).collect();
+        nodes.push(Node::new(
+            "lonely_bridge",
+            "Lonely Bridge",
+            NodeKind::Note,
+            "",
+        ));
+        let kb = kb_with(nodes);
+
+        // cap well below the total (hub + N leaves + lonely_bridge).
+        let cap = 5usize;
+        let mut protected = HashSet::new();
+        protected.insert("lonely_bridge".to_string());
+
+        let result = kb.extract_full_corpus(Some(cap), &protected, true);
+        let ids: HashSet<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+
+        assert!(
+            ids.contains("lonely_bridge"),
+            "the protected, deliberately-lowest-degree bridge node must survive \
+             truncation even though a naive degree-only cap would cut it: {ids:?}"
+        );
+        assert!(
+            ids.contains("hub"),
+            "the highest-degree node should also naturally survive on merit"
+        );
+        // The cap (5) minus the one protected node leaves room for 4
+        // degree-ranked survivors; with N=30 ordinary leaves all tied at
+        // degree 1 (or 0), most must be cut — prove at least one ordinary
+        // (unprotected) leaf was actually excluded, not just "everything
+        // happened to fit".
+        let some_leaf_cut = (0..N).any(|i| !ids.contains(format!("n{i}").as_str()));
+        assert!(
+            some_leaf_cut,
+            "unprotected low-degree leaves must actually be cut by the cap, not just \
+             the protected node exempted: {ids:?}"
+        );
+        assert_eq!(
+            result.nodes.len(),
+            cap,
+            "protected node counts toward the cap budget (like a starter node does in \
+             extract_subgraph), it's just never the one CHOSEN to be cut"
+        );
+    }
+
+    #[test]
+    fn extract_full_corpus_hidden_node_count_matches_actual_cut_count() {
+        const N: usize = 40;
+        let kb = kb_with_hub_and_low_degree_outlier(N, "n0");
+        let total = N + 1; // hub + N leaves
+        let cap = 10usize;
+        let result = kb.extract_full_corpus(Some(cap), &HashSet::new(), true);
+        assert_eq!(result.nodes.len(), cap);
+        assert_eq!(
+            result.hidden_node_count,
+            total - cap,
+            "hidden_node_count must reflect exactly how many were cut, not an \
+             incidental/stale value"
+        );
+    }
+
+    #[test]
+    fn extract_full_corpus_protected_id_absent_from_this_kb_does_not_shrink_the_effective_cap() {
+        // A `protected` id that belongs to a DIFFERENT KB instance (never
+        // present here) must be silently ignored — not treated as consuming
+        // one slot of the exemption budget, which would otherwise leave one
+        // fewer real node kept than the cap promises.
+        const N: usize = 20;
+        let kb = kb_with_hub_and_low_degree_outlier(N, "n0");
+        let cap = 8usize;
+        let mut protected = HashSet::new();
+        protected.insert("concept:from-a-totally-different-instance".to_string());
+
+        let result = kb.extract_full_corpus(Some(cap), &protected, true);
+        assert_eq!(
+            result.nodes.len(),
+            cap,
+            "a protected id absent from this KB must not change the effective cap"
+        );
+    }
+
+    #[test]
+    fn extract_full_corpus_cap_larger_than_total_is_a_no_op() {
+        const N: usize = 10;
+        let kb = kb_with_hub_and_low_degree_outlier(N, "n0");
+        let result = kb.extract_full_corpus(Some(1000), &HashSet::new(), true);
+        assert_eq!(result.nodes.len(), N + 1);
+        assert_eq!(result.hidden_node_count, 0);
+    }
+
+    #[test]
+    fn extract_full_corpus_include_body_false_strips_heavy_fields() {
+        let big_body = "x".repeat(5_000);
+        let kb = kb_with(vec![Node::new("a", "A", NodeKind::Note, big_body.clone())]);
+        let result = kb.extract_full_corpus(None, &HashSet::new(), false);
+        assert_eq!(result.nodes.len(), 1);
+        assert_eq!(result.nodes[0].body, "", "body must be stripped");
+
+        let result_full = kb.extract_full_corpus(None, &HashSet::new(), true);
+        assert_eq!(result_full.nodes[0].body, big_body);
     }
 }

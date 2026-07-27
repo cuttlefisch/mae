@@ -315,6 +315,8 @@ impl super::Editor {
             "kb_graph_multi_kb_grid_gap_factor" => {
                 self.kb_graph_multi_kb_grid_gap_factor.to_string()
             }
+            "kb_graph_multi_kb_full_corpus" => self.kb_graph_multi_kb_full_corpus.to_string(),
+            "kb_graph_full_corpus_node_cap" => self.kb_graph_full_corpus_node_cap.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -1365,6 +1367,15 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.kb_graph_multi_kb_grid_gap_factor = v.clamp(0.0, 10.0);
+            }
+            "kb_graph_multi_kb_full_corpus" => {
+                self.kb_graph_multi_kb_full_corpus = parse_option_bool(value)?;
+            }
+            "kb_graph_full_corpus_node_cap" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_graph_full_corpus_node_cap = v.clamp(100, 50_000);
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }
@@ -3147,6 +3158,80 @@ mod graph_view_option_tests {
             .set_option("kb_graph_multi_kb_grid_gap_factor", "not-a-number")
             .is_err());
         assert_eq!(editor.kb_graph_multi_kb_grid_gap_factor, before);
+    }
+
+    #[test]
+    fn kb_graph_multi_kb_full_corpus_option_roundtrips_and_defaults_off() {
+        // Phase B1 (#462 full-corpus retrieval): default MUST be off so
+        // kb_graph_view_mode=multi's extraction is byte-for-byte unchanged
+        // until a user explicitly opts in.
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor
+                .get_option("kb_graph_multi_kb_full_corpus")
+                .unwrap()
+                .0,
+            "false"
+        );
+        assert!(!editor.kb_graph_multi_kb_full_corpus);
+
+        editor
+            .set_option("kb_graph_multi_kb_full_corpus", "true")
+            .unwrap();
+        assert!(editor.kb_graph_multi_kb_full_corpus);
+        assert_eq!(
+            editor
+                .get_option("kb_graph_multi_kb_full_corpus")
+                .unwrap()
+                .0,
+            "true"
+        );
+
+        editor
+            .set_option("kb_graph_multi_kb_full_corpus", "false")
+            .unwrap();
+        assert!(!editor.kb_graph_multi_kb_full_corpus);
+    }
+
+    #[test]
+    fn kb_graph_full_corpus_node_cap_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor
+                .get_option("kb_graph_full_corpus_node_cap")
+                .unwrap()
+                .0,
+            "5000"
+        );
+        assert_eq!(editor.kb_graph_full_corpus_node_cap, 5000);
+
+        editor
+            .set_option("kb_graph_full_corpus_node_cap", "1200")
+            .unwrap();
+        assert_eq!(editor.kb_graph_full_corpus_node_cap, 1200);
+        assert_eq!(
+            editor
+                .get_option("kb_graph_full_corpus_node_cap")
+                .unwrap()
+                .0,
+            "1200"
+        );
+
+        // Out-of-range values clamp rather than error.
+        editor
+            .set_option("kb_graph_full_corpus_node_cap", "1")
+            .unwrap();
+        assert_eq!(editor.kb_graph_full_corpus_node_cap, 100);
+        editor
+            .set_option("kb_graph_full_corpus_node_cap", "999999")
+            .unwrap();
+        assert_eq!(editor.kb_graph_full_corpus_node_cap, 50_000);
+
+        let before = editor.kb_graph_full_corpus_node_cap;
+        assert!(editor
+            .set_option("kb_graph_full_corpus_node_cap", "not-a-number")
+            .is_err());
+        assert_eq!(editor.kb_graph_full_corpus_node_cap, before);
     }
 }
 

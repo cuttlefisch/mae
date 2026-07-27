@@ -781,6 +781,34 @@ impl OptionRegistry {
                      packs adjacent diagrams edge-to-edge with no gap; the default of 0.6 \
                      matches this option's pre-existing hardcoded behavior exactly.",
                     OptionKind::Float, "0.6", Some("kb-graph.multi-kb-grid-gap-factor"), &[]),
+                opt!("kb_graph_multi_kb_full_corpus", &["kb-graph-multi-kb-full-corpus"],
+                    "Master opt-in switch (ADR-068 Phase B) for full-corpus retrieval in \
+                     kb_graph_view_mode=multi: when on, each diagram (the seed AND every related \
+                     instance) is extracted via KnowledgeBase::extract_full_corpus (every node in \
+                     that instance, safety-netted by kb_graph_full_corpus_node_cap) instead of a \
+                     depth/breadth-bounded BFS from kb_graph_default_depth around one seed node. \
+                     A node that would otherwise be truncated is exempt from the cap when it's \
+                     either the diagram's own focus/starter node or a cross-instance-link source \
+                     (a 'bridge' — losing it would silently sever the only connection between two \
+                     diagrams), computed once per diagram via Editor::kb_cross_instance_link_sources. \
+                     Off (the default) leaves kb_graph_view_mode=multi's extraction byte-for-byte \
+                     unchanged — this option's mere existence changes nothing until explicitly \
+                     enabled. Render-time level-of-detail (which full-corpus nodes actually draw \
+                     vs. cluster/hide) is a separate, not-yet-built layer (ADR-068 Phases B2-B5); \
+                     with this alone, EVERY node in-scope renders individually.",
+                    OptionKind::Bool, "false", Some("kb-graph.multi-kb-full-corpus"), &[]),
+                opt!("kb_graph_full_corpus_node_cap", &["kb-graph-full-corpus-node-cap"],
+                    "Safety-net cap on a single diagram's node count when \
+                     kb_graph_multi_kb_full_corpus is on — analogous to kb_graph_node_count_cap, \
+                     but deliberately a separate, much higher default: full-corpus mode's whole \
+                     point is showing (near-)everything, and kb_graph_view_mode=multi can compose \
+                     up to kb_graph_multi_kb_max_related_instances+1 diagrams, so a pathological-\
+                     scale federation (e.g. several thousand-node KBs at once) still needs a real \
+                     ceiling. Exempts the diagram's own focus/starter node and any cross-instance- \
+                     link source from truncation (see kb_graph_multi_kb_full_corpus); everything \
+                     else is kept by highest-degree-first, same selection rule \
+                     kb_graph_node_count_cap already uses.",
+                    OptionKind::Int, "5000", Some("kb-graph.full-corpus-node-cap"), &[]),
                 // --- File tree ---
                 opt!("file_tree_focus_on_open", &["file-tree-focus-on-open"],
                     "Auto-focus the file tree window when it opens",
