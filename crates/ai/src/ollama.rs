@@ -155,47 +155,21 @@ impl OllamaProvider {
 
     /// Parse Ollama's native `/api/embed` response body into a list of
     /// embedding vectors, one per input, in the same order as the request's
-    /// `input` array (per Ollama's own documented ordering guarantee).
-    /// Extracted as a pure function (mirroring `parse_response` below) so
-    /// the response-shape parsing is unit-testable without a real HTTP
-    /// round trip -- this crate has no existing HTTP-mocking test harness,
-    /// so keeping wire-parsing logic pure and separate from the `reqwest`
-    /// call is how every other response type in this file is tested too.
+    /// `input` array (per Ollama's own documented ordering guarantee). A
+    /// thin wrapper over `mae_kb::embedding_client::parse_ollama_embed_
+    /// response` (ADR-061 Phase C) — the actual parsing logic is shared with
+    /// the daemon's own enrichment sweep and the editor's `daemon_mode=off`
+    /// enrich-now path, both of which need the identical response shape
+    /// parsed identically but cannot depend on this crate (see that
+    /// module's doc comment for why). Kept as a public method here, not
+    /// removed, so existing call sites and this file's own tests are
+    /// unaffected by the extraction.
     pub fn parse_embed_response(body: &serde_json::Value) -> Result<Vec<Vec<f32>>, ProviderError> {
-        let embeddings = body
-            .get("embeddings")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| ProviderError {
-                message: format!(
-                    "Ollama embed response missing 'embeddings' array (body: {})",
-                    body
-                ),
-                retryable: false,
-                kind: ErrorKind::Unknown,
-            })?;
-
-        embeddings
-            .iter()
-            .map(|vec_val| {
-                vec_val
-                    .as_array()
-                    .ok_or_else(|| ProviderError {
-                        message: "Ollama embed response entry was not an array".to_string(),
-                        retryable: false,
-                        kind: ErrorKind::Unknown,
-                    })?
-                    .iter()
-                    .map(|n| {
-                        n.as_f64().map(|f| f as f32).ok_or_else(|| ProviderError {
-                            message: "Ollama embed response contained a non-numeric component"
-                                .to_string(),
-                            retryable: false,
-                            kind: ErrorKind::Unknown,
-                        })
-                    })
-                    .collect::<Result<Vec<f32>, ProviderError>>()
-            })
-            .collect()
+        mae_kb::embedding_client::parse_ollama_embed_response(body).map_err(|e| ProviderError {
+            message: e.message,
+            retryable: e.retryable,
+            kind: ErrorKind::Unknown,
+        })
     }
 
     /// Parse Ollama's native `/api/chat` response into canonical ProviderResponse.
@@ -439,10 +413,7 @@ impl AgentProvider for OllamaProvider {
                 .unwrap_or("http://localhost:11434")
         );
 
-        let body = json!({
-            "model": model,
-            "input": inputs,
-        });
+        let body = mae_kb::embedding_client::build_ollama_embed_request(model, inputs);
 
         debug!(model = %model, url = %url, input_count = inputs.len(), "sending Ollama embed request");
 

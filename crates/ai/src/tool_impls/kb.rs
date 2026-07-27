@@ -713,6 +713,158 @@ pub fn execute_kb_sync_status(editor: &Editor) -> Result<String, String> {
     serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
 }
 
+/// Run `cmd` via `sh -c` and return its trimmed stdout, or `None` on any
+/// failure (empty command, non-zero exit, empty output). Deliberately a
+/// small, local copy of `crates/mae::config::run_key_command`'s shape rather
+/// than a cross-crate shared helper -- `crates/mae` depends on `crates/ai`,
+/// not the reverse, so this tool (in `crates/ai`) cannot reach it, and the
+/// helper itself is ~15 lines with no meaningful logic to diverge on.
+fn run_embedding_api_key_command(cmd: &str) -> Option<String> {
+    if cmd.is_empty() {
+        return None;
+    }
+    let output = std::process::Command::new("sh")
+        .args(["-c", cmd])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let key = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if key.is_empty() {
+        None
+    } else {
+        Some(key)
+    }
+}
+
+/// ADR-061 Phase E: run a KB enrichment sweep synchronously, in-process --
+/// the `daemon_mode=off` (or "don't wait for the next background tick")
+/// manual path. Deliberately scoped to the PRIMARY KB only: federated
+/// instances (`editor.kb.instances`) are held as in-memory `KnowledgeBase`
+/// values in the editor, not `Arc<dyn KbStore>` handles, so there is no
+/// store to enrich for them from this process today -- a named, bounded
+/// scope limitation (principle #15), not a silent gap. Uses a genuinely
+/// BLOCKING HTTP call (`mae_kb::embedding_client::ollama_embed_blocking`),
+/// matching ADR-061's own Decision text ("runs... synchronously with
+/// respect to the invoking command") -- this never bridges into the async
+/// `OllamaProvider::embed` used for chat, which would risk a "cannot start
+/// a runtime from within a runtime" panic depending on the calling thread's
+/// own execution context.
+pub fn execute_kb_enrich(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+    let store = editor
+        .kb
+        .store
+        .as_ref()
+        .ok_or_else(|| "no local KB store is available to enrich".to_string())?;
+
+    let provider = editor
+        .get_option("ai_embedding_provider")
+        .map(|(v, _)| v)
+        .unwrap_or_else(|| "ollama".to_string());
+    let model = editor
+        .get_option("ai_embedding_model")
+        .map(|(v, _)| v)
+        .unwrap_or_else(|| "nomic-embed-text".to_string());
+    let base_url = editor
+        .get_option("ai_embedding_base_url")
+        .map(|(v, _)| v)
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "http://localhost:11434".to_string());
+    let api_key = editor
+        .get_option("ai_embedding_api_key_command")
+        .map(|(v, _)| v)
+        .filter(|v| !v.is_empty())
+        .and_then(|cmd| run_embedding_api_key_command(&cmd));
+    let chunk_version: i64 = editor
+        .get_option("ai_embedding_chunk_version")
+        .and_then(|(v, _)| v.parse().ok())
+        .unwrap_or(1);
+
+    let plan = mae_kb::enrichment::plan_enrichment_scan(
+        store.as_ref(),
+        editor.kb.registry.primary_ai_residency,
+        &provider,
+        &model,
+        chunk_version,
+    );
+
+    if plan.residency_blocked {
+        return Ok(serde_json::json!({
+            "status": "skipped",
+            "reason": format!(
+                "the primary KB's AI residency policy forbids provider '{provider}'"
+            ),
+        })
+        .to_string());
+    }
+
+    if !plan.errors.is_empty() {
+        return Err(format!(
+            "enrichment scan failed: {}",
+            plan.errors.join("; ")
+        ));
+    }
+
+    let limit = args
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize);
+    let mut targets = plan.targets;
+    if let Some(limit) = limit {
+        targets.truncate(limit);
+    }
+
+    if targets.is_empty() {
+        return Ok(serde_json::json!({
+            "status": "up_to_date",
+            "nodes_scanned": plan.nodes_scanned,
+            "cache_hits": plan.cache_hits,
+            "newly_embedded": 0,
+        })
+        .to_string());
+    }
+
+    let client = reqwest::blocking::Client::new();
+    let mut embedded: Vec<(String, Vec<f32>)> = Vec::with_capacity(targets.len());
+    let mut embed_errors: Vec<String> = Vec::new();
+    for target in &targets {
+        match mae_kb::embedding_client::ollama_embed_blocking(
+            &client,
+            &base_url,
+            api_key.as_deref(),
+            &model,
+            std::slice::from_ref(&target.body),
+        ) {
+            Ok(mut vecs) if !vecs.is_empty() => {
+                embedded.push((target.content_hash.clone(), vecs.remove(0)));
+            }
+            Ok(_) => embed_errors.push(format!("{}: empty embedding returned", target.node_id)),
+            Err(e) => embed_errors.push(format!("{}: {e}", target.node_id)),
+        }
+    }
+
+    let newly_embedded = embedded.len();
+    let apply_errors = mae_kb::enrichment::apply_enrichment_results(
+        store.as_ref(),
+        &model,
+        chunk_version,
+        &embedded,
+    );
+
+    let mut errors = embed_errors;
+    errors.extend(apply_errors);
+
+    Ok(serde_json::json!({
+        "status": "complete",
+        "nodes_scanned": plan.nodes_scanned,
+        "cache_hits": plan.cache_hits,
+        "newly_embedded": newly_embedded,
+        "errors": errors,
+    })
+    .to_string())
+}
+
 /// Detect ghost/stale ids and reimport-stale files across the primary KB and
 /// every federated instance — see `KnowledgeBase::detect_ghost_ids` and
 /// `CozoKbStore::detect_reimport_stale_files`. More expensive than
@@ -4905,6 +5057,138 @@ mod tests {
         );
     }
 
+    // ADR-061 Phase E: `kb_enrich` (daemon_mode=off enrich-now).
+
+    #[test]
+    fn kb_enrich_with_no_store_returns_a_clean_error_not_a_panic() {
+        let editor = Editor::new();
+        assert!(editor.kb.store.is_none());
+        let result = execute_kb_enrich(&editor, &serde_json::json!({}));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn kb_enrich_is_a_plain_synchronous_call_with_no_background_thread_or_timer() {
+        // ADR-061 Phase E's own Verification requirement: nothing here may
+        // spawn a background thread or timer -- structurally guaranteed by
+        // `execute_kb_enrich` containing no `std::thread::spawn`/`tokio::
+        // spawn` at all (a plain, synchronous function), verified here by
+        // observing that the call returns before this test's own explicit
+        // timeout elapses AND that no `DaemonScheduler`-shaped background
+        // task exists anywhere in this process (there is none -- this
+        // crate has no such type at all, unlike `mae-daemon`).
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        // Point at an address nothing listens on so any (incorrect) network
+        // attempt fails fast rather than hanging the test suite.
+        editor
+            .set_option("ai_embedding_base_url", "http://127.0.0.1:1")
+            .unwrap();
+
+        let start = std::time::Instant::now();
+        let result = execute_kb_enrich(&editor, &serde_json::json!({}));
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "a KB with zero nodes must return immediately -- no background \
+             task was spawned to wait on"
+        );
+        let v: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
+        assert_eq!(v["status"], "up_to_date");
+    }
+
+    #[test]
+    fn kb_enrich_residency_blocks_before_any_network_attempt() {
+        use mae_kb::KbStore;
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store
+            .insert_node(&mae_core::KbNode::new(
+                "note:enrich-secret",
+                "Secret",
+                mae_core::KbNodeKind::Note,
+                "must never leave this machine",
+            ))
+            .unwrap();
+
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+        editor
+            .set_option("ai_embedding_provider", "claude")
+            .unwrap(); // hosted, non-local
+                       // An address nothing listens on -- if residency were bypassed, this
+                       // call would hang/error trying to actually reach it instead of
+                       // returning the clean "skipped" result asserted below.
+        editor
+            .set_option("ai_embedding_base_url", "http://127.0.0.1:1")
+            .unwrap();
+
+        let result = execute_kb_enrich(&editor, &serde_json::json!({})).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["status"], "skipped");
+        assert!(v["reason"].as_str().unwrap().contains("residency"));
+    }
+
+    #[test]
+    fn kb_enrich_reports_up_to_date_without_a_network_attempt_when_fully_cached() {
+        use mae_kb::KbStore;
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store
+            .insert_node(&mae_core::KbNode::new(
+                "note:enrich-cached",
+                "Cached",
+                mae_core::KbNodeKind::Note,
+                "already embedded content",
+            ))
+            .unwrap();
+        let content_hash = mae_kb::activity::body_hash("already embedded content");
+        store
+            .put_cached_embedding(&content_hash, "nomic-embed-text", 1, &[0.1, 0.2])
+            .unwrap();
+
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        editor
+            .set_option("ai_embedding_base_url", "http://127.0.0.1:1")
+            .unwrap();
+
+        let result = execute_kb_enrich(&editor, &serde_json::json!({})).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["status"], "up_to_date");
+        assert_eq!(v["cache_hits"], 1);
+        assert_eq!(v["newly_embedded"], 0);
+    }
+
+    #[test]
+    fn kb_enrich_a_provider_failure_is_reported_not_a_panic_and_leaves_the_node_uncached() {
+        use mae_kb::KbStore;
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store
+            .insert_node(&mae_core::KbNode::new(
+                "note:enrich-unreachable",
+                "Unreachable",
+                mae_core::KbNodeKind::Note,
+                "content whose embed call will fail",
+            ))
+            .unwrap();
+
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        // Nothing listens here -- the embed HTTP call must fail cleanly.
+        editor
+            .set_option("ai_embedding_base_url", "http://127.0.0.1:1")
+            .unwrap();
+
+        let result = execute_kb_enrich(&editor, &serde_json::json!({})).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["status"], "complete");
+        assert_eq!(v["newly_embedded"], 0);
+        assert!(
+            !v["errors"].as_array().unwrap().is_empty(),
+            "a failed embed call must be reported as an error, not silently dropped: {v}"
+        );
+    }
+
     #[test]
     fn kb_graph_view_state_multi_mode_recomputes_diagram_node_count_after_residency_filter() {
         // Adversarial (#462 access-model review / CLAUDE.md #14): the original
@@ -5032,6 +5316,39 @@ mod tests {
             surviving_sibling_ids,
             vec!["user:multi-graphview-count-seed"],
             "the recomputed node_count must actually match which nodes survived: {nodes:?}"
+        );
+    }
+
+    #[test]
+    fn kb_enrich_limit_caps_how_many_nodes_are_attempted() {
+        use mae_kb::KbStore;
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        for i in 0..5 {
+            store
+                .insert_node(&mae_core::KbNode::new(
+                    format!("note:enrich-limit-{i}"),
+                    format!("Note {i}"),
+                    mae_core::KbNodeKind::Note,
+                    format!("distinct body {i}"),
+                ))
+                .unwrap();
+        }
+
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        editor
+            .set_option("ai_embedding_base_url", "http://127.0.0.1:1")
+            .unwrap();
+
+        let result = execute_kb_enrich(&editor, &serde_json::json!({"limit": 2})).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(v["status"], "complete");
+        // All attempted (failed) embeds are reported as errors -- exactly
+        // `limit` of the 5 available targets, not all 5.
+        assert_eq!(
+            v["errors"].as_array().unwrap().len(),
+            2,
+            "the 'limit' argument must cap how many nodes are attempted: {v}"
         );
     }
 }

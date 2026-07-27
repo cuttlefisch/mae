@@ -38,6 +38,8 @@ pub mod adr_kb;
 pub mod adr_parse;
 pub mod backup;
 pub mod data_dir;
+pub mod embedding_client;
+pub mod enrichment;
 pub mod export;
 pub mod federation;
 pub mod fuzzy;

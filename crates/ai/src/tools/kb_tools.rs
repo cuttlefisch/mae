@@ -217,6 +217,17 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .permission(PermissionTier::ReadOnly)
         .build(),
         ToolDefBuilder::new(
+            "kb_enrich",
+            "Run a KB embedding-enrichment sweep right now, in-process (ADR-061 Phase E). This is the manual path for a daemon_mode=off (or on-demand/shared, if you don't want to wait for the next background tick) setup -- it embeds every node in the primary KB that doesn't already have a cached embedding under the configured (embedding provider, model, chunk_version), reusing the exact same content-addressed cache the daemon's own background sweep writes to. Runs synchronously (blocks this tool call, not the interactive editor) -- it is explicitly low-priority and never runs automatically. Gated by the SAME AI-residency check chat calls use: a LocalModelsOnly-residency KB is never sent to a hosted provider.",
+        )
+        .prop(
+            "limit",
+            "integer",
+            "Maximum number of nodes to embed in this call (default: no limit -- embeds every cache miss)",
+        )
+        .permission(PermissionTier::Shell)
+        .build(),
+        ToolDefBuilder::new(
             "kb_sync_status",
             "Per-federated-instance sync/freshness diagnostics: whether kb_notes_dir resolves to a registered instance, whether that instance's filesystem watcher is actually attached (not just whether one was ever expected), any watcher attach error, and seconds since its last drain. Use this to diagnose 'why didn't another mae process see my new/changed node'.",
         )

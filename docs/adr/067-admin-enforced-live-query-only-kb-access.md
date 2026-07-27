@@ -232,6 +232,8 @@ incorrectly restore `Full`), and the wrapped_key/v5-interaction test above.
 `cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean across both
 the editor and daemon workspaces; `cargo build --workspace --features gui` clean.
 
+### Phase B — `kb_access` Join/Read split + `kb_join` enforcement
+
 Split the identical match arm at `daemon/src/collab_handler/mod.rs:1184`. `KbOp::Read`
 stays unconditional for any role, as today. `KbOp::Join` becomes conditional on the
 member's `ReplicationPolicy`: denied when `QueryOnly`. Legacy/un-anchored KBs (no signed
@@ -257,6 +259,51 @@ retroactively tear down that live subscription — stated and tested as an expli
 named limitation of this phase (session revocation is a distinct mechanism this ADR does
 not build; the policy governs future `kb_join` calls, not already-established sessions),
 not silently assumed to be handled by the same code path.
+
+## Implementation note (Phase B, principle #15)
+
+`kb_access_with_coll` (`daemon/src/collab_handler/mod.rs`) now derives `(role, replication)`
+from the **same** lookup rather than a second `derived_membership` call — the anchored/
+op-log branch reads `m.replication` off the `ValidMember` Phase A already populates; the
+legacy/un-anchored branch (plain `member_roles`, no signed op-log) defaults to `Full`
+unconditionally, matching the ADR's own named scope boundary. The `QueryOnly`-Join denial
+is checked *before* the general hierarchical RBAC match, specifically so its message
+(`"member is restricted to live-query-only access for KB '...' and may not replicate it
+locally (ADR-067)"`) is distinguishable both from a role-insufficiency denial and from the
+non-member `"not a member of KB '...'"` denial `kb_join`'s callers already see — telling a
+genuine, restricted member they're "not a member" would be actively misleading.
+
+`handle_kb_join` (`daemon/src/collab_handler/kb_membership.rs`) needed no structural change
+for the "no subscription on deny" property: its existing `Deny`/`Err` match arm already
+returns early, before the `session_docs.insert`/`track_client_connect`/`bc.subscribe_doc`
+steps further down the function — Phase B's gate reuses that same early return, so a
+denied `QueryOnly` join was already guaranteed to never reach the subscription code, no new
+plumbing required.
+
+Three adversarial tests added (`daemon/src/collab_handler/tests/
+collab_handler_replication_policy_tests.rs`), matching this section's own Verification
+bullets and each independently confirmed to fail against the pre-fix `kb_access_with_coll`
+(re-ran the suite with the fix `git stash`ed — all three failed as expected, then passed
+again once restored): `query_only_viewer_denied_join_others_allowed_with_distinguishable_
+message` (the 4-principal N-way case — Owner/Editor/Full-Viewer allowed, QueryOnly-Viewer
+denied with a message distinguishable from a genuine non-member's, constructed by
+temporarily setting the KB's join policy to `restrictive` since the default `Invite` policy
+gives a non-member `Pending`, not `Deny`, which would make the two cases trivially
+distinguishable by variant alone rather than by message content), `query_only_member_kb_
+join_never_subscribes_the_session` (registers two real sessions via `EventBroadcaster::
+subscribe` — required before `subscribe_doc` has any observable effect at all — then proves
+via a real `broadcast()` + `try_recv()` that only the allowed session's channel receives the
+event), and `mid_session_restriction_does_not_tear_down_an_already_live_session_but_blocks_
+future_joins` (the named limitation from this section's Verification bullet 3, both halves:
+an already-subscribed session survives a mid-session restriction, but a fresh `kb_join`
+attempt by the same principal afterward is correctly denied). No RPC surface exists yet to
+set `replication` on a member (out of this phase's scope — Phase B is the gate, not the
+admin command surface), so the `QueryOnly` fixture member's op is built and signed directly
+via `KbCollectionDoc::build_membership_op` + `append_signed_op`, mirroring what `kb/
+add_member`'s handler does internally for every other field.
+
+`cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean in the
+daemon workspace (159 tests passing, up from 156).
 
 ### Phase C — `kb/query.my_wrapped_key`: narrow key delivery for `QueryOnly` E2E members
 
@@ -287,6 +334,34 @@ wrap, not the original stale one — reusing the existing rotation-test pattern 
 proven at `derive_content_key_delivers_to_members_excludes_others_and_rotates`
 (`shared/sync/src/membership.rs:1507`) rather than writing a parallel, potentially-
 diverging test for the same property.
+
+## Implementation note (Phase C, principle #15)
+
+`my_wrapped_key` (`daemon/src/kb_query.rs`) was added as a new `kb/query.*` dispatch
+method exactly as designed — gated by the same `load_gated`/`check_kb_read_access` prefix
+every sibling method already uses, with zero new access-control logic. It returns
+`{applicable: false}` (no `wrapped_key` field at all) for a genuinely unencrypted KB,
+`{applicable: true, wrapped_key: <hex or null>, epoch}` for an E2E KB — `null` (not an
+error) for a real member with no wrapped-key op targeting them yet, reusing
+`find_wrapped_content_key` unmodified. A non-member's request is denied with the exact
+same `McpError` message every other `kb/query.*` method already produces for the identical
+`check_kb_read_access` failure — deliberately not a special-cased shape, so this new
+endpoint doesn't let a stranger learn anything by diffing its denial against a sibling's.
+
+Three tests added (`daemon/src/tests/kb_query_tests.rs`): a two-member E2E fixture proving
+each member's response never contains the other's wrapped key (checked both at the
+top-level field and via a raw-wire substring scan, not just field equality — the same
+`hostile_hub_operator_cannot_search_an_e2e_kb_for_plaintext` discipline this file's other
+tests already use); the unencrypted-KB `applicable: false` case; and the non-member
+denial-shape-parity case (asserting `my_wrapped_key`'s error message is byte-identical to
+`kb/query.get`'s for the same non-member). The rotation case (item 4 of this section's own
+Verification) was deliberately NOT re-tested here — `find_wrapped_content_key` already has
+a dedicated rotation test (`derive_content_key_delivers_to_members_excludes_others_and_
+rotates`) and this endpoint adds no new logic on that axis, so a parallel test would only
+duplicate coverage, not add any (principle #8).
+
+`cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean in the
+daemon workspace.
 
 ### Phase D — client-side path: self-pointing `RemoteHub` + OAuth self-scoped tokens, and closing the mTLS gap
 
@@ -364,6 +439,53 @@ against a constructed real timeline fixture — a member who joined, then was la
 restricted (residual risk = true), interleaved with a member who was restricted before
 ever attempting to join (residual risk = false) — not a single hand-picked case that
 happens to be unambiguous.
+
+## Implementation note (Phase E, principle #15)
+
+A real gap surfaced during implementation: the signed op-log records **granted policy
+over time** (Admit/SetRole ops), not **replication events** — there is no `kb/join`
+success ledger anywhere in the system (`DocStore::track_client_connect` is a liveness
+heartbeat with no history). So "the member's actual join event," as this section's
+Decision text originally phrased it, isn't literally derivable. The honest, implementable
+signal actually built is a sound **bound** on that question rather than a direct answer:
+`had_full_replication_window` (`shared/sync/src/membership.rs`) walks a member's own
+Admit/SetRole history in causal order and asks "was this member ever granted `Full`
+before their current `QueryOnly` restriction?" — `Some(true)` means a real window existed
+during which their client had permission to `kb_join` (a residual local copy is a live
+possibility, even though this can't confirm one exists), `Some(false)` means they were
+restricted from their very first `Admit` and could never have legitimately replicated,
+`None` means not applicable (currently `Full`, or no signed op-log at all — the same named
+scope boundary as Phase B's legacy-KB fallback). A convenience wrapper,
+`had_full_replication_window_self_anchored`, resolves the anchor from the op-log's own
+self-consistent genesis rather than requiring an externally-supplied anchor pubkey — every
+other caller in this module threads a securely pre-established anchor specifically to
+defend against a malicious relay's forged genesis, but this signal is a soft,
+owner-facing UI hint computed from the owner's OWN locally-held collection replica, not an
+access-control decision, so that defense doesn't apply here.
+
+Wired into `KbSharingSnapshot`/`MemberView` (`crates/core/src/kb_sharing.rs`) as a new
+`residual_replica_risk: Option<bool>` field, computed once per KB (not per member) from
+the collection's own `oplog_ops()`. Because the `*KB Sharing*` buffer, the
+`kb_sharing_status` MCP tool, and the `(kb-sharing-status)` Scheme primitive all already
+share one `build_snapshot` (CLAUDE.md #3/#8), this single change gives the signal parity
+across the human buffer, the AI peer, and user Scheme scripts for free — no per-surface
+plumbing needed. The buffer's member row appends a short annotation ONLY for the
+real-risk case (`Some(true)`); a restricted-but-never-at-risk member or a currently-`Full`
+member gets no extra text at all, so the signal can never read as a false alarm.
+
+One adversarial test (`crates/core/src/kb_sharing_tests.rs`) builds a real signed op-log
+via `KbCollectionDoc::build_membership_op`/`append_signed_op` with four members
+interleaved on one timeline — Alice (Admit(Full) → SetRole(QueryOnly), residual risk =
+true), Bob (Admit(QueryOnly) directly, residual risk = false), and Carol (plain Full
+editor, not applicable at all) — asserting all three outcomes simultaneously (not a single
+hand-picked case) at both the snapshot-field level and the rendered buffer-text level (the
+annotation appears for Alice, and is absent from both Bob's and Carol's rows).
+`crates/core/Cargo.toml` gained a new dev-dependency on `mae-mcp` (for `Identity::generate`
+— constructing a real signed op-log needs a real Ed25519 identity, the same reason the
+daemon crate's own test suite already depends on it).
+
+`cargo test --workspace`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check`
+clean across the whole editor workspace.
 
 ## Consequences
 

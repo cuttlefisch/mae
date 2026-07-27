@@ -246,7 +246,8 @@
         "mae-make",
         "mae-snippets",
         "mae-spell",
-        "mae-sync"
+        "mae-sync",
+        "mae-mcp"
       ],
       "public_items": [
         {
@@ -661,6 +662,14 @@
         },
         {
           "name": "data_dir",
+          "kind": "mod"
+        },
+        {
+          "name": "embedding_client",
+          "kind": "mod"
+        },
+        {
+          "name": "enrichment",
           "kind": "mod"
         },
         {

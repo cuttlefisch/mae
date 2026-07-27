@@ -207,6 +207,19 @@ fn classify_kb_tool(tool_name: &str) -> Option<ToolResidencyShape> {
         // filter -- structurally incapable of the seed exemption (#358) ---
         "kb_raw_query" | "kb_view_query" => PrimaryOnly,
 
+        // --- PrimaryOnly: ADR-061 Phase E, primary-KB-only by construction
+        // (federated instances have no CozoKbStore handle in this process
+        // today). Its own return value is just counts, but a failed node's
+        // id can appear in the "errors" array -- real node-identity leakage,
+        // not content, but enough that "no per-row filter" applies (like
+        // kb_raw_query) rather than treating it as content-free. This is a
+        // SEPARATE, layered check from `execute_kb_enrich`'s own internal
+        // `residency_permits_provider` gate on the EMBEDDING provider
+        // (ai_embedding_provider) -- that one governs which model processes
+        // restricted content; this one governs which REQUESTER may even
+        // call the tool and see its (node-id-bearing) output at all. ---
+        "kb_enrich" => PrimaryOnly,
+
         // --- PrimaryOnlyFilterable: implementation only ever reads
         // editor.kb.store, and returns real Node results the tool impl
         // post-filters for the seed exemption (#358) ---
@@ -957,6 +970,36 @@ mod tests {
             Some("claude"),
         );
         assert!(matches!(decision, ResidencyDecision::Deny(_)));
+    }
+
+    // --- New: ADR-061 Phase E, kb_enrich (PrimaryOnly bucket) ---
+
+    #[test]
+    fn kb_enrich_denied_when_primary_restricted_and_requester_is_not_local() {
+        let editor = editor_with_restricted_primary();
+        let decision =
+            check_kb_residency(&editor, "kb_enrich", &serde_json::json!({}), Some("claude"));
+        assert!(
+            matches!(decision, ResidencyDecision::Deny(_)),
+            "a non-local requester must not even be able to call kb_enrich against a \
+             LocalModelsOnly primary KB, regardless of what embedding provider it configures"
+        );
+    }
+
+    #[test]
+    fn kb_enrich_allowed_when_requester_is_a_local_provider() {
+        let editor = editor_with_restricted_primary();
+        let decision =
+            check_kb_residency(&editor, "kb_enrich", &serde_json::json!({}), Some("ollama"));
+        assert_eq!(decision, ResidencyDecision::Allow);
+    }
+
+    #[test]
+    fn kb_enrich_allowed_when_primary_is_unrestricted() {
+        let editor = Editor::new();
+        let decision =
+            check_kb_residency(&editor, "kb_enrich", &serde_json::json!({}), Some("claude"));
+        assert_eq!(decision, ResidencyDecision::Allow);
     }
 
     // --- New: UnscopedFederatedContent bucket ---

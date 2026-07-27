@@ -474,6 +474,25 @@ impl KbStore for CozoKbStore {
         CozoKbStore::graphrag_search(self, vec, k)
     }
 
+    fn get_cached_embedding(
+        &self,
+        content_hash: &str,
+        model: &str,
+        chunk_version: i64,
+    ) -> Result<Option<Vec<f32>>, KbStoreError> {
+        CozoKbStore::get_cached_embedding(self, content_hash, model, chunk_version)
+    }
+
+    fn put_cached_embedding(
+        &self,
+        content_hash: &str,
+        model: &str,
+        chunk_version: i64,
+        vec: &[f32],
+    ) -> Result<(), KbStoreError> {
+        CozoKbStore::put_cached_embedding(self, content_hash, model, chunk_version, vec)
+    }
+
     fn health_report(&self) -> Result<HealthReport, KbStoreError> {
         CozoKbStore::health_report(self)
     }
