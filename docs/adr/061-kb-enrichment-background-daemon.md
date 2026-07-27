@@ -247,3 +247,46 @@ not the 2-way case that can hide a coordination bug a 3-way race exposes.
   would otherwise disagree (a query whose best FTS match and best vector match are different
   nodes), proving the blend is real composition and not one signal type silently shadowing the
   other.
+
+## Implementation note (Phase A, principle #15)
+
+`AgentProvider` (`crates/ai/src/provider.rs`) gained `async fn embed(&self, model: &str, inputs:
+&[String]) -> Result<Vec<Vec<f32>>, ProviderError>` with a default implementation returning a
+new `ErrorKind::Unsupported` (never retryable — distinct from a transient failure a caller might
+back off and retry). `model` is a separate parameter, not `self.config.model`: an embedding model
+(e.g. `nomic-embed-text`) is a different model from whatever chat model a provider is configured
+for, and Phase B's cache key is literally `(content_hash, model_id, chunk_version)`, so the model
+must be nameable per-call rather than implied by unrelated provider state. `OllamaProvider`
+implements it for real against Ollama's current `/api/embed` endpoint (not the legacy singular
+`/api/embeddings`) — verified against Ollama's own API docs before wiring, since a wrong
+request/response shape would silently corrupt every cached vector downstream. Response parsing
+is extracted into a pure `parse_embed_response` function (mirroring the existing `parse_response`
+pattern), unit-tested directly since this crate has no HTTP-mocking test harness for a full
+round-trip test.
+
+**A real architectural gap found and fixed while wiring the residency check** (Verification
+item A's "hosted-provider configuration pointed at a `LocalModelsOnly` KB must be rejected"):
+`check_kb_residency`'s existing `is_local_provider`/`LOCAL_AI_PROVIDERS` lived in `crates/core`
+— but ADR-061's real caller (Phase C's scheduler-driven sweep) runs inside `mae-daemon`, a
+separate binary that does not depend on `mae-core` at all (ADR-014's two-workspace split), and
+has no `Editor` to route through. `is_local_provider`/`LOCAL_AI_PROVIDERS` relocated to
+`mae_kb::federation` (`shared/kb`, which both workspaces already depend on directly, and which
+already owns the `AiResidency` enum itself) with a re-export from `crates/core/src/ai_residency.rs`
+so no existing caller broke. A new pure `residency_permits_provider(residency: AiResidency,
+provider: &str) -> bool` sits next to it — the daemon can call this directly against a
+`KbInstance.ai_residency` value with no `Editor` in the loop, while the editor's own
+`check_kb_residency` gate can (in a later phase) delegate its leaf provider-vs-residency decision
+to the same function instead of duplicating the comparison.
+
+**Honest scope note**: Phase A's own Verification item A also specifies "a provider failure...
+must degrade... never corrupt the enrichment cache" — not fully testable at this phase alone,
+since there is no cache yet (Phase B). What Phase A does verify: `embed()`'s default trait
+implementation is classified `Unsupported`/non-retryable (not a generic error a caller might
+mistakenly retry), and `OllamaProvider::parse_embed_response` correctly handles a missing
+`embeddings` field, a non-numeric vector component, and preserves batch ordering (a real,
+distinct-vectors test, not a single hand-picked value repeated, so a transposition bug would
+actually be caught). The cache-corruption-immunity property is Phase B's own verification
+obligation once the cache exists to corrupt.
+
+`cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean across both
+the editor and daemon workspaces (confirming the `shared/kb` relocation doesn't regress either).

@@ -34,6 +34,10 @@ pub enum ErrorKind {
     Auth,
     /// Network / HTTP transport error.
     Transport,
+    /// The provider genuinely lacks this capability (e.g. `embed()` on a
+    /// provider with no embeddings API) — never retryable, distinct from a
+    /// transient failure a caller might otherwise back off and retry.
+    Unsupported,
     /// Everything else.
     Unknown,
 }
@@ -132,6 +136,39 @@ pub trait AgentProvider: Send + Sync {
 
     /// Provider name for display and logging.
     fn name(&self) -> &str;
+
+    /// Generate embedding vectors for a batch of texts (ADR-061 Phase A).
+    /// Batched (not one-at-a-time) because the real caller — ADR-061 Phase
+    /// C's scheduler-driven enrichment sweep — processes many KB nodes per
+    /// tick, and Ollama's own `/api/embed` endpoint natively accepts a list.
+    ///
+    /// `model` is a separate parameter, not `self.config.model` — an
+    /// embedding model (e.g. `nomic-embed-text`) is a genuinely different
+    /// model from whatever chat model this provider is configured for, and
+    /// ADR-061 Phase B's cache key is literally `(content_hash, model_id,
+    /// chunk_version)`, so the caller must be able to name the model
+    /// explicitly rather than have it implied by unrelated provider state.
+    ///
+    /// Default implementation returns [`ErrorKind::Unsupported`] — most
+    /// providers added to this trait so far are chat/completion-only,
+    /// and adding a real embeddings implementation is opt-in per provider
+    /// (see `OllamaProvider` for the first, day-one implementation).
+    /// Callers must check for `ErrorKind::Unsupported` and treat it as
+    /// "this provider can never do this," never retry it, and (per
+    /// ADR-061 Phase A's residency requirement) must gate the call itself
+    /// on `mae_kb::federation::residency_permits_provider` before ever
+    /// reaching this method for a `LocalModelsOnly` KB.
+    async fn embed(
+        &self,
+        _model: &str,
+        _inputs: &[String],
+    ) -> Result<Vec<Vec<f32>>, ProviderError> {
+        Err(ProviderError {
+            message: format!("{} does not support embedding generation", self.name()),
+            retryable: false,
+            kind: ErrorKind::Unsupported,
+        })
+    }
 }
 
 /// Response from a provider — text, tool calls, or both.
@@ -166,4 +203,52 @@ pub enum StopReason {
     ToolUse,
     /// Max tokens reached (truncated).
     MaxTokens,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Minimal stub implementing only the two required trait methods, to
+    /// prove the default `embed()` provided by the trait itself (not an
+    /// override) behaves correctly -- exercising exactly what a
+    /// not-yet-embedding-capable provider (e.g. Claude/OpenAI/Gemini today)
+    /// actually gets for free.
+    struct StubChatOnlyProvider;
+
+    #[async_trait]
+    impl AgentProvider for StubChatOnlyProvider {
+        async fn send(
+            &self,
+            _messages: &[Message],
+            _tools: &[ToolDefinition],
+            _system_prompt: &str,
+        ) -> Result<ProviderResponse, ProviderError> {
+            unimplemented!("not exercised by this test")
+        }
+
+        fn name(&self) -> &str {
+            "stub-chat-only"
+        }
+    }
+
+    #[tokio::test]
+    async fn default_embed_is_unsupported_not_a_transient_failure() {
+        let provider = StubChatOnlyProvider;
+        let err = provider
+            .embed("some-model", &["hello".to_string()])
+            .await
+            .expect_err("a provider with no embed() override must not silently succeed");
+        assert_eq!(
+            err.kind,
+            ErrorKind::Unsupported,
+            "must be classified Unsupported (never retryable), not a generic/transient error \
+             a caller might mistakenly back off and retry"
+        );
+        assert!(
+            !err.retryable,
+            "a capability gap can never be resolved by retrying"
+        );
+        assert!(err.message.contains("stub-chat-only"));
+    }
 }
