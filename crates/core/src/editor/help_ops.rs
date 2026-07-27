@@ -548,6 +548,24 @@ impl Editor {
                 .to_string();
         }
 
+        // ADR-068 Phase B8 (TUI decision): a full-corpus diagram can carry
+        // hundreds/thousands of nodes — dumping every single title as its
+        // own "- " line would be a real readability regression versus the
+        // capped-BFS view this replaced. Rather than build full GUI feature
+        // parity (zoom, per-frame LOD) for a text listing, reuse the
+        // ALREADY-cached `node_api_tier` (topology-derived, zoom-
+        // independent — computed once at populate time regardless of
+        // whether a GUI window ever reflattens) to show Bridge/Hub-tier
+        // nodes individually plus one honest "... and N more (clustered)"
+        // summary line, gated behind the SAME `kb_graph_dense_cluster_
+        // threshold` option the GUI's clustering uses (so a small diagram
+        // still lists every node, matching pre-Phase-B behavior). Judgment
+        // call, deliberately proportionate per CLAUDE.md #9 — this is TUI
+        // PARITY (never silently truncate/dump thousands of lines), not a
+        // call to replicate every GUI visual nuance (zoom-aware Hidden vs.
+        // Clustered, cluster-group bucketing) in plain text.
+        let full_corpus_active = self.kb_graph_multi_kb_full_corpus
+            && gv.mode == crate::graph_view::GraphViewMode::Multi;
         let mut out = String::new();
         out.push_str("* KB Graph (multi-KB)\n");
         let mut offset = 0usize;
@@ -566,8 +584,28 @@ impl Editor {
             }
             let end = (offset + label.node_count).min(gv.scene.nodes.len());
             let slice = gv.scene.nodes.get(offset..end).unwrap_or(&[]);
+            let tier_slice = gv.node_api_tier.get(offset..end);
             if slice.is_empty() {
                 out.push_str("(no nodes)\n");
+            } else if full_corpus_active && slice.len() >= self.kb_graph_dense_cluster_threshold {
+                let mut shown = 0usize;
+                for (i, node) in slice.iter().enumerate() {
+                    let tier = tier_slice
+                        .and_then(|t| t.get(i))
+                        .copied()
+                        .unwrap_or(crate::graph_view::ApiTier::Ordinary);
+                    if matches!(
+                        tier,
+                        crate::graph_view::ApiTier::Bridge | crate::graph_view::ApiTier::Hub
+                    ) {
+                        out.push_str(&format!("- {}\n", node.label));
+                        shown += 1;
+                    }
+                }
+                let elided = slice.len() - shown;
+                if elided > 0 {
+                    out.push_str(&format!("... and {elided} more (clustered)\n"));
+                }
             } else {
                 for node in slice {
                     out.push_str(&format!("- {}\n", node.label));
