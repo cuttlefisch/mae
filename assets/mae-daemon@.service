@@ -1,0 +1,60 @@
+# MAE Daemon — per-tenant process isolation template (ADR-060 Phase E).
+#
+# For tenants that must not share a process or failure domain at all — the case
+# where Phases A-D's in-process multi-tenant isolation (mae-daemon.service, the
+# single shared-process unit), however correct, is still one crash or one
+# resource-exhaustion event away from affecting a co-resident tenant. Each
+# template instantiation gets its own process, its own PID, its own
+# daemon.toml, and its own data directory — genuine OS-level isolation, not
+# merely logical separation within one process.
+#
+# This is a systemd TEMPLATE unit, directly mirroring the already-shipped
+# mae-headless@.service pattern: one instance per TENANT, instantiated with
+# the tenant name as the instance name, systemd-escaped.
+#
+# **Linux-only, per the project's Gate W cross-platform scoping** (ADR-060
+# Phase E) — mae-daemon is confirmed never expected to run on macOS or
+# Windows as a deployed service.
+#
+# Prerequisite: create a per-tenant config file BEFORE starting the unit —
+# each tenant needs its own socket path / collab.bind port so instances never
+# collide:
+#   cp ~/.config/mae/daemon.toml ~/.config/mae/daemon-<tenant>.toml
+#   # edit daemon-<tenant>.toml: set a unique `socket` and `collab.bind` port,
+#   # and (recommended) [[tenant]] entries scoping this instance to just its
+#   # own KB instances/principals (ADR-060 Phase C)
+#
+# Installation:
+#   cp mae-daemon@.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now 'mae-daemon@'"$(systemd-escape <tenant>)"'.service'
+#
+# Logs: journalctl --user -u 'mae-daemon@*' -f
+
+[Unit]
+Description=MAE Daemon (tenant: %i)
+Documentation=https://github.com/cuttlefisch/mae
+After=network.target
+
+[Service]
+Type=simple
+# %i is the systemd-escaped tenant name. --config points at a per-tenant
+# daemon.toml (see the prerequisite above); --data-dir gives this instance
+# its own KB storage directory, fully separate from every other tenant's
+# instance — the actual process-level isolation this phase exists to provide.
+ExecStart=%h/.local/bin/mae-daemon --config %h/.config/mae/daemon-%i.toml --data-dir %h/.local/share/mae/tenants/%i
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%h/.local/share/mae/tenants/%i %h/.config/mae %t
+PrivateTmp=yes
+
+# Resource limits
+LimitNOFILE=65536
+
+[Install]
+WantedBy=default.target

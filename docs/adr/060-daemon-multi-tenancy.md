@@ -1,11 +1,13 @@
 # ADR-060: Daemon multi-tenancy
 
-**Status:** In progress (Phases A/B/C/D landed — see "Implementation note" sections below;
-Phase C's collab/OAuth-side principal-keyed wiring is explicitly deferred, tracked as issue
-#456, not silently gapped. Phases E–G remain, tracked as real follow-on work.)
+**Status:** Accepted — all phases A–G landed (see "Implementation note" sections below).
+Phase C's collab/OAuth-side principal-keyed wiring is the one explicitly deferred piece,
+tracked as issue #456, not silently gapped.
 **Extends:** ADR-035, ADR-054, ADR-057.
 **Relates to:** ADR-017, ADR-018, ADR-025.
-**Tracking:** issue #375 (epic tracker).
+**Tracking:** issue #408 (epic tracker) — corrected from a stale "#375" reference (that issue
+is the unrelated external-editor MCP pairing epic; found via a direct cross-check while
+closing out Phase E, not left uncorrected once noticed).
 
 ## Context
 
@@ -835,3 +837,144 @@ Context:**
   mode this test is built to falsify is the untested middle ground: a config change that
   silently fails to take effect with no error surfaced anywhere, leaving an operator
   believing a quota or tenant registration is active when it is not.
+
+## Implementation note (added during Phase E implementation, principle #15)
+
+Shipped as designed, no corrections needed this time (unlike Phases B/C/D, each of which
+found and corrected a false premise during implementation) — Phase E's design text already
+correctly scoped this as "reuse the already-shipped `mae-headless@.service` pattern," and
+that reuse held up exactly as described.
+
+**What shipped:** `assets/mae-daemon@.service` — a systemd template unit, parameterized by
+tenant name (`%i`), giving each instantiation its own PID, its own `--config`-pointed
+`daemon.toml`, and its own `--data-dir`. Documented in `docs/DAEMON_ADMIN.md`'s new "Multi-tenant
+deployment" section alongside the existing single-process `mae-daemon.service`, framed as two
+supported deployment shapes rather than one superseding the other — most tenants share one
+process (Phases A-D's software-enforced isolation), a tenant needing genuine failure-domain
+separation gets its own instantiation.
+
+**The adversarial test**
+(`daemon/tests/multi_tenant_process_isolation_e2e.rs::sigkilling_one_tenant_process_has_zero_observable_impact_on_another`)
+proves exactly the property this phase exists for, using two real `mae-daemon` child
+processes (not simulated) and a real `SIGKILL` (via `tokio::process::Child::kill()`, which
+sends `SIGKILL` on Unix — not a graceful shutdown, so the result doesn't depend on tenant A
+getting a chance to clean up first). Includes the negative control this ADR's own testing
+discipline (principle #14) calls for: confirms tenant A's port genuinely stops accepting
+connections after the kill (proving the kill wasn't a no-op that would make "zero impact on
+B" vacuously true), and confirms tenant A was genuinely alive and responsive *before* the
+kill (proving the isolation being measured isn't against an already-dead process). Ten
+post-kill requests against tenant B, all succeeding within the same generous CI-tolerant
+latency bound (10x pre-kill baseline, floored at 50ms) this ADR's Phase B ceiling test
+already established as the right shape for this class of assertion. Gated behind
+`MAE_TCP_E2E=1`, which `daemon`'s existing CI step already sets unconditionally for its bare
+`cargo test` invocation — no CI workflow changes needed, the new test file was picked up
+automatically. 8/8 local stress runs, full `daemon` workspace suite (`MAE_TCP_E2E=1 cargo
+test`) green, clippy/fmt clean.
+
+**Scope confirmed, not re-litigated:** Linux-only, per this phase's own text and Gate W —
+`assets/mae-daemon@.service` ships no macOS/Windows equivalent, matching `mae-headless@.service`'s
+existing precedent and the ADR's own explicit "no `launchd`/Service-Control-Manager
+equivalent" framing.
+
+## Implementation note (added while scoping Phase F, principle #15 — a genuine drift finding, not the phase it was found under)
+
+While scoping Phase F's N-tenant benchmark, a load-bearing gap surfaced: **`daemon/src/main.rs`
+never loaded a KB registry or opened any federated instance store at startup.**
+`DaemonState.registry` was unconditionally initialized to `KbRegistry::default()` (empty), and
+`instance_stores` was populated ONLY inside `#[cfg(test)]` code across the whole daemon crate —
+confirmed by direct grep, not assumed. This means Phase A's own premise — "reusing the
+already-partitioned `instance_stores`... as the address space" — was true of the *data
+structure*, but the structure itself was never populated in a real running process: every
+`instance`-addressed request against a genuinely deployed `mae-daemon` resolved to
+`DaemonError::UnknownInstance`, no matter what a `kb-registry.toml` on disk said. Phases A-D's
+entire addressing/quota/isolation mechanism (all shipped and tested this session) was reachable
+only through the test suite's synthetic in-process `DaemonState` construction, never through a
+real spawned binary. Filed as issue #460 and fixed in the same pass rather than left for a
+separate investigation, once root-caused as a genuine omission (not, per one hypothesis
+considered and ruled out, an intentional design where Phase E's process-per-tenant model was
+meant to supersede Phases A-D's in-process addressing — Phase A's own design text assumes
+`instance_stores` already works, ruling that reading out).
+
+**Fix:** `main.rs` now loads `KbRegistry::load(&data_dir)` immediately after the primary store
+opens, and opens each enabled, non-primary instance's `CozoKbStore`, mirroring the editor's own
+federation bootstrap (`crates/mae/src/bootstrap.rs::init_kb_federation`'s CozoDB-first path)
+but deliberately scoped down: no org-dir-import fallback (the daemon serves CozoDB stores, it
+doesn't own org-file editing) and no ADR-020 stranded-instance recovery reconstruction (an
+editor-specific, human-session robustness concern) — just the core "load the registry, open
+each instance" path Phase A-D's addressing mechanism actually needs to be reachable. A
+missing/failed instance store is logged and skipped, never fatal to the primary.
+
+**The adversarial test**
+(`daemon/tests/federated_instance_startup_e2e.rs::real_daemon_opens_federated_instances_from_kb_registry_toml_at_startup`)
+proves this against a real spawned `mae-daemon` binary, not synthetic state: a primary store and
+a separately-registered federated instance store, each with distinctly-named content; an
+`instance`-addressed `kb/get` for the federated-only node succeeds and returns the right node
+(the property that was broken); a negative control confirms the instance-scoped view never sees
+the primary's own content (real isolation, not a leaky federated view); and — a genuinely
+useful thing this investigation surfaced along the way — an *unaddressed* `kb/get` now finds
+content from the federated instance too, because `None` routes through `rebuild_query_layer`'s
+`FederatedQuery`, which spans the primary plus every `instance_stores` entry. That federated
+layer already existed in the code; before this fix it silently had only one member (the
+primary) in every real deployment, making federation a no-op regardless of what a
+`kb-registry.toml` claimed. This fix is therefore also the first time federated *search* across
+multiple daemon-hosted KB instances becomes real in production, not just addressing to one
+instance at a time.
+
+## Implementation note (added during Phase F implementation, principle #15)
+
+`daemon/benches/kb_dispatch_concurrency.rs` gained `bench_kb_dispatch_multi_tenant_concurrency`,
+made possible by issue #460's fix directly above (before it, there was no way to get a real
+`mae-daemon` process to serve more than one KB instance, so an honest multi-instance benchmark
+against the real binary could not have been run). Each tenant gets its own dedicated
+20K-node store and an unlimited quota, isolating what this phase measures (Phase B's
+per-instance lock isolation) from Phase C's quota-enforcement overhead.
+
+**Regression check run first, as this phase's own Verification bullet requires**: the
+existing single-tenant `bench_kb_dispatch_concurrency` was re-run in the same session
+(un-filtered, both benchmarks back-to-back on the same machine) rather than assumed still
+valid, and its N=1 figure was cross-checked against the new sweep's 1-tenant×1-session
+figure — close, as expected (same dispatch path, same store size), confirming no
+regression. Full numbers, the multi-tenant capacity ceiling, and the explicit "no savings
+claimed beyond what real cache overlap could deliver" framing (per gopls's own documented
+caveat, cited in Context) are recorded in `docs/adr/004-kb-scaling.md`'s Tier 1 section
+alongside — not replacing — the existing single-tenant table, per this phase's own
+instruction that a single-tenant number and a multi-tenant number answer different
+questions and both remain useful.
+
+## Implementation note (added during Phase G implementation, principle #15)
+
+**The `daemon_mode` documentation gap this phase's Decision section named was already
+partially closed by ADR-065** (its own drift-correction bundle added a `daemon_mode`
+section to `docs/EXTERNAL_EDITOR_MCP_PAIRING.md`, including a direct reference to "ADR-060's
+multi-tenant daemon work" for the `shared` mode) — found by checking the file directly
+rather than trusting this ADR's own now-stale "currently contains zero mentions of
+daemon_mode" claim. What that section did NOT yet cover, and what this implementation adds:
+a "Multi-tenant `mae-daemon` deployment (ADR-060) and `shared` mode" subsection connecting
+`daemon_mode=shared` to Phase E's two deployment shapes (shared-process default vs.
+process-per-tenant), cross-linked to `DAEMON_ADMIN.md`'s own multi-tenant section rather
+than duplicating its mechanics.
+
+**The config-change contract, proven rather than assumed**: this ADR's own Verification
+section names two acceptable proof shapes — (a) live-apply, genuinely demonstrated, or (b)
+an explicit signal (a log line, a rejected reconfiguration attempt, or **documented
+behavior**) that a restart is required. Live-apply is confirmed false (`DaemonConfig::load()`
+runs once at startup, nothing watches the file afterward — already established during
+Phase C). Rather than building new file-watching/signal-emitting infrastructure to satisfy
+option (b)'s "log line" reading, this phase takes the "documented behavior" reading
+explicitly offered by the same sentence: `daemon/tests/config_change_contract_e2e.rs` proves
+empirically (a real spawned daemon, a `[[tenant]]` entry with a 1-point-per-minute budget
+added to the on-disk config file mid-session, ten subsequent `kb/get` calls that a
+live-reloading daemon would reject after the first — all still succeed) that the restart
+requirement is real, and `EXTERNAL_EDITOR_MCP_PAIRING.md`'s new subsection states it
+plainly for an operator, closing the specific failure mode this ADR's Verification section
+names: "a config change that silently fails to take effect with no error surfaced
+anywhere."
+
+**A separate, smaller bug found while scoping this phase, filed rather than fixed here**:
+`daemon/src/main.rs`'s scheduler construction calls `DaemonConfig::load()` a second time
+instead of reusing the already-`--config`-resolved `config` variable in scope — an operator
+using `--config <custom-path>` gets a scheduler configured from the default path instead.
+Doesn't affect tenant routing/quotas (those correctly use the resolved `config`), only the
+scheduler's own tick intervals. Tracked as issue #461, not fixed in this pass (out of this
+phase's own scope — a config-change-CONTRACT phase, not a config-resolution-correctness
+phase).

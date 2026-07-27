@@ -135,8 +135,17 @@ jobs:
           SHA=$(git rev-parse HEAD)
           echo "Waiting for CI on commit $SHA..."
 
-          # Poll for up to 35 minutes (CI typically takes ~20-25 min)
-          for i in $(seq 1 70); do
+          # Poll for up to 60 minutes. Was 35 (CI "typically" 20-25 min) --
+          # raised after a real, confirmed miss: the CI run for the v0.14.55
+          # bump commit genuinely passed but took 37.5 minutes wall-clock
+          # (21:10:51-21:48:27), 2.5 min past the old budget, skipping the
+          # tag for a release that was actually green (same shape as the
+          # earlier documented v0.14.45 miss above, though that one's root
+          # cause was concurrent-run racing, not budget sizing -- this is a
+          # second, independent way this same symptom (bump commit lands,
+          # tag never does) can happen). 60 min gives real headroom above
+          # the worst genuinely-observed duration, not just past it.
+          for i in $(seq 1 120); do
             # Check if the CI workflow has completed on this commit
             STATUS=$(gh api "repos/${{ github.repository }}/commits/${SHA}/status" --jq '.state' 2>/dev/null || echo "pending")
 

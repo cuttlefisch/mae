@@ -72,6 +72,45 @@ against a 20K-node store, not lock serialization. Re-run via
 hardware-dependent and will drift — re-measure before quoting this table in
 anything customer-facing.
 
+**Multi-tenant capacity (ADR-060 Phase F, ~2026-07):** the same methodology with an
+explicit N-tenant dimension, made possible by issue #460's fix (before it, `mae-daemon`
+never opened more than its own primary store, so there was no way to run a genuine
+multi-instance benchmark against the real binary at all). Each tenant gets its own
+dedicated 20K-node store and an unlimited quota — this measures Phase B's per-instance
+lock isolation, not Phase C's quota-enforcement overhead. Single run, same reference
+machine, both benchmarks back-to-back (`cargo bench -p mae-daemon --bench
+kb_dispatch_concurrency`, no filter):
+
+| Tenants × sessions/tenant | Total concurrent | p50 | p99 |
+|---|---|---|---|
+| 1 × 1 | 1 | 91ms | 116ms |
+| 2 × 4 | 8 | 126ms | 161ms |
+| 4 × 4 | 16 | 290ms | 397ms |
+| 8 × 4 | 32 | 463ms | 683ms |
+
+**Regression check (required before trusting the above, per Phase F's own Verification
+bullet):** this run's single-tenant baseline (N=1: p50=93ms, p99=102ms) and the
+multi-tenant sweep's 1-tenant×1-session figure (p50=91ms, p99=116ms) are close — same
+dispatch path, same store size, measured in the same run — confirming Phases A-D's
+tenant-scoping work did not regress the pre-existing single-tenant case. (The single-tenant
+N=1 figure in this specific run, p99=102ms, itself runs measurably slower than the
+~71ms recorded above from an earlier session/machine-state — expected hardware/load
+drift the original text already warns about, not a regression signal on its own; the
+regression check that matters is the same-run comparison just described.)
+
+Applying the same "p99 ≤ 2x single-session baseline" SLO (116ms → 232ms ceiling) to the
+multi-tenant sweep: the 2×4 level (161ms) holds, the 4×4 level (397ms) exceeds it — a
+**~8-total-concurrent-session ceiling**, the same order of magnitude as the single-tenant
+number above, not a large multiple of it either way. Stated plainly per this phase's own
+caution against overstating resource *savings*: this is the **expected, honest** result for
+synthetic tenants with zero cache overlap (each has its own distinct 20K-node store,
+sharing nothing) — tenant isolation costs no *extra* capacity beyond what raw concurrent
+load already predicts, but it also delivers no *savings* beyond what genuine cache-overlap
+between tenants' real workloads could actually provide. A deployment where tenants' KBs
+share meaningfully overlapping content (a more realistic team scenario than this
+benchmark's deliberately-disjoint synthetic stores) would be expected to do better than
+this ceiling, not worse — but that claim is not made here, since it wasn't measured here.
+
 **Correction (found via a real CI failure, not assumed — ~2026-07):** the WAL
 mode / `busy_timeout` PRAGMAs above describe an implementation against
 `crates/kb/src/persist.rs`, a file that no longer exists — this codebase's KB

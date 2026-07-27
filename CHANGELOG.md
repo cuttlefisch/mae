@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.56] - 2026-07-27
+
+### Bug Fixes
+
+- *(ci)* Daemon workspace fmt + real WSL2 distro for Phase E remote verify ([ed67fac](https://github.com/cuttlefisch/mae/commit/ed67fac8e55b2a474dcc02eff890ff37a144c850))
+
+### Documentation
+
+- *(adr)* ADR-066 Phase E round-1 implementation note; regen ADR KB ([4999322](https://github.com/cuttlefisch/mae/commit/49993221ee053618416dd8b0d7c26d2417f3183f))
+
 ## [0.14.55] - 2026-07-26
 
 ### Bug Fixes
@@ -33,6 +43,11 @@ All notable changes to this project will be documented in this file.
 - *(ai)* Contain a panicking tool implementation instead of crashing the editor ([da26526](https://github.com/cuttlefisch/mae/commit/da265261f0b8b98c3625821362186213e4eae918))
 - *(mcp)* Close a TOCTOU race in authorized_keys authorize/revoke ([a5c1c49](https://github.com/cuttlefisch/mae/commit/a5c1c4905df91dd75d75803e69a31e044af71ab0))
 - *(kb)* Close two more gaps in the SQLite busy-retry coverage ([29b9b43](https://github.com/cuttlefisch/mae/commit/29b9b43e36d2a9c277d27bf4517333adb74360ba))
+- *(daemon)* Load federated KB instances at startup (#460) ([29436e4](https://github.com/cuttlefisch/mae/commit/29436e430b6fd0fbe9d6fc427ca6ddac5693443f))
+
+### CI
+
+- Raise version-bump's CI-wait poll budget from 35 to 60 minutes ([20a3e77](https://github.com/cuttlefisch/mae/commit/20a3e7747e6c5ef20698b349fdb73bda4109d479))
 
 ### Documentation
 
@@ -57,6 +72,9 @@ All notable changes to this project will be documented in this file.
 - *(daemon)* ADR-060 Phase D — IDOR + cross-KB role isolation, verified not rewritten ([126e201](https://github.com/cuttlefisch/mae/commit/126e201e0e7bcce6cd9b0c72c21fc10d8024a60c))
 - *(daemon)* ADR-060 Phase C — per-tenant quotas + independent eviction (#411) ([7d9419a](https://github.com/cuttlefisch/mae/commit/7d9419aa4626eef98f860b7be67eccd244663f19))
 - *(mae)* ADR-050 Phase H — :kb-export-guidance colon command (#383) ([c7794e3](https://github.com/cuttlefisch/mae/commit/c7794e3517203b30e5616928c1cd1266a6e6c722))
+- *(daemon)* ADR-060 Phase E — mae-daemon@.service systemd template (#413) ([402b6df](https://github.com/cuttlefisch/mae/commit/402b6df7a6c5feadc6fc09b1084b5609c3de8cdc))
+- *(daemon)* ADR-060 Phases F+G — N-tenant benchmark + config-change contract (#414, #415) ([afc30fb](https://github.com/cuttlefisch/mae/commit/afc30fb665bf59a8807d8a5d65e7ff0ab3851cb6))
+- *(daemon)* ADR-066 Phase E — Windows remote-daemon verification (#375) ([0034ec2](https://github.com/cuttlefisch/mae/commit/0034ec252cb79da15c9eba9ec1f8291c306a6066))
 
 ### Miscellaneous
 
@@ -64,6 +82,7 @@ All notable changes to this project will be documented in this file.
 - *(vscode)* Add LICENSE (GPL-3.0-or-later) + fix npm audit properly ([7c6cdc2](https://github.com/cuttlefisch/mae/commit/7c6cdc277c8fd1df1eec4155337fc03e98f3024f))
 - *(vscode)* Extract "MAE for VS Code" into its own repository ([0ab3ae2](https://github.com/cuttlefisch/mae/commit/0ab3ae24f3793d2f38440ad257d671dbdcf8b82d))
 - *(kb)* Regenerate ADR KB asset for ADR-062's Status flip to Accepted ([929defa](https://github.com/cuttlefisch/mae/commit/929defa783f500b262645867ce79b2a03ea2e2f7))
+- Bump version to 0.14.55 ([6dffff9](https://github.com/cuttlefisch/mae/commit/6dffff90ccee993a7ed3da1f86cb086224e115de))
 
 ### Testing
 

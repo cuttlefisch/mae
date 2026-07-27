@@ -231,6 +231,33 @@ editor is actually attached to (`collab_status`/`daemon_status`) before assuming
 pairing itself is broken. The pairing mechanics and the KB backend are two independent
 failure surfaces.
 
+### Multi-tenant `mae-daemon` deployment (ADR-060) and `shared` mode
+
+If several teams' paired editors point at one `shared`-mode daemon (the previous section),
+ADR-060 gives that daemon two supported deployment shapes — see
+[`DAEMON_ADMIN.md`'s "Multi-tenant deployment"](DAEMON_ADMIN.md#multi-tenant-deployment-shared-process-vs-process-per-tenant-adr-060)
+for the full mechanics:
+
+- **Shared process (default)** — multiple tenants share one `mae-daemon.service` process,
+  isolated in software (per-tenant instance addressing, cost-weighted request budgets,
+  role composition that never leaks across a tenant's KBs).
+- **Process-per-tenant (`mae-daemon@<tenant>.service`)** — genuine OS-level isolation for a
+  tenant that needs "if this crashes, no other tenant is affected," a guarantee the shared
+  process can't give.
+
+**Config-change contract, stated explicitly (verified, not assumed —
+`daemon/tests/config_change_contract_e2e.rs`):** `mae-daemon` has **no live-reload
+mechanism for any `daemon.toml` section**, `[[tenant]]` entries included.
+`DaemonConfig::load()` runs once at process startup and nothing watches the file
+afterward. Concretely: registering a new tenant, changing an existing tenant's quota, or
+any other edit to a running daemon's config file has **zero effect** until that daemon
+process is restarted (`systemctl --user restart mae-daemon` or the equivalent
+`mae-daemon@<tenant>` instance) — there is no error, no rejection, and no log line telling
+you the edit was ignored; the daemon simply keeps running on the config it started with.
+If you edit `daemon.toml` for a `shared`-mode deployment other people are actively paired
+against, plan the restart (and its brief connection interruption) accordingly rather than
+assuming the change is live.
+
 ## Config-format fragmentation: what to expect
 
 Every MCP host has its **own** config schema, and this feature is evolving month to
