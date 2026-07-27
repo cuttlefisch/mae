@@ -268,6 +268,49 @@ fn compile_cpp(compiler: &str, std_flag: &str, source: &str, output: &Path) -> R
     compile_via_stdin(compiler, &args, source, "CXX")
 }
 
+/// Spawn `path`, retrying a handful of times on `ExecutableFileBusy` (issue
+/// #482) — a real, documented OS-level race: `exec()` can transiently fail
+/// with ETXTBSY if the kernel's internal "this inode was recently open for
+/// writing" bookkeeping hasn't fully cleared yet, even though the writer's
+/// file descriptor is already closed (observed on CI, but not CI-specific —
+/// a user running a babel block immediately after MAE finishes compiling its
+/// fresh binary could hit the identical race in normal use, not only in a
+/// test).
+fn spawn_with_etxtbsy_retry(path: &Path, dir: &Path) -> std::io::Result<std::process::Child> {
+    retry_on_etxtbsy(|| {
+        Command::new(path)
+            .current_dir(dir)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+    })
+}
+
+/// The retry policy itself, generic over the spawn attempt so it's directly
+/// unit-testable with an injected closure rather than needing to reproduce a
+/// genuine OS-level race deterministically (see the tests below). Bounded and
+/// narrowly scoped to `ExecutableFileBusy` specifically so a genuine,
+/// persistent spawn failure (wrong path, missing exec permission, binary not
+/// found) still surfaces immediately rather than being delayed behind a
+/// retry loop that can never succeed for it.
+fn retry_on_etxtbsy<T>(mut attempt: impl FnMut() -> std::io::Result<T>) -> std::io::Result<T> {
+    const MAX_ATTEMPTS: u32 = 5;
+    let mut last_err = None;
+    for i in 0..MAX_ATTEMPTS {
+        match attempt() {
+            Ok(v) => return Ok(v),
+            Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                last_err = Some(e);
+                if i + 1 < MAX_ATTEMPTS {
+                    std::thread::sleep(Duration::from_millis(20 * (i as u64 + 1)));
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last_err.expect("loop always sets last_err before exhausting MAX_ATTEMPTS"))
+}
+
 /// Run a compiled binary with the same timeout + truncation discipline as the
 /// shell path (`execute_shell`). A binary that never exits is killed at
 /// `timeout_secs`, so a runaway compiled block can't hang the editor.
@@ -282,12 +325,7 @@ fn compile_cpp(compiler: &str, std_flag: &str, source: &str, output: &Path) -> R
 /// buffer unbounded output into memory even for a process that legitimately
 /// produces a lot of output before exiting quickly.
 fn run_binary(path: &Path, dir: &Path, timeout_secs: u64, max_output_bytes: usize) -> ExecResult {
-    let mut child = match Command::new(path)
-        .current_dir(dir)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
+    let mut child = match spawn_with_etxtbsy_retry(path, dir) {
         Ok(c) => c,
         Err(e) => return ExecResult::Error(format!("Failed to run binary: {}", e)),
     };
@@ -346,6 +384,70 @@ fn run_binary(path: &Path, dir: &Path, timeout_secs: u64, max_output_bytes: usiz
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // issue #482: retry_on_etxtbsy, tested via an injected closure rather than
+    // trying to reproduce the real OS race deterministically.
+
+    #[test]
+    fn retry_on_etxtbsy_succeeds_after_transient_busy_errors() {
+        let calls = std::cell::Cell::new(0);
+        let result: std::io::Result<&str> = retry_on_etxtbsy(|| {
+            calls.set(calls.get() + 1);
+            if calls.get() < 3 {
+                Err(std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy))
+            } else {
+                Ok("spawned")
+            }
+        });
+        assert_eq!(result.unwrap(), "spawned");
+        assert_eq!(
+            calls.get(),
+            3,
+            "must retry exactly until the attempt succeeds"
+        );
+    }
+
+    #[test]
+    fn retry_on_etxtbsy_gives_up_after_the_bounded_attempt_budget() {
+        let calls = std::cell::Cell::new(0);
+        let result: std::io::Result<()> = retry_on_etxtbsy(|| {
+            calls.set(calls.get() + 1);
+            Err(std::io::Error::from(std::io::ErrorKind::ExecutableFileBusy))
+        });
+        assert!(
+            result.is_err(),
+            "must eventually give up, not retry forever"
+        );
+        assert_eq!(
+            result.unwrap_err().kind(),
+            std::io::ErrorKind::ExecutableFileBusy,
+            "the error surfaced after giving up must be the real busy error, not something else"
+        );
+        assert_eq!(
+            calls.get(),
+            5,
+            "must stop at the bounded attempt budget, not run away"
+        );
+    }
+
+    #[test]
+    fn retry_on_etxtbsy_does_not_retry_a_different_error_kind() {
+        // The exact negative case that matters: a persistent, non-busy failure
+        // (e.g. the binary genuinely doesn't exist) must surface on the FIRST
+        // attempt, not be delayed behind retries that can never help it.
+        let calls = std::cell::Cell::new(0);
+        let result: std::io::Result<()> = retry_on_etxtbsy(|| {
+            calls.set(calls.get() + 1);
+            Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+        });
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err().kind(),
+            std::io::ErrorKind::NotFound,
+            "a non-busy error must pass through unchanged"
+        );
+        assert_eq!(calls.get(), 1, "a non-busy error must never be retried");
+    }
 
     #[test]
     fn handles_compiled_languages() {
