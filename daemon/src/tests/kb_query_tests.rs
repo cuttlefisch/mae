@@ -681,6 +681,231 @@ async fn kb_query_enabled_but_no_doc_store_gets_a_distinct_jsonrpc_error() {
     assert!(!error.contains("kb_query_enabled is false"));
 }
 
+// ---------------------------------------------------------------------------
+// ADR-067 Phase C: `kb/query.my_wrapped_key` narrow key delivery.
+// ---------------------------------------------------------------------------
+
+/// As [`seed_e2e_kb`], but admits a SECOND member too, returning both
+/// members' `ContentKey`-wrap material so a test can assert one member's
+/// endpoint response never leaks into another's.
+#[allow(clippy::too_many_arguments)]
+async fn seed_e2e_kb_two_members(
+    doc_store: &DocStore,
+    owner: &Arc<Identity>,
+    kb_id: &str,
+    member_a_principal: &str,
+    member_a: &Identity,
+    member_b_principal: &str,
+    member_b: &Identity,
+    node_id: &str,
+) {
+    doc_store.set_signer(Arc::clone(owner));
+    let mut coll = KbCollectionDoc::new_owned(kb_id, &owner.fingerprint(), "owner");
+    coll.set_transport_policy(TransportPolicy::Hub);
+
+    let owner_secret = owner.secret_bytes();
+    let owner_pub = owner.public().to_bytes();
+    let key = ContentKey::generate();
+    let self_wrap = wrap_to_member(&key, &wrap_public_for(&owner_secret)).unwrap();
+    coll.author_e2e_genesis(
+        kb_id,
+        &owner.fingerprint(),
+        &owner_secret,
+        &owner_pub,
+        self_wrap,
+        1000,
+    );
+
+    for (i, (principal, member)) in [
+        (member_a_principal, member_a),
+        (member_b_principal, member_b),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let member_secret = member.secret_bytes();
+        let member_pub = member.public().to_bytes();
+        let member_wrap_pub = wrap_public_for(&member_secret);
+        let member_wrap = wrap_to_member(&key, &member_wrap_pub).unwrap();
+        coll.author_member_admit(
+            kb_id,
+            principal,
+            &member_pub,
+            &member_wrap_pub,
+            Role::Viewer,
+            "member",
+            member_wrap,
+            &owner.fingerprint(),
+            &owner_secret,
+            &owner_pub,
+            1001 + i as u64,
+        );
+    }
+    let _ = coll.add_node(node_id, "");
+    doc_store
+        .share_doc(&format!("kbc:{kb_id}"), &coll.encode_state())
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
+async fn my_wrapped_key_returns_only_the_requesting_members_own_key_never_anothers() {
+    let doc_store = fresh_doc_store().await;
+    let owner = Arc::new(Identity::generate("owner"));
+    let member_a = Identity::generate("alice");
+    let member_b = Identity::generate("bob");
+    let member_a_principal = "oauth:alice@example.com";
+    let member_b_principal = "oauth:bob@example.com";
+    seed_e2e_kb_two_members(
+        &doc_store,
+        &owner,
+        "two-member-kb",
+        member_a_principal,
+        &member_a,
+        member_b_principal,
+        &member_b,
+        "n1",
+    )
+    .await;
+
+    let a_result = extract_result(
+        kb_query::dispatch(
+            "kb/query.my_wrapped_key",
+            &json!({"kb_id": "two-member-kb"}),
+            &doc_store,
+            Some(member_a_principal),
+            generous_limits(),
+        )
+        .await,
+    );
+    let b_result = extract_result(
+        kb_query::dispatch(
+            "kb/query.my_wrapped_key",
+            &json!({"kb_id": "two-member-kb"}),
+            &doc_store,
+            Some(member_b_principal),
+            generous_limits(),
+        )
+        .await,
+    );
+
+    assert_eq!(a_result["applicable"], true);
+    assert_eq!(b_result["applicable"], true);
+    let a_key = a_result["wrapped_key"]
+        .as_str()
+        .expect("member A must receive a real wrapped key");
+    let b_key = b_result["wrapped_key"]
+        .as_str()
+        .expect("member B must receive a real wrapped key");
+    assert_ne!(
+        a_key, b_key,
+        "each member's wrap is bound to their own X25519 wrap key -- they must \
+         never be byte-identical"
+    );
+
+    // The real property: A's response body must not contain B's key material
+    // anywhere, and vice versa -- not just "the top-level field differs."
+    let a_wire = serde_json::to_string(&a_result).unwrap();
+    let b_wire = serde_json::to_string(&b_result).unwrap();
+    assert!(
+        !a_wire.contains(b_key),
+        "member A's response must never contain member B's wrapped key"
+    );
+    assert!(
+        !b_wire.contains(a_key),
+        "member B's response must never contain member A's wrapped key"
+    );
+}
+
+#[tokio::test]
+async fn my_wrapped_key_on_unencrypted_kb_reports_not_applicable() {
+    let doc_store = fresh_doc_store().await;
+    let owner = Arc::new(Identity::generate("owner"));
+    let member_principal = "oauth:carol@example.com";
+    seed_unencrypted_kb(
+        &doc_store,
+        &owner,
+        "plain-kb",
+        Some((member_principal, Role::Viewer)),
+        "n1",
+        "Title",
+        "Body",
+        &[],
+    )
+    .await;
+
+    let result = extract_result(
+        kb_query::dispatch(
+            "kb/query.my_wrapped_key",
+            &json!({"kb_id": "plain-kb"}),
+            &doc_store,
+            Some(member_principal),
+            generous_limits(),
+        )
+        .await,
+    );
+
+    assert_eq!(
+        result["applicable"], false,
+        "an unencrypted KB must get an explicit 'not applicable', never a \
+         null/garbage wrapped_key a naive client might mistake for a real \
+         (empty) key: {result:?}"
+    );
+    assert!(
+        result.get("wrapped_key").is_none(),
+        "no wrapped_key field at all when not applicable, not a null one: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn my_wrapped_key_non_member_gets_the_same_denial_shape_as_every_other_kb_query_method() {
+    let doc_store = fresh_doc_store().await;
+    let owner = Arc::new(Identity::generate("owner"));
+    let member_a = Identity::generate("alice");
+    seed_e2e_kb(
+        &doc_store,
+        &owner,
+        "members-only-kb",
+        "oauth:alice@example.com",
+        &member_a,
+        "n1",
+        "Title",
+        "Body",
+    )
+    .await;
+
+    let stranger_wrapped_key = kb_query::dispatch(
+        "kb/query.my_wrapped_key",
+        &json!({"kb_id": "members-only-kb"}),
+        &doc_store,
+        Some("oauth:total-stranger@example.com"),
+        generous_limits(),
+    )
+    .await;
+    let stranger_get = kb_query::dispatch(
+        "kb/query.get",
+        &json!({"kb_id": "members-only-kb", "node_id": "n1"}),
+        &doc_store,
+        Some("oauth:total-stranger@example.com"),
+        generous_limits(),
+    )
+    .await;
+
+    // Both fail, and with the exact same message -- the new endpoint doesn't
+    // introduce a distinguishable denial shape (which would let a stranger
+    // learn something about the KB by comparing the two error strings) for
+    // an identical non-member access-gate failure.
+    assert!(stranger_wrapped_key.is_err());
+    assert!(stranger_get.is_err());
+    assert_eq!(
+        stranger_wrapped_key.unwrap_err().message,
+        stranger_get.unwrap_err().message,
+        "my_wrapped_key's non-member denial must match every other kb/query \
+         method's existing non-member-facing error shape (ADR-053 precedent), \
+         not introduce a new, distinguishable one"
+    );
+}
+
 /// Build a `ValidatedPrincipal` directly — this file tests below the JWT
 /// layer (see the module doc), so a real signed token isn't needed to
 /// exercise `route_authenticated_request`'s own gating logic.

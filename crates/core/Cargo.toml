@@ -60,6 +60,9 @@ parking_lot = "0.12"
 [dev-dependencies]
 tempfile = "3"
 criterion = { version = "0.8", features = ["html_reports"] }
+# ADR-067 Phase E test fixtures: constructing a real signed membership op-log
+# needs a real Ed25519 identity, same as the daemon crate's own test suite.
+mae-mcp = { path = "../../shared/mcp" }
 
 [[bench]]
 name = "buffer_ops"

@@ -246,7 +246,8 @@
         "mae-make",
         "mae-snippets",
         "mae-spell",
-        "mae-sync"
+        "mae-sync",
+        "mae-mcp"
       ],
       "public_items": [
         {

@@ -91,6 +91,7 @@ pub async fn dispatch(
             .await
         }
         "kb/query.graph" => graph(doc_store, &kb_id, principal, limits.max_scan_nodes).await,
+        "kb/query.my_wrapped_key" => my_wrapped_key(doc_store, &kb_id, principal).await,
         other => Err(McpError::method_not_found(format!(
             "unknown kb/query method '{other}'"
         ))),
@@ -269,6 +270,56 @@ async fn search(
         "kb_id": kb_id,
         "results": results,
         "scanned": scanned,
+    }))
+}
+
+/// ADR-067 Phase C: narrow, fingerprint-scoped E2E content-key delivery for a
+/// `QueryOnly`-restricted member. Gated by the SAME unmodified Read-only
+/// `check_kb_read_access` every other `kb/query.*` method already uses — a
+/// `QueryOnly` member already passes `KbOp::Read` under Phase B, so no new
+/// access-control logic is needed here, only a new narrowly-scoped read.
+/// Reuses `find_wrapped_content_key` (already pure, requires no secret key
+/// material server-side, and fingerprint-scoped by construction — it returns
+/// only the wrapped blob from the latest owner-authored op targeting the
+/// given fingerprint) rather than adding new key-handling logic.
+async fn my_wrapped_key(
+    doc_store: &DocStore,
+    kb_id: &str,
+    principal: Option<&str>,
+) -> Result<Value, McpError> {
+    let (coll, encryption) = load_gated(doc_store, kb_id, principal).await?;
+    let principal = principal.ok_or_else(|| {
+        McpError::internal_error(
+            "kb/query.my_wrapped_key requires an authenticated principal".to_string(),
+        )
+    })?;
+
+    if !matches!(encryption, Encryption::E2e) {
+        // Explicit "not applicable" for a genuinely unencrypted KB — never a
+        // null/garbage value a naive client might mistake for "here is your
+        // key, it's empty."
+        return Ok(json!({
+            "kb_id": kb_id,
+            "applicable": false,
+        }));
+    }
+
+    let anchor = collab_handler::resolve_content_anchor(doc_store, kb_id)
+        .await
+        .ok_or_else(|| {
+            McpError::internal_error(format!("KB '{kb_id}' has no signed content anchor"))
+        })?;
+
+    // Fingerprint-scoped by construction: only ever returns the blob wrapped
+    // to `principal`'s own fingerprint, never another member's, and `None`
+    // (not an error) for a real member with no wrapped-key op targeting them
+    // yet — e.g. mid E2E setup before the owner has re-wrapped to them.
+    let wrapped = membership::find_wrapped_content_key(&coll.oplog_ops(), &anchor, principal);
+    Ok(json!({
+        "kb_id": kb_id,
+        "applicable": true,
+        "wrapped_key": wrapped.map(hex::encode),
+        "epoch": coll.epoch_of(principal),
     }))
 }
 

@@ -75,6 +75,14 @@ pub struct MemberView {
     pub is_me: bool,
     /// `label (SHA256:ab…3f)` — the shared display form (locked identity decision).
     pub display: String,
+    /// ADR-067 Phase E: for a currently `QueryOnly`-restricted member, whether they
+    /// were ever granted `Full` replication before being restricted — a real
+    /// residual-replica-risk signal (an already-replicated local copy may exist,
+    /// which this ADR cannot delete or confirm). `None` when not applicable: the
+    /// member is currently `Full` (nothing restricted to report on), or this KB has
+    /// no signed op-log to derive history from at all (a legacy/un-anchored KB —
+    /// the same named scope boundary as Phase B's own `kb_access` gate).
+    pub residual_replica_risk: Option<bool>,
 }
 
 /// A pending join request (invite policy) awaiting owner approval.
@@ -216,6 +224,10 @@ pub fn build_snapshot(collab: &CollabState) -> KbSharingSnapshot {
                     .copied()
                     .unwrap_or_else(|| coll.epoch_of(me));
 
+                // ADR-067 Phase E: computed once per KB (not per member) since it
+                // only depends on the collection's own op-log, not on which member
+                // is being viewed.
+                let oplog_ops = coll.oplog_ops();
                 let members: Vec<MemberView> = coll
                     .member_roles()
                     .into_iter()
@@ -223,6 +235,11 @@ pub fn build_snapshot(collab: &CollabState) -> KbSharingSnapshot {
                         is_me: m.fingerprint == me && !me.is_empty(),
                         epoch: coll.epoch_of(&m.fingerprint),
                         display: format_peer(&m.label, &m.fingerprint),
+                        residual_replica_risk:
+                            mae_sync::membership::had_full_replication_window_self_anchored(
+                                &oplog_ops,
+                                &m.fingerprint,
+                            ),
                         fingerprint: m.fingerprint,
                         label: m.label,
                         role: m.role.as_str().to_string(),
@@ -557,10 +574,17 @@ pub fn build_view(
         if !members_collapsed {
             for m in &kb.members {
                 let you = if m.is_me { "  (you)" } else { "" };
+                // ADR-067 Phase E: only ever adds text for the real-risk case — a
+                // restricted-but-never-replicated member gets no extra annotation at
+                // all, so this never reads as a false alarm.
+                let residual_risk = match m.residual_replica_risk {
+                    Some(true) => "  [query-only; may hold a pre-restriction local copy]",
+                    _ => "",
+                };
                 push(
                     &mut view,
                     KbSharingLine {
-                        text: format!("      {} — {}{you}", m.display, m.role),
+                        text: format!("      {} — {}{you}{residual_risk}", m.display, m.role),
                         kind: KbSharingLineKind::Member {
                             kb_id: kb.id.clone(),
                             fingerprint: m.fingerprint.clone(),

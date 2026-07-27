@@ -335,6 +335,34 @@ proven at `derive_content_key_delivers_to_members_excludes_others_and_rotates`
 (`shared/sync/src/membership.rs:1507`) rather than writing a parallel, potentially-
 diverging test for the same property.
 
+## Implementation note (Phase C, principle #15)
+
+`my_wrapped_key` (`daemon/src/kb_query.rs`) was added as a new `kb/query.*` dispatch
+method exactly as designed — gated by the same `load_gated`/`check_kb_read_access` prefix
+every sibling method already uses, with zero new access-control logic. It returns
+`{applicable: false}` (no `wrapped_key` field at all) for a genuinely unencrypted KB,
+`{applicable: true, wrapped_key: <hex or null>, epoch}` for an E2E KB — `null` (not an
+error) for a real member with no wrapped-key op targeting them yet, reusing
+`find_wrapped_content_key` unmodified. A non-member's request is denied with the exact
+same `McpError` message every other `kb/query.*` method already produces for the identical
+`check_kb_read_access` failure — deliberately not a special-cased shape, so this new
+endpoint doesn't let a stranger learn anything by diffing its denial against a sibling's.
+
+Three tests added (`daemon/src/tests/kb_query_tests.rs`): a two-member E2E fixture proving
+each member's response never contains the other's wrapped key (checked both at the
+top-level field and via a raw-wire substring scan, not just field equality — the same
+`hostile_hub_operator_cannot_search_an_e2e_kb_for_plaintext` discipline this file's other
+tests already use); the unencrypted-KB `applicable: false` case; and the non-member
+denial-shape-parity case (asserting `my_wrapped_key`'s error message is byte-identical to
+`kb/query.get`'s for the same non-member). The rotation case (item 4 of this section's own
+Verification) was deliberately NOT re-tested here — `find_wrapped_content_key` already has
+a dedicated rotation test (`derive_content_key_delivers_to_members_excludes_others_and_
+rotates`) and this endpoint adds no new logic on that axis, so a parallel test would only
+duplicate coverage, not add any (principle #8).
+
+`cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean in the
+daemon workspace.
+
 ### Phase D — client-side path: self-pointing `RemoteHub` + OAuth self-scoped tokens, and closing the mTLS gap
 
 Two real prerequisites make Phase D genuinely new work, not free reuse:
@@ -411,6 +439,53 @@ against a constructed real timeline fixture — a member who joined, then was la
 restricted (residual risk = true), interleaved with a member who was restricted before
 ever attempting to join (residual risk = false) — not a single hand-picked case that
 happens to be unambiguous.
+
+## Implementation note (Phase E, principle #15)
+
+A real gap surfaced during implementation: the signed op-log records **granted policy
+over time** (Admit/SetRole ops), not **replication events** — there is no `kb/join`
+success ledger anywhere in the system (`DocStore::track_client_connect` is a liveness
+heartbeat with no history). So "the member's actual join event," as this section's
+Decision text originally phrased it, isn't literally derivable. The honest, implementable
+signal actually built is a sound **bound** on that question rather than a direct answer:
+`had_full_replication_window` (`shared/sync/src/membership.rs`) walks a member's own
+Admit/SetRole history in causal order and asks "was this member ever granted `Full`
+before their current `QueryOnly` restriction?" — `Some(true)` means a real window existed
+during which their client had permission to `kb_join` (a residual local copy is a live
+possibility, even though this can't confirm one exists), `Some(false)` means they were
+restricted from their very first `Admit` and could never have legitimately replicated,
+`None` means not applicable (currently `Full`, or no signed op-log at all — the same named
+scope boundary as Phase B's legacy-KB fallback). A convenience wrapper,
+`had_full_replication_window_self_anchored`, resolves the anchor from the op-log's own
+self-consistent genesis rather than requiring an externally-supplied anchor pubkey — every
+other caller in this module threads a securely pre-established anchor specifically to
+defend against a malicious relay's forged genesis, but this signal is a soft,
+owner-facing UI hint computed from the owner's OWN locally-held collection replica, not an
+access-control decision, so that defense doesn't apply here.
+
+Wired into `KbSharingSnapshot`/`MemberView` (`crates/core/src/kb_sharing.rs`) as a new
+`residual_replica_risk: Option<bool>` field, computed once per KB (not per member) from
+the collection's own `oplog_ops()`. Because the `*KB Sharing*` buffer, the
+`kb_sharing_status` MCP tool, and the `(kb-sharing-status)` Scheme primitive all already
+share one `build_snapshot` (CLAUDE.md #3/#8), this single change gives the signal parity
+across the human buffer, the AI peer, and user Scheme scripts for free — no per-surface
+plumbing needed. The buffer's member row appends a short annotation ONLY for the
+real-risk case (`Some(true)`); a restricted-but-never-at-risk member or a currently-`Full`
+member gets no extra text at all, so the signal can never read as a false alarm.
+
+One adversarial test (`crates/core/src/kb_sharing_tests.rs`) builds a real signed op-log
+via `KbCollectionDoc::build_membership_op`/`append_signed_op` with four members
+interleaved on one timeline — Alice (Admit(Full) → SetRole(QueryOnly), residual risk =
+true), Bob (Admit(QueryOnly) directly, residual risk = false), and Carol (plain Full
+editor, not applicable at all) — asserting all three outcomes simultaneously (not a single
+hand-picked case) at both the snapshot-field level and the rendered buffer-text level (the
+annotation appears for Alice, and is absent from both Bob's and Carol's rows).
+`crates/core/Cargo.toml` gained a new dev-dependency on `mae-mcp` (for `Identity::generate`
+— constructing a real signed op-log needs a real Ed25519 identity, the same reason the
+daemon crate's own test suite already depends on it).
+
+`cargo test --workspace`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check`
+clean across the whole editor workspace.
 
 ## Consequences
 

@@ -36,6 +36,7 @@ graph TD
     mae_core --> mae_snippets
     mae_core --> mae_spell
     mae_core --> mae_sync
+    mae_core --> mae_mcp
     mae_dap --> mae_core
     mae_export --> mae_babel
     mae_format[mae-format]
