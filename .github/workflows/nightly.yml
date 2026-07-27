@@ -1,0 +1,63 @@
+name: Nightly Rust Canary
+
+# Moved out of ci.yml's `check` job (previously a `toolchain: [stable, nightly]`
+# matrix leg running on every push/PR). It's purely informational --
+# `continue-on-error: true`, catching edge cases in upstream dependencies
+# (CozoDB, tree-sitter, etc.) before a nightly Rust release reaches stable --
+# not a per-PR regression signal, so it doesn't need per-commit cadence. It
+# was costing ~17 minutes on every single PR's critical path for a canary
+# whose own value is entirely about catching *upstream* drift. Matches the
+# existing `dep-compat-check.yml` precedent in this repo (a separate scheduled
+# workflow for the same "not every PR, but still tracked" shape of check).
+on:
+  schedule:
+    - cron: "0 6 * * *" # Daily at 06:00 UTC
+  workflow_dispatch: # Manual trigger
+
+env:
+  CARGO_TERM_COLOR: always
+  # Harden dependency fetching against transient network flakes (curl HTTP/2
+  # framing errors mid-fetch). See ci.yml for the full rationale.
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+
+jobs:
+  nightly-rust:
+    name: nightly-rust / ${{ matrix.step }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        step: [test, clippy]
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-rust
+        with:
+          toolchain: nightly
+          components: clippy, rustfmt
+
+      - uses: ./.github/actions/install-gui-deps
+
+      - name: cargo test
+        if: matrix.step == 'test'
+        timeout-minutes: 30
+        run: |
+          # CozoDB's sled backend triggers glibc "malloc(): unaligned tcache
+          # chunk detected" (SIGABRT) on nightly Rust. Exclude CozoDB-heavy
+          # integration test binaries that crash the process. These tests
+          # pass on stable (see ci.yml's `check` job).
+          cargo test --workspace --exclude mae
+          cargo test -p mae --bins
+          cargo test -p mae --test mcp_event_loop_integration
+          # Skipped on nightly: kb_graph_validation_{embeddings,queries,schema},
+          # kb_lifecycle_e2e, collab_tcp_e2e_{psk_auth,kb_protocol,kb_stress,tests}
+          # (all CozoDB or #[ignore])
+          # collab_bridge_integration and collab_stress moved to daemon workspace
+          cargo test --doc --workspace
+
+      - name: cargo clippy
+        if: matrix.step == 'clippy'
+        run: cargo clippy --workspace --all-targets -- -D warnings

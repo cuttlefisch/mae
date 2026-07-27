@@ -1,0 +1,40 @@
+name: Setup Rust toolchain + cache
+description: >
+  Installs a Rust toolchain and configures Swatinem/rust-cache. Extracted
+  because 8+ jobs in ci.yml repeated this identical block (CLAUDE.md
+  principle #8 -- "if two renderers compute the same thing, extract it" --
+  applied to CI job definitions, not just application code).
+
+  Deliberately does NOT include actions/checkout: a local composite action's
+  own action.yml must already exist in the checkout for GitHub Actions to
+  resolve `uses: ./.github/actions/setup-rust` at all, so checkout can never
+  itself live inside a local composite action -- every calling job must run
+  actions/checkout as its own first step before this one.
+inputs:
+  toolchain:
+    description: Rust toolchain channel/version to install (e.g. stable, nightly, 1.95)
+    required: false
+    default: stable
+  components:
+    description: Extra rustup components, comma-separated (e.g. "clippy, rustfmt")
+    required: false
+    default: ""
+  workspaces:
+    description: >
+      Passed through to Swatinem/rust-cache's `workspaces` input. Multi-line
+      for multiple workspaces, e.g.:
+        workspaces: |
+          .
+          daemon -> daemon/target
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: ${{ inputs.toolchain }}
+        components: ${{ inputs.components }}
+    - uses: Swatinem/rust-cache@v2
+      with:
+        workspaces: ${{ inputs.workspaces }}
