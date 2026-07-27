@@ -414,6 +414,30 @@ impl CozoKbStore {
             }"#,
         )?;
 
+        // ADR-061 Phase B: content-addressed embedding cache -- deliberately a
+        // SEPARATE relation from `embeddings` above, not an extra key column on it.
+        // `embeddings` is keyed by (id, model) and HNSW-indexed with a FIXED
+        // `<F32; 384>` vector width (all-MiniLM-L6-v2's dimension) because it's the
+        // relation `vector_search`/`graphrag_search` actually query for similarity.
+        // This cache answers a different question -- "have we already paid to embed
+        // this exact (content, model, chunking) combination" -- pure exact-key
+        // lookup, never similarity-searched, so its `vec` column is a plain
+        // variable-length list (`[Float]`), not the fixed-width HNSW type. That
+        // also means this cache is NOT locked to any one embedding model's output
+        // dimension, unlike `embeddings` -- a real, separately-tracked limitation
+        // (see the Phase B implementation note) rather than something this schema
+        // change needs to fix. `chunk_version` is a small integer versioning MAE's
+        // own chunking algorithm, bumped only when that algorithm changes.
+        self.create_if_absent(
+            r#":create embedding_cache {
+                content_hash: String,
+                model: String,
+                chunk_version: Int
+                =>
+                vec: [Float]
+            }"#,
+        )?;
+
         // Source file tracking for ingestion pipeline.
         // Enables incremental reimport (only re-parse changed files).
         self.create_if_absent(

@@ -71,3 +71,92 @@ fn graphrag_expands_neighbors() {
         "graph neighbor should be included via expansion"
     );
 }
+
+// ADR-061 Phase B: content-addressed embedding cache.
+
+#[test]
+fn cached_embedding_survives_a_real_daemon_restart() {
+    // Deliberately does NOT use `make_store()`'s tuple directly for the second
+    // open -- this test's whole point is proving genuine on-disk persistence,
+    // not in-memory memoization within one process lifetime. A naive
+    // in-memory-only cache would pass a same-process check but fail this one,
+    // so the store is fully dropped and reopened at the identical path.
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("test_cozo");
+    let vec = vec![0.1_f32, 0.2, -0.3, 0.4];
+    {
+        let store = crate::cozo_store::CozoKbStore::open(&path).unwrap();
+        store
+            .put_cached_embedding("hash-abc", "nomic-embed-text", 1, &vec)
+            .unwrap();
+        // store dropped here -- genuinely closes the on-disk engine.
+    }
+    let reopened = crate::cozo_store::CozoKbStore::open(&path).unwrap();
+    let hit = reopened
+        .get_cached_embedding("hash-abc", "nomic-embed-text", 1)
+        .unwrap();
+    assert_eq!(
+        hit,
+        Some(vec),
+        "a cached embedding must survive the store being fully closed and reopened"
+    );
+}
+
+#[test]
+fn model_or_chunk_version_bump_invalidates_only_the_affected_entries() {
+    let (_tmp, store) = make_store();
+    let original = vec![1.0_f32, 0.0, 0.0];
+    store
+        .put_cached_embedding("hash-x", "model-a", 1, &original)
+        .unwrap();
+
+    // A different model, same content+chunk_version -> miss (never computed
+    // under this key), and does NOT disturb the original entry.
+    assert_eq!(
+        store.get_cached_embedding("hash-x", "model-b", 1).unwrap(),
+        None,
+        "a different model_id must be a cache miss, not silently reuse model-a's vector"
+    );
+    // A bumped chunk_version, same content+model -> also a miss.
+    assert_eq!(
+        store.get_cached_embedding("hash-x", "model-a", 2).unwrap(),
+        None,
+        "a bumped chunk_version must be a cache miss, not silently reuse the old chunking's vector"
+    );
+    // The ORIGINAL key is untouched by either miss above.
+    assert_eq!(
+        store.get_cached_embedding("hash-x", "model-a", 1).unwrap(),
+        Some(original.clone()),
+        "the original (model, chunk_version) entry must remain exactly as cached"
+    );
+
+    // Now actually populate the bumped-chunk_version key with a genuinely
+    // different vector, and confirm BOTH entries coexist independently --
+    // proving a version bump invalidates exactly the affected entry (a fresh
+    // recompute lands under its own key) without touching the other.
+    let recomputed = vec![0.0_f32, 1.0, 0.0];
+    store
+        .put_cached_embedding("hash-x", "model-a", 2, &recomputed)
+        .unwrap();
+    assert_eq!(
+        store.get_cached_embedding("hash-x", "model-a", 1).unwrap(),
+        Some(original),
+        "the old chunk_version's entry must still be exactly what it was"
+    );
+    assert_eq!(
+        store.get_cached_embedding("hash-x", "model-a", 2).unwrap(),
+        Some(recomputed),
+        "the new chunk_version's entry must be the freshly-computed vector"
+    );
+}
+
+#[test]
+fn cache_lookup_is_a_clean_miss_for_never_cached_content() {
+    let (_tmp, store) = make_store();
+    assert_eq!(
+        store
+            .get_cached_embedding("never-seen", "any-model", 1)
+            .unwrap(),
+        None
+    );
+}
