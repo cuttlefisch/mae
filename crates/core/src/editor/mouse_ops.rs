@@ -473,7 +473,31 @@ impl super::Editor {
 
     /// Switch focus to whichever window contains the given cell coordinates.
     /// Returns `true` if focus actually changed.
+    ///
+    /// Overlay-aware: while the KB graph view is drawn fullscreen
+    /// (`kb_graph_view_overlay_active`), `window_mgr`'s tiled `layout_rects`
+    /// are stale — the tiled pane that used to occupy most of the screen is
+    /// still alive in `window_mgr`, just visually hidden underneath the
+    /// fullscreen graph. A click landing anywhere on screen is a click on
+    /// the graph, so resolve to `kb_graph_view_overlay_window()` FIRST and
+    /// skip the stale tiled hit-test entirely — mirrors the exact
+    /// `kb_graph_view_overlay_window().or_else(|| window_at_cell(...))`
+    /// pattern already used by the GUI hover and wheel-zoom paths (see
+    /// `gui_app.rs`). Folded into this one shared function (rather than each
+    /// of its 3 call sites) per CLAUDE.md principle #8, so any future call
+    /// site inherits correct behavior automatically. Without this, a click
+    /// on the hidden stale pane silently refocused it, and keyboard dispatch
+    /// then resolved that buffer's keymap (no exit binding) — trapping the
+    /// user in an unresponsive-looking fullscreen graph.
     pub fn focus_window_at(&mut self, col: u16, row: u16) -> bool {
+        if let Some(win_id) = self.kb_graph_view_overlay_window() {
+            if win_id != self.window_mgr.focused_id() {
+                self.window_mgr.set_focused(win_id);
+                self.capture_graph_companion_focus(win_id);
+                return true;
+            }
+            return false;
+        }
         let area = self.last_layout_area;
         if let Some(win_id) = self.window_mgr.window_at_cell(col, row, area) {
             if win_id != self.window_mgr.focused_id() {

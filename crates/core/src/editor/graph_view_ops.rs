@@ -6772,4 +6772,207 @@ mod tests {
             mid
         );
     }
+
+    // --- Phase A1: overlay input-focus trap (`Editor::focus_window_at`) ---
+    //
+    // Opening the graph view always creates a 60/40 tiled split
+    // (`DisplayAction::ReuseOrSplit`, ratio 0.6). Toggling the fullscreen
+    // overlay is a pure bool flip that paints the graph over the WHOLE
+    // screen, but the original tiled pane is still alive underneath in
+    // `window_mgr`. Before this fix, `focus_window_at` hit-tested clicks
+    // against the stale pre-overlay `layout_rects` with no awareness of the
+    // overlay, so a click landing where the hidden pane used to be silently
+    // refocused it -- trapping the user (keyboard dispatch then resolved
+    // that buffer's keymap, which has no "close graph" binding).
+
+    #[test]
+    fn focus_window_at_stays_on_the_graph_window_while_overlay_is_active() {
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        let other_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.id != graph_win_id)
+            .map(|w| w.id)
+            .unwrap();
+
+        editor.kb_graph_view_toggle_overlay();
+        assert!(editor.kb_graph_view_overlay_active);
+        assert_eq!(
+            editor.window_mgr.focused_id(),
+            graph_win_id,
+            "opening the graph view focuses the newly split graph window"
+        );
+
+        // Derive a coordinate genuinely inside the stale pane's real
+        // pre-overlay tiled rect (CLAUDE.md #14 -- no hand-picked coordinate).
+        let other_rect = editor
+            .window_mgr
+            .layout_rects(editor.last_layout_area)
+            .into_iter()
+            .find(|(id, _)| *id == other_win_id)
+            .map(|(_, r)| r)
+            .unwrap();
+        let col = other_rect.x + other_rect.width / 2;
+        let row = other_rect.y + other_rect.height / 2;
+
+        let changed = editor.focus_window_at(col, row);
+        assert!(
+            !changed,
+            "a click on the hidden stale pane must not report a focus change \
+             while the fullscreen overlay is active"
+        );
+        assert_eq!(
+            editor.window_mgr.focused_id(),
+            graph_win_id,
+            "focus must stay on the graph window, not silently jump to the hidden stale pane"
+        );
+        assert_eq!(
+            editor.current_keymap_names().map(|(name, _)| name),
+            Some("graph"),
+            "keyboard dispatch must resolve the graph buffer's keymap, not the trapped \
+             stale pane's -- this is the actual observable symptom of the input trap"
+        );
+    }
+
+    #[test]
+    fn focus_window_at_refocuses_the_stale_pane_when_overlay_is_inactive() {
+        // Adversarial (CLAUDE.md #14): proves the fix is a conditional,
+        // overlay-gated behavior change, not a blanket change to
+        // `focus_window_at`'s normal (non-overlay) behavior.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        let other_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.id != graph_win_id)
+            .map(|w| w.id)
+            .unwrap();
+
+        assert!(!editor.kb_graph_view_overlay_active);
+        assert_eq!(editor.window_mgr.focused_id(), graph_win_id);
+
+        let other_rect = editor
+            .window_mgr
+            .layout_rects(editor.last_layout_area)
+            .into_iter()
+            .find(|(id, _)| *id == other_win_id)
+            .map(|(_, r)| r)
+            .unwrap();
+        let col = other_rect.x + other_rect.width / 2;
+        let row = other_rect.y + other_rect.height / 2;
+
+        let changed = editor.focus_window_at(col, row);
+        assert!(
+            changed,
+            "with the overlay OFF, a click on the tiled pane must genuinely refocus it"
+        );
+        assert_eq!(editor.window_mgr.focused_id(), other_win_id);
+    }
+
+    #[test]
+    fn focus_window_at_prefers_overlay_regardless_of_sibling_window_count() {
+        // N-way (CLAUDE.md #14): the overlay preference must win no matter
+        // how many sibling windows exist underneath it, not just the
+        // minimal 2-window case.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let graph_idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let graph_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == graph_idx)
+            .map(|w| w.id)
+            .unwrap();
+        let first_other_win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.id != graph_win_id)
+            .map(|w| w.id)
+            .unwrap();
+
+        // Split the non-graph pane again for a genuine 3-window layout.
+        let text_idx = editor.buffers.len();
+        editor.buffers.push(Buffer::new());
+        let area = editor
+            .window_mgr
+            .layout_rects(editor.last_layout_area)
+            .into_iter()
+            .find(|(id, _)| *id == first_other_win_id)
+            .map(|(_, r)| r)
+            .unwrap();
+        editor.window_mgr.set_focused(first_other_win_id);
+        let third_win_id = editor
+            .window_mgr
+            .split(SplitDirection::Horizontal, text_idx, area)
+            .expect("split should succeed");
+        assert_eq!(editor.window_mgr.iter_windows().count(), 3);
+
+        editor.kb_graph_view_toggle_overlay();
+        assert!(editor.kb_graph_view_overlay_active);
+
+        for target in [first_other_win_id, third_win_id] {
+            let rect = editor
+                .window_mgr
+                .layout_rects(editor.last_layout_area)
+                .into_iter()
+                .find(|(id, _)| *id == target)
+                .map(|(_, r)| r)
+                .unwrap();
+            let col = rect.x + rect.width / 2;
+            let row = rect.y + rect.height / 2;
+            editor.focus_window_at(col, row);
+            assert_eq!(
+                editor.window_mgr.focused_id(),
+                graph_win_id,
+                "overlay preference must win over sibling window {:?} underneath it",
+                target
+            );
+        }
+    }
+
+    #[test]
+    fn focus_window_at_outside_any_window_is_still_a_noop_without_overlay() {
+        // Confirms the fix leaves the pre-existing "click outside every
+        // window's rect" no-op behavior completely unaffected.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        assert!(!editor.kb_graph_view_overlay_active);
+        let before = editor.window_mgr.focused_id();
+
+        let col = editor.last_layout_area.x + editor.last_layout_area.width + 50;
+        let row = editor.last_layout_area.y + editor.last_layout_area.height + 50;
+        let changed = editor.focus_window_at(col, row);
+        assert!(
+            !changed,
+            "a click outside every window's rect must remain a no-op, as before this fix"
+        );
+        assert_eq!(editor.window_mgr.focused_id(), before);
+    }
 }
