@@ -1015,11 +1015,7 @@ mod partition_boundary_links_by_instance_tests {
                 priority: 0,
                 remote_hub: None,
             });
-        editor
-            .kb
-            .instances
-            .entry(uuid.to_string())
-            .or_insert_with(KnowledgeBase::new)
+        editor.kb.instances.entry(uuid.to_string()).or_default()
     }
 
     /// Three registered instances (primary + two siblings, "alpha" and
@@ -1166,10 +1162,9 @@ mod partition_boundary_links_by_instance_tests {
             .registry
             .find(stale_uuid.as_deref().unwrap())
             .is_none());
-        assert!(editor
+        assert!(!editor
             .kb
             .instances
-            .get(stale_uuid.as_deref().unwrap())
-            .is_none());
+            .contains_key(stale_uuid.as_deref().unwrap()));
     }
 }

@@ -732,6 +732,10 @@
           "kind": "struct"
         },
         {
+          "name": "CrossInstanceLink",
+          "kind": "struct"
+        },
+        {
           "name": "SubgraphResult",
           "kind": "struct"
         },
