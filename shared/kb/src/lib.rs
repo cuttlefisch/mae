@@ -1234,21 +1234,37 @@ impl KnowledgeBase {
         while depth <= spec.max_depth && !frontier.is_empty() {
             let mut next_frontier = Vec::new();
             for node_id in &frontier {
-                if included.insert(node_id.clone()) && depth < spec.max_depth {
-                    // Add outgoing links to frontier
-                    if let Some(node) = self.nodes.get(node_id) {
+                // #493: only a node that actually resolves may enter
+                // `included` at all. A dead/typo'd link's target must NOT be
+                // phantom-inserted here even though it's silently skipped
+                // later in `collect_and_categorize`'s node-collection loop --
+                // by the time that loop runs, the damage is already done:
+                // `collect_and_categorize` classifies a link as internal vs.
+                // boundary purely via `included.contains(&target)`, so a
+                // phantom-included dead target makes a REAL link pointing at
+                // it misclassify as "internal" (same-subgraph) instead of
+                // "boundary" (unresolvable) -- the target never actually
+                // appears in the result's `nodes`, so that link now points at
+                // nothing, silently. Gating the `included.insert` on node
+                // existence (short-circuit, so a nonexistent id also never
+                // triggers link/backlink expansion) fixes this at the source
+                // instead of leaving it for every downstream categorization
+                // site to work around individually (CLAUDE.md #8).
+                if let Some(node) = self.nodes.get(node_id) {
+                    if included.insert(node_id.clone()) && depth < spec.max_depth {
+                        // Add outgoing links to frontier
                         for link in node.links() {
                             if !included.contains(&link) {
                                 next_frontier.push(link);
                             }
                         }
-                    }
-                    // Add backlinks if requested
-                    if spec.include_backlinks {
-                        if let Some(sources) = self.links_in.get(node_id) {
-                            for src in sources {
-                                if !included.contains(src) {
-                                    next_frontier.push(src.clone());
+                        // Add backlinks if requested
+                        if spec.include_backlinks {
+                            if let Some(sources) = self.links_in.get(node_id) {
+                                for src in sources {
+                                    if !included.contains(src) {
+                                        next_frontier.push(src.clone());
+                                    }
                                 }
                             }
                         }
