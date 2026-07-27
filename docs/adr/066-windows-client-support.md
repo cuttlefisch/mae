@@ -418,3 +418,56 @@ touches). Phases D (GUI Windows verification) and E (remote-connection path
 verification) remain open, tracked as issues #445/#446 — deliberately not compressed
 into this pass, consistent with this ADR's own "Costs" section calling Windows support
 one of the three largest children in the ADR-057 vision set.
+
+**Phase E — picked up (issue #446), Phase D still explicitly deferred.** Per this ADR's
+own text, Phase E depends only on the already-cross-platform TCP/mTLS and OAuth/HTTPS
+transports, not on Phase A/D — so it was sequenced ahead of Phase D (which needs a
+GPU-capable Windows toolchain pass Phase D itself hasn't had yet).
+
+Real infrastructure problem, not application code: GH Actions has no native way to
+network two different-OS hosted runners together, so a genuinely remote Linux daemon
+can't be reached from a Windows runner without a second, non-GH-Actions-native hop
+(a self-hosted runner pair, a tunnel service, or similar — all rejected as
+disproportionate to what this phase needs to prove). Instead, `daemon/examples/
+windows_remote_verify.rs` — a Windows-native Rust client using the SAME transports a
+real remote deployment would (TCP + OAuth/HTTPS bearer, no Unix-socket dependency
+anywhere) — runs on a single `windows-latest` runner against a `mae-daemon` that is
+genuinely Linux-built and Linux-run inside WSL2 on that same runner. This proves the
+protocol/client code paths Phase E cares about (a Windows-built client correctly
+speaking both transports to a Linux-built daemon) without claiming to prove anything
+about cross-machine network topology, which was never this phase's actual question.
+
+De-risked locally first: `daemon/tests/windows_remote_verify_smoke_test.rs` runs the
+same client binary Linux-to-Linux against a real local daemon before ever trusting it
+in the harder-to-debug cross-OS CI job — catching one real bug this way (a blocking
+`std::process::Command::output()` inside `#[tokio::test]`'s single-threaded runtime
+starved a `tokio::spawn`ed mock JWKS server on the same runtime, hanging the daemon's
+own JWT verification indefinitely; fixed by switching to `tokio::process::Command`).
+
+First real-CI round surfaced a wrong assumption the job's own original comment had
+stated outright: that `windows-latest` ships WSL2 with a Linux distro preinstalled. It
+does not — the WSL2 *kernel feature* is present, but `wsl --status` reported "no
+installed distributions," and the naive follow-on `wsl bash "$(wslpath ...)"` failed
+with `wslpath: command not found` (`wslpath` is a WSL-internal utility; invoking it from
+the git-bash host side, which is what a bare `wsl bash "$(...)"` construction does when
+building the argument string, can't work regardless of distro availability). Fixed by
+adding `Vampire/setup-wsl@v7` (installs a real Ubuntu-22.04 distro via lightweight
+rootfs import — no interactive `wsl --install`/reboot cycle, which would be far too slow
+and unreliable for ephemeral CI) and switching the WSL-side steps to its `wsl-bash {0}`
+shell, which runs a step's script genuinely inside the distro. This also let three
+earlier self-review-caught workarounds be simplified away entirely: the separate
+`daemon/phase-e-*.sh` script files (previously needed only to dodge Git Bash's `/tmp`
+being a different filesystem from WSL2's own) collapsed into plain inline `run:` blocks,
+since `wsl-bash` steps already execute directly against the checked-out workspace's
+WSL-visible path.
+
+The same round also surfaced an unrelated but real gap: `cargo fmt --all --check` run
+from the repo root only covers the editor workspace — `daemon/` is a separate Cargo
+workspace (ADR-014) with its own independent fmt state, silently never checked locally
+before the first push of this phase's new files. Fixed by running `cargo fmt --all`
+inside `daemon/` directly; this also reformatted several pre-existing daemon test/bench
+files that had apparently never been checked against this exact rustfmt version.
+
+Status as of this note: pushed, iterating against real CI (issue #446, PR #459) —
+matching this ADR's own established Phase C precedent of multiple real rounds before a
+confirmed-green status is claimed. Not yet confirmed green.

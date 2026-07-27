@@ -217,6 +217,160 @@ jobs:
         run: |
           cargo clippy -p mae-mcp -p mae-core -p mae --bin mae -p mae-agent-cli --all-targets -- -D warnings
 
+  windows-remote-e2e:
+    name: ADR-066 Phase E / windows remote daemon verification
+    runs-on: windows-latest
+    # First iteration of genuinely new CI infrastructure (a Windows-BUILT
+    # client reaching a real Linux-BUILT mae-daemon, hosted in WSL2 on the
+    # SAME runner since GH Actions has no native way to network two
+    # different-OS runners directly) with ZERO local pre-verification
+    # possible -- same posture mae-vscode's own untriaged Windows CI gap
+    # uses, and the same one ADR-066 Phase A/C started with before being
+    # proven stable enough to hard-block. Promote to blocking once proven
+    # stable across a few real runs, matching that same precedent -- not a
+    # permanent leniency.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "daemon -> daemon/target"
+
+      # The verification client + its --gen-material mode (self-signed TLS
+      # cert/key, JWKS, a signed JWT) -- built natively on Windows, since
+      # this is exactly the "Windows-built client" ADR-066 Phase E's own
+      # text names. examples/ (not a [[bin]]) because --gen-material needs
+      # rsa/rcgen/rand/base64, dev-dependencies a production mae-daemon
+      # binary has no business linking.
+      - name: Build windows_remote_verify (Windows-native)
+        run: cd daemon && cargo build --example windows_remote_verify
+
+      - name: Generate cert/JWKS/JWT material (Windows side)
+        shell: bash
+        run: |
+          mkdir -p daemon/phase-e-material
+          jwt=$(./daemon/target/debug/examples/windows_remote_verify.exe \
+            --gen-material daemon/phase-e-material \
+            --resource "https://127.0.0.1:39443/mcp")
+          echo "PHASE_E_JWT=$jwt" >> "$GITHUB_ENV"
+
+      # `windows-latest` has the WSL2 KERNEL FEATURE enabled but ships with
+      # NO distro installed -- confirmed the hard way by a real CI run
+      # ("wsl --status" printing "Windows Subsystem for Linux has no
+      # installed distributions", and a follow-on "wslpath: command not
+      # found" because `wslpath` only exists INSIDE a WSL distro, not on
+      # the host git-bash side that a bare `wsl bash "$(wslpath ...)"`
+      # invocation runs from). Vampire/setup-wsl installs a real Ubuntu
+      # distro (a lightweight rootfs import, no interactive `wsl --install`
+      # / reboot cycle) and additionally provides a `wsl-bash` shell that
+      # runs a step's `run:` block genuinely INSIDE that distro -- so
+      # `wslpath` (used below to translate the Windows checkout path into
+      # its WSL-visible /mnt/... form) is called from the correct side.
+      - uses: Vampire/setup-wsl@v7
+        with:
+          distribution: Ubuntu-22.04
+          additional-packages: build-essential python3
+
+      - name: Confirm WSL2 distro is available
+        shell: wsl-bash {0}
+        run: lsb_release -a
+
+      # Real Rust toolchain + a real build of mae-daemon FROM THE SAME
+      # CHECKED-OUT SOURCE, entirely inside WSL2 -- genuinely Linux-built,
+      # not cross-compiled or downloaded. WSL2 exposes the Windows checkout
+      # via /mnt/<drive>/..., so no second checkout is needed. `${{
+      # github.workspace }}` is substituted by GH Actions as a literal
+      # Windows path (e.g. `D:\a\mae\mae`) before this script ever runs;
+      # `wslpath` (now genuinely available under `wsl-bash`) converts it.
+      - name: Build mae-daemon inside WSL2 (genuinely Linux-built)
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          if ! command -v cargo >/dev/null 2>&1; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
+          fi
+          source "$HOME/.cargo/env"
+          cd "$(wslpath '${{ github.workspace }}')/daemon"
+          cargo build --bin mae-daemon
+
+      # Start the real Linux-built daemon inside WSL2, bound to
+      # 127.0.0.1:39443 -- WSL2's automatic localhost port-forwarding makes
+      # this reachable from the Windows-native client below as
+      # 127.0.0.1:39443, no explicit port-forwarding setup needed (a
+      # documented WSL2 behavior, unverified against THIS specific runner
+      # image until this job actually runs).
+      #
+      # jwks_url must be http(s):// -- reqwest::Client::new() (daemon/src/oauth.rs's
+      # JWKS fetcher) does not support file:// URLs, confirmed by direct
+      # source read rather than assumed and left to fail in CI. A tiny
+      # Python http.server (installed via additional-packages above) serves
+      # the generated jwks.json entirely WITHIN WSL's own network namespace
+      # -- both it and the daemon that fetches from it run inside WSL, so
+      # this never needs to cross the Windows/WSL boundary at all.
+      - name: Start mae-daemon inside WSL2 (collab TCP + OAuth/HTTPS)
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          source "$HOME/.cargo/env"
+          root="$(wslpath '${{ github.workspace }}')/daemon"
+          material="$root/phase-e-material"
+          data_dir="$(mktemp -d)/data"
+          mkdir -p "$data_dir"
+
+          cd "$material"
+          nohup python3 -m http.server 39441 --bind 127.0.0.1 \
+            > /tmp/mae-jwks-server-phase-e.log 2>&1 &
+          disown
+          for i in $(seq 1 25); do
+            (echo > /dev/tcp/127.0.0.1/39441) >/dev/null 2>&1 && break
+            sleep 0.2
+          done
+
+          config=$(mktemp)
+          {
+            echo '[collab]'
+            echo 'enabled = true'
+            echo 'bind = "127.0.0.1:39442"'
+            echo ''
+            echo '[collab.auth]'
+            echo 'mode = "none"'
+            echo ''
+            echo '[oauth]'
+            echo 'enabled = true'
+            echo 'bind = "127.0.0.1:39443"'
+            echo 'canonical_resource_uri = "https://127.0.0.1:39443/mcp"'
+            echo 'jwks_url = "http://127.0.0.1:39441/jwks.json"'
+            echo 'issuer = "https://idp.example.com"'
+            echo "cert_path = \"$material/cert.pem\""
+            echo "key_path = \"$material/key.pem\""
+            echo 'kb_query_enabled = true'
+          } > "$config"
+
+          cd "$root"
+          XDG_RUNTIME_DIR="$(mktemp -d)" XDG_CONFIG_HOME="$(mktemp -d)" \
+            nohup ./target/debug/mae-daemon --data-dir "$data_dir" --config "$config" \
+            > /tmp/mae-daemon-phase-e.log 2>&1 &
+          disown
+          for i in $(seq 1 50); do
+            (echo > /dev/tcp/127.0.0.1/39442) >/dev/null 2>&1 && exit 0
+            sleep 0.2
+          done
+          echo 'daemon did not come up within 10s'; cat /tmp/mae-daemon-phase-e.log; exit 1
+
+      - name: Run Windows-native verification client against the WSL2-hosted daemon
+        shell: bash
+        run: |
+          ./daemon/target/debug/examples/windows_remote_verify.exe \
+            --collab-addr 127.0.0.1:39442 \
+            --oauth-url https://127.0.0.1:39443 \
+            --jwt "$PHASE_E_JWT"
+
+      - name: Daemon log (always, for diagnosis)
+        if: always()
+        shell: wsl-bash {0}
+        run: cat /tmp/mae-daemon-phase-e.log || true
+
   daemon:
     name: daemon / check + test
     runs-on: ubuntu-latest

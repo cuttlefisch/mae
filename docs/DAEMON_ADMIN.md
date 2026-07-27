@@ -41,6 +41,43 @@ systemctl --user enable --now mae-daemon
 journalctl --user -u mae-daemon -f        # follow logs
 ```
 
+### Multi-tenant deployment: shared process vs. process-per-tenant (ADR-060)
+
+Two supported deployment shapes, not one — pick based on the isolation guarantee a given
+tenant actually needs:
+
+- **Shared process (default, `mae-daemon.service` above).** Multiple tenants — e.g. several
+  teams inside the same trusted organization — share one daemon process. Phase A-D give this
+  real, software-enforced isolation: per-tenant instance addressing (never resolves another
+  tenant's data), per-tenant cost-weighted request-points budgets + connection caps, and
+  tenant-boundary role composition that never leaks across KBs. Efficient (one process, shared
+  cache), and sufficient for the common case.
+- **Process-per-tenant (`assets/mae-daemon@.service`, a systemd *template* unit).** For a
+  tenant whose operator needs "if this tenant's daemon crashes or gets OOM-killed, it must
+  not take any other tenant down with it" — a guarantee Phase A-D's in-process isolation,
+  however correct, cannot give (they're still one process, one failure domain). Each
+  instantiation gets its own PID, its own `daemon.toml`, its own data directory:
+
+  ```bash
+  # One-time per tenant: a distinct config with its own socket/collab.bind port
+  # (instances must never collide) and, recommended, [[tenant]] entries scoping
+  # this instance to just its own KB instances/principals (Phase C).
+  cp assets/daemon-config.toml ~/.config/mae/daemon-acme-corp.toml
+  # edit: unique `socket`, unique `collab.bind` port
+
+  cp assets/mae-daemon@.service ~/.config/systemd/user/
+  systemctl --user daemon-reload
+  systemctl --user enable --now 'mae-daemon@'"$(systemd-escape acme-corp)"'.service'
+  journalctl --user -u 'mae-daemon@*' -f    # follow all tenant instances' logs
+  ```
+
+  **Linux-only** — mae-daemon is confirmed never expected to run on macOS or Windows as a
+  deployed service, so there is no `launchd`/Service-Control-Manager equivalent of this unit.
+
+Both shapes can run simultaneously: e.g. most tenants sharing one `mae-daemon.service`
+process, with one tenant that has stricter isolation requirements split out to its own
+`mae-daemon@acme-corp.service` instance.
+
 ---
 
 ## 2. Configuration (`~/.config/mae/daemon.toml`)
