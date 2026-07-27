@@ -7,7 +7,10 @@ parser-as-projector), ADR-035 (editor↔daemon boundary + `daemon_mode`), ADR-05
 MCP pairing — VS Code/Copilot & cross-editor compatibility), ADR-053 (live scoped read-through KB
 query surface). This ADR is the root of a new ADR set (ADR-058 through ADR-066); every child ADR
 in that set Extends this one.
-**Tracking:** epic tracker to be filed.
+**Tracking:** issue #394 — filed alongside this ADR's original authoring pass; this line
+was never updated with the real issue number afterward, itself a small instance of the
+exact "prose drifts from reality" failure mode this ADR exists to prevent (caught and
+fixed 2026-07-27, prompted by a direct request to check for stale ADR content).
 
 ## Context
 
@@ -308,3 +311,39 @@ failures, not added post-hoc); it remains binding on ADR-066's unstarted Phases 
 ADR-060/ADR-064 once their own Windows-relevant surfaces are implemented.
 
 Status flipped `Proposed` → `Accepted` on this basis.
+
+### Progress note (2026-07-27, prompted by a direct request to check for stale ADR content)
+
+Real status check against the actual child ADR docs and their tracking issues (not assumed
+from this note's own age), six-plus months after ratification:
+
+| Child | Status | Note |
+|---|---|---|
+| ADR-058 (per-project KB provisioning) | **Shipped**, all 5 phases | issue #396 (epic), closed |
+| ADR-059 (ADR-as-KB-node generalization) | **Shipped**, all 5 phases | issue #402 (epic), closed |
+| ADR-060 (daemon multi-tenancy) | **6 of 7 phases shipped** | issue #408 (epic), open — Phase C's collab/OAuth-side extension deferred to #456; row 3's "single global lock" reality is now closed (superseded by per-tenant addressing/locking, Phases A/B) |
+| ADR-061 (KB enrichment) | **Not started** — `Status: Proposed` | issue #416 (epic) + 6 phase issues (#417-422), all open |
+| ADR-062 (federation registry scaling) | **Shipped** | issue #423 (epic), closed |
+| ADR-063 (guidance-delivery uniformity) | **Shipped** | issue #429 (epic), closed |
+| ADR-064 (second native frontend, visual design) | **Not started** — `Status: Proposed` | issue #434 (epic) + 6 phase issues (#435-440), all open |
+| ADR-065 (KB/daemon drift corrections) | **Shipped**, all 4 items | issues #390-393, closed |
+| ADR-066 (Windows client support) | **4 of 5 phases shipped** | issue #441 (epic), open — Phase D (GUI verification) remains, tracked as #445 |
+
+Net: **seven of nine children fully shipped**; two (ADR-060, ADR-066) materially complete
+with one honestly-scoped remaining piece each, both separately tracked rather than blocking
+their epics from reflecting the real state of the other phases; two (ADR-061, ADR-064) not
+yet started at all. ADR-061 and ADR-064 are, not coincidentally, two of the three children
+this ADR's own Consequences section named up front as "large enough on their own that each
+is comparable in scope to the entire ADR-050-055 initiative" (the third, ADR-060, is the
+most complete of the three large ones). This matches the sizing prediction in that section
+rather than contradicting it — the large children were expected to take longest, and have.
+
+Row 3's "today's reality" text (single global `Arc<Mutex<DaemonState>>`) is now stale in
+the same sense row 11's was at the original ratification: the gap it describes has since
+closed for the phases ADR-060 actually shipped (Phases A/B replaced the global lock with
+per-tenant addressing + directory/per-instance locking). Left as historical record per this
+ADR's own stated policy (a closed gap's citation stays attributed to what closed it, not
+rewritten to describe the post-fix state), consistent with how row 11 was handled originally.
+
+Issue #394 (the overarching epic this ADR's Tracking line now correctly points to, see
+above) has been updated with this same status breakdown.
