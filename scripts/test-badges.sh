@@ -47,9 +47,21 @@ echo ""
 echo "=== Step 3: Test PATCH (write badge data) ==="
 
 # Count tests
+# Matches badges.yml's own counting method (fixed 2026-07-28: the prior
+# `cargo test` + sum-per-binary-"N passed"-lines approach was fragile and had
+# badly undercounted in CI — 452 against a real ~7,223+ suite — with no visible
+# error since failures were swallowed by `|| true`/`continue-on-error`).
+# nextest's own final summary is ONE authoritative line for the whole run.
 echo "Counting tests..."
-OUTPUT=$(cargo test --workspace --exclude mae-gui 2>&1)
-TOTAL=$(echo "$OUTPUT" | grep -oP '\d+ passed' | awk '{s+=$1} END {print s}')
+command -v cargo-nextest >/dev/null 2>&1 || cargo install cargo-nextest --locked
+set +e
+cargo nextest run --workspace --features gui 2>&1 | tee /tmp/nextest-badge-output.log
+set -e
+TOTAL=$( (grep -oP '\d+(?= tests run)' /tmp/nextest-badge-output.log || true) | tail -1)
+if [ -z "$TOTAL" ]; then
+    echo "❌ Could not parse a test count from nextest output — see the log above."
+    exit 1
+fi
 FORMATTED=$(printf "%'d" "$TOTAL")
 echo "Tests: $FORMATTED passing"
 
