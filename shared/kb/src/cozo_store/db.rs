@@ -193,33 +193,46 @@ impl CozoKbStore {
     }
     /// Retry a cozo op on SQLite BUSY / "database is locked" contention.
     ///
-    /// cozo 0.7's sqlite backend sets no `busy_timeout`, so a concurrent
-    /// cross-process writer transiently fails with "database is locked" — an
-    /// experiment showed ~14% raw write-failure under two-writer contention, and 0%
-    /// with this backoff. Multi-instance daemon-less sharing depends on it. On the
-    /// sled backend the predicate never matches, so this is a zero-cost pass-through.
+    /// cozo 0.7's sqlite backend sets no `busy_timeout` — confirmed by direct
+    /// inspection of the vendored `cozo-0.7.6` source (`storage/sqlite.rs`):
+    /// `new_cozo_sqlite`/`SqliteStorage::transact` open their own `sqlite` crate
+    /// `Connection` internally with no `pragma busy_timeout`/`journal_mode=WAL`
+    /// call anywhere, and the connection itself is never exposed via any public
+    /// API — there is no hook this crate could use to set the pragma even if it
+    /// wanted to. So a concurrent cross-process writer transiently fails with
+    /// "database is locked" (an experiment showed ~14% raw write-failure under
+    /// two-writer contention, 0% with this backoff), and the only lever
+    /// available is an application-level retry loop. Multi-instance
+    /// daemon-less sharing depends on it. On the sled backend the predicate
+    /// never matches, so this is a zero-cost pass-through.
     ///
-    /// MAX_ATTEMPTS was raised from 100 to 400 after
-    /// `sqlite_multi_instance_concurrent_writes_converge` (the adversarial test this
-    /// backoff exists for) flaked on CI with a genuine "database is locked (code 5)"
-    /// after exhausting retries — CI runners contend for disk/CPU more than the dev
-    /// machine the original 14%/0% figures were measured on, so the retry budget
-    /// needs headroom for slower/more-loaded hardware, not just a fast local box.
-    /// Worst-case added latency stays bounded (~8ms/attempt cap × 400 ≈ 3.2s ceiling,
-    /// only ever paid under sustained contention — a successful write still returns
-    /// on the first attempt with zero added latency).
+    /// **Bounded by wall-clock time, not attempt count** (issue #484): a fixed
+    /// `MAX_ATTEMPTS` was tried first (raised 100 → 400 after an earlier CI
+    /// flake), but a per-attempt count is an indirect, hardware-dependent proxy
+    /// for "how long can I wait" — it silently under-budgets on a slower/more
+    /// contended CI runner than whatever machine last tuned the number, which is
+    /// exactly what happened again (`sqlite_multi_instance_concurrent_writes_
+    /// converge` still exhausted 400 attempts under heavier load). A deadline
+    /// bounds the thing this retry actually cares about directly, and adapts to
+    /// however slow the CI runner happens to be without needing a third manual
+    /// re-tune. `MAX_RETRY_DURATION` is generous (dwarfing the ~14%-of-the-time,
+    /// sub-millisecond contention windows this backoff is measured to clear) but
+    /// still finite, so a genuinely stuck/deadlocked writer doesn't hang forever
+    /// — a real failure still surfaces, just after actually exhausting a
+    /// reasonable time budget instead of an arbitrary attempt count.
     fn run_with_busy_retry<F>(&self, mut op: F) -> Result<NamedRows, cozo::Error>
     where
         F: FnMut() -> Result<NamedRows, cozo::Error>,
     {
-        const MAX_ATTEMPTS: u32 = 400;
+        const MAX_RETRY_DURATION: std::time::Duration = std::time::Duration::from_secs(20);
         // Per-instance seed so two competing writers jitter differently. Without
         // jitter, identical backoff keeps them in lockstep and they collide forever.
         let seed = self as *const Self as u64;
+        let start = std::time::Instant::now();
         let mut attempt: u32 = 0;
         loop {
             match op() {
-                Err(e) if attempt < MAX_ATTEMPTS && Self::is_busy(&e) => {
+                Err(e) if start.elapsed() < MAX_RETRY_DURATION && Self::is_busy(&e) => {
                     attempt += 1;
                     // Exponential cap (~0.25ms → 8ms) with FULL jitter: sleep a random
                     // 0..cap so the two writers desynchronize and both make progress

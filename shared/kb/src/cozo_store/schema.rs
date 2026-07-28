@@ -528,10 +528,44 @@ impl CozoKbStore {
 /// the call shape differs. `run_with_busy_retry`'s own doc comment explains
 /// why jitter specifically matters here: "Without jitter, identical backoff
 /// keeps them in lockstep and they collide forever."
+///
+/// Bounded by wall-clock time (issue #484), same reasoning and same fix as
+/// `Db::run_with_busy_retry`'s own doc comment: a fixed attempt count is an
+/// indirect, hardware-dependent proxy for "how long can I wait," and this
+/// function had the IDENTICAL `MAX_ATTEMPTS: u32 = 400` vulnerability its
+/// sibling did, just never observed failing in CI yet — fixed here too for
+/// consistency rather than leaving a second copy of the same latent bug
+/// (principle #15: fix drift for the whole feature area, not just the one
+/// symptom that happened to be reported first).
 pub(crate) fn retry_on_transient_sqlite_busy<T, E: std::fmt::Display>(
     f: impl Fn() -> Result<T, E>,
 ) -> Result<T, E> {
-    const MAX_ATTEMPTS: u32 = 400;
+    retry_on_transient_sqlite_busy_with_deadline(f, DEFAULT_BUSY_RETRY_DEADLINE)
+}
+
+/// Production default — matches `Db::run_with_busy_retry`'s own budget exactly
+/// (principle #8: one tuned constant, not two that can drift apart).
+const DEFAULT_BUSY_RETRY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// Test-only seam: the "gives up eventually" tests need a SHORT deadline to
+/// stay fast (a persistent-contention closure genuinely runs for the entire
+/// budget by construction — that's the property being tested), so the real
+/// 20s production deadline isn't usable directly in a unit test without
+/// making the suite slow. Not part of the public API surface (`pub(crate)`,
+/// `#[cfg(test)]`-only caller) — production code always goes through
+/// [`retry_on_transient_sqlite_busy`] with the real budget above.
+#[cfg(test)]
+pub(crate) fn retry_on_transient_sqlite_busy_for_test<T, E: std::fmt::Display>(
+    f: impl Fn() -> Result<T, E>,
+    deadline: std::time::Duration,
+) -> Result<T, E> {
+    retry_on_transient_sqlite_busy_with_deadline(f, deadline)
+}
+
+fn retry_on_transient_sqlite_busy_with_deadline<T, E: std::fmt::Display>(
+    f: impl Fn() -> Result<T, E>,
+    deadline: std::time::Duration,
+) -> Result<T, E> {
     fn is_transient_busy_message(s: &str) -> bool {
         let s = s.to_ascii_lowercase();
         s.contains("database is locked") || s.contains("sqlite_busy") || s.contains("busy")
@@ -540,6 +574,7 @@ pub(crate) fn retry_on_transient_sqlite_busy<T, E: std::fmt::Display>(
     // `self as *const Self as u64`) -- no need for a real RNG crate just to
     // desynchronize two competing retriers.
     let seed = &f as *const _ as u64;
+    let start = std::time::Instant::now();
     let mut attempt: u32 = 0;
     loop {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&f));
@@ -553,7 +588,7 @@ pub(crate) fn retry_on_transient_sqlite_busy<T, E: std::fmt::Display>(
                 .unwrap_or(false),
             Ok(Ok(_)) => false,
         };
-        if !is_retryable || attempt >= MAX_ATTEMPTS {
+        if !is_retryable || start.elapsed() >= deadline {
             return match outcome {
                 Ok(result) => result,
                 Err(payload) => std::panic::resume_unwind(payload),

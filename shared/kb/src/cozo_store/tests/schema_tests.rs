@@ -132,7 +132,9 @@ fn concurrent_first_time_sled_open_never_panics_even_under_lock_contention() {
 /// exercises the retry logic itself directly for BOTH shapes rather than
 /// relying on getting lucky with real contention.
 mod retry_on_transient_sqlite_busy_tests {
-    use crate::cozo_store::schema::retry_on_transient_sqlite_busy;
+    use crate::cozo_store::schema::{
+        retry_on_transient_sqlite_busy, retry_on_transient_sqlite_busy_for_test,
+    };
     use std::sync::atomic::{AtomicU32, Ordering};
 
     #[test]
@@ -236,30 +238,46 @@ mod retry_on_transient_sqlite_busy_tests {
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 
+    /// Issue #484: bounded by wall-clock time, not a fixed attempt count (see
+    /// `retry_on_transient_sqlite_busy_with_deadline`'s own doc comment for why
+    /// a fixed count under-provisions on a slower/more-loaded CI runner). Uses
+    /// the test-only short-deadline seam so this stays fast -- a
+    /// persistent-contention closure genuinely runs for the ENTIRE deadline by
+    /// construction (that's the property under test), so exercising the real
+    /// 20s production deadline directly here would make the suite slow for no
+    /// added coverage.
+    const TEST_DEADLINE: std::time::Duration = std::time::Duration::from_millis(200);
+
     #[test]
     fn gives_up_after_the_bounded_retry_budget_on_persistent_contention() {
         let attempts = AtomicU32::new(0);
+        let start = std::time::Instant::now();
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            retry_on_transient_sqlite_busy(|| -> Result<(), String> {
-                attempts.fetch_add(1, Ordering::SeqCst);
-                panic!("database is locked");
-            })
+            retry_on_transient_sqlite_busy_for_test(
+                || -> Result<(), String> {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    panic!("database is locked");
+                },
+                TEST_DEADLINE,
+            )
         }));
+        let elapsed = start.elapsed();
         assert!(
             outcome.is_err(),
             "persistent (never-clearing) contention must eventually surface as a propagated \
              panic, not loop forever"
         );
-        let n = attempts.load(Ordering::SeqCst);
-        // MAX_ATTEMPTS=400 permits 401 total calls (the check happens before
-        // the retry-th call, same off-by-one shape as this crate's existing
-        // `Db::run_with_busy_retry` precedent) -- bound loosely at 500 rather
-        // than pin the exact number, since the point of this assertion is
-        // "bounded, not infinite," not enforcing an exact off-by-one.
         assert!(
-            (1..=500).contains(&n),
-            "must give up within the documented bounded budget (~400, matching \
-             Db::run_with_busy_retry's own precedent), got {n} attempts"
+            attempts.load(Ordering::SeqCst) > 1,
+            "must have actually retried at least once before giving up, not fail on the first \
+             attempt like the unrelated-panic case does"
+        );
+        // Generous upper bound (deadline + one worst-case 8ms sleep + scheduling
+        // slack), never a lower bound on real elapsed time -- the point is
+        // "bounded, not infinite," not pinning an exact duration.
+        assert!(
+            elapsed < TEST_DEADLINE + std::time::Duration::from_millis(500),
+            "must give up within the documented deadline budget, took {elapsed:?}"
         );
     }
 
@@ -268,15 +286,23 @@ mod retry_on_transient_sqlite_busy_tests {
     #[test]
     fn gives_up_after_the_bounded_retry_budget_on_persistent_err_contention() {
         let attempts = AtomicU32::new(0);
-        let result: Result<(), String> = retry_on_transient_sqlite_busy(|| {
-            attempts.fetch_add(1, Ordering::SeqCst);
-            Err("database is locked".to_string())
-        });
+        let start = std::time::Instant::now();
+        let result: Result<(), String> = retry_on_transient_sqlite_busy_for_test(
+            || {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                Err("database is locked".to_string())
+            },
+            TEST_DEADLINE,
+        );
+        let elapsed = start.elapsed();
         assert!(result.is_err());
-        let n = attempts.load(Ordering::SeqCst);
         assert!(
-            (1..=500).contains(&n),
-            "must give up within the documented bounded budget, got {n} attempts"
+            attempts.load(Ordering::SeqCst) > 1,
+            "must have actually retried at least once before giving up"
+        );
+        assert!(
+            elapsed < TEST_DEADLINE + std::time::Duration::from_millis(500),
+            "must give up within the documented deadline budget, took {elapsed:?}"
         );
     }
 }
