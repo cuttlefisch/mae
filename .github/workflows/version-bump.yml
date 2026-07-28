@@ -146,14 +146,26 @@ jobs:
           # tag never does) can happen). 60 min gives real headroom above
           # the worst genuinely-observed duration, not just past it.
           for i in $(seq 1 120); do
-            # Check if the CI workflow has completed on this commit
-            STATUS=$(gh api "repos/${{ github.repository }}/commits/${SHA}/status" --jq '.state' 2>/dev/null || echo "pending")
+            # Gate ONLY on the "CI" workflow run for this commit -- not on
+            # check-suites broadly, which used to fold in every OTHER
+            # github-actions workflow that also happens to run on push to
+            # main (Badges, most notably). A real, observed miss: the v0.14.58
+            # bump commit's actual CI was still legitimately green (in
+            # progress, later passed) while Badges independently failed for
+            # its own unrelated reason -- check-suites' "any workflow failed"
+            # semantics treated that as a reason to skip tagging a release
+            # whose real code was fine. Badges updates a gist-hosted shields.io
+            # badge; it has no bearing on whether the tagged commit is safe to
+            # release, and must never gate the release the way a genuine code
+            # CI failure does. Uses the Actions runs API (which reports a
+            # `name` per workflow directly) instead of check-suites (which
+            # only exposes an opaque per-app conclusion with no per-workflow
+            # breakout) specifically so this can filter to the one workflow
+            # that actually represents "is the code correct."
+            CONCLUSION=$(gh api "repos/${{ github.repository }}/actions/runs?head_sha=${SHA}" \
+              --jq '[.workflow_runs[] | select(.name == "CI")] | if length == 0 then "pending" elif all(.conclusion == "success" or .conclusion == "skipped") then "success" elif any(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled") then "failure" else "pending" end' 2>/dev/null || echo "pending")
 
-            # Also check the check-suites (Actions use check runs, not commit statuses)
-            CONCLUSION=$(gh api "repos/${{ github.repository }}/commits/${SHA}/check-suites" \
-              --jq '[.check_suites[] | select(.app.slug == "github-actions")] | if length == 0 then "pending" elif all(.conclusion == "success" or .conclusion == "skipped") then "success" elif any(.conclusion == "failure" or .conclusion == "timed_out" or .conclusion == "cancelled") then "failure" else "pending" end' 2>/dev/null || echo "pending")
-
-            echo "  Attempt $i: status=$STATUS, check-suites=$CONCLUSION"
+            echo "  Attempt $i: CI workflow=$CONCLUSION"
 
             if [ "$CONCLUSION" = "success" ]; then
               echo "CI passed!"
