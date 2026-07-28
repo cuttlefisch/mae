@@ -901,12 +901,27 @@ body {
   transform-box: fill-box;
   transform-origin: center;
 }
+/* Labels are selective, not persistent (dataviz skill's "selective direct
+   labels" rule): with ~15-20 nodes crammed around a small chord ring,
+   showing every label at once produces exactly the overlapping/clipped
+   mess a real render surfaced (several titles ran into each other or
+   were cut off past the diagram edge). Only the anchor, the currently
+   selected node, and whatever's under the cursor show a label by
+   default; every other node is an identifiable dot, its title one
+   hover away via the existing popover -- this is a labeling-density
+   fix, not a data-hiding one. */
 .node text {
   fill: var(--fg3);
   font-size: 11px;
   pointer-events: none;
   user-select: none;
-  transition: fill 200ms ease;
+  opacity: 0;
+  transition: fill 200ms ease, opacity 200ms ease;
+}
+.node-anchor text,
+.node.selected text,
+.node.hovered text {
+  opacity: 1;
 }
 .node { cursor: pointer; }
 /* Hover LIFTS (scale + drop-shadow), it does not recolor — recoloring is
@@ -1006,8 +1021,17 @@ const GRAPH_JS: &str = r#"
 
   // --- Layout: fit all node positions (chord-ring or force, whichever the
   // export baked in) into the SVG viewBox. Center is used both for the
-  // viewBox fit AND as the pull-point for edge arcs below. ---
+  // viewBox fit AND as the pull-point for edge arcs below. Node labels
+  // sit to the RIGHT of their circle (`x: n.x + r + 3`) and can run up to
+  // 29 chars (28 + an ellipsis) at an 11px font -- padding just the node
+  // *positions* by a flat amount clipped exactly this text in a real
+  // render, since it never accounted for label width at all. `labelPad`
+  // is a deliberately generous per-character estimate (real glyph widths
+  // vary; overshooting costs empty margin, undershooting clips text
+  // again -- overshoot), added only on the right/bottom where labels
+  // actually extend. ---
   var pad = 60;
+  var labelPad = 29 * 7;
   var minX = Math.min.apply(null, nodes.map(function (n) { return n.x; }));
   var maxX = Math.max.apply(null, nodes.map(function (n) { return n.x; }));
   var minY = Math.min.apply(null, nodes.map(function (n) { return n.y; }));
@@ -1016,13 +1040,29 @@ const GRAPH_JS: &str = r#"
   var w = Math.max(1, maxX - minX);
   var h = Math.max(1, maxY - minY);
   var centerX = (minX + maxX) / 2, centerY = (minY + maxY) / 2;
-  svg.setAttribute("viewBox", (minX - pad) + " " + (minY - pad) + " " + (w + pad * 2) + " " + (h + pad * 2));
+  svg.setAttribute(
+    "viewBox",
+    (minX - pad) + " " + (minY - pad) + " " + (w + pad * 2 + labelPad) + " " + (h + pad * 2)
+  );
   svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
 
   function degreeOf(id) {
     var d = 0;
     edges.forEach(function (e) { if (e.source === id || e.target === id) d++; });
     return d;
+  }
+
+  // Chord-diagram node labels stay short even for the few that show by
+  // default (anchor/selected/hovered, see the `.node text` CSS) -- the
+  // full title is always one hover away via the popover, the detail
+  // panel, and the outline, so truncating here loses nothing a reader
+  // can't get instantly from the same click/hover that revealed the
+  // label in the first place. Character count, not byte length --
+  // titles can contain non-ASCII text (the ES translations).
+  function truncateLabel(s, maxChars) {
+    var chars = Array.from(s);
+    if (chars.length <= maxChars) { return s; }
+    return chars.slice(0, maxChars).join("") + "…";
   }
 
   var svgNS = "http://www.w3.org/2000/svg";
@@ -1079,7 +1119,7 @@ const GRAPH_JS: &str = r#"
     });
     var circle = el("circle", { cx: n.x, cy: n.y, r: r });
     var text = el("text", { x: n.x + r + 3, y: n.y + 4 });
-    text.textContent = n["title_" + currentLang];
+    text.textContent = truncateLabel(n["title_" + currentLang], 28);
     g.appendChild(circle);
     g.appendChild(text);
     g.addEventListener("mouseenter", function () { onHover(n, true); });
@@ -1253,7 +1293,7 @@ const GRAPH_JS: &str = r#"
     nodeGroups.forEach(function (g, i) {
       var n = nodes[i];
       var t = g.querySelector("text");
-      if (t) { t.textContent = n["title_" + currentLang]; }
+      if (t) { t.textContent = truncateLabel(n["title_" + currentLang], 28); }
     });
     if (selectedId != null) { renderDetail(nodesById[selectedId]); }
     langToggle.textContent = currentLang === "en" ? "EN / ES → ES" : "ES / EN → EN";
