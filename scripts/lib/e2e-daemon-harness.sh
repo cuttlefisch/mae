@@ -37,12 +37,30 @@ HARNESS_PIDS=()
 HARNESS_TTL_BIN="$(command -v timeout || command -v gtimeout || true)"
 
 # harness_spawn VAR LOGFILE -- cmd...
-# Starts cmd in its OWN session (setsid) so it's its own process-group leader -
-# a forked grandchild can't survive a parent-directed kill. Records the pid in
-# $VAR, HARNESS_PIDS, and (if $WORK is set) $WORK/pids.
+# Starts cmd in its OWN process group so it's its own process-group leader -
+# a forked grandchild can't survive a parent-directed kill. Prefers `setsid`
+# (a real new SESSION, not just a process group) where available. macOS has
+# no `setsid` at all -- it's a util-linux tool, never shipped in BSD userland
+# or GNU coreutils (confirmed: not even Homebrew's `coreutils` formula
+# includes it) -- so there this falls back to bash's own job control
+# (`set -m`), which also puts a backgrounded command in a NEW process group
+# whose PGID equals its own PID. That's a strictly weaker isolation (no new
+# session, still attached to the controlling terminal) but sufficient for
+# what this actually needs to guarantee: `harness_cleanup`'s `kill -TERM --
+# "-$pid"` targets the process GROUP, which only requires the child to lead
+# its own group, not a whole new session. Records the pid in $VAR,
+# HARNESS_PIDS, and (if $WORK is set) $WORK/pids.
 harness_spawn() {
   local __var="$1" __log="$2"; shift 2; [ "${1:-}" = "--" ] && shift
-  setsid "$@" >"$__log" 2>&1 &
+  if command -v setsid >/dev/null 2>&1; then
+    setsid "$@" >"$__log" 2>&1 &
+  else
+    local __had_monitor=0
+    case "$-" in *m*) __had_monitor=1 ;; esac
+    set -m
+    "$@" >"$__log" 2>&1 &
+    [ "$__had_monitor" = 1 ] || set +m
+  fi
   local pid=$!
   HARNESS_PIDS+=("$pid")
   [ -n "${WORK:-}" ] && printf '%s\n' "$pid" >>"$WORK/pids"
