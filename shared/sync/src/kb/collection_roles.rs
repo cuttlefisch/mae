@@ -48,6 +48,9 @@ impl KbCollectionDoc {
             root.insert(&mut txn, COLL_NODES_KEY, MapPrelim::default());
             root.insert(&mut txn, COLL_POLICY_KEY, policy.as_str());
             root.insert(&mut txn, COLL_PENDING_KEY, MapPrelim::default());
+            // ADR-033: eagerly seeded, same rationale as `collection_core.rs`'s
+            // constructors — see `mod.rs`'s `COLL_LEASE_KEY` comment.
+            root.insert(&mut txn, COLL_LEASE_KEY, MapPrelim::default());
             let m = root.insert(&mut txn, COLL_MEMBER_ROLES_KEY, MapPrelim::default());
             if !owner_principal.is_empty() {
                 let entry = m.insert(&mut txn, owner_principal, MapPrelim::default());

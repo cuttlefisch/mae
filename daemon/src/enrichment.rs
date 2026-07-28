@@ -31,6 +31,13 @@ pub trait EmbedBackend: Send + Sync {
     async fn embed(&self, model: &str, inputs: &[String]) -> Result<Vec<Vec<f32>>, String>;
 }
 
+// ADR-061 Phase D2: `LeaseFence`/`NoFence` live in `mae_daemon::lease_fence`
+// (the library crate), not here — `collab_handler::kb_lease::DaemonLeaseFence`
+// (the production implementation) is library-crate code and cannot implement
+// a trait defined in this binary-only module. See that module's doc comment
+// for the full crate-boundary rationale.
+use mae_daemon::lease_fence::LeaseFence;
+
 /// The real Ollama backend, using the daemon's own async `reqwest::Client`
 /// and the shared, dependency-light request/response shaping
 /// (`mae_kb::embedding_client`, ADR-061 Phase C) — the same shaping
@@ -98,15 +105,18 @@ pub struct SweepResult {
 }
 
 /// Run one full enrichment sweep of `store`: plan (blocking) → embed in
-/// batches of `cfg.batch_size` (async, on the caller's executor) → apply
-/// (blocking). A batch's embed failure is recorded and does NOT abort the
-/// sweep — every other batch still gets its chance, matching `mae_kb::
-/// enrichment`'s own per-node error-isolation discipline one level up.
+/// batches of `cfg.batch_size` (async, on the caller's executor) → **re-check
+/// `fence`** → apply (blocking). A batch's embed failure is recorded and does
+/// NOT abort the sweep — every other batch still gets its chance, matching
+/// `mae_kb::enrichment`'s own per-node error-isolation discipline one level
+/// up. `fence` is ADR-061 Phase D2's write-time lease re-check — pass
+/// [`NoFence`] for a KB that isn't collab-shared (nothing to coordinate).
 pub async fn run_enrichment_sweep(
     store: Arc<CozoKbStore>,
     residency: AiResidency,
     backend: &dyn EmbedBackend,
     cfg: &EnrichmentConfig,
+    fence: &dyn LeaseFence,
 ) -> SweepResult {
     let mut result = SweepResult::default();
 
@@ -165,6 +175,20 @@ pub async fn run_enrichment_sweep(
     result.newly_embedded = embedded.len();
 
     if !embedded.is_empty() {
+        // ADR-061 Phase D2 / ADR-033: re-check the lease immediately before
+        // committing — the embed loop above can take real wall-clock time
+        // (network calls), so the lease this sweep started under may have
+        // since expired and been granted to another daemon. Discard rather
+        // than commit a stale batch; the next tick's `plan_enrichment_scan`
+        // naturally re-targets whatever this daemon didn't finish (the same
+        // resumption guarantee already proven for a killed process).
+        if let Err(e) = fence.check().await {
+            result.newly_embedded = 0;
+            result.errors.push(format!(
+                "lease fence rejected commit, discarding batch: {e}"
+            ));
+            return result;
+        }
         let model = cfg.model.clone();
         let chunk_version = cfg.chunk_version;
         let apply_errors = match tokio::task::spawn_blocking(move || {
@@ -184,6 +208,7 @@ pub async fn run_enrichment_sweep(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mae_daemon::lease_fence::NoFence;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Mutex;
 
@@ -250,6 +275,7 @@ mod tests {
             model: "test-model".to_string(),
             chunk_version: 1,
             batch_size: 16,
+            lease_ttl_secs: 300,
         }
     }
 
@@ -260,9 +286,14 @@ mod tests {
         insert(&store, "n:2", "beta content");
 
         let backend = CountingBackend::new();
-        let result =
-            run_enrichment_sweep(Arc::clone(&store), AiResidency::Open, &backend, &test_cfg())
-                .await;
+        let result = run_enrichment_sweep(
+            Arc::clone(&store),
+            AiResidency::Open,
+            &backend,
+            &test_cfg(),
+            &NoFence,
+        )
+        .await;
 
         assert_eq!(result.nodes_scanned, 2);
         assert_eq!(result.newly_embedded, 2);
@@ -281,6 +312,7 @@ mod tests {
             AiResidency::Open,
             &backend2,
             &test_cfg(),
+            &NoFence,
         )
         .await;
         assert_eq!(result2.cache_hits, 2);
@@ -307,8 +339,14 @@ mod tests {
         cfg.batch_size = 1; // force one node per batch so the failure is isolated
 
         let backend = CountingBackend::failing("BOOM");
-        let result =
-            run_enrichment_sweep(Arc::clone(&store), AiResidency::Open, &backend, &cfg).await;
+        let result = run_enrichment_sweep(
+            Arc::clone(&store),
+            AiResidency::Open,
+            &backend,
+            &cfg,
+            &NoFence,
+        )
+        .await;
 
         assert_eq!(result.nodes_scanned, 3);
         assert_eq!(
@@ -324,8 +362,14 @@ mod tests {
         // Resume: the failed node must still be a target (not lost), the two
         // successful ones must NOT be re-embedded (not duplicated).
         let backend2 = CountingBackend::new(); // no longer fails -- "the transient issue cleared"
-        let result2 =
-            run_enrichment_sweep(Arc::clone(&store), AiResidency::Open, &backend2, &cfg).await;
+        let result2 = run_enrichment_sweep(
+            Arc::clone(&store),
+            AiResidency::Open,
+            &backend2,
+            &cfg,
+            &NoFence,
+        )
+        .await;
         assert_eq!(result2.cache_hits, 2, "n:1 and n:3 must not be re-embedded");
         assert_eq!(
             result2.newly_embedded, 1,
@@ -347,6 +391,7 @@ mod tests {
                 provider: "claude".to_string(), // hosted, non-local
                 ..test_cfg()
             },
+            &NoFence,
         )
         .await;
 
@@ -363,11 +408,85 @@ mod tests {
     async fn an_empty_kb_is_a_clean_no_op() {
         let store = make_store();
         let backend = CountingBackend::new();
-        let result =
-            run_enrichment_sweep(Arc::clone(&store), AiResidency::Open, &backend, &test_cfg())
-                .await;
+        let result = run_enrichment_sweep(
+            Arc::clone(&store),
+            AiResidency::Open,
+            &backend,
+            &test_cfg(),
+            &NoFence,
+        )
+        .await;
         assert_eq!(result.nodes_scanned, 0);
         assert_eq!(backend.calls.load(Ordering::SeqCst), 0);
         assert!(result.errors.is_empty());
+    }
+
+    /// A fence that always rejects — simulates "another daemon was granted the
+    /// lease before this sweep could commit."
+    struct RejectingFence;
+
+    #[async_trait]
+    impl LeaseFence for RejectingFence {
+        async fn check(&self) -> Result<(), String> {
+            Err("simulated: lease moved on".to_string())
+        }
+    }
+
+    // ADR-061 Phase D2 / ADR-033 Verification D (the fence half — the N-way
+    // claim race itself is exercised at the daemon/collab_handler layer,
+    // `collab_handler_lease_race_tests.rs`): a sweep that computes real
+    // embeddings but then finds the lease has moved on must discard the
+    // batch, not commit it — asserted via the store's own cache staying
+    // empty (a real observation, not just checking the returned error
+    // string).
+    #[tokio::test]
+    async fn a_fence_rejection_discards_the_batch_instead_of_committing() {
+        let store = make_store();
+        insert(&store, "n:1", "alpha content");
+        insert(&store, "n:2", "beta content");
+
+        let backend = CountingBackend::new();
+        let result = run_enrichment_sweep(
+            Arc::clone(&store),
+            AiResidency::Open,
+            &backend,
+            &test_cfg(),
+            &RejectingFence,
+        )
+        .await;
+
+        assert_eq!(
+            backend.calls.load(Ordering::SeqCst),
+            1,
+            "the embed call itself still happens -- the fence is checked at COMMIT time, \
+             not before embedding starts (matches ADR-033's own framing: a paused/slow \
+             holder's late WRITE is rejected, not its compute prevented outright)"
+        );
+        assert_eq!(
+            result.newly_embedded, 0,
+            "a rejected batch must not be reported as committed"
+        );
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.contains("lease fence rejected")),
+            "the rejection must be visible in the sweep result, got: {:?}",
+            result.errors
+        );
+
+        // The real, load-bearing assertion: the cache must actually be empty
+        // afterward, not just that the result struct says so.
+        use mae_kb::activity::body_hash;
+        use mae_kb::store::KbStore;
+        let n1 = store.get_node("n:1").unwrap().unwrap();
+        let hash = body_hash(&n1.body);
+        assert!(
+            store
+                .get_cached_embedding(&hash, &test_cfg().model, test_cfg().chunk_version)
+                .unwrap()
+                .is_none(),
+            "a fence-rejected batch must not have written anything to the cache"
+        );
     }
 }

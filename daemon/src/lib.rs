@@ -6,6 +6,7 @@
 pub mod checkpoint;
 pub mod collab_handler;
 pub mod doc_store;
+pub mod lease_fence;
 pub mod projector;
 pub mod storage;
 

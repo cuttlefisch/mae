@@ -23,6 +23,7 @@
 mod docs_methods;
 mod kb_content;
 mod kb_governance;
+pub mod kb_lease;
 mod kb_membership;
 mod sync_methods;
 
@@ -583,6 +584,7 @@ async fn handle_doc_notification_inner(
         | "kb/remove_member"
         | "kb/approve_member"
         | "kb/collection_op"
+        | "kb/claim_lease"
         | "kb/set_policy"
         | "kb/set_governance"
         | "kb/block_principal"
@@ -1812,6 +1814,18 @@ async fn handle_doc_request_inner(
 
         "kb/collection_op" => {
             kb_content::handle_kb_collection_op(
+                doc_store,
+                broadcaster,
+                session_id,
+                auth_principal,
+                transport,
+                id,
+                &params,
+            )
+            .await
+        }
+        "kb/claim_lease" => {
+            kb_lease::handle_kb_claim_lease(
                 doc_store,
                 broadcaster,
                 session_id,

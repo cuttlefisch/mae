@@ -411,6 +411,125 @@ Phase B's cache already handles.
 `cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean across both
 workspaces; `cargo build --workspace --features gui` clean.
 
+## Implementation note (Phase D1, principle #15)
+
+**Split into D1 (the lease primitive itself) / D2 (enrichment as its first caller) / D3 (ADR-034
+sharing) across separate PRs, landed in that order** — this note covers D1 only. D2/D3 follow as
+their own PRs once D1 is proven stable, matching the phased-landing discipline already established
+for A/B/C/E above.
+
+**A real, adversarially-discovered CRDT-safety bug, not anticipated by the Decision text**: the
+first data-model attempt nested the lease claims one level (`YMap<op_kind -> YMap<claim_key ->
+record>>`), mirroring the signed-oplog's own append-only-set pattern. A round-trip test simulating
+two never-synced daemons concurrently claiming the SAME not-yet-existing `op_kind` submap failed —
+after merging, one peer's entire claim was silently dropped, not unioned with the other's. Root
+cause: yrs resolves two independently-created `MapPrelim::default()` values assigned to the SAME
+not-yet-existing key via last-writer-wins on the OUTER key itself, not a merge of the nested
+maps' contents — a real, general CRDT gotcha (concurrently creating a container for the first
+time is unsafe; concurrently inserting a new key into an ALREADY-established shared map is the
+safe, ordinary case). Fixed by flattening to a single `YMap<claim_key -> record>` (op_kind stored
+as a field per entry) and eagerly seeding the outer map in every `KbCollectionDoc` constructor —
+exactly the same pattern `member_roles`/`pending`/`nodes` already use, confirmed by direct read
+before assuming it was safe. The round-trip test (`two_concurrent_daemon_claims_converge_to_the_
+same_deterministic_winner`, `shared/sync/src/kb/tests/collection_lease_tests.rs`) now passes and
+stays in the suite as a standing regression guard against reintroducing the nested form.
+
+**ADR-033's own text needed two corrections during design, folded in rather than implemented
+literally and wrong**: (1) "reuse the ADR-023 epoch as the fencing token" cannot mean the literal
+per-member authorization epoch — bumping it on a lease grant would fence the loser's unrelated
+ordinary edits too, collateral damage ADR-033's own Consequences section never describes. Built
+instead as a narrow, separate `(kb_id, op_kind)` generation counter — the *pattern* ADR-033
+describes ("a KB-wide operation carries an epoch"), at a dimension that doesn't collide with
+per-member authorization. (2) "broadcast on the ADR-024 attention bus" doesn't correspond to any
+real inter-daemon channel — `NotificationCenter` is single-editor-process UI presentation, and the
+real daemon-mesh gossip transport (#89) is still the tracked bottleneck. Used ADR-033's own named
+fallback instead: an in-band LWW claim in the collection doc, already fully shipped end-to-end via
+the existing `persist_and_broadcast_collection` relay — zero new transport. `NotificationCenter`
+(`notify_enrichment_lease_status`, `crates/core/src/editor/notify_ops.rs`) is the LOCAL
+presentation of that already-synced state, not the transport itself.
+
+`kb/claim_lease` (`daemon/src/collab_handler/kb_lease.rs`) is gated `KbOp::Edit`, not `KbOp::Manage`
+— any Editor-role member may claim it, unlike `kb/collection_op`'s owner-only gate, since
+enrichment/embedding work is an ordinary editing capability, not KB governance.
+
+**Honest scope note**: `enforce_lease_generation_fence` (the write-time re-check) ships in this
+phase, fully unit-tested directly, but has no production caller yet — Phase D2 (issue #420's
+second half) wires `run_enrichment_sweep`'s commit path to call it. Named explicitly (`#[allow
+(dead_code)]` with a doc comment, not a silent gap) rather than deferred without a trace.
+
+Verification item D's **N-way (≥3 daemon) race** requirement is met at the primitive level in this
+phase (`collab_handler_lease_race_tests.rs`: 3 members claim from the same pre-claim state,
+dispatched out of order, converge to exactly one deterministic winner regardless of order; a
+non-member is denied outright). The "zero duplicate provider calls" behavioral half of item D
+(losers making no calls into a fake `EmbedBackend`) requires D2's real caller to exist and is that
+phase's own verification obligation, not testable against code that doesn't exist yet.
+
+`cargo test -p mae-sync`/`cargo test --lib` (daemon workspace)/`cargo test -p mae-core notify_ops`
+all clean; `cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean across both the
+editor and daemon workspaces; `cargo build --workspace` clean.
+
+## Implementation note (Phase D2, principle #15)
+
+**A real crate-boundary constraint found during implementation, not anticipated by the Decision
+text**: `daemon/src/enrichment.rs` (where `run_enrichment_sweep` needs to check the lease before
+committing) is BINARY-crate-only (declared in `main.rs`, not `lib.rs`), while
+`collab_handler::kb_lease::DaemonLeaseFence` (the production fence implementation, since it needs
+`load_collection`/`enforce_lease_generation_fence`, both `collab_handler`-internal) is
+LIBRARY-crate code (`lib.rs`'s `pub mod collab_handler`) — and a library can never implement a
+trait defined in its own downstream binary (wrong dependency direction). Resolved by putting the
+`LeaseFence` trait itself in a new small, standalone library module,
+`daemon/src/lease_fence.rs` (`pub mod lease_fence` in `lib.rs`) — neither `enrichment` nor
+`collab_handler` "owns" it; both depend on it, `enrichment.rs` via `mae_daemon::lease_fence::
+LeaseFence` (crate-external reference, matching `main.rs`'s own existing `use mae_daemon::{...}`
+convention), `collab_handler::kb_lease` via `crate::lease_fence::LeaseFence` (same crate).
+
+**Real architectural gap found while mapping a local store to its collab `kb_id`**: the
+scheduler's `stores: Vec<(String, Arc<CozoKbStore>)>` loop had no existing forward mapping from a
+local store entry to the `kb_id` string the collab layer's `kbc:{kb_id}` collection doc uses —
+`instance_stores` is keyed by UUID (`daemon/src/handler.rs`), a different namespace. Resolved via
+`KbRegistry`'s own `primary_shared`/`primary_collab_id` (primary) and `KbInstance.shared`/
+`collab_id` (named instances, looked up by the SAME `registry.instances.iter().find(|i| &i.uuid ==
+name)` pattern the residency lookup right next to it already uses) — no new mapping invented, and
+a store with `collab_id: None` (the common, single-daemon case) is correctly skipped entirely: it
+uses [`NoFence`](../../daemon/src/lease_fence.rs), nothing to coordinate with a single copy of the
+data.
+
+`claim_lease_for_scheduler` (`collab_handler/kb_lease.rs`) deliberately does **not** go through the
+`kb_access` gate `handle_kb_claim_lease`'s external RPC path uses — the scheduler is the daemon's
+own internal maintenance tick operating on data it already has full local access to via
+`CozoKbStore` directly, not an authenticated network caller. Mirrors `kb_governance.rs`'s
+`handle_kb_block_unblock_principal` precedent for a local, already-trusted-daemon operation.
+`session_id: 0` is a safe sentinel for `persist_and_broadcast_collection`'s `broadcast_except`
+(confirmed: real session ids are allocated from 1 upward, `mae_mcp::session::NEXT_SESSION_ID`).
+
+**Scope limit named explicitly, not silently dropped**: no mid-sweep lease renewal is implemented
+in this phase — a long sweep spanning multiple embed batches relies on `lease_ttl_secs` (new
+`EnrichmentConfig` field, default 300s) being generous enough to cover it without renewal. The
+fence is checked exactly once, immediately before `apply_enrichment_results` — this is where a
+kill-holder-mid-sweep race actually needs to be caught (the embed loop's network calls are where
+real wall-clock time elapses), not before every batch.
+
+**Verification D's behavioral half** ("losers make zero calls into a fake `EmbedBackend`", deferred
+from Phase D1's own note) is covered by `enrichment.rs`'s new
+`a_fence_rejection_discards_the_batch_instead_of_committing` test — though scoped honestly:
+the embed calls DO still happen (the fence is checked at commit time, not before embedding starts,
+matching ADR-033's own "a late WRITE is rejected" framing, not "compute is prevented outright");
+what's asserted is that the cache stays genuinely empty afterward (a real store read, not just the
+returned error string). The kill-holder-mid-sweep race itself is exercised twice: the pure-logic
+version (Phase D1's own test, unchanged) and a NEW test exercising the actual production
+`claim_lease_for_scheduler` + `DaemonLeaseFence` pair through a real `DocStore`
+(`collab_handler_lease_race_tests.rs`) — genuine TTL expiry through wall-clock time, using a
+1-second TTL + a short real sleep (a `ttl_secs: 0` claim was tried first and found to be a
+degenerate case: `is_expired`'s boundary `now >= claimed_at + ttl` collapses to an empty
+valid-interval at `ttl=0`, so even the claim's OWN immediate read-back reports "no current holder" —
+not a bug, but it meant that shortcut couldn't stand in for a real TTL-expiry exercise).
+
+`cargo test` (both `--lib` and the binary target — `enrichment`/`scheduler` are binary-crate-only,
+so `--lib` alone does not exercise them) clean across the daemon workspace (165 lib + 131 binary
+unit tests, all e2e suites); `cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean;
+`cargo build --workspace --features gui` clean on the editor workspace (unaffected, but confirmed
+since `mae-sync`/`mae-kb` are shared crates).
+
 ## Implementation note (Phase E, principle #15)
 
 Re-read the Decision text carefully before implementing: it specifies the enrich-now path runs
