@@ -1831,6 +1831,31 @@ fn edge_is_offscreen_same_side(
         || (y1 > h + m && y2 > h + m)
 }
 
+/// How many straight-line segments a tapered curved edge is approximated
+/// with (`kb_graph_edge_taper_enabled`) — an internal rendering-quality/
+/// cost knob, not a genuine per-user preference (mirrors
+/// `CLUSTER_ANGULAR_SECTORS`'s same "small private constant, not an
+/// option" precedent), so not user-configurable. 6 is smooth enough for
+/// this codebase's typical curvature range (0.12-0.5) without an
+/// excessive draw-call multiplier per edge.
+const EDGE_TAPER_SEGMENTS: usize = 6;
+
+/// A point on the quadratic Bezier curve (`p0`, `pc`, `p2`) at parameter
+/// `t` in `[0, 1]` — shared by the tapered-edge segment sampler so it
+/// traces the EXACT SAME curve the single-`Curve`-element (untapered) path
+/// draws, just approximated as a polyline of several straight segments
+/// instead of one true curve (a standard, visually indistinguishable
+/// approximation at `EDGE_TAPER_SEGMENTS`'s segment count for this
+/// codebase's curvature range — no GUI/Skia backend changes needed, since
+/// it reuses the existing `VisualElement::Line` primitive rather than
+/// requiring a new gradient-stroke primitive).
+fn quadratic_bezier_point(p0: (f64, f64), pc: (f64, f64), p2: (f64, f64), t: f64) -> (f64, f64) {
+    let mt = 1.0 - t;
+    let x = mt * mt * p0.0 + 2.0 * mt * t * pc.0 + t * t * p2.0;
+    let y = mt * mt * p0.1 + 2.0 * mt * t * pc.1 + t * t * p2.1;
+    (x, y)
+}
+
 /// Estimated per-character advance width, as a fraction of `font_size`,
 /// for the graph view's label text. This module has no real font-metrics
 /// access (pure geometry — Skia painting happens later in
@@ -2698,6 +2723,53 @@ pub(crate) fn flatten_scene_graph_cached(
                         (mid_x + perp_x * offset, mid_y + perp_y * offset)
                     }
                 };
+                // Opacity-taper (live-testing follow-up, evidence-grounded):
+                // Holten & van Wijk's tapered/opacity-gradient edge research
+                // studied fading a curved edge toward its own midpoint as a
+                // clutter-reduction technique — it directly targets "dense
+                // edges converge and overlap in a chord diagram's interior,
+                // making it look like a filled circle": each ENDPOINT (where
+                // the actual connection information lives) stays fully
+                // visible, while the overlap-heavy middle (which carries no
+                // additional information) fades. Approximated as
+                // `EDGE_TAPER_SEGMENTS` straight sub-segments along the same
+                // quadratic Bezier the untapered branch below draws as one
+                // `Curve` — no new `VisualElement` variant, no GUI/Skia
+                // backend changes. Opt-in: this multiplies draw calls per
+                // tapered edge, matching this codebase's first-appearance/
+                // opt-in posture for a new potentially-costly rendering
+                // feature.
+                if style.edge_taper_enabled {
+                    let p0 = (sx1, sy1);
+                    let pc = (ctrl_x, ctrl_y);
+                    let p2 = (sx2, sy2);
+                    for i in 0..EDGE_TAPER_SEGMENTS {
+                        let t0 = i as f64 / EDGE_TAPER_SEGMENTS as f64;
+                        let t1 = (i + 1) as f64 / EDGE_TAPER_SEGMENTS as f64;
+                        let (ax, ay) = quadratic_bezier_point(p0, pc, p2, t0);
+                        let (bx, by) = quadratic_bezier_point(p0, pc, p2, t1);
+                        // Full alpha at both endpoints (t=0/t=1), faintest
+                        // at the middle (t=0.5) — `sin(pi*t)` is exactly 0
+                        // at t=0/1 and 1 at t=0.5, evaluated at each
+                        // segment's own midpoint parameter.
+                        let t_mid = (t0 + t1) / 2.0;
+                        let taper_factor = 1.0
+                            - (style.edge_taper_strength as f64)
+                                * (std::f64::consts::PI * t_mid).sin();
+                        let seg_alpha = (effective_alpha as f64 * taper_factor).max(0.0) as f32;
+                        elements.push(VisualElement::Line {
+                            x1: ax as f32,
+                            y1: ay as f32,
+                            x2: bx as f32,
+                            y2: by as f32,
+                            color: color.clone(),
+                            thickness: style.edge_width,
+                            dashed: false,
+                            alpha: seg_alpha,
+                        });
+                    }
+                    continue;
+                }
                 elements.push(VisualElement::Curve {
                     x1: sx1 as f32,
                     y1: sy1 as f32,
@@ -5183,6 +5255,156 @@ mod tests {
             }
             other => panic!("expected Curve, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn flatten_taper_disabled_reproduces_a_single_curve_element_byte_identical() {
+        // Default (off) posture: identical output to a build with no taper
+        // logic at all, for the exact same fixture as
+        // `flatten_curves_internal_edges_when_curvature_is_nonzero`.
+        let mut scene = SceneGraph::new();
+        scene
+            .nodes
+            .push(test_node("a", -100.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("b", 100.0, 0.0, NodeKind::Note));
+        scene.edges.push(test_edge(0, 1));
+        let mut style = test_style();
+        style.edge_curvature = 0.2;
+        assert!(!style.edge_taper_enabled, "sanity: taper must default off");
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        let curve_count = elements
+            .iter()
+            .filter(|e| matches!(e, VisualElement::Curve { .. }))
+            .count();
+        let line_count = elements
+            .iter()
+            .filter(|e| matches!(e, VisualElement::Line { .. }))
+            .count();
+        assert_eq!(curve_count, 1, "exactly one untapered Curve element");
+        assert_eq!(line_count, 0, "no Line segments when taper is disabled");
+    }
+
+    #[test]
+    fn flatten_taper_enabled_splits_a_curve_into_segments_fading_toward_the_midpoint() {
+        let mut scene = SceneGraph::new();
+        scene
+            .nodes
+            .push(test_node("a", -100.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("b", 100.0, 0.0, NodeKind::Note));
+        scene.edges.push(test_edge(0, 1));
+        let mut style = test_style();
+        style.edge_curvature = 0.2;
+        style.edge_alpha = 1.0;
+        style.edge_taper_enabled = true;
+        style.edge_taper_strength = 0.8;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+
+        let segment_alphas: Vec<f32> = elements
+            .iter()
+            .filter_map(|e| match e {
+                VisualElement::Line { alpha, .. } => Some(*alpha),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            segment_alphas.len(),
+            EDGE_TAPER_SEGMENTS,
+            "a tapered curve must split into exactly EDGE_TAPER_SEGMENTS Line segments, \
+             not one Curve"
+        );
+        assert!(
+            !elements
+                .iter()
+                .any(|e| matches!(e, VisualElement::Curve { .. })),
+            "a tapered edge must not ALSO emit the untapered single-Curve element"
+        );
+
+        // Symmetric (first == last, both sampled the same distance from
+        // their nearer endpoint) and strictly fainter in the middle —
+        // proves this is a genuine taper (fade-then-return), not a
+        // monotonic fade in one direction. Each segment's alpha is sampled
+        // at ITS OWN midpoint parameter (not the segment's outer edge), so
+        // the first/last segments are close to but not exactly
+        // effective_alpha — check the exact formula, not a loose "near 1.0"
+        // guess.
+        let first = segment_alphas[0];
+        let last = *segment_alphas.last().unwrap();
+        let middle = segment_alphas[EDGE_TAPER_SEGMENTS / 2];
+        let t_mid_first = 0.5 / EDGE_TAPER_SEGMENTS as f64;
+        let expected_first = 1.0 * (1.0 - 0.8 * (std::f64::consts::PI * t_mid_first).sin()) as f32;
+        assert!(
+            (first - expected_first).abs() < 1e-5,
+            "the first segment's alpha must match the exact taper formula: expected \
+             {expected_first}, got {first}"
+        );
+        assert!(
+            (first - last).abs() < 1e-5,
+            "the taper must be symmetric: first={first}, last={last}"
+        );
+        assert!(
+            middle < first && middle < last,
+            "the middle segment must be strictly fainter than both ends: first={first}, \
+             middle={middle}, last={last}"
+        );
+    }
+
+    #[test]
+    fn flatten_taper_strength_zero_produces_uniform_alpha_across_segments() {
+        let mut scene = SceneGraph::new();
+        scene
+            .nodes
+            .push(test_node("a", -100.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("b", 100.0, 0.0, NodeKind::Note));
+        scene.edges.push(test_edge(0, 1));
+        let mut style = test_style();
+        style.edge_curvature = 0.2;
+        style.edge_alpha = 0.7;
+        style.edge_taper_enabled = true;
+        style.edge_taper_strength = 0.0;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        for e in &elements {
+            if let VisualElement::Line { alpha, .. } = e {
+                assert!(
+                    (*alpha - 0.7).abs() < 1e-6,
+                    "taper_strength=0.0 must leave every segment at the flat edge_alpha, \
+                     got {alpha}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn flatten_taper_never_applies_to_a_boundary_self_loop_stub() {
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("a", 0.0, 0.0, NodeKind::Note));
+        scene.edges.push(SceneEdge {
+            source: 0,
+            target: 0,
+            label: Some("...".to_string()),
+            style: EdgeStyle {
+                color: "#unused".to_string(),
+                width: 1.0,
+                dashed: true,
+            },
+            weight: 1.0,
+            rel_type: None,
+        });
+        let mut style = test_style();
+        style.edge_curvature = 0.5;
+        style.edge_taper_enabled = true;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        let line_count = elements
+            .iter()
+            .filter(|e| matches!(e, VisualElement::Line { .. }))
+            .count();
+        assert_eq!(
+            line_count, 1,
+            "a boundary/self-loop stub must stay a single straight Line, never segmented"
+        );
     }
 
     #[test]
