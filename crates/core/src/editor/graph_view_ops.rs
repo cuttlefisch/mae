@@ -345,6 +345,24 @@ impl Editor {
             let viewport = gv.viewports.entry(win_id).or_default();
             viewport.width = width as f64;
             viewport.height = height as f64;
+            // Dynamic zoom-out floor (live-testing report: "unable to zoom
+            // out far enough to see all kbs... needlessly or too strictly
+            // clamping the allowed zoom levels rather than calculating
+            // them dynamically") — recomputed on EVERY reflatten (unlike
+            // the initial zoom-to-fit below, which only ever runs once),
+            // so a scene that grows after this window was first opened
+            // (e.g. full-corpus mode composing more instances) always
+            // stays zoomable out far enough to fit. Set BEFORE the initial
+            // zoom-to-fit call below, so that call's own `set_zoom` clamps
+            // against the freshly-computed floor, not a stale default.
+            viewport.min_zoom = crate::graph_view::dynamic_min_zoom(
+                &gv.scene,
+                &style,
+                &gv.node_degrees,
+                width as f64,
+                height as f64,
+                zoom_to_fit_margin,
+            );
             if is_new_viewport {
                 if let Some(fit) = crate::graph_view::zoom_to_fit(
                     &gv.scene,
@@ -5345,6 +5363,80 @@ mod tests {
     }
 
     #[test]
+    fn min_zoom_recomputes_on_every_reflatten_as_the_scene_grows_not_just_at_first_open() {
+        // Live-testing report: "i'm still unable to zoom out far enough to
+        // see all kbs and their names" -- root cause: the zoom-to-fit
+        // calculation only ever ran ONCE, on first window creation. This
+        // proves the NEW dynamic floor keeps up as the scene grows on a
+        // window that's already been open for a while (e.g. full-corpus
+        // mode composing more instances after the graph was first shown),
+        // not just at initial open.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let (graph_idx, graph_win_id) = graph_idx_and_win_id(&editor);
+
+        let min_zoom_before =
+            editor.buffers[graph_idx].graph_view().unwrap().viewports[&graph_win_id].min_zoom;
+        assert_eq!(
+            min_zoom_before,
+            mae_canvas::scene::Viewport::default().min_zoom,
+            "sanity: a single-node scene must keep today's default floor"
+        );
+        let applied_below_default = editor.kb_graph_view_zoom_to(0.05);
+        assert_eq!(
+            applied_below_default,
+            Some(0.1),
+            "sanity: 0.05 must still clamp to the default floor before the scene grows"
+        );
+
+        // Grow the scene directly to something far larger than the
+        // viewport (only the bounding box matters here, not a realistic
+        // KB topology) and reflatten the SAME window again -- mirroring
+        // what a real full-corpus populate does to an already-open graph.
+        if let Some(gv) = editor.buffers[graph_idx].graph_view_mut() {
+            gv.scene.nodes.push(mae_canvas::scene::SceneNode {
+                id: "concept:far".to_string(),
+                label: "Far".to_string(),
+                x: -10_000.0,
+                y: 0.0,
+                kind: mae_canvas::scene::NodeKind::Concept,
+                pinned: false,
+                is_seed: false,
+            });
+            gv.scene.nodes.push(mae_canvas::scene::SceneNode {
+                id: "concept:far2".to_string(),
+                label: "Far2".to_string(),
+                x: 10_000.0,
+                y: 0.0,
+                kind: mae_canvas::scene::NodeKind::Concept,
+                pinned: false,
+                is_seed: false,
+            });
+            gv.node_degrees = vec![0; gv.scene.nodes.len()];
+        }
+        editor.graph_view_reflatten_window(graph_idx, graph_win_id);
+
+        let min_zoom_after =
+            editor.buffers[graph_idx].graph_view().unwrap().viewports[&graph_win_id].min_zoom;
+        assert!(
+            min_zoom_after < min_zoom_before,
+            "reflattening a window whose scene has since grown must lower its floor, not \
+             freeze it at whatever the scene looked like on first open: before={min_zoom_before}, \
+             after={min_zoom_after}"
+        );
+
+        // A value that used to clamp UP to the old default floor must now
+        // be honored, via the exact real production path (kb_graph_view_zoom_to).
+        editor.window_mgr.set_focused(graph_win_id);
+        let applied = editor.kb_graph_view_zoom_to(0.05);
+        assert_eq!(
+            applied,
+            Some(0.05),
+            "0.05 must now be honored instead of clamping up to the stale default floor"
+        );
+    }
+
+    #[test]
     fn zoom_to_targets_a_window_showing_the_graph_when_focus_is_elsewhere() {
         // No focused-graph-window context (e.g. an AI-driven session with
         // focus on a text buffer) — must still resolve to SOME window
@@ -8354,6 +8446,7 @@ mod tests {
             zoom: 1.0,
             width: 4000.0,
             height: 4000.0,
+            ..Default::default()
         };
         let (_, cache) = editor.graph_view_doi_render_tiers(graph_idx, &viewport);
         if let Some(gv) = editor.buffers[graph_idx].graph_view_mut() {

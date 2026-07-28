@@ -1650,6 +1650,38 @@ fn scene_bounding_box(
         })
 }
 
+/// The UNMARGINED zoom ratio that fits the scene's node extent within a
+/// `viewport_width` x `viewport_height` pixel area — `None` for an empty
+/// scene, a degenerate (zero-area) extent, or a not-yet-known (zero)
+/// viewport size. Shared by `zoom_to_fit` (which layers its own "only
+/// ever suggest zooming out, never in" gate + margin on top, for its
+/// "sensible zoom on first open" purpose) and `Editor::graph_view_
+/// reflatten_window`'s dynamic `Viewport.min_zoom` computation (which
+/// wants the UNGATED ratio — a scene that needs zooming further IN to
+/// "fit" is irrelevant to a zoom-OUT floor, but is a meaningfully
+/// different question from "should we auto-zoom on open", so the two
+/// callers apply the gate differently rather than sharing it) — so the
+/// two can never disagree on what "fits everything" means for a given
+/// scene.
+fn raw_fit_ratio(
+    scene: &mae_canvas::scene::SceneGraph,
+    style: &GraphStyleOptions,
+    node_degrees: &[u32],
+    viewport_width: f64,
+    viewport_height: f64,
+) -> Option<f64> {
+    if viewport_width <= 0.0 || viewport_height <= 0.0 {
+        return None;
+    }
+    let (min_x, min_y, max_x, max_y) = scene_bounding_box(scene, style, node_degrees)?;
+    let bbox_w = max_x - min_x;
+    let bbox_h = max_y - min_y;
+    if bbox_w <= 0.0 || bbox_h <= 0.0 {
+        return None;
+    }
+    Some((viewport_width / bbox_w).min(viewport_height / bbox_h))
+}
+
 /// Compute the zoom level that fits the scene's node extent within a
 /// `viewport_width` x `viewport_height` pixel area, with `margin` (e.g. 0.9
 /// leaves 10% breathing room) applied on top of the tightest-fitting axis.
@@ -1673,22 +1705,39 @@ pub fn zoom_to_fit(
     viewport_height: f64,
     margin: f64,
 ) -> Option<f64> {
-    if viewport_width <= 0.0 || viewport_height <= 0.0 {
-        return None;
-    }
-    let (min_x, min_y, max_x, max_y) = scene_bounding_box(scene, style, node_degrees)?;
-    let bbox_w = max_x - min_x;
-    let bbox_h = max_y - min_y;
-    if bbox_w <= 0.0 || bbox_h <= 0.0 {
-        return None;
-    }
-    let raw_fit = (viewport_width / bbox_w).min(viewport_height / bbox_h);
+    let raw_fit = raw_fit_ratio(scene, style, node_degrees, viewport_width, viewport_height)?;
     if raw_fit >= 1.0 {
         // Already fits (or is smaller than the viewport) at the natural
         // scale — leave the default alone rather than zooming in further.
         return None;
     }
     Some(raw_fit * margin)
+}
+
+/// The dynamic minimum zoom (`Viewport.min_zoom`) for a scene of this
+/// extent — the ratio that fits EVERYTHING within the viewport, same
+/// `margin` convention as `zoom_to_fit` (a little slack below the tightest
+/// fit, so the fully-zoomed-out view isn't pixel-perfect-tight against the
+/// viewport edge). Unlike `zoom_to_fit`, this is NOT gated on "only if
+/// less than 1.0" — a min-zoom floor must reflect the true fit ratio even
+/// when that ratio happens to be >= 1.0 (a tiny scene). Falls back to
+/// `default_min_zoom` (today's flat `0.1`) whenever the ratio can't be
+/// computed (empty scene, degenerate extent, zero viewport) or would
+/// itself be smaller than that floor — a dynamic floor should only ever
+/// let the user zoom out FURTHER than the old flat floor, never less far,
+/// so a genuinely tiny/degenerate scene keeps exactly today's behavior.
+pub(crate) fn dynamic_min_zoom(
+    scene: &mae_canvas::scene::SceneGraph,
+    style: &GraphStyleOptions,
+    node_degrees: &[u32],
+    viewport_width: f64,
+    viewport_height: f64,
+    margin: f64,
+) -> f64 {
+    let default_floor = mae_canvas::scene::Viewport::default().min_zoom;
+    raw_fit_ratio(scene, style, node_degrees, viewport_width, viewport_height)
+        .map(|raw| (raw * margin).min(default_floor))
+        .unwrap_or(default_floor)
 }
 
 /// Flatten a `mae-canvas` `SceneGraph` into `VisualElement`s for the GUI's
@@ -3408,6 +3457,79 @@ mod tests {
         let degrees = vec![0, 0];
         assert!(zoom_to_fit(&scene, &style, &degrees, 0.0, 600.0, 0.85).is_none());
         assert!(zoom_to_fit(&scene, &style, &degrees, 800.0, 0.0, 0.85).is_none());
+    }
+
+    #[test]
+    fn dynamic_min_zoom_goes_below_the_default_floor_for_a_scene_much_larger_than_the_viewport() {
+        // Live-testing report: "unable to zoom out far enough to see all
+        // kbs and their names... needlessly or too strictly clamping the
+        // allowed zoom levels rather than calculating them dynamically."
+        // A scene wide enough that even a heavy margin's "fit everything"
+        // ratio is below the flat 0.1 floor must actually return something
+        // below 0.1 — the whole point of making this dynamic.
+        let style = test_style();
+        let mut scene = SceneGraph::new();
+        // 20,000px apart -- much wider than a flat 0.1 zoom would need to
+        // shrink even a 2000px-wide scene to fit an 800px viewport.
+        scene
+            .nodes
+            .push(test_node("a", -10_000.0, 0.0, NodeKind::Note));
+        scene
+            .nodes
+            .push(test_node("b", 10_000.0, 0.0, NodeKind::Note));
+        let degrees = vec![0, 0];
+
+        let min_zoom = dynamic_min_zoom(&scene, &style, &degrees, 800.0, 600.0, 0.85);
+        assert!(
+            min_zoom < mae_canvas::scene::Viewport::default().min_zoom,
+            "a scene this much larger than the viewport must lower the floor below the \
+             default 0.1, got {min_zoom}"
+        );
+    }
+
+    #[test]
+    fn dynamic_min_zoom_never_rises_above_the_default_floor_for_a_small_scene() {
+        // A scene that already fits comfortably at 1.0 must NOT tighten
+        // the zoom-out floor above today's flat default -- this is a
+        // strictly-loosen-never-tighten mechanism, not a general-purpose
+        // "clamp to the scene's own fit ratio" one.
+        let style = test_style();
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("a", -10.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("b", 10.0, 0.0, NodeKind::Note));
+        let degrees = vec![0, 0];
+
+        let min_zoom = dynamic_min_zoom(&scene, &style, &degrees, 800.0, 600.0, 0.85);
+        assert_eq!(
+            min_zoom,
+            mae_canvas::scene::Viewport::default().min_zoom,
+            "a small scene must keep exactly today's default floor, not a tighter one"
+        );
+    }
+
+    #[test]
+    fn dynamic_min_zoom_falls_back_to_the_default_floor_for_a_degenerate_scene() {
+        let style = test_style();
+        let empty = SceneGraph::new();
+        assert_eq!(
+            dynamic_min_zoom(&empty, &style, &[], 800.0, 600.0, 0.85),
+            mae_canvas::scene::Viewport::default().min_zoom,
+            "an empty scene must fall back to the default floor, not panic or return garbage"
+        );
+
+        let mut scene = SceneGraph::new();
+        scene
+            .nodes
+            .push(test_node("a", -10_000.0, 0.0, NodeKind::Note));
+        scene
+            .nodes
+            .push(test_node("b", 10_000.0, 0.0, NodeKind::Note));
+        let degrees = vec![0, 0];
+        assert_eq!(
+            dynamic_min_zoom(&scene, &style, &degrees, 0.0, 600.0, 0.85),
+            mae_canvas::scene::Viewport::default().min_zoom,
+            "a not-yet-known (zero) viewport size must fall back to the default floor"
+        );
     }
 
     #[test]
