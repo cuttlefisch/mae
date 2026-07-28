@@ -584,6 +584,7 @@ impl HtmlGraphExporter {
         html.push_str(&html_escape(page_title));
         html.push_str("</title>\n<style>\n");
         html.push_str(&render_css_variables(&dark, &light));
+        html.push_str(&render_widget_inverse_theme_css(&dark, &light));
         html.push_str(STATIC_CSS);
         html.push_str("</style>\n</head>\n<body>\n");
 
@@ -656,6 +657,31 @@ fn render_css_variables(dark: &GruvboxPalette, light: &GruvboxPalette) -> String
     push_palette_vars(&mut css, dark);
     css.push_str("}\n:root[data-theme=\"light\"] {\n");
     push_palette_vars(&mut css, light);
+    css.push_str("}\n");
+    css
+}
+
+/// The chord nav widget (`#graph-pane`) deliberately renders in the *opposite*
+/// gruvbox mode from the surrounding page — a light inset on a dark page, a
+/// dark inset on a light page — so the widget reads as a distinct, deliberate
+/// focal point rather than blending into the page chrome. Mirrors
+/// [`render_css_variables`]'s own default/media-query/attribute structure
+/// exactly, just inverted and scoped to `#graph-pane`: the attribute-selector
+/// rules carry higher specificity than the bare/media-scoped ones, so an
+/// explicit theme-toggle click always wins over the system preference, same
+/// as it does for the rest of the page.
+fn render_widget_inverse_theme_css(dark: &GruvboxPalette, light: &GruvboxPalette) -> String {
+    let mut css = String::new();
+    css.push_str("#graph-pane {\n");
+    push_palette_vars(&mut css, light);
+    css.push_str("}\n");
+    css.push_str("@media (prefers-color-scheme: light) {\n#graph-pane {\n");
+    push_palette_vars(&mut css, dark);
+    css.push_str("}\n}\n");
+    css.push_str(":root[data-theme=\"dark\"] #graph-pane {\n");
+    push_palette_vars(&mut css, light);
+    css.push_str("}\n:root[data-theme=\"light\"] #graph-pane {\n");
+    push_palette_vars(&mut css, dark);
     css.push_str("}\n");
     css
 }
@@ -1414,6 +1440,40 @@ mod tests {
         let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
         assert!(html.contains("--accent: #fe8019"));
         assert!(html.contains("--accent: #d65d0e"));
+    }
+
+    #[test]
+    fn graph_pane_theme_is_inverted_from_the_page_root() {
+        // The chord widget deliberately renders in the opposite gruvbox mode
+        // from the surrounding page -- assert both inverted, #graph-pane-
+        // scoped blocks are present, and that the attribute-selector form
+        // (which wins on specificity over the page root's own attribute
+        // rule) pairs dark-page-root with the *light* accent inside the
+        // widget, and vice versa.
+        let nodes = vec![simple_node("a", "A", "body", true)];
+        let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
+        assert!(html.contains(":root[data-theme=\"dark\"] #graph-pane {"));
+        assert!(html.contains(":root[data-theme=\"light\"] #graph-pane {"));
+
+        let dark_root_widget_block = html
+            .split(":root[data-theme=\"dark\"] #graph-pane {")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect("dark-root widget block present");
+        assert!(
+            dark_root_widget_block.contains("--accent: #d65d0e"),
+            "page in dark mode should give the widget the LIGHT-validated accent, got: {dark_root_widget_block}"
+        );
+
+        let light_root_widget_block = html
+            .split(":root[data-theme=\"light\"] #graph-pane {")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect("light-root widget block present");
+        assert!(
+            light_root_widget_block.contains("--accent: #fe8019"),
+            "page in light mode should give the widget the DARK-validated accent, got: {light_root_widget_block}"
+        );
     }
 
     #[test]
