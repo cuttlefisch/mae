@@ -1056,12 +1056,17 @@ body {
   overflow-y: auto;
 }
 #outline-panel.collapsed .outline-list { display: none; }
+/* Explicit font-weight (not the <h3> user-agent default -- don't rely on
+   that holding) plus fg2 (not the more muted fg3 used for de-emphasized
+   meta text elsewhere) so this reads clearly as a real section heading
+   for the sidebar's contents, not another line of quiet chrome. */
 #outline-panel h3 {
   margin: 0.25rem 0;
   font-size: 0.8rem;
+  font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  color: var(--fg3);
+  color: var(--fg2);
   cursor: pointer;
   user-select: none;
 }
@@ -1567,12 +1572,31 @@ const GRAPH_JS: &str = r#"
   // documentElement[data-theme], which CSS already defines at matching
   // specificity (render_css_variables) -- background/color/fill/stroke
   // all carry a 180-200ms transition, so this reads as a smooth cross-
-  // fade rather than a snap. ---
+  // fade rather than a snap.
+  //
+  // The chosen theme persists across reopening this same exported file
+  // via localStorage (file:// origins persist it per-path in Chromium/
+  // Firefox, which matches the real use case here -- no server needed).
+  // Reads/writes are wrapped in try/catch: some browser privacy modes
+  // throw on localStorage access rather than just returning null, and a
+  // reader's theme preference isn't worth a page-load error over. A
+  // stored preference needs data-theme set explicitly on load (not just
+  // inside the click handler, which is all that existed before) -- the
+  // page otherwise relies purely on the prefers-color-scheme media query
+  // until the first click, which would silently ignore anything stored. ---
   var themeOrder = ["dark", "light"];
-  var themeIdx = (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) ? 1 : 0;
+  var storedTheme = null;
+  try { storedTheme = localStorage.getItem("mae-guide-theme"); } catch (e) { /* ignore */ }
+  var themeIdx = themeOrder.indexOf(storedTheme);
+  if (themeIdx === -1) {
+    themeIdx = (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) ? 1 : 0;
+  } else {
+    document.documentElement.setAttribute("data-theme", themeOrder[themeIdx]);
+  }
   themeToggle.addEventListener("click", function () {
     themeIdx = (themeIdx + 1) % themeOrder.length;
     document.documentElement.setAttribute("data-theme", themeOrder[themeIdx]);
+    try { localStorage.setItem("mae-guide-theme", themeOrder[themeIdx]); } catch (e) { /* ignore */ }
   });
 
   applyLanguage();
@@ -2104,6 +2128,56 @@ mod tests {
         assert!(!html.contains(":root[data-theme=\"dark\"] #graph-pane {"));
         assert!(!html.contains(":root[data-theme=\"light\"] #graph-pane {"));
         assert!(!html.contains("box-shadow: 0 2px 10px"));
+    }
+
+    #[test]
+    fn outline_heading_is_bold_and_not_the_most_muted_ink() {
+        // The "On this page" heading previously had no explicit
+        // font-weight (relying on the <h3> user-agent default) and used
+        // the same muted fg3 ink as de-emphasized meta text elsewhere,
+        // which undercut it reading as a real section heading at a
+        // glance.
+        let nodes = vec![simple_node("a", "A", "body", true)];
+        let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
+        let rule = html
+            .split("#outline-panel h3 {")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect("#outline-panel h3 rule present");
+        assert!(
+            rule.contains("font-weight: 600"),
+            "expected an explicit bold weight, got: {rule}"
+        );
+        assert!(
+            rule.contains("color: var(--fg2)"),
+            "expected fg2 (not the more muted fg3), got: {rule}"
+        );
+    }
+
+    #[test]
+    fn theme_preference_persists_via_local_storage() {
+        // Regression: the theme toggle previously had no persistence at
+        // all -- themeIdx was recomputed purely from prefers-color-scheme
+        // on every load, and data-theme was only ever set inside the
+        // click handler, never on initial load. A reader's explicit
+        // choice (as opposed to their OS/browser default) didn't survive
+        // reopening the file.
+        let nodes = vec![simple_node("a", "A", "body", true)];
+        let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
+        assert!(html.contains("localStorage.getItem(\"mae-guide-theme\")"));
+        assert!(html.contains("localStorage.setItem(\"mae-guide-theme\", themeOrder[themeIdx])"));
+        // The stored-preference branch must set data-theme immediately on
+        // load, not only inside the click handler, or a stored choice
+        // would never actually apply until the reader clicked once.
+        let stored_branch = html
+            .split("var themeIdx = themeOrder.indexOf(storedTheme);")
+            .nth(1)
+            .and_then(|s| s.split("themeToggle.addEventListener").next())
+            .expect("theme-init branch present");
+        assert!(
+            stored_branch.contains("document.documentElement.setAttribute(\"data-theme\""),
+            "expected data-theme to be set on load when a stored preference exists: {stored_branch}"
+        );
     }
 
     #[test]
