@@ -11,6 +11,7 @@ mod collab_handler_cross_kb_role_isolation_tests;
 mod collab_handler_derive_cache_tests;
 mod collab_handler_governance_quorum_tests;
 mod collab_handler_kb_lifecycle_tests;
+mod collab_handler_lease_race_tests;
 mod collab_handler_legacy_migration_tests;
 mod collab_handler_member_access_tests;
 mod collab_handler_membership_join_tests;
@@ -159,6 +160,11 @@ pub(crate) fn kb_member_msg(
 ) -> serde_json::Value {
     serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,
             "params":{"kb_id":kb_id,"member":member,"role":role,"label":member}})
+}
+
+pub(crate) fn kb_claim_lease_msg(kb_id: &str, op_kind: &str, ttl_secs: u64) -> serde_json::Value {
+    serde_json::json!({"jsonrpc":"2.0","id":1,"method":"kb/claim_lease",
+            "params":{"kb_id":kb_id,"op_kind":op_kind,"ttl_secs":ttl_secs}})
 }
 
 pub(crate) fn kb_policy_msg(kb_id: &str, policy: &str) -> serde_json::Value {

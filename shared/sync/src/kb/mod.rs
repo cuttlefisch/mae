@@ -15,6 +15,7 @@ use crate::SyncError;
 
 mod collection_core;
 mod collection_crypto;
+mod collection_lease;
 mod collection_oplog;
 mod collection_roles;
 mod node;
@@ -208,6 +209,34 @@ const MEMBER_WRAP_PUBKEY_KEY: &str = "wrap_pubkey";
 const PENDING_AT_KEY: &str = "requested_at";
 const PENDING_PUBKEY_KEY: &str = "pubkey"; // hex Ed25519 (ADR-038, optional)
 const PENDING_WRAP_PUBKEY_KEY: &str = "wrap_pubkey"; // hex X25519 wrap key (ADR-041 / I1)
+
+/// ADR-033 advisory lease claims: a FLAT `YMap<claim_key -> claim record>` (every
+/// entry carries its own `op_kind` field — see `LEASE_OP_KIND_KEY` in
+/// `collection_lease.rs`). Keyed by a per-attempt `claim_key`, not a single LWW
+/// slot per op_kind — under genuine multi-daemon concurrency, two daemons can each
+/// write a claim before seeing each other's write; a single LWW key would let
+/// yrs's internal (client_id, clock) merge order silently pick the winner, which is
+/// NOT the same as ADR-033's explicit "highest fingerprint" tiebreak. Deliberately
+/// ONE flat level, not `YMap<op_kind -> YMap<claim_key -> record>>`: a doc-creation-
+/// time-eagerly-seeded map is safe for concurrent inserts of NEW keys (exactly how
+/// `member_roles`/`pending` already work), but two peers who've never synced each
+/// independently creating the SAME not-yet-existing NESTED map (e.g. both are the
+/// first to ever claim "enrichment") is unsafe — yrs resolves the outer key via
+/// last-writer-wins, so one peer's entire subtree wins outright and the other's
+/// entries are silently dropped, not merged. Confirmed by a failing round-trip test
+/// during development before flattening to this single-level design. Every
+/// constructor eagerly seeds this key (empty) so it's always already-established
+/// before any concurrent claim — see `collection_lease.rs` for the full rationale.
+const COLL_LEASE_KEY: &str = "leases";
+const LEASE_HOLDER_KEY: &str = "holder_fp";
+const LEASE_CLAIMED_AT_KEY: &str = "claimed_at"; // unix seconds (decimal)
+const LEASE_TTL_KEY: &str = "ttl_secs"; // decimal
+/// Monotonic-per-`op_kind` fencing counter, assigned at claim time as
+/// `(count of prior claims for this op_kind) + 1`. NOT the ADR-023 per-member
+/// authorization epoch (that would fence a lease loser's unrelated ordinary edits
+/// too) — a separate, narrow dimension, per ADR-033's own "a KB-wide operation
+/// carries an epoch" text read at the `(kb_id, op_kind)` granularity.
+const LEASE_GENERATION_KEY: &str = "generation";
 
 /// Collection schema version. v2 = ADR-018 (principal-anchored owner/roles/policy).
 pub const SCHEMA_VERSION: u32 = 2;
@@ -405,6 +434,28 @@ pub struct PendingRequest {
     /// content key to THIS, not the ed25519 key). The joiner sends it on `kb/join` (the
     /// daemon can't derive it). `None` for a pre-ADR-041 record.
     pub wrap_pubkey: Option<[u8; 32]>,
+}
+
+/// ADR-033 advisory lease claim — coordinates an expensive, KB-wide bulk operation
+/// (enrichment sweeps, embedding rebuilds) so only one daemon runs it at a time.
+/// `generation` is the fencing token: a caller captures it at claim time and, before
+/// committing the operation's results, re-checks that it's still current (see
+/// `current_lease`) — if it has advanced, someone else was granted the lease in the
+/// meantime and the stale batch must be discarded, not committed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LeaseClaim {
+    pub op_kind: String,
+    pub holder_fp: String,
+    pub claimed_at: u64,
+    pub lease_ttl_secs: u64,
+    pub generation: u64,
+}
+
+impl LeaseClaim {
+    /// Whether this claim has expired as of `now` (unix seconds).
+    pub fn is_expired(&self, now: u64) -> bool {
+        now >= self.claimed_at.saturating_add(self.lease_ttl_secs)
+    }
 }
 
 /// A KB collection manifest represented as a yrs document.
