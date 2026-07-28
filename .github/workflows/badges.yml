@@ -46,17 +46,52 @@ jobs:
         # `cargo test --doc` reports 0 doctests across every crate in this
         # workspace today (confirmed by direct observation across many local/CI
         # runs this session).
+        #
+        # Issue #510: a real, structural fix, not a bigger retry count. The 5
+        # `heavy-subprocess-e2e` files (real `mae --headless` subprocesses making
+        # real resource-bound assertions -- near-zero idle CPU, bounded FD/RSS
+        # growth, an MCP round trip within a real timeout) are already
+        # serialized against EACH OTHER (`.config/nextest.toml`'s test-group),
+        # but that never protected them from the OTHER residual contention
+        # window that group's own comment already named: "the hundreds of OTHER
+        # test binaries nextest starts concurrently at the very beginning of a
+        # full run." Confirmed causing a genuine, repeated failure (not
+        # speculative): `guidance_content_over_budget_falls_back_to_pointer_over_
+        # the_real_wire` failed all 3 attempts (1 + the group's own retries=2) on
+        # a real CI run, each attempt independently timing out around the same
+        # ~30s mark -- the spawned `mae --headless` process was too CPU-starved
+        # by everything else scheduling at once to even bind its own socket.
+        # Splitting into two SEQUENTIAL invocations removes the actual
+        # contention instead of retrying through it: the heavy-subprocess-e2e
+        # binaries run FIRST, alone, on an otherwise-idle runner (the most
+        # favorable timing these latency-sensitive tests can get), then
+        # everything else runs after -- no shared window where both compete for
+        # the same CPU at once. Sums both runs' "tests run" totals for the badge.
         run: |
           set +e
-          cargo nextest run --workspace --features gui 2>&1 | tee /tmp/nextest-badge-output.log
+          HEAVY_FILTER='binary(headless_e2e) + binary(guidance_delivery_e2e) + binary(headless_kb_convergence_e2e) + binary(headless_soak_shaped_e2e) + binary(headless_idle_cpu_e2e)'
+          # PIPESTATUS[0], not $? -- `$?` after `cmd | tee file` reflects
+          # `tee`'s own exit code unless the shell has `pipefail` set, and this
+          # step deliberately doesn't assume that (explicit is safer than
+          # relying on GitHub Actions' default bash flags, which could change).
+          cargo nextest run --workspace --features gui -E "$HEAVY_FILTER" 2>&1 | tee /tmp/nextest-badge-output-heavy.log
+          RC_HEAVY=${PIPESTATUS[0]}
+          cargo nextest run --workspace --features gui -E "not ($HEAVY_FILTER)" 2>&1 | tee /tmp/nextest-badge-output-rest.log
+          RC_REST=${PIPESTATUS[0]}
           set -e
-          TOTAL=$( (grep -oP '\d+(?= tests run)' /tmp/nextest-badge-output.log || true) | tail -1)
-          if [ -z "$TOTAL" ]; then
-            echo "::error::Could not parse a test count from nextest output -- see the raw log above. Refusing to publish a wrong/zero badge."
+          if [ "$RC_HEAVY" -ne 0 ] || [ "$RC_REST" -ne 0 ]; then
+            echo "::error::A nextest run failed -- see the raw logs above. Refusing to publish a wrong/zero badge."
             exit 1
           fi
+          HEAVY_TOTAL=$( (grep -oP '\d+(?= tests run)' /tmp/nextest-badge-output-heavy.log || true) | tail -1)
+          REST_TOTAL=$( (grep -oP '\d+(?= tests run)' /tmp/nextest-badge-output-rest.log || true) | tail -1)
+          if [ -z "$HEAVY_TOTAL" ] || [ -z "$REST_TOTAL" ]; then
+            echo "::error::Could not parse a test count from nextest output -- see the raw logs above. Refusing to publish a wrong/zero badge."
+            exit 1
+          fi
+          TOTAL=$((HEAVY_TOTAL + REST_TOTAL))
           FORMATTED=$(printf "%'d" "$TOTAL")
-          echo "Parsed test count: $FORMATTED"
+          echo "Parsed test count: $FORMATTED (heavy=$HEAVY_TOTAL + rest=$REST_TOTAL)"
           echo "count=$FORMATTED" >> $GITHUB_OUTPUT
 
       - name: Count lines of code

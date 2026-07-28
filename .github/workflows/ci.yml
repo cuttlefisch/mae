@@ -138,8 +138,19 @@ jobs:
         # still runs separately, unchanged. See .config/nextest.toml for the
         # one named, cross-linked retry override (#487) -- no blanket retry
         # policy.
+        #
+        # Issue #510: split into two SEQUENTIAL nextest invocations for the
+        # same structural reason as badges.yml's own "Count tests" step (see
+        # that file's comment for the full evidence -- a real, repeated
+        # subprocess-startup failure under the initial full-suite scheduling
+        # burst, not a hypothetical). This job hadn't shown the failure yet,
+        # but shares the identical vulnerability (same test files, same
+        # `--workspace --features gui` invocation shape) -- fixed here too
+        # rather than waiting for it to surface here as its own incident.
         run: |
-          cargo nextest run --workspace --release --features gui
+          HEAVY_FILTER='binary(headless_e2e) + binary(guidance_delivery_e2e) + binary(headless_kb_convergence_e2e) + binary(headless_soak_shaped_e2e) + binary(headless_idle_cpu_e2e)'
+          cargo nextest run --workspace --release --features gui -E "$HEAVY_FILTER"
+          cargo nextest run --workspace --release --features gui -E "not ($HEAVY_FILTER)"
           cargo test --doc --workspace --release --features gui
 
       - name: cargo clippy
