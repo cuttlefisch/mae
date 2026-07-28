@@ -23,7 +23,7 @@
 mod docs_methods;
 mod kb_content;
 mod kb_governance;
-mod kb_lease;
+pub mod kb_lease;
 mod kb_membership;
 mod sync_methods;
 

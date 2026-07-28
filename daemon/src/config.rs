@@ -107,6 +107,14 @@ pub struct EnrichmentConfig {
     /// Nodes embedded per `/api/embed` batch call, bounding both the request
     /// body size and how much work is lost if a single batch call fails.
     pub batch_size: usize,
+    /// ADR-061 Phase D2: how long this daemon's ADR-033 advisory lease claim
+    /// on the enrichment lock is valid before another daemon may claim it.
+    /// Only consulted for a KB that is actually collab-shared (`shared`/
+    /// `collab_id` set in the registry) — an unshared KB has no coordination
+    /// to do at all. No mid-sweep renewal is implemented in this phase
+    /// (named scope limit, not an oversight): the default is generous enough
+    /// to cover a realistic sweep's embed-batch loop without one.
+    pub lease_ttl_secs: u64,
 }
 
 impl Default for EnrichmentConfig {
@@ -119,6 +127,7 @@ impl Default for EnrichmentConfig {
             model: "nomic-embed-text".to_string(),
             chunk_version: 1,
             batch_size: 16,
+            lease_ttl_secs: 300,
         }
     }
 }
