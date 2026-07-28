@@ -2375,17 +2375,27 @@ fn label_winners_compute_count() -> usize {
 /// Returns the set of node indices whose label wins a non-overlapping
 /// screen-space slot.
 ///
-/// Priority order: the selected and/or hovered node(s) first (tier 0),
-/// then by degree descending, tie-broken by node index ascending — a pure
-/// function of `scene`/`degrees`, so the SAME input always produces the
-/// SAME visible-label set (no frame-to-frame flicker as ties resolve
-/// differently). Offscreen nodes (per `node_is_offscreen`) never enter
-/// the candidate pool, so a culled node can never consume a slot that
-/// would otherwise go to a visible neighbor. Boundary-stub labels are
-/// deliberately NOT part of this pool — see `flatten_scene_graph`'s edge
-/// loop, which draws them unconditionally; they carry no degree/selection
-/// state and their purpose (a correctness signal: "more graph beyond this
-/// depth, here") shouldn't be silently hidden by a denser node label.
+/// Priority order: the selected and/or hovered node(s) first (tier 0), then
+/// genuinely isolated (degree-0) nodes (tier 1), then everything else by
+/// degree descending (tier 2) — tie-broken by node index ascending within
+/// each tier, a pure function of `scene`/`degrees`, so the SAME input
+/// always produces the SAME visible-label set (no frame-to-frame flicker
+/// as ties resolve differently). A degree-0 node has no edges pointing at
+/// it either, so unlike a hub (still visually identifiable via its many
+/// edges even label-less), it has NO other cue identifying it if its label
+/// loses — the same reasoning `boundary_stub_label_always_shown` already
+/// applies to the "... (+N)" boundary-stub label below. Isolated nodes stay
+/// INSIDE the normal overlap-avoidance pool rather than being force-drawn
+/// unconditionally like boundary stubs: two literally-coincident isolated
+/// nodes must still resolve to exactly one winner, not both drawn garbled
+/// on top of each other. Offscreen nodes (per `node_is_offscreen`) never
+/// enter the candidate pool, so a culled node can never consume a slot that
+/// would otherwise go to a visible neighbor. Boundary-stub labels
+/// themselves are deliberately NOT part of this pool — see
+/// `flatten_scene_graph`'s edge loop, which draws them unconditionally;
+/// they carry no degree/selection state and their purpose (a correctness
+/// signal: "more graph beyond this depth, here") shouldn't be silently
+/// hidden by a denser node label.
 ///
 /// See `flatten_scene_graph_cached` for the memoized entry point most
 /// production callers should use instead of calling this directly on
@@ -2417,7 +2427,14 @@ fn compute_label_winners(
 
     candidates.sort_by_key(|&i| {
         let is_priority = scene.selection == Some(i) || scene.hovered == Some(i);
-        let tier: u8 = if is_priority { 0 } else { 1 };
+        let is_isolated = degrees.get(i).copied().unwrap_or(0) == 0;
+        let tier: u8 = if is_priority {
+            0
+        } else if is_isolated {
+            1
+        } else {
+            2
+        };
         (
             tier,
             std::cmp::Reverse(degrees.get(i).copied().unwrap_or(0)),
@@ -3833,12 +3850,29 @@ mod tests {
 
     /// Two nodes placed at the SAME scene position (so their estimated
     /// label boxes overlap regardless of exact width-estimate math) — one
-    /// high-degree, one low-degree, neither selected/hovered.
+    /// high-degree, one low-degree (deliberately non-zero — degree 1, not
+    /// 0 — so this pair stays in the ordinary "both non-isolated" tier;
+    /// see `overlapping_isolated_nodes_scene` for the degree-0 case),
+    /// neither selected/hovered.
     fn overlapping_nodes_scene(hi_id: &str, lo_id: &str) -> (SceneGraph, Vec<u32>) {
         let mut scene = SceneGraph::new();
         scene.nodes.push(test_node(hi_id, 0.0, 0.0, NodeKind::Note));
         scene.nodes.push(test_node(lo_id, 0.0, 0.0, NodeKind::Note));
-        (scene, vec![20, 0])
+        (scene, vec![20, 1])
+    }
+
+    /// Like `overlapping_nodes_scene`, but the low-priority node is
+    /// genuinely isolated (degree 0) — exercises the isolated-node tier
+    /// rather than the ordinary degree-descending tier.
+    fn overlapping_isolated_nodes_scene(
+        hi_id: &str,
+        lo_id: &str,
+        hi_degree: u32,
+    ) -> (SceneGraph, Vec<u32>) {
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node(hi_id, 0.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node(lo_id, 0.0, 0.0, NodeKind::Note));
+        (scene, vec![hi_degree, 0])
     }
 
     fn text_present_for(elements: &[VisualElement], approx_x: f32) -> bool {
@@ -3865,7 +3899,7 @@ mod tests {
         );
         // Only the higher-degree ("hub") node's label wins the overlapping slot.
         let hub_r = node_render_radius(&style, 20, viewport.zoom);
-        let leaf_r = node_render_radius(&style, 0, viewport.zoom);
+        let leaf_r = node_render_radius(&style, 1, viewport.zoom);
         assert!(
             text_present_for(&elements, 400.0 + hub_r + 4.0),
             "the higher-degree node's label must win the overlapping slot"
@@ -3890,6 +3924,96 @@ mod tests {
         assert!(
             text_present_for(&elements, 400.0 + selected_r + 4.0),
             "the selected node's label must win despite losing on degree"
+        );
+    }
+
+    #[test]
+    fn flatten_never_suppresses_an_isolated_degree_zero_nodes_label_despite_overlapping_higher_degree_neighbors(
+    ) {
+        // Three same-position nodes: a hub (degree 50), a mid-degree node
+        // (30), and a genuinely isolated one (0, no edges pointing at it
+        // either). Unlike the hub — still identifiable via its many edges
+        // even label-less — the isolated node has no other visual cue
+        // identifying it, so it must win a slot even against neighbors
+        // with real degree.
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("hub", 0.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("mid", 0.0, 0.0, NodeKind::Note));
+        scene
+            .nodes
+            .push(test_node("isolated", 0.0, 0.0, NodeKind::Note));
+        let degrees = vec![50u32, 30u32, 0u32];
+        let style = declutter_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &degrees);
+        let isolated_r = node_render_radius(&style, 0, viewport.zoom);
+        assert!(
+            text_present_for(&elements, 400.0 + isolated_r + 4.0),
+            "the isolated (degree-0) node's label must win a slot despite higher-degree \
+             neighbors overlapping it"
+        );
+        let text_count = elements
+            .iter()
+            .filter(|e| matches!(e, VisualElement::Text { .. }))
+            .count();
+        assert_eq!(
+            text_count, 1,
+            "exactly one of the three overlapping labels wins — the isolated node — not \
+             all three, not zero"
+        );
+    }
+
+    #[test]
+    fn flatten_resolves_two_overlapping_isolated_nodes_by_index_not_double_drawing() {
+        // Two genuinely isolated (degree-0) nodes at the same position:
+        // guaranteeing isolated-node visibility must NOT mean unconditional
+        // force-drawing like a boundary stub — they still compete for the
+        // slot via the normal overlap-avoidance pool, resolving to exactly
+        // one deterministic winner (lower index), not both drawn garbled
+        // on top of each other.
+        let (scene, degrees) =
+            overlapping_isolated_nodes_scene("first_isolated", "second_isolated", 0);
+        let style = declutter_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &degrees);
+        let text_count = elements
+            .iter()
+            .filter(|e| matches!(e, VisualElement::Text { .. }))
+            .count();
+        assert_eq!(
+            text_count, 1,
+            "exactly one of the two overlapping isolated nodes' labels must win, not both, \
+             not neither"
+        );
+        let first_r = node_render_radius(&style, 0, viewport.zoom);
+        assert!(
+            text_present_for(&elements, 400.0 + first_r + 4.0),
+            "the lower-index isolated node must be the deterministic winner"
+        );
+    }
+
+    #[test]
+    fn flatten_an_isolated_node_never_evicts_the_selected_nodes_label() {
+        // A selected node (itself degree-0, the harder case) plus an
+        // overlapping isolated node — an explicit user focus (tier 0) must
+        // still beat a merely-isolated node (tier 1).
+        let (mut scene, degrees) = overlapping_isolated_nodes_scene("selected", "isolated", 0);
+        scene.selection = Some(0);
+        let style = declutter_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &degrees);
+        let selected_r = node_render_radius(&style, 0, viewport.zoom);
+        assert!(
+            text_present_for(&elements, 400.0 + selected_r + 4.0),
+            "the selected node's label must win"
+        );
+        let text_count = elements
+            .iter()
+            .filter(|e| matches!(e, VisualElement::Text { .. }))
+            .count();
+        assert_eq!(
+            text_count, 1,
+            "the merely-isolated (non-selected) node must be suppressed, not also shown"
         );
     }
 
