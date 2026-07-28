@@ -160,42 +160,40 @@ fn external_store_change_arms_a_background_reload() {
         "no cooldown active"
     );
 
-    // Another "process" commits to the store (modifies the file).
-    store
-        .insert_node(&mae_kb::Node::new(
-            "user:ext",
-            "Ext",
-            mae_kb::NodeKind::Note,
-            "b",
-        ))
-        .unwrap();
+    // Issue #494 (macOS CI flake, investigated, not band-aided): this used to
+    // reuse THIS test's own long-lived `store` handle for the "external write" --
+    // but that keeps the sqlite file descriptor open under the SAME handle for the
+    // whole test, which is not what "another process" actually means, and matches
+    // a real, documented notify-rs/FSEvents gap on macOS (upstream issue #240,
+    // "Events not delivered until a file is closed on macOS"): FSEvents can fail to
+    // reliably report a Modify event for a file while a writer keeps its own handle
+    // open, only flushing once that handle is closed. Widening the poll deadline
+    // (a prior attempt at this fix) did NOT help -- confirmed by a real CI run that
+    // still timed out at the full widened deadline with zero detection, meaning the
+    // event genuinely wasn't arriving at all, not just arriving late. The actual fix
+    // is to make the "external process" simulation real: open a SEPARATE
+    // `CozoKbStore` handle on the same path, write through it, and DROP it (closing
+    // its own sqlite connection) before polling -- exactly what a genuinely
+    // independent OS process committing to the shared store would do, and the
+    // signal FSEvents is documented to need.
+    {
+        let external =
+            mae_kb::CozoKbStore::open_with_engine(&path, "sqlite").expect("reopen the store");
+        external
+            .insert_node(&mae_kb::Node::new(
+                "user:ext",
+                "Ext",
+                mae_kb::NodeKind::Note,
+                "b",
+            ))
+            .unwrap();
+        // Explicit drop: close this handle's own connection now, not whenever the
+        // block happens to end, so the close-then-poll ordering is unambiguous.
+        drop(external);
+    }
 
     // Poll: the external change must arm a background reload (notify is async).
-    //
-    // Issue #494: this used a 3s deadline and flaked intermittently on macOS CI
-    // (`external_store_change_arms_a_background_reload` timing out). Investigated,
-    // not just widened blindly -- three concrete hypotheses were checked against
-    // `notify` 8.2.0's actual source and this repo's own prior findings, and each
-    // was ruled out:
-    //   1. `FsEventWatcher`'s configurable latency defaults to `0.0` already
-    //      (`fsevent.rs`'s `FsEventWatcher::new`) -- there is no lower value to
-    //      configure.
-    //   2. `kFSEventStreamCreateFlagNoDefer` is already set on the FSEvents stream
-    //      (`fsevent.rs`'s `flags: ... | kFSEventStreamCreateFlagNoDefer`), so the
-    //      FIRST event after starting a watch is not deliberately deferred either.
-    //   3. SQLite WAL mode (which would put the real write in a `-wal` sidecar file
-    //      `StoreWatcher` never watches) is NOT in play -- `cozo_store/schema.rs`'s
-    //      own prior investigation already confirmed `journal_mode=WAL` is never
-    //      configured; this store uses the default rollback-journal mode, so writes
-    //      land directly in the watched file.
-    // With every notify/FSEvents-side configuration knob already at its most
-    // aggressive setting, the remaining explanation is genuine OS-level event-
-    // delivery scheduling variance under real (often loaded) CI runners -- not a
-    // configuration bug this test can fix by tuning the watcher. 15s gives 5x the
-    // original budget, matching the scale of real wall-clock tolerance this same
-    // test suite already grants comparable async-delivery tests (e.g.
-    // `headless_soak_shaped_e2e`'s ~74s real runtime) rather than an arbitrary bump.
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     let mut armed = false;
     while std::time::Instant::now() < deadline {
         editor.drain_kb_store_watch();
