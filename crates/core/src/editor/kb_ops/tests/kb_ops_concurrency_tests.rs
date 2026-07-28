@@ -171,7 +171,31 @@ fn external_store_change_arms_a_background_reload() {
         .unwrap();
 
     // Poll: the external change must arm a background reload (notify is async).
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    //
+    // Issue #494: this used a 3s deadline and flaked intermittently on macOS CI
+    // (`external_store_change_arms_a_background_reload` timing out). Investigated,
+    // not just widened blindly -- three concrete hypotheses were checked against
+    // `notify` 8.2.0's actual source and this repo's own prior findings, and each
+    // was ruled out:
+    //   1. `FsEventWatcher`'s configurable latency defaults to `0.0` already
+    //      (`fsevent.rs`'s `FsEventWatcher::new`) -- there is no lower value to
+    //      configure.
+    //   2. `kFSEventStreamCreateFlagNoDefer` is already set on the FSEvents stream
+    //      (`fsevent.rs`'s `flags: ... | kFSEventStreamCreateFlagNoDefer`), so the
+    //      FIRST event after starting a watch is not deliberately deferred either.
+    //   3. SQLite WAL mode (which would put the real write in a `-wal` sidecar file
+    //      `StoreWatcher` never watches) is NOT in play -- `cozo_store/schema.rs`'s
+    //      own prior investigation already confirmed `journal_mode=WAL` is never
+    //      configured; this store uses the default rollback-journal mode, so writes
+    //      land directly in the watched file.
+    // With every notify/FSEvents-side configuration knob already at its most
+    // aggressive setting, the remaining explanation is genuine OS-level event-
+    // delivery scheduling variance under real (often loaded) CI runners -- not a
+    // configuration bug this test can fix by tuning the watcher. 15s gives 5x the
+    // original budget, matching the scale of real wall-clock tolerance this same
+    // test suite already grants comparable async-delivery tests (e.g.
+    // `headless_soak_shaped_e2e`'s ~74s real runtime) rather than an arbitrary bump.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
     let mut armed = false;
     while std::time::Instant::now() < deadline {
         editor.drain_kb_store_watch();
