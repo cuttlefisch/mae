@@ -530,6 +530,77 @@ unit tests, all e2e suites); `cargo clippy --all-targets -- -D warnings`/`cargo 
 `cargo build --workspace --features gui` clean on the editor workspace (unaffected, but confirmed
 since `mae-sync`/`mae-kb` are shared crates).
 
+## Implementation note (Phase D3, principle #15)
+
+**ADR-034's own "implemented in Phase G" status line was stale/wrong, corrected in this PR**
+(`docs/adr/034-cross-peer-derived-artifact-sharing.md`) — Phase G belongs to ADR-060's own phase
+lettering, not ADR-061's, and zero sharing-protocol code existed anywhere before this PR (confirmed
+by grep for `share_derived_artifacts`/an advertise-request-serve protocol/the
+`(content_hash, embedding_model_id, chunk_version)` sharing key). Same class of correction as
+ADR-033's own status line, fixed in Phase D1.
+
+**A second real crate-boundary constraint, same shape as Phase D2's `LeaseFence`**: `kb/
+fetch_artifact` needs to read the local KB content store's embedding cache
+(`CozoKbStore::get_cached_embedding`), reached via `DaemonState`/`resolve_kb_store` — both
+BINARY-crate-only (`main.rs`'s `mod handler;` is private, not declared in `lib.rs` at all), while
+the RPC dispatch it must serve from (`collab_handler::handle_doc_request_inner`) is LIBRARY-crate
+code. Resolved identically to `LeaseFence`: a new small library module,
+`daemon/src/artifact_store.rs` (`ArtifactStore` trait + a `NoArtifactStore` default for a KB with
+no local replica), with the real implementation (`handler::DaemonArtifactStore`) living in the
+binary crate.
+
+**Threading `Arc<dyn ArtifactStore>` through the collab dispatch chain, confirmed low-risk before
+attempting it** (not assumed): a dedicated research pass found exactly ONE real dispatch call site
+(`run_session`), reached via exactly two call chains (hub TCP, P2P mesh) — both already having
+`Arc<Mutex<DaemonState>>` in scope at or one hop from the call site — and direct precedent for
+adding a required parameter to this exact function twice before (the `transport`/`auth_pubkey`
+additions), each a similarly-shaped, contained diff. Threaded through
+`handle_client_with_auth`/`handle_client`/`handle_client_authenticated`/`run_session`/
+`handle_doc_request_inner` (append-last, matching the established parameter-ordering precedent) and
+`p2p::serve`; ~10 call sites total across `main.rs`/`p2p.rs`/`dialer.rs`/the daemon's own
+integration tests, all mechanical, all still green.
+
+`kb/fetch_artifact` is gated `KbOp::Read` (any member, including Viewer) — reading a derived
+artifact is no more sensitive than reading the content it was derived from. Also gated on the KB's
+own `share_derived_artifacts` toggle (new per-KB `KbCollectionDoc` field, ADR-034's own "coordinator
+opts in" design) — even a genuinely cached artifact is not served while sharing is disabled
+(defaults to `false`/opt-in, matching this codebase's `TransportPolicy`/`Encryption` precedent for
+every other new-capability toggle). "Coordinator" is deliberately not a separate stored field —
+it's derived directly from the ADR-033 lease (`current_lease("enrichment", now).holder_fp`), reusing
+Phase D1's election/tiebreak machinery rather than building a second one, per ADR-034's own text.
+
+**Honest scope limits, named rather than silently dropped**:
+- **Relationship/metadata baking (ADR-034 item 1) is NOT built in this phase.** No "derive
+  relationships" AI logic exists anywhere yet (Phase C only computes vectors) — this ADR wires the
+  *sharing mechanism* for embeddings, not a new relationship-derivation pipeline, which is out of
+  ADR-061's scope entirely. Building an unreachable scaffold with no caller and no way to exercise
+  its correctness beyond "does it compile" was judged worse than not building it (CLAUDE.md: no
+  half-finished/speculative code) — this sub-part is deferred to whenever that derivation logic is
+  designed, tracked as a real gap, not silently absent.
+- **The model-pin-mismatch decision is the REQUESTER's, not built here.** ADR-034: "a peer fetching
+  with a mismatched pin recomputes locally." This daemon simply reports what it has cached under the
+  exact requested `(model, chunk_version)` key; there is no automatic requester/client call site in
+  this phase at all (mirroring Phase D1's own precedent — the lease primitive shipped with no
+  automatic caller until D2 wired one specific consumer). A future caller decides when to ask and
+  what to do with a mismatch or a `has_artifact: false`.
+- **No dedicated toggle command/tool for `share_derived_artifacts` in this phase** — the
+  `KbCollectionDoc` field + accessor/setter exist and are tested directly; user-facing
+  command/Scheme-API/MCP-tool wiring to flip it interactively is deferred, matching this PR's focus
+  on the ADR-034 mechanism itself over its full product surface.
+
+Adversarial coverage (CLAUDE.md principle #14): a non-member is denied at the exact same `kb_access`
+gate every other read path uses (the attacker case ADR-034 names: "an artifact offered by a
+non-member is ignored"); a member is served nothing while `share_derived_artifacts` is disabled,
+even for a genuinely cached vector (not merely documented — asserted against a real cache hit that's
+still refused); a genuine cache miss is reported distinctly from both the disabled-sharing and
+denied cases (a caller must be able to tell "nothing cached yet" from "you're not allowed" from
+"sharing is off").
+
+`cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean across the
+daemon workspace (169 lib + 131 binary unit tests, all e2e suites, no regressions from the dispatch
+threading); `cargo test -p mae-sync` clean (306 tests, 7 new for the per-KB settings, including a
+genuine two-peer concurrent-setting-change convergence test).
+
 ## Implementation note (Phase E, principle #15)
 
 Re-read the Decision text carefully before implementing: it specifies the enrich-now path runs

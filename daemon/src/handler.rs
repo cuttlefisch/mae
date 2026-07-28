@@ -844,6 +844,41 @@ pub(crate) fn resolve_kb_store(st: &DaemonState, kb_id: &str) -> Option<Arc<Cozo
     }
 }
 
+/// ADR-061 Phase D3: the production `mae_daemon::artifact_store::ArtifactStore` —
+/// bridges `collab_handler`'s `kb/fetch_artifact` RPC (library crate) to this
+/// binary crate's `DaemonState`/`resolve_kb_store`, mirroring
+/// `collab_handler::kb_lease::DaemonLeaseFence`'s identical crate-boundary
+/// pattern from Phase D2.
+pub struct DaemonArtifactStore(pub Arc<Mutex<DaemonState>>);
+
+#[async_trait::async_trait]
+impl mae_daemon::artifact_store::ArtifactStore for DaemonArtifactStore {
+    async fn get_cached_embedding(
+        &self,
+        kb_id: &str,
+        content_hash: &str,
+        model: &str,
+        chunk_version: i64,
+    ) -> Result<Option<Vec<f32>>, String> {
+        let store = {
+            let st = self.0.lock().await;
+            resolve_kb_store(&st, kb_id)
+                .ok_or_else(|| format!("KB '{kb_id}' has no local content store on this daemon"))?
+        };
+        let content_hash = content_hash.to_string();
+        let model = model.to_string();
+        // ADR-054: a synchronous CozoDB read must not run inline on the async
+        // executor, matching every other store read in this daemon.
+        tokio::task::spawn_blocking(move || {
+            store
+                .get_cached_embedding(&content_hash, &model, chunk_version)
+                .map_err(|e| format!("cache lookup failed: {e}"))
+        })
+        .await
+        .map_err(|e| format!("cache lookup task panicked: {e}"))?
+    }
+}
+
 /// Establish (or widen) a P2P mesh share for `kb_id` directly via the control
 /// socket — the daemon's self-sufficient `kb-share-p2p` path (ADR-025). On a FRESH
 /// share it creates the `kbc:{kb_id}` collection owned by this daemon, **seeds its

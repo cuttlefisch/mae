@@ -13,6 +13,7 @@ use yrs::Doc;
 
 use crate::SyncError;
 
+mod collection_artifacts;
 mod collection_core;
 mod collection_crypto;
 mod collection_lease;
@@ -168,6 +169,18 @@ const COLL_PENDING_KEY: &str = "pending"; // YMap<fingerprint -> {label,requeste
 const COLL_RETIRED_KEY: &str = "retired"; // YMap<fingerprint -> last epoch> (#72 tombstone)
 const COLL_TRANSPORT_POLICY_KEY: &str = "transport_policy"; // hub|p2p|both (absent ⇒ hub)
 const COLL_ENCRYPTION_KEY: &str = "encryption"; // ADR-037: none|e2e (absent ⇒ none)
+                                                // ADR-034 (ADR-061 Phase D3): per-KB derived-artifact-sharing settings. Plain
+                                                // scalar values at the top-level `collection` map (like transport_policy/
+                                                // encryption above) — safe for concurrent first-set the same way those are
+                                                // (no nested-container creation race, unlike the ADR-033 lease's own data
+                                                // model; see `collection_lease.rs`'s doc comment for why THAT one needed
+                                                // eager seeding instead). "Coordinator" is deliberately NOT a stored field
+                                                // here — it's derived directly from the ADR-033 lease
+                                                // (`current_lease("enrichment", now).holder_fp`), reusing Phase D1's
+                                                // election/tiebreak machinery rather than building a second one.
+const COLL_EMBEDDING_MODEL_KEY: &str = "embedding_model"; // pinned model name (absent ⇒ none pinned)
+const COLL_CHUNK_VERSION_KEY: &str = "chunk_version"; // decimal (absent ⇒ 0)
+const COLL_SHARE_ARTIFACTS_KEY: &str = "share_derived_artifacts"; // "1"|"0" (absent ⇒ false, opt-in)
 /// ADR-026 signed membership op-log: `YMap<chain_hash -> op record>` — the
 /// append-only, CRDT *set* of signed membership ops (keyed by each op's
 /// `chain_hash` so concurrent appends converge). Validity is *derived* by every
