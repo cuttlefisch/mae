@@ -1223,6 +1223,26 @@ pub struct GraphStyleOptions {
     /// `flatten_scene_graph`'s edge loop) — it's sparse and a meaningful
     /// correctness signal, not part of the density problem this fixes.
     pub edge_alpha: f32,
+    /// Stroke width (logical px) of every edge (internal and boundary
+    /// stub alike). Mirrors `kb_graph_edge_width` — a real, previously-
+    /// hardcoded-to-1.0 config gap: `mae_canvas::kb_graph::positions_to_
+    /// scene` always constructs `EdgeStyle::default()`, whose `width`
+    /// field never varied by anything. Edge width is a pure rendering-
+    /// style concern (consistent with node radius/colors), so the flatten
+    /// loop uses THIS value instead of the scene-embedded `edge.style.
+    /// width` for both `Line` and `Curve` elements.
+    pub edge_width: f32,
+    /// Minimum alpha multiplier (0.0-1.0) for an internal edge whose
+    /// authored ADR-030 relationship weight is 0.0 — mirrors
+    /// `kb_graph_edge_weight_alpha_floor`. See the edge loop's weight-
+    /// blend computation for the full formula.
+    pub edge_weight_alpha_floor: f32,
+    /// Whether internal curved edges fade toward their own midpoint.
+    /// Mirrors `kb_graph_edge_taper_enabled`.
+    pub edge_taper_enabled: bool,
+    /// How much fainter a tapered edge's midpoint gets relative to its
+    /// endpoints (0.0-1.0). Mirrors `kb_graph_edge_taper_strength`.
+    pub edge_taper_strength: f32,
     /// Which algorithm computed the scene's node positions — the
     /// edge-curve control-point formula in `flatten_scene_graph` branches
     /// on this (#367): `Chord` pulls toward the circle's center instead of
@@ -1443,6 +1463,10 @@ impl GraphStyleOptions {
             label_declutter_enabled: editor.kb_graph_label_declutter_enabled,
             edge_curvature: editor.kb_graph_edge_curvature,
             edge_alpha: editor.kb_graph_edge_alpha,
+            edge_width: editor.kb_graph_edge_width,
+            edge_weight_alpha_floor: editor.kb_graph_edge_weight_alpha_floor,
+            edge_taper_enabled: editor.kb_graph_edge_taper_enabled,
+            edge_taper_strength: editor.kb_graph_edge_taper_strength,
             layout_algorithm: editor.kb_graph_layout_algorithm,
             cluster_group_by: editor.kb_graph_cluster_group_by,
             color_override: None,
@@ -2585,6 +2609,24 @@ pub(crate) fn flatten_scene_graph_cached(
         } else {
             style.edge_color.clone()
         };
+        // Weight-driven opacity (live-testing follow-up, evidence-grounded):
+        // a chord diagram's own convention is to encode connection
+        // magnitude via chord thickness/opacity — MAE's ADR-030 `?w=`
+        // relationship weight (`edge.weight`, 0.0-1.0, default 1.0 when
+        // unauthored) already carries this signal end-to-end but was never
+        // consulted by rendering. `lerp(floor, 1.0, weight)` means the
+        // common unauthored case (weight=1.0) renders BYTE-IDENTICAL to
+        // today's flat `style.edge_alpha` — only an explicitly-authored
+        // low-weight edge visibly de-emphasizes. The boundary self-loop
+        // stub is a correctness signal, not a weighted relationship — stays
+        // fully opaque regardless, unchanged from before.
+        let effective_alpha = if is_self_link {
+            1.0
+        } else {
+            let w = (edge.weight as f32).clamp(0.0, 1.0);
+            style.edge_alpha
+                * (style.edge_weight_alpha_floor + (1.0 - style.edge_weight_alpha_floor) * w)
+        };
         let (sx1, sy1) = scene_to_viewport(viewport, src.x, src.y);
         let src_r = radii.get(edge.source).copied().unwrap_or(style.node_radius);
         // A boundary edge OR a genuine self-referential link is
@@ -2664,12 +2706,12 @@ pub(crate) fn flatten_scene_graph_cached(
                     x2: sx2 as f32,
                     y2: sy2 as f32,
                     color,
-                    thickness: edge.style.width as f32,
+                    thickness: style.edge_width,
                     // Boundary self-loop stubs never reach this branch
                     // (they always stay straight, see the comment above) —
-                    // this is always an internal edge, so `edge_alpha`
-                    // always applies.
-                    alpha: style.edge_alpha,
+                    // this is always an internal edge, so the weight-blended
+                    // `effective_alpha` always applies.
+                    alpha: effective_alpha,
                 });
                 continue;
             }
@@ -2680,22 +2722,19 @@ pub(crate) fn flatten_scene_graph_cached(
             x2: sx2 as f32,
             y2: sy2 as f32,
             color: color.clone(),
-            thickness: edge.style.width as f32,
+            thickness: style.edge_width,
             // The raw data-level flag, NOT `is_self_link` — a real
             // cross-instance edge is also `edge.style.dashed` (reused
             // convention), and stays visually flagged as "not an ordinary
             // edge" even in the rare case it falls through to this
             // straight-line branch (`edge_curvature == 0.0`).
             dashed: edge.style.dashed,
-            // The boundary self-loop stub is sparse and a meaningful
-            // correctness signal ("more graph beyond this depth, here"),
-            // not part of the dense-overlapping-edges problem `edge_alpha`
-            // exists to fix — it always draws fully opaque, regardless of
-            // the configured edge_alpha. A real cross-instance edge is NOT
-            // that signal (A3) — it's an ordinary edge for density
-            // purposes, so it respects `edge_alpha` like any other
-            // non-self-link edge, even in this straight-line fallback.
-            alpha: if is_self_link { 1.0 } else { style.edge_alpha },
+            // `effective_alpha` already folds in the boundary-stub-stays-
+            // opaque / weight-blend logic above (see its own doc comment) —
+            // a real cross-instance edge is NOT that signal (A3), so it
+            // respects the weight-blended alpha like any other non-self-
+            // link edge, even in this straight-line fallback.
+            alpha: effective_alpha,
         });
         // A boundary stub's label ("...", or "... (+N)" for a source with
         // multiple collapsed out-of-subgraph links — see
@@ -3148,6 +3187,23 @@ mod tests {
             // alpha-specific tests build their own style with a lower value
             // explicitly, same pattern as `edge_curvature` above.
             edge_alpha: 1.0,
+            // 1.0 — matches today's pre-Phase-F hardcoded `EdgeStyle::
+            // default().width`, a no-op so no pre-existing test's exact
+            // fixture geometry changes; new width-specific tests build
+            // their own style explicitly, same pattern as `edge_curvature`.
+            edge_width: 1.0,
+            // 1.0 (not the production 0.3 default) — a genuine no-op: every
+            // existing edge test's fixture uses `test_edge`'s hardcoded
+            // `weight: 1.0`, so `lerp(floor, 1.0, weight=1.0)` always
+            // resolves to `1.0` regardless of what floor is set to here —
+            // set to 1.0 anyway for a maximally explicit no-op rather than
+            // relying on that cancellation.
+            edge_weight_alpha_floor: 1.0,
+            // Off — matches the production default; every existing edge
+            // test asserts exactly one Curve/Line element per edge, which
+            // tapering (multiple segments) would break if enabled here.
+            edge_taper_enabled: false,
+            edge_taper_strength: 0.0,
             // Force, matching `edge_curvature: 0.0` above — every existing
             // edge-curve test here asserts the Force perpendicular-offset
             // formula (or a straight line); new chord-mode tests build
@@ -4932,6 +4988,145 @@ mod tests {
                 );
             }
             other => panic!("expected Line, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn flatten_edge_weight_one_renders_byte_identical_to_flat_edge_alpha() {
+        // The common, unauthored case (ADR-030 default weight 1.0) must be
+        // completely unaffected by the weight-blend formula, regardless of
+        // what `edge_weight_alpha_floor` is set to.
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("a", 0.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("b", 50.0, 0.0, NodeKind::Note));
+        scene.edges.push(test_edge(0, 1)); // weight: 1.0
+        let mut style = test_style();
+        style.edge_alpha = 0.4;
+        style.edge_weight_alpha_floor = 0.1;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        match &elements[0] {
+            VisualElement::Line { alpha, .. } => assert_eq!(
+                *alpha, 0.4,
+                "weight=1.0 must render byte-identical to a flat edge_alpha"
+            ),
+            other => panic!("expected Line, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn flatten_edge_weight_zero_renders_at_exactly_the_alpha_floor() {
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("a", 0.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("b", 50.0, 0.0, NodeKind::Note));
+        scene.edges.push(SceneEdge {
+            source: 0,
+            target: 1,
+            label: None,
+            style: EdgeStyle::default(),
+            weight: 0.0,
+            rel_type: None,
+        });
+        let mut style = test_style();
+        style.edge_alpha = 0.8;
+        style.edge_weight_alpha_floor = 0.25;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        match &elements[0] {
+            VisualElement::Line { alpha, .. } => {
+                assert!(
+                    (*alpha - 0.8 * 0.25).abs() < 1e-6,
+                    "weight=0.0 must render at exactly edge_alpha * floor, got {alpha}"
+                );
+            }
+            other => panic!("expected Line, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn flatten_edge_weight_interpolates_linearly_between_floor_and_full_alpha() {
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("a", 0.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("b", 50.0, 0.0, NodeKind::Note));
+        scene.edges.push(SceneEdge {
+            source: 0,
+            target: 1,
+            label: None,
+            style: EdgeStyle::default(),
+            weight: 0.5,
+            rel_type: None,
+        });
+        let mut style = test_style();
+        style.edge_alpha = 1.0;
+        style.edge_weight_alpha_floor = 0.2;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        match &elements[0] {
+            VisualElement::Line { alpha, .. } => {
+                // 1.0 * (0.2 + (1.0 - 0.2) * 0.5) = 0.6
+                assert!(
+                    (*alpha - 0.6).abs() < 1e-6,
+                    "weight=0.5 must linearly interpolate to 0.6, got {alpha}"
+                );
+            }
+            other => panic!("expected Line, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn flatten_boundary_stub_alpha_is_unaffected_by_weight_blend() {
+        // The boundary self-loop stub isn't a weighted relationship — it
+        // must stay fully opaque regardless of its (largely meaningless)
+        // `weight` field, exactly like it already ignores `edge_alpha`.
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node("a", 0.0, 0.0, NodeKind::Note));
+        scene.edges.push(SceneEdge {
+            source: 0,
+            target: 0,
+            label: Some("...".to_string()),
+            style: EdgeStyle {
+                color: "#unused".to_string(),
+                width: 1.0,
+                dashed: true,
+            },
+            weight: 0.0,
+            rel_type: None,
+        });
+        let mut style = test_style();
+        style.edge_weight_alpha_floor = 0.0;
+        let viewport = mae_canvas::scene::Viewport::default();
+        let elements = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        match &elements[0] {
+            VisualElement::Line { alpha, .. } => {
+                assert_eq!(*alpha, 1.0, "a boundary stub must stay fully opaque")
+            }
+            other => panic!("expected Line, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn flatten_edge_width_controls_thickness_for_both_line_and_curve() {
+        let mut scene = SceneGraph::new();
+        scene
+            .nodes
+            .push(test_node("a", -100.0, 0.0, NodeKind::Note));
+        scene.nodes.push(test_node("b", 100.0, 0.0, NodeKind::Note));
+        scene.edges.push(test_edge(0, 1));
+        let mut style = test_style();
+        style.edge_width = 3.5;
+
+        let viewport = mae_canvas::scene::Viewport::default();
+        let straight = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        match &straight[0] {
+            VisualElement::Line { thickness, .. } => assert_eq!(*thickness, 3.5),
+            other => panic!("expected Line, got {other:?}"),
+        }
+
+        style.edge_curvature = 0.2;
+        let curved = flatten_scene_graph(&scene, &viewport, &style, &[]);
+        match &curved[0] {
+            VisualElement::Curve { thickness, .. } => assert_eq!(*thickness, 3.5),
+            other => panic!("expected Curve, got {other:?}"),
         }
     }
 

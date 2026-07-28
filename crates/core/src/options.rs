@@ -662,6 +662,44 @@ impl OptionRegistry {
                      converge near the circle's center) readable instead of blending into a \
                      solid mass, while nodes stay fully opaque so they remain the visual focus.",
                     OptionKind::Float, "0.5", Some("kb-graph.edge-alpha"), &[]),
+                opt!("kb_graph_edge_width", &["kb-graph-edge-width"],
+                    "Stroke width (logical px) of graph-view edges (both internal and boundary \
+                     stubs). A real, previously-hardcoded-to-1.0 config gap: edge thickness never \
+                     varied by anything. A thinner default reduces baseline ink (Tufte's data-ink \
+                     principle) and leans on kb_graph_edge_alpha as the primary density-management \
+                     lever — edge thickness scales worse than opacity once density is high enough \
+                     to cause real occlusion.",
+                    OptionKind::Float, "0.75", Some("kb-graph.edge-width"), &[]),
+                opt!("kb_graph_edge_weight_alpha_floor", &["kb-graph-edge-weight-alpha-floor"],
+                    "Minimum alpha multiplier (0.0-1.0) for an internal edge whose authored ADR-030 \
+                     relationship weight is 0.0 — an edge's effective opacity is kb_graph_edge_alpha \
+                     times a linear blend between this floor and 1.0 across the edge's own weight \
+                     (0.0-1.0, default 1.0 when unauthored), so an edge with the default/unauthored \
+                     weight renders byte-identical to today (a flat kb_graph_edge_alpha), while an \
+                     explicitly-authored LOW-weight edge visibly de-emphasizes — surfacing real \
+                     authored relationship strength (matches the standard chord-diagram convention \
+                     of encoding connection magnitude via width/opacity) instead of a flat blur. \
+                     Never 0.0 by default so a weak-but-real connection doesn't fully vanish.",
+                    OptionKind::Float, "0.3", Some("kb-graph.edge-weight-alpha-floor"), &[]),
+                opt!("kb_graph_edge_taper_enabled", &["kb-graph-edge-taper-enabled"],
+                    "Whether internal curved graph-view edges fade toward their own midpoint \
+                     (fully opaque at both endpoints, faintest halfway between) instead of a flat \
+                     opacity along their whole length — a studied clutter-reduction technique \
+                     (Holten & van Wijk's tapered/opacity-gradient edge research) that targets \
+                     exactly the 'dense chord diagram looks like a filled circle' symptom: the \
+                     overlap-heavy interior (which carries no extra information) fades, while each \
+                     endpoint (where the actual connection information lives) stays fully visible. \
+                     Off by default: this splits each tapered edge into several segments, a real \
+                     draw-call cost — matches this codebase's first-appearance/opt-in posture for \
+                     a new potentially-costly rendering feature (kb_graph_multi_kb_full_corpus's \
+                     own precedent).",
+                    OptionKind::Bool, "false", Some("kb-graph.edge-taper-enabled"), &[]),
+                opt!("kb_graph_edge_taper_strength", &["kb-graph-edge-taper-strength"],
+                    "How much fainter a tapered edge's midpoint gets relative to its endpoints \
+                     (0.0-1.0), only consulted when kb_graph_edge_taper_enabled is on. 0.0 leaves \
+                     every segment at the same opacity (no visible taper); 1.0 fades the midpoint \
+                     to fully transparent.",
+                    OptionKind::Float, "0.6", Some("kb-graph.edge-taper-strength"), &[]),
                 opt!("kb_graph_boundary_stub_label_always_shown",
                     &["kb-graph-boundary-stub-label-always-shown"],
                     "Whether a subgraph boundary stub's '... (+N)' collapsed-link-count label is \

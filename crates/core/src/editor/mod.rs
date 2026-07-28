@@ -821,6 +821,18 @@ pub struct Editor {
     /// Opacity (0.0-1.0) of internal graph-view edges. Mirrors
     /// `kb_graph_edge_alpha`.
     pub kb_graph_edge_alpha: f32,
+    /// Stroke width (logical px) of graph-view edges. Mirrors
+    /// `kb_graph_edge_width`.
+    pub kb_graph_edge_width: f32,
+    /// Minimum alpha multiplier for a weight=0.0 edge. Mirrors
+    /// `kb_graph_edge_weight_alpha_floor`.
+    pub kb_graph_edge_weight_alpha_floor: f32,
+    /// Whether internal curved edges fade toward their own midpoint.
+    /// Mirrors `kb_graph_edge_taper_enabled`.
+    pub kb_graph_edge_taper_enabled: bool,
+    /// How much fainter a tapered edge's midpoint gets. Mirrors
+    /// `kb_graph_edge_taper_strength`.
+    pub kb_graph_edge_taper_strength: f32,
     /// Whether a boundary stub's "... (+N)" label is always drawn instead
     /// of only on hover/selection of its source node. Mirrors
     /// `kb_graph_boundary_stub_label_always_shown`.
@@ -1471,6 +1483,10 @@ impl Editor {
             kb_graph_label_declutter_enabled: true,
             kb_graph_edge_curvature: 0.12,
             kb_graph_edge_alpha: 0.5,
+            kb_graph_edge_width: 0.75,
+            kb_graph_edge_weight_alpha_floor: 0.3,
+            kb_graph_edge_taper_enabled: false,
+            kb_graph_edge_taper_strength: 0.6,
             kb_graph_boundary_stub_label_always_shown: false,
             kb_graph_color_tween_enabled: true,
             kb_graph_color_tween_duration_ms: 150,
