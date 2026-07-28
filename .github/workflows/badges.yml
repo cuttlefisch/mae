@@ -20,9 +20,32 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          # Both workspaces -- mirrors ci.yml's `stable / test` leg (same
+          # rationale: the "Build mae-daemon" step below needs the daemon
+          # workspace built too, and without this it lands in the default
+          # (root-workspace-only) cache scope and recompiles from scratch
+          # every run).
+          workspaces: |
+            .
+            daemon -> daemon/target
       - uses: taiki-e/install-action@nextest
 
       - uses: ./.github/actions/install-gui-deps
+
+      # Found while verifying #511's split-invocation fix: this step never
+      # built the daemon workspace, unlike ci.yml's `stable / test` leg
+      # (`Build mae-daemon (for headless_kb_convergence_e2e)`, `ci.yml:126`).
+      # Previously invisible -- the ORIGINAL #510 contention bug always
+      # exhausted a heavy-group test's retries first and cancelled the whole
+      # nextest run before reaching `headless_kb_convergence_e2e`, so this
+      # gap never got the chance to fail on its own. #511's split fixed that
+      # masking failure (confirmed: no heavy-group test failed on a
+      # socket-bind timeout in that verification run) and, in doing so,
+      # surfaced this pre-existing, fully deterministic gap for the first
+      # time. Mirrors ci.yml's step exactly.
+      - name: Build mae-daemon (for headless_kb_convergence_e2e)
+        run: cd daemon && cargo build --release --bin mae-daemon
 
       - name: Count tests
         id: tests
@@ -69,7 +92,15 @@ jobs:
         # the same CPU at once. Sums both runs' "tests run" totals for the badge.
         run: |
           set +e
-          HEAVY_FILTER='binary(headless_e2e) + binary(guidance_delivery_e2e) + binary(headless_kb_convergence_e2e) + binary(headless_soak_shaped_e2e) + binary(headless_idle_cpu_e2e)'
+          # mcp_tool_tiering_e2e added after #511's verification run: it
+          # spawns a real `mae --headless` subprocess and asserts a socket
+          # bind within a bounded wall-clock window -- the identical failure
+          # profile as the other 5 (`headless instance never bound its
+          # stable socket`) -- but had never been added to this filter or to
+          # `.config/nextest.toml`'s `heavy-subprocess-e2e` group, so it was
+          # still exposed to the full-suite startup burst. See
+          # .config/nextest.toml for the matching group membership.
+          HEAVY_FILTER='binary(headless_e2e) + binary(guidance_delivery_e2e) + binary(headless_kb_convergence_e2e) + binary(headless_soak_shaped_e2e) + binary(headless_idle_cpu_e2e) + binary(mcp_tool_tiering_e2e)'
           # PIPESTATUS[0], not $? -- `$?` after `cmd | tee file` reflects
           # `tee`'s own exit code unless the shell has `pipefail` set, and this
           # step deliberately doesn't assume that (explicit is safer than

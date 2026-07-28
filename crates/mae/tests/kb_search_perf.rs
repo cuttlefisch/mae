@@ -86,8 +86,20 @@ fn search_ranked_scales_to_thousands_of_nodes() {
     // multiple seconds at this N), not to benchmark — so it stays well above
     // observed debug latency to avoid CI flake. (Per-keystroke completion at
     // this scale is Phase 6's debounce/server-top-N job, not this path's.)
+    //
+    // Raised 600ms -> 1500ms after issue #511's own verification run: that PR
+    // split full-suite nextest into a heavy-subprocess-e2e-first pass and a
+    // "rest" pass, and this test (part of "rest") hit a real, observed
+    // p95=923ms the first time it ran under the new scheduling shape --
+    // dozens of test binaries all starting at once with no heavy-group
+    // serialization ahead of them to stagger the burst. Confirmed this is
+    // CI-load contention. not an algorithmic regression: the same in-process,
+    // no-subprocess `search_ranked` call, reproduced locally in isolation.
+    // 1500ms keeps a >1.6x margin over the observed spike while staying far
+    // below the "multiple seconds" an actual O(n²) regression would produce
+    // at this N.
     assert!(
-        p95 < 600.0,
+        p95 < 1500.0,
         "search_ranked p95 too slow over {N} nodes: {p95:.2} ms (possible O(n²) regression)"
     );
 }

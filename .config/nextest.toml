@@ -58,9 +58,10 @@ filter = '''
   + binary(headless_kb_convergence_e2e)
   + binary(headless_soak_shaped_e2e)
   + binary(headless_idle_cpu_e2e)
+  + binary(mcp_tool_tiering_e2e)
 '''
 test-group = "heavy-subprocess-e2e"
-# The group above serializes these 5 files AGAINST EACH OTHER, but not
+# The group above serializes these files AGAINST EACH OTHER, but not
 # against the hundreds of OTHER test binaries nextest starts concurrently at
 # the very beginning of a full run -- a real residual contention window,
 # confirmed empirically MORE THAN ONCE now, not just theoretical: one test in
@@ -76,6 +77,15 @@ test-group = "heavy-subprocess-e2e"
 # small, explained retry for a specific, already-understood
 # environmental-timing effect (not a masked logic bug -- the logic itself was
 # reverified clean both times), not a blanket policy.
+#
+# `mcp_tool_tiering_e2e` added after #511's own CI/badges.yml split-invocation
+# fix landed and, for the first time, ran far enough into the "rest" bucket to
+# reach it: it failed with the identical "headless instance never bound its
+# stable socket" signature as the other 5 -- a real `mae --headless`
+# subprocess + bounded-bind assertion, structurally the same class of test,
+# just missed from the original list because it hadn't been the one observed
+# failing yet. Same treatment (own group member + heavy-first invocation
+# order in badges.yml/ci.yml) rather than a one-off retry bump.
 retries = 2
 
 [[profile.default.overrides]]
