@@ -2570,28 +2570,16 @@ pub(crate) fn flatten_scene_graph_cached(
         // curvature branch, where the "second endpoint" is a synthetic
         // stub-offset position, not a real second node.
         let is_self_link = edge.source == edge.target;
-        // ADR-068/live-testing fix: an edge whose source is Hidden/Clustered
-        // (folded into an aggregate "+N nodes" stub, not drawn as its own
-        // circle) must not draw either — otherwise it visually "connects to
-        // nowhere". A self-loop/boundary stub's synthetic "target" isn't a
-        // real second node (see the comment above), so only the SOURCE's
-        // tier matters for those; a real two-node edge is judged by BOTH
-        // endpoints. Deliberately does not redirect a Clustered endpoint's
-        // edge to its aggregate stub's centroid instead (see
-        // `cluster_groups`' own doc comment on why that stub's position is
-        // itself not the right anchor here) — the stub's own node-count
-        // label already communicates "there's more here".
-        let src_tier = render_tiers
-            .get(edge.source)
-            .copied()
-            .unwrap_or(RenderTier::Full);
-        let tgt_tier = render_tiers
-            .get(edge.target)
-            .copied()
-            .unwrap_or(RenderTier::Full);
-        if src_tier != RenderTier::Full || (!is_self_link && tgt_tier != RenderTier::Full) {
-            continue;
-        }
+        // Live-testing correction (reverses an earlier same-session
+        // attempt to skip edges touching a Hidden/Clustered-tier node):
+        // edges ALWAYS draw regardless of either endpoint's RenderTier.
+        // Direct user feedback — a connection communicates real KB
+        // structure and stays legible even from a distance, unlike a node
+        // CIRCLE, which is only unreadable once its rendered radius drops
+        // below legibility (see `finalize_render_tiers`' zoom-legibility
+        // floor). Node visibility (Full/Clustered/Hidden) and edge
+        // visibility are deliberately two independent axes — only the
+        // node-drawing loop below consults `render_tiers` at all.
         let color = if is_self_link {
             style.boundary_edge_color.clone()
         } else {
@@ -3819,10 +3807,14 @@ mod tests {
     }
 
     #[test]
-    fn flatten_scene_graph_cached_skips_edges_to_a_hidden_tier_node() {
-        // Live-testing bug: the edge loop never consulted `render_tiers` at
-        // all, so an edge to a `Hidden` node (invisible, not even a stub)
-        // still drew — visually "connecting to nowhere".
+    fn flatten_scene_graph_cached_still_draws_edges_to_a_hidden_tier_node() {
+        // Live-testing correction: edges to a `Hidden` node (no circle
+        // drawn at all) must still draw — direct user feedback that a
+        // connection communicates real KB structure and stays legible
+        // even from a distance, unlike a node circle, which becomes
+        // unreadable once too small. Node visibility and edge visibility
+        // are independent axes; only the node-drawing loop consults
+        // `render_tiers`.
         let mut scene = SceneGraph::new();
         scene.nodes.push(test_node("a", 0.0, 0.0, NodeKind::Note));
         scene.nodes.push(test_node("b", 100.0, 0.0, NodeKind::Note));
@@ -3847,15 +3839,18 @@ mod tests {
             .iter()
             .filter(|e| matches!(e, VisualElement::Line { .. }))
             .count();
-        assert_eq!(line_count, 0, "an edge to a Hidden-tier node must not draw");
+        assert_eq!(
+            line_count, 1,
+            "an edge to a Hidden-tier node must still draw"
+        );
     }
 
     #[test]
-    fn flatten_scene_graph_cached_skips_edges_to_a_clustered_tier_node() {
-        // A Clustered node isn't drawn individually (folded into an
-        // aggregate "+N nodes" stub) — an edge still pointing at its
-        // no-longer-drawn position is equally misleading as pointing at a
-        // Hidden node. The stub itself must still draw.
+    fn flatten_scene_graph_cached_still_draws_edges_to_a_clustered_tier_node() {
+        // Same correction as the Hidden-tier case above — a Clustered
+        // node's own aggregate "+N nodes" stub AND the ordinary edge
+        // pointing at its (no-longer-individually-drawn) position both
+        // draw; the two are independent, not mutually exclusive.
         let mut scene = SceneGraph::new();
         scene.nodes.push(test_node("a", 0.0, 0.0, NodeKind::Note));
         scene.nodes.push(test_node("b", 100.0, 0.0, NodeKind::Note));
@@ -3881,8 +3876,8 @@ mod tests {
             .filter(|e| matches!(e, VisualElement::Line { .. }))
             .count();
         assert_eq!(
-            line_count, 0,
-            "an edge to a Clustered-tier node must not draw"
+            line_count, 1,
+            "an edge to a Clustered-tier node must still draw"
         );
         let stub_count = elements
             .iter()
@@ -3890,15 +3885,14 @@ mod tests {
             .count();
         assert_eq!(
             stub_count, 1,
-            "the clustered node's own aggregate stub must still draw"
+            "the clustered node's own aggregate stub must also still draw"
         );
     }
 
     #[test]
     fn flatten_scene_graph_cached_still_draws_edges_between_two_full_tier_nodes() {
-        // Control case (CLAUDE.md #14 — not just the positive fix, the
-        // negative-control too): the new tier gate must not over-suppress
-        // ordinary edges between two fully-rendered nodes.
+        // Control case (CLAUDE.md #14): an ordinary edge between two
+        // fully-rendered nodes is unaffected by any of the above.
         let mut scene = SceneGraph::new();
         scene.nodes.push(test_node("a", 0.0, 0.0, NodeKind::Note));
         scene.nodes.push(test_node("b", 100.0, 0.0, NodeKind::Note));
@@ -3930,11 +3924,10 @@ mod tests {
     }
 
     #[test]
-    fn flatten_scene_graph_cached_boundary_self_loop_stub_disappears_when_its_source_is_hidden() {
-        // Adversarial: a boundary/self-loop stub's synthetic "target" isn't
-        // a real second node (`edge.source == edge.target`), so the tier
-        // gate must judge it by the SOURCE's tier alone — easy to get wrong
-        // given the self-loop path skips the normal target lookup entirely.
+    fn flatten_scene_graph_cached_boundary_self_loop_stub_still_draws_when_its_source_is_hidden() {
+        // A boundary/self-loop stub is itself an edge — it must follow the
+        // same "edges always draw regardless of tier" rule as any other
+        // edge, even though its source node's own circle is Hidden.
         let mut scene = SceneGraph::new();
         scene.nodes.push(test_node("a", 0.0, 0.0, NodeKind::Note));
         scene.edges.push(SceneEdge {
@@ -3966,9 +3959,18 @@ mod tests {
             &mut cache,
         );
         assert!(
-            elements.is_empty(),
-            "a boundary/self-loop stub whose source is Hidden must not draw its line or \
-             label — got {elements:?}"
+            elements
+                .iter()
+                .any(|e| matches!(e, VisualElement::Line { .. })),
+            "a boundary/self-loop stub must still draw even when its source is Hidden — got \
+             {elements:?}"
+        );
+        assert!(
+            !elements
+                .iter()
+                .any(|e| matches!(e, VisualElement::Circle { .. })),
+            "the Hidden node's own CIRCLE must still be suppressed — only edge visibility \
+             changed, not node visibility"
         );
     }
 
