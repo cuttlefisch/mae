@@ -644,12 +644,12 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .build(),
         ToolDefBuilder::new(
             "kb_vector_search",
-            "Semantic (vector) KB search — the similarity-by-meaning modality alongside kb_search (lexical) and kb_related (graph). Currently UNAVAILABLE: no embedding provider is configured, so it returns a clear error pointing you to kb_search / kb_related. Shares their scope/limit contract for when embeddings are wired.",
+            "Semantic (vector) KB search — the similarity-by-meaning modality alongside kb_search (lexical) and kb_related (graph). Embeds the query and fuses it with lexical relevance via Reciprocal Rank Fusion against the primary KB's cached embeddings (populated by kb_enrich). Requires a local KB store and a reachable embedding provider (ai_embedding_provider/ai_embedding_model options) — returns a clear error pointing you to kb_search / kb_related if either is unavailable, or if AI residency policy forbids the configured provider.",
         )
         .prop(
             "query",
             "string",
-            "Text query (will be embedded when an embedding provider is configured)",
+            "Text query, embedded via the configured embedding provider",
         )
         .prop(
             "scope",

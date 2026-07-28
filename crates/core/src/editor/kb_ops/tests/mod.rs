@@ -11,6 +11,7 @@ mod kb_ops_daemon_tests;
 mod kb_ops_durability_tests;
 mod kb_ops_registry_tests;
 mod kb_ops_search_federation_tests;
+mod kb_ops_vector_blend_tests;
 mod kb_ops_watcher_misc_tests;
 
 // Shared test helpers used across multiple test modules

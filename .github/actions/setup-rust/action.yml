@@ -74,6 +74,30 @@ inputs:
 runs:
   using: composite
   steps:
+    # Issues #498/#502: MAE's KB tests spin up real `OrgDirWatcher`s (one
+    # inotify instance per watcher on Linux) across many test files
+    # (kb_ops_durability_tests, kb_ops_registry_tests, kb_ops_concurrency_tests,
+    # kb_ops_watcher_misc_tests, kb_ops_search_federation_tests,
+    # kb_ops_crud_tests, kb_ops_collab_sync_tests -- confirmed by grep, not
+    # guessed). Ubuntu runners default `fs.inotify.max_user_instances` to 128
+    # (confirmed on a real machine) -- nextest's default full-machine
+    # concurrency can run well over 128 of these concurrently, so a watcher
+    # attach genuinely fails under contention (not a test bug): reproduced
+    # LOCALLY by running the affected test modules together under default
+    # parallelism, root-caused to `kb_adopt_instance`'s own pre-existing
+    # error-handling comment naming exactly this failure mode ("the
+    # inotify-limit case"). Raising the actual OS limit is the real fix (the
+    # nextest test-group serialization in .config/nextest.toml only covers
+    # the specific modules already known to be affected -- this covers the
+    # underlying resource for every caller, present and future, everywhere
+    # this action runs on Linux). No inotify equivalent on macOS/Windows, so
+    # scoped to `runner.os == 'Linux'` only.
+    - name: Raise inotify limits (issues #498/#502)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo sysctl -w fs.inotify.max_user_instances=4096
+        sudo sysctl -w fs.inotify.max_user_watches=1048576
     - uses: dtolnay/rust-toolchain@master
       with:
         toolchain: ${{ inputs.toolchain }}
