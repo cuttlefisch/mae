@@ -580,6 +580,58 @@ fn kb_reimport_file_retracts_stale_id_even_with_no_watcher_attached() {
     assert!(store.get_node("user:t-jenkins").unwrap().is_some());
 }
 
+// Issues #455 (Windows)/#498 (macOS), same root cause on two platforms: a real CI
+// failure on both. `KbRegistry::register` canonicalizes `org_dir` (#303's own
+// established discipline), so a caller who later passes `kb_reimport_file` an
+// UNCANONICALIZED path that requires resolving a symlink component to match
+// silently finds no registered instance at all -- on Windows because
+// `std::fs::canonicalize` prepends `\\?\`, on macOS because `TempDir`'s default
+// `/var/folders/...` location resolves through `/var` -> `/private/var`. Linux
+// doesn't hit this by accident (a plain tmp dir has no symlink to resolve), so
+// this is verified here with a REAL symlink -- the same technique
+// `kb_scope_project_path_identity_not_string_equality` already uses for this
+// exact class of bug (Windows symlink creation needs elevated privileges by
+// default, hence `#[cfg(unix)]`, matching that test's own precedent).
+#[cfg(unix)]
+#[test]
+fn kb_reimport_file_resolves_a_symlinked_org_dir_the_same_way_registration_did() {
+    let tmp = TempDir::new().unwrap();
+    let real_dir = tmp.path().join("real-notes");
+    std::fs::create_dir_all(&real_dir).unwrap();
+    let link_dir = tmp.path().join("alias-to-notes");
+    std::os::unix::fs::symlink(&real_dir, &link_dir).unwrap();
+
+    let mut editor = Editor::new();
+    let _td = with_test_dirs(&mut editor);
+    // Register via the SYMLINK path -- `KbRegistry::register` canonicalizes this
+    // internally, so the registry's own `org_dir` ends up resolved to `real_dir`.
+    let uuid = editor.kb_register("TestNotes", &link_dir).unwrap().uuid;
+
+    // A caller reimporting a file it reached THROUGH the symlink (e.g. a save
+    // triggered via the path the user actually opened) -- deliberately NOT
+    // pre-canonicalized, mirroring every real call site (`file_ops.rs`'s
+    // save-triggered reimport never canonicalizes its path either).
+    let f = link_dir.join("note1.org");
+    std::fs::write(
+        &f,
+        ":PROPERTIES:\n:ID: user:t-symlinked\n:END:\n#+title: Symlinked\n\nBody.\n",
+    )
+    .unwrap();
+    editor.kb_reimport_file(&f);
+
+    assert!(
+        editor
+            .kb
+            .instances
+            .get(&uuid)
+            .unwrap()
+            .contains("user:t-symlinked"),
+        "a path reaching the registered org_dir through an unresolved symlink \
+         component must still match the (internally canonicalized) registry entry \
+         -- the same mismatch that made this intermittent on Windows/macOS CI"
+    );
+}
+
 #[test]
 fn kb_create_note_from_title_persists_durably_to_the_matching_instance() {
     // Reproduces the reported bug: a node created via SPC n f ("create new

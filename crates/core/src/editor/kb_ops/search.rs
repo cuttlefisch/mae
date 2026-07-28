@@ -222,7 +222,26 @@ impl Editor {
 
     /// Re-import a single file into the KB instance that covers its directory.
     /// Used after saving a file inside `kb_notes_dir` to keep the graph in sync.
+    ///
+    /// Issues #455/#498 (same root cause, two platforms): `KbRegistry::register`
+    /// canonicalizes `org_dir` (#303's own established discipline) so a
+    /// symlinked/relative/non-normalized registration path always resolves to the
+    /// same stable location. A caller-supplied `path` that ISN'T already
+    /// canonicalized then fails `path.starts_with(&inst)` even when it's the exact
+    /// same file — on Windows because `std::fs::canonicalize` prepends the `\\?\`
+    /// verbatim-path prefix (tracked in #455's skip list), and on macOS because
+    /// `/var` (where `TempDir`'s default `env::temp_dir()` lives) is itself a
+    /// symlink to `/private/var` (tracked in #498) — Linux temp dirs typically
+    /// don't hit this since `/tmp` there is rarely a symlink requiring resolution,
+    /// which is exactly why this surfaced as "Windows/macOS-only", not a Linux
+    /// bug being separately introduced twice. Canonicalizing `path` HERE, once,
+    /// before the comparison, fixes both platforms' manifestations of the same
+    /// mismatch at its actual source instead of working around each symptom
+    /// separately. Falls back to the given path if canonicalization fails (e.g.
+    /// the file was deleted between the caller's own check and this call) rather
+    /// than hard-failing the whole reimport.
     pub fn kb_reimport_file(&mut self, path: &std::path::Path) {
+        let path = &path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         for (uuid, inst) in self
             .kb
             .registry
