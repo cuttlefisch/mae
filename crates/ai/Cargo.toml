@@ -18,11 +18,16 @@ mae-kb = { path = "../../shared/kb", features = ["storage-sled", "crdt", "remote
 mae-shell = { path = "../shell" }
 mae-sync = { path = "../../shared/sync" }
 # For kb_export_subgraph_html (#kb-export-html): mae-canvas bakes the
-# force-directed layout positions, mae-export renders the standalone HTML
-# page -- mirrors mae-core's own dependency on both for the native graph
-# view / org export.
+# chord-ring layout positions; the standalone HTML page itself is rendered
+# by the bilingual-kb-export crate (see kb_export_html.rs's module doc and
+# /home/hayden/src/bilingual-kb-export/kb/adrs/0001-extract-into-
+# standalone-project.org) -- extracted out of this workspace's own
+# mae-export::html_graph after it shipped several runtime/UX bugs with no
+# test layer able to catch them; mae-export itself is still pulled in
+# transitively via mae-core for general org-export needs, just no longer a
+# direct dependency of this crate.
 mae-canvas = { path = "../canvas" }
-mae-export = { path = "../export" }
+bilingual-kb-export = { path = "../../../bilingual-kb-export/crates/export" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # "blocking" is for ADR-061 Phase E's synchronous enrich-now tool only

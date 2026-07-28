@@ -14,11 +14,11 @@
 //! Chord layout mode uses — see that function's doc comment) so this tool
 //! doesn't reimplement either. The exported nav widget is a small,
 //! secondary chord diagram (edges rendered as arcs through the interior
-//! client-side, see `mae_export::html_graph::GRAPH_JS`), not the primary
+//! client-side, see `bilingual_kb_export::html_graph::GRAPH_JS`), not the primary
 //! force-directed graph view — `build_kb_graph` (Fruchterman-Reingold via
 //! `ForceLayout::run`) is available in the same module if a future caller
 //! wants that instead; swapping is a one-line change, not a new
-//! dependency. HTML assembly lives entirely in `mae_export::html_graph` —
+//! dependency. HTML assembly lives entirely in `bilingual_kb_export::html_graph` —
 //! this file is the bridge from `mae-kb`/`mae-canvas` types to that
 //! crate's leaf-crate `GraphExportNode`/`GraphExportEdge` shapes (mirrors
 //! `crates/core/src/editor/graph_view_ops.rs`'s own `to_kb_nodes`/
@@ -79,7 +79,7 @@ fn locate_seed_kb<'a>(editor: &'a Editor, id: &str) -> Result<&'a mae_kb::Knowle
 /// clamped to 200 — past 200 the chord ring's per-node hit target starts
 /// shrinking to fit the fixed-size widget, which needs layout work this
 /// tool doesn't do yet), `translations` (optional, path to a `{id:
-/// {title_es, body_es}}` JSON overlay — see `mae_export::html_graph` module
+/// {title_es, body_es}}` JSON overlay — see `bilingual_kb_export::html_graph` module
 /// docs), `title` (optional, page `<title>`/`<h1>`, default derived from
 /// the seed node's own title). If `node_cap` truncates the reachable set,
 /// the returned status string says so explicitly (`"N more node(s) hidden
@@ -151,11 +151,11 @@ pub fn execute_kb_export_subgraph_html(
         ));
     }
 
-    let translations: mae_export::html_graph::TranslationMap =
+    let translations: bilingual_kb_export::html_graph::TranslationMap =
         match args.get("translations").and_then(|v| v.as_str()) {
             Some(raw) => {
                 let resolved = resolve_path(editor, raw);
-                mae_export::html_graph::load_translations(&resolved)?
+                bilingual_kb_export::html_graph::load_translations(&resolved)?
             }
             None => HashMap::new(),
         };
@@ -182,7 +182,7 @@ pub fn execute_kb_export_subgraph_html(
             weight: l.weight,
         })
         .collect();
-    // Boundary links are dropped for this export (see mae_export::html_graph
+    // Boundary links are dropped for this export (see bilingual_kb_export::html_graph
     // module docs: v1 is single-KB, read-only, no "... (+N)" stub concept)
     // -- the chord layout doesn't consult them at all, so `&[]`.
     //
@@ -190,7 +190,7 @@ pub fn execute_kb_export_subgraph_html(
     // force-directed (`build_kb_graph`): the exported nav widget is a
     // small, secondary chord diagram (nodes at even angular positions,
     // edges as arcs through the interior -- rendered client-side in
-    // `mae_export::html_graph::GRAPH_JS`), not the primary force-directed
+    // `bilingual_kb_export::html_graph::GRAPH_JS`), not the primary force-directed
     // graph view. Both functions live in the same module and share the
     // same `SceneGraph`/positions-only contract, so this is a one-line
     // swap, not a new dependency.
@@ -203,13 +203,13 @@ pub fn execute_kb_export_subgraph_html(
         .collect();
 
     // --- Bridge to mae-export for HTML rendering ---
-    let palette = mae_export::html_graph::GruvboxPalette::dark();
-    let export_nodes: Vec<mae_export::html_graph::GraphExportNode> = result
+    let palette = bilingual_kb_export::html_graph::GruvboxPalette::dark();
+    let export_nodes: Vec<bilingual_kb_export::html_graph::GraphExportNode> = result
         .nodes
         .iter()
         .map(|n| {
             let (x, y) = positions.get(&n.id).copied().unwrap_or((0.0, 0.0));
-            mae_export::html_graph::build_export_node(
+            bilingual_kb_export::html_graph::build_export_node(
                 n.id.clone(),
                 n.kind.as_str().to_string(),
                 x,
@@ -223,10 +223,10 @@ pub fn execute_kb_export_subgraph_html(
             )
         })
         .collect();
-    let export_edges: Vec<mae_export::html_graph::GraphExportEdge> = result
+    let export_edges: Vec<bilingual_kb_export::html_graph::GraphExportEdge> = result
         .links
         .iter()
-        .map(|l| mae_export::html_graph::GraphExportEdge {
+        .map(|l| bilingual_kb_export::html_graph::GraphExportEdge {
             source: l.source.clone(),
             target: l.target.clone(),
             rel_type: l.rel_type.clone(),
@@ -246,7 +246,7 @@ pub fn execute_kb_export_subgraph_html(
         .map(|s| s.to_string())
         .unwrap_or_else(|| format!("{seed_title} \u{2014} KB Subgraph"));
 
-    let html = mae_export::html_graph::HtmlGraphExporter.export(
+    let html = bilingual_kb_export::html_graph::HtmlGraphExporter.export(
         &export_nodes,
         &export_edges,
         id,

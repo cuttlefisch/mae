@@ -4,10 +4,19 @@
 //! @since: 0.9.0
 
 pub mod html;
-pub mod html_graph;
 pub mod markdown;
 pub mod markdown_parser;
 pub mod org_writer;
+
+// `html_graph` (the KB-subgraph -> bilingual interactive HTML export) used
+// to live here. It shipped several runtime/UX bugs with no test layer able
+// to catch them (every test asserted on generated-source substrings, none
+// drove a real browser) -- extracted into its own hardened, independently
+// tested project at `bilingual-kb-export` (path-sibling to this repo, see
+// `crates/ai/src/tool_impls/kb_export_html.rs` for the real caller and
+// `/home/hayden/src/bilingual-kb-export/kb/adrs/0001-extract-into-
+// standalone-project.org` for the full rationale). Not re-exported from
+// here on purpose -- callers depend on `bilingual-kb-export` directly.
 
 /// Document-level metadata extracted from org keywords.
 #[derive(Debug, Clone, Default)]
