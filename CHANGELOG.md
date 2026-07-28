@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.14.59] - 2026-07-28
+## [0.14.60] - 2026-07-28
 
 ### Bug Fixes
 
@@ -23,6 +23,12 @@ All notable changes to this project will be documented in this file.
 - *(kb)* Extract_subgraph no longer phantom-includes unresolvable BFS targets (#493) ([cb8ccce](https://github.com/cuttlefisch/mae/commit/cb8ccce7dc423db15d832ead4ca986a5c9a503c7))
 - *(kb-graph)* Widen multi-KB grid columns for long diagram names ([e6739e5](https://github.com/cuttlefisch/mae/commit/e6739e51ad5f192c904abfc164f23dae0f9715b5))
 - *(kb-graph)* Cluster-stub visual — spatial-aware bucketing + clearer copy ([bce06ad](https://github.com/cuttlefisch/mae/commit/bce06ada5b0230834167f5c378055d0930863d65))
+- *(kb)* Widen external_store_change_arms_a_background_reload's deadline (#494) ([5847e98](https://github.com/cuttlefisch/mae/commit/5847e983fb1636d308cbd03aea4bbccd339d724b))
+- *(kb)* The real fix for #494 -- simulate a genuinely separate writer ([cd25c41](https://github.com/cuttlefisch/mae/commit/cd25c4193760eca2cb13d3bac8a56b573cbcf2b0))
+- *(kb)* Root-cause and fix #455/#498 -- kb_reimport_file path canonicalization mismatch ([d0c9e76](https://github.com/cuttlefisch/mae/commit/d0c9e76945df20c315886d8df08473a1a83f9e14))
+- *(kb)* Bound SQLite busy-retry by wall-clock deadline, not attempt count (#484) ([932593b](https://github.com/cuttlefisch/mae/commit/932593bb857a56daba10fa975afb861a59d15b41))
+- *(babel,collab)* Root-cause + fix remaining known macOS CI flakes (#500, #506) ([8a5cbb5](https://github.com/cuttlefisch/mae/commit/8a5cbb538ea6e48e0cde1c187103f99c9e374d90))
+- *(kb)* Raise busy-retry deadline 20s -> 45s for Windows' in-process cargo-test contention ([7e0fafc](https://github.com/cuttlefisch/mae/commit/7e0fafc307ba3118462fc165f63a44f4060f509c))
 - *(kb)* Canonicalize paths before instance-membership comparison (#496) ([d60b72c](https://github.com/cuttlefisch/mae/commit/d60b72c933eccf613e56e5398f1d0dc162c42359))
 - *(kb-graph)* Stop drawing edges to Hidden/Clustered-tier nodes ([9867290](https://github.com/cuttlefisch/mae/commit/986729025843e60e4871103abee427839254b6b4))
 - *(kb-graph)* Theme change now repaints the graph view without a click ([19de5da](https://github.com/cuttlefisch/mae/commit/19de5da8befa0df4687205029dc60ce4bffcbefb))
@@ -32,11 +38,7 @@ All notable changes to this project will be documented in this file.
 - *(kb)* Nested list-item :ID: drawers lose their opening lines on wrap ([fb5e4db](https://github.com/cuttlefisch/mae/commit/fb5e4db97dd15e4cb7f8bfdc48dead2508f696f1))
 - *(kb-graph)* Guarantee an isolated node's label survives declutter ([00d0fb4](https://github.com/cuttlefisch/mae/commit/00d0fb4331f9038b6387b78842ca5449c9b79c86))
 - *(mcp)* Declare tools/list_changed and actually send it ([a0808f8](https://github.com/cuttlefisch/mae/commit/a0808f8979a36c41219e251616bcaffb54c6583f))
-- *(kb)* Widen external_store_change_arms_a_background_reload's deadline (#494) ([5847e98](https://github.com/cuttlefisch/mae/commit/5847e983fb1636d308cbd03aea4bbccd339d724b))
-- *(kb)* The real fix for #494 -- simulate a genuinely separate writer ([cd25c41](https://github.com/cuttlefisch/mae/commit/cd25c4193760eca2cb13d3bac8a56b573cbcf2b0))
-- *(kb)* Root-cause and fix #455/#498 -- kb_reimport_file path canonicalization mismatch ([d0c9e76](https://github.com/cuttlefisch/mae/commit/d0c9e76945df20c315886d8df08473a1a83f9e14))
 - *(ci)* Portable harness_spawn fallback when setsid is unavailable ([c18ec13](https://github.com/cuttlefisch/mae/commit/c18ec133a4091ebf38f2b91eb1317b780b1d087c))
-- *(kb)* Bound SQLite busy-retry by wall-clock deadline, not attempt count (#484) ([932593b](https://github.com/cuttlefisch/mae/commit/932593bb857a56daba10fa975afb861a59d15b41))
 
 ### CI
 
@@ -45,6 +47,7 @@ All notable changes to this project will be documented in this file.
 - Add sccache + mold to setup-rust for cross-job compile caching (#491) ([b525a72](https://github.com/cuttlefisch/mae/commit/b525a72e76358e3a814895236addd7ac036c6284))
 - *(badges)* Fix test-count badge silently undercounting (452 vs ~7,223+) ([2bff279](https://github.com/cuttlefisch/mae/commit/2bff279c8a0a8aab2a7bbcf2e5f7696b7d19bc92))
 - *(windows)* Skip new kb_reimport_file test for the same pre-existing #455 gap as its sibling ([ffbf7ea](https://github.com/cuttlefisch/mae/commit/ffbf7ea6df1583182bf2fc9219835bbf082989bb))
+- Fix Version Bump gating on unrelated Badges failures + raise heavy-subprocess-e2e retries (#510) ([b466db8](https://github.com/cuttlefisch/mae/commit/b466db855173330cb390f37f942b9dc41f9f6742))
 
 ### Documentation
 
@@ -77,13 +80,13 @@ All notable changes to this project will be documented in this file.
 - *(daemon)* ADR-067 Phase B — kb_access Join/Read split + kb_join enforcement ([293660b](https://github.com/cuttlefisch/mae/commit/293660b75db6e9fdcd5f8abc727a3b989a76e198))
 - *(kb)* ADR-067 Phase C + Phase E — QueryOnly key delivery + residual-risk visibility ([e34a9b4](https://github.com/cuttlefisch/mae/commit/e34a9b4908a18dbc7096a4553fae9718c9a552e5))
 - *(kb)* ADR-061 Phase C + Phase E — enrichment scheduler wiring + enrich-now path ([3b5d29b](https://github.com/cuttlefisch/mae/commit/3b5d29b75cfab0b1bc744a0b0af27bc15ba14742))
-- *(kb-graph)* Zoom-legibility floor lets DOI-elided nodes populate back in ([4d92973](https://github.com/cuttlefisch/mae/commit/4d9297315117bd875635efe6cf7846ab8e0c890d))
-- *(kb-graph)* Weight-driven edge opacity + configurable edge width ([272377c](https://github.com/cuttlefisch/mae/commit/272377c1fa3755ae680e98e03eea85d62b3fe7b2))
-- *(kb-graph)* Opt-in opacity-taper toward a curved edge's midpoint ([bc75011](https://github.com/cuttlefisch/mae/commit/bc750115e9278b680437cf30289f78bccc754142))
 - *(kb)* ADR-061 Phase D1 — real ADR-033 advisory lease primitive (#420) ([7ed875a](https://github.com/cuttlefisch/mae/commit/7ed875a3ae49343898cb7ce05852ba8d7df98a59))
 - *(kb)* ADR-061 Phase D2 — enrichment becomes the lease's first caller (#420) ([37ce9c1](https://github.com/cuttlefisch/mae/commit/37ce9c13c969c12e403f18a78318022767eb0bd8))
 - *(kb)* ADR-061 Phase D3 — ADR-034 cross-peer artifact sharing (#420) ([d5b967a](https://github.com/cuttlefisch/mae/commit/d5b967a1e1c852bb310c34bf299898ea25e725aa))
 - *(kb)* ADR-061 Phase F -- kb_vector_search wiring + RRF blend, fix real macOS/Linux KB-watcher CI flakes (#498/#502) ([f6246e1](https://github.com/cuttlefisch/mae/commit/f6246e168e941ee8afca20bcb982cb589654256a))
+- *(kb-graph)* Zoom-legibility floor lets DOI-elided nodes populate back in ([4d92973](https://github.com/cuttlefisch/mae/commit/4d9297315117bd875635efe6cf7846ab8e0c890d))
+- *(kb-graph)* Weight-driven edge opacity + configurable edge width ([272377c](https://github.com/cuttlefisch/mae/commit/272377c1fa3755ae680e98e03eea85d62b3fe7b2))
+- *(kb-graph)* Opt-in opacity-taper toward a curved edge's midpoint ([bc75011](https://github.com/cuttlefisch/mae/commit/bc750115e9278b680437cf30289f78bccc754142))
 
 ### Miscellaneous
 
@@ -92,8 +95,9 @@ All notable changes to this project will be documented in this file.
 - *(ci)* Efficiency pass -- composite actions, cache scoping, MSRV leg, path filters ([c420331](https://github.com/cuttlefisch/mae/commit/c42033181bd3e6fdf2d2f3fb4eb9a8f813738bb8))
 - *(adr-kb)* Regenerate assets/mae-adr.cozo for ADR-034's status correction ([909622b](https://github.com/cuttlefisch/mae/commit/909622bbc8cc55d5bd272570165c1704026a2b84))
 - Bump version to 0.14.57 ([15ec5de](https://github.com/cuttlefisch/mae/commit/15ec5de8879c4bf5345c49a4f32797d538a716cd))
-- *(adr-kb)* Regenerate assets/mae-adr.cozo for ADR-069 ([9facbe7](https://github.com/cuttlefisch/mae/commit/9facbe71646ef5a9d5dd6b84f84b74affae06446))
 - Bump version to 0.14.58 ([2d5855e](https://github.com/cuttlefisch/mae/commit/2d5855ebcd6c63ac8a0b33eeaf7cb4407555ae2e))
+- *(adr-kb)* Regenerate assets/mae-adr.cozo for ADR-069 ([9facbe7](https://github.com/cuttlefisch/mae/commit/9facbe71646ef5a9d5dd6b84f84b74affae06446))
+- Bump version to 0.14.59 ([ba9a5d5](https://github.com/cuttlefisch/mae/commit/ba9a5d5089384afb34fbee4c05e2d814f4efcf2d))
 
 ### Performance
 
