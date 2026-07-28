@@ -176,6 +176,25 @@ pub struct Viewport {
     pub zoom: f64,
     pub width: f64,
     pub height: f64,
+    /// Dynamic lower clamp `interaction::zoom`/`set_zoom` enforce, in place
+    /// of a flat global constant — live-testing report: "i'm still unable
+    /// to zoom out far enough to see all kbs and their names, we seem to
+    /// be needlessly or too strictly clamping the allowed zoom levels
+    /// rather than calculating them dynamically based on the space taken
+    /// up by the kb view." A large scene's true "fit everything" zoom
+    /// ratio (`graph_view::zoom_to_fit`'s own bounding-box computation) can
+    /// legitimately fall below any single fixed floor; recomputed on every
+    /// `Editor::graph_view_reflatten_window` call (not just first-open),
+    /// so a scene that grows (e.g. full-corpus mode composing more
+    /// instances) always stays zoomable out far enough to fit. `#[serde(
+    /// default)]` so any existing (de)serialized `Viewport` without this
+    /// field falls back to today's exact `0.1` behavior.
+    #[serde(default = "default_min_zoom")]
+    pub min_zoom: f64,
+}
+
+fn default_min_zoom() -> f64 {
+    0.1
 }
 
 impl Default for Viewport {
@@ -186,6 +205,7 @@ impl Default for Viewport {
             zoom: 1.0,
             width: 800.0,
             height: 600.0,
+            min_zoom: default_min_zoom(),
         }
     }
 }

@@ -237,24 +237,48 @@ fn normalize_path(p: &Path) -> PathBuf {
     p.canonicalize().unwrap_or_else(|_| p.to_path_buf())
 }
 
+/// Deadline for [`wait_for`]'s poll loop. Widened from an earlier 3s (issue
+/// #494): macOS's FSEvents backend delivers change notifications in
+/// OS-coalesced batches regardless of the `latency: 0.0` this module already
+/// requests (not further caller-tunable), so a tight deadline is more
+/// marginal on macOS under CI load than on Linux's inotify backend, without
+/// there being any actual debounce/config asymmetry to fix here. 10s gives
+/// well over 3x headroom over the original while keeping the worst-case
+/// added wall-clock time for a `continue-on-error: true`, non-blocking CI job
+/// bounded and reasonable — the loop still exits immediately on success in
+/// the common case; this only affects the rare slow-CI tail.
+pub const WATCHER_TEST_POLL_DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Poll `cond` until it returns `true` or [`WATCHER_TEST_POLL_DEADLINE`]
+/// elapses — `notify`-backed watchers are eventually-consistent on every
+/// platform this crate supports, so a test observing a watcher side effect
+/// must poll rather than assert immediately. Test/CI-only helper (not part
+/// of this crate's real runtime behavior), but a normal `pub fn` rather than
+/// `#[cfg(test)]`-gated: a `cfg(test)` item is only visible within its own
+/// crate's test build, never to a downstream dependent crate's tests, so
+/// `mae-core`'s own watcher-related tests (`kb_ops_concurrency_tests.rs`)
+/// need this to be genuinely, always compiled and exported to call it at
+/// all rather than hand-rolling an independent (and, per #494, silently
+/// drifting) copy of the same loop. `FnMut` (not `Fn`) so a caller's
+/// condition closure can mutate captured state each poll (e.g. draining a
+/// pending queue via a `&mut Editor` method).
+pub fn wait_for<F: FnMut() -> bool>(mut cond: F) -> bool {
+    let deadline = std::time::Instant::now() + WATCHER_TEST_POLL_DEADLINE;
+    while std::time::Instant::now() < deadline {
+        if cond() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
 
     const SAMPLE: &str = ":PROPERTIES:\n:ID: abc-123\n:END:\n#+title: Test\nbody [[id:xyz]]\n";
-
-    fn wait_for<F: Fn() -> bool>(cond: F) -> bool {
-        // notify is eventually-consistent on most platforms. Poll briefly.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-        while std::time::Instant::now() < deadline {
-            if cond() {
-                return true;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(25));
-        }
-        false
-    }
 
     #[test]
     fn store_watcher_detects_external_modification() {
