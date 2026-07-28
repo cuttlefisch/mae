@@ -214,17 +214,27 @@ impl CozoKbStore {
     /// exactly what happened again (`sqlite_multi_instance_concurrent_writes_
     /// converge` still exhausted 400 attempts under heavier load). A deadline
     /// bounds the thing this retry actually cares about directly, and adapts to
-    /// however slow the CI runner happens to be without needing a third manual
-    /// re-tune. `MAX_RETRY_DURATION` is generous (dwarfing the ~14%-of-the-time,
-    /// sub-millisecond contention windows this backoff is measured to clear) but
-    /// still finite, so a genuinely stuck/deadlocked writer doesn't hang forever
-    /// — a real failure still surfaces, just after actually exhausting a
-    /// reasonable time budget instead of an arbitrary attempt count.
+    /// however slow the CI runner happens to be without needing a manual re-tune.
+    ///
+    /// `MAX_RETRY_DURATION` was 20s initially, then raised to 45s after a SECOND
+    /// real miss specifically on `stable / test (windows)`: that leg runs
+    /// `sqlite_multi_instance_concurrent_writes_converge` via plain `cargo test`
+    /// (not nextest's per-test PROCESS isolation the Linux/macOS legs get), so
+    /// its two writer threads compete for scheduling not just with each other
+    /// but with every OTHER concurrently-running mae-core test in the SAME
+    /// process — a genuinely worse contention pattern than this backoff was
+    /// stress-verified against (16 cores fully CPU-saturated, 8 fully-isolated
+    /// PROCESSES each running only this test, completed in 2-4s every time). 45s
+    /// gives real headroom above that already-adversarial baseline for Windows'
+    /// additionally slower SQLite I/O (NTFS overhead vs. Linux ext4, well
+    /// documented) stacked with in-process contention, while staying finite —
+    /// a genuinely stuck/deadlocked writer still surfaces as a real failure,
+    /// just after exhausting a reasonable budget instead of an arbitrary count.
     fn run_with_busy_retry<F>(&self, mut op: F) -> Result<NamedRows, cozo::Error>
     where
         F: FnMut() -> Result<NamedRows, cozo::Error>,
     {
-        const MAX_RETRY_DURATION: std::time::Duration = std::time::Duration::from_secs(20);
+        const MAX_RETRY_DURATION: std::time::Duration = std::time::Duration::from_secs(45);
         // Per-instance seed so two competing writers jitter differently. Without
         // jitter, identical backoff keeps them in lockstep and they collide forever.
         let seed = self as *const Self as u64;
