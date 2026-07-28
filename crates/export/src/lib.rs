@@ -537,18 +537,46 @@ pub fn convert_inline_markup_str(text: &str, target: InlineTarget) -> String {
             }
             '[' if text[i..].starts_with("[[") => {
                 if let Some((end, link_target, label)) = parse_org_link_str(text, i) {
+                    // `id:` prefix survives on raw-org-file input but is
+                    // already stripped on `mae_kb`-normalized input (see
+                    // `parse_org_link_str`'s doc comment) -- strip
+                    // defensively either way so it's never shown/used
+                    // inconsistently. A stripped/bare (non-URL) target is
+                    // an internal KB reference: give it a `#`-prefixed
+                    // href (a real, if currently unhandled, in-page
+                    // anchor form) rather than an invalid bare-UUID href.
+                    let stripped_target = link_target.strip_prefix("id:").unwrap_or(link_target);
+                    let is_external = stripped_target.contains("://");
+                    let href = if is_external {
+                        stripped_target.to_string()
+                    } else {
+                        format!("#{stripped_target}")
+                    };
                     match target {
                         InlineTarget::Html => {
-                            let display = label.unwrap_or(link_target);
+                            // `Some(l)` is already HTML-escaped by the
+                            // recursive call (it walks the same char-by-
+                            // char escaping this whole function does);
+                            // the `None` (bare-target-as-label) case
+                            // isn't escaped yet, so it still needs it
+                            // here -- escaping `display` unconditionally
+                            // would double-escape the `Some` case.
+                            let display_html = match &label {
+                                Some(l) => convert_inline_markup_str(l, target),
+                                None => html_escape(stripped_target),
+                            };
                             result.push_str(&format!(
                                 "<a href=\"{}\">{}</a>",
-                                html_escape(link_target),
-                                html_escape(display)
+                                html_escape(&href),
+                                display_html
                             ));
                         }
                         InlineTarget::Markdown => {
-                            let display = label.unwrap_or(link_target);
-                            result.push_str(&format!("[{}]({})", display, link_target));
+                            let display = match &label {
+                                Some(l) => convert_inline_markup_str(l, target),
+                                None => stripped_target.to_string(),
+                            };
+                            result.push_str(&format!("[{display}]({href})"));
                         }
                     }
                     i = end + 1;
@@ -605,7 +633,20 @@ fn find_markup_end_str(text: &str, start: usize, marker: char) -> Option<(usize,
 }
 
 fn parse_org_link_str(text: &str, start: usize) -> Option<(usize, &str, Option<&str>)> {
-    // [[target][label]] or [[target]]
+    // [[target][label]] (raw org-file two-bracket-group form) or [[target]]
+    // (bare) -- AND `[[target|label]]` (single bracket-group, pipe-
+    // separated), which is NOT standard org-file syntax but IS the literal
+    // storage form `mae_kb`'s own org parser canonicalizes every internal
+    // `[[id:UUID][label]]` link into (see `shared/kb/src/org.rs`'s link
+    // normalization, "the internal pipe-display convention"). Both this
+    // module's exporters (`html.rs`'s `HtmlExporter`, `html_graph.rs`'s
+    // graph export) render `mae_kb::Node::body` -- i.e. the ALREADY-
+    // normalized pipe form, not raw org-file text -- so without this,
+    // every internal link renders as a garbled, unsplit "UUID|label"
+    // string used as both href and visible text. Recognizing `|` here is
+    // safe/non-regressive for genuine raw-org-file callers: standard
+    // Org-mode link syntax never legitimately puts a bare `|` inside a
+    // single `[[...]]` bracket pair.
     if !text[start..].starts_with("[[") {
         return None;
     }
@@ -621,8 +662,12 @@ fn parse_org_link_str(text: &str, start: usize) -> Option<(usize, &str, Option<&
         }
     }
     if let Some(close_pos) = rest.find("]]") {
-        let target = &text[after_open..after_open + close_pos];
-        return Some((after_open + close_pos + 1, target, None));
+        let inner = &text[after_open..after_open + close_pos];
+        let end = after_open + close_pos + 1;
+        if let Some(bar) = inner.find('|') {
+            return Some((end, &inner[..bar], Some(&inner[bar + 1..])));
+        }
+        return Some((end, inner, None));
     }
     None
 }

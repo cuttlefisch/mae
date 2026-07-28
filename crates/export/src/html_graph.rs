@@ -375,7 +375,32 @@ fn mermaid_fallback_html(source: &str, reason: &str) -> String {
 /// renderer — see `render_org_element`'s doc comment), and `#+begin_src
 /// mermaid` blocks are pre-rendered to inline SVG (or a safe raw-source
 /// fallback) instead of being dumped as a generic `<pre><code>` block.
+/// `mae_kb::Node::body` retains a leading `:PROPERTIES:...:END:` drawer
+/// verbatim (properties are metadata, but the generic org parser this
+/// module reuses — `parse_org_document`, written for exporting genuine
+/// org-file body content — has no concept of a drawer and treats it as
+/// an ordinary paragraph). Left unstripped, every exported node's body
+/// literally opens with its own raw `:ID:`/`:hash:` lines rendered as
+/// visible prose. Strips only a *leading* drawer (bounded to the first
+/// ~500 chars so a `:PROPERTIES:`-looking string deep in real prose is
+/// never mistaken for one) — mirrors the same bounded-prefix convention
+/// `shared/kb/src/activity.rs::body_hash` already uses for the same
+/// drawer shape.
+fn strip_leading_properties_drawer(body: &str) -> &str {
+    let head = &body[..body.len().min(500)];
+    if let Some(props_start) = head.find(":PROPERTIES:") {
+        if head[..props_start].trim().is_empty() {
+            if let Some(end_rel) = head[props_start..].find(":END:") {
+                let end = props_start + end_rel + ":END:".len();
+                return body[end..].trim_start_matches(['\n', '\r']);
+            }
+        }
+    }
+    body
+}
+
 fn render_node_body_html(body: &str, palette: &GruvboxPalette) -> String {
+    let body = strip_leading_properties_drawer(body);
     let (meta, elements) = parse_org_document(body);
     let mut html = String::with_capacity(body.len() * 2);
     for element in &elements {
@@ -400,6 +425,7 @@ fn render_node_body_html(body: &str, palette: &GruvboxPalette) -> String {
 /// whitespace, truncated to `max_chars` (character-boundary-safe) with a
 /// trailing ellipsis if truncated.
 pub fn plain_text_preview(body: &str, max_chars: usize) -> String {
+    let body = strip_leading_properties_drawer(body);
     let (_, elements) = parse_org_document(body);
     let mut text = String::new();
     for element in &elements {
@@ -1418,6 +1444,115 @@ mod tests {
         assert!(!html.contains("<script src=\"http"));
         assert!(!html.contains("<link "));
         assert!(!html.contains("<script src=\"https"));
+    }
+
+    // --- Real-content regressions: found by actually running the export
+    // against a live KB (RoamNotes) rather than only against hand-built
+    // fixtures, which never happened to exercise the mae_kb-normalized
+    // `[[UUID|label]]` link form or a real properties drawer ---
+
+    #[test]
+    fn internal_pipe_style_links_render_as_clean_split_href_and_label() {
+        // mae_kb's org parser canonicalizes every `[[id:UUID][label]]`
+        // link into `[[UUID|label]]` before storage (see
+        // `parse_org_link_str`'s doc comment) -- assert that form renders
+        // as a real split link, not a garbled "UUID|label" dumped as both
+        // href and visible text (the actual bug: RoamNotes-sourced bodies
+        // rendered `<a href="1bc667b2-...|state">1bc667b2-...|state</a>`
+        // instead of `<a href="#1bc667b2-...">state</a>`). Uses
+        // `build_export_node` directly (its `.body_en` is plain HTML, not
+        // JSON-string-escaped the way a full page export's embedded
+        // payload is) so the assertion reads the real markup directly.
+        let n = build_export_node(
+            "a",
+            "note",
+            0.0,
+            0.0,
+            true,
+            true,
+            "A",
+            "See [[1bc667b2-1d9a-402e-a2ea-eab6fd7d81e3|state]] here.",
+            None,
+            &palette(),
+        );
+        assert_eq!(
+            n.body_en,
+            "<p>See <a href=\"#1bc667b2-1d9a-402e-a2ea-eab6fd7d81e3\">state</a> here.</p>\n"
+        );
+    }
+
+    #[test]
+    fn raw_org_file_two_bracket_links_still_render_correctly() {
+        // Non-regression: the OTHER exporter (`html.rs`'s `HtmlExporter`)
+        // feeds this same shared parser genuine raw org-FILE text, where
+        // `id:` prefixes are still present and `][` (not `|`) is the
+        // label separator -- confirm that form is unaffected.
+        let n = build_export_node(
+            "a",
+            "note",
+            0.0,
+            0.0,
+            true,
+            true,
+            "A",
+            "See [[id:1bc667b2-1d9a-402e-a2ea-eab6fd7d81e3][state]] here.",
+            None,
+            &palette(),
+        );
+        assert_eq!(
+            n.body_en,
+            "<p>See <a href=\"#1bc667b2-1d9a-402e-a2ea-eab6fd7d81e3\">state</a> here.</p>\n"
+        );
+    }
+
+    #[test]
+    fn external_links_keep_their_real_url_as_href() {
+        let n = build_export_node(
+            "a",
+            "note",
+            0.0,
+            0.0,
+            true,
+            true,
+            "A",
+            "See [[https://example.com/x|the docs]] here.",
+            None,
+            &palette(),
+        );
+        assert_eq!(
+            n.body_en,
+            "<p>See <a href=\"https://example.com/x\">the docs</a> here.</p>\n"
+        );
+    }
+
+    #[test]
+    fn leading_properties_drawer_never_appears_in_rendered_body_or_preview() {
+        // The actual bug: every RoamNotes-sourced node's rendered body
+        // opened with its own raw `:PROPERTIES: :ID: ... :hash: ... :END:`
+        // drawer dumped as visible prose, because `parse_org_document`
+        // (written for org BODY content) has no concept of a drawer.
+        let body = ":PROPERTIES:\n:ID:       a\n:hash:     deadbeef\n:END:\nReal content here.";
+        let n = build_export_node(
+            "a",
+            "note",
+            0.0,
+            0.0,
+            true,
+            true,
+            "A",
+            body,
+            None,
+            &palette(),
+        );
+        assert!(
+            !n.body_en.contains(":PROPERTIES:"),
+            "properties drawer leaked into the exported page: {}",
+            n.body_en
+        );
+        assert!(!n.body_en.contains(":hash:"));
+        assert!(n.body_en.contains("Real content here."));
+        assert!(!n.preview_en.contains("PROPERTIES"));
+        assert!(n.preview_en.contains("Real content here."));
     }
 
     // --- Chord nav widget additions: accent palette, home/outline/theme
