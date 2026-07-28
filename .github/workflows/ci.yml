@@ -261,41 +261,41 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
+        with:
+          nextest: "true"
       - name: cargo build --workspace (compile-only, catches portability gaps everywhere)
         run: cargo build --workspace
-      - name: cargo test (crates ADR-066 Phase A actually changed)
+      # Issue #484: migrated from plain `cargo test` to nextest (2026-07-28), after
+      # `sqlite_multi_instance_concurrent_writes_converge` recurred a THIRD time despite
+      # two rounds of retry-budget increases (count-based -> 20s wall-clock -> 45s
+      # wall-clock, see shared/kb/src/cozo_store/db.rs's own history comment). Root
+      # cause was never the budget: plain `cargo test -p mae-core --lib` runs all
+      # ~2877 tests as IN-PROCESS THREADS with no isolation, so this test's own two
+      # writer threads compete for scheduling not just with each other but with every
+      # other concurrently-running test in the SAME process -- on a real CI run, the
+      # observed failure was "database is locked" surviving a full 45 CONTINUOUS
+      # seconds of retry, which is process-wide starvation, not lock contention a
+      # bigger number could ever fix. nextest gives every test its own OS process
+      # (already true for Linux/macOS's `stable / test` and `macOS / build...` legs --
+      # this brings Windows to the same isolation model instead of leaving it as the
+      # one leg without it) -- and, for free, this test's module
+      # (kb_ops_concurrency_tests) is already a member of .config/nextest.toml's
+      # `kb-ops-filesystem-watchers` group, so it now also gets that group's existing
+      # max-threads=1 serialization against its 7 sibling modules, the same protection
+      # Linux/macOS already have. Scope is UNCHANGED (still the 4 crates ADR-066 Phase
+      # A actually touched, not `--workspace` -- see the comment above), only the
+      # runner changed. The 20 `--skip`s become an equivalent `-E "not (...)"` nextest
+      # filter (exact-match `test(=...)`, not substring, to keep the exclusion as
+      # narrow as the original `--skip` list was).
+      - name: cargo nextest run (crates ADR-066 Phase A actually changed)
         timeout-minutes: 20
-        # windows-latest runners default `run:` to PowerShell, which doesn't support
-        # `\` line continuation (backtick is its continuation char) -- the `--skip`
-        # list below needs bash explicitly, matching every other multi-line run block
-        # in this file (which happen to be shell-agnostic single-line-per-command and
-        # so never surfaced this).
         shell: bash
         run: |
-          cargo test -p mae-mcp --all-targets
-          cargo test -p mae-core --lib -- \
-            --skip file_picker::tests::basename_exact_ranks_highest \
-            --skip file_picker::tests::dir_prefix_filters_to_subtree \
-            --skip file_picker::tests::dir_prefix_with_remainder_finds_file \
-            --skip file_picker::tests::filter_typing_path_promotes_exact_file \
-            --skip file_picker::tests::reorder_by_recency_promotes_recent_files_to_front \
-            --skip file_picker::tests::scan_finds_files \
-            --skip file_picker::tests::switch_root_to_absolute_dir \
-            --skip file_picker::tests::tab_completes_to_longest_common_prefix \
-            --skip file_picker::tests::tilde_expansion \
-            --skip editor::dap_ops::tests::canonicalize_absolute_path_unchanged \
-            --skip editor::dap_ops::tests::dap_set_breakpoint_adds_and_is_idempotent \
-            --skip editor::dap_ops::tests::dap_set_breakpoint_conditional_stores_condition \
-            --skip editor::dap_ops::tests::dap_set_breakpoint_conditional_updates_existing \
-            --skip editor::dap_ops::tests::dap_set_breakpoint_conditional_with_hit_condition \
-            --skip editor::kb_ops::tests::kb_ops_watcher_misc_tests::kb_register_does_not_clobber_user_dirs \
-            --skip editor::tests::lsp_tests::open_file_in_project_sets_pending_lsp_root_change_when_no_project \
-            --skip editor::tests::navigation_tests::gf_opens_file_under_cursor \
-            --skip editor::tests::project_tests::set_project_root_command \
-            --skip editor::babel_ops::tests::babel_run_block_results_land_after_end_src_with_multibyte_content_earlier \
-            --skip swap::tests::orphan_detection
-          cargo test -p mae --bin mae
-          cargo test -p mae-agent-cli
+          cargo nextest run -p mae-mcp --all-targets
+          SKIP_FILTER='test(=file_picker::tests::basename_exact_ranks_highest) + test(=file_picker::tests::dir_prefix_filters_to_subtree) + test(=file_picker::tests::dir_prefix_with_remainder_finds_file) + test(=file_picker::tests::filter_typing_path_promotes_exact_file) + test(=file_picker::tests::reorder_by_recency_promotes_recent_files_to_front) + test(=file_picker::tests::scan_finds_files) + test(=file_picker::tests::switch_root_to_absolute_dir) + test(=file_picker::tests::tab_completes_to_longest_common_prefix) + test(=file_picker::tests::tilde_expansion) + test(=editor::dap_ops::tests::canonicalize_absolute_path_unchanged) + test(=editor::dap_ops::tests::dap_set_breakpoint_adds_and_is_idempotent) + test(=editor::dap_ops::tests::dap_set_breakpoint_conditional_stores_condition) + test(=editor::dap_ops::tests::dap_set_breakpoint_conditional_updates_existing) + test(=editor::dap_ops::tests::dap_set_breakpoint_conditional_with_hit_condition) + test(=editor::kb_ops::tests::kb_ops_watcher_misc_tests::kb_register_does_not_clobber_user_dirs) + test(=editor::tests::lsp_tests::open_file_in_project_sets_pending_lsp_root_change_when_no_project) + test(=editor::tests::navigation_tests::gf_opens_file_under_cursor) + test(=editor::tests::project_tests::set_project_root_command) + test(=editor::babel_ops::tests::babel_run_block_results_land_after_end_src_with_multibyte_content_earlier) + test(=swap::tests::orphan_detection)'
+          cargo nextest run -p mae-core --lib -E "not ($SKIP_FILTER)"
+          cargo nextest run -p mae --bin mae
+          cargo nextest run -p mae-agent-cli
       - name: cargo clippy (crates ADR-066 Phase A actually changed)
         run: |
           cargo clippy -p mae-mcp -p mae-core -p mae --bin mae -p mae-agent-cli --all-targets -- -D warnings
