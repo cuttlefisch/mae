@@ -72,10 +72,18 @@ fn locate_seed_kb<'a>(editor: &'a Editor, id: &str) -> Result<&'a mae_kb::Knowle
 /// Export a KB subgraph rooted at `id` to one self-contained HTML file.
 ///
 /// Args: `id` (required, seed/anchor node), `path` (required, output file),
-/// `depth` (optional, BFS hop radius, default 2, clamped to 4),
-/// `translations` (optional, path to a `{id: {title_es, body_es}}` JSON
-/// overlay — see `mae_export::html_graph` module docs), `title` (optional,
-/// page `<title>`/`<h1>`, default derived from the seed node's own title).
+/// `depth` (optional, BFS hop radius, default 2, clamped to 4 — this tool
+/// exports one flat chord ring with no drill-down, not built for a long
+/// narrow chain; prefer multiple shallower exports over one deep one),
+/// `node_cap` (optional, safety net on the reachable-set size, default 60,
+/// clamped to 200 — past 200 the chord ring's per-node hit target starts
+/// shrinking to fit the fixed-size widget, which needs layout work this
+/// tool doesn't do yet), `translations` (optional, path to a `{id:
+/// {title_es, body_es}}` JSON overlay — see `mae_export::html_graph` module
+/// docs), `title` (optional, page `<title>`/`<h1>`, default derived from
+/// the seed node's own title). If `node_cap` truncates the reachable set,
+/// the returned status string says so explicitly (`"N more node(s) hidden
+/// by node_cap"`) rather than reporting a plain success.
 ///
 /// Fails with a clear, specific error (never a panic/generic error) when:
 /// the seed id doesn't exist anywhere in the KB; an explicitly-given
@@ -95,11 +103,32 @@ pub fn execute_kb_export_subgraph_html(
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required argument: path".to_string())?;
+    // Clamped, not just defaulted -- 4 is a deliberate ceiling, not an
+    // arbitrary one: this tool renders every node client-side in one flat
+    // chord ring with no drill-down/pagination, so an unbounded depth on a
+    // well-connected KB can reach well past what `node_cap` below would
+    // keep anyway. A caller that legitimately needs a longer linear chain
+    // should prefer multiple shallower exports over one deep one -- this
+    // tool's UI (chord ring + reading-order walk) isn't built for a long,
+    // narrow shape.
     let depth = args
         .get("depth")
         .and_then(|v| v.as_u64())
         .unwrap_or(2)
         .min(4) as usize;
+    // A generous but real safety net -- this tool targets small (~15-20
+    // node) curated exports; a much larger reachable set is almost
+    // certainly not what a "subgraph export" call intended. Overridable,
+    // still capped at 200: past that the chord ring's per-node hit target
+    // shrinks as the ring grows to fit a fixed-size widget (see
+    // `build_kb_graph_chord_positions`'s sqrt-area layout), so a much
+    // larger export needs widget-sizing work this tool doesn't do yet, not
+    // just a bigger number here.
+    let node_cap = args
+        .get("node_cap")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(60)
+        .min(200) as usize;
 
     let kb = locate_seed_kb(editor, id)?;
 
@@ -107,10 +136,7 @@ pub fn execute_kb_export_subgraph_html(
         starter_nodes: vec![id.to_string()],
         max_depth: depth,
         include_backlinks: true,
-        // A generous but real safety net -- this tool targets small (~15-20
-        // node) curated exports; a much larger reachable set is almost
-        // certainly not what a "subgraph export" call intended.
-        node_cap: Some(60),
+        node_cap: Some(node_cap),
         include_body: true,
     };
     let result = kb.extract_subgraph(&spec);
@@ -246,7 +272,7 @@ pub fn execute_kb_export_subgraph_html(
     })?;
 
     Ok(format!(
-        "Exported {} node{} ({} edges) rooted at '{id}' to {} ({} bytes){}",
+        "Exported {} node{} ({} edges) rooted at '{id}' to {} ({} bytes){}{}",
         export_nodes.len(),
         if export_nodes.len() == 1 { "" } else { "s" },
         export_edges.len(),
@@ -256,6 +282,19 @@ pub fn execute_kb_export_subgraph_html(
             String::new()
         } else {
             format!(", {} translation(s) applied", translations.len())
+        },
+        // Never truncate silently -- house rule elsewhere in this codebase
+        // (see graph_view_ops.rs's identical hidden_node_count reporting).
+        // Without this, a caller hitting `node_cap` got a success message
+        // that read as complete ("Exported 60 nodes...") with no signal
+        // that the true reachable set was actually larger.
+        if result.hidden_node_count > 0 {
+            format!(
+                ", {} more node(s) hidden by node_cap",
+                result.hidden_node_count
+            )
+        } else {
+            String::new()
         }
     ))
 }
@@ -279,6 +318,76 @@ mod tests {
             "A child note.",
         ));
         editor
+    }
+
+    /// A star KB: `root` plus `spoke_count` directly-linked spokes -- for
+    /// exercising `node_cap`/`hidden_node_count` behavior, which
+    /// `editor_with_linked_notes`'s 2-node fixture can't reach.
+    fn editor_with_star_kb(spoke_count: usize) -> Editor {
+        let mut editor = Editor::new();
+        let mut root_body = "The hub.".to_string();
+        for i in 0..spoke_count {
+            root_body.push_str(&format!(" [[spoke{i}][Spoke {i}]]"));
+        }
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "root",
+            "Hub",
+            mae_kb::NodeKind::Note,
+            &root_body,
+        ));
+        for i in 0..spoke_count {
+            editor.kb.primary.insert(mae_kb::Node::new(
+                format!("spoke{i}"),
+                format!("Spoke {i}"),
+                mae_kb::NodeKind::Note,
+                "A spoke note.",
+            ));
+        }
+        editor
+    }
+
+    #[test]
+    fn node_cap_truncation_is_reported_not_silent() {
+        let editor = editor_with_star_kb(20);
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.html");
+        let msg = execute_kb_export_subgraph_html(
+            &editor,
+            &serde_json::json!({
+                "id": "root",
+                "path": out.to_str().unwrap(),
+                "node_cap": 5,
+            }),
+        )
+        .unwrap();
+        // 5 nodes fit (root + 4 spokes out of 20 reachable) -> 16 hidden.
+        assert!(msg.contains("Exported 5 nodes"), "{msg}");
+        assert!(msg.contains("16 more node(s) hidden by node_cap"), "{msg}");
+    }
+
+    #[test]
+    fn node_cap_override_is_honored_and_default_still_60() {
+        let editor = editor_with_star_kb(3);
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.html");
+        // Well under both the override and the default -- no truncation,
+        // no "hidden" mention either way.
+        let msg = execute_kb_export_subgraph_html(
+            &editor,
+            &serde_json::json!({"id": "root", "path": out.to_str().unwrap(), "node_cap": 10}),
+        )
+        .unwrap();
+        assert!(msg.contains("Exported 4 nodes"), "{msg}");
+        assert!(!msg.contains("hidden"), "{msg}");
+
+        let out2 = dir.path().join("out2.html");
+        let msg2 = execute_kb_export_subgraph_html(
+            &editor,
+            &serde_json::json!({"id": "root", "path": out2.to_str().unwrap()}),
+        )
+        .unwrap();
+        assert!(msg2.contains("Exported 4 nodes"), "{msg2}");
+        assert!(!msg2.contains("hidden"), "{msg2}");
     }
 
     #[test]

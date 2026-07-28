@@ -1124,11 +1124,32 @@ const GRAPH_JS: &str = r#"
   var w = Math.max(1, maxX - minX);
   var h = Math.max(1, maxY - minY);
   var centerX = (minX + maxX) / 2, centerY = (minY + maxY) / 2;
+  var viewBoxW = w + pad * 2 + labelPad;
   svg.setAttribute(
     "viewBox",
-    (minX - pad) + " " + (minY - pad) + " " + (w + pad * 2 + labelPad) + " " + (h + pad * 2)
+    (minX - pad) + " " + (minY - pad) + " " + viewBoxW + " " + (h + pad * 2)
   );
   svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+
+  // A world-space radius floor (e.g. "Math.max(12, ...)") only guarantees a
+  // real on-screen hit target when world units and screen pixels are 1:1 --
+  // they are not. The chord ring's world extent grows with node count (see
+  // build_kb_graph_chord_positions's sqrt-area layout) while this widget's
+  // container is a FIXED CSS size (~280-300px, see STATIC_CSS), so
+  // preserveAspectRatio scales world units down as the graph grows; a
+  // sufficient world-space floor at 14 nodes silently stops being
+  // sufficient on screen at 50+. Confirmed empirically, not theoretically:
+  // a synthetic 50-node star rendered on-screen circles as small as ~3px
+  // radius before this fix, nowhere near the 12px/24px-diameter hit target
+  // every other comment in this file assumes. Compute the actual
+  // world-to-screen scale from the real rendered size and inflate the
+  // world-space floor to compensate, so the *on-screen* result is what's
+  // actually guaranteed, not just the SVG-unit number that happens to work
+  // at this session's one tested N.
+  var renderedWidth = svg.getBoundingClientRect().width || 300;
+  var worldToScreenScale = renderedWidth / viewBoxW;
+  var minOnscreenRadiusPx = 12;
+  var minWorldRadius = minOnscreenRadiusPx / worldToScreenScale;
 
   function degreeOf(id) {
     var d = 0;
@@ -1189,13 +1210,25 @@ const GRAPH_JS: &str = r#"
     edgePaths.push(path);
   });
 
-  // --- Draw nodes. Radius floors at 12 (>=24px hit target diameter). ---
+  // --- Draw nodes. Radius floors at minWorldRadius (computed above from
+  // the real world-to-screen scale, not a flat SVG-unit constant) so the
+  // >=24px hit-target diameter holds on screen regardless of node count. ---
   var nodeLayer = el("g", { id: "node-layer" });
   svg.appendChild(nodeLayer);
   var nodeGroups = [];
   nodes.forEach(function (n) {
     var deg = degreeOf(n.id);
-    var r = Math.max(12, (n.is_anchor ? 14 : 9) + Math.min(deg, 6) * 0.8);
+    // Additive, not Math.max(minWorldRadius, ...): a max() only preserves
+    // anchor/degree size differentiation when the degree-based term
+    // happens to exceed the floor, which in practice it rarely does once
+    // minWorldRadius is inflated enough to matter (confirmed empirically:
+    // an early version of this used max() and rendered every node at
+    // exactly the same 12px on-screen radius even at this session's real
+    // 14-node guide, silently losing the anchor's visual prominence).
+    // Adding a small, deliberately-scaled-down bonus on top of the
+    // guaranteed floor keeps both: the hit-target guarantee always holds,
+    // and higher-degree/anchor nodes still read as visually larger.
+    var r = minWorldRadius + (n.is_anchor ? 3 : 0) + Math.min(deg, 6) * 0.4;
     var g = el("g", {
       class: "node" + (n.is_anchor ? " node-anchor" : ""),
       "data-idx": n._idx,
@@ -1588,6 +1621,34 @@ mod tests {
     }
 
     // --- HtmlGraphExporter::export: serialization / structure ---
+
+    #[test]
+    fn node_radius_is_computed_from_real_screen_scale_not_a_flat_svg_unit_floor() {
+        // Regression: an earlier version floored node radius at a flat
+        // world-space constant ("Math.max(12, ...)"), which only produces
+        // a real 24px on-screen hit target by coincidence of the specific
+        // node count/viewBox size it happened to be tested against.
+        // Confirmed empirically this session (headless Chromium +
+        // Puppeteer, not just this string check): a synthetic 50-node star
+        // rendered circles as small as ~3px on-screen radius under the old
+        // flat-floor code, vs. a real ~12px floor after this fix, at both
+        // 14 nodes (this repo's real guide) and 50 (synthetic). This test
+        // only confirms the fix's code path is present in every export
+        // (getBoundingClientRect-derived scale, not a bare constant) --
+        // the actual on-screen-pixel behavior needs a real browser to
+        // verify and was checked that way, not by this test alone.
+        let nodes = vec![simple_node("a", "A", "body", true)];
+        let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
+        assert!(html.contains("getBoundingClientRect().width"));
+        assert!(html.contains("minWorldRadius"));
+        assert!(html.contains("worldToScreenScale"));
+        // The actual radius expression must reference the computed floor,
+        // not fall back to a bare constant (a doc comment above legitimately
+        // mentions the old "Math.max(12, ...)" pattern for context, so this
+        // checks the real assignment specifically rather than the whole
+        // page for that substring).
+        assert!(html.contains("var r = minWorldRadius +"));
+    }
 
     #[test]
     fn export_produces_well_formed_standalone_html() {
