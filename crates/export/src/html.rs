@@ -134,18 +134,28 @@ pub(crate) fn render_element(html: &mut String, element: &OrgElement, opts: &Exp
             html.push_str(&format!("</{}>\n", tag));
         }
         OrgElement::Table { rows, has_header } => {
+            // Cell content goes through the same inline-markup converter as
+            // every other block (List, Quote, ...) below -- it previously
+            // went through html_escape() alone, so =code=, *bold*, and
+            // [[id:...][links]] inside a table cell rendered as literal,
+            // unconverted org markup instead of real HTML. Every table in
+            // the KB was affected, not just one note's.
             html.push_str("<table>\n");
             for (i, row) in rows.iter().enumerate() {
                 if i == 0 && *has_header {
                     html.push_str("<thead>\n<tr>");
                     for cell in row {
-                        html.push_str(&format!("<th>{}</th>", html_escape(cell)));
+                        html.push_str("<th>");
+                        html.push_str(&convert_inline_markup_str(cell, InlineTarget::Html));
+                        html.push_str("</th>");
                     }
                     html.push_str("</tr>\n</thead>\n<tbody>\n");
                 } else {
                     html.push_str("<tr>");
                     for cell in row {
-                        html.push_str(&format!("<td>{}</td>", html_escape(cell)));
+                        html.push_str("<td>");
+                        html.push_str(&convert_inline_markup_str(cell, InlineTarget::Html));
+                        html.push_str("</td>");
                     }
                     html.push_str("</tr>\n");
                 }
@@ -278,6 +288,42 @@ mod tests {
         let html = exporter.export(&meta, &elements);
         assert!(html.contains("<th>Name</th>"));
         assert!(html.contains("<td>Alice</td>"));
+    }
+
+    #[test]
+    fn export_table_cell_markup_is_converted_not_left_as_raw_org_syntax() {
+        // Regression: table cells went through html_escape() alone, never
+        // convert_inline_markup_str() -- every other block (List, Quote,
+        // Paragraph) already routes cell-equivalent content through it.
+        // A real cheatsheet table with function names like `=length(x)=`
+        // rendered the literal "=length(x)=" text instead of a <code> span,
+        // and an id: link in a cell rendered as literal bracket syntax
+        // instead of a real <a>.
+        let meta = OrgMeta::default();
+        let elements = vec![OrgElement::Table {
+            rows: vec![
+                vec!["Function".to_string(), "Does".to_string()],
+                vec![
+                    "=length(x)=".to_string(),
+                    "See [[id:abc123][the docs]]".to_string(),
+                ],
+            ],
+            has_header: true,
+        }];
+        let exporter = HtmlExporter;
+        let html = exporter.export(&meta, &elements);
+        assert!(
+            html.contains("<code>length(x)</code>"),
+            "expected =verbatim= markup in a cell to render as <code>, got: {html}"
+        );
+        assert!(
+            html.contains("<a href=\"#abc123\">the docs</a>"),
+            "expected an id: link in a cell to render as a real <a>, got: {html}"
+        );
+        assert!(
+            !html.contains("=length(x)="),
+            "raw org verbatim syntax should not survive unconverted in a cell"
+        );
     }
 
     #[test]

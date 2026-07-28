@@ -467,6 +467,17 @@ pub fn plain_text_preview(body: &str, max_chars: usize) -> String {
                     push_plain(&item.content, &mut text);
                 }
             }
+            // Previously missing entirely -- a node whose body is a table
+            // (e.g. the HCL cheatsheet's function-reference table) got an
+            // empty or near-empty hover-popover preview, since no cell
+            // content ever reached `text` at all.
+            OrgElement::Table { rows, .. } => {
+                for row in rows {
+                    for cell in row {
+                        push_plain(cell, &mut text);
+                    }
+                }
+            }
             _ => {}
         }
     }
@@ -660,6 +671,7 @@ impl HtmlGraphExporter {
              </article>\n\
              <aside id=\"sidebar\">\n\
              <div id=\"graph-pane\">\n\
+             <div id=\"graph-caption\"></div>\n\
              <svg id=\"graph-svg\" xmlns=\"http://www.w3.org/2000/svg\"></svg>\n\
              <div id=\"popover\" class=\"popover\" hidden></div>\n\
              </div>\n\
@@ -830,6 +842,8 @@ body {
 }
 #graph-pane {
   flex: 0 0 280px;
+  display: flex;
+  flex-direction: column;
   position: relative;
   min-width: 0;
   /* A hairline divider (one shade off the page surface, same treatment as
@@ -848,7 +862,29 @@ body {
   color: var(--fg1);
   transition: background-color 200ms ease, color 200ms ease;
 }
-#graph-svg { width: 100%; height: 100%; display: block; }
+#graph-svg { width: 100%; flex: 1; min-height: 0; display: block; }
+/* Shows the hovered node's title, falling back to the selected node's
+   title when nothing is hovered (see updateCaption() in GRAPH_JS) -- a
+   real, legible body-text size instead of the cramped 11px in-SVG label
+   this replaced. Sits at the TOP of the graph viewport, not below the
+   diagram: the hover popover is cursor-positioned and can land near the
+   bottom of the ring, which would cover a caption placed underneath it --
+   putting the caption above the ring keeps it clear of anywhere the
+   popover can actually appear. min-height holds its layout slot even
+   when briefly empty (before the very first hover/selection) so the ring
+   below it doesn't shift. text-overflow handles a long title without
+   wrapping to a second line and shrinking the ring to make room. */
+#graph-caption {
+  flex: 0 0 auto;
+  min-height: 1.4em;
+  padding: 0.4rem 0.75rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--fg1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 #main-content .hint { color: var(--fg3); font-style: italic; }
 #main-content h2 { margin-top: 0; }
 #detail-panel-content { transition: opacity 180ms ease; opacity: 1; }
@@ -972,41 +1008,16 @@ body {
   transform-box: fill-box;
   transform-origin: center;
 }
-/* Labels are selective, not persistent (dataviz skill's "selective direct
-   labels" rule): with ~15-20 nodes crammed around a small chord ring,
-   showing every label at once produces exactly the overlapping/clipped
-   mess a real render surfaced (several titles ran into each other or
-   were cut off past the diagram edge). Only the anchor, the currently
-   selected node, and whatever's under the cursor show a label by
-   default; every other node is an identifiable dot, its title one
-   hover away via the existing popover -- this is a labeling-density
-   fix, not a data-hiding one. */
-.node text {
-  fill: var(--fg3);
-  font-size: 11px;
-  pointer-events: none;
-  user-select: none;
-  opacity: 0;
-  /* Halo, not just a fill color: with up to 26 edges converging on one hub
-     node in a star-shaped subgraph, a label can sit directly on top of
-     several crossing lines at once -- raw fill-vs-solid-background contrast
-     is irrelevant there, since the background right behind the glyphs often
-     isn't the flat page background at all. `paint-order: stroke fill`
-     draws a `--bg0`-colored outline behind the glyph before the fill, so
-     the label stays legible regardless of what's underneath (edges, other
-     nodes) -- the standard cartography/map-label technique for exactly
-     this problem, not a color tweak that only helps against a flat bg. */
-  stroke: var(--bg0);
-  stroke-width: 3px;
-  stroke-linejoin: round;
-  paint-order: stroke fill;
-  transition: fill 200ms ease, opacity 200ms ease;
-}
-.node-anchor text,
-.node.selected text,
-.node.hovered text {
-  opacity: 1;
-}
+/* Node titles previously rendered as in-SVG <text> next to each circle --
+   at an 11px font in a ~280px-wide widget, with only the anchor/selected/
+   hovered node's label ever showing (see the removed comment this rule
+   used to carry, on labeling density). Two real problems with that,
+   reported directly: the text was too small to comfortably read, and
+   reserving in-SVG room for it (even after fixing the reservation to be
+   symmetric) ate a large fraction of the widget's small on-screen size as
+   dead padding. Node titles now show in #graph-caption below the diagram
+   instead, at a real body-text size -- see the caption rule and
+   updateCaption() in GRAPH_JS. */
 .node { cursor: pointer; }
 /* Hover LIFTS (scale + drop-shadow), it does not recolor — recoloring is
    reserved entirely for `.selected` (the current node). This also means
@@ -1087,6 +1098,7 @@ const GRAPH_JS: &str = r#"
 
   var svg = document.getElementById("graph-svg");
   var popover = document.getElementById("popover");
+  var graphCaption = document.getElementById("graph-caption");
   var detailContent = document.getElementById("detail-panel-content");
   var outlinePanel = document.getElementById("outline-panel");
   var outlineList = document.getElementById("outline-list");
@@ -1106,24 +1118,22 @@ const GRAPH_JS: &str = r#"
 
   // --- Layout: fit all node positions (chord-ring or force, whichever the
   // export baked in) into the SVG viewBox. Center is used both for the
-  // viewBox fit AND as the pull-point for edge arcs below. Node labels can
-  // run up to 29 chars (28 + an ellipsis) at an 11px font -- padding just
-  // the node *positions* by a flat amount clipped exactly this text in a
-  // real render, since it never accounted for label width at all.
-  // `labelPad` is a deliberately generous per-character estimate (real
-  // glyph widths vary; overshooting costs empty margin, undershooting
-  // clips text again -- overshoot). Earlier versions added labelPad only
-  // to the right (labels always sat right of their node), which visibly
-  // decentered the node ring -- the mass of nodes rendered left-of-center
-  // inside a viewBox whose extra width was allocated entirely to one
-  // side. Labels now flip anchor per node (see the node-drawing loop
-  // below: left-half-of-ring nodes anchor "end" and extend left, right-
-  // half nodes anchor "start" and extend right -- the standard radial-
-  // diagram label convention, e.g. D3 radial trees), so labelPad is
-  // budgeted symmetrically on both sides: the ring itself, not a label
-  // overflow region, sits in the geometric center of the viewBox. ---
-  var pad = 60;
-  var labelPad = 29 * 7;
+  // viewBox fit AND as the pull-point for edge arcs below. Node titles no
+  // longer render as in-SVG <text> at all (see the node-drawing loop and
+  // #graph-caption below) -- they show, at a real legible size, in a
+  // caption under the diagram instead. Earlier versions padded the
+  // viewBox to make room for in-SVG label text, which (even after fixing
+  // that padding to be symmetric) still ate a large fraction of the
+  // widget's small on-screen size as dead margin. With no label text to
+  // budget room for, `pad` only needs to cover the node circles
+  // themselves -- but a first cut at 16 was too tight: it only accounted
+  // for a bare minimum radius, not the anchor/degree size bonus applied
+  // per node below (up to +5.4 world units), the circle's own 1.5px
+  // stroke, or the 1.25x scale a hovered node's circle briefly gets --
+  // real render showed edge nodes clipped flush against the panel
+  // boundary. 40 leaves real breathing room for all of that without
+  // reintroducing the old label-driven padding's dead-space problem. ---
+  var pad = 40;
   var minX = Math.min.apply(null, nodes.map(function (n) { return n.x; }));
   var maxX = Math.max.apply(null, nodes.map(function (n) { return n.x; }));
   var minY = Math.min.apply(null, nodes.map(function (n) { return n.y; }));
@@ -1132,10 +1142,10 @@ const GRAPH_JS: &str = r#"
   var w = Math.max(1, maxX - minX);
   var h = Math.max(1, maxY - minY);
   var centerX = (minX + maxX) / 2, centerY = (minY + maxY) / 2;
-  var viewBoxW = w + pad * 2 + labelPad * 2;
+  var viewBoxW = w + pad * 2;
   svg.setAttribute(
     "viewBox",
-    (minX - pad - labelPad) + " " + (minY - pad) + " " + viewBoxW + " " + (h + pad * 2)
+    (minX - pad) + " " + (minY - pad) + " " + viewBoxW + " " + (h + pad * 2)
   );
   svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
 
@@ -1163,19 +1173,6 @@ const GRAPH_JS: &str = r#"
     var d = 0;
     edges.forEach(function (e) { if (e.source === id || e.target === id) d++; });
     return d;
-  }
-
-  // Chord-diagram node labels stay short even for the few that show by
-  // default (anchor/selected/hovered, see the `.node text` CSS) -- the
-  // full title is always one hover away via the popover, the detail
-  // panel, and the outline, so truncating here loses nothing a reader
-  // can't get instantly from the same click/hover that revealed the
-  // label in the first place. Character count, not byte length --
-  // titles can contain non-ASCII text (the ES translations).
-  function truncateLabel(s, maxChars) {
-    var chars = Array.from(s);
-    if (chars.length <= maxChars) { return s; }
-    return chars.slice(0, maxChars).join("") + "…";
   }
 
   var svgNS = "http://www.w3.org/2000/svg";
@@ -1243,19 +1240,7 @@ const GRAPH_JS: &str = r#"
       "data-kind": n.kind,
     });
     var circle = el("circle", { cx: n.x, cy: n.y, r: r });
-    // Flip label anchor by ring-half so labels extend outward from the
-    // ring's own center rather than always rightward -- this is what
-    // keeps the node ring (not a lopsided label-overflow region) visually
-    // centered in the viewBox; see the viewBox comment above.
-    var onLeft = n.x < centerX;
-    var text = el("text", {
-      x: n.x + (onLeft ? -(r + 3) : r + 3),
-      y: n.y + 4,
-      "text-anchor": onLeft ? "end" : "start",
-    });
-    text.textContent = truncateLabel(n["title_" + currentLang], 28);
     g.appendChild(circle);
-    g.appendChild(text);
     g.addEventListener("mouseenter", function () { onHover(n, true); });
     g.addEventListener("mousemove", movePopover);
     g.addEventListener("mouseleave", function () { onHover(n, false); });
@@ -1269,19 +1254,55 @@ const GRAPH_JS: &str = r#"
     return n ? nodeGroups[n._idx] : null;
   }
 
+  // Shows a node's title in #graph-caption, below the diagram, at a real
+  // legible size -- see the CSS rule's comment for why this replaced
+  // in-SVG label text. Falls back to the currently selected node (not
+  // blank) so the caption reads as "what am I looking at" rather than
+  // flickering empty every time the cursor leaves a node.
+  function updateCaption(n) {
+    graphCaption.textContent = n ? n["title_" + currentLang] : "";
+  }
   // --- Hover popover (title via textContent, never innerHTML) ---
   function onHover(n, entering) {
     var g = groupFor(n.id);
     if (g) { g.classList.toggle("hovered", entering); }
-    if (!entering) { popover.hidden = true; return; }
+    if (!entering) {
+      popover.hidden = true;
+      updateCaption(selectedId != null ? nodesById[selectedId] : null);
+      return;
+    }
+    updateCaption(n);
     popover.textContent = "";
     popover.appendChild(dom("div", { class: "popover-title" }, n["title_" + currentLang]));
     popover.appendChild(dom("div", { class: "popover-body" }, n["preview_" + currentLang]));
     popover.hidden = false;
   }
+  // Clamp to the viewport instead of always anchoring bottom-right of the
+  // cursor: the chord widget sits in the right-hand sidebar, so a node on
+  // the right half of the ring puts the cursor near the viewport's right
+  // edge already -- an unclamped popover there rendered mostly off-screen.
+  // Flip to whichever side of the cursor actually has room, per axis,
+  // independently (a popover can need to flip horizontally, vertically,
+  // both, or neither depending on where on the ring the cursor is).
   function movePopover(ev) {
-    popover.style.left = (ev.clientX + 14) + "px";
-    popover.style.top = (ev.clientY + 14) + "px";
+    // onHover already set content + unhid the popover before this fires
+    // (mouseenter -> onHover, then mousemove -> this), so its real
+    // rendered size is already measurable -- no need to reposition or
+    // toggle visibility just to read it.
+    var rect = popover.getBoundingClientRect();
+    var margin = 8;
+    var left = ev.clientX + 14;
+    if (left + rect.width + margin > window.innerWidth) {
+      left = ev.clientX - rect.width - 14;
+    }
+    left = Math.max(margin, left);
+    var top = ev.clientY + 14;
+    if (top + rect.height + margin > window.innerHeight) {
+      top = ev.clientY - rect.height - 14;
+    }
+    top = Math.max(margin, top);
+    popover.style.left = left + "px";
+    popover.style.top = top + "px";
   }
 
   // --- Hover-preview + click-to-navigate on in-body links (org-roam-ui-
@@ -1300,11 +1321,23 @@ const GRAPH_JS: &str = r#"
   // subgraph's nodesById (a real case -- not every link in a body's
   // source note happens to land inside whatever subgraph got exported)
   // is a silent no-op below for both hover and click, not an error.
+  // A source note commonly links to more than what a depth-limited curated
+  // export actually includes -- that's expected, not a bug in the curation
+  // itself (see the "keep extraction opinionated" writing-style note). But
+  // rendering those as normal `<a>` elements gave every unresolved link
+  // the same blue, underlined, pointer-cursor appearance as a real one,
+  // with nothing happening on click -- indistinguishable from a working
+  // link until you actually try it. Unwrap unresolved links into plain
+  // text (not just a "disabled-looking" style on the `<a>`) so there's no
+  // false affordance at all: no color, no cursor, no focus stop.
   function wireBodyLinks(container) {
     var links = container.querySelectorAll("a[href^='#']");
     Array.prototype.forEach.call(links, function (a) {
       var n = nodesById[a.getAttribute("href").slice(1)];
-      if (!n) { return; }
+      if (!n) {
+        a.replaceWith(document.createTextNode(a.textContent));
+        return;
+      }
       a.addEventListener("mouseenter", function () { onHover(n, true); });
       a.addEventListener("mousemove", movePopover);
       a.addEventListener("mouseleave", function () { onHover(n, false); });
@@ -1396,14 +1429,27 @@ const GRAPH_JS: &str = r#"
     }, 120);
   }
 
-  function selectNode(id) {
+  // Applies a selection to the DOM only -- no history side effect. Used by
+  // both real navigation (selectNode, below) and the popstate handler
+  // (browser back/forward), which must NOT push a new entry for a
+  // navigation the browser is already replaying.
+  function applySelection(id) {
     var n = nodesById[id];
     if (!n) { return; }
+    // A click-to-navigate (chord node or in-body link) doesn't reliably
+    // fire the hovered element's mouseleave -- clicking a body link
+    // replaces #main-content's DOM (including the very <a> under the
+    // cursor) as part of this call, and the popover was observed staying
+    // on screen indefinitely afterward. Navigating away always ends
+    // whatever hover context produced the popover, regardless of why the
+    // browser didn't fire mouseleave for it.
+    popover.hidden = true;
     if (selectedId != null) {
       var prevG = groupFor(selectedId);
       if (prevG) { prevG.classList.remove("selected"); }
     }
     selectedId = id;
+    updateCaption(n);
     var g = groupFor(id);
     if (g) { g.classList.add("selected"); }
     edgePaths.forEach(function (p) {
@@ -1412,6 +1458,37 @@ const GRAPH_JS: &str = r#"
     });
     renderDetail(n);
   }
+  // Real navigation (chord click, body-link click, Home/Previous/Next):
+  // pushes a history entry so the browser's own Back/Forward buttons work
+  // -- the one navigation UX every reader already knows, and the actual
+  // gap Home/Previous/Next (a linear reading-order walk) doesn't cover on
+  // its own: following links freely through the graph has no "undo" of
+  // its own otherwise. A no-op re-selection of the already-open node
+  // (e.g. clicking a link back to the current page) doesn't push a
+  // duplicate entry.
+  function selectNode(id) {
+    if (id === selectedId) { return; }
+    if (!nodesById[id]) { return; }
+    applySelection(id);
+    // Single-quoted deliberately, not double: this whole script is a Rust
+    // raw string delimited by double-quote-hash, and that exact two-char
+    // sequence anywhere in the JS source closes it early (a real compile
+    // break hit while writing this).
+    history.pushState({ nodeId: id }, "", '#' + id);
+  }
+  window.addEventListener("popstate", function (ev) {
+    var id = (ev.state && ev.state.nodeId) || anchorId;
+    applySelection(id);
+    // Keep Previous/Next's position (and disabled state) consistent with
+    // whatever Back/Forward just landed on -- every node is present in
+    // readingOrder, so this always finds a real index. Without this, a
+    // Next click after a Back would continue from wherever walkIndex was
+    // left by the last Previous/Next click instead of from the node
+    // actually on screen.
+    var idx = readingOrder.indexOf(id);
+    if (idx !== -1) { walkIndex = idx; }
+    updateWalkButtons();
+  });
   homeBtn.addEventListener("click", function () { selectNode(anchorId); });
 
   // --- Suggested reading order (BFS distance from the anchor node) +
@@ -1477,11 +1554,7 @@ const GRAPH_JS: &str = r#"
 
   // --- EN/ES toggle: swaps all visible text in place, instantly ---
   function applyLanguage() {
-    nodeGroups.forEach(function (g, i) {
-      var n = nodes[i];
-      var t = g.querySelector("text");
-      if (t) { t.textContent = truncateLabel(n["title_" + currentLang], 28); }
-    });
+    updateCaption(selectedId != null ? nodesById[selectedId] : null);
     if (selectedId != null) { renderDetail(nodesById[selectedId]); }
     langToggle.textContent = currentLang === "en" ? "EN / ES → ES" : "ES / EN → EN";
   }
@@ -1505,8 +1578,13 @@ const GRAPH_JS: &str = r#"
   applyLanguage();
   // Auto-select the anchor/spine node on load so the accent + detail panel
   // are populated immediately, matching "Home" as a real default rather
-  // than an empty-state page.
-  selectNode(anchorId);
+  // than an empty-state page. Uses replaceState, not selectNode's
+  // pushState, so the page's very first load establishes the starting
+  // history entry instead of creating a second one under it -- Back from
+  // the first real navigation should leave the page, not land on an
+  // invisible duplicate of itself.
+  applySelection(anchorId);
+  history.replaceState({ nodeId: anchorId }, "", '#' + anchorId);
 })();
 "#;
 
@@ -1626,6 +1704,27 @@ mod tests {
     }
 
     #[test]
+    fn plain_text_preview_includes_table_content() {
+        // Regression: push_plain's match over OrgElement had no arm for
+        // Table at all, so a node body dominated by a table (e.g. a
+        // function-reference cheatsheet) got an empty or near-empty
+        // hover-popover preview -- every cell's text was silently dropped.
+        let body = "* Common functions\n\n\
+                     | Function | Does |\n\
+                     |----------+------|\n\
+                     | length(x) | Number of elements |\n";
+        let preview = plain_text_preview(body, 200);
+        assert!(
+            preview.contains("length(x)"),
+            "expected table cell content in the preview, got: {preview:?}"
+        );
+        assert!(
+            preview.contains("Number of elements"),
+            "expected every cell's text, not just the first column, got: {preview:?}"
+        );
+    }
+
+    #[test]
     fn plain_text_preview_resolves_links_instead_of_showing_raw_syntax() {
         // Regression: the popover showed raw "[[UUID|label]]" (mae_kb's
         // internal link storage form) or "[[id:UUID][label]]" (raw org-file
@@ -1683,33 +1782,44 @@ mod tests {
     }
 
     #[test]
-    fn chord_node_labels_flip_anchor_instead_of_decentering_the_ring() {
-        // Regression: an earlier version always anchored labels to the
-        // right of their node ("x: n.x + r + 3") and padded the viewBox's
-        // extra label-overflow width entirely on the right side too --
-        // visually decentering the node ring inside its panel (the ring's
-        // own bounding box sat left-of-center in a viewBox that was wider
-        // than it needed to be, all on one side). The fix flips each
-        // node's label anchor by which half of the ring it's on and
-        // budgets labelPad symmetrically on both sides of the viewBox, so
-        // the ring itself -- not a one-sided label margin -- sits centered.
+    fn chord_ring_has_no_in_svg_label_overflow_padding() {
+        // Earlier versions reserved viewBox width for in-SVG node-label
+        // text (first one-sided, later symmetric) -- either way, dead
+        // padding around a widget that's already small on screen. Node
+        // titles now show in #graph-caption below/above the ring instead
+        // (see graph_caption_shows_hovered_then_falls_back_to_selected),
+        // so the viewBox only needs to fit the node circles themselves.
         let nodes = vec![simple_node("a", "A", "body", true)];
         let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
         assert!(
-            html.contains("var onLeft = n.x < centerX;"),
-            "expected per-node ring-half detection driving the anchor flip"
+            html.contains("var viewBoxW = w + pad * 2;"),
+            "expected the viewBox to budget only circle padding, no labelPad term"
         );
         assert!(
-            html.contains("\"text-anchor\": onLeft ? \"end\" : \"start\","),
-            "expected label anchor to flip by ring-half rather than always anchoring right"
+            !html.contains("labelPad"),
+            "labelPad should be fully removed now that labels don't render in the SVG"
         );
         assert!(
-            html.contains("var viewBoxW = w + pad * 2 + labelPad * 2;"),
-            "expected labelPad to be budgeted on both sides of the viewBox, not just the right"
+            !html.contains("el(\"text\""),
+            "node titles should no longer be constructed as in-SVG <text> elements at all"
         );
+    }
+
+    #[test]
+    fn graph_caption_shows_hovered_then_falls_back_to_selected() {
+        // Regression: node titles used to render as tiny (11px) in-SVG
+        // text next to each circle. Moved to a real-sized caption element
+        // instead -- this guards both that the caption exists and that its
+        // update function falls back to the *selected* node (not blank) on
+        // mouseleave, so the caption always reads as "what's on screen"
+        // rather than flickering empty between hovers.
+        let nodes = vec![simple_node("a", "A", "body", true)];
+        let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
+        assert!(html.contains("id=\"graph-caption\""));
+        assert!(html.contains("function updateCaption(n)"));
         assert!(
-            html.contains("(minX - pad - labelPad) + \" \""),
-            "expected the viewBox x-origin to extend left by labelPad too, keeping the ring centered"
+            html.contains("updateCaption(selectedId != null ? nodesById[selectedId] : null);"),
+            "expected onHover's mouseleave path to fall back to the selected node, not clear the caption"
         );
     }
 
@@ -1901,6 +2011,24 @@ mod tests {
         assert!(html.contains("function wireBodyLinks(container)"));
         assert!(html.contains("ev.preventDefault();"));
         assert!(html.contains("selectNode(n.id);"));
+    }
+
+    #[test]
+    fn unresolved_body_links_get_unwrapped_not_left_looking_clickable() {
+        // A source note commonly links to more than a depth-limited curated
+        // export actually includes -- expected, not a bug in the curation
+        // itself. But an unresolved link previously kept its normal <a>
+        // styling (theme link color, underline, pointer cursor) with
+        // nothing happening on click: indistinguishable from a working
+        // link until a reader actually tried it. wireBodyLinks now unwraps
+        // any href whose target isn't in nodesById into plain text instead
+        // of leaving a dead-but-styled <a> in place.
+        let nodes = vec![simple_node("a", "A", "body", true)];
+        let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
+        assert!(
+            html.contains("a.replaceWith(document.createTextNode(a.textContent));"),
+            "expected unresolved body links to be unwrapped into plain text"
+        );
     }
 
     #[test]
