@@ -244,6 +244,7 @@ async fn full_client_session_over_pipe() {
             bc_clone,
             std::time::Instant::now(),
             Transport::Hub,
+            Arc::new(crate::artifact_store::NoArtifactStore),
         )
         .await;
     });

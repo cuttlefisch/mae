@@ -21,6 +21,7 @@
 //! "Architecture Debt" section.
 
 mod docs_methods;
+mod kb_artifacts;
 mod kb_content;
 mod kb_governance;
 pub mod kb_lease;
@@ -69,6 +70,7 @@ pub const HANDSHAKE_TIMEOUT_SECS: u64 = 10;
 ///
 /// The auth handshake runs on the raw stream before JSON-RPC `initialize`.
 /// If auth fails, the connection is dropped without entering the main loop.
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_client_with_auth<R, W, A>(
     mut reader: R,
     mut writer: W,
@@ -77,6 +79,7 @@ pub async fn handle_client_with_auth<R, W, A>(
     broadcaster: SharedBroadcaster,
     start_time: std::time::Instant,
     transport: Transport,
+    artifact_store: Arc<dyn crate::artifact_store::ArtifactStore>,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send,
@@ -119,11 +122,13 @@ pub async fn handle_client_with_auth<R, W, A>(
         broadcaster,
         start_time,
         transport,
+        artifact_store,
     )
     .await;
 }
 
 /// Anonymous (no-auth) connection — used for the loopback/`none` mode.
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_client<R, W>(
     reader: R,
     writer: W,
@@ -131,6 +136,7 @@ pub async fn handle_client<R, W>(
     broadcaster: SharedBroadcaster,
     start_time: std::time::Instant,
     transport: Transport,
+    artifact_store: Arc<dyn crate::artifact_store::ArtifactStore>,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -143,12 +149,14 @@ pub async fn handle_client<R, W>(
         broadcaster,
         start_time,
         transport,
+        artifact_store,
     )
     .await;
 }
 
 /// Authenticated connection — binds `peer` (from mTLS or the JSON handshake) to
 /// the session so attribution + KB membership reflect the verified identity.
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_client_authenticated<R, W>(
     reader: R,
     writer: W,
@@ -157,6 +165,7 @@ pub async fn handle_client_authenticated<R, W>(
     broadcaster: SharedBroadcaster,
     start_time: std::time::Instant,
     transport: Transport,
+    artifact_store: Arc<dyn crate::artifact_store::ArtifactStore>,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -169,6 +178,7 @@ pub async fn handle_client_authenticated<R, W>(
         broadcaster,
         start_time,
         transport,
+        artifact_store,
     )
     .await;
 }
@@ -182,6 +192,7 @@ pub async fn handle_client_authenticated<R, W>(
 /// BufReader is left in a corrupted state (header consumed, body still pending).
 /// To avoid this, we spawn a dedicated reader task that feeds complete messages
 /// into an mpsc channel, so `read_message` always runs to completion.
+#[allow(clippy::too_many_arguments)]
 async fn run_session<R, W>(
     mut session: ClientSession,
     reader: R,
@@ -190,6 +201,7 @@ async fn run_session<R, W>(
     broadcaster: SharedBroadcaster,
     start_time: std::time::Instant,
     transport: Transport,
+    artifact_store: Arc<dyn crate::artifact_store::ArtifactStore>,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -311,7 +323,7 @@ async fn run_session<R, W>(
                 }
 
                 let mut response = if is_doc {
-                    handle_doc_request_inner(&msg, &doc_store, &broadcaster, start_time, session_id, auth_label.as_deref(), auth_principal.as_deref(), auth_pubkey.as_ref(), &mut session_docs, transport).await
+                    handle_doc_request_inner(&msg, &doc_store, &broadcaster, start_time, session_id, auth_label.as_deref(), auth_principal.as_deref(), auth_pubkey.as_ref(), &mut session_docs, transport, artifact_store.as_ref()).await
                 } else {
                     mae_mcp::handle_request(
                         &msg, &tool_defs, &tool_tx, &mut session, &broadcaster,
@@ -585,6 +597,7 @@ async fn handle_doc_notification_inner(
         | "kb/approve_member"
         | "kb/collection_op"
         | "kb/claim_lease"
+        | "kb/fetch_artifact"
         | "kb/set_policy"
         | "kb/set_governance"
         | "kb/block_principal"
@@ -625,6 +638,7 @@ async fn handle_doc_request(
         None,
         session_docs,
         Transport::Hub,
+        &crate::artifact_store::NoArtifactStore,
     )
     .await
 }
@@ -1611,6 +1625,7 @@ async fn handle_doc_request_inner(
     auth_pubkey: Option<&[u8; 32]>,
     session_docs: &mut HashSet<String>,
     transport: Transport,
+    artifact_store: &dyn crate::artifact_store::ArtifactStore,
 ) -> JsonRpcResponse {
     let request: JsonRpcRequest = match serde_json::from_str(msg) {
         Ok(r) => r,
@@ -1831,6 +1846,17 @@ async fn handle_doc_request_inner(
                 session_id,
                 auth_principal,
                 transport,
+                id,
+                &params,
+            )
+            .await
+        }
+        "kb/fetch_artifact" => {
+            kb_artifacts::handle_kb_fetch_artifact(
+                doc_store,
+                auth_principal,
+                transport,
+                artifact_store,
                 id,
                 &params,
             )

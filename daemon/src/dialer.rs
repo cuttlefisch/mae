@@ -705,6 +705,7 @@ mod tests {
             a_bc.clone(),
             Instant::now(),
             crate::conn_limit::ConnLimiter::new(0),
+            Arc::new(mae_daemon::artifact_store::NoArtifactStore),
         ));
         (addr, a_store, a_bc)
     }

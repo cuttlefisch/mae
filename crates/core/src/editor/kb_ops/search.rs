@@ -16,6 +16,20 @@ fn canonicalize_for_instance_match(path: &std::path::Path) -> std::path::PathBuf
     path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
 }
 
+/// A pre-embedded query vector for RRF-blending semantic search into
+/// `kb_federated_search_scoped_with_vector` (ADR-061 Phase F2). Embedding the
+/// query TEXT is a network call this crate has no async runtime/HTTP client
+/// for — the caller (`crates/ai`'s `execute_kb_vector_search`) computes this
+/// via the same blocking-embed path `execute_kb_enrich` already uses, then
+/// hands the result in here. `model`/`chunk_version` are the pin the cached
+/// embeddings being searched must match (ADR-034) — a mismatched pin just
+/// means `search_cached_embeddings` finds no hits, not an error.
+pub struct QueryVector<'a> {
+    pub vec: &'a [f32],
+    pub model: &'a str,
+    pub chunk_version: i64,
+}
+
 impl Editor {
     /// Collect all KB node (id, title) pairs from local + federated instances.
     pub fn kb_all_node_pairs(&self) -> Vec<(String, String)> {
@@ -222,8 +236,32 @@ impl Editor {
 
     /// Re-import a single file into the KB instance that covers its directory.
     /// Used after saving a file inside `kb_notes_dir` to keep the graph in sync.
+    ///
+    /// Issues #455/#498 (same root cause, two platforms): `KbRegistry::register`
+    /// canonicalizes `org_dir` (#303's own established discipline) so a
+    /// symlinked/relative/non-normalized registration path always resolves to the
+    /// same stable location. A caller-supplied `path` that ISN'T already
+    /// canonicalized then fails `path.starts_with(&inst)` even when it's the exact
+    /// same file — on Windows because `std::fs::canonicalize` prepends the `\\?\`
+    /// verbatim-path prefix (tracked in #455's skip list), and on macOS because
+    /// `/var` (where `TempDir`'s default `env::temp_dir()` lives) is itself a
+    /// symlink to `/private/var` (tracked in #498) — Linux temp dirs typically
+    /// don't hit this since `/tmp` there is rarely a symlink requiring resolution,
+    /// which is exactly why this surfaced as "Windows/macOS-only", not a Linux
+    /// bug being separately introduced twice. Canonicalizing `path` HERE, once,
+    /// before the comparison, fixes both platforms' manifestations of the same
+    /// mismatch at its actual source instead of working around each symptom
+    /// separately. Falls back to the given path if canonicalization fails (e.g.
+    /// the file was deleted between the caller's own check and this call) rather
+    /// than hard-failing the whole reimport.
     pub fn kb_reimport_file(&mut self, path: &std::path::Path) {
-        let canonical = canonicalize_for_instance_match(path);
+        // Canonicalize once, up front, and shadow `path` so EVERY downstream
+        // use (the containment check below, `ids_for_path`, `ids_by_source_
+        // file`, `ingest_org_file`, `record_ids`) consistently sees the same
+        // canonical form the watcher's own cache keys and the registered
+        // instance's `org_dir` both already use -- not just the initial
+        // `starts_with` check.
+        let path = &canonicalize_for_instance_match(path);
         for (uuid, inst) in self
             .kb
             .registry
@@ -231,25 +269,42 @@ impl Editor {
             .iter()
             .map(|i| (i.uuid.clone(), i.org_dir.clone()))
         {
-            if canonical.starts_with(&inst) {
-                let prev_ids = self
+            if path.starts_with(&inst) {
+                // Issue #498/#502 (drift, principle #15): retraction used to depend
+                // ENTIRELY on a live watcher's cached path->ids mapping, silently doing
+                // nothing when no watcher was tracking this path -- true whenever
+                // `kb_watcher_enabled` is off, or whenever `OrgDirWatcher::new` failed to
+                // attach (an exhausted inotify-instance limit under heavy concurrent
+                // process load, reproduced locally under parallel `cargo test`/nextest
+                // execution). Fall back to the in-memory graph's own source_file
+                // attribution, which is always available and always correct for "what did
+                // this path currently produce" -- retraction on an in-place `:ID:` rename
+                // must not silently depend on a watcher having happened to attach.
+                let prev_ids = match self
                     .kb
                     .watchers
                     .get(&uuid)
-                    .and_then(|w| w.ids_for_path(path));
+                    .and_then(|w| w.ids_for_path(path))
+                {
+                    Some(ids) => ids,
+                    None => self
+                        .kb
+                        .instances
+                        .get(&uuid)
+                        .map(|kb| kb.ids_by_source_file(path))
+                        .unwrap_or_default(),
+                };
                 let ids = match self.kb.instances.get_mut(&uuid) {
                     Some(kb) => kb.ingest_org_file(path),
                     None => return,
                 };
                 // Retract ids this path no longer produces (e.g. an in-place `:ID:`
                 // edit followed by a save) — same class of fix as the watcher path.
-                if let Some(prev_ids) = prev_ids {
-                    for old_id in prev_ids.iter().filter(|id| !ids.contains(id)) {
-                        if let Some(kb) = self.kb.instances.get_mut(&uuid) {
-                            kb.remove(old_id);
-                        }
-                        self.kb_persist_instance_delete(&uuid, old_id);
+                for old_id in prev_ids.iter().filter(|id| !ids.contains(id)) {
+                    if let Some(kb) = self.kb.instances.get_mut(&uuid) {
+                        kb.remove(old_id);
                     }
+                    self.kb_persist_instance_delete(&uuid, old_id);
                 }
                 // Phase 0b: persist the reimported nodes to the durable instance
                 // store — parity with the watcher drain (0a); otherwise a save-driven
@@ -327,6 +382,32 @@ impl Editor {
         &self,
         query: &str,
         scope: &mae_kb::KbScope,
+    ) -> Vec<(Option<String>, mae_kb::Node)> {
+        self.kb_federated_search_scoped_impl(query, scope, None)
+    }
+
+    /// ADR-061 Phase F2: same as `kb_federated_search_scoped`, additionally
+    /// blending in semantic hits from the primary KB's cached embeddings via
+    /// Reciprocal Rank Fusion. `query_vector` is an ALREADY-EMBEDDED query
+    /// (embedding the query text is a network call this crate has no async
+    /// runtime/HTTP client for — `crates/ai`'s `execute_kb_vector_search` owns
+    /// computing it via the same blocking-embed path `execute_kb_enrich`
+    /// already uses, then passes the result in here). `None` reproduces
+    /// `kb_federated_search_scoped` exactly, so this is purely additive.
+    pub fn kb_federated_search_scoped_with_vector(
+        &self,
+        query: &str,
+        scope: &mae_kb::KbScope,
+        query_vector: QueryVector<'_>,
+    ) -> Vec<(Option<String>, mae_kb::Node)> {
+        self.kb_federated_search_scoped_impl(query, scope, Some(query_vector))
+    }
+
+    fn kb_federated_search_scoped_impl(
+        &self,
+        query: &str,
+        scope: &mae_kb::KbScope,
+        query_vector: Option<QueryVector<'_>>,
     ) -> Vec<(Option<String>, mae_kb::Node)> {
         use mae_kb::KbScope;
         let use_activity = self.kb.search_sort == "activity";
@@ -424,6 +505,30 @@ impl Editor {
             }
         }
 
+        // ADR-061 Phase F2: fuse in semantic hits BEFORE the alpha/recency
+        // resort below, so relevance-mode RRF fusion composes with the same
+        // sort-mode logic every other mode already goes through — a
+        // "relevance" blended order can still be re-sorted alphabetically or
+        // by recency same as a pure-lexical one could. Primary store only
+        // (Phase F1's own scope limit): federated instances are in-memory
+        // `KnowledgeBase` values with no `Arc<dyn KbStore>` handle to look up
+        // cached embeddings against.
+        if let Some(qv) = query_vector {
+            if let Some(store) = self.kb.store.as_ref() {
+                if let Ok(vector_hits) = mae_kb::enrichment::search_cached_embeddings(
+                    store.as_ref(),
+                    qv.model,
+                    qv.chunk_version,
+                    qv.vec,
+                    results.len().max(self.kb.search_max_results),
+                ) {
+                    if !vector_hits.is_empty() {
+                        results = self.rrf_blend_with_vector(results, vector_hits);
+                    }
+                }
+            }
+        }
+
         if use_alpha {
             results.sort_by(|a, b| a.1.id.cmp(&b.1.id));
         } else if use_recency {
@@ -437,6 +542,54 @@ impl Editor {
         }
 
         results
+    }
+
+    /// Reciprocal Rank Fusion of the existing lexical `results` order with
+    /// `vector_hits` (already ranked by ascending cosine distance). Score by
+    /// RANK POSITION, not raw score — FTS relevance and cosine distance
+    /// aren't on a comparable scale, but ranks from each list are directly
+    /// combinable (`score(id) = Σ 1/(60 + rank)`, standard RRF constant). A
+    /// node that's a vector hit but never appeared lexically (semantically
+    /// related, lexically distant) is fetched fresh from the primary store
+    /// and still included — the whole point of blending in a second
+    /// modality — and silently dropped only if it's since been deleted.
+    fn rrf_blend_with_vector(
+        &self,
+        lexical: Vec<(Option<String>, mae_kb::Node)>,
+        vector_hits: Vec<mae_kb::VectorHit>,
+    ) -> Vec<(Option<String>, mae_kb::Node)> {
+        const RRF_K: f64 = 60.0;
+        let mut score: std::collections::HashMap<String, f64> = std::collections::HashMap::new();
+        let mut entries: std::collections::HashMap<String, (Option<String>, mae_kb::Node)> =
+            std::collections::HashMap::new();
+
+        for (rank, (inst, node)) in lexical.into_iter().enumerate() {
+            *score.entry(node.id.clone()).or_insert(0.0) += 1.0 / (RRF_K + (rank + 1) as f64);
+            entries.insert(node.id.clone(), (inst, node));
+        }
+
+        for (rank, hit) in vector_hits.into_iter().enumerate() {
+            *score.entry(hit.id.clone()).or_insert(0.0) += 1.0 / (RRF_K + (rank + 1) as f64);
+            if !entries.contains_key(&hit.id) {
+                if let Some(node) = self.kb.primary.get(&hit.id) {
+                    entries.insert(hit.id.clone(), (None, node.clone()));
+                } else if let Some(ql) = self.kb.query_layer() {
+                    if let Some(node) = ql.get(&hit.id) {
+                        entries.insert(hit.id.clone(), (None, node));
+                    }
+                }
+            }
+        }
+
+        let mut fused: Vec<(f64, Option<String>, mae_kb::Node)> = entries
+            .into_iter()
+            .filter_map(|(id, (inst, node))| score.get(&id).map(|s| (*s, inst, node)))
+            .collect();
+        fused.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        fused
+            .into_iter()
+            .map(|(_, inst, node)| (inst, node))
+            .collect()
     }
 
     /// Get a node by ID, searching local first then federated instances.

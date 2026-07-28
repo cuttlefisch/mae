@@ -160,15 +160,37 @@ fn external_store_change_arms_a_background_reload() {
         "no cooldown active"
     );
 
-    // Another "process" commits to the store (modifies the file).
-    store
-        .insert_node(&mae_kb::Node::new(
-            "user:ext",
-            "Ext",
-            mae_kb::NodeKind::Note,
-            "b",
-        ))
-        .unwrap();
+    // Issue #494 (macOS CI flake, investigated, not band-aided): this used to
+    // reuse THIS test's own long-lived `store` handle for the "external write" --
+    // but that keeps the sqlite file descriptor open under the SAME handle for the
+    // whole test, which is not what "another process" actually means, and matches
+    // a real, documented notify-rs/FSEvents gap on macOS (upstream issue #240,
+    // "Events not delivered until a file is closed on macOS"): FSEvents can fail to
+    // reliably report a Modify event for a file while a writer keeps its own handle
+    // open, only flushing once that handle is closed. Widening the poll deadline
+    // (a prior attempt at this fix) did NOT help -- confirmed by a real CI run that
+    // still timed out at the full widened deadline with zero detection, meaning the
+    // event genuinely wasn't arriving at all, not just arriving late. The actual fix
+    // is to make the "external process" simulation real: open a SEPARATE
+    // `CozoKbStore` handle on the same path, write through it, and DROP it (closing
+    // its own sqlite connection) before polling -- exactly what a genuinely
+    // independent OS process committing to the shared store would do, and the
+    // signal FSEvents is documented to need.
+    {
+        let external =
+            mae_kb::CozoKbStore::open_with_engine(&path, "sqlite").expect("reopen the store");
+        external
+            .insert_node(&mae_kb::Node::new(
+                "user:ext",
+                "Ext",
+                mae_kb::NodeKind::Note,
+                "b",
+            ))
+            .unwrap();
+        // Explicit drop: close this handle's own connection now, not whenever the
+        // block happens to end, so the close-then-poll ordering is unambiguous.
+        drop(external);
+    }
 
     // Poll: the external change must arm a background reload (notify is async).
     // Shared helper (issue #494) rather than a hand-rolled loop, so the

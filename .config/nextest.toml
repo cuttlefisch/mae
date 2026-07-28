@@ -27,6 +27,27 @@ nextest-version = "0.9.70"
 # not a response to an observed CI failure.
 [test-groups]
 heavy-subprocess-e2e = { max-threads = 1 }
+# Issues #498/#502: real-filesystem KB tests (org-file watchers via inotify/FSEvents,
+# actual `TempDir` read/write/reimport races) that legitimately compete for a
+# limited OS resource -- the number of concurrently-open inotify instances/watches
+# per user (Linux) or FSEvents streams (macOS). Confirmed by direct root-cause
+# analysis, not guessed: `kb_adopt_instance` (crates/core/src/editor/kb_ops/
+# registry.rs) already anticipates `OrgDirWatcher::new` failing under "the
+# inotify-limit case" in its own pre-existing error-handling comment, and
+# `kb_reimport_file`'s id-retraction logic used to depend ENTIRELY on a watcher
+# having successfully attached -- silently a no-op otherwise. Reproduced LOCALLY
+# (not just in CI) by running just these two modules together under nextest's/
+# `cargo test`'s default full-machine concurrency: `kb_ops_durability_tests`'s
+# `kb_reimport_file_retracts_id_dropped_by_in_place_rename` and
+# `kb_ops_durability_tests`::`kb_promote_node_resave_org_file_...` (both fixed by
+# adding a watcher-independent in-memory fallback,
+# `KnowledgeBase::ids_by_source_file`) plus `kb_ops_concurrency_tests`/
+# `kb_ops_watcher_misc_tests` (still real watcher/store-attach races, not yet
+# given an equivalent fallback) all failed under contention and passed cleanly
+# in isolation or under `--test-threads=1`. Serializing this group against
+# itself (not against the rest of the suite) removes the contention without
+# papering over a single test.
+kb-ops-filesystem-watchers = { max-threads = 1 }
 
 [profile.default]
 
@@ -49,6 +70,40 @@ test-group = "heavy-subprocess-e2e"
 # already-understood environmental-timing effect (not a masked logic bug --
 # the logic itself was reverified clean) mirrors the #487 precedent above.
 retries = 1
+
+[[profile.default.overrides]]
+filter = '''
+  package(mae-core) and (
+    test(kb_ops_durability_tests)
+    + test(kb_ops_concurrency_tests)
+    + test(kb_ops_watcher_misc_tests)
+    + test(kb_ops_registry_tests)
+    + test(kb_ops_search_federation_tests)
+    + test(kb_ops_crud_tests)
+    + test(kb_ops_collab_sync_tests)
+    + test(option_tests)
+  )
+'''
+test-group = "kb-ops-filesystem-watchers"
+# All 8 modules confirmed (by grep across the WHOLE crate, not just kb_ops/
+# tests/ -- `editor::tests::option_tests::handle_link_click_source_file_mode_
+# opens_raw_file` also calls `kb_register` and was initially missed) to call
+# `kb_register`/create a real `OrgDirWatcher` -- every one competes for the
+# identical limited OS resource (Linux: `fs.inotify.max_user_instances`,
+# default 128 on a real machine checked directly). Confirmed the initial
+# 4-module grouping was insufficient on its own: `kb_ops_concurrency_tests::
+# external_registry_change_adopts_new_instance` (already inside that group)
+# still failed under a full `cargo nextest run -p mae-core --lib`, because the
+# group only serializes its OWN members against each other -- modules left out
+# were still running fully concurrently and still contending for the same
+# inotify-instance budget. Even after broadening to 7, `kb_ops_watcher_misc_
+# tests::drain_debounce_skips_recent` still failed once in 3 full-suite runs
+# -- root-caused to this 8th, crate-wide straggler outside kb_ops/tests/
+# entirely. Paired with the actual root-cause fix -- raising the OS's own
+# `fs.inotify.max_user_instances` limit in CI, see
+# `.github/actions/setup-rust/action.yml` -- this grouping is defense in depth
+# for any environment (including local `cargo test`, which doesn't get the CI
+# sysctl bump) that still has a low OS default.
 
 # Issue #487: `rotate_identity_write_failure_reports_error_not_success` is a
 # deliberately-tuned, self-documented hard TCP SO_LINGER/RST timing race (see

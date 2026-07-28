@@ -1,6 +1,13 @@
 # ADR-034: Cross-peer sharing of derived intelligence (compute-once)
 
-**Status:** Accepted (design); implemented in Phase G.
+**Status:** Accepted (design); items 2 (content-addressed artifact cache + `kb/fetch_artifact`
+serving) and the per-KB collection settings (pinned `embedding_model`/`chunk_version`,
+`share_derived_artifacts`) implemented — ADR-061 Phase D3. Item 1 (relationship/metadata baking
+into CRDT content) is NOT yet implemented — no "derive relationships" AI logic exists anywhere to
+call yet (see ADR-061's own Phase D3 Implementation note for the full scope-limit rationale). The
+prior text here ("implemented in Phase G") was stale/wrong: Phase G belongs to ADR-060's own phase
+lettering, not this ADR's, and zero sharing-protocol code existed before Phase D3 — corrected per
+CLAUDE.md principle #15, matching ADR-033's own identical correction.
 **Extends:** ADR-031 (derived intelligence is a local projection), ADR-033 (the coordinator that
 computes once), ADR-026 (membership = the trust boundary for sharing).
 **Feeds:** the RAG/AI cost model; per-KB collection settings.

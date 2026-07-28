@@ -786,6 +786,25 @@ impl KnowledgeBase {
         self.nodes.iter()
     }
 
+    /// Ids of nodes currently attributed to `path` via `source_file` — the
+    /// in-memory-graph's own source of truth for "what did this file last
+    /// produce". Used as a watcher-independent fallback by
+    /// `Editor::kb_reimport_file`'s id-retraction logic: a live filesystem
+    /// watcher's cached path->ids mapping is unavailable whenever
+    /// `kb_watcher_enabled` is off, OR whenever `OrgDirWatcher::new` failed
+    /// to attach (e.g. an exhausted inotify-instance limit under heavy
+    /// concurrent test/process load) — in either case there is still a
+    /// correct answer sitting right here in the graph, so retraction on an
+    /// in-place `:ID:` rename must not silently depend on a watcher having
+    /// happened to attach. Order is unspecified.
+    pub fn ids_by_source_file(&self, path: &std::path::Path) -> Vec<String> {
+        self.nodes
+            .iter()
+            .filter(|(_, n)| n.source_file.as_deref() == Some(path))
+            .map(|(id, _)| id.clone())
+            .collect()
+    }
+
     /// Get a mutable reference to a node by ID.
     pub fn get_mut(&mut self, id: &str) -> Option<&mut Node> {
         self.nodes.get_mut(id)

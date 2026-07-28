@@ -1,6 +1,8 @@
 # ADR-061: KB enrichment as a background daemon responsibility
 
-**Status:** Proposed.
+**Status:** Accepted — all six phases (A–F) implemented. See this doc's own per-phase
+"Implementation note (principle #15)" sections for what shipped vs. each phase's original
+Decision text, including named scope limits and corrections.
 **Extends:** ADR-031, ADR-033, ADR-034, ADR-057.
 **Depends on:** ADR-045, ADR-060.
 
@@ -530,6 +532,77 @@ unit tests, all e2e suites); `cargo clippy --all-targets -- -D warnings`/`cargo 
 `cargo build --workspace --features gui` clean on the editor workspace (unaffected, but confirmed
 since `mae-sync`/`mae-kb` are shared crates).
 
+## Implementation note (Phase D3, principle #15)
+
+**ADR-034's own "implemented in Phase G" status line was stale/wrong, corrected in this PR**
+(`docs/adr/034-cross-peer-derived-artifact-sharing.md`) — Phase G belongs to ADR-060's own phase
+lettering, not ADR-061's, and zero sharing-protocol code existed anywhere before this PR (confirmed
+by grep for `share_derived_artifacts`/an advertise-request-serve protocol/the
+`(content_hash, embedding_model_id, chunk_version)` sharing key). Same class of correction as
+ADR-033's own status line, fixed in Phase D1.
+
+**A second real crate-boundary constraint, same shape as Phase D2's `LeaseFence`**: `kb/
+fetch_artifact` needs to read the local KB content store's embedding cache
+(`CozoKbStore::get_cached_embedding`), reached via `DaemonState`/`resolve_kb_store` — both
+BINARY-crate-only (`main.rs`'s `mod handler;` is private, not declared in `lib.rs` at all), while
+the RPC dispatch it must serve from (`collab_handler::handle_doc_request_inner`) is LIBRARY-crate
+code. Resolved identically to `LeaseFence`: a new small library module,
+`daemon/src/artifact_store.rs` (`ArtifactStore` trait + a `NoArtifactStore` default for a KB with
+no local replica), with the real implementation (`handler::DaemonArtifactStore`) living in the
+binary crate.
+
+**Threading `Arc<dyn ArtifactStore>` through the collab dispatch chain, confirmed low-risk before
+attempting it** (not assumed): a dedicated research pass found exactly ONE real dispatch call site
+(`run_session`), reached via exactly two call chains (hub TCP, P2P mesh) — both already having
+`Arc<Mutex<DaemonState>>` in scope at or one hop from the call site — and direct precedent for
+adding a required parameter to this exact function twice before (the `transport`/`auth_pubkey`
+additions), each a similarly-shaped, contained diff. Threaded through
+`handle_client_with_auth`/`handle_client`/`handle_client_authenticated`/`run_session`/
+`handle_doc_request_inner` (append-last, matching the established parameter-ordering precedent) and
+`p2p::serve`; ~10 call sites total across `main.rs`/`p2p.rs`/`dialer.rs`/the daemon's own
+integration tests, all mechanical, all still green.
+
+`kb/fetch_artifact` is gated `KbOp::Read` (any member, including Viewer) — reading a derived
+artifact is no more sensitive than reading the content it was derived from. Also gated on the KB's
+own `share_derived_artifacts` toggle (new per-KB `KbCollectionDoc` field, ADR-034's own "coordinator
+opts in" design) — even a genuinely cached artifact is not served while sharing is disabled
+(defaults to `false`/opt-in, matching this codebase's `TransportPolicy`/`Encryption` precedent for
+every other new-capability toggle). "Coordinator" is deliberately not a separate stored field —
+it's derived directly from the ADR-033 lease (`current_lease("enrichment", now).holder_fp`), reusing
+Phase D1's election/tiebreak machinery rather than building a second one, per ADR-034's own text.
+
+**Honest scope limits, named rather than silently dropped**:
+- **Relationship/metadata baking (ADR-034 item 1) is NOT built in this phase.** No "derive
+  relationships" AI logic exists anywhere yet (Phase C only computes vectors) — this ADR wires the
+  *sharing mechanism* for embeddings, not a new relationship-derivation pipeline, which is out of
+  ADR-061's scope entirely. Building an unreachable scaffold with no caller and no way to exercise
+  its correctness beyond "does it compile" was judged worse than not building it (CLAUDE.md: no
+  half-finished/speculative code) — this sub-part is deferred to whenever that derivation logic is
+  designed, tracked as a real gap, not silently absent.
+- **The model-pin-mismatch decision is the REQUESTER's, not built here.** ADR-034: "a peer fetching
+  with a mismatched pin recomputes locally." This daemon simply reports what it has cached under the
+  exact requested `(model, chunk_version)` key; there is no automatic requester/client call site in
+  this phase at all (mirroring Phase D1's own precedent — the lease primitive shipped with no
+  automatic caller until D2 wired one specific consumer). A future caller decides when to ask and
+  what to do with a mismatch or a `has_artifact: false`.
+- **No dedicated toggle command/tool for `share_derived_artifacts` in this phase** — the
+  `KbCollectionDoc` field + accessor/setter exist and are tested directly; user-facing
+  command/Scheme-API/MCP-tool wiring to flip it interactively is deferred, matching this PR's focus
+  on the ADR-034 mechanism itself over its full product surface.
+
+Adversarial coverage (CLAUDE.md principle #14): a non-member is denied at the exact same `kb_access`
+gate every other read path uses (the attacker case ADR-034 names: "an artifact offered by a
+non-member is ignored"); a member is served nothing while `share_derived_artifacts` is disabled,
+even for a genuinely cached vector (not merely documented — asserted against a real cache hit that's
+still refused); a genuine cache miss is reported distinctly from both the disabled-sharing and
+denied cases (a caller must be able to tell "nothing cached yet" from "you're not allowed" from
+"sharing is off").
+
+`cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean across the
+daemon workspace (169 lib + 131 binary unit tests, all e2e suites, no regressions from the dispatch
+threading); `cargo test -p mae-sync` clean (306 tests, 7 new for the per-KB settings, including a
+genuine two-peer concurrent-setting-change convergence test).
+
 ## Implementation note (Phase E, principle #15)
 
 Re-read the Decision text carefully before implementing: it specifies the enrich-now path runs
@@ -597,3 +670,69 @@ nodes are attempted.
 
 `cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean across both
 workspaces; `cargo build --workspace --features gui` clean.
+
+## Implementation note (Phase F, principle #15)
+
+**Decision F's own text is corrected here, not just implemented as originally written.** It says
+this phase wires `kb_vector_search` to "the now-populated [HNSW] index" — but Phase B's own
+Implementation note (already in this file) flagged that the HNSW `embeddings` relation is
+hardcoded `<F32; 384>`, permanently mismatched with the shipped default embedding model
+(`nomic-embed-text`), and named this as "real and not fixed by this phase — it's Phase F's
+concern." This phase is that concern, resolved as Phase B's note anticipated: `kb_vector_search`
+is wired to a NEW `mae_kb::enrichment::search_cached_embeddings` (`shared/kb/src/enrichment.rs`),
+a brute-force cosine k-NN scan directly over the `embedding_cache` relation Phase B/C already
+populate — not the fixed-width HNSW index at all. KB sizes here are in the thousands of nodes at
+most, so a linear scan is single-digit-millisecond; no index-dimension coupling to the
+user-configurable `ai_embedding_model` option is needed. Reuses `body_hash`/`get_cached_embedding`
+exactly as `plan_enrichment_scan` already does (principle #8) — a node is a hit only if a prior
+`kb_enrich` sweep already embedded it under the SAME `(model, chunk_version)` pin; a mismatch is a
+silent miss, not an error, matching the cache's own contract.
+
+**The blend into `kb_federated_search_scoped` is real, but lives one layer up from the ADR's own
+line reference.** `crates/core` has no async runtime/HTTP client at all (by design — embedding a
+query is a network call), so `kb_federated_search_scoped` itself cannot embed a query string. The
+function instead gained a new sibling entry point, `kb_federated_search_scoped_with_vector`
+(`QueryVector<'_>` struct: an ALREADY-EMBEDDED vector + its `(model, chunk_version)` pin), which
+fuses the existing lexical ranking with `search_cached_embeddings`'s vector ranking via Reciprocal
+Rank Fusion (`score(id) = Σ 1/(60 + rank)`, standard RRF constant) — rank position, not raw score,
+since FTS relevance and cosine distance aren't on a comparable scale. `execute_kb_vector_search`
+(the un-stubbed `kb_vector_search` tool) is the one caller that has a query vector on hand (via
+the same blocking-embed path `execute_kb_enrich` already established in Phase E) and calls this
+entry point — so `kb_vector_search`'s own result is deliberately the fused lexical+semantic
+ranking (real hybrid search), not a pure-vector-only list. Plain `kb_search`/`kb_search_context`
+are UNCHANGED (still call the original `kb_federated_search_scoped`, no embedding call added to
+every lexical search) — blending is additive, reached only through the tool that already pays the
+embed cost. Primary KB only, matching Phase B/C/E's own scope limit: federated instances have no
+`Arc<dyn KbStore>` handle to search cached embeddings against.
+
+**A drift correction to `crates/mae/src/ai_residency.rs` was required, not optional.**
+`kb_vector_search` used to be classified `ScopedFederatedScan` (hard-deny outright when scope
+includes a restricted KB — appropriate for its old permanent-stub behavior, which never returned
+any real content). Now that it returns real `(Option<String>, Node)` results, leaving it under the
+old shape would have been strictly safer (a stricter gate is fail-safe) but still wrong — exactly
+the kind of drift principle #15 warns about. Reclassified to `ScopedFederatedScanFilterable`
+alongside `kb_search`/`kb_search_context`, with `execute_kb_vector_search` now calling
+`mae_core::ai_residency::filter_residency_exempt` on its own materialized results, matching its
+siblings exactly. `ScopedFederatedScan` itself (and its now-orphaned `any_restricted_kb_label_in_
+scope` gate-level pre-check helper) was removed rather than left as dead code once `kb_vector_
+search` was its last real user — the #351 scope-narrowing property it existed for is preserved by
+the Filterable path's own design (`kb_federated_search_scoped(query, scope)` already only includes
+KBs within the resolved scope; per-node filtering then drops non-exempt content from whichever
+restricted KB genuinely is in scope).
+
+**Verification**: `shared/kb/src/enrichment.rs`'s `search_cached_embeddings` has dedicated tests
+(ranks by ascending distance, ignores an uncached node, ignores a mismatched model pin, respects
+`k`). `crates/core/src/editor/kb_ops/tests/kb_ops_vector_blend_tests.rs` has the ADR's own named
+dual-signal verification test: a node lexically matching the query but semantically unrelated, and
+a node semantically close (a near-identical cached vector) but lexically distant, both surface in
+the blended top results — proving real fusion, not just "whichever signal ranks first" — plus a
+regression test that the plain (no-vector) entry point is byte-for-byte unaffected.
+`execute_kb_vector_search` itself is tested for every branch that doesn't require a live embedding
+provider (no local store, unreachable provider, residency-blocked before any network attempt) —
+matching Phase E's own established "unreachable `127.0.0.1:1`" technique for testing without a
+live Ollama server; the real fused-ranking property is exercised at the
+`kb_federated_search_scoped_with_vector` layer instead, since that's the fusion logic this tool
+delegates to once it has an embedded query vector in hand.
+
+`cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean across both
+workspaces; `cargo build --workspace --release --features gui` clean.

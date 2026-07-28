@@ -483,6 +483,7 @@ async fn spawn_p2p_mesh(
         broadcaster,
         start_time,
         conn_limit::ConnLimiter::new(p2p.max_connections),
+        Arc::new(handler::DaemonArtifactStore(Arc::clone(&state))),
     ));
 }
 
@@ -790,6 +791,11 @@ async fn spawn_collab_server(
     // 0-means-unlimited semantics, same panic-safe RAII decrement).
     let max_connections = collab.max_connections;
     let limiter = conn_limit::ConnLimiter::new(max_connections);
+    // ADR-061 Phase D3: one shared handle, cloned per connection below (same
+    // pattern as `doc_store`/`broadcaster`) -- bridges `kb/fetch_artifact` to
+    // this daemon's local KB content store.
+    let artifact_store: Arc<dyn mae_daemon::artifact_store::ArtifactStore> =
+        Arc::new(handler::DaemonArtifactStore(Arc::clone(&state)));
     tokio::spawn(async move {
         loop {
             match tcp_listener.accept().await {
@@ -807,6 +813,7 @@ async fn spawn_collab_server(
                     let store = Arc::clone(&doc_store);
                     let bc = Arc::clone(&broadcaster);
                     let auth = collab_auth.clone();
+                    let artifacts = Arc::clone(&artifact_store);
                     tokio::spawn(async move {
                         let _guard = guard;
                         // mTLS path needs the whole stream (cannot pre-split).
@@ -867,6 +874,7 @@ async fn spawn_collab_server(
                                         bc,
                                         server_start_time,
                                         mae_sync::kb::Transport::Hub,
+                                        artifacts,
                                     )
                                     .await;
                                 }
@@ -887,6 +895,7 @@ async fn spawn_collab_server(
                                     bc,
                                     server_start_time,
                                     mae_sync::kb::Transport::Hub,
+                                    artifacts,
                                 )
                                 .await;
                             }
@@ -903,6 +912,7 @@ async fn spawn_collab_server(
                                     bc,
                                     server_start_time,
                                     mae_sync::kb::Transport::Hub,
+                                    artifacts,
                                 )
                                 .await;
                             }
@@ -914,6 +924,7 @@ async fn spawn_collab_server(
                                     bc,
                                     server_start_time,
                                     mae_sync::kb::Transport::Hub,
+                                    artifacts,
                                 )
                                 .await;
                             }
