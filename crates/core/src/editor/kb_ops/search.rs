@@ -2,6 +2,20 @@
 
 use super::*;
 
+/// Canonicalize `path` for identity comparison against a registered
+/// instance's own `org_dir` — `KbRegistry::register` (shared/kb/src/
+/// federation.rs) already canonicalizes `org_dir` at registration time, so
+/// comparing an un-canonicalized caller path against it via `starts_with`
+/// silently fails wherever the two forms diverge (e.g. macOS's `/var` ->
+/// `/private/var` symlink) — issue #496. Falls back to the path unchanged
+/// if it doesn't exist / can't be resolved (same fallback idiom already
+/// used independently by `resolve_kb_scope` below and by `mae_kb::watch::
+/// normalize_path`), so a hypothetical/not-yet-saved path never fails
+/// closed.
+fn canonicalize_for_instance_match(path: &std::path::Path) -> std::path::PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
 impl Editor {
     /// Collect all KB node (id, title) pairs from local + federated instances.
     pub fn kb_all_node_pairs(&self) -> Vec<(String, String)> {
@@ -209,6 +223,7 @@ impl Editor {
     /// Re-import a single file into the KB instance that covers its directory.
     /// Used after saving a file inside `kb_notes_dir` to keep the graph in sync.
     pub fn kb_reimport_file(&mut self, path: &std::path::Path) {
+        let canonical = canonicalize_for_instance_match(path);
         for (uuid, inst) in self
             .kb
             .registry
@@ -216,7 +231,7 @@ impl Editor {
             .iter()
             .map(|i| (i.uuid.clone(), i.org_dir.clone()))
         {
-            if path.starts_with(&inst) {
+            if canonical.starts_with(&inst) {
                 let prev_ids = self
                     .kb
                     .watchers
@@ -253,11 +268,12 @@ impl Editor {
 
     /// Check if a path is inside a registered KB instance directory.
     pub fn kb_path_in_instance(&self, path: &std::path::Path) -> bool {
+        let canonical = canonicalize_for_instance_match(path);
         self.kb
             .registry
             .instances
             .iter()
-            .any(|i| path.starts_with(&i.org_dir))
+            .any(|i| canonical.starts_with(&i.org_dir))
     }
 
     /// Resolve a `kb_search_scope` option value / AI-tool `scope` argument to a `KbScope`
@@ -285,10 +301,7 @@ impl Editor {
         let normalized = token.trim().to_ascii_lowercase();
         if normalized == "project" || normalized == "project-only" {
             return match self.active_project_root() {
-                Some(root) => {
-                    let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-                    mae_kb::KbScope::Project(canonical)
-                }
+                Some(root) => mae_kb::KbScope::Project(canonicalize_for_instance_match(root)),
                 None => mae_kb::KbScope::All,
             };
         }
