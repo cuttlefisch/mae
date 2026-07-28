@@ -325,6 +325,7 @@ impl super::Editor {
             "kb_graph_doi_zoom_threshold" => self.kb_graph_doi_zoom_threshold.to_string(),
             "kb_graph_doi_distance_falloff" => self.kb_graph_doi_distance_falloff.to_string(),
             "kb_graph_dense_cluster_threshold" => self.kb_graph_dense_cluster_threshold.to_string(),
+            "kb_graph_min_legible_radius_px" => self.kb_graph_min_legible_radius_px.to_string(),
             "kb_graph_cluster_group_by" => self.kb_graph_cluster_group_by.as_str().to_string(),
             _ => return None,
         };
@@ -1420,6 +1421,12 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.kb_graph_dense_cluster_threshold = v.clamp(1, 100_000);
+            }
+            "kb_graph_min_legible_radius_px" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_min_legible_radius_px = v.clamp(0.0, 1000.0);
             }
             "kb_graph_cluster_group_by" => {
                 let group_by = crate::graph_view::ClusterGroupBy::parse(value).ok_or_else(|| {

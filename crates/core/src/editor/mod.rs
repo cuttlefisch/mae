@@ -951,6 +951,11 @@ pub struct Editor {
     /// Subsumes issue #477's own originally-proposed option of the same
     /// shape.
     pub kb_graph_dense_cluster_threshold: usize,
+    /// ADR-068 Phase B follow-up: minimum rendered node-circle radius
+    /// (screen px) below which a DOI-elision candidate stays elided even
+    /// once it would otherwise clear back into full detail — see
+    /// `crate::graph_view::finalize_render_tiers`'s doc comment.
+    pub kb_graph_min_legible_radius_px: f32,
     /// ADR-068 Phase B6: how `RenderTier::Clustered` nodes bucket into
     /// aggregate "... (+N)" stubs. Mirrors `kb_graph_layout_algorithm`'s
     /// exact enum-option shape; see `crate::graph_view::ClusterGroupBy`.
@@ -1491,6 +1496,7 @@ impl Editor {
             kb_graph_doi_zoom_threshold: 0.5,
             kb_graph_doi_distance_falloff: 2,
             kb_graph_dense_cluster_threshold: 20,
+            kb_graph_min_legible_radius_px: 6.0,
             kb_graph_cluster_group_by: crate::graph_view::ClusterGroupBy::Kind,
             pending_graph_layout: None,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)

@@ -1943,6 +1943,16 @@ pub(crate) struct DoiTierCache {
     zoom: f64,
     doi_zoom_threshold: f32,
     dense_cluster_threshold: usize,
+    /// Per-node rendered radius at `zoom` (parallel to `scene.nodes`) — the
+    /// exact input `finalize_render_tiers`' legibility-floor check
+    /// consults. Keyed here (alongside `min_legible_radius_px` below)
+    /// rather than trusting `zoom` alone to imply it: `zoom` matching
+    /// exactly already makes a re-derived `radii` identical FOR FIXED
+    /// degrees/style, but a live `:set kb-graph-node-radius ...` (or any
+    /// other size-affecting option) while a full-corpus view sits at an
+    /// unchanged zoom/generation would otherwise go undetected.
+    radii: Vec<f32>,
+    min_legible_radius_px: f32,
     pub(crate) result: Vec<RenderTier>,
 }
 
@@ -1956,6 +1966,8 @@ impl DoiTierCache {
         zoom: f64,
         doi_zoom_threshold: f32,
         dense_cluster_threshold: usize,
+        radii: Vec<f32>,
+        min_legible_radius_px: f32,
         result: Vec<RenderTier>,
     ) -> Self {
         DoiTierCache {
@@ -1966,14 +1978,17 @@ impl DoiTierCache {
             zoom,
             doi_zoom_threshold,
             dense_cluster_threshold,
+            radii,
+            min_legible_radius_px,
             result,
         }
     }
 
     /// Whether this cache's EXPENSIVE part (`candidates`, BFS-derived) is
     /// still valid — deliberately excludes zoom/dense_cluster_threshold/
-    /// doi_zoom_threshold, which only ever affect the cheap finalization
-    /// step and must never gate reuse of the expensive one.
+    /// doi_zoom_threshold/radii/min_legible_radius_px, which only ever
+    /// affect the cheap finalization step and must never gate reuse of the
+    /// expensive one.
     pub(crate) fn candidates_valid(
         &self,
         doi_generation: u64,
@@ -1997,11 +2012,15 @@ impl DoiTierCache {
         doi_zoom_threshold: f32,
         doi_distance_falloff: usize,
         dense_cluster_threshold: usize,
+        radii: &[f32],
+        min_legible_radius_px: f32,
     ) -> bool {
         self.candidates_valid(doi_generation, node_count, doi_distance_falloff)
             && self.zoom == zoom
             && self.doi_zoom_threshold == doi_zoom_threshold
             && self.dense_cluster_threshold == dense_cluster_threshold
+            && self.radii == radii
+            && self.min_legible_radius_px == min_legible_radius_px
     }
 }
 
@@ -2102,12 +2121,34 @@ pub(crate) fn compute_doi_candidates(
 /// the DOI pipeline that re-runs on a raw zoom-value change, so a
 /// continuous zoom gesture never re-triggers the expensive BFS that
 /// produced `candidates`.
+///
+/// **Zoom-legibility floor** (live-testing follow-up — "the nodes
+/// themselves should dynamically populate/clear according to whether
+/// they're even big enough to render"): before applying the Hidden/
+/// Clustered decision, a candidate whose OWN rendered radius at the
+/// current zoom (`radii[i]`, the exact same `node_render_radius` value
+/// its real circle would draw at) already clears `min_legible_radius_px`
+/// is promoted back to `Full` — despite being graph-distant from focus.
+/// This is deliberately a PER-NODE check, not a "zoomed into this visual
+/// region" concept: `node_render_radius` already grows monotonically
+/// with zoom for a fixed degree, so as the user zooms in, more and more
+/// candidates individually cross the floor and pop back to full detail —
+/// exactly the "populate as you zoom into an area" behavior, achieved
+/// with no new spatial/viewport-position bookkeeping. Bridge/Hub-tier
+/// nodes are untouched either way (never in `candidates` to begin with —
+/// see `compute_doi_candidates`). Monotonic nesting (B8 test 2) still
+/// holds: raising zoom can only ADD nodes to the full-tier set (a
+/// candidate's radius never shrinks as zoom increases) and, among nodes
+/// that still don't clear the floor, can only ever move Hidden ->
+/// Clustered (never the reverse) exactly as before this floor existed.
 pub(crate) fn finalize_render_tiers(
     node_count: usize,
     candidates: &[usize],
     zoom: f64,
     doi_zoom_threshold: f32,
     dense_cluster_threshold: usize,
+    radii: &[f32],
+    min_legible_radius_px: f32,
 ) -> Vec<RenderTier> {
     let mut tiers = vec![RenderTier::Full; node_count];
     if candidates.len() < dense_cluster_threshold {
@@ -2122,6 +2163,12 @@ pub(crate) fn finalize_render_tiers(
         RenderTier::Clustered
     };
     for &i in candidates {
+        let radius = radii.get(i).copied().unwrap_or(0.0);
+        if radius >= min_legible_radius_px {
+            // Legible at this zoom despite being graph-distant from
+            // focus — stays Full (already the initial value above).
+            continue;
+        }
         tiers[i] = elided_tier;
     }
     tiers

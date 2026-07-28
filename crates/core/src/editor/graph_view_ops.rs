@@ -1379,6 +1379,20 @@ impl Editor {
         let doi_zoom_threshold = self.kb_graph_doi_zoom_threshold;
         let doi_distance_falloff = self.kb_graph_doi_distance_falloff;
         let dense_cluster_threshold = self.kb_graph_dense_cluster_threshold;
+        let min_legible_radius_px = self.kb_graph_min_legible_radius_px;
+        // Per-node rendered radius at the CURRENT zoom — the same
+        // `node_render_radius` value each node's real circle draws at,
+        // feeding `finalize_render_tiers`' legibility-floor check. Cheap
+        // (O(node_count), no graph traversal), same complexity class the
+        // rest of this function's finalize step already documents itself
+        // as safe to redo on every zoom tick.
+        let style = self.graph_style_options();
+        let radii: Vec<f32> = (0..node_count)
+            .map(|i| {
+                let degree = gv.node_degrees.get(i).copied().unwrap_or(0);
+                crate::graph_view::node_render_radius(&style, degree, zoom)
+            })
+            .collect();
 
         if let Some(cache) = &gv.doi_tier_cache {
             if cache.matches(
@@ -1388,6 +1402,8 @@ impl Editor {
                 doi_zoom_threshold,
                 doi_distance_falloff,
                 dense_cluster_threshold,
+                &radii,
+                min_legible_radius_px,
             ) {
                 // Truly nothing changed (not even zoom) — the existing
                 // cache is already exactly right, nothing to recompute or
@@ -1396,16 +1412,18 @@ impl Editor {
             }
             if cache.candidates_valid(gv.doi_generation, node_count, doi_distance_falloff) {
                 // The EXPENSIVE part (BFS-derived candidates) is still
-                // valid — only zoom/dense_cluster_threshold changed, so
-                // only the cheap finalization needs to rerun. This is the
-                // path a continuous zoom gesture takes on every tick: no
-                // `graph_view_doi_distances` BFS call at all.
+                // valid — only zoom/dense_cluster_threshold/radii changed,
+                // so only the cheap finalization needs to rerun. This is
+                // the path a continuous zoom gesture takes on every tick:
+                // no `graph_view_doi_distances` BFS call at all.
                 let tiers = crate::graph_view::finalize_render_tiers(
                     node_count,
                     &cache.candidates,
                     zoom,
                     doi_zoom_threshold,
                     dense_cluster_threshold,
+                    &radii,
+                    min_legible_radius_px,
                 );
                 let new_cache = crate::graph_view::DoiTierCache::new(
                     gv.doi_generation,
@@ -1415,6 +1433,8 @@ impl Editor {
                     zoom,
                     doi_zoom_threshold,
                     dense_cluster_threshold,
+                    radii,
+                    min_legible_radius_px,
                     tiers.clone(),
                 );
                 // Always store (not `None`) so `GraphView.doi_tier_cache`
@@ -1441,6 +1461,8 @@ impl Editor {
             zoom,
             doi_zoom_threshold,
             dense_cluster_threshold,
+            &radii,
+            min_legible_radius_px,
         );
         let cache = crate::graph_view::DoiTierCache::new(
             gv.doi_generation,
@@ -1450,6 +1472,8 @@ impl Editor {
             zoom,
             doi_zoom_threshold,
             dense_cluster_threshold,
+            radii,
+            min_legible_radius_px,
             tiers.clone(),
         );
         (tiers, Some(cache))
@@ -6260,6 +6284,30 @@ mod tests {
         (graph_idx, win_id)
     }
 
+    /// The set of node ids resolving to `RenderTier::Full` for `graph_idx`
+    /// at a given `zoom` — shared by every DOI/LOD monotonic-nesting-style
+    /// test (originally inlined per-test, extracted once a second test
+    /// needed the identical logic, CLAUDE.md #8).
+    fn full_tier_ids_at_zoom(
+        editor: &Editor,
+        graph_idx: usize,
+        zoom: f64,
+    ) -> std::collections::HashSet<String> {
+        let viewport = mae_canvas::scene::Viewport {
+            zoom,
+            ..Default::default()
+        };
+        let (tiers, _) = editor.graph_view_doi_render_tiers(graph_idx, &viewport);
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        gv.scene
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| tiers.get(*i).copied() == Some(crate::graph_view::RenderTier::Full))
+            .map(|(_, n)| n.id.clone())
+            .collect()
+    }
+
     #[test]
     fn populate_graph_buffer_single_mode_is_byte_identical_even_when_a_real_cross_instance_link_exists(
     ) {
@@ -7599,25 +7647,23 @@ mod tests {
         let (graph_idx, _) = graph_idx_and_win_id(&editor);
 
         let full_tier_ids = |ed: &Editor, zoom: f64| -> std::collections::HashSet<String> {
-            let viewport = mae_canvas::scene::Viewport {
-                zoom,
-                ..Default::default()
-            };
-            let (tiers, _) = ed.graph_view_doi_render_tiers(graph_idx, &viewport);
-            let gv = ed.buffers[graph_idx].graph_view().unwrap();
-            gv.scene
-                .nodes
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| {
-                    tiers.get(*i).copied() == Some(crate::graph_view::RenderTier::Full)
-                })
-                .map(|(_, n)| n.id.clone())
-                .collect()
+            full_tier_ids_at_zoom(ed, graph_idx, zoom)
         };
 
         editor.kb_graph_doi_distance_falloff = 0;
         editor.kb_graph_dense_cluster_threshold = 1;
+        // This test exercises hop-distance-based elision in isolation
+        // (falloff/dense-cluster-threshold/zoom-vs-doi_zoom_threshold) —
+        // NOT the separate, ALSO real zoom-legibility-floor promotion
+        // (`finalize_render_tiers`'s own dedicated test coverage). At the
+        // zoom levels this test uses (1.0-5.0), a degree-0 node's rendered
+        // radius is already comfortably above any sane legibility
+        // threshold by construction (node_render_radius's zoom^0.5 scaling
+        // barely shrinks it from the zoom-1.0 base) — neutralize the floor
+        // here (an unreachably high value) so it can't promote everything
+        // to Full regardless of falloff, which would defeat this test's
+        // whole point.
+        editor.kb_graph_min_legible_radius_px = 1000.0;
         let mut previous = full_tier_ids(&editor, 0.1);
 
         // Step 1: relax zoom.
@@ -7661,6 +7707,82 @@ mod tests {
                 .nodes
                 .len(),
             "fully relaxed thresholds must render every node Full"
+        );
+    }
+
+    #[test]
+    fn zoom_legibility_floor_promotes_doi_elided_nodes_back_to_full_and_never_shrinks_on_zoom_in() {
+        // Live-testing follow-up: "the nodes themselves should dynamically
+        // populate/clear according to whether they're even big enough to
+        // render." Root cause this test guards against regressing:
+        // `finalize_render_tiers` used to apply the SAME Hidden/Clustered
+        // decision to every DOI-elision candidate regardless of its actual
+        // rendered size at the current zoom, so a graph-distant node never
+        // returned to Full no matter how far the user zoomed in on it.
+        //
+        // Same fixture shape as `monotonic_nesting_relaxing_thresholds_
+        // only_grows_the_full_tier_set` — a tight falloff (0) so every
+        // leaf (each degree 1, linked once from the hub) is a genuine DOI
+        // candidate, and a low dense-cluster-threshold so clustering
+        // always triggers regardless of count.
+        const N: usize = 60;
+        let mut editor = Editor::new();
+        let mut nodes = Vec::with_capacity(N + 1);
+        let mut hub_body = String::new();
+        for i in 0..N {
+            hub_body.push_str(&format!("[[concept:n{i}]] "));
+            nodes.push(mae_kb::Node::new(
+                format!("concept:n{i}"),
+                format!("N{i}"),
+                mae_kb::NodeKind::Note,
+                "",
+            ));
+        }
+        nodes.push(mae_kb::Node::new(
+            "concept:hub",
+            "Hub",
+            mae_kb::NodeKind::Note,
+            hub_body,
+        ));
+        register_plain_instance(&mut editor, "big", nodes);
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_multi_kb_full_corpus = true;
+        editor.kb_graph_doi_distance_falloff = 0;
+        editor.kb_graph_dense_cluster_threshold = 1;
+        // A leaf's rendered radius at zoom 0.1 is
+        // (node_radius=18 + node_degree_scale=4 * sqrt(degree=1)) *
+        // 0.1^0.5 ~= 6.96px; at zoom 2.0 it's ~= 31.1px. 10.0 sits
+        // cleanly between the two, so this threshold — not the
+        // production default — is what makes the test's zoom choices
+        // deterministically cross the floor in exactly one direction.
+        editor.kb_graph_min_legible_radius_px = 10.0;
+
+        editor.kb_graph_view_open(Some("concept:hub".to_string()), Some(0));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+
+        // Low zoom: below the legibility floor -- elided leaves must stay
+        // Clustered, not Full.
+        let low_zoom = full_tier_ids_at_zoom(&editor, graph_idx, 0.1);
+        // High zoom: past the legibility floor -- must now populate back
+        // to Full despite still being 1+ hops beyond the falloff.
+        let high_zoom = full_tier_ids_at_zoom(&editor, graph_idx, 2.0);
+
+        assert!(
+            low_zoom.is_subset(&high_zoom),
+            "zooming in must never shrink the full-tier set: lost {:?}",
+            low_zoom.difference(&high_zoom).collect::<Vec<_>>()
+        );
+        assert!(
+            high_zoom.len() > low_zoom.len(),
+            "sanity: zooming in on a diagram of degree-0 leaves must actually populate SOME \
+             of them back to Full, not merely fail to shrink the set — low_zoom={}, \
+             high_zoom={}",
+            low_zoom.len(),
+            high_zoom.len()
+        );
+        assert!(
+            high_zoom.contains("concept:hub"),
+            "the hub itself (Hub tier, exempt from DOI entirely) must be Full at every zoom"
         );
     }
 
@@ -7874,6 +7996,12 @@ mod tests {
         editor.kb_graph_doi_distance_falloff = 0;
         editor.kb_graph_dense_cluster_threshold = 5;
         editor.kb_graph_doi_zoom_threshold = 0.5;
+        // Isolate hop-distance elision from the separate zoom-legibility
+        // floor (see the identical note on
+        // `monotonic_nesting_relaxing_thresholds_only_grows_the_full_tier_set`)
+        // — this test forces zoom 1.0 below, well within "obviously
+        // legible" territory for any sane threshold.
+        editor.kb_graph_min_legible_radius_px = 1000.0;
 
         editor.kb_graph_view_open(Some("concept:hub".to_string()), Some(0));
         let (graph_idx, win_id) = graph_idx_and_win_id(&editor);
@@ -8198,6 +8326,12 @@ mod tests {
         // of 1 would trivially keep them all in reach.
         editor.kb_graph_doi_distance_falloff = 0;
         editor.kb_graph_dense_cluster_threshold = 5;
+        // Isolate hop-distance elision from the separate zoom-legibility
+        // floor (see the identical note on
+        // `monotonic_nesting_relaxing_thresholds_only_grows_the_full_tier_set`)
+        // — this test forces zoom 1.0 below, well within "obviously
+        // legible" territory for any sane threshold.
+        editor.kb_graph_min_legible_radius_px = 1000.0;
 
         editor.kb_graph_view_open(Some("concept:hub".to_string()), Some(0));
         let (graph_idx, _win_id) = graph_idx_and_win_id(&editor);

@@ -861,6 +861,20 @@ impl OptionRegistry {
                      of the same shape. Only consulted when kb_graph_multi_kb_full_corpus is on AND \
                      kb_graph_view_mode=multi.",
                     OptionKind::Int, "20", Some("kb-graph.dense-cluster-threshold"), &[]),
+                opt!("kb_graph_min_legible_radius_px", &["kb-graph-min-legible-radius-px"],
+                    "ADR-068 Phase B follow-up: minimum rendered node-circle radius (screen px, at \
+                     the CURRENT zoom — same node_render_radius computation every node's actual \
+                     drawn circle uses) below which a node elided by DOI/LOD tiering \
+                     (kb_graph_multi_kb_full_corpus) stays elided even if it would otherwise be \
+                     legible. A DOI-elision candidate whose rendered radius clears this floor \
+                     renders at full detail regardless of hop-distance-from-focus — this is what \
+                     makes zooming into one area of a KB progressively 'populate' its nearby nodes \
+                     back in as they become big enough to actually see, rather than only ever \
+                     toggling between an invisible/hidden node and a '... (+N)' aggregate stub. \
+                     Bridge/Hub-tier nodes are unaffected (never DOI-elision candidates in the \
+                     first place — see kb_graph_doi_distance_falloff). Only consulted when \
+                     kb_graph_multi_kb_full_corpus is on AND kb_graph_view_mode=multi.",
+                    OptionKind::Float, "6.0", Some("kb-graph.min-legible-radius-px"), &[]),
                 opt!("kb_graph_cluster_group_by", &["kb-graph-cluster-group-by"],
                     "ADR-068 Phase B: how nodes elided by DOI/LOD tiering bucket into aggregate \
                      '... (+N)' stubs — kind (group by NodeKind, e.g. every clustered Concept in a \
