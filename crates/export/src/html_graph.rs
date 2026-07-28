@@ -859,6 +859,15 @@ body {
   position: relative;
   min-width: 0;
   border-bottom: 1px solid var(--bg3);
+  /* The scoped inverted-theme variables (render_widget_inverse_theme_css)
+     only take visual effect if something actually paints with them --
+     without this, #graph-pane stayed transparent and the "light window
+     inset in a dark page" effect never happened: the widget's own --bg0
+     was correctly inverted, but nothing painted it, so the page's real
+     background showed through underneath instead. */
+  background: var(--bg0);
+  color: var(--fg1);
+  transition: background-color 200ms ease, color 200ms ease;
 }
 #graph-svg { width: 100%; height: 100%; display: block; }
 #main-content .hint { color: var(--fg3); font-style: italic; }
@@ -1834,6 +1843,34 @@ mod tests {
             GruvboxPalette::dark().link,
             GruvboxPalette::dark().accent,
             "link color must stay distinct from the graph-emphasis accent"
+        );
+    }
+
+    #[test]
+    fn graph_pane_actually_paints_with_its_inverted_background() {
+        // Regression: the scoped inverted-theme CSS variables were correct
+        // (confirmed by the test below), but nothing applied `background:
+        // var(--bg0)` to #graph-pane itself -- it stayed transparent, so
+        // the page's real (non-inverted) background showed through and the
+        // "light window inset in a dark page" effect never actually
+        // happened visually. Confirmed empirically too (headless Chromium):
+        // #graph-pane's computed background-color was rgba(0,0,0,0) before
+        // this fix.
+        let nodes = vec![simple_node("a", "A", "body", true)];
+        let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
+        // Several `#graph-pane { ... }` blocks exist (the theme-inversion
+        // variable blocks in render_widget_inverse_theme_css, plus this
+        // sizing/appearance rule in STATIC_CSS) -- anchor on the sizing
+        // rule specifically via a marker only it contains.
+        assert!(html.contains("flex: 0 0 280px;"));
+        let rule = html
+            .split("flex: 0 0 280px;")
+            .nth(1)
+            .and_then(|s| s.split('}').next())
+            .expect("#graph-pane sizing rule present");
+        assert!(
+            rule.contains("background: var(--bg0)"),
+            "expected #graph-pane to actually paint with its own (inverted) background: {rule}"
         );
     }
 
