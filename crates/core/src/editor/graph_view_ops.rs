@@ -297,6 +297,7 @@ impl Editor {
         let (width, height) = self.graph_viewport_pixel_size(win_id);
         let mut style = self.graph_style_options();
         let zoom_to_fit_margin = self.kb_graph_zoom_to_fit_margin as f64;
+        let theme_name = self.theme.name.clone();
 
         // ---- Pass 1: resolve/store this window's `Viewport` (unchanged
         // from before ADR-068 Phase B4). ----
@@ -305,6 +306,10 @@ impl Editor {
                 self.mark_full_redraw();
                 return;
             };
+            // Theme-change staleness (see `last_theme_name`'s doc comment)
+            // — set unconditionally on every reflatten, same as every other
+            // per-reflatten bookkeeping field here.
+            gv.last_theme_name.insert(win_id, theme_name);
             // Merge in the active color tween's current eased color, if
             // any — `from_editor` has no per-`GraphView` knowledge, so
             // this is the call site that bridges `GraphView.color_tween`
@@ -487,14 +492,19 @@ impl Editor {
 
             for win_id in live_win_ids {
                 let (w, h) = self.graph_viewport_pixel_size(win_id);
-                let stale = match self.buffers[buf_idx]
-                    .graph_view()
-                    .and_then(|gv| gv.viewports.get(&win_id))
-                {
+                let Some(gv) = self.buffers[buf_idx].graph_view() else {
+                    continue;
+                };
+                let size_stale = match gv.viewports.get(&win_id) {
                     Some(vp) => vp.width != w as f64 || vp.height != h as f64,
                     None => true,
                 };
-                if stale {
+                // Theme-change staleness (see `GraphView.last_theme_name`'s
+                // doc comment) — self-heals regardless of how the theme
+                // changed (`SPC t t`, `:set-theme`, config reload, ...),
+                // same philosophy as the viewport-size check above.
+                let theme_stale = gv.last_theme_name.get(&win_id) != Some(&self.theme.name);
+                if size_stale || theme_stale {
                     self.graph_view_reflatten_window(buf_idx, win_id);
                     changed = true;
                 }
@@ -533,6 +543,7 @@ impl Editor {
                 gv.viewports.retain(|id, _| live_win_ids.contains(id));
                 gv.rendered.retain(|id, _| live_win_ids.contains(id));
                 gv.render_epoch.retain(|id, _| live_win_ids.contains(id));
+                gv.last_theme_name.retain(|id, _| live_win_ids.contains(id));
             }
         }
     }
@@ -3448,6 +3459,95 @@ mod tests {
         assert_ne!(vp.height, h0);
 
         // Calling again with no further size change must be a no-op.
+        assert!(!editor.sync_open_graph_viewports());
+    }
+
+    #[test]
+    fn theme_change_reflattens_graph_view_without_a_click() {
+        // Live-testing bug: `SPC t t` (cycle-theme) required clicking into
+        // the graph view before the new theme's colors actually showed on
+        // rendered nodes. Root cause: `set_theme_by_name`/`cycle_theme` only
+        // ever set `Editor.theme` -- nothing triggered a graph-view
+        // reflatten, so the cached `rendered` VisualElements kept the OLD
+        // theme's colors until some UNRELATED event (a click) happened to
+        // trigger one as a side effect. This test changes `editor.theme`
+        // directly (mirroring exactly what `cycle_theme` itself does) and
+        // calls `sync_open_graph_viewports` -- the same per-GUI-tick
+        // self-healing resync `about_to_wait` already calls every frame --
+        // with NO click/interaction at all.
+        let names = crate::theme::bundled_theme_names();
+        assert!(
+            names.len() >= 2,
+            "need at least 2 bundled themes for this test to be meaningful"
+        );
+
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.theme =
+            crate::theme::Theme::load(&names[0], &crate::theme::BundledResolver).unwrap();
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == idx)
+            .map(|w| w.id)
+            .unwrap();
+
+        let style_before = editor.graph_style_options();
+        let before_fill: Vec<String> = editor.buffers[idx]
+            .graph_view()
+            .unwrap()
+            .rendered
+            .get(&win_id)
+            .unwrap()
+            .elements
+            .iter()
+            .filter_map(|e| match e {
+                VisualElement::Circle { fill: Some(f), .. } => Some(f.clone()),
+                _ => None,
+            })
+            .collect();
+
+        // No click, no resize, no navigation -- ONLY the theme changes,
+        // exactly like `cycle_theme`'s own effect on `editor.theme`.
+        editor.theme =
+            crate::theme::Theme::load(&names[1], &crate::theme::BundledResolver).unwrap();
+        let style_after = editor.graph_style_options();
+        assert_ne!(
+            style_before.background_color, style_after.background_color,
+            "test setup: the two chosen bundled themes must actually differ, or this test \
+             can't prove anything"
+        );
+
+        assert!(
+            editor.sync_open_graph_viewports(),
+            "a theme change must be detected as stale and trigger a reflatten, with no click \
+             or other interaction needed"
+        );
+
+        let after_fill: Vec<String> = editor.buffers[idx]
+            .graph_view()
+            .unwrap()
+            .rendered
+            .get(&win_id)
+            .unwrap()
+            .elements
+            .iter()
+            .filter_map(|e| match e {
+                VisualElement::Circle { fill: Some(f), .. } => Some(f.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_ne!(
+            before_fill, after_fill,
+            "the re-flattened node colors must reflect the NEW theme"
+        );
+
+        // No further theme change: must not redundantly reflatten every tick.
         assert!(!editor.sync_open_graph_viewports());
     }
 
