@@ -354,6 +354,17 @@ impl SchemeRuntime {
             }
         }
 
+        // Apply `(kb-export-subgraph-html ...)` requests — the SAME
+        // `mae_ai::execute_kb_export_subgraph_html` function the
+        // `kb_export_subgraph_html` MCP tool and `:kb-export-html`
+        // colon-command call, per CLAUDE.md principle #3 (AI/human parity).
+        for args in state.pending_kb_export_requests.drain(..) {
+            match mae_ai::execute_kb_export_subgraph_html(editor, &args) {
+                Ok(msg) => editor.set_status(msg),
+                Err(e) => editor.set_status(format!("kb-export-subgraph-html error: {e}")),
+            }
+        }
+
         // Apply typed link additions from (kb-add-link! SRC DST REL_TYPE)
         if let Some(ref store) = editor.kb.store {
             for (src, dst, rel_type) in state.pending_kb_links.drain(..) {

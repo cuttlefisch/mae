@@ -2177,3 +2177,57 @@ fn kb_graph_view_set_pinned_from_scheme_rejects_a_lone_x_argument() {
         "error should explain the expected arity: {err}"
     );
 }
+
+// `(kb-export-subgraph-html ...)` (kb/adrs/0002 in bilingual-kb-export) —
+// same queue-then-drain shape as the `kb-graph-view-*` family above, except
+// the drain calls `mae_ai::execute_kb_export_subgraph_html(editor, &args)`
+// directly rather than an `Editor::kb_graph_view_*` method (see
+// `state_sync_apply.rs`'s `apply_kb_mutations`) — confirming the Scheme
+// primitive and the MCP tool (`kb_export_subgraph_html`) are the same code
+// path, not a parallel reimplementation (CLAUDE.md principle #3).
+
+#[test]
+fn kb_export_subgraph_html_from_scheme_writes_the_file() {
+    let dir = std::env::temp_dir().join("mae_test_kb_export_subgraph_html");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("index_export.html");
+    let _ = std::fs::remove_file(&path);
+
+    let mut rt = new_runtime();
+    let mut editor = Editor::new(); // seeds the built-in "index" node
+
+    rt.eval(&format!(
+        r#"(kb-export-subgraph-html "index" "{}")"#,
+        path.display()
+    ))
+    .unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    let written = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("kb-export-subgraph-html should have written {path:?}: {e}"));
+    assert!(
+        written.contains("<html"),
+        "output should be a full HTML page"
+    );
+    assert!(
+        editor.status_msg.contains("index") || editor.status_msg.to_lowercase().contains("export"),
+        "status line should report the export result: {}",
+        editor.status_msg
+    );
+}
+
+#[test]
+fn kb_export_subgraph_html_from_scheme_reports_a_missing_seed_id_via_status() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+
+    rt.eval(r#"(kb-export-subgraph-html "does-not-exist" "/tmp/mae_test_kb_export_missing.html")"#)
+        .unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    assert!(
+        editor.status_msg.contains("does-not-exist"),
+        "status line should surface the real error, not swallow it: {}",
+        editor.status_msg
+    );
+}

@@ -9,7 +9,14 @@ license.workspace = true
 mae-core = { path = "../core" }
 mae-kb = { path = "../../shared/kb", features = ["storage-sled", "crdt"] }
 mae-sync = { path = "../../shared/sync" }
+# For (kb-export-subgraph-html ...) (kb/adrs/0002 in bilingual-kb-export --
+# following the kb-graph-view-* precedent: the real logic stays in
+# mae-ai/mae-export, this crate only wires a Scheme-callable primitive onto
+# it). mae-ai does not depend on mae-scheme anywhere in its own tree, so
+# this is a new, non-circular edge.
+mae-ai = { path = "../ai" }
 base64 = "0.22"
+serde_json = "1"
 tracing = { workspace = true }
 libc = "0.2"
 parking_lot = "0.12"

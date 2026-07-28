@@ -31,6 +31,7 @@ use crate::vm::Vm;
 
 mod editor_ops;
 mod io_packages;
+mod kb_export;
 mod kb_graph_view;
 mod kb_preview;
 mod kb_primitives;
@@ -46,6 +47,7 @@ mod test_primitives;
 
 use editor_ops::register_editor_ops_fns;
 use io_packages::register_io_package_fns;
+use kb_export::register_kb_export_fns;
 use kb_graph_view::register_kb_graph_view_fns;
 use kb_preview::register_kb_preview_fns;
 use kb_primitives::register_kb_primitive_fns;
@@ -173,6 +175,12 @@ struct SharedState {
     /// `Editor::kb_preview_*` method, mirroring
     /// `pending_graph_view_intents` above.
     pending_kb_preview_intents: Vec<mae_core::KbPreviewIntent>,
+    /// Pending `(kb-export-subgraph-html ...)` requests, each a JSON args
+    /// object (`{id, path, depth?, translations?, title?}`) — drained into
+    /// `mae_ai::execute_kb_export_subgraph_html(editor, &args)`, the same
+    /// function the `kb_export_subgraph_html` MCP tool calls, mirroring
+    /// `pending_graph_view_intents` above.
+    pending_kb_export_requests: Vec<serde_json::Value>,
     /// Daemon control channel (cloned from `editor.kb` on each state sync) so
     /// synchronous-return primitives like `(kb-share-p2p)` can drive the same
     /// backend as the command + MCP tool (ADR-025 §"Driving surfaces").
@@ -435,6 +443,7 @@ impl SchemeRuntime {
         register_kb_query_fns(&mut vm, &shared);
         register_kb_graph_view_fns(&mut vm, &shared);
         register_kb_preview_fns(&mut vm, &shared);
+        register_kb_export_fns(&mut vm, &shared);
         register_misc_primitive_fns(&mut vm, &shared);
         register_test_primitive_fns(&mut vm, &shared);
 
