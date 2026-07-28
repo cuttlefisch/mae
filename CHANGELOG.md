@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.62] - 2026-07-28
+
+### CI
+
+- Fix 3 latent bugs surfaced by #511's own verification run (#513) ([00766e4](https://github.com/cuttlefisch/mae/commit/00766e4e34435bce17c3388b8a973f6e5d2a20c1))
+
 ## [0.14.61] - 2026-07-28
 
 ### CI
 
 - Structurally isolate heavy-subprocess-e2e from the full-suite startup burst (#510) (#511) ([0862b82](https://github.com/cuttlefisch/mae/commit/0862b82e99c65c8d27b6725dccc8763a10e5751b))
+
+### Miscellaneous
+
+- Bump version to 0.14.61 ([80eed08](https://github.com/cuttlefisch/mae/commit/80eed08eb5a4da9a3ce12d36dcfc2c208ec548fc))
 
 ## [0.14.60] - 2026-07-28
 
