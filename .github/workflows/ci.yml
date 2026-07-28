@@ -147,12 +147,15 @@ jobs:
         # but shares the identical vulnerability (same test files, same
         # `--workspace --features gui` invocation shape) -- fixed here too
         # rather than waiting for it to surface here as its own incident.
-        # mcp_tool_tiering_e2e added alongside the original 5 after #511's own
-        # verification run caught it failing with the identical "never bound
-        # its stable socket" signature -- same real subprocess + bounded-bind
-        # profile, just missed the first time. See .config/nextest.toml.
+        # mcp_tool_tiering_e2e and tool_schema_nested_e2e added alongside the
+        # original 5 after two successive #511 verification runs each caught
+        # one more file failing with the identical "never bound its stable
+        # socket" signature -- same real subprocess + bounded-bind profile,
+        # just missed until it was the one observed failing. The final
+        # addition came from an exhaustive sweep, not another one-off
+        # reaction -- see .config/nextest.toml for the full methodology.
         run: |
-          HEAVY_FILTER='binary(headless_e2e) + binary(guidance_delivery_e2e) + binary(headless_kb_convergence_e2e) + binary(headless_soak_shaped_e2e) + binary(headless_idle_cpu_e2e) + binary(mcp_tool_tiering_e2e)'
+          HEAVY_FILTER='binary(headless_e2e) + binary(guidance_delivery_e2e) + binary(headless_kb_convergence_e2e) + binary(headless_soak_shaped_e2e) + binary(headless_idle_cpu_e2e) + binary(mcp_tool_tiering_e2e) + binary(tool_schema_nested_e2e)'
           cargo nextest run --workspace --release --features gui -E "$HEAVY_FILTER"
           cargo nextest run --workspace --release --features gui -E "not ($HEAVY_FILTER)"
           cargo test --doc --workspace --release --features gui
