@@ -21,6 +21,10 @@ impl KbCollectionDoc {
             root.insert(&mut txn, COLL_NODES_KEY, MapPrelim::default());
             let members = root.insert(&mut txn, COLL_MEMBERS_KEY, ArrayPrelim::default());
             members.push_back(&mut txn, creator);
+            // ADR-033: eagerly seeded so concurrent lease claims only ever insert
+            // NEW keys into an already-established map (see `mod.rs`'s
+            // `COLL_LEASE_KEY` comment for why lazy nested creation is unsafe).
+            root.insert(&mut txn, COLL_LEASE_KEY, MapPrelim::default());
         }
         Self { doc }
     }
@@ -36,6 +40,7 @@ impl KbCollectionDoc {
             root.insert(&mut txn, COLL_NODES_KEY, MapPrelim::default());
             let members = root.insert(&mut txn, COLL_MEMBERS_KEY, ArrayPrelim::default());
             members.push_back(&mut txn, creator);
+            root.insert(&mut txn, COLL_LEASE_KEY, MapPrelim::default());
         }
         Self { doc }
     }

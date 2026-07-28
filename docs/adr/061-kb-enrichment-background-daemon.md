@@ -411,6 +411,63 @@ Phase B's cache already handles.
 `cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean across both
 workspaces; `cargo build --workspace --features gui` clean.
 
+## Implementation note (Phase D1, principle #15)
+
+**Split into D1 (the lease primitive itself) / D2 (enrichment as its first caller) / D3 (ADR-034
+sharing) across separate PRs, landed in that order** — this note covers D1 only. D2/D3 follow as
+their own PRs once D1 is proven stable, matching the phased-landing discipline already established
+for A/B/C/E above.
+
+**A real, adversarially-discovered CRDT-safety bug, not anticipated by the Decision text**: the
+first data-model attempt nested the lease claims one level (`YMap<op_kind -> YMap<claim_key ->
+record>>`), mirroring the signed-oplog's own append-only-set pattern. A round-trip test simulating
+two never-synced daemons concurrently claiming the SAME not-yet-existing `op_kind` submap failed —
+after merging, one peer's entire claim was silently dropped, not unioned with the other's. Root
+cause: yrs resolves two independently-created `MapPrelim::default()` values assigned to the SAME
+not-yet-existing key via last-writer-wins on the OUTER key itself, not a merge of the nested
+maps' contents — a real, general CRDT gotcha (concurrently creating a container for the first
+time is unsafe; concurrently inserting a new key into an ALREADY-established shared map is the
+safe, ordinary case). Fixed by flattening to a single `YMap<claim_key -> record>` (op_kind stored
+as a field per entry) and eagerly seeding the outer map in every `KbCollectionDoc` constructor —
+exactly the same pattern `member_roles`/`pending`/`nodes` already use, confirmed by direct read
+before assuming it was safe. The round-trip test (`two_concurrent_daemon_claims_converge_to_the_
+same_deterministic_winner`, `shared/sync/src/kb/tests/collection_lease_tests.rs`) now passes and
+stays in the suite as a standing regression guard against reintroducing the nested form.
+
+**ADR-033's own text needed two corrections during design, folded in rather than implemented
+literally and wrong**: (1) "reuse the ADR-023 epoch as the fencing token" cannot mean the literal
+per-member authorization epoch — bumping it on a lease grant would fence the loser's unrelated
+ordinary edits too, collateral damage ADR-033's own Consequences section never describes. Built
+instead as a narrow, separate `(kb_id, op_kind)` generation counter — the *pattern* ADR-033
+describes ("a KB-wide operation carries an epoch"), at a dimension that doesn't collide with
+per-member authorization. (2) "broadcast on the ADR-024 attention bus" doesn't correspond to any
+real inter-daemon channel — `NotificationCenter` is single-editor-process UI presentation, and the
+real daemon-mesh gossip transport (#89) is still the tracked bottleneck. Used ADR-033's own named
+fallback instead: an in-band LWW claim in the collection doc, already fully shipped end-to-end via
+the existing `persist_and_broadcast_collection` relay — zero new transport. `NotificationCenter`
+(`notify_enrichment_lease_status`, `crates/core/src/editor/notify_ops.rs`) is the LOCAL
+presentation of that already-synced state, not the transport itself.
+
+`kb/claim_lease` (`daemon/src/collab_handler/kb_lease.rs`) is gated `KbOp::Edit`, not `KbOp::Manage`
+— any Editor-role member may claim it, unlike `kb/collection_op`'s owner-only gate, since
+enrichment/embedding work is an ordinary editing capability, not KB governance.
+
+**Honest scope note**: `enforce_lease_generation_fence` (the write-time re-check) ships in this
+phase, fully unit-tested directly, but has no production caller yet — Phase D2 (issue #420's
+second half) wires `run_enrichment_sweep`'s commit path to call it. Named explicitly (`#[allow
+(dead_code)]` with a doc comment, not a silent gap) rather than deferred without a trace.
+
+Verification item D's **N-way (≥3 daemon) race** requirement is met at the primitive level in this
+phase (`collab_handler_lease_race_tests.rs`: 3 members claim from the same pre-claim state,
+dispatched out of order, converge to exactly one deterministic winner regardless of order; a
+non-member is denied outright). The "zero duplicate provider calls" behavioral half of item D
+(losers making no calls into a fake `EmbedBackend`) requires D2's real caller to exist and is that
+phase's own verification obligation, not testable against code that doesn't exist yet.
+
+`cargo test -p mae-sync`/`cargo test --lib` (daemon workspace)/`cargo test -p mae-core notify_ops`
+all clean; `cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean across both the
+editor and daemon workspaces; `cargo build --workspace` clean.
+
 ## Implementation note (Phase E, principle #15)
 
 Re-read the Decision text carefully before implementing: it specifies the enrich-now path runs

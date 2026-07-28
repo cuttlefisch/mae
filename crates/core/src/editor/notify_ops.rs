@@ -477,6 +477,48 @@ impl super::Editor {
             );
         }
     }
+
+    /// ADR-033/ADR-061 Phase D1 (#420): the local presentation of a KB-wide lease
+    /// claim's outcome. `held` is whose it currently is per
+    /// `KbCollectionDoc::current_lease` — an info toast when THIS daemon holds it
+    /// (routine), or an action-required (sticky) surface when a peer holds it,
+    /// since a human wondering "why isn't enrichment running here" deserves an
+    /// explanation, not silence.
+    ///
+    /// Ships in this PR fully implemented and unit-tested; its real call site
+    /// (raised when the enrichment scheduler actually claims/loses the lease) is
+    /// ADR-061 Phase D2 — no production caller exists yet, named explicitly
+    /// rather than silently deferred (matches this codebase's own precedent for a
+    /// correctly-wired but not-yet-connected scaffold).
+    pub fn notify_enrichment_lease_status(
+        &mut self,
+        kb_id: &str,
+        op_kind: &str,
+        holder_fp: &str,
+        held_locally: bool,
+    ) {
+        if held_locally {
+            self.notify(
+                crate::notifications::Notification::info(
+                    "collab",
+                    format!("{op_kind} running on {kb_id}"),
+                )
+                .key(format!("collab:lease:{kb_id}:{op_kind}")),
+            );
+        } else {
+            self.notify(
+                crate::notifications::Notification::action_required(
+                    "collab",
+                    format!("{op_kind} is running on a peer"),
+                )
+                .key(format!("collab:lease:{kb_id}:{op_kind}"))
+                .body(format!(
+                    "Peer {holder_fp} currently holds the {op_kind} lease for {kb_id} — \
+                     this daemon is deferring to avoid duplicate work."
+                )),
+            );
+        }
+    }
 }
 
 #[cfg(test)]
@@ -563,6 +605,34 @@ mod tests {
         let mut ed = Editor::new();
         let id = ed.notify(Notification::action_required("collab", "x").key("k"));
         assert!(!ed.notify_run_action(id, 9));
+    }
+
+    #[test]
+    fn lease_held_locally_is_a_low_key_info_toast() {
+        let mut ed = Editor::new();
+        ed.notify_enrichment_lease_status("kb-1", "enrichment", "fp:me", true);
+        assert_eq!(
+            ed.notifications.outstanding_count(),
+            0,
+            "info is not sticky"
+        );
+        assert_eq!(ed.notifications.badge_severity(), None);
+    }
+
+    #[test]
+    fn lease_held_by_a_peer_is_a_sticky_action_required_explanation() {
+        let mut ed = Editor::new();
+        ed.notify_enrichment_lease_status("kb-1", "enrichment", "fp:peer", false);
+        assert_eq!(
+            ed.notifications.outstanding_count(),
+            1,
+            "a human wondering why enrichment isn't running here deserves an \
+             explanation, not silence"
+        );
+        assert_eq!(
+            ed.notifications.badge_severity(),
+            Some(Severity::ActionRequired)
+        );
     }
 
     #[test]
