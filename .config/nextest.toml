@@ -63,13 +63,20 @@ test-group = "heavy-subprocess-e2e"
 # The group above serializes these 5 files AGAINST EACH OTHER, but not
 # against the hundreds of OTHER test binaries nextest starts concurrently at
 # the very beginning of a full run -- a real residual contention window,
-# confirmed empirically: one test in this set failed once during a full
-# local `make test` run, at position 7/7218 (i.e. during the initial startup
-# burst), then passed cleanly both in isolation and under --release
-# immediately after. A small, explained retry for this specific,
-# already-understood environmental-timing effect (not a masked logic bug --
-# the logic itself was reverified clean) mirrors the #487 precedent above.
-retries = 1
+# confirmed empirically MORE THAN ONCE now, not just theoretical: one test in
+# this set failed once during a full local `make test` run, at position
+# 7/7218 (i.e. during the initial startup burst), then passed cleanly both in
+# isolation and under --release immediately after -- and issue #510 is a
+# SECOND, independent occurrence in real CI (`guidance_delivery_e2e`,
+# position 10/7345, same startup-burst window), where the original
+# `retries = 1` genuinely wasn't enough (failed both attempts). Raised to 2 to
+# match the #487 precedent fully (that override was always the model this one
+# was sized against -- `retries = 1` was a lighter version of the same idea,
+# now brought in line since the narrower budget proved insufficient). Still a
+# small, explained retry for a specific, already-understood
+# environmental-timing effect (not a masked logic bug -- the logic itself was
+# reverified clean both times), not a blanket policy.
+retries = 2
 
 [[profile.default.overrides]]
 filter = '''
