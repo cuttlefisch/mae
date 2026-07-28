@@ -624,7 +624,6 @@ impl HtmlGraphExporter {
         html.push_str(&html_escape(page_title));
         html.push_str("</title>\n<style>\n");
         html.push_str(&render_css_variables(&dark, &light));
-        html.push_str(&render_widget_inverse_theme_css(&dark, &light));
         html.push_str(STATIC_CSS);
         html.push_str("</style>\n</head>\n<body>\n");
 
@@ -710,31 +709,6 @@ fn render_css_variables(dark: &GruvboxPalette, light: &GruvboxPalette) -> String
     push_palette_vars(&mut css, dark);
     css.push_str("}\n:root[data-theme=\"light\"] {\n");
     push_palette_vars(&mut css, light);
-    css.push_str("}\n");
-    css
-}
-
-/// The chord nav widget (`#graph-pane`) deliberately renders in the *opposite*
-/// gruvbox mode from the surrounding page — a light inset on a dark page, a
-/// dark inset on a light page — so the widget reads as a distinct, deliberate
-/// focal point rather than blending into the page chrome. Mirrors
-/// [`render_css_variables`]'s own default/media-query/attribute structure
-/// exactly, just inverted and scoped to `#graph-pane`: the attribute-selector
-/// rules carry higher specificity than the bare/media-scoped ones, so an
-/// explicit theme-toggle click always wins over the system preference, same
-/// as it does for the rest of the page.
-fn render_widget_inverse_theme_css(dark: &GruvboxPalette, light: &GruvboxPalette) -> String {
-    let mut css = String::new();
-    css.push_str("#graph-pane {\n");
-    push_palette_vars(&mut css, light);
-    css.push_str("}\n");
-    css.push_str("@media (prefers-color-scheme: light) {\n#graph-pane {\n");
-    push_palette_vars(&mut css, dark);
-    css.push_str("}\n}\n");
-    css.push_str(":root[data-theme=\"dark\"] #graph-pane {\n");
-    push_palette_vars(&mut css, light);
-    css.push_str("}\n:root[data-theme=\"light\"] #graph-pane {\n");
-    push_palette_vars(&mut css, dark);
     css.push_str("}\n");
     css
 }
@@ -858,13 +832,18 @@ body {
   flex: 0 0 280px;
   position: relative;
   min-width: 0;
+  /* A hairline divider (one shade off the page surface, same treatment as
+     a chart's own recessive gridlines) separates the chord widget from the
+     outline below it -- no color inversion, no card border-radius/shadow.
+     An earlier version rendered this panel in the *opposite* gruvbox mode
+     with a rounded, drop-shadowed "card" look, on the theory that visual
+     contrast would read as a deliberate focal point; in practice it read
+     as a boxed-in prototype widget instead of an integrated part of the
+     page. The widget now shares the sidebar's own surface color -- the
+     dataviz anti-pattern list's guidance against "thick blocks, heavy
+     chrome, no breathing room" applies here as much as it would to any
+     other chart container. */
   border-bottom: 1px solid var(--bg3);
-  /* The scoped inverted-theme variables (render_widget_inverse_theme_css)
-     only take visual effect if something actually paints with them --
-     without this, #graph-pane stayed transparent and the "light window
-     inset in a dark page" effect never happened: the widget's own --bg0
-     was correctly inverted, but nothing painted it, so the page's real
-     background showed through underneath instead. */
   background: var(--bg0);
   color: var(--fg1);
   transition: background-color 200ms ease, color 200ms ease;
@@ -981,11 +960,6 @@ body {
    one accent against a muted field doesn't need to pass that check at
    all. `transform`/`filter`/`fill`/`stroke` all transition over
    150-250ms so navigation and hover read as motion, not a snap. */
-#graph-pane {
-  border-radius: 10px;
-  overflow: hidden;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
-}
 .node circle {
   fill: var(--fg4);
   stroke: var(--bg0);
@@ -1132,15 +1106,22 @@ const GRAPH_JS: &str = r#"
 
   // --- Layout: fit all node positions (chord-ring or force, whichever the
   // export baked in) into the SVG viewBox. Center is used both for the
-  // viewBox fit AND as the pull-point for edge arcs below. Node labels
-  // sit to the RIGHT of their circle (`x: n.x + r + 3`) and can run up to
-  // 29 chars (28 + an ellipsis) at an 11px font -- padding just the node
-  // *positions* by a flat amount clipped exactly this text in a real
-  // render, since it never accounted for label width at all. `labelPad`
-  // is a deliberately generous per-character estimate (real glyph widths
-  // vary; overshooting costs empty margin, undershooting clips text
-  // again -- overshoot), added only on the right/bottom where labels
-  // actually extend. ---
+  // viewBox fit AND as the pull-point for edge arcs below. Node labels can
+  // run up to 29 chars (28 + an ellipsis) at an 11px font -- padding just
+  // the node *positions* by a flat amount clipped exactly this text in a
+  // real render, since it never accounted for label width at all.
+  // `labelPad` is a deliberately generous per-character estimate (real
+  // glyph widths vary; overshooting costs empty margin, undershooting
+  // clips text again -- overshoot). Earlier versions added labelPad only
+  // to the right (labels always sat right of their node), which visibly
+  // decentered the node ring -- the mass of nodes rendered left-of-center
+  // inside a viewBox whose extra width was allocated entirely to one
+  // side. Labels now flip anchor per node (see the node-drawing loop
+  // below: left-half-of-ring nodes anchor "end" and extend left, right-
+  // half nodes anchor "start" and extend right -- the standard radial-
+  // diagram label convention, e.g. D3 radial trees), so labelPad is
+  // budgeted symmetrically on both sides: the ring itself, not a label
+  // overflow region, sits in the geometric center of the viewBox. ---
   var pad = 60;
   var labelPad = 29 * 7;
   var minX = Math.min.apply(null, nodes.map(function (n) { return n.x; }));
@@ -1151,10 +1132,10 @@ const GRAPH_JS: &str = r#"
   var w = Math.max(1, maxX - minX);
   var h = Math.max(1, maxY - minY);
   var centerX = (minX + maxX) / 2, centerY = (minY + maxY) / 2;
-  var viewBoxW = w + pad * 2 + labelPad;
+  var viewBoxW = w + pad * 2 + labelPad * 2;
   svg.setAttribute(
     "viewBox",
-    (minX - pad) + " " + (minY - pad) + " " + viewBoxW + " " + (h + pad * 2)
+    (minX - pad - labelPad) + " " + (minY - pad) + " " + viewBoxW + " " + (h + pad * 2)
   );
   svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
 
@@ -1262,7 +1243,16 @@ const GRAPH_JS: &str = r#"
       "data-kind": n.kind,
     });
     var circle = el("circle", { cx: n.x, cy: n.y, r: r });
-    var text = el("text", { x: n.x + r + 3, y: n.y + 4 });
+    // Flip label anchor by ring-half so labels extend outward from the
+    // ring's own center rather than always rightward -- this is what
+    // keeps the node ring (not a lopsided label-overflow region) visually
+    // centered in the viewBox; see the viewBox comment above.
+    var onLeft = n.x < centerX;
+    var text = el("text", {
+      x: n.x + (onLeft ? -(r + 3) : r + 3),
+      y: n.y + 4,
+      "text-anchor": onLeft ? "end" : "start",
+    });
     text.textContent = truncateLabel(n["title_" + currentLang], 28);
     g.appendChild(circle);
     g.appendChild(text);
@@ -1693,6 +1683,37 @@ mod tests {
     }
 
     #[test]
+    fn chord_node_labels_flip_anchor_instead_of_decentering_the_ring() {
+        // Regression: an earlier version always anchored labels to the
+        // right of their node ("x: n.x + r + 3") and padded the viewBox's
+        // extra label-overflow width entirely on the right side too --
+        // visually decentering the node ring inside its panel (the ring's
+        // own bounding box sat left-of-center in a viewBox that was wider
+        // than it needed to be, all on one side). The fix flips each
+        // node's label anchor by which half of the ring it's on and
+        // budgets labelPad symmetrically on both sides of the viewBox, so
+        // the ring itself -- not a one-sided label margin -- sits centered.
+        let nodes = vec![simple_node("a", "A", "body", true)];
+        let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
+        assert!(
+            html.contains("var onLeft = n.x < centerX;"),
+            "expected per-node ring-half detection driving the anchor flip"
+        );
+        assert!(
+            html.contains("\"text-anchor\": onLeft ? \"end\" : \"start\","),
+            "expected label anchor to flip by ring-half rather than always anchoring right"
+        );
+        assert!(
+            html.contains("var viewBoxW = w + pad * 2 + labelPad * 2;"),
+            "expected labelPad to be budgeted on both sides of the viewBox, not just the right"
+        );
+        assert!(
+            html.contains("(minX - pad - labelPad) + \" \""),
+            "expected the viewBox x-origin to extend left by labelPad too, keeping the ring centered"
+        );
+    }
+
+    #[test]
     fn export_produces_well_formed_standalone_html() {
         let nodes = vec![
             simple_node("a", "Node A", "Body A.", true),
@@ -1921,21 +1942,12 @@ mod tests {
     }
 
     #[test]
-    fn graph_pane_actually_paints_with_its_inverted_background() {
-        // Regression: the scoped inverted-theme CSS variables were correct
-        // (confirmed by the test below), but nothing applied `background:
-        // var(--bg0)` to #graph-pane itself -- it stayed transparent, so
-        // the page's real (non-inverted) background showed through and the
-        // "light window inset in a dark page" effect never actually
-        // happened visually. Confirmed empirically too (headless Chromium):
-        // #graph-pane's computed background-color was rgba(0,0,0,0) before
-        // this fix.
+    fn graph_pane_actually_paints_with_the_page_background() {
+        // Regression guard for a real bug: #graph-pane needs an explicit
+        // `background: var(--bg0)` or it stays transparent and whatever
+        // sits behind it in the DOM shows through instead.
         let nodes = vec![simple_node("a", "A", "body", true)];
         let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
-        // Several `#graph-pane { ... }` blocks exist (the theme-inversion
-        // variable blocks in render_widget_inverse_theme_css, plus this
-        // sizing/appearance rule in STATIC_CSS) -- anchor on the sizing
-        // rule specifically via a marker only it contains.
         assert!(html.contains("flex: 0 0 280px;"));
         let rule = html
             .split("flex: 0 0 280px;")
@@ -1944,42 +1956,26 @@ mod tests {
             .expect("#graph-pane sizing rule present");
         assert!(
             rule.contains("background: var(--bg0)"),
-            "expected #graph-pane to actually paint with its own (inverted) background: {rule}"
+            "expected #graph-pane to actually paint with a background: {rule}"
         );
     }
 
     #[test]
-    fn graph_pane_theme_is_inverted_from_the_page_root() {
-        // The chord widget deliberately renders in the opposite gruvbox mode
-        // from the surrounding page -- assert both inverted, #graph-pane-
-        // scoped blocks are present, and that the attribute-selector form
-        // (which wins on specificity over the page root's own attribute
-        // rule) pairs dark-page-root with the *light* accent inside the
-        // widget, and vice versa.
+    fn graph_pane_shares_the_page_root_theme_not_an_inverted_one() {
+        // An earlier version rendered the chord widget in the *opposite*
+        // gruvbox mode from the page (a distinct light/dark "card" inset),
+        // scoped via `:root[data-theme] #graph-pane { ... }` blocks with
+        // their own flipped --accent/--bg0/etc. That read as a boxed-in
+        // prototype widget rather than an integrated part of the page (see
+        // the STATIC_CSS comment above `#graph-pane`), so it was removed --
+        // the widget now inherits the same theme variables as everything
+        // else. Guard against the inverted, widget-scoped blocks coming
+        // back.
         let nodes = vec![simple_node("a", "A", "body", true)];
         let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
-        assert!(html.contains(":root[data-theme=\"dark\"] #graph-pane {"));
-        assert!(html.contains(":root[data-theme=\"light\"] #graph-pane {"));
-
-        let dark_root_widget_block = html
-            .split(":root[data-theme=\"dark\"] #graph-pane {")
-            .nth(1)
-            .and_then(|s| s.split('}').next())
-            .expect("dark-root widget block present");
-        assert!(
-            dark_root_widget_block.contains("--accent: #d65d0e"),
-            "page in dark mode should give the widget the LIGHT-validated accent, got: {dark_root_widget_block}"
-        );
-
-        let light_root_widget_block = html
-            .split(":root[data-theme=\"light\"] #graph-pane {")
-            .nth(1)
-            .and_then(|s| s.split('}').next())
-            .expect("light-root widget block present");
-        assert!(
-            light_root_widget_block.contains("--accent: #fe8019"),
-            "page in light mode should give the widget the DARK-validated accent, got: {light_root_widget_block}"
-        );
+        assert!(!html.contains(":root[data-theme=\"dark\"] #graph-pane {"));
+        assert!(!html.contains(":root[data-theme=\"light\"] #graph-pane {"));
+        assert!(!html.contains("box-shadow: 0 2px 10px"));
     }
 
     #[test]
