@@ -498,6 +498,14 @@ fn parse_heading_todo(title: &str) -> (Option<String>, String) {
 pub enum InlineTarget {
     Html,
     Markdown,
+    /// Bare text, no markup at all — emphasis markers vanish (not `<b>`/
+    /// `**`, just the inner text) and links resolve to their label alone
+    /// (or the bare target, `id:`-stripped, if unlabeled) with no
+    /// brackets/href. Added specifically so `plain_text_preview` (used for
+    /// hover-popover previews) can reuse this one parser instead of a
+    /// second, separate link-stripping implementation — see that
+    /// function's doc comment.
+    PlainText,
 }
 
 /// Convert org inline markup using string slicing (not char-based).
@@ -518,6 +526,9 @@ pub fn convert_inline_markup_str(text: &str, target: InlineTarget) -> String {
                         ('*', InlineTarget::Markdown) => {
                             format!("**{}**", convert_inline_markup_str(content, target))
                         }
+                        ('*' | '/', InlineTarget::PlainText) => {
+                            convert_inline_markup_str(content, target)
+                        }
                         ('/', InlineTarget::Html) => {
                             format!("<i>{}</i>", convert_inline_markup_str(content, target))
                         }
@@ -526,6 +537,7 @@ pub fn convert_inline_markup_str(text: &str, target: InlineTarget) -> String {
                         }
                         ('~' | '=', InlineTarget::Html) => format!("<code>{}</code>", content),
                         ('~' | '=', InlineTarget::Markdown) => format!("`{}`", content),
+                        ('~' | '=' | '+', InlineTarget::PlainText) => content.to_string(),
                         ('+', InlineTarget::Html) => format!("<del>{}</del>", content),
                         ('+', InlineTarget::Markdown) => format!("~~{}~~", content),
                         _ => content.to_string(),
@@ -577,6 +589,17 @@ pub fn convert_inline_markup_str(text: &str, target: InlineTarget) -> String {
                                 None => stripped_target.to_string(),
                             };
                             result.push_str(&format!("[{display}]({href})"));
+                        }
+                        InlineTarget::PlainText => {
+                            // No brackets, no href -- just the label (or
+                            // the bare, id:-stripped target if unlabeled).
+                            // This is the fix for hover-popover previews
+                            // that used to show raw "[[UUID|label]]" text.
+                            let display = match &label {
+                                Some(l) => convert_inline_markup_str(l, target),
+                                None => stripped_target.to_string(),
+                            };
+                            result.push_str(&display);
                         }
                     }
                     i = end + 1;

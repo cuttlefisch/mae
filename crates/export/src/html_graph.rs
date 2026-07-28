@@ -60,7 +60,7 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::html::render_element as render_org_element;
-use crate::{html_escape, parse_org_document, OrgElement};
+use crate::{convert_inline_markup_str, html_escape, parse_org_document, InlineTarget, OrgElement};
 
 // ---------------------------------------------------------------------
 // Bilingual translation overlay
@@ -171,6 +171,17 @@ pub struct GruvboxPalette {
     /// contrast against this theme's own `bg0` is 5.84:1 (dark,
     /// `#fe8019` on `#282828`) / 3.41:1 (light, `#d65d0e` on `#fbf1c7`).
     pub accent: &'static str,
+    /// Prose-link color (in-body `<a>`, popover links) — deliberately a
+    /// *different* hue from `accent` (orange), which already carries a
+    /// specific meaning elsewhere on the page ("this is the current node/
+    /// edge"); reusing it for ordinary hyperlinks would blur that meaning.
+    /// Gruvbox `bright_blue`/`blue` (the same hues already used for the
+    /// `node_scheme_api` kind color, just promoted to a first-class role
+    /// here), validated as a single-hue ordinal ramp (not part of the
+    /// 7-slot categorical set that failed): 5.48:1 contrast on dark `bg0`
+    /// (`#83a598` on `#282828`), 3.73:1 on light `bg0` (`#458588` on
+    /// `#fbf1c7`) — both clear the 3:1 UI-component floor.
+    pub link: &'static str,
 }
 
 impl GruvboxPalette {
@@ -207,6 +218,7 @@ impl GruvboxPalette {
             edge: "#928374",            // gray
             edge_boundary: "#fb4934",   // bright_red
             accent: "#fe8019",          // bright_orange
+            link: "#83a598",            // bright_blue
         }
     }
 
@@ -243,6 +255,7 @@ impl GruvboxPalette {
             edge: "#928374",            // gray
             edge_boundary: "#cc241d",   // red
             accent: "#d65d0e",          // orange
+            link: "#458588",            // blue
         }
     }
 }
@@ -421,45 +434,46 @@ fn render_node_body_html(body: &str, palette: &GruvboxPalette) -> String {
 }
 
 /// A short, plain-text (no markup) preview of a node body for the hover
-/// popover — org markup characters stripped, collapsed to single-line
-/// whitespace, truncated to `max_chars` (character-boundary-safe) with a
-/// trailing ellipsis if truncated.
+/// popover — org markup resolved away, collapsed to single-line whitespace,
+/// truncated to `max_chars` (character-boundary-safe) with a trailing
+/// ellipsis if truncated.
+///
+/// Each element's raw text is run through `convert_inline_markup_str(...,
+/// InlineTarget::PlainText)` — the same parser `render_node_body_html`
+/// (HTML) and `html.rs`'s `HtmlExporter` (Markdown) already use, just a
+/// third output mode — rather than a separate hand-rolled stripper. The
+/// previous version only filtered out `* / = ~` characters, which drops
+/// emphasis markers but has no concept of a `[[target|label]]` link at
+/// all: a body containing one showed the raw brackets/pipe/target text
+/// verbatim in the hover popover (a real bug, not hypothetical -- visible
+/// in this session's own earlier screenshot as a mangled, concatenated
+/// GitHub URL). Reusing the real parser fixes that for free instead of
+/// teaching a second, separate implementation about link syntax.
 pub fn plain_text_preview(body: &str, max_chars: usize) -> String {
     let body = strip_leading_properties_drawer(body);
     let (_, elements) = parse_org_document(body);
     let mut text = String::new();
+    let push_plain = |s: &str, text: &mut String| {
+        text.push_str(&convert_inline_markup_str(s, InlineTarget::PlainText));
+        text.push(' ');
+    };
     for element in &elements {
         match element {
-            OrgElement::Paragraph(p) => {
-                text.push_str(p);
-                text.push(' ');
-            }
-            OrgElement::Heading { title, .. } => {
-                text.push_str(title);
-                text.push(' ');
-            }
-            OrgElement::Quote(q) => {
-                text.push_str(q);
-                text.push(' ');
-            }
+            OrgElement::Paragraph(p) => push_plain(p, &mut text),
+            OrgElement::Heading { title, .. } => push_plain(title, &mut text),
+            OrgElement::Quote(q) => push_plain(q, &mut text),
             OrgElement::List { items, .. } => {
                 for item in items {
-                    text.push_str(&item.content);
-                    text.push(' ');
+                    push_plain(&item.content, &mut text);
                 }
             }
             _ => {}
         }
     }
-    // Collapse whitespace (newlines from multi-line paragraphs, etc.) and
-    // strip the plainest org emphasis markers so the preview doesn't show
-    // literal `*bold*`/`/italic/` asterisks/slashes.
+    // Collapse whitespace (newlines from multi-line paragraphs, etc.) into
+    // single spaces -- markup/link resolution already happened above.
     let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
-    let stripped: String = collapsed
-        .chars()
-        .filter(|c| !matches!(c, '*' | '/' | '=' | '~'))
-        .collect();
-    truncate_chars(stripped.trim(), max_chars)
+    truncate_chars(collapsed.trim(), max_chars)
 }
 
 fn truncate_chars(s: &str, max_chars: usize) -> String {
@@ -620,6 +634,9 @@ impl HtmlGraphExporter {
         html.push_str(
             "<button id=\"home-button\" type=\"button\" title=\"Jump to the spine/anchor node\">\u{2302} Home</button>\n",
         );
+        html.push_str(
+            "<button id=\"prev-button\" type=\"button\" disabled>\u{2190} Previous</button>\n",
+        );
         html.push_str("<button id=\"start-here\" type=\"button\">Start here \u{2192}</button>\n");
         html.push_str(
             "<button id=\"theme-toggle\" type=\"button\">\u{263D}/\u{2600} Theme</button>\n",
@@ -627,15 +644,25 @@ impl HtmlGraphExporter {
         html.push_str("<button id=\"lang-toggle\" type=\"button\" hidden>EN / ES</button>\n");
         html.push_str("</div>\n</header>\n");
 
+        // The node's own rendered content is the primary reading surface, not
+        // the nav chrome around it -- `#main-content` is deliberately the
+        // dominant flex child, with the chord diagram + outline demoted to a
+        // narrow fixed-width `#sidebar`, stacked (chord above outline) rather
+        // than side by side. Element ids are unchanged from the prior layout
+        // (`#detail-panel-content`, `#graph-pane`, `#outline-panel`, etc.) --
+        // every DOM query in GRAPH_JS below is by id, not DOM position, so
+        // this restructure is pure markup/CSS, no JS changes needed for it.
         html.push_str(
             "<main id=\"app-main\">\n\
+             <article id=\"main-content\">\n\
+             <div id=\"detail-panel-content\">\n\
+             <p class=\"hint\">Click a node in the graph to see its details here.</p>\n\
+             </div>\n\
+             </article>\n\
+             <aside id=\"sidebar\">\n\
              <div id=\"graph-pane\">\n\
              <svg id=\"graph-svg\" xmlns=\"http://www.w3.org/2000/svg\"></svg>\n\
              <div id=\"popover\" class=\"popover\" hidden></div>\n\
-             </div>\n\
-             <aside id=\"detail-panel\">\n\
-             <div id=\"detail-panel-content\">\n\
-             <p class=\"hint\">Click a node in the graph to see its details here.</p>\n\
              </div>\n\
              <nav id=\"outline-panel\">\n\
              <h3 id=\"outline-toggle\">On this page \u{25be}</h3>\n\
@@ -755,6 +782,8 @@ fn push_palette_vars(css: &mut String, p: &GruvboxPalette) {
     css.push_str(p.edge_boundary);
     css.push_str(";\n--accent: ");
     css.push_str(p.accent);
+    css.push_str(";\n--link: ");
+    css.push_str(p.link);
     css.push_str(";\n");
 }
 
@@ -793,32 +822,50 @@ body {
   transition: background-color 180ms ease, color 180ms ease, transform 180ms ease;
 }
 .controls button:hover { background: var(--bg3); }
+.controls button:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: var(--bg2);
+}
 .controls button#home-button { background: var(--accent); color: var(--bg0); border-color: var(--accent); }
 .controls button#home-button:hover { transform: translateY(-1px); }
+/* The node's rendered content is the primary reading surface -- #main-content
+   is the dominant flex child; the chord diagram + outline are demoted to a
+   narrow, fixed-width #sidebar (not a flex ratio -- a compact nav widget
+   doesn't benefit from stretching wider on a wide viewport), stacked chord-
+   above-outline rather than side by side. See the html_graph module doc
+   comment for why this replaced an earlier layout where the graph took ~2/3
+   of the page width and the outline was easy to lose below a long body. */
 #app-main {
   flex: 1;
   display: flex;
   min-height: 0;
 }
+#main-content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 1.5rem 2rem;
+}
+#sidebar {
+  flex: 0 0 300px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-left: 1px solid var(--bg3);
+}
 #graph-pane {
-  flex: 2;
+  flex: 0 0 280px;
   position: relative;
   min-width: 0;
-  border-right: 1px solid var(--bg3);
+  border-bottom: 1px solid var(--bg3);
 }
 #graph-svg { width: 100%; height: 100%; display: block; }
-#detail-panel {
-  flex: 1;
-  min-width: 260px;
-  max-width: 420px;
-  overflow-y: auto;
-  padding: 1rem 1.25rem;
-}
-#detail-panel .hint { color: var(--fg3); font-style: italic; }
-#detail-panel h2 { margin-top: 0; }
+#main-content .hint { color: var(--fg3); font-style: italic; }
+#main-content h2 { margin-top: 0; }
 #detail-panel-content { transition: opacity 180ms ease; opacity: 1; }
 #detail-panel-content.fading { opacity: 0; }
-#detail-panel .kind-badge {
+#main-content .kind-badge {
   display: inline-block;
   font-size: 0.75rem;
   text-transform: uppercase;
@@ -829,16 +876,16 @@ body {
   padding: 0.1rem 0.4rem;
   margin-bottom: 0.5rem;
 }
-#detail-panel .anchor-note {
+#main-content .anchor-note {
   background: var(--bg1);
   border-left: 3px solid var(--node-anchor);
   padding: 0.4rem 0.6rem;
   margin-bottom: 0.75rem;
   font-size: 0.85rem;
 }
-#detail-panel .link-list { list-style: none; padding: 0; margin: 0.5rem 0; }
-#detail-panel .link-list li { margin-bottom: 0.3rem; }
-#detail-panel .link-jump {
+#main-content .link-list { list-style: none; padding: 0; margin: 0.5rem 0; }
+#main-content .link-list li { margin-bottom: 0.3rem; }
+#main-content .link-jump {
   background: none;
   border: 1px solid var(--bg3);
   color: var(--fg1);
@@ -848,14 +895,37 @@ body {
   text-align: left;
   width: 100%;
 }
-#detail-panel .link-jump:hover { background: var(--bg1); }
-#detail-panel .external-link {
+#main-content .link-jump:hover { background: var(--bg1); }
+#main-content .external-link {
   color: var(--fg4);
   font-size: 0.85rem;
 }
-#detail-panel pre { background: var(--bg1); padding: 0.75rem; border-radius: 4px; overflow-x: auto; }
-#detail-panel code { font-family: "JetBrains Mono", "Fira Code", monospace; }
-#detail-panel blockquote { border-left: 3px solid var(--bg3); margin-left: 0; padding-left: 0.75rem; color: var(--fg3); }
+#main-content pre { background: var(--bg1); padding: 0.75rem; border-radius: 4px; overflow-x: auto; }
+#main-content code { font-family: "JetBrains Mono", "Fira Code", monospace; }
+#main-content blockquote { border-left: 3px solid var(--bg3); margin-left: 0; padding-left: 0.75rem; color: var(--fg3); }
+/* Prose links (in-body `<a>` from the org-link converter) previously had no
+   rule at all and fell through to the browser's default blue/purple, which
+   clashes with the theme. `--link` is deliberately a different hue from
+   `--accent` (orange already means "current node/edge" elsewhere on the
+   page) -- see `GruvboxPalette::link`'s doc comment for the validated
+   contrast numbers. Underline at reduced opacity rather than the browser
+   default full-strength double rule, so it reads as a link without
+   competing with the accent-orange selected state used elsewhere. */
+#main-content a,
+.popover a {
+  color: var(--link);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--link) 50%, transparent);
+}
+#main-content a:hover,
+.popover a:hover {
+  text-decoration-color: var(--link);
+}
+#main-content a:visited,
+.popover a:visited {
+  color: var(--link);
+  opacity: 0.85;
+}
 .mermaid-diagram { margin: 0.75rem 0; }
 .mermaid-diagram svg { max-width: 100%; height: auto; }
 .mermaid-fallback-warning { color: var(--node-command); font-size: 0.85rem; }
@@ -916,6 +986,19 @@ body {
   pointer-events: none;
   user-select: none;
   opacity: 0;
+  /* Halo, not just a fill color: with up to 26 edges converging on one hub
+     node in a star-shaped subgraph, a label can sit directly on top of
+     several crossing lines at once -- raw fill-vs-solid-background contrast
+     is irrelevant there, since the background right behind the glyphs often
+     isn't the flat page background at all. `paint-order: stroke fill`
+     draws a `--bg0`-colored outline behind the glyph before the fill, so
+     the label stays legible regardless of what's underneath (edges, other
+     nodes) -- the standard cartography/map-label technique for exactly
+     this problem, not a color tweak that only helps against a flat bg. */
+  stroke: var(--bg0);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+  paint-order: stroke fill;
   transition: fill 200ms ease, opacity 200ms ease;
 }
 .node-anchor text,
@@ -955,9 +1038,9 @@ body {
 }
 
 #outline-panel {
-  border-top: 1px solid var(--bg3);
+  flex: 1;
   padding: 0.5rem 1.25rem;
-  max-height: 40%;
+  min-height: 0;
   overflow-y: auto;
 }
 #outline-panel.collapsed .outline-list { display: none; }
@@ -1009,6 +1092,7 @@ const GRAPH_JS: &str = r#"
   var outlineToggle = document.getElementById("outline-toggle");
   var langToggle = document.getElementById("lang-toggle");
   var startHereBtn = document.getElementById("start-here");
+  var prevBtn = document.getElementById("prev-button");
   var homeBtn = document.getElementById("home-button");
   var themeToggle = document.getElementById("theme-toggle");
 
@@ -1150,6 +1234,28 @@ const GRAPH_JS: &str = r#"
     popover.style.top = (ev.clientY + 14) + "px";
   }
 
+  // --- Hover-preview on in-body links (org-roam-ui-style): every internal
+  // link the org-link converter produces inside a rendered node body (an
+  // <a> whose href is a fragment-style internal reference, not a real
+  // URL) gets the exact same hover popover chord-diagram nodes already
+  // have -- same onHover/movePopover, same popover element, same
+  // nodesById lookup, nothing new to build. External https links never
+  // match the fragment-prefix check, so they're excluded automatically,
+  // and an internal reference that doesn't resolve in *this* curated
+  // subgraph's nodesById (a real case -- not every link in a body's
+  // source note happens to land inside whatever subgraph got exported)
+  // is a silent no-op below, not an error.
+  function wireBodyLinkPreviews(container) {
+    var links = container.querySelectorAll("a[href^='#']");
+    Array.prototype.forEach.call(links, function (a) {
+      var n = nodesById[a.getAttribute("href").slice(1)];
+      if (!n) { return; }
+      a.addEventListener("mouseenter", function () { onHover(n, true); });
+      a.addEventListener("mousemove", movePopover);
+      a.addEventListener("mouseleave", function () { onHover(n, false); });
+    });
+  }
+
   // --- Selection / detail panel ---
   function outgoingLinks(id) {
     return edges.filter(function (e) { return e.source === id; })
@@ -1222,6 +1328,7 @@ const GRAPH_JS: &str = r#"
       // deliberate innerHTML assignment in this file; every other piece of
       // text above/below goes through textContent/dom() instead.
       body.innerHTML = n["body_" + currentLang];
+      wireBodyLinkPreviews(body);
       detailContent.appendChild(body);
       renderLinkList(detailContent, "Links to", outgoingLinks(n.id));
       renderLinkList(detailContent, "Linked from", incomingLinks(n.id));
@@ -1277,16 +1384,31 @@ const GRAPH_JS: &str = r#"
     });
     return order.map(function (n) { return n.id; });
   }
+  // Previous/Next share one position in `readingOrder`, clamped (not
+  // modulo-wrapped) at both ends -- Next stops at the last node instead of
+  // silently wrapping back to the start, so the two controls behave like
+  // ordinary pagination, each disabled exactly when it has nowhere to go.
   var readingOrder = computeReadingOrder();
   var walkIndex = -1;
+  function updateWalkButtons() {
+    prevBtn.disabled = walkIndex <= 0;
+    startHereBtn.textContent = walkIndex === -1
+      ? "Start here →"
+      : (walkIndex >= readingOrder.length - 1 ? "✓ Done" : "Next →");
+    startHereBtn.disabled = walkIndex >= readingOrder.length - 1;
+  }
   startHereBtn.addEventListener("click", function () {
-    walkIndex = (walkIndex + 1) % readingOrder.length;
+    walkIndex = Math.min(walkIndex + 1, readingOrder.length - 1);
     selectNode(readingOrder[walkIndex]);
-    startHereBtn.textContent = walkIndex === readingOrder.length - 1
-      ? "Restart ↺"
-      : "Next →";
-    if (walkIndex === readingOrder.length - 1) { walkIndex = -1; }
+    updateWalkButtons();
   });
+  prevBtn.addEventListener("click", function () {
+    if (walkIndex <= 0) { return; }
+    walkIndex -= 1;
+    selectNode(readingOrder[walkIndex]);
+    updateWalkButtons();
+  });
+  updateWalkButtons();
 
   // --- EN/ES toggle: swaps all visible text in place, instantly ---
   function applyLanguage() {
@@ -1436,6 +1558,27 @@ mod tests {
         assert!(preview.chars().count() <= 51); // 50 + ellipsis
         assert!(!preview.contains('*'));
         assert!(!preview.contains('/'));
+    }
+
+    #[test]
+    fn plain_text_preview_resolves_links_instead_of_showing_raw_syntax() {
+        // Regression: the popover showed raw "[[UUID|label]]" (mae_kb's
+        // internal link storage form) or "[[id:UUID][label]]" (raw org-file
+        // form) verbatim, brackets/pipe/target and all.
+        let pipe_form = plain_text_preview(
+            "See [[1bc667b2-1d9a-402e-a2ea-eab6fd7d81e3|state]] for detail.",
+            200,
+        );
+        assert_eq!(pipe_form, "See state for detail.");
+
+        let bracket_form = plain_text_preview(
+            "See [[id:1bc667b2-1d9a-402e-a2ea-eab6fd7d81e3][state]] for detail.",
+            200,
+        );
+        assert_eq!(bracket_form, "See state for detail.");
+
+        let unlabeled = plain_text_preview("See [[1bc667b2-1d9a-402e-a2ea-eab6fd7d81e3]].", 200);
+        assert_eq!(unlabeled, "See 1bc667b2-1d9a-402e-a2ea-eab6fd7d81e3.");
     }
 
     #[test]
@@ -1615,6 +1758,22 @@ mod tests {
         let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
         assert!(html.contains("--accent: #fe8019"));
         assert!(html.contains("--accent: #d65d0e"));
+    }
+
+    #[test]
+    fn prose_links_get_a_theme_link_color_distinct_from_accent() {
+        // Regression: in-body <a> had no CSS rule at all and fell through
+        // to the browser's default blue/purple, clashing with the theme.
+        let nodes = vec![simple_node("a", "A", "body", true)];
+        let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
+        assert!(html.contains("--link: #83a598"));
+        assert!(html.contains("--link: #458588"));
+        assert!(html.contains("#main-content a"));
+        assert_ne!(
+            GruvboxPalette::dark().link,
+            GruvboxPalette::dark().accent,
+            "link color must stay distinct from the graph-emphasis accent"
+        );
     }
 
     #[test]
