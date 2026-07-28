@@ -29,8 +29,8 @@
 //! [`GraphExportNode::is_anchor`]. Do not conflate the two: a curated
 //! user-authored onboarding note (the typical anchor/seed-of-the-BFS node
 //! for this exporter's real dogfooded use case) will almost always have
-//! `is_seed: false` and `is_anchor: true`. The exported page's "distinct
-//! styling + Start here" affordance is driven by `is_anchor`, not
+//! `is_seed: false` and `is_anchor: true`. The exported page's distinct
+//! styling and Previous/Next reading-order walk are driven by `is_anchor`, not
 //! `is_seed` — `is_seed` is exposed in the JSON payload purely because the
 //! field genuinely exists on the source data and a reader may still find
 //! it useful (e.g. to visually distinguish MAE's own built-in docs from
@@ -501,8 +501,8 @@ pub struct GraphExportNode {
     /// `NodeSource::Seed` — see module docs' `is_seed` vs `is_anchor` note.
     pub is_seed: bool,
     /// The BFS starter/center node this subgraph export was rooted at —
-    /// drives the page's "distinct styling + Start here" affordance. See
-    /// module docs.
+    /// drives the page's distinct styling and the Previous/Next
+    /// reading-order walk. See module docs.
     pub is_anchor: bool,
     pub title_en: String,
     pub body_en: String,
@@ -581,8 +581,8 @@ pub struct HtmlGraphExporter;
 impl HtmlGraphExporter {
     /// `page_title`: `<title>`/`<h1>` text (e.g. "Terraform Onboarding").
     /// `anchor_id`: the id of the node with `is_anchor: true` in `nodes` —
-    /// used to drive "Start here" without the page having to re-scan
-    /// `nodes` client-side for the flag.
+    /// used to drive the reading-order walk's starting point without the
+    /// page having to re-scan `nodes` client-side for the flag.
     pub fn export(
         &self,
         nodes: &[GraphExportNode],
@@ -637,7 +637,7 @@ impl HtmlGraphExporter {
         html.push_str(
             "<button id=\"prev-button\" type=\"button\" disabled>\u{2190} Previous</button>\n",
         );
-        html.push_str("<button id=\"start-here\" type=\"button\">Start here \u{2192}</button>\n");
+        html.push_str("<button id=\"next-button\" type=\"button\">Next \u{2192}</button>\n");
         html.push_str(
             "<button id=\"theme-toggle\" type=\"button\">\u{263D}/\u{2600} Theme</button>\n",
         );
@@ -910,7 +910,25 @@ body {
   font-size: 0.85rem;
 }
 #main-content pre { background: var(--bg1); padding: 0.75rem; border-radius: 4px; overflow-x: auto; }
-#main-content code { font-family: "JetBrains Mono", "Fira Code", monospace; }
+/* Inline code (=x=/~x~ spans) previously had only a monospace font, with
+   nothing to set it apart from surrounding prose -- a background pill
+   (matching how most rendered-markdown/org viewers treat inline code)
+   fixes that. Block code (inside <pre>) already has its own background
+   from the rule above, so the second rule below cancels the pill there to
+   avoid a visibly doubled/nested box. */
+#main-content code {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  background: var(--bg2);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+#main-content pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: 1em;
+}
 #main-content blockquote { border-left: 3px solid var(--bg3); margin-left: 0; padding-left: 0.75rem; color: var(--fg3); }
 /* Prose links (in-body `<a>` from the org-link converter) previously had no
    rule at all and fell through to the browser's default blue/purple, which
@@ -1100,7 +1118,7 @@ const GRAPH_JS: &str = r#"
   var outlineList = document.getElementById("outline-list");
   var outlineToggle = document.getElementById("outline-toggle");
   var langToggle = document.getElementById("lang-toggle");
-  var startHereBtn = document.getElementById("start-here");
+  var nextBtn = document.getElementById("next-button");
   var prevBtn = document.getElementById("prev-button");
   var homeBtn = document.getElementById("home-button");
   var themeToggle = document.getElementById("theme-toggle");
@@ -1276,18 +1294,23 @@ const GRAPH_JS: &str = r#"
     popover.style.top = (ev.clientY + 14) + "px";
   }
 
-  // --- Hover-preview on in-body links (org-roam-ui-style): every internal
-  // link the org-link converter produces inside a rendered node body (an
-  // <a> whose href is a fragment-style internal reference, not a real
-  // URL) gets the exact same hover popover chord-diagram nodes already
-  // have -- same onHover/movePopover, same popover element, same
-  // nodesById lookup, nothing new to build. External https links never
+  // --- Hover-preview + click-to-navigate on in-body links (org-roam-ui-
+  // style): every internal link the org-link converter produces inside a
+  // rendered node body (an <a> whose href is a fragment-style internal
+  // reference, not a real URL) gets the exact same hover popover chord-
+  // diagram nodes already have -- same onHover/movePopover, same popover
+  // element, same nodesById lookup, nothing new to build for that part.
+  // Click actually opens the linked node (selectNode) instead of the
+  // browser's default same-page fragment-scroll, which -- since no
+  // element in this page actually has that id -- had no visible effect at
+  // all; a real, reproducible bug (clicking any in-body link silently did
+  // nothing), not just a missing nice-to-have. External https links never
   // match the fragment-prefix check, so they're excluded automatically,
   // and an internal reference that doesn't resolve in *this* curated
   // subgraph's nodesById (a real case -- not every link in a body's
   // source note happens to land inside whatever subgraph got exported)
-  // is a silent no-op below, not an error.
-  function wireBodyLinkPreviews(container) {
+  // is a silent no-op below for both hover and click, not an error.
+  function wireBodyLinks(container) {
     var links = container.querySelectorAll("a[href^='#']");
     Array.prototype.forEach.call(links, function (a) {
       var n = nodesById[a.getAttribute("href").slice(1)];
@@ -1295,6 +1318,10 @@ const GRAPH_JS: &str = r#"
       a.addEventListener("mouseenter", function () { onHover(n, true); });
       a.addEventListener("mousemove", movePopover);
       a.addEventListener("mouseleave", function () { onHover(n, false); });
+      a.addEventListener("click", function (ev) {
+        ev.preventDefault();
+        selectNode(n.id);
+      });
     });
   }
 
@@ -1370,7 +1397,7 @@ const GRAPH_JS: &str = r#"
       // deliberate innerHTML assignment in this file; every other piece of
       // text above/below goes through textContent/dom() instead.
       body.innerHTML = n["body_" + currentLang];
-      wireBodyLinkPreviews(body);
+      wireBodyLinks(body);
       detailContent.appendChild(body);
       renderLinkList(detailContent, "Links to", outgoingLinks(n.id));
       renderLinkList(detailContent, "Linked from", incomingLinks(n.id));
@@ -1398,7 +1425,7 @@ const GRAPH_JS: &str = r#"
   homeBtn.addEventListener("click", function () { selectNode(anchorId); });
 
   // --- Suggested reading order (BFS distance from the anchor node) +
-  // "Start here" walk ---
+  // Previous/Next walk ---
   function computeReadingOrder() {
     var adjacency = {};
     nodes.forEach(function (n) { adjacency[n.id] = []; });
@@ -1430,16 +1457,22 @@ const GRAPH_JS: &str = r#"
   // modulo-wrapped) at both ends -- Next stops at the last node instead of
   // silently wrapping back to the start, so the two controls behave like
   // ordinary pagination, each disabled exactly when it has nowhere to go.
+  //
+  // walkIndex starts at 0, not -1: readingOrder[0] is always the anchor
+  // itself (distance 0 from itself in the BFS above), and the anchor is
+  // already auto-selected on page load (see selectNode(anchorId) below) --
+  // so position 0 is already showing before either button is ever
+  // clicked. Starting at -1 with a "Start here" label was a real bug: the
+  // first click just re-selected the node already on screen, a confusing
+  // no-op dressed up as a fresh start.
   var readingOrder = computeReadingOrder();
-  var walkIndex = -1;
+  var walkIndex = 0;
   function updateWalkButtons() {
     prevBtn.disabled = walkIndex <= 0;
-    startHereBtn.textContent = walkIndex === -1
-      ? "Start here →"
-      : (walkIndex >= readingOrder.length - 1 ? "✓ Done" : "Next →");
-    startHereBtn.disabled = walkIndex >= readingOrder.length - 1;
+    nextBtn.textContent = walkIndex >= readingOrder.length - 1 ? "✓ Done" : "Next →";
+    nextBtn.disabled = walkIndex >= readingOrder.length - 1;
   }
-  startHereBtn.addEventListener("click", function () {
+  nextBtn.addEventListener("click", function () {
     walkIndex = Math.min(walkIndex + 1, readingOrder.length - 1);
     selectNode(readingOrder[walkIndex]);
     updateWalkButtons();
@@ -1831,6 +1864,25 @@ mod tests {
     }
 
     #[test]
+    fn body_links_actually_navigate_on_click_not_just_preview_on_hover() {
+        // Regression: wireBodyLinks (formerly wireBodyLinkPreviews, renamed
+        // to match what it actually does now) only wired hover listeners.
+        // The <a> kept its bare "#UUID" href, so a click fell through to
+        // the browser's default same-page fragment-scroll -- since no
+        // element in the page actually has that id, this had NO visible
+        // effect at all. Confirmed empirically (headless Chromium) both
+        // before (click did nothing) and after (click opens the node) this
+        // fix. This test checks the click handler + preventDefault are
+        // present in the generated JS; the on-screen behavior was verified
+        // separately with a real browser.
+        let nodes = vec![simple_node("a", "A", "body", true)];
+        let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
+        assert!(html.contains("function wireBodyLinks(container)"));
+        assert!(html.contains("ev.preventDefault();"));
+        assert!(html.contains("selectNode(n.id);"));
+    }
+
+    #[test]
     fn prose_links_get_a_theme_link_color_distinct_from_accent() {
         // Regression: in-body <a> had no CSS rule at all and fell through
         // to the browser's default blue/purple, clashing with the theme.
@@ -1843,6 +1895,28 @@ mod tests {
             GruvboxPalette::dark().link,
             GruvboxPalette::dark().accent,
             "link color must stay distinct from the graph-emphasis accent"
+        );
+    }
+
+    #[test]
+    fn next_button_does_not_re_select_the_already_visible_anchor() {
+        // Regression: walkIndex started at -1 with a "Start here" label,
+        // but readingOrder[0] is always the anchor (BFS distance 0 from
+        // itself) and the anchor is already auto-selected on page load --
+        // so the first click just re-selected the node already on screen,
+        // a confusing no-op. walkIndex now starts at 0 (reflecting "we're
+        // already at the first stop"), and the button always reads
+        // "Next"/"Done", never "Start here".
+        let nodes = vec![simple_node("a", "A", "body", true)];
+        let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
+        assert!(html.contains("var walkIndex = 0;"));
+        assert!(
+            html.contains(">Next \u{2192}<"),
+            "button's initial static label should be Next, not Start here"
+        );
+        assert!(
+            !html.contains("id=\"start-here\""),
+            "the button id should reflect what it actually does now"
         );
     }
 
