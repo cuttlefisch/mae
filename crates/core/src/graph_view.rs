@@ -3048,15 +3048,51 @@ pub(crate) fn flatten_scene_graph_cached(
         if members.is_empty() {
             continue;
         }
-        let (sum_x, sum_y, sum_r) = members.iter().fold((0.0f32, 0.0f32, 0.0f32), |acc, &i| {
-            (
-                acc.0 + positions[i].0,
-                acc.1 + positions[i].1,
-                acc.2 + radii[i],
-            )
-        });
+        // Live-testing polish: a PLAIN Cartesian average of members'
+        // screen positions is geometrically pulled INWARD relative to the
+        // ring they actually sit on — the centroid of points on a circle's
+        // arc always sits strictly inside that arc's chord (basic circle
+        // geometry), never on the circle itself, unless the arc is a
+        // single point. Edges always terminate at each node's REAL on-ring
+        // position (they're never redirected by tier), so a stub drawn at
+        // the plain-averaged position visibly sits at a different radius
+        // from the diagram's center than its own members/edges do — and a
+        // member that later repopulates to `Full` appears at ITS real
+        // on-ring position, which looked disconnected from where the stub
+        // (and the edges converging near it) had been sitting. Fix:
+        // reproject using a proper CIRCULAR mean relative to this
+        // diagram's own center (`diagram_center_viewport`, the same
+        // per-node array the edge-curvature formula above already uses) —
+        // average each member's ANGLE (via `atan2(mean(sin), mean(cos))`,
+        // the standard circular-mean formula; a plain angle average breaks
+        // at the 0°/360° wraparound) and its distance-from-center
+        // separately, then reproject at that angle and radius. This keeps
+        // the stub at the SAME distance from the diagram's center as its
+        // real members — on the ring, at the arc's angular midpoint —
+        // instead of pulled inside it.
+        let (dcx, dcy) = diagram_center_viewport
+            .get(members[0])
+            .copied()
+            .unwrap_or((center_x, center_y));
+        let (mut sin_sum, mut cos_sum, mut r_from_center_sum, mut sum_r) =
+            (0.0f64, 0.0f64, 0.0f64, 0.0f32);
+        for &i in members {
+            let dx = positions[i].0 as f64 - dcx;
+            let dy = positions[i].1 as f64 - dcy;
+            let angle = dy.atan2(dx);
+            sin_sum += angle.sin();
+            cos_sum += angle.cos();
+            r_from_center_sum += (dx * dx + dy * dy).sqrt();
+            sum_r += radii[i];
+        }
         let n = members.len() as f32;
-        let (cx, cy, avg_r) = (sum_x / n, sum_y / n, (sum_r / n).max(1.0));
+        let mean_angle = sin_sum.atan2(cos_sum);
+        let mean_radius_from_center = r_from_center_sum / n as f64;
+        let (cx, cy) = (
+            (dcx + mean_radius_from_center * mean_angle.cos()) as f32,
+            (dcy + mean_radius_from_center * mean_angle.sin()) as f32,
+        );
+        let avg_r = (sum_r / n).max(1.0);
         // Sub-linear (sqrt) growth with cluster size, capped at 4x the
         // average member radius — visually communicates "more collapsed
         // nodes here" without letting a huge cluster (e.g. +112) dwarf the
@@ -3932,6 +3968,207 @@ mod tests {
                  from center, ring radius is {ring_radius_screen}"
             );
         }
+    }
+
+    #[test]
+    fn cluster_stub_sits_at_exactly_the_same_radius_from_center_as_its_real_members() {
+        // Live-testing polish: a plain Cartesian average of an arc's points
+        // is geometrically pulled INSIDE the ring (never precisely on it),
+        // so a repopulated member's real on-ring position visibly
+        // disagreed with where the stub (and the edges converging near it)
+        // had been sitting. The circular-mean fix must place the stub at
+        // EXACTLY the same distance from the diagram's center as its real
+        // members — not merely "closer to the ring than the old bug",
+        // which the existing (looser) test above already covers.
+        const N: usize = 16;
+        const RADIUS: f64 = 100.0;
+        let mut scene = SceneGraph::new();
+        for i in 0..N {
+            let angle = i as f64 * 2.0 * std::f64::consts::PI / N as f64;
+            scene.nodes.push(test_node(
+                &format!("n{i}"),
+                RADIUS * angle.cos(),
+                RADIUS * angle.sin(),
+                NodeKind::Note,
+            ));
+        }
+        let style = test_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let degrees = vec![0u32; N];
+        let render_tiers = vec![RenderTier::Clustered; N];
+        let diagram_indices = vec![0usize; N];
+        let mut cache = None;
+        let elements = flatten_scene_graph_cached(
+            &scene,
+            &viewport,
+            &style,
+            &degrees,
+            &[],
+            &render_tiers,
+            &diagram_indices,
+            &mut cache,
+        );
+        let (origin_x, origin_y) = mae_canvas::interaction::scene_to_viewport(&viewport, 0.0, 0.0);
+        let (ring_edge_x, ring_edge_y) =
+            mae_canvas::interaction::scene_to_viewport(&viewport, RADIUS, 0.0);
+        let ring_radius_screen =
+            ((ring_edge_x - origin_x).powi(2) + (ring_edge_y - origin_y).powi(2)).sqrt();
+        let stub_centers: Vec<(f32, f32)> = elements
+            .iter()
+            .filter_map(|e| match e {
+                VisualElement::Circle {
+                    cx, cy, fill: None, ..
+                } => Some((*cx, *cy)),
+                _ => None,
+            })
+            .collect();
+        assert!(!stub_centers.is_empty());
+        for (cx, cy) in &stub_centers {
+            let dist_from_center =
+                ((*cx as f64 - origin_x).powi(2) + (*cy as f64 - origin_y).powi(2)).sqrt();
+            assert!(
+                (dist_from_center - ring_radius_screen).abs() < 0.5,
+                "a cluster stub must sit at EXACTLY the ring's own radius from center (same \
+                 distance as its real members), got {dist_from_center}, ring radius is \
+                 {ring_radius_screen}"
+            );
+        }
+    }
+
+    #[test]
+    fn cluster_stub_single_member_reproduces_that_members_exact_position() {
+        // Degenerate case: a "cluster" of exactly one member (no other node
+        // shares its bucket/sector) must reproduce that member's own real
+        // position exactly — the circular mean of a single point is that
+        // point.
+        let mut scene = SceneGraph::new();
+        scene
+            .nodes
+            .push(test_node("full_a", 100.0, 0.0, NodeKind::Note));
+        scene
+            .nodes
+            .push(test_node("lonely_clustered", 0.0, 100.0, NodeKind::Note));
+        scene
+            .nodes
+            .push(test_node("full_b", -100.0, 0.0, NodeKind::Note));
+        let style = test_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let degrees = vec![0u32; 3];
+        let render_tiers = vec![RenderTier::Full, RenderTier::Clustered, RenderTier::Full];
+        let diagram_indices = vec![0usize; 3];
+        let mut cache = None;
+        let elements = flatten_scene_graph_cached(
+            &scene,
+            &viewport,
+            &style,
+            &degrees,
+            &[],
+            &render_tiers,
+            &diagram_indices,
+            &mut cache,
+        );
+        let stub_centers: Vec<(f32, f32)> = elements
+            .iter()
+            .filter_map(|e| match e {
+                VisualElement::Circle {
+                    cx, cy, fill: None, ..
+                } => Some((*cx, *cy)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stub_centers.len(), 1, "exactly one single-member stub");
+        let (expected_x, expected_y) =
+            mae_canvas::interaction::scene_to_viewport(&viewport, 0.0, 100.0);
+        assert!(
+            (stub_centers[0].0 as f64 - expected_x).abs() < 0.5
+                && (stub_centers[0].1 as f64 - expected_y).abs() < 0.5,
+            "a single-member cluster's stub must sit at exactly that member's own real \
+             position, got {:?}, expected ({expected_x}, {expected_y})",
+            stub_centers[0]
+        );
+    }
+
+    #[test]
+    fn cluster_stub_circular_mean_handles_the_180_degree_wraparound_correctly() {
+        // Adversarial (CLAUDE.md #14): two members at +170 deg and -170 deg
+        // (i.e. 170 deg and 190 deg) straddle the +-180 deg boundary atan2
+        // wraps at. Their TRUE circular mean is 180 deg (the short way
+        // around, 20 deg apart) -- a NAIVE plain arithmetic average of the
+        // two atan2 outputs would instead give (170 + (-170)) / 2 = 0 deg,
+        // the exact OPPOSITE side of the ring. This proves the fix
+        // actually uses the sin/cos circular-mean formula, not a shortcut
+        // that happens to work for the (non-adversarial) cases above.
+        const RADIUS: f64 = 100.0;
+        let angle_a = 170.0_f64.to_radians();
+        let angle_b = (-170.0_f64).to_radians();
+        let mut scene = SceneGraph::new();
+        scene.nodes.push(test_node(
+            "a",
+            RADIUS * angle_a.cos(),
+            RADIUS * angle_a.sin(),
+            NodeKind::Note,
+        ));
+        scene.nodes.push(test_node(
+            "b",
+            RADIUS * angle_b.cos(),
+            RADIUS * angle_b.sin(),
+            NodeKind::Note,
+        ));
+        // Filler nodes so diagram_len is large enough that both real
+        // members above land in the SAME angular sector (`angular_sector_
+        // of` buckets by LOCAL INDEX, not real position) — not Clustered,
+        // so they don't join this cluster group or produce their own stub.
+        for i in 2..16 {
+            scene.nodes.push(test_node(
+                &format!("filler{i}"),
+                1000.0,
+                1000.0,
+                NodeKind::Note,
+            ));
+        }
+        let style = test_style();
+        let viewport = mae_canvas::scene::Viewport::default();
+        let degrees = vec![0u32; 16];
+        let mut render_tiers = vec![RenderTier::Hidden; 16];
+        render_tiers[0] = RenderTier::Clustered;
+        render_tiers[1] = RenderTier::Clustered;
+        let diagram_indices = vec![0usize; 16];
+        let mut cache = None;
+        let elements = flatten_scene_graph_cached(
+            &scene,
+            &viewport,
+            &style,
+            &degrees,
+            &[],
+            &render_tiers,
+            &diagram_indices,
+            &mut cache,
+        );
+        let stub_centers: Vec<(f32, f32)> = elements
+            .iter()
+            .filter_map(|e| match e {
+                VisualElement::Circle {
+                    cx, cy, fill: None, ..
+                } => Some((*cx, *cy)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            stub_centers.len(),
+            1,
+            "both members must land in the same angular-sector bucket"
+        );
+        let (origin_x, origin_y) = mae_canvas::interaction::scene_to_viewport(&viewport, 0.0, 0.0);
+        // Correct (180 deg): the stub sits on the NEGATIVE-x side of the
+        // ring. Wrong (naive 0 deg average): it would sit on the
+        // POSITIVE-x side instead — the opposite side of the diagram.
+        assert!(
+            (stub_centers[0].0 as f64) < origin_x,
+            "the circular mean of 170 deg and -170 deg must be ~180 deg (negative-x side of \
+             the ring), not the naive plain average of ~0 deg (positive-x side) — got stub \
+             at {:?}, origin at ({origin_x}, {origin_y})",
+            stub_centers[0]
+        );
     }
 
     #[test]
