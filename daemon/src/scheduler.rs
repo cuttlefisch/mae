@@ -311,25 +311,95 @@ impl DaemonScheduler {
                 self.config.enrichment.base_url.clone(),
                 self.config.enrichment.api_key.clone(),
             );
+            // ADR-061 Phase D2: read the collab handles once per tick (not
+            // per store) — `None` when collab is disabled or not yet up
+            // (`main.rs` starts the scheduler before conditionally
+            // constructing the collab `doc_store`), in which case every
+            // store below falls back to `NoFence` (nothing to coordinate).
+            let (doc_store, broadcaster, owner_fp) = {
+                let ds = self.daemon_state.lock().await;
+                (
+                    ds.doc_store.clone(),
+                    ds.broadcaster.clone(),
+                    ds.owner.as_ref().map(|o| o.fingerprint()),
+                )
+            };
             for (name, store) in &stores {
-                let residency = {
+                let (residency, collab_id) = {
                     let ds = self.daemon_state.lock().await;
                     if name == "primary" {
-                        ds.registry.primary_ai_residency
+                        let collab_id = ds
+                            .registry
+                            .primary_shared
+                            .then(|| ds.registry.primary_collab_id.clone())
+                            .flatten();
+                        (ds.registry.primary_ai_residency, collab_id)
                     } else {
-                        ds.registry
-                            .instances
-                            .iter()
-                            .find(|i| &i.uuid == name)
-                            .map(|i| i.ai_residency)
-                            .unwrap_or_default()
+                        let inst = ds.registry.instances.iter().find(|i| &i.uuid == name);
+                        let residency = inst.map(|i| i.ai_residency).unwrap_or_default();
+                        let collab_id = inst.filter(|i| i.shared).and_then(|i| i.collab_id.clone());
+                        (residency, collab_id)
                     }
                 };
+
+                // ADR-061 Phase D2 / ADR-033: claim the enrichment lease before
+                // sweeping a KB that IS collab-shared. An unshared KB (the
+                // common case) has no coordination to do at all -- NoFence.
+                let fence: Box<dyn mae_daemon::lease_fence::LeaseFence> = match (
+                    &collab_id,
+                    &doc_store,
+                    &broadcaster,
+                    &owner_fp,
+                ) {
+                    (Some(kb_id), Some(ds_arc), Some(bc), Some(holder_fp)) => {
+                        match mae_daemon::collab_handler::kb_lease::claim_lease_for_scheduler(
+                            ds_arc,
+                            bc,
+                            kb_id,
+                            "enrichment",
+                            holder_fp,
+                            self.config.enrichment.lease_ttl_secs,
+                        )
+                        .await
+                        {
+                            Ok(lease) if lease.holder_fp == *holder_fp => {
+                                Box::new(mae_daemon::collab_handler::kb_lease::DaemonLeaseFence {
+                                    doc_store: Arc::clone(ds_arc),
+                                    kb_id: kb_id.clone(),
+                                    op_kind: "enrichment".to_string(),
+                                    holder_fp: holder_fp.clone(),
+                                    generation: lease.generation,
+                                })
+                            }
+                            Ok(lease) => {
+                                tracing::debug!(
+                                    instance = %name,
+                                    kb_id = %kb_id,
+                                    holder = %lease.holder_fp,
+                                    "maintenance_tick: enrichment lease held by a peer, skipping this tick"
+                                );
+                                continue;
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    instance = %name,
+                                    kb_id = %kb_id,
+                                    error = %e,
+                                    "maintenance_tick: lease claim failed, skipping enrichment this tick"
+                                );
+                                continue;
+                            }
+                        }
+                    }
+                    _ => Box::new(mae_daemon::lease_fence::NoFence),
+                };
+
                 let result = crate::enrichment::run_enrichment_sweep(
                     Arc::clone(store),
                     residency,
                     &backend,
                     &self.config.enrichment,
+                    fence.as_ref(),
                 )
                 .await;
                 if result.residency_blocked {

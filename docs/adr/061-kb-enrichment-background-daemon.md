@@ -468,6 +468,68 @@ phase's own verification obligation, not testable against code that doesn't exis
 all clean; `cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean across both the
 editor and daemon workspaces; `cargo build --workspace` clean.
 
+## Implementation note (Phase D2, principle #15)
+
+**A real crate-boundary constraint found during implementation, not anticipated by the Decision
+text**: `daemon/src/enrichment.rs` (where `run_enrichment_sweep` needs to check the lease before
+committing) is BINARY-crate-only (declared in `main.rs`, not `lib.rs`), while
+`collab_handler::kb_lease::DaemonLeaseFence` (the production fence implementation, since it needs
+`load_collection`/`enforce_lease_generation_fence`, both `collab_handler`-internal) is
+LIBRARY-crate code (`lib.rs`'s `pub mod collab_handler`) — and a library can never implement a
+trait defined in its own downstream binary (wrong dependency direction). Resolved by putting the
+`LeaseFence` trait itself in a new small, standalone library module,
+`daemon/src/lease_fence.rs` (`pub mod lease_fence` in `lib.rs`) — neither `enrichment` nor
+`collab_handler` "owns" it; both depend on it, `enrichment.rs` via `mae_daemon::lease_fence::
+LeaseFence` (crate-external reference, matching `main.rs`'s own existing `use mae_daemon::{...}`
+convention), `collab_handler::kb_lease` via `crate::lease_fence::LeaseFence` (same crate).
+
+**Real architectural gap found while mapping a local store to its collab `kb_id`**: the
+scheduler's `stores: Vec<(String, Arc<CozoKbStore>)>` loop had no existing forward mapping from a
+local store entry to the `kb_id` string the collab layer's `kbc:{kb_id}` collection doc uses —
+`instance_stores` is keyed by UUID (`daemon/src/handler.rs`), a different namespace. Resolved via
+`KbRegistry`'s own `primary_shared`/`primary_collab_id` (primary) and `KbInstance.shared`/
+`collab_id` (named instances, looked up by the SAME `registry.instances.iter().find(|i| &i.uuid ==
+name)` pattern the residency lookup right next to it already uses) — no new mapping invented, and
+a store with `collab_id: None` (the common, single-daemon case) is correctly skipped entirely: it
+uses [`NoFence`](../../daemon/src/lease_fence.rs), nothing to coordinate with a single copy of the
+data.
+
+`claim_lease_for_scheduler` (`collab_handler/kb_lease.rs`) deliberately does **not** go through the
+`kb_access` gate `handle_kb_claim_lease`'s external RPC path uses — the scheduler is the daemon's
+own internal maintenance tick operating on data it already has full local access to via
+`CozoKbStore` directly, not an authenticated network caller. Mirrors `kb_governance.rs`'s
+`handle_kb_block_unblock_principal` precedent for a local, already-trusted-daemon operation.
+`session_id: 0` is a safe sentinel for `persist_and_broadcast_collection`'s `broadcast_except`
+(confirmed: real session ids are allocated from 1 upward, `mae_mcp::session::NEXT_SESSION_ID`).
+
+**Scope limit named explicitly, not silently dropped**: no mid-sweep lease renewal is implemented
+in this phase — a long sweep spanning multiple embed batches relies on `lease_ttl_secs` (new
+`EnrichmentConfig` field, default 300s) being generous enough to cover it without renewal. The
+fence is checked exactly once, immediately before `apply_enrichment_results` — this is where a
+kill-holder-mid-sweep race actually needs to be caught (the embed loop's network calls are where
+real wall-clock time elapses), not before every batch.
+
+**Verification D's behavioral half** ("losers make zero calls into a fake `EmbedBackend`", deferred
+from Phase D1's own note) is covered by `enrichment.rs`'s new
+`a_fence_rejection_discards_the_batch_instead_of_committing` test — though scoped honestly:
+the embed calls DO still happen (the fence is checked at commit time, not before embedding starts,
+matching ADR-033's own "a late WRITE is rejected" framing, not "compute is prevented outright");
+what's asserted is that the cache stays genuinely empty afterward (a real store read, not just the
+returned error string). The kill-holder-mid-sweep race itself is exercised twice: the pure-logic
+version (Phase D1's own test, unchanged) and a NEW test exercising the actual production
+`claim_lease_for_scheduler` + `DaemonLeaseFence` pair through a real `DocStore`
+(`collab_handler_lease_race_tests.rs`) — genuine TTL expiry through wall-clock time, using a
+1-second TTL + a short real sleep (a `ttl_secs: 0` claim was tried first and found to be a
+degenerate case: `is_expired`'s boundary `now >= claimed_at + ttl` collapses to an empty
+valid-interval at `ttl=0`, so even the claim's OWN immediate read-back reports "no current holder" —
+not a bug, but it meant that shortcut couldn't stand in for a real TTL-expiry exercise).
+
+`cargo test` (both `--lib` and the binary target — `enrichment`/`scheduler` are binary-crate-only,
+so `--lib` alone does not exercise them) clean across the daemon workspace (165 lib + 131 binary
+unit tests, all e2e suites); `cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean;
+`cargo build --workspace --features gui` clean on the editor workspace (unaffected, but confirmed
+since `mae-sync`/`mae-kb` are shared crates).
+
 ## Implementation note (Phase E, principle #15)
 
 Re-read the Decision text carefully before implementing: it specifies the enrich-now path runs

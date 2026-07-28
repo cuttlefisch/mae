@@ -15,6 +15,7 @@
 //! this phase even though its real caller doesn't yet.
 
 use super::*;
+use crate::lease_fence::LeaseFence;
 
 /// Three members each independently claim the SAME op_kind lease from the SAME
 /// pre-claim collection state, dispatched out of order — asserts exactly one
@@ -321,5 +322,97 @@ async fn generation_fence_rejects_a_stale_generation_after_a_new_grant() {
     assert!(
         err.is_err(),
         "alice's stale generation must be rejected once bob has been granted a new one"
+    );
+}
+
+/// ADR-061 Phase D2's real, kill-holder-mid-sweep coverage: the production
+/// `claim_lease_for_scheduler` + `DaemonLeaseFence` pair (not the lower-level
+/// pure-logic helper the test above exercises), through a real `DocStore`.
+/// `claim_lease_for_scheduler` uses real wall-clock time internally (not
+/// injectable), so genuinely exercising TTL expiry through it needs a real,
+/// short sleep — a `ttl_secs: 0` claim would look expired even on its OWN
+/// immediate read-back (`is_expired`'s boundary is `now >= claimed_at + ttl`,
+/// which collapses to an empty valid-interval at ttl=0), so that shortcut
+/// doesn't work here. A ~1s sleep is a standard, deterministic pattern for
+/// TTL-expiry tests and not the kind of resource-contention flakiness this
+/// codebase's nextest migration had to account for elsewhere.
+#[tokio::test]
+async fn daemon_lease_fence_rejects_a_stale_holder_after_a_real_new_grant_through_the_scheduler_api(
+) {
+    let store = test_doc_store();
+    let bc = test_broadcaster();
+    let mut docs = HashSet::new();
+    kb_share_as(
+        &store,
+        &bc,
+        Some("alice"),
+        Some(&fp("alice")),
+        "kb-lease-scheduler-api",
+        "alice",
+        &mut docs,
+    )
+    .await;
+
+    let alice_claim = kb_lease::claim_lease_for_scheduler(
+        &store,
+        &bc,
+        "kb-lease-scheduler-api",
+        "enrichment",
+        &fp("alice"),
+        1, // a 1-second ttl, allowed to lapse below via a real sleep
+    )
+    .await
+    .expect("alice's claim succeeds");
+    assert_eq!(alice_claim.holder_fp, fp("alice"));
+
+    tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+
+    // Bob claims next — a genuinely new grant, since alice's TTL already
+    // lapsed. Both are hub-owner-role here for simplicity; real multi-daemon
+    // topology aside, this exercises the exact same function the scheduler
+    // calls from two different daemon processes.
+    let bob_claim = kb_lease::claim_lease_for_scheduler(
+        &store,
+        &bc,
+        "kb-lease-scheduler-api",
+        "enrichment",
+        &fp("bob"),
+        60,
+    )
+    .await
+    .expect("bob's claim succeeds");
+    assert_eq!(bob_claim.holder_fp, fp("bob"));
+    assert_ne!(
+        alice_claim.generation, bob_claim.generation,
+        "bob's grant must be a distinct generation from alice's"
+    );
+
+    // Alice's fence, constructed with HER captured generation, must now
+    // reject — the real production check `run_enrichment_sweep` calls before
+    // committing.
+    let alice_fence = kb_lease::DaemonLeaseFence {
+        doc_store: std::sync::Arc::clone(&store),
+        kb_id: "kb-lease-scheduler-api".to_string(),
+        op_kind: "enrichment".to_string(),
+        holder_fp: fp("alice"),
+        generation: alice_claim.generation,
+    };
+    assert!(
+        alice_fence.check().await.is_err(),
+        "alice's fence must reject once bob has been granted a new generation"
+    );
+
+    // Bob's fence, with HIS current generation, must pass — the correct
+    // holder's own commit is not also incorrectly rejected.
+    let bob_fence = kb_lease::DaemonLeaseFence {
+        doc_store: std::sync::Arc::clone(&store),
+        kb_id: "kb-lease-scheduler-api".to_string(),
+        op_kind: "enrichment".to_string(),
+        holder_fp: fp("bob"),
+        generation: bob_claim.generation,
+    };
+    assert!(
+        bob_fence.check().await.is_ok(),
+        "bob's own fence must pass for his own current generation"
     );
 }
