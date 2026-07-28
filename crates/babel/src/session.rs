@@ -154,10 +154,55 @@ impl Session {
         // Drain the interpreter's one-time startup banner (version string,
         // copyright notice, etc. — e.g. Python's "Python 3.x.y ... Type
         // help...") from stderr now, before any `execute()` call, so it's
-        // never mistaken for a block's error output later. Bounded wait
-        // (chunked, not a single fixed sleep) that stops as soon as
-        // stderr goes quiet for one beat — a few tens of ms in practice,
-        // paid once per session creation, not per block execution.
+        // never mistaken for a block's error output later.
+        //
+        // Issue #500: this used to be a FIXED 300ms bounded wait, which is a
+        // guess at "how long banner printing takes" — wrong on a slow/cold
+        // interpreter start (confirmed on a real macOS CI runner: Python
+        // 3.14.6 there took long enough that the banner was still mid-flight
+        // when the deadline fired, leaving it undrained in the stderr
+        // channel — `execute()`'s OWN later stderr-drain then picked up that
+        // leftover banner text and concatenated it into the very first
+        // block's returned output, exactly matching the observed failure).
+        // A bigger fixed number is still just a bigger guess, so this
+        // synchronizes on a REAL signal instead: the interpreter's startup
+        // banner is written synchronously, BEFORE it ever reads its first
+        // line of stdin (true for every REPL `repl_command` supports —
+        // confirmed empirically for python3 -i above; the read-eval-print
+        // loop cannot echo a response to input it hasn't read yet). So a
+        // round-trip through the SAME sentinel mechanism `execute()` uses —
+        // send a trivial warm-up statement, block until its end-sentinel
+        // comes back on stdout — structurally guarantees the interpreter is
+        // now past its banner-printing phase, whatever that phase's actual
+        // duration was on this particular machine. Only AFTER that
+        // real synchronization does the (now safe, no longer racing a slow
+        // startup) short bounded stderr drain run to actually collect the
+        // banner text sitting in the pipe.
+        let warmup_sentinel = format!("__MAE_SESSION_WARMUP_{}__", std::process::id());
+        let warmup_end = format!("{warmup_sentinel}_END");
+        let warmup_code = wrap_with_sentinels(language, "", &warmup_sentinel);
+        if let Some(stdin) = child.stdin.as_mut() {
+            let _ = stdin.write_all(warmup_code.as_bytes());
+            let _ = stdin.flush();
+        }
+        let warmup_deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let remaining = warmup_deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                // A dead/hung interpreter is a real failure `execute()` will
+                // surface properly on the caller's first real call -- don't
+                // block session creation forever waiting for a warm-up that
+                // was never going to work anyway.
+                break;
+            }
+            match rx.recv_timeout(remaining.min(Duration::from_millis(200))) {
+                Ok(line) if line.contains(&warmup_end) => break,
+                Ok(_) => continue,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+
         let banner_deadline = std::time::Instant::now() + Duration::from_millis(300);
         loop {
             let remaining = banner_deadline.saturating_duration_since(std::time::Instant::now());

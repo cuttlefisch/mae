@@ -35,14 +35,37 @@ set -uo pipefail
 
 HARNESS_PIDS=()
 HARNESS_TTL_BIN="$(command -v timeout || command -v gtimeout || true)"
+# Issue #506: setsid is util-linux (Linux-only) -- macOS/BSD has no equivalent
+# binary at all, unlike timeout/gtimeout above which at least have a Homebrew
+# fallback name to look for. Portable-tooling fallback matching principle #13
+# ("no Linux-only commands without a fallback... never silently no-op on one
+# platform"): degrade to plain backgrounding (still gets a real pid, just not
+# its own session/process-group leader) rather than hard-failing the whole
+# harness. Linux path (the common CI case) is completely unchanged.
+HARNESS_SETSID_BIN="$(command -v setsid || true)"
+[ -n "$HARNESS_SETSID_BIN" ] || echo "WARN: no setsid found - spawned processes won't get their own process group (degraded cleanup on this run only, see harness_spawn's own comment)" >&2
 
 # harness_spawn VAR LOGFILE -- cmd...
 # Starts cmd in its OWN session (setsid) so it's its own process-group leader -
 # a forked grandchild can't survive a parent-directed kill. Records the pid in
 # $VAR, HARNESS_PIDS, and (if $WORK is set) $WORK/pids.
+#
+# Without setsid (macOS -- see HARNESS_SETSID_BIN above), the spawned command
+# stays in this script's own process group instead of becoming its own leader.
+# harness_cleanup's group-kill (`kill -- "-$pid"`) then simply fails (already
+# `2>/dev/null`-suppressed) and falls through to its existing single-pid
+# fallback (`kill "$pid"`) -- a real, but bounded and already-tolerated,
+# reduction in cleanup guarantee (this pid's own untracked grandchildren, if
+# any, aren't reached), NOT a hard failure. Two other independent backstops
+# still fully apply regardless: the kernel-enforced `timeout -k` dead-man's
+# switch (harness_spawn_daemon) and the next run's harness_sweep_stale.
 harness_spawn() {
   local __var="$1" __log="$2"; shift 2; [ "${1:-}" = "--" ] && shift
-  setsid "$@" >"$__log" 2>&1 &
+  if [ -n "$HARNESS_SETSID_BIN" ]; then
+    "$HARNESS_SETSID_BIN" "$@" >"$__log" 2>&1 &
+  else
+    "$@" >"$__log" 2>&1 &
+  fi
   local pid=$!
   HARNESS_PIDS+=("$pid")
   [ -n "${WORK:-}" ] && printf '%s\n' "$pid" >>"$WORK/pids"
