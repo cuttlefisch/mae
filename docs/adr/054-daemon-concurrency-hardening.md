@@ -142,9 +142,12 @@ Cross-checked against existing precedent: MAE already has an adversarially-teste
 path for Cozo's SQLite backend (`sqlite_multi_instance_concurrent_writes_converge`,
 `crates/core/src/editor/kb_ops/tests/kb_ops_concurrency_tests.rs:76+`, backed by
 `run_with_busy_retry`'s exponential-backoff-with-jitter, `shared/kb/src/cozo_store/db.rs:194-238` —
-`MAX_ATTEMPTS` deliberately raised 100→400 after a real observed CI flake under contention). That
-test covers a different-but-related axis (two separate `CozoKbStore` handles on the same file,
-modeling cross-*process* contention); this ADR's own new adversarial test
+a fixed `MAX_ATTEMPTS` was raised 100→400 after a real observed CI flake under contention, then
+STILL exhausted under heavier CI load a second time (issue #484); fixed for good by bounding the
+retry loop by wall-clock deadline instead of attempt count, which self-scales to whatever
+contention duration a given CI runner actually produces rather than needing a third manual
+re-tune). That test covers a different-but-related axis (two separate `CozoKbStore` handles on the
+same file, modeling cross-*process* contention); this ADR's own new adversarial test
 (`kb_write_concurrency_tests.rs`) covers the complementary axis actually needed here: one shared
 `Arc<CozoKbStore>` accessed by many `spawn_blocking` tasks within the *same* daemon process,
 exercising Cozo's in-process `relation_locks` directly rather than the cross-connection retry path.
