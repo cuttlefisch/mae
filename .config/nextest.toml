@@ -59,6 +59,7 @@ filter = '''
   + binary(headless_soak_shaped_e2e)
   + binary(headless_idle_cpu_e2e)
   + binary(mcp_tool_tiering_e2e)
+  + binary(tool_schema_nested_e2e)
 '''
 test-group = "heavy-subprocess-e2e"
 # The group above serializes these files AGAINST EACH OTHER, but not
@@ -86,6 +87,23 @@ test-group = "heavy-subprocess-e2e"
 # just missed from the original list because it hadn't been the one observed
 # failing yet. Same treatment (own group member + heavy-first invocation
 # order in badges.yml/ci.yml) rather than a one-off retry bump.
+#
+# `tool_schema_nested_e2e` added the SAME way, one CI cycle later --
+# reacting one-at-a-time to whichever file happens to fail next doesn't
+# converge, so this addition instead came from an exhaustive sweep of every
+# `crates/mae/tests/*.rs` file for the shared signature (`grep -rl "never
+# bound its stable socket\|wait_for_socket_live"` + a second independent
+# pass on `arg("--headless")` -- both returned the identical 7-file set,
+# cross-checked against a third pass over every `Command::new`-spawning test
+# file to make sure nothing with a differently-worded wait/timeout message
+# was missed). Two look-alikes were checked and ruled OUT, not just
+# skipped: `kb_seed_provenance_e2e` spawns a subprocess but blocks on
+# `.output()` to completion (a one-shot batch builder, no socket-bind race);
+# `mcp_event_loop_integration` has the same profile but is `#[ignore]`d by
+# default, so it never runs in this invocation at all. This membership list
+# should now be exhaustive for the default (non-ignored) suite -- if a new
+# heavy test is added later, add it here proactively rather than waiting for
+# it to be the next one to fail in CI.
 retries = 2
 
 [[profile.default.overrides]]

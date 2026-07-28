@@ -92,15 +92,18 @@ jobs:
         # the same CPU at once. Sums both runs' "tests run" totals for the badge.
         run: |
           set +e
-          # mcp_tool_tiering_e2e added after #511's verification run: it
-          # spawns a real `mae --headless` subprocess and asserts a socket
-          # bind within a bounded wall-clock window -- the identical failure
-          # profile as the other 5 (`headless instance never bound its
-          # stable socket`) -- but had never been added to this filter or to
-          # `.config/nextest.toml`'s `heavy-subprocess-e2e` group, so it was
-          # still exposed to the full-suite startup burst. See
-          # .config/nextest.toml for the matching group membership.
-          HEAVY_FILTER='binary(headless_e2e) + binary(guidance_delivery_e2e) + binary(headless_kb_convergence_e2e) + binary(headless_soak_shaped_e2e) + binary(headless_idle_cpu_e2e) + binary(mcp_tool_tiering_e2e)'
+          # mcp_tool_tiering_e2e and tool_schema_nested_e2e added after two
+          # successive #511 verification runs each caught one file failing
+          # with the identical "headless instance never bound its stable
+          # socket" signature as the original 5 -- the same real `mae
+          # --headless` subprocess + bounded-bind profile, just not the file
+          # that happened to be observed failing yet. Reacting one-at-a-time
+          # doesn't converge, so the final addition came from an exhaustive
+          # sweep of every crates/mae/tests/*.rs file for this signature
+          # (see .config/nextest.toml's comment for the full methodology and
+          # the two look-alikes explicitly ruled out) -- this list should now
+          # be exhaustive for the default suite.
+          HEAVY_FILTER='binary(headless_e2e) + binary(guidance_delivery_e2e) + binary(headless_kb_convergence_e2e) + binary(headless_soak_shaped_e2e) + binary(headless_idle_cpu_e2e) + binary(mcp_tool_tiering_e2e) + binary(tool_schema_nested_e2e)'
           # PIPESTATUS[0], not $? -- `$?` after `cmd | tee file` reflects
           # `tee`'s own exit code unless the shell has `pipefail` set, and this
           # step deliberately doesn't assume that (explicit is safer than
