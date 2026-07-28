@@ -585,14 +585,31 @@ pub fn convert_inline_markup_str(text: &str, target: InlineTarget) -> String {
             }
             _ => {}
         }
-        match (ch, target) {
+        // `ch` above (`bytes[i] as char`) is only valid for dispatching on
+        // the ASCII markup-trigger bytes matched in the two arms above --
+        // every one of `*`/`/`/`~`/`=`/`+`/`[` is a single UTF-8 byte, and
+        // no ASCII byte value ever collides with a UTF-8 continuation
+        // (0x80-0xBF) or leading (0xC0-0xF4) byte, so that dispatch is
+        // byte-position-safe even with multibyte content nearby. But
+        // falling through to here and still using `ch`/`i += 1` for the
+        // general case was a real bug: any non-ASCII character (an
+        // em-dash, any accented character -- i.e. this function silently
+        // mangled every Spanish translation) got decoded one raw byte at
+        // a time instead of one Unicode scalar at a time, corrupting it
+        // into 2-4 garbage Latin-1-ish characters. Decode the real char
+        // here instead.
+        let real_ch = text[i..]
+            .chars()
+            .next()
+            .expect("i is always a valid char boundary at this point");
+        match (real_ch, target) {
             ('<', InlineTarget::Html) => result.push_str("&lt;"),
             ('>', InlineTarget::Html) => result.push_str("&gt;"),
             ('&', InlineTarget::Html) => result.push_str("&amp;"),
             ('"', InlineTarget::Html) => result.push_str("&quot;"),
-            _ => result.push(ch),
+            _ => result.push(real_ch),
         }
-        i += 1;
+        i += real_ch.len_utf8();
     }
 
     result
@@ -836,6 +853,23 @@ mod tests {
     fn inline_markup_bold_markdown() {
         let result = convert_inline_markup_str("hello *world*", InlineTarget::Markdown);
         assert_eq!(result, "hello **world**");
+    }
+
+    #[test]
+    fn non_ascii_characters_survive_unmangled() {
+        // Regression: the main loop decoded one raw BYTE at a time
+        // (`bytes[i] as char`, `i += 1`) instead of one Unicode scalar at
+        // a time -- every non-ASCII character (an em-dash, any accented
+        // character) got split into its 2-4 individual UTF-8 bytes, each
+        // reinterpreted as a bogus Latin-1-ish char. Found by actually
+        // running a real Spanish translation through this path -- every
+        // accented word came out mangled (e.g. "configuración" ->
+        // "configuraciÃ³n").
+        let result = convert_inline_markup_str(
+            "el flujo — la configuración, todavía, ¿cómo?",
+            InlineTarget::Html,
+        );
+        assert_eq!(result, "el flujo — la configuración, todavía, ¿cómo?");
     }
 
     #[test]
