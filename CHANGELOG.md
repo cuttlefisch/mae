@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.64] - 2026-07-28
+
+### CI
+
+- Migrate Windows leg to nextest, closing #484 for real (#510 CI reliability sweep) (#516) ([6520c87](https://github.com/cuttlefisch/mae/commit/6520c872eac6d58acdf7c5f2151807025be0b3d0))
+
 ## [0.14.63] - 2026-07-28
 
 ### CI
 
 - Add tool_schema_nested_e2e to heavy group via exhaustive sweep (#510) (#515) ([a4bda24](https://github.com/cuttlefisch/mae/commit/a4bda24d508d790495cfa794e71ba283f003ad2b))
+
+### Miscellaneous
+
+- Bump version to 0.14.63 ([a1125ef](https://github.com/cuttlefisch/mae/commit/a1125ef0370edd983cf0daea171fee5a6f997642))
 
 ## [0.14.62] - 2026-07-28
 
