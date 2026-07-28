@@ -263,6 +263,10 @@ impl super::Editor {
             "kb_graph_label_declutter_enabled" => self.kb_graph_label_declutter_enabled.to_string(),
             "kb_graph_edge_curvature" => self.kb_graph_edge_curvature.to_string(),
             "kb_graph_edge_alpha" => self.kb_graph_edge_alpha.to_string(),
+            "kb_graph_edge_width" => self.kb_graph_edge_width.to_string(),
+            "kb_graph_edge_weight_alpha_floor" => self.kb_graph_edge_weight_alpha_floor.to_string(),
+            "kb_graph_edge_taper_enabled" => self.kb_graph_edge_taper_enabled.to_string(),
+            "kb_graph_edge_taper_strength" => self.kb_graph_edge_taper_strength.to_string(),
             "kb_graph_boundary_stub_label_always_shown" => {
                 self.kb_graph_boundary_stub_label_always_shown.to_string()
             }
@@ -325,6 +329,7 @@ impl super::Editor {
             "kb_graph_doi_zoom_threshold" => self.kb_graph_doi_zoom_threshold.to_string(),
             "kb_graph_doi_distance_falloff" => self.kb_graph_doi_distance_falloff.to_string(),
             "kb_graph_dense_cluster_threshold" => self.kb_graph_dense_cluster_threshold.to_string(),
+            "kb_graph_min_legible_radius_px" => self.kb_graph_min_legible_radius_px.to_string(),
             "kb_graph_cluster_group_by" => self.kb_graph_cluster_group_by.as_str().to_string(),
             _ => return None,
         };
@@ -1238,6 +1243,27 @@ impl super::Editor {
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.kb_graph_edge_alpha = v.clamp(0.0, 1.0);
             }
+            "kb_graph_edge_width" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_edge_width = v.clamp(0.1, 20.0);
+            }
+            "kb_graph_edge_weight_alpha_floor" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_edge_weight_alpha_floor = v.clamp(0.0, 1.0);
+            }
+            "kb_graph_edge_taper_enabled" => {
+                self.kb_graph_edge_taper_enabled = parse_option_bool(value)?;
+            }
+            "kb_graph_edge_taper_strength" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_edge_taper_strength = v.clamp(0.0, 1.0);
+            }
             "kb_graph_boundary_stub_label_always_shown" => {
                 self.kb_graph_boundary_stub_label_always_shown = parse_option_bool(value)?;
             }
@@ -1420,6 +1446,12 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.kb_graph_dense_cluster_threshold = v.clamp(1, 100_000);
+            }
+            "kb_graph_min_legible_radius_px" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_min_legible_radius_px = v.clamp(0.0, 1000.0);
             }
             "kb_graph_cluster_group_by" => {
                 let group_by = crate::graph_view::ClusterGroupBy::parse(value).ok_or_else(|| {
@@ -2840,6 +2872,86 @@ mod graph_view_option_tests {
             .set_option("kb_graph_edge_alpha", "not-a-number")
             .is_err());
         assert_eq!(editor.kb_graph_edge_alpha, before);
+    }
+
+    #[test]
+    fn kb_graph_edge_width_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(editor.get_option("kb_graph_edge_width").unwrap().0, "0.75");
+
+        editor.set_option("kb_graph_edge_width", "2.0").unwrap();
+        assert_eq!(editor.kb_graph_edge_width, 2.0);
+
+        editor.set_option("kb_graph_edge_width", "-5.0").unwrap();
+        assert_eq!(editor.kb_graph_edge_width, 0.1);
+        editor.set_option("kb_graph_edge_width", "999.0").unwrap();
+        assert_eq!(editor.kb_graph_edge_width, 20.0);
+
+        let before = editor.kb_graph_edge_width;
+        assert!(editor
+            .set_option("kb_graph_edge_width", "not-a-number")
+            .is_err());
+        assert_eq!(editor.kb_graph_edge_width, before);
+    }
+
+    #[test]
+    fn kb_graph_edge_weight_alpha_floor_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor
+                .get_option("kb_graph_edge_weight_alpha_floor")
+                .unwrap()
+                .0,
+            "0.3"
+        );
+
+        editor
+            .set_option("kb_graph_edge_weight_alpha_floor", "0.5")
+            .unwrap();
+        assert_eq!(editor.kb_graph_edge_weight_alpha_floor, 0.5);
+
+        editor
+            .set_option("kb_graph_edge_weight_alpha_floor", "-1.0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_edge_weight_alpha_floor, 0.0);
+        editor
+            .set_option("kb_graph_edge_weight_alpha_floor", "5.0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_edge_weight_alpha_floor, 1.0);
+    }
+
+    #[test]
+    fn kb_graph_edge_taper_enabled_option_roundtrips() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor.get_option("kb_graph_edge_taper_enabled").unwrap().0,
+            "false"
+        );
+        editor
+            .set_option("kb_graph_edge_taper_enabled", "true")
+            .unwrap();
+        assert!(editor.kb_graph_edge_taper_enabled);
+    }
+
+    #[test]
+    fn kb_graph_edge_taper_strength_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor.get_option("kb_graph_edge_taper_strength").unwrap().0,
+            "0.6"
+        );
+        editor
+            .set_option("kb_graph_edge_taper_strength", "0.9")
+            .unwrap();
+        assert_eq!(editor.kb_graph_edge_taper_strength, 0.9);
+        editor
+            .set_option("kb_graph_edge_taper_strength", "-1.0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_edge_taper_strength, 0.0);
+        editor
+            .set_option("kb_graph_edge_taper_strength", "5.0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_edge_taper_strength, 1.0);
     }
 
     #[test]

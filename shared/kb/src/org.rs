@@ -397,11 +397,12 @@ fn is_org_tag_run(s: &str) -> bool {
 /// A `:PROPERTIES: :ID: … :END:` drawer found inside a heading's body that
 /// is NOT the heading's own immediate drawer — typically a nested list
 /// item's own drawer (org-roam's "numbered step with its own ID" pattern).
-/// `owner_line` is the nearest preceding non-blank line's text (the list
-/// item's marker + text), used to derive the resulting node's title;
-/// `owner_line_idx` is that line's index within the slice passed to
-/// `scan_heading_properties`, used to compute each item's body range
-/// against its next sibling.
+/// `owner_line` is the item's own content block, from its first line up to
+/// (not including) this drawer, wrapped-line continuations rejoined with a
+/// single space — used to derive the resulting node's title. `owner_line_idx`
+/// is that block's FIRST line's index within the slice passed to
+/// `scan_heading_properties`, used to compute each item's body range against
+/// its next sibling.
 struct NestedDrawer {
     owner_line: String,
     owner_line_idx: usize,
@@ -478,7 +479,34 @@ fn scan_heading_properties(
         i = next;
     }
 
-    let mut owner_line_idx = i;
+    // Track the start of the current content block (a list item or plain
+    // paragraph), not merely the last non-blank line seen so far — a
+    // multi-line-wrapped item (its list-marker line plus one or more
+    // continuation lines before its own drawer) previously had its EARLY
+    // lines — typically holding both the item's real title text and its
+    // own `[[id:...]]` links — misattributed to whatever content preceded
+    // it (the previous sibling's body, or dropped entirely for the first
+    // item in a heading), leaving this item with an empty/near-empty body
+    // and a title that was just its last wrapped line. A new block starts
+    // whenever the previous line was blank (a paragraph break) OR the
+    // current line itself opens a new list item, so tightly-packed list
+    // items with no blank line between them ("1. ...\n2. ...") still split
+    // correctly.
+    // Track the start of the current content block (a list item or plain
+    // paragraph), not merely the last non-blank line seen so far — a
+    // multi-line-wrapped item (its list-marker line plus one or more
+    // continuation lines before its own drawer) previously had its EARLY
+    // lines — typically holding both the item's real title text and its
+    // own `[[id:...]]` links — misattributed to whatever content preceded
+    // it (the previous sibling's body, or dropped entirely for the first
+    // item in a heading), leaving this item with an empty/near-empty body
+    // and a title that was just its last wrapped line. A new block starts
+    // whenever the previous line was blank (a paragraph break) OR the
+    // current line itself opens a new list item, so tightly-packed list
+    // items with no blank line between them ("1. ...\n2. ...") still split
+    // correctly.
+    let mut block_start_idx = i;
+    let mut prev_was_blank = true;
     while i < lines.len() {
         let trimmed = lines[i].trim_start();
         if heading_level(lines[i]).is_some() {
@@ -493,23 +521,53 @@ fn scan_heading_properties(
         }
         if trimmed.to_ascii_uppercase().starts_with(":PROPERTIES:") {
             let (id, props, next) = parse_drawer_at(lines, i);
+            let owner_line = lines[block_start_idx..i]
+                .iter()
+                .map(|l| l.trim())
+                .collect::<Vec<_>>()
+                .join(" ");
             nested.push(NestedDrawer {
-                owner_line: lines[owner_line_idx].to_string(),
-                owner_line_idx,
+                owner_line,
+                owner_line_idx: block_start_idx,
                 id,
                 props,
             });
             i = next;
-            owner_line_idx = i;
+            block_start_idx = i;
+            prev_was_blank = true;
             continue;
         }
-        if !trimmed.is_empty() {
-            owner_line_idx = i;
+        if trimmed.is_empty() {
+            prev_was_blank = true;
+            i += 1;
+            continue;
         }
+        if prev_was_blank || is_list_item_start(lines[i]) {
+            block_start_idx = i;
+        }
+        prev_was_blank = false;
         i += 1;
     }
 
     (own_id, own_props, nested)
+}
+
+/// Whether `line` opens a new org list item (`- `, `+ `, `1.`/`1)` markers,
+/// with or without a checkbox) — the same digit-prefix detection
+/// `strip_list_marker` uses, factored out so `scan_heading_properties` can
+/// recognize a new item starting immediately after a PRIOR item's last
+/// content line, with no intervening blank line to signal the break.
+fn is_list_item_start(line: &str) -> bool {
+    let trimmed = line.trim_start();
+    if trimmed.starts_with("- ") || trimmed.starts_with("+ ") {
+        return true;
+    }
+    let digits = trimmed.find(|c: char| !c.is_ascii_digit()).unwrap_or(0);
+    if digits > 0 {
+        let rest = &trimmed[digits..];
+        return rest.starts_with(". ") || rest.starts_with(") ");
+    }
+    false
 }
 
 /// Strip a leading org list marker (`-`, `+`, `1.`, `1)`) and an optional
@@ -1614,6 +1672,146 @@ Just a heading without a drawer.
             .typed_links
             .iter()
             .any(|(src, link)| src == "item-1" && link.target == "file-id"));
+    }
+
+    #[test]
+    fn multi_line_wrapped_item_keeps_its_own_outgoing_link_not_its_predecessors() {
+        // The real-world failure this fix addresses: a wrapped list item
+        // whose [[id:...]] link sits on its OWN first line, with plain
+        // continuation text (no link) on the line(s) immediately before its
+        // drawer. Before the fix, `owner_line_idx` tracked only the LAST
+        // non-blank line before the drawer, so item-2's body started at
+        // "the endpoint before finishing this item." — its own link three
+        // lines earlier was already claimed as the tail of item-1's body.
+        let content = "\
+:PROPERTIES:
+:ID: file-id
+:END:
+#+title: Repro
+
+* Steps
+
+1. First step overview here.
+   :PROPERTIES:
+   :ID: item-1
+   :END:
+2. Read [[id:file-id][the overview]] then confirm
+   the firewall rules and provisioning steps for
+   the endpoint before finishing this item.
+   :PROPERTIES:
+   :ID: item-2
+   :END:
+";
+        let result = parse_org_multi_result(content);
+        let ids: Vec<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, vec!["file-id", "item-1", "item-2"]);
+        assert!(
+            result
+                .typed_links
+                .iter()
+                .any(|(src, link)| src == "item-2" && link.target == "file-id"),
+            "item-2's own link (on its first wrapped line) must attribute to \
+             item-2, not vanish into item-1's body: {:?}",
+            result.typed_links
+        );
+        let item2 = result.nodes.iter().find(|n| n.id == "item-2").unwrap();
+        assert!(!item2.body.contains("First step overview"));
+        let item1 = result.nodes.iter().find(|n| n.id == "item-1").unwrap();
+        assert!(!item1.body.contains("the overview"));
+    }
+
+    #[test]
+    fn multi_line_wrapped_first_item_in_a_headingless_id_is_not_silently_dropped() {
+        // Distinct from the sibling-theft case above: the FIRST nested item
+        // under a heading with no own `:ID:` has no predecessor node to
+        // steal its early lines — before the fix those lines (and any link
+        // on them) belonged to no node at all, vanishing from the corpus
+        // rather than merely misattributing.
+        let content = "\
+:PROPERTIES:
+:ID: file-id
+:END:
+#+title: Repro
+
+* Steps
+
+1. Read [[id:file-id][the overview]] before
+   provisioning anything for this phase of
+   the plan.
+   :PROPERTIES:
+   :ID: item-1
+   :END:
+";
+        let result = parse_org_multi_result(content);
+        assert!(result.nodes.iter().any(|n| n.id == "item-1"));
+        assert!(
+            result
+                .typed_links
+                .iter()
+                .any(|(src, link)| src == "item-1" && link.target == "file-id"),
+            "the first nested item's own link must not be dropped: {:?}",
+            result.typed_links
+        );
+    }
+
+    #[test]
+    fn multi_line_wrapped_item_title_reflects_its_own_full_text_not_the_last_wrapped_line() {
+        // The other symptom of the same bug: a title derived from only the
+        // last line before the drawer reads as a meaningless fragment (this
+        // is a real excerpt's shape — a long checklist item ending in a
+        // short trailing clause).
+        let content = "\
+* Steps
+
+1. Fill one Network Inventory Template instance for the endpoint,
+   covering firewall rules that let the host and, for artifacts,
+   ci-runner-01 reach it.
+   :PROPERTIES:
+   :ID: item-1
+   :END:
+";
+        let nodes = parse_org_multi(content);
+        let item1 = nodes.iter().find(|n| n.id == "item-1").unwrap();
+        assert!(
+            item1
+                .title
+                .starts_with("Fill one Network Inventory Template"),
+            "title should start with the item's real opening text, got: {:?}",
+            item1.title
+        );
+        assert!(
+            item1.title.contains("reach it."),
+            "title should still include the item's full wrapped text, got: {:?}",
+            item1.title
+        );
+    }
+
+    #[test]
+    fn tightly_packed_multi_line_items_with_no_blank_line_between_still_split_correctly() {
+        // Multi-line items back-to-back with no blank separator — a new
+        // list-item marker line must still start a fresh block even though
+        // `prev_was_blank` is false at that point.
+        let content = "\
+* Steps
+
+1. Alpha line one
+   alpha line two.
+   :PROPERTIES:
+   :ID: item-1
+   :END:
+2. Beta line one
+   beta line two.
+   :PROPERTIES:
+   :ID: item-2
+   :END:
+";
+        let nodes = parse_org_multi(content);
+        let item1 = nodes.iter().find(|n| n.id == "item-1").unwrap();
+        let item2 = nodes.iter().find(|n| n.id == "item-2").unwrap();
+        assert!(item1.body.contains("Alpha"));
+        assert!(!item1.body.contains("Beta"));
+        assert!(item2.body.contains("Beta"));
+        assert!(!item2.body.contains("Alpha"));
     }
 
     #[test]

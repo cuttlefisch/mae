@@ -906,3 +906,99 @@ fn kb_register_canonicalizes_org_dir() {
         "registry must store the canonicalized org_dir, not the literal argument"
     );
 }
+
+// Issue #496: `kb_register`'s real registration path canonicalizes `org_dir`
+// (see `kb_register_canonicalizes_org_dir` above), but `kb_reimport_file`/
+// `kb_path_in_instance` used to compare an un-canonicalized caller `path`
+// against it via `Path::starts_with` — silently mismatching wherever a
+// symlink separates the two spellings of the same real directory (macOS's
+// `/var` -> `/private/var` in practice; reproduced here on Linux via an
+// explicit symlink, same technique as `kb_scope_project_path_identity_not_
+// string_equality` above, so this isn't gated on macOS-only CI).
+#[cfg(unix)]
+#[test]
+fn kb_reimport_file_matches_instance_via_symlinked_alias_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real_dir = tmp.path().join("real-notes");
+    std::fs::create_dir_all(&real_dir).unwrap();
+    let alias_dir = tmp.path().join("alias-to-notes");
+    std::os::unix::fs::symlink(&real_dir, &alias_dir).unwrap();
+
+    let mut editor = Editor::new();
+    let _test_dirs = with_test_dirs(&mut editor);
+    let result = editor
+        .kb_register("AliasNotes", &real_dir)
+        .expect("registration should succeed");
+
+    // Write the org file via the ALIAS path — the reimport call below uses
+    // this same alias, mirroring a real save through a symlinked project dir.
+    let alias_file = alias_dir.join("note1.org");
+    std::fs::write(
+        &alias_file,
+        ":PROPERTIES:\n:ID: aliased-note\n:END:\n#+title: Aliased Note\n\nBody.\n",
+    )
+    .unwrap();
+
+    editor.kb_reimport_file(&alias_file);
+
+    assert!(
+        editor.kb.instances[&result.uuid]
+            .get("aliased-note")
+            .is_some(),
+        "reimporting a file via a symlinked alias of the registered org_dir must still \
+         match the instance and ingest the node, not silently no-op"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn kb_path_in_instance_true_for_symlinked_alias_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let real_dir = tmp.path().join("real-notes");
+    std::fs::create_dir_all(&real_dir).unwrap();
+    let alias_dir = tmp.path().join("alias-to-notes");
+    std::os::unix::fs::symlink(&real_dir, &alias_dir).unwrap();
+
+    let mut editor = Editor::new();
+    let _test_dirs = with_test_dirs(&mut editor);
+    editor
+        .kb_register("AliasNotes", &real_dir)
+        .expect("registration should succeed");
+
+    let alias_file = alias_dir.join("note1.org");
+    std::fs::write(&alias_file, "content").unwrap();
+
+    assert!(
+        editor.kb_path_in_instance(&alias_file),
+        "a path reached via a symlinked alias of a registered org_dir must be recognized \
+         as inside that instance"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn kb_path_in_instance_false_for_a_real_but_unrelated_directory() {
+    // Adversarial negative case: canonicalizing the caller's path must not
+    // make matching MORE permissive — a genuinely different, unrelated real
+    // directory must still return false.
+    let tmp = tempfile::tempdir().unwrap();
+    let real_dir = tmp.path().join("real-notes");
+    let unrelated_dir = tmp.path().join("unrelated-notes");
+    std::fs::create_dir_all(&real_dir).unwrap();
+    std::fs::create_dir_all(&unrelated_dir).unwrap();
+
+    let mut editor = Editor::new();
+    let _test_dirs = with_test_dirs(&mut editor);
+    editor
+        .kb_register("RealNotes", &real_dir)
+        .expect("registration should succeed");
+
+    let unrelated_file = unrelated_dir.join("note.org");
+    std::fs::write(&unrelated_file, "content").unwrap();
+
+    assert!(
+        !editor.kb_path_in_instance(&unrelated_file),
+        "a genuinely unrelated real directory must never be treated as inside the \
+         registered instance"
+    );
+}

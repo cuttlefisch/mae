@@ -11,7 +11,8 @@
 //! Do not remove `handle_request` match arms or session fields without
 //! checking the sync roadmap (ADR-006).
 
-use std::collections::HashSet;
+use crate::protocol::ToolInfo;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
@@ -94,6 +95,20 @@ pub struct ClientSession {
     /// `mae_ai::tools::parse_categories`. `None` (default) means
     /// "use the server's policy unchanged".
     pub declared_tool_categories: Option<String>,
+    /// Extended-tier tools this session has "unlocked" via `request_tools`
+    /// (keyed by name), each carrying the SAME full definition (including
+    /// `input_schema`) `request_tools`' own JSON output already returned to
+    /// the client -- no separate full-catalog lookup needed downstream.
+    /// `tools/list`'s response is Core (`tool_definitions`) UNION these
+    /// values; the moment this map gains a new entry, `handle_client`'s loop
+    /// emits `notifications/tools/list_changed` (the initialize response
+    /// declares `tools.listChanged: true` for exactly this reason -- a
+    /// spec-compliant client must be told the tool list changed before it
+    /// will accept a subsequent `tools/call` for a name it never advertised).
+    /// `search_tools`'s output (name+description+score only, no schema)
+    /// deliberately never populates this: a client can't usefully call a
+    /// tool it only knows the relevance score of.
+    pub unlocked_extended_tools: HashMap<String, ToolInfo>,
 }
 
 impl ClientSession {
@@ -116,6 +131,7 @@ impl ClientSession {
             instructions: None,
             declared_permission_ceiling: None,
             declared_tool_categories: None,
+            unlocked_extended_tools: HashMap::new(),
         }
     }
 
@@ -191,6 +207,10 @@ impl std::fmt::Debug for ClientSession {
             .field("client_info", &self.client_info)
             .field("initialized", &self.initialized)
             .field("subscriptions", &self.subscriptions)
+            .field(
+                "unlocked_extended_tools",
+                &self.unlocked_extended_tools.keys().collect::<Vec<_>>(),
+            )
             .finish_non_exhaustive()
     }
 }

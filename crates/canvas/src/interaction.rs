@@ -61,23 +61,27 @@ pub fn pan(vp: &mut Viewport, dx: f64, dy: f64) {
     vp.center_y -= dy / vp.zoom;
 }
 
-/// Zoom the viewport around a focus point (in screen coordinates).
+/// Zoom the viewport around a focus point (in screen coordinates). Lower
+/// bound is `vp.min_zoom` — dynamic per-scene, not a flat constant, see
+/// that field's doc comment — upper bound is a flat `10.0` (no reported
+/// need for a dynamic ceiling).
 pub fn zoom(vp: &mut Viewport, factor: f64, focus_x: f64, focus_y: f64) {
     let (scene_x, scene_y) = viewport_to_scene(vp, focus_x, focus_y);
-    vp.zoom = (vp.zoom * factor).clamp(0.1, 10.0);
+    vp.zoom = (vp.zoom * factor).clamp(vp.min_zoom, 10.0);
     // Adjust center so the focus point stays fixed
     vp.center_x = scene_x - (focus_x - vp.width / 2.0) / vp.zoom;
     vp.center_y = scene_y - (focus_y - vp.height / 2.0) / vp.zoom;
 }
 
 /// Set the viewport to an explicit absolute zoom level, clamped to the same
-/// [0.1, 10.0] range `zoom()` enforces. Unlike `zoom()`, this takes no pixel
-/// focus point and never touches `center_x`/`center_y` — the pan position
-/// stays put. Meant for callers with no meaningful screen coordinate to
-/// anchor around (e.g. an AI agent's "set the graph zoom to 2x" request),
-/// as opposed to a mouse wheel event's inherently pixel-anchored zoom.
+/// `[vp.min_zoom, 10.0]` range `zoom()` enforces. Unlike `zoom()`, this
+/// takes no pixel focus point and never touches `center_x`/`center_y` — the
+/// pan position stays put. Meant for callers with no meaningful screen
+/// coordinate to anchor around (e.g. an AI agent's "set the graph zoom to
+/// 2x" request), as opposed to a mouse wheel event's inherently
+/// pixel-anchored zoom.
 pub fn set_zoom(vp: &mut Viewport, target: f64) {
-    vp.zoom = target.clamp(0.1, 10.0);
+    vp.zoom = target.clamp(vp.min_zoom, 10.0);
 }
 
 /// Navigate to the nearest node in the given direction from the current selection.
@@ -224,6 +228,7 @@ mod tests {
             zoom: 2.0,
             width: 800.0,
             height: 600.0,
+            ..Default::default()
         };
         let (sx, sy) = viewport_to_scene(&vp, 400.0, 300.0);
         let (back_x, back_y) = scene_to_viewport(&vp, sx, sy);

@@ -2,6 +2,20 @@
 
 use super::*;
 
+/// Canonicalize `path` for identity comparison against a registered
+/// instance's own `org_dir` — `KbRegistry::register` (shared/kb/src/
+/// federation.rs) already canonicalizes `org_dir` at registration time, so
+/// comparing an un-canonicalized caller path against it via `starts_with`
+/// silently fails wherever the two forms diverge (e.g. macOS's `/var` ->
+/// `/private/var` symlink) — issue #496. Falls back to the path unchanged
+/// if it doesn't exist / can't be resolved (same fallback idiom already
+/// used independently by `resolve_kb_scope` below and by `mae_kb::watch::
+/// normalize_path`), so a hypothetical/not-yet-saved path never fails
+/// closed.
+fn canonicalize_for_instance_match(path: &std::path::Path) -> std::path::PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
 /// A pre-embedded query vector for RRF-blending semantic search into
 /// `kb_federated_search_scoped_with_vector` (ADR-061 Phase F2). Embedding the
 /// query TEXT is a network call this crate has no async runtime/HTTP client
@@ -241,7 +255,13 @@ impl Editor {
     /// the file was deleted between the caller's own check and this call) rather
     /// than hard-failing the whole reimport.
     pub fn kb_reimport_file(&mut self, path: &std::path::Path) {
-        let path = &path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        // Canonicalize once, up front, and shadow `path` so EVERY downstream
+        // use (the containment check below, `ids_for_path`, `ids_by_source_
+        // file`, `ingest_org_file`, `record_ids`) consistently sees the same
+        // canonical form the watcher's own cache keys and the registered
+        // instance's `org_dir` both already use -- not just the initial
+        // `starts_with` check.
+        let path = &canonicalize_for_instance_match(path);
         for (uuid, inst) in self
             .kb
             .registry
@@ -303,11 +323,12 @@ impl Editor {
 
     /// Check if a path is inside a registered KB instance directory.
     pub fn kb_path_in_instance(&self, path: &std::path::Path) -> bool {
+        let canonical = canonicalize_for_instance_match(path);
         self.kb
             .registry
             .instances
             .iter()
-            .any(|i| path.starts_with(&i.org_dir))
+            .any(|i| canonical.starts_with(&i.org_dir))
     }
 
     /// Resolve a `kb_search_scope` option value / AI-tool `scope` argument to a `KbScope`
@@ -335,10 +356,7 @@ impl Editor {
         let normalized = token.trim().to_ascii_lowercase();
         if normalized == "project" || normalized == "project-only" {
             return match self.active_project_root() {
-                Some(root) => {
-                    let canonical = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-                    mae_kb::KbScope::Project(canonical)
-                }
+                Some(root) => mae_kb::KbScope::Project(canonicalize_for_instance_match(root)),
                 None => mae_kb::KbScope::All,
             };
         }

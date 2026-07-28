@@ -297,6 +297,7 @@ impl Editor {
         let (width, height) = self.graph_viewport_pixel_size(win_id);
         let mut style = self.graph_style_options();
         let zoom_to_fit_margin = self.kb_graph_zoom_to_fit_margin as f64;
+        let theme_name = self.theme.name.clone();
 
         // ---- Pass 1: resolve/store this window's `Viewport` (unchanged
         // from before ADR-068 Phase B4). ----
@@ -305,6 +306,10 @@ impl Editor {
                 self.mark_full_redraw();
                 return;
             };
+            // Theme-change staleness (see `last_theme_name`'s doc comment)
+            // — set unconditionally on every reflatten, same as every other
+            // per-reflatten bookkeeping field here.
+            gv.last_theme_name.insert(win_id, theme_name);
             // Merge in the active color tween's current eased color, if
             // any — `from_editor` has no per-`GraphView` knowledge, so
             // this is the call site that bridges `GraphView.color_tween`
@@ -340,6 +345,24 @@ impl Editor {
             let viewport = gv.viewports.entry(win_id).or_default();
             viewport.width = width as f64;
             viewport.height = height as f64;
+            // Dynamic zoom-out floor (live-testing report: "unable to zoom
+            // out far enough to see all kbs... needlessly or too strictly
+            // clamping the allowed zoom levels rather than calculating
+            // them dynamically") — recomputed on EVERY reflatten (unlike
+            // the initial zoom-to-fit below, which only ever runs once),
+            // so a scene that grows after this window was first opened
+            // (e.g. full-corpus mode composing more instances) always
+            // stays zoomable out far enough to fit. Set BEFORE the initial
+            // zoom-to-fit call below, so that call's own `set_zoom` clamps
+            // against the freshly-computed floor, not a stale default.
+            viewport.min_zoom = crate::graph_view::dynamic_min_zoom(
+                &gv.scene,
+                &style,
+                &gv.node_degrees,
+                width as f64,
+                height as f64,
+                zoom_to_fit_margin,
+            );
             if is_new_viewport {
                 if let Some(fit) = crate::graph_view::zoom_to_fit(
                     &gv.scene,
@@ -487,14 +510,19 @@ impl Editor {
 
             for win_id in live_win_ids {
                 let (w, h) = self.graph_viewport_pixel_size(win_id);
-                let stale = match self.buffers[buf_idx]
-                    .graph_view()
-                    .and_then(|gv| gv.viewports.get(&win_id))
-                {
+                let Some(gv) = self.buffers[buf_idx].graph_view() else {
+                    continue;
+                };
+                let size_stale = match gv.viewports.get(&win_id) {
                     Some(vp) => vp.width != w as f64 || vp.height != h as f64,
                     None => true,
                 };
-                if stale {
+                // Theme-change staleness (see `GraphView.last_theme_name`'s
+                // doc comment) — self-heals regardless of how the theme
+                // changed (`SPC t t`, `:set-theme`, config reload, ...),
+                // same philosophy as the viewport-size check above.
+                let theme_stale = gv.last_theme_name.get(&win_id) != Some(&self.theme.name);
+                if size_stale || theme_stale {
                     self.graph_view_reflatten_window(buf_idx, win_id);
                     changed = true;
                 }
@@ -533,6 +561,7 @@ impl Editor {
                 gv.viewports.retain(|id, _| live_win_ids.contains(id));
                 gv.rendered.retain(|id, _| live_win_ids.contains(id));
                 gv.render_epoch.retain(|id, _| live_win_ids.contains(id));
+                gv.last_theme_name.retain(|id, _| live_win_ids.contains(id));
             }
         }
     }
@@ -1368,6 +1397,20 @@ impl Editor {
         let doi_zoom_threshold = self.kb_graph_doi_zoom_threshold;
         let doi_distance_falloff = self.kb_graph_doi_distance_falloff;
         let dense_cluster_threshold = self.kb_graph_dense_cluster_threshold;
+        let min_legible_radius_px = self.kb_graph_min_legible_radius_px;
+        // Per-node rendered radius at the CURRENT zoom — the same
+        // `node_render_radius` value each node's real circle draws at,
+        // feeding `finalize_render_tiers`' legibility-floor check. Cheap
+        // (O(node_count), no graph traversal), same complexity class the
+        // rest of this function's finalize step already documents itself
+        // as safe to redo on every zoom tick.
+        let style = self.graph_style_options();
+        let radii: Vec<f32> = (0..node_count)
+            .map(|i| {
+                let degree = gv.node_degrees.get(i).copied().unwrap_or(0);
+                crate::graph_view::node_render_radius(&style, degree, zoom)
+            })
+            .collect();
 
         if let Some(cache) = &gv.doi_tier_cache {
             if cache.matches(
@@ -1377,6 +1420,8 @@ impl Editor {
                 doi_zoom_threshold,
                 doi_distance_falloff,
                 dense_cluster_threshold,
+                &radii,
+                min_legible_radius_px,
             ) {
                 // Truly nothing changed (not even zoom) — the existing
                 // cache is already exactly right, nothing to recompute or
@@ -1385,16 +1430,18 @@ impl Editor {
             }
             if cache.candidates_valid(gv.doi_generation, node_count, doi_distance_falloff) {
                 // The EXPENSIVE part (BFS-derived candidates) is still
-                // valid — only zoom/dense_cluster_threshold changed, so
-                // only the cheap finalization needs to rerun. This is the
-                // path a continuous zoom gesture takes on every tick: no
-                // `graph_view_doi_distances` BFS call at all.
+                // valid — only zoom/dense_cluster_threshold/radii changed,
+                // so only the cheap finalization needs to rerun. This is
+                // the path a continuous zoom gesture takes on every tick:
+                // no `graph_view_doi_distances` BFS call at all.
                 let tiers = crate::graph_view::finalize_render_tiers(
                     node_count,
                     &cache.candidates,
                     zoom,
                     doi_zoom_threshold,
                     dense_cluster_threshold,
+                    &radii,
+                    min_legible_radius_px,
                 );
                 let new_cache = crate::graph_view::DoiTierCache::new(
                     gv.doi_generation,
@@ -1404,6 +1451,8 @@ impl Editor {
                     zoom,
                     doi_zoom_threshold,
                     dense_cluster_threshold,
+                    radii,
+                    min_legible_radius_px,
                     tiers.clone(),
                 );
                 // Always store (not `None`) so `GraphView.doi_tier_cache`
@@ -1430,6 +1479,8 @@ impl Editor {
             zoom,
             doi_zoom_threshold,
             dense_cluster_threshold,
+            &radii,
+            min_legible_radius_px,
         );
         let cache = crate::graph_view::DoiTierCache::new(
             gv.doi_generation,
@@ -1439,6 +1490,8 @@ impl Editor {
             zoom,
             doi_zoom_threshold,
             dense_cluster_threshold,
+            radii,
+            min_legible_radius_px,
             tiers.clone(),
         );
         (tiers, Some(cache))
@@ -3452,6 +3505,95 @@ mod tests {
     }
 
     #[test]
+    fn theme_change_reflattens_graph_view_without_a_click() {
+        // Live-testing bug: `SPC t t` (cycle-theme) required clicking into
+        // the graph view before the new theme's colors actually showed on
+        // rendered nodes. Root cause: `set_theme_by_name`/`cycle_theme` only
+        // ever set `Editor.theme` -- nothing triggered a graph-view
+        // reflatten, so the cached `rendered` VisualElements kept the OLD
+        // theme's colors until some UNRELATED event (a click) happened to
+        // trigger one as a side effect. This test changes `editor.theme`
+        // directly (mirroring exactly what `cycle_theme` itself does) and
+        // calls `sync_open_graph_viewports` -- the same per-GUI-tick
+        // self-healing resync `about_to_wait` already calls every frame --
+        // with NO click/interaction at all.
+        let names = crate::theme::bundled_theme_names();
+        assert!(
+            names.len() >= 2,
+            "need at least 2 bundled themes for this test to be meaningful"
+        );
+
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.theme =
+            crate::theme::Theme::load(&names[0], &crate::theme::BundledResolver).unwrap();
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let idx = editor
+            .buffers
+            .iter()
+            .position(|b| b.kind == BufferKind::Graph)
+            .unwrap();
+        let win_id = editor
+            .window_mgr
+            .iter_windows()
+            .find(|w| w.buffer_idx == idx)
+            .map(|w| w.id)
+            .unwrap();
+
+        let style_before = editor.graph_style_options();
+        let before_fill: Vec<String> = editor.buffers[idx]
+            .graph_view()
+            .unwrap()
+            .rendered
+            .get(&win_id)
+            .unwrap()
+            .elements
+            .iter()
+            .filter_map(|e| match e {
+                VisualElement::Circle { fill: Some(f), .. } => Some(f.clone()),
+                _ => None,
+            })
+            .collect();
+
+        // No click, no resize, no navigation -- ONLY the theme changes,
+        // exactly like `cycle_theme`'s own effect on `editor.theme`.
+        editor.theme =
+            crate::theme::Theme::load(&names[1], &crate::theme::BundledResolver).unwrap();
+        let style_after = editor.graph_style_options();
+        assert_ne!(
+            style_before.background_color, style_after.background_color,
+            "test setup: the two chosen bundled themes must actually differ, or this test \
+             can't prove anything"
+        );
+
+        assert!(
+            editor.sync_open_graph_viewports(),
+            "a theme change must be detected as stale and trigger a reflatten, with no click \
+             or other interaction needed"
+        );
+
+        let after_fill: Vec<String> = editor.buffers[idx]
+            .graph_view()
+            .unwrap()
+            .rendered
+            .get(&win_id)
+            .unwrap()
+            .elements
+            .iter()
+            .filter_map(|e| match e {
+                VisualElement::Circle { fill: Some(f), .. } => Some(f.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_ne!(
+            before_fill, after_fill,
+            "the re-flattened node colors must reflect the NEW theme"
+        );
+
+        // No further theme change: must not redundantly reflatten every tick.
+        assert!(!editor.sync_open_graph_viewports());
+    }
+
+    #[test]
     fn kb_graph_view_overlay_window_is_none_when_inactive() {
         let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
         editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
@@ -5221,6 +5363,80 @@ mod tests {
     }
 
     #[test]
+    fn min_zoom_recomputes_on_every_reflatten_as_the_scene_grows_not_just_at_first_open() {
+        // Live-testing report: "i'm still unable to zoom out far enough to
+        // see all kbs and their names" -- root cause: the zoom-to-fit
+        // calculation only ever ran ONCE, on first window creation. This
+        // proves the NEW dynamic floor keeps up as the scene grows on a
+        // window that's already been open for a while (e.g. full-corpus
+        // mode composing more instances after the graph was first shown),
+        // not just at initial open.
+        let mut editor = ed_with_kb_node("concept:buffer", "Buffer", "");
+        editor.kb_graph_view_open(Some("concept:buffer".to_string()), None);
+        let (graph_idx, graph_win_id) = graph_idx_and_win_id(&editor);
+
+        let min_zoom_before =
+            editor.buffers[graph_idx].graph_view().unwrap().viewports[&graph_win_id].min_zoom;
+        assert_eq!(
+            min_zoom_before,
+            mae_canvas::scene::Viewport::default().min_zoom,
+            "sanity: a single-node scene must keep today's default floor"
+        );
+        let applied_below_default = editor.kb_graph_view_zoom_to(0.05);
+        assert_eq!(
+            applied_below_default,
+            Some(0.1),
+            "sanity: 0.05 must still clamp to the default floor before the scene grows"
+        );
+
+        // Grow the scene directly to something far larger than the
+        // viewport (only the bounding box matters here, not a realistic
+        // KB topology) and reflatten the SAME window again -- mirroring
+        // what a real full-corpus populate does to an already-open graph.
+        if let Some(gv) = editor.buffers[graph_idx].graph_view_mut() {
+            gv.scene.nodes.push(mae_canvas::scene::SceneNode {
+                id: "concept:far".to_string(),
+                label: "Far".to_string(),
+                x: -10_000.0,
+                y: 0.0,
+                kind: mae_canvas::scene::NodeKind::Concept,
+                pinned: false,
+                is_seed: false,
+            });
+            gv.scene.nodes.push(mae_canvas::scene::SceneNode {
+                id: "concept:far2".to_string(),
+                label: "Far2".to_string(),
+                x: 10_000.0,
+                y: 0.0,
+                kind: mae_canvas::scene::NodeKind::Concept,
+                pinned: false,
+                is_seed: false,
+            });
+            gv.node_degrees = vec![0; gv.scene.nodes.len()];
+        }
+        editor.graph_view_reflatten_window(graph_idx, graph_win_id);
+
+        let min_zoom_after =
+            editor.buffers[graph_idx].graph_view().unwrap().viewports[&graph_win_id].min_zoom;
+        assert!(
+            min_zoom_after < min_zoom_before,
+            "reflattening a window whose scene has since grown must lower its floor, not \
+             freeze it at whatever the scene looked like on first open: before={min_zoom_before}, \
+             after={min_zoom_after}"
+        );
+
+        // A value that used to clamp UP to the old default floor must now
+        // be honored, via the exact real production path (kb_graph_view_zoom_to).
+        editor.window_mgr.set_focused(graph_win_id);
+        let applied = editor.kb_graph_view_zoom_to(0.05);
+        assert_eq!(
+            applied,
+            Some(0.05),
+            "0.05 must now be honored instead of clamping up to the stale default floor"
+        );
+    }
+
+    #[test]
     fn zoom_to_targets_a_window_showing_the_graph_when_focus_is_elsewhere() {
         // No focused-graph-window context (e.g. an AI-driven session with
         // focus on a text buffer) — must still resolve to SOME window
@@ -6158,6 +6374,30 @@ mod tests {
             .unwrap()
             .id;
         (graph_idx, win_id)
+    }
+
+    /// The set of node ids resolving to `RenderTier::Full` for `graph_idx`
+    /// at a given `zoom` — shared by every DOI/LOD monotonic-nesting-style
+    /// test (originally inlined per-test, extracted once a second test
+    /// needed the identical logic, CLAUDE.md #8).
+    fn full_tier_ids_at_zoom(
+        editor: &Editor,
+        graph_idx: usize,
+        zoom: f64,
+    ) -> std::collections::HashSet<String> {
+        let viewport = mae_canvas::scene::Viewport {
+            zoom,
+            ..Default::default()
+        };
+        let (tiers, _) = editor.graph_view_doi_render_tiers(graph_idx, &viewport);
+        let gv = editor.buffers[graph_idx].graph_view().unwrap();
+        gv.scene
+            .nodes
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| tiers.get(*i).copied() == Some(crate::graph_view::RenderTier::Full))
+            .map(|(_, n)| n.id.clone())
+            .collect()
     }
 
     #[test]
@@ -7499,25 +7739,23 @@ mod tests {
         let (graph_idx, _) = graph_idx_and_win_id(&editor);
 
         let full_tier_ids = |ed: &Editor, zoom: f64| -> std::collections::HashSet<String> {
-            let viewport = mae_canvas::scene::Viewport {
-                zoom,
-                ..Default::default()
-            };
-            let (tiers, _) = ed.graph_view_doi_render_tiers(graph_idx, &viewport);
-            let gv = ed.buffers[graph_idx].graph_view().unwrap();
-            gv.scene
-                .nodes
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| {
-                    tiers.get(*i).copied() == Some(crate::graph_view::RenderTier::Full)
-                })
-                .map(|(_, n)| n.id.clone())
-                .collect()
+            full_tier_ids_at_zoom(ed, graph_idx, zoom)
         };
 
         editor.kb_graph_doi_distance_falloff = 0;
         editor.kb_graph_dense_cluster_threshold = 1;
+        // This test exercises hop-distance-based elision in isolation
+        // (falloff/dense-cluster-threshold/zoom-vs-doi_zoom_threshold) —
+        // NOT the separate, ALSO real zoom-legibility-floor promotion
+        // (`finalize_render_tiers`'s own dedicated test coverage). At the
+        // zoom levels this test uses (1.0-5.0), a degree-0 node's rendered
+        // radius is already comfortably above any sane legibility
+        // threshold by construction (node_render_radius's zoom^0.5 scaling
+        // barely shrinks it from the zoom-1.0 base) — neutralize the floor
+        // here (an unreachably high value) so it can't promote everything
+        // to Full regardless of falloff, which would defeat this test's
+        // whole point.
+        editor.kb_graph_min_legible_radius_px = 1000.0;
         let mut previous = full_tier_ids(&editor, 0.1);
 
         // Step 1: relax zoom.
@@ -7561,6 +7799,82 @@ mod tests {
                 .nodes
                 .len(),
             "fully relaxed thresholds must render every node Full"
+        );
+    }
+
+    #[test]
+    fn zoom_legibility_floor_promotes_doi_elided_nodes_back_to_full_and_never_shrinks_on_zoom_in() {
+        // Live-testing follow-up: "the nodes themselves should dynamically
+        // populate/clear according to whether they're even big enough to
+        // render." Root cause this test guards against regressing:
+        // `finalize_render_tiers` used to apply the SAME Hidden/Clustered
+        // decision to every DOI-elision candidate regardless of its actual
+        // rendered size at the current zoom, so a graph-distant node never
+        // returned to Full no matter how far the user zoomed in on it.
+        //
+        // Same fixture shape as `monotonic_nesting_relaxing_thresholds_
+        // only_grows_the_full_tier_set` — a tight falloff (0) so every
+        // leaf (each degree 1, linked once from the hub) is a genuine DOI
+        // candidate, and a low dense-cluster-threshold so clustering
+        // always triggers regardless of count.
+        const N: usize = 60;
+        let mut editor = Editor::new();
+        let mut nodes = Vec::with_capacity(N + 1);
+        let mut hub_body = String::new();
+        for i in 0..N {
+            hub_body.push_str(&format!("[[concept:n{i}]] "));
+            nodes.push(mae_kb::Node::new(
+                format!("concept:n{i}"),
+                format!("N{i}"),
+                mae_kb::NodeKind::Note,
+                "",
+            ));
+        }
+        nodes.push(mae_kb::Node::new(
+            "concept:hub",
+            "Hub",
+            mae_kb::NodeKind::Note,
+            hub_body,
+        ));
+        register_plain_instance(&mut editor, "big", nodes);
+        editor.kb_graph_view_mode = GraphViewMode::Multi;
+        editor.kb_graph_multi_kb_full_corpus = true;
+        editor.kb_graph_doi_distance_falloff = 0;
+        editor.kb_graph_dense_cluster_threshold = 1;
+        // A leaf's rendered radius at zoom 0.1 is
+        // (node_radius=18 + node_degree_scale=4 * sqrt(degree=1)) *
+        // 0.1^0.5 ~= 6.96px; at zoom 2.0 it's ~= 31.1px. 10.0 sits
+        // cleanly between the two, so this threshold — not the
+        // production default — is what makes the test's zoom choices
+        // deterministically cross the floor in exactly one direction.
+        editor.kb_graph_min_legible_radius_px = 10.0;
+
+        editor.kb_graph_view_open(Some("concept:hub".to_string()), Some(0));
+        let (graph_idx, _) = graph_idx_and_win_id(&editor);
+
+        // Low zoom: below the legibility floor -- elided leaves must stay
+        // Clustered, not Full.
+        let low_zoom = full_tier_ids_at_zoom(&editor, graph_idx, 0.1);
+        // High zoom: past the legibility floor -- must now populate back
+        // to Full despite still being 1+ hops beyond the falloff.
+        let high_zoom = full_tier_ids_at_zoom(&editor, graph_idx, 2.0);
+
+        assert!(
+            low_zoom.is_subset(&high_zoom),
+            "zooming in must never shrink the full-tier set: lost {:?}",
+            low_zoom.difference(&high_zoom).collect::<Vec<_>>()
+        );
+        assert!(
+            high_zoom.len() > low_zoom.len(),
+            "sanity: zooming in on a diagram of degree-0 leaves must actually populate SOME \
+             of them back to Full, not merely fail to shrink the set — low_zoom={}, \
+             high_zoom={}",
+            low_zoom.len(),
+            high_zoom.len()
+        );
+        assert!(
+            high_zoom.contains("concept:hub"),
+            "the hub itself (Hub tier, exempt from DOI entirely) must be Full at every zoom"
         );
     }
 
@@ -7774,6 +8088,12 @@ mod tests {
         editor.kb_graph_doi_distance_falloff = 0;
         editor.kb_graph_dense_cluster_threshold = 5;
         editor.kb_graph_doi_zoom_threshold = 0.5;
+        // Isolate hop-distance elision from the separate zoom-legibility
+        // floor (see the identical note on
+        // `monotonic_nesting_relaxing_thresholds_only_grows_the_full_tier_set`)
+        // — this test forces zoom 1.0 below, well within "obviously
+        // legible" territory for any sane threshold.
+        editor.kb_graph_min_legible_radius_px = 1000.0;
 
         editor.kb_graph_view_open(Some("concept:hub".to_string()), Some(0));
         let (graph_idx, win_id) = graph_idx_and_win_id(&editor);
@@ -8098,6 +8418,12 @@ mod tests {
         // of 1 would trivially keep them all in reach.
         editor.kb_graph_doi_distance_falloff = 0;
         editor.kb_graph_dense_cluster_threshold = 5;
+        // Isolate hop-distance elision from the separate zoom-legibility
+        // floor (see the identical note on
+        // `monotonic_nesting_relaxing_thresholds_only_grows_the_full_tier_set`)
+        // — this test forces zoom 1.0 below, well within "obviously
+        // legible" territory for any sane threshold.
+        editor.kb_graph_min_legible_radius_px = 1000.0;
 
         editor.kb_graph_view_open(Some("concept:hub".to_string()), Some(0));
         let (graph_idx, _win_id) = graph_idx_and_win_id(&editor);
@@ -8120,6 +8446,7 @@ mod tests {
             zoom: 1.0,
             width: 4000.0,
             height: 4000.0,
+            ..Default::default()
         };
         let (_, cache) = editor.graph_view_doi_render_tiers(graph_idx, &viewport);
         if let Some(gv) = editor.buffers[graph_idx].graph_view_mut() {

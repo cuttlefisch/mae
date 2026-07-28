@@ -193,16 +193,13 @@ fn external_store_change_arms_a_background_reload() {
     }
 
     // Poll: the external change must arm a background reload (notify is async).
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let mut armed = false;
-    while std::time::Instant::now() < deadline {
+    // Shared helper (issue #494) rather than a hand-rolled loop, so the
+    // poll deadline can't independently drift out of sync with watch.rs's
+    // own copy again.
+    let armed = mae_kb::watch::wait_for(|| {
         editor.drain_kb_store_watch();
-        if editor.kb.pending_preload.is_some() {
-            armed = true;
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(25));
-    }
+        editor.kb.pending_preload.is_some()
+    });
     assert!(
         armed,
         "external store change must arm a background mirror reload"

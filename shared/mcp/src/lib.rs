@@ -430,6 +430,7 @@ async fn handle_client(
                     }
                 }
 
+                let unlocked_before = session.unlocked_extended_tools.len();
                 let response = handle_request(
                     &msg, tool_definitions, &tool_tx, &mut session, &broadcaster,
                 ).await;
@@ -459,6 +460,32 @@ async fn handle_client(
                     Err(_) => {
                         warn!(session = session.id, "write timeout; closing slow client");
                         break;
+                    }
+                }
+
+                // A `request_tools` call just unlocked a new Extended-tier
+                // tool for THIS session -- tell the client its tool list
+                // changed so a spec-compliant one re-calls `tools/list`
+                // (which now includes it) before trying to call it by name.
+                // Sent as its own standalone notification, NOT through the
+                // subscription-gated `broadcaster`/`write_notification` path:
+                // that mechanism is MAE's own opt-in editor-state-event
+                // extension (`notifications/subscribe`), while
+                // `tools/list_changed` is a standard MCP protocol
+                // notification this server already declared support for at
+                // `initialize` (`tools.listChanged: true`) -- it must reach
+                // the client unconditionally, not only after an explicit
+                // opt-in a generic MCP client has no reason to know about.
+                if session.unlocked_extended_tools.len() > unlocked_before {
+                    let notification = serde_json::json!({
+                        "jsonrpc": "2.0",
+                        "method": "notifications/tools/list_changed",
+                    });
+                    if let Ok(body) = serde_json::to_vec(&notification) {
+                        if write_framed(&mut writer, &body, write_timeout).await.is_err() {
+                            warn!(session = session.id, "failed to write tools/list_changed notification; closing client");
+                            break;
+                        }
                     }
                 }
             }
@@ -660,6 +687,58 @@ pub async fn read_message<R: tokio::io::AsyncBufRead + Unpin>(
 // Request dispatch
 // ---------------------------------------------------------------------------
 
+/// Extract full `ToolInfo` definitions from a completed tool call's raw
+/// output, IF that call was `request_tools` and it succeeded. Returns an
+/// empty `Vec` for any other tool name (in particular `search_tools`, whose
+/// output is name+description+score only -- no `input_schema`, so it can
+/// never yield a definition a client could actually call) or malformed/
+/// empty output (e.g. `request_tools`' own "No tools matched..." plain-text
+/// fallback, which isn't a JSON array). `request_tools`' JSON keys are
+/// snake_case (`input_schema`, matching `crates/ai/src/executor/
+/// tool_dispatch.rs`'s own hand-built `serde_json::json!` output) while
+/// `ToolInfo` deserializes as camelCase (`inputSchema`) -- so this reads
+/// fields by hand rather than via `serde_json::from_value::<ToolInfo>`,
+/// which would silently produce empty schemas on a key-case mismatch.
+fn parse_unlocked_tools_from_request_tools_output(tool_name: &str, output: &str) -> Vec<ToolInfo> {
+    if tool_name != "request_tools" {
+        return Vec::new();
+    }
+    let Ok(serde_json::Value::Array(items)) = serde_json::from_str::<serde_json::Value>(output)
+    else {
+        return Vec::new();
+    };
+    items
+        .into_iter()
+        .filter_map(|item| {
+            let name = item.get("name")?.as_str()?.to_string();
+            let description = item
+                .get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let input_schema = item
+                .get("input_schema")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            let permission = item
+                .get("permission")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
+            Some(ToolInfo {
+                name,
+                description,
+                input_schema,
+                permission,
+                // `request_tools`' own output carries no annotations; these
+                // are advisory hints only (ADR-051), never a security
+                // boundary, so omitting them for an unlocked Extended tool
+                // is a real but acceptable limitation, not a correctness gap.
+                annotations: None,
+            })
+        })
+        .collect()
+}
+
 /// Process a single JSON-RPC request, updating session state as needed.
 ///
 /// Handles protocol methods (initialize, ping, subscribe, health, etc.)
@@ -767,7 +846,18 @@ pub async fn handle_request(
             let result = InitializeResult {
                 protocol_version: negotiated.to_string(),
                 capabilities: ServerCapabilities {
-                    tools: Some(serde_json::json!({})),
+                    // `listChanged: true` -- this server DOES send
+                    // `notifications/tools/list_changed` (see `handle_client`'s
+                    // loop) the moment a `request_tools` call unlocks a new
+                    // Extended-tier tool for this session. Declaring an empty
+                    // `{}` here (the prior behavior) told every spec-compliant
+                    // client the tool list is static, which made a subsequent
+                    // `tools/call` for a name only revealed via `request_tools`
+                    // a correctly-rejected "unknown tool" call from the
+                    // client's point of view -- dispatch itself already
+                    // accepted any of the full ~700+ tools regardless of
+                    // tiering, but the client never knew it was allowed to ask.
+                    tools: Some(serde_json::json!({"listChanged": true})),
                 },
                 server_info: serde_json::json!({
                     "name": "mae-editor",
@@ -854,8 +944,20 @@ pub async fn handle_request(
             // fixed once (a client-side permission gate that never actually
             // saw tier data). Re-deriving field lists by hand is how that
             // regressed; serializing the struct itself is how it can't.
+            // Core (`tool_definitions`) UNION this session's own
+            // `request_tools`-unlocked Extended tools -- each connection
+            // only ever sees the extras IT resolved, not a global set shared
+            // across every other connected client. Skips a name already
+            // present in `tool_definitions` so an Extended tool the server
+            // later promotes to Core is never listed twice.
             let tools: Vec<serde_json::Value> = tool_definitions
                 .iter()
+                .chain(
+                    session
+                        .unlocked_extended_tools
+                        .values()
+                        .filter(|t| !tool_definitions.iter().any(|core| core.name == t.name)),
+                )
                 .map(|t| {
                     serde_json::to_value(t).unwrap_or_else(
                         |_| serde_json::json!({"name": t.name, "description": t.description}),
@@ -946,6 +1048,19 @@ pub async fn handle_request(
             match reply_rx.await {
                 Ok(result) => {
                     debug!(session = session.id, tool = %tool_name, success = result.success, "tool call complete");
+                    // Unlock: `request_tools`' own output already carries a
+                    // full definition per tool (see `tool_dispatch.rs`'s
+                    // `request_tools` handler) -- reuse it directly rather
+                    // than needing this transport crate to hold a separate
+                    // full-catalog lookup.
+                    if result.success {
+                        for t in parse_unlocked_tools_from_request_tools_output(
+                            &tool_name,
+                            &result.output,
+                        ) {
+                            session.unlocked_extended_tools.insert(t.name.clone(), t);
+                        }
+                    }
                     let call_result = ToolCallResult {
                         content: vec![ContentItem {
                             content_type: "text".to_string(),
@@ -1166,6 +1281,184 @@ mod tests {
         assert_eq!(tool["annotations"]["readOnlyHint"], true);
         assert_eq!(tool["annotations"]["destructiveHint"], false);
         assert_eq!(tool["annotations"]["idempotentHint"], true);
+    }
+
+    #[test]
+    fn parse_unlocked_tools_wrong_tool_name_is_empty() {
+        let out = r#"[{"name":"kb_health","description":"d","input_schema":{},"permission":null}]"#;
+        assert!(parse_unlocked_tools_from_request_tools_output("search_tools", out).is_empty());
+    }
+
+    #[test]
+    fn parse_unlocked_tools_malformed_json_is_empty() {
+        assert!(
+            parse_unlocked_tools_from_request_tools_output("request_tools", "not json").is_empty()
+        );
+    }
+
+    #[test]
+    fn parse_unlocked_tools_no_match_plain_text_fallback_is_empty() {
+        // request_tools' own "nothing matched" output is plain text, not JSON.
+        assert!(parse_unlocked_tools_from_request_tools_output(
+            "request_tools",
+            "No tools matched the given categories/names."
+        )
+        .is_empty());
+    }
+
+    #[test]
+    fn parse_unlocked_tools_extracts_full_definition_from_snake_case_json() {
+        let out = r#"[{"name":"kb_health","description":"Compute KB health","input_schema":{"type":"object"},"permission":"ReadOnly"}]"#;
+        let parsed = parse_unlocked_tools_from_request_tools_output("request_tools", out);
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].name, "kb_health");
+        assert_eq!(parsed[0].description, "Compute KB health");
+        assert_eq!(
+            parsed[0].input_schema,
+            serde_json::json!({"type": "object"})
+        );
+        assert_eq!(parsed[0].permission.as_deref(), Some("ReadOnly"));
+    }
+
+    /// The tooling-discovery gap this fixes: `request_tools`'/`search_tools`'
+    /// own doc text promises "once you have a tool's name you can call it
+    /// directly" -- but a spec-compliant MCP client won't call a name
+    /// `tools/list` never advertised unless told the list changed. This
+    /// proves the full loop: a `request_tools` call unlocks the tool for
+    /// THIS session, and a subsequent `tools/list` call actually includes
+    /// its full definition (not just Core).
+    #[tokio::test]
+    async fn handle_request_request_tools_unlocks_the_tool_for_a_subsequent_tools_list() {
+        let (tx, mut rx) = mpsc::channel::<McpToolRequest>(4);
+        tokio::spawn(async move {
+            while let Some(req) = rx.recv().await {
+                let output = if req.tool_name == "request_tools" {
+                    r#"[{"name":"kb_health","description":"Compute KB health report","input_schema":{"type":"object","properties":{}},"permission":"ReadOnly"}]"#.to_string()
+                } else {
+                    "{}".to_string()
+                };
+                let _ = req.reply.send(McpToolResult {
+                    success: true,
+                    output,
+                });
+            }
+        });
+
+        let mut session = ClientSession::new();
+        let bc = dummy_broadcaster();
+        let core_tools: Vec<ToolInfo> = vec![];
+
+        let request_msg = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"request_tools","arguments":{"tools":"kb_health"}}}"#;
+        let _ = handle_request(request_msg, &core_tools, &tx, &mut session, &bc).await;
+        assert!(
+            session.unlocked_extended_tools.contains_key("kb_health"),
+            "request_tools must unlock the resolved tool on the session"
+        );
+
+        let list_msg = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
+        let list_resp = handle_request(list_msg, &core_tools, &tx, &mut session, &bc).await;
+        let tools_arr = list_resp.result.unwrap()["tools"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            tools_arr.len(),
+            1,
+            "tools/list must now include the unlocked tool"
+        );
+        assert_eq!(tools_arr[0]["name"], "kb_health");
+        assert_eq!(tools_arr[0]["inputSchema"]["type"], "object");
+    }
+
+    /// `search_tools`' output (name+description+score, no schema) must NEVER
+    /// unlock a tool -- a client can't usefully call a tool it only knows
+    /// the relevance score of, and doing so anyway would advertise a
+    /// schema-less entry via `tools/list`.
+    #[tokio::test]
+    async fn handle_request_search_tools_never_unlocks_a_tool() {
+        let (tx, mut rx) = mpsc::channel::<McpToolRequest>(4);
+        tokio::spawn(async move {
+            while let Some(req) = rx.recv().await {
+                let _ = req.reply.send(McpToolResult {
+                    success: true,
+                    output: r#"[{"name":"kb_health","description":"d","score":42}]"#.to_string(),
+                });
+            }
+        });
+
+        let mut session = ClientSession::new();
+        let bc = dummy_broadcaster();
+        let core_tools: Vec<ToolInfo> = vec![];
+
+        let search_msg = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"search_tools","arguments":{"query":"health"}}}"#;
+        let _ = handle_request(search_msg, &core_tools, &tx, &mut session, &bc).await;
+        assert!(
+            session.unlocked_extended_tools.is_empty(),
+            "search_tools must never unlock a tool"
+        );
+
+        let list_msg = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
+        let list_resp = handle_request(list_msg, &core_tools, &tx, &mut session, &bc).await;
+        let tools_arr = list_resp.result.unwrap()["tools"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert!(tools_arr.is_empty(), "tools/list must stay empty");
+    }
+
+    /// A tool unlocked via `request_tools` that's ALSO already in the Core
+    /// set must not appear twice in `tools/list`.
+    #[tokio::test]
+    async fn handle_request_unlocked_tool_already_in_core_is_not_duplicated() {
+        let (tx, mut rx) = mpsc::channel::<McpToolRequest>(4);
+        tokio::spawn(async move {
+            while let Some(req) = rx.recv().await {
+                let _ = req.reply.send(McpToolResult {
+                    success: true,
+                    output: r#"[{"name":"already_core","description":"d","input_schema":{},"permission":null}]"#.to_string(),
+                });
+            }
+        });
+
+        let mut session = ClientSession::new();
+        let bc = dummy_broadcaster();
+        let core_tools = vec![ToolInfo {
+            name: "already_core".to_string(),
+            description: "Core version".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+            permission: None,
+            annotations: None,
+        }];
+
+        let request_msg = r#"{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"request_tools","arguments":{"tools":"already_core"}}}"#;
+        let _ = handle_request(request_msg, &core_tools, &tx, &mut session, &bc).await;
+
+        let list_msg = r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#;
+        let list_resp = handle_request(list_msg, &core_tools, &tx, &mut session, &bc).await;
+        let tools_arr = list_resp.result.unwrap()["tools"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert_eq!(
+            tools_arr.len(),
+            1,
+            "a tool already in Core must not also appear as an unlocked duplicate"
+        );
+    }
+
+    /// The `initialize` response must declare `tools.listChanged: true` --
+    /// without it, a spec-compliant client has no reason to ever re-call
+    /// `tools/list` after `request_tools`, no matter what this server does
+    /// server-side.
+    #[tokio::test]
+    async fn handle_request_initialize_declares_tools_list_changed_capability() {
+        let (tx, _rx) = mpsc::channel(1);
+        let mut session = ClientSession::new();
+        let bc = dummy_broadcaster();
+        let msg = r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","clientInfo":{"name":"test"}}}"#;
+        let resp = handle_request(msg, &[], &tx, &mut session, &bc).await;
+        let result = resp.result.unwrap();
+        assert_eq!(result["capabilities"]["tools"]["listChanged"], true);
     }
 
     #[tokio::test]
