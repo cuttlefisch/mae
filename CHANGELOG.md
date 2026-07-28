@@ -2,30 +2,96 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased]
+## [0.14.57] - 2026-07-28
 
 ### Bug Fixes
 
 - *(graph-view)* Audit fixes for stale layout race, label-cache, dedup, dead code, self-links (#462 PR1) ([b12f779](https://github.com/cuttlefisch/mae/commit/b12f779b9cf7dcbf2b6af20318e41c68c6961ab8))
+- *(daemon)* Load federated KB instances at startup (#460) ([29436e4](https://github.com/cuttlefisch/mae/commit/29436e430b6fd0fbe9d6fc427ca6ddac5693443f))
+- *(ci)* Daemon workspace fmt + real WSL2 distro for Phase E remote verify ([ed67fac](https://github.com/cuttlefisch/mae/commit/ed67fac8e55b2a474dcc02eff890ff37a144c850))
 - *(kb)* Opt-in lightweight subgraph extraction (#462 PR3) ([ae936a6](https://github.com/cuttlefisch/mae/commit/ae936a6afbd6f0cd440ce886404562ca1d858966))
 - *(kb)* Recompute per-diagram node_count after residency filter (#462 access-model review) ([aab54dd](https://github.com/cuttlefisch/mae/commit/aab54dd6e168ddadaf62370aad3bb46741c26432))
+- *(ci)* Clippy 1.97 lints + stale code map on PR #480 ([b5b56f3](https://github.com/cuttlefisch/mae/commit/b5b56f36d0baa3f5711688405e267c961a8a277b))
+- *(ci)* Clippy 1.97 cloned_ref_to_slice_refs lint in multi-KB test ([3e3e0e5](https://github.com/cuttlefisch/mae/commit/3e3e0e5a067e641f4857425ef30404d05d4a0b94))
+- *(kb)* Reconcile FederatedQuery::health_report across federated instances (#474) ([d2f6b6c](https://github.com/cuttlefisch/mae/commit/d2f6b6cc5def0204d8c0082043e31da3d623493e))
+- *(kb-graph)* Phase A6 configuration gaps in multi-KB chord view ([0815ef4](https://github.com/cuttlefisch/mae/commit/0815ef47a648bb7447207016fc0d6b6ac643bd37))
+- *(kb-graph)* Phase A2 -- detect cross-instance links between two non-seed diagrams ([02b251c](https://github.com/cuttlefisch/mae/commit/02b251cbf9f240ff09a07cb9989b36120b40dbc7))
+- *(kb-graph)* Phase A3 -- chord curvature bows toward each diagram's own center ([ecebd8e](https://github.com/cuttlefisch/mae/commit/ecebd8e7f685820671eeadd6a99af92699186c11))
+- *(kb-graph)* Phase A1 -- overlay input-focus trap in focus_window_at ([bd2ac4d](https://github.com/cuttlefisch/mae/commit/bd2ac4dfdd006e8b0f3a5eae99800d5ac8d05e95))
+- *(kb)* Phase A5 -- kb_cleanup_orphans deletes only from primary (#485) ([7dc452e](https://github.com/cuttlefisch/mae/commit/7dc452e453bb99c5333e67cf195854cf34fad9ab))
+- *(babel)* Retry compiled-binary spawn on ExecutableFileBusy (issue #482) ([66199a1](https://github.com/cuttlefisch/mae/commit/66199a1d0680de4d4ea66bdb096382ba4b474a5f))
+- *(kb)* Extract_subgraph no longer phantom-includes unresolvable BFS targets (#493) ([cb8ccce](https://github.com/cuttlefisch/mae/commit/cb8ccce7dc423db15d832ead4ca986a5c9a503c7))
+- *(kb-graph)* Widen multi-KB grid columns for long diagram names ([e6739e5](https://github.com/cuttlefisch/mae/commit/e6739e51ad5f192c904abfc164f23dae0f9715b5))
+- *(kb-graph)* Cluster-stub visual — spatial-aware bucketing + clearer copy ([bce06ad](https://github.com/cuttlefisch/mae/commit/bce06ada5b0230834167f5c378055d0930863d65))
+- *(kb)* Widen external_store_change_arms_a_background_reload's deadline (#494) ([5847e98](https://github.com/cuttlefisch/mae/commit/5847e983fb1636d308cbd03aea4bbccd339d724b))
+- *(kb)* The real fix for #494 -- simulate a genuinely separate writer ([cd25c41](https://github.com/cuttlefisch/mae/commit/cd25c4193760eca2cb13d3bac8a56b573cbcf2b0))
+- *(kb)* Root-cause and fix #455/#498 -- kb_reimport_file path canonicalization mismatch ([d0c9e76](https://github.com/cuttlefisch/mae/commit/d0c9e76945df20c315886d8df08473a1a83f9e14))
 
-### Features
+### CI
 
-- *(graph-view)* Default center to active project's KB instance (#462 Part 1 / PR2) ([afc7c3c](https://github.com/cuttlefisch/mae/commit/afc7c3cfbc2e3fa008a4873ea72146c4494e1bab))
-- *(kb)* Cross-instance link detection for multi-KB graph view (#462 PR4 Part 1) ([f4ec9a3](https://github.com/cuttlefisch/mae/commit/f4ec9a3ee60a25877286e119e023b4d7ce1d706f))
-- *(kb)* Multi-KB chord graph view composition (#462 PR4 Part 2/3) ([783c4e5](https://github.com/cuttlefisch/mae/commit/783c4e5be30f3566151c7690542831618bdcac63))
-- *(kb)* TUI parity for multi-KB graph view (#462 PR4 Part 4) ([4e31524](https://github.com/cuttlefisch/mae/commit/4e3152410ec01c72a5da2d6e35ca3713247d5bef))
-
-## [0.14.56] - 2026-07-27
-
-### Bug Fixes
-
-- *(ci)* Daemon workspace fmt + real WSL2 distro for Phase E remote verify ([ed67fac](https://github.com/cuttlefisch/mae/commit/ed67fac8e55b2a474dcc02eff890ff37a144c850))
+- Raise version-bump's CI-wait poll budget from 35 to 60 minutes ([20a3e77](https://github.com/cuttlefisch/mae/commit/20a3e7747e6c5ef20698b349fdb73bda4109d479))
+- Adopt cargo-nextest for the biggest test legs + add a macOS CI job ([33d875a](https://github.com/cuttlefisch/mae/commit/33d875ae9e3dacd5f4df192f45378a3e8e355914))
+- Add sccache + mold to setup-rust for cross-job compile caching (#491) ([b525a72](https://github.com/cuttlefisch/mae/commit/b525a72e76358e3a814895236addd7ac036c6284))
+- *(badges)* Fix test-count badge silently undercounting (452 vs ~7,223+) ([2bff279](https://github.com/cuttlefisch/mae/commit/2bff279c8a0a8aab2a7bbcf2e5f7696b7d19bc92))
+- *(windows)* Skip new kb_reimport_file test for the same pre-existing #455 gap as its sibling ([ffbf7ea](https://github.com/cuttlefisch/mae/commit/ffbf7ea6df1583182bf2fc9219835bbf082989bb))
 
 ### Documentation
 
 - *(adr)* ADR-066 Phase E round-1 implementation note; regen ADR KB ([4999322](https://github.com/cuttlefisch/mae/commit/49993221ee053618416dd8b0d7c26d2417f3183f))
+- *(adr)* Fix stale ADR-057/066 status text; reconcile 6 tracking issues ([53f997e](https://github.com/cuttlefisch/mae/commit/53f997e0500cac85d326453a31c119d43a2b1b68))
+- *(kb)* #462 PR4b — docs/API-parity pass for multi-KB chord graph view ([382a602](https://github.com/cuttlefisch/mae/commit/382a60297a47038a5e4aaed3e7d66d9a8c6cdfd7))
+- *(adr)* Cross-link issue #474 as a second health_report drift correction ([63fa9bc](https://github.com/cuttlefisch/mae/commit/63fa9bc37a1898db80c32931bd1fea93b3339a45))
+- *(adr)* ADR-068 -- full-corpus multi-KB retrieval + DOI-based LOD rendering ([6547bc0](https://github.com/cuttlefisch/mae/commit/6547bc0d7f50841284920586e8114926915104e1))
+
+### Features
+
+- *(daemon)* ADR-060 Phase E — mae-daemon@.service systemd template (#413) ([402b6df](https://github.com/cuttlefisch/mae/commit/402b6df7a6c5feadc6fc09b1084b5609c3de8cdc))
+- *(daemon)* ADR-060 Phases F+G — N-tenant benchmark + config-change contract (#414, #415) ([afc30fb](https://github.com/cuttlefisch/mae/commit/afc30fb665bf59a8807d8a5d65e7ff0ab3851cb6))
+- *(daemon)* ADR-066 Phase E — Windows remote-daemon verification (#375) ([0034ec2](https://github.com/cuttlefisch/mae/commit/0034ec252cb79da15c9eba9ec1f8291c306a6066))
+- *(graph-view)* Default center to active project's KB instance (#462 Part 1 / PR2) ([afc7c3c](https://github.com/cuttlefisch/mae/commit/afc7c3cfbc2e3fa008a4873ea72146c4494e1bab))
+- *(kb)* Cross-instance link detection for multi-KB graph view (#462 PR4 Part 1) ([f4ec9a3](https://github.com/cuttlefisch/mae/commit/f4ec9a3ee60a25877286e119e023b4d7ce1d706f))
+- *(kb)* Multi-KB chord graph view composition (#462 PR4 Part 2/3) ([783c4e5](https://github.com/cuttlefisch/mae/commit/783c4e5be30f3566151c7690542831618bdcac63))
+- *(kb)* TUI parity for multi-KB graph view (#462 PR4 Part 4) ([4e31524](https://github.com/cuttlefisch/mae/commit/4e3152410ec01c72a5da2d6e35ca3713247d5bef))
+- *(ai)* ADR-061 Phase A -- pluggable embedding provider (Ollama-first) ([cb87e8b](https://github.com/cuttlefisch/mae/commit/cb87e8bebbb8c86fd8e00a8e7eab62cb9d269a83))
+- *(sync)* ADR-067 Phase A -- adversarial tests + implementation note ([c95a1d0](https://github.com/cuttlefisch/mae/commit/c95a1d0f778982931f7440af9102edc7744b181a))
+- *(kb-graph)* Phase A4 -- per-diagram health/loaded indicator (#479) ([e63699a](https://github.com/cuttlefisch/mae/commit/e63699a11b7dd409359eab519895b870b757e49d))
+- *(kb-graph)* Phase B1 -- full-corpus extraction for multi-KB chord view ([1ef6a46](https://github.com/cuttlefisch/mae/commit/1ef6a46cbf018f191115f787d9f95820acbc8ef7))
+- *(kb)* ADR-068 Phase B3 -- KnowledgeBase::hop_distances_from ([883f217](https://github.com/cuttlefisch/mae/commit/883f217085b60dc29b6c3a0d932b3625ae2e9857))
+- *(kb-graph)* ADR-068 Phase B2-B5 -- DOI/LOD render-tier core ([4567573](https://github.com/cuttlefisch/mae/commit/45675736f1b6170499eed0139d4c19845eace6f9))
+- *(kb-graph)* ADR-068 Phase B6 -- 4 remaining DOI/LOD tiering options ([6d95539](https://github.com/cuttlefisch/mae/commit/6d955398ccfc47cefeceb4a8987b80e0b7f0b9bd))
+- *(kb-graph)* ADR-068 Phase B8 -- TUI decision for full-corpus text listing ([2ca20ca](https://github.com/cuttlefisch/mae/commit/2ca20cac8d573e84fc46607fd2743b5f0f5e33df))
+- *(scheme)* ADR-068 -- kb-graph-view-state render-tier AI-peer parity ([62e750c](https://github.com/cuttlefisch/mae/commit/62e750c079ca47912f1b1216b88ea990730c2b0a))
+- *(kb)* ADR-061 Phase B -- content-addressed embedding cache ([c1987b3](https://github.com/cuttlefisch/mae/commit/c1987b309e538bd0b95a594c52e5f69e647e7faf))
+- *(daemon)* ADR-067 Phase B — kb_access Join/Read split + kb_join enforcement ([293660b](https://github.com/cuttlefisch/mae/commit/293660b75db6e9fdcd5f8abc727a3b989a76e198))
+- *(kb)* ADR-067 Phase C + Phase E — QueryOnly key delivery + residual-risk visibility ([e34a9b4](https://github.com/cuttlefisch/mae/commit/e34a9b4908a18dbc7096a4553fae9718c9a552e5))
+- *(kb)* ADR-061 Phase C + Phase E — enrichment scheduler wiring + enrich-now path ([3b5d29b](https://github.com/cuttlefisch/mae/commit/3b5d29b75cfab0b1bc744a0b0af27bc15ba14742))
+- *(kb)* ADR-061 Phase D1 — real ADR-033 advisory lease primitive (#420) ([7ed875a](https://github.com/cuttlefisch/mae/commit/7ed875a3ae49343898cb7ce05852ba8d7df98a59))
+- *(kb)* ADR-061 Phase D2 — enrichment becomes the lease's first caller (#420) ([37ce9c1](https://github.com/cuttlefisch/mae/commit/37ce9c13c969c12e403f18a78318022767eb0bd8))
+- *(kb)* ADR-061 Phase D3 — ADR-034 cross-peer artifact sharing (#420) ([d5b967a](https://github.com/cuttlefisch/mae/commit/d5b967a1e1c852bb310c34bf299898ea25e725aa))
+- *(kb)* ADR-061 Phase F -- kb_vector_search wiring + RRF blend, fix real macOS/Linux KB-watcher CI flakes (#498/#502) ([f6246e1](https://github.com/cuttlefisch/mae/commit/f6246e168e941ee8afca20bcb982cb589654256a))
+
+### Miscellaneous
+
+- Bump version to 0.14.56 ([a5988d5](https://github.com/cuttlefisch/mae/commit/a5988d52b124841a00bed8d55218f48521b85585))
+- Sync Cargo.lock with 0.14.56 version bump ([a67263e](https://github.com/cuttlefisch/mae/commit/a67263eeca69590f28b838679731b804fefb63d9))
+- *(ci)* Efficiency pass -- composite actions, cache scoping, MSRV leg, path filters ([c420331](https://github.com/cuttlefisch/mae/commit/c42033181bd3e6fdf2d2f3fb4eb9a8f813738bb8))
+- *(adr-kb)* Regenerate assets/mae-adr.cozo for ADR-034's status correction ([909622b](https://github.com/cuttlefisch/mae/commit/909622bbc8cc55d5bd272570165c1704026a2b84))
+
+### Performance
+
+- *(kb-graph)* Decouple expensive DOI candidate BFS from continuous zoom ([2a95b3d](https://github.com/cuttlefisch/mae/commit/2a95b3de917d6975173a85fb31059a3f90806f31))
+
+### Refactor
+
+- *(kb)* Extract compute_in_degree_map + KnowledgeBase::linked_in_degree (#474) ([3dbecb3](https://github.com/cuttlefisch/mae/commit/3dbecb3b4cf806329dfa3ec79bd2dbbbcfcfdfbc))
+
+### Testing
+
+- *(core)* Kb_cleanup_orphans federation orphan-safety regression tests (#474) ([a265dd4](https://github.com/cuttlefisch/mae/commit/a265dd4d55833d27ed9aa75719d0971f61ab4d93))
+
+### Wip
+
+- *(sync)* ADR-067 Phase A -- ReplicationPolicy field, no tests yet ([edc21be](https://github.com/cuttlefisch/mae/commit/edc21be45fea20478f90d1a03f66d117e2281a27))
 
 ## [0.14.55] - 2026-07-26
 
@@ -58,11 +124,6 @@ All notable changes to this project will be documented in this file.
 - *(ai)* Contain a panicking tool implementation instead of crashing the editor ([da26526](https://github.com/cuttlefisch/mae/commit/da265261f0b8b98c3625821362186213e4eae918))
 - *(mcp)* Close a TOCTOU race in authorized_keys authorize/revoke ([a5c1c49](https://github.com/cuttlefisch/mae/commit/a5c1c4905df91dd75d75803e69a31e044af71ab0))
 - *(kb)* Close two more gaps in the SQLite busy-retry coverage ([29b9b43](https://github.com/cuttlefisch/mae/commit/29b9b43e36d2a9c277d27bf4517333adb74360ba))
-- *(daemon)* Load federated KB instances at startup (#460) ([29436e4](https://github.com/cuttlefisch/mae/commit/29436e430b6fd0fbe9d6fc427ca6ddac5693443f))
-
-### CI
-
-- Raise version-bump's CI-wait poll budget from 35 to 60 minutes ([20a3e77](https://github.com/cuttlefisch/mae/commit/20a3e7747e6c5ef20698b349fdb73bda4109d479))
 
 ### Documentation
 
@@ -87,9 +148,6 @@ All notable changes to this project will be documented in this file.
 - *(daemon)* ADR-060 Phase D — IDOR + cross-KB role isolation, verified not rewritten ([126e201](https://github.com/cuttlefisch/mae/commit/126e201e0e7bcce6cd9b0c72c21fc10d8024a60c))
 - *(daemon)* ADR-060 Phase C — per-tenant quotas + independent eviction (#411) ([7d9419a](https://github.com/cuttlefisch/mae/commit/7d9419aa4626eef98f860b7be67eccd244663f19))
 - *(mae)* ADR-050 Phase H — :kb-export-guidance colon command (#383) ([c7794e3](https://github.com/cuttlefisch/mae/commit/c7794e3517203b30e5616928c1cd1266a6e6c722))
-- *(daemon)* ADR-060 Phase E — mae-daemon@.service systemd template (#413) ([402b6df](https://github.com/cuttlefisch/mae/commit/402b6df7a6c5feadc6fc09b1084b5609c3de8cdc))
-- *(daemon)* ADR-060 Phases F+G — N-tenant benchmark + config-change contract (#414, #415) ([afc30fb](https://github.com/cuttlefisch/mae/commit/afc30fb665bf59a8807d8a5d65e7ff0ab3851cb6))
-- *(daemon)* ADR-066 Phase E — Windows remote-daemon verification (#375) ([0034ec2](https://github.com/cuttlefisch/mae/commit/0034ec252cb79da15c9eba9ec1f8291c306a6066))
 
 ### Miscellaneous
 
