@@ -660,6 +660,22 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .required(["query"])
         .permission(PermissionTier::ReadOnly)
         .build(),
+        ToolDefBuilder::new(
+            "kb_export_subgraph_html",
+            "Export a KB subgraph (a seed/anchor node plus its neighborhood) to ONE self-contained, standalone HTML file — no external network requests, works fully offline in a browser. BFS from `id` out to `depth` hops (default 2, clamped to 4), force-directed layout baked in at export time (no JS physics shipped). The anchor node gets distinct styling and a \"Start here\" reading-order walk. Click a node for its full body + outgoing/incoming links; hover for a title+excerpt preview. Optional `translations` JSON overlay ({id: {title_es, body_es}}) adds an instant EN/ES toggle — omit it and the page just shows EN with the toggle hidden. `#+begin_src mermaid` blocks in node bodies are pre-rendered to inline SVG. Fails with a clear error if `id` doesn't resolve anywhere in the KB, or if `translations` is given but unreadable/malformed.",
+        )
+        .prop("id", "string", "Seed/anchor node id to center the export on")
+        .prop("path", "string", "Output HTML file path (absolute, or relative to the project root)")
+        .prop("depth", "integer", "BFS hop radius from the seed (default 2, clamped to 4)")
+        .prop(
+            "translations",
+            "string",
+            "Optional path to a {id: {title_es, body_es}} JSON file adding an EN/ES toggle to the export",
+        )
+        .prop("title", "string", "Optional page title (default: derived from the seed node's own title)")
+        .required(["id", "path"])
+        .permission(PermissionTier::Write)
+        .build(),
         // --- Org tools ---
         ToolDefBuilder::new("org_cycle", "Toggle visibility (folding) of the Org heading at the cursor.")
             .permission(PermissionTier::Write)

@@ -241,6 +241,37 @@ pub fn handle_command_mode(
                 return;
             }
 
+            // :kb-export-html <seed-id> <output-path> [depth] — export a KB
+            // subgraph (seed node + its neighborhood) to one self-contained
+            // HTML file. Synchronous, no ai_tx/LLM round-trip, same shape as
+            // :kb-export-guidance above. `translations`/`title` (the tool's
+            // other optional args) have no colon-command surface — this
+            // interactive entry point only covers the common case; call the
+            // kb_export_subgraph_html MCP tool directly for those.
+            if cmd == "kb-export-html" || cmd.starts_with("kb-export-html ") {
+                let rest = cmd.strip_prefix("kb-export-html").unwrap_or("").trim();
+                let mut parts = rest.split_whitespace();
+                let id = parts.next();
+                let path = parts.next();
+                let depth = parts.next().and_then(|d| d.parse::<u64>().ok());
+                match (id, path) {
+                    (Some(id), Some(path)) => {
+                        let mut args = serde_json::json!({"id": id, "path": path});
+                        if let Some(depth) = depth {
+                            args["depth"] = serde_json::json!(depth);
+                        }
+                        match mae_ai::execute_kb_export_subgraph_html(editor, &args) {
+                            Ok(msg) => editor.set_status(format!("[KB] {msg}")),
+                            Err(e) => editor.set_status(format!("[KB] Export failed: {e}")),
+                        }
+                    }
+                    _ => editor.set_status(
+                        "Usage: :kb-export-html <seed-id> <output-path> [depth]".to_string(),
+                    ),
+                }
+                return;
+            }
+
             // :verify [objective] — spawn verifier sub-agent (direct delegate, no LLM round-trip)
             if cmd == "verify" || cmd.starts_with("verify ") {
                 let objective = cmd.strip_prefix("verify").unwrap_or("").trim();

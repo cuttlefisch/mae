@@ -4,6 +4,7 @@
 //! @since: 0.9.0
 
 pub mod html;
+pub mod html_graph;
 pub mod markdown;
 pub mod markdown_parser;
 pub mod org_writer;

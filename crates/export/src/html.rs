@@ -63,7 +63,15 @@ impl Exporter for HtmlExporter {
     }
 }
 
-fn render_element(html: &mut String, element: &OrgElement, opts: &ExportOptions) {
+/// Render a single parsed org element as HTML, appending to `html`.
+///
+/// `pub(crate)` (not private) so `crate::html_graph` can reuse it for
+/// per-node body rendering in the KB subgraph HTML exporter instead of
+/// duplicating the element-to-HTML match (CLAUDE.md #8) — the only
+/// deviation `html_graph` needs (special-casing `#+begin_src mermaid`
+/// blocks) is handled by intercepting those elements BEFORE calling this,
+/// not by forking this function.
+pub(crate) fn render_element(html: &mut String, element: &OrgElement, opts: &ExportOptions) {
     match element {
         OrgElement::Heading {
             level, title, tags, ..

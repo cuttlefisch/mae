@@ -7,3 +7,8 @@ license.workspace = true
 
 [dependencies]
 mae-babel = { path = "../babel" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

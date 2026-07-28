@@ -2954,7 +2954,9 @@ dependencies = [
  "async-trait",
  "chrono",
  "glob",
+ "mae-canvas",
  "mae-core",
+ "mae-export",
  "mae-kb",
  "mae-shell",
  "mae-sync",
@@ -3047,6 +3049,9 @@ name = "mae-export"
 version = "0.14.56"
 dependencies = [
  "mae-babel",
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

@@ -1203,6 +1203,10 @@ impl CommandRegistry {
             "kb-export-guidance",
             "Export guidance-KB context to AGENTS.md or a custom path (ADR-050 Phase H)",
         );
+        reg.register_builtin(
+            "kb-export-html",
+            "Export a KB subgraph (seed node + neighborhood) to one self-contained HTML file",
+        );
         reg.register_builtin("kb-narrow", "Narrow to a meta-node component for editing");
         reg.register_builtin(
             "kb-widen",

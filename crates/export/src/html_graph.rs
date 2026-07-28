@@ -1,0 +1,1453 @@
+//! Self-contained, offline-first HTML export of a KB subgraph.
+//!
+//! One Rust entry point (`HtmlGraphExporter::export`) returns one complete
+//! HTML `String` — inline `<style>`, inline `<script>`, an embedded JSON
+//! data payload, no external network requests, no bundler, no npm
+//! dependency shipped in the output. This mirrors `crate::html::HtmlExporter`
+//! (`html.rs`)'s "one function, one dependency-free HTML string" shape; it
+//! is a separate type rather than an `Exporter` impl because its input
+//! shape (a positioned node/edge graph, not `OrgMeta` + `Vec<OrgElement>`)
+//! doesn't fit that trait's signature.
+//!
+//! `mae-export` stays a leaf crate here too (no `mae-kb`/`mae-canvas`
+//! dependency) — mirrors `mae_canvas::kb_graph`'s own "leaf crate, caller
+//! bridges the types" pattern (see that module's doc comment). The caller
+//! (`crates/ai/src/tool_impls`, which already depends on both) converts
+//! `mae_kb::SubgraphResult` + `mae_canvas`-baked layout positions into
+//! [`GraphExportNode`]/[`GraphExportEdge`] before calling here.
+//!
+//! ## `is_seed` vs the exported subgraph's anchor node
+//!
+//! @ai-caution: [correctness] `GraphExportNode::is_seed` is a literal reuse
+//! of `mae_kb`/`mae_canvas`'s REAL `is_seed` concept — `NodeSource::Seed`,
+//! i.e. "this is MAE's own compiled-in manual content" (see
+//! `mae_canvas::scene::SceneNode::is_seed`'s doc comment and
+//! `mae_core::ai_residency::is_residency_exempt`). It has NOTHING to do
+//! with "the node this subgraph export was centered on" — that is a
+//! genuinely different concept with no existing reusable field anywhere in
+//! this codebase, so it gets its own honestly-different name here:
+//! [`GraphExportNode::is_anchor`]. Do not conflate the two: a curated
+//! user-authored onboarding note (the typical anchor/seed-of-the-BFS node
+//! for this exporter's real dogfooded use case) will almost always have
+//! `is_seed: false` and `is_anchor: true`. The exported page's "distinct
+//! styling + Start here" affordance is driven by `is_anchor`, not
+//! `is_seed` — `is_seed` is exposed in the JSON payload purely because the
+//! field genuinely exists on the source data and a reader may still find
+//! it useful (e.g. to visually distinguish MAE's own built-in docs from
+//! user notes within the same exported subgraph).
+//!
+//! ## Bilingual content (v1)
+//!
+//! Translation data is NOT part of `mae-kb`'s `Node` schema — it is a
+//! purely additive overlay supplied by an external `{id: {title_es,
+//! body_es}}` JSON file (see [`TranslationMap`]/[`load_translations`]),
+//! applied by the caller before building [`GraphExportNode`]s. When no
+//! translation exists for a node, its ES fields mirror the EN ones and the
+//! page hides the EN/ES toggle entirely (see `has_translations` below).
+//!
+//! ## Mermaid diagrams
+//!
+//! `#+begin_src mermaid ... #+end_src` blocks inside a node body are
+//! pre-rendered to an inline `<svg>` at export time via `npx
+//! @mermaid-js/mermaid-cli` (`mmdc`), themed from the same
+//! [`GruvboxPalette`] as the page CSS — see [`render_mermaid_block`]. If
+//! `mmdc`/`npx` isn't available (or the render fails for any reason), that
+//! ONE diagram falls back to a `<pre>` block of the raw mermaid source
+//! (with a visible warning), not a failed export.
+
+use std::collections::HashMap;
+use std::path::Path;
+use std::process::Command;
+
+use crate::html::render_element as render_org_element;
+use crate::{html_escape, parse_org_document, OrgElement};
+
+// ---------------------------------------------------------------------
+// Bilingual translation overlay
+// ---------------------------------------------------------------------
+
+/// One node's translation overlay, loaded from an external `--translations`
+/// JSON file — additive, never part of `mae_kb::Node`. See module docs.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct NodeTranslation {
+    #[serde(default)]
+    pub title_es: Option<String>,
+    #[serde(default)]
+    pub body_es: Option<String>,
+}
+
+/// `{node_id: NodeTranslation}` — the whole shape of a `--translations`
+/// file.
+pub type TranslationMap = HashMap<String, NodeTranslation>;
+
+/// Load a `--translations` JSON file. Callers only invoke this when a path
+/// was explicitly given (an OMITTED `--translations` flag is never an
+/// error — see module docs); a path that WAS given but can't be read or
+/// doesn't parse as the expected shape IS a real, clearly-reported error —
+/// silently ignoring a typo'd path would produce a half-translated page
+/// with no indication why.
+pub fn load_translations(path: &Path) -> Result<TranslationMap, String> {
+    let raw = std::fs::read_to_string(path).map_err(|e| {
+        format!(
+            "kb_export_subgraph_html: couldn't read translations file '{}': {e}",
+            path.display()
+        )
+    })?;
+    serde_json::from_str(&raw).map_err(|e| {
+        format!(
+            "kb_export_subgraph_html: translations file '{}' isn't valid JSON in the expected \
+             `{{\"node-id\": {{\"title_es\": \"...\", \"body_es\": \"...\"}}}}` shape: {e}",
+            path.display()
+        )
+    })
+}
+
+// ---------------------------------------------------------------------
+// Gruvbox palette (sourced from crates/core/src/themes/gruvbox-{dark,light}.toml)
+// ---------------------------------------------------------------------
+
+/// Resolved gruvbox hex values for the exported page's CSS + the mermaid
+/// diagram theme. These are a byte-for-byte copy of what
+/// `crates/core/src/themes/gruvbox-dark.toml` / `gruvbox-light.toml`'s
+/// `[palette]` table plus their `"ui.graph.*"` `[styles]` role-mapping
+/// resolve to today — NOT hand-picked gruvbox lookalikes. If either theme
+/// file's palette or `ui.graph.*` mapping changes, update the matching
+/// `dark()`/`light()` constructor below to match.
+#[derive(Debug, Clone, Copy)]
+pub struct GruvboxPalette {
+    pub name: &'static str,
+    pub bg0: &'static str,
+    pub bg1: &'static str,
+    pub bg2: &'static str,
+    pub bg3: &'static str,
+    pub fg0: &'static str,
+    pub fg1: &'static str,
+    pub fg2: &'static str,
+    pub fg3: &'static str,
+    pub fg4: &'static str,
+    pub gray: &'static str,
+    /// `"ui.graph.node.<kind>"` resolved fill per `NodeKind`.
+    pub node_index: &'static str,
+    pub node_command: &'static str,
+    pub node_concept: &'static str,
+    pub node_key: &'static str,
+    pub node_note: &'static str,
+    pub node_project: &'static str,
+    pub node_category: &'static str,
+    pub node_lesson: &'static str,
+    pub node_tutorial: &'static str,
+    pub node_meta: &'static str,
+    pub node_block: &'static str,
+    pub node_scheme_api: &'static str,
+    pub node_task: &'static str,
+    pub node_view: &'static str,
+    /// `"ui.graph.node.selected"` — reused here for the ANCHOR node (the
+    /// most visually prominent role available), not for click-selection
+    /// (the exported page has no separate "selected vs anchor" visual
+    /// tier — see `render_css`).
+    pub node_selected: &'static str,
+    /// `"ui.graph.node.hover"`.
+    pub node_hover: &'static str,
+    /// `"ui.graph.edge"`.
+    pub edge: &'static str,
+    /// `"ui.graph.edge.boundary"` — unused by v1 (boundary links are
+    /// dropped, see module docs) but kept for parity/future use.
+    pub edge_boundary: &'static str,
+}
+
+impl GruvboxPalette {
+    /// `gruvbox-dark.toml`.
+    pub const fn dark() -> Self {
+        Self {
+            name: "dark",
+            bg0: "#282828",
+            bg1: "#3c3836",
+            bg2: "#504945",
+            bg3: "#665c54",
+            fg0: "#fbf1c7",
+            fg1: "#ebdbb2",
+            fg2: "#d5c4a1",
+            fg3: "#bdae93",
+            fg4: "#a89984",
+            gray: "#928374",
+            node_index: "#fabd2f",      // bright_yellow
+            node_command: "#cc241d",    // red
+            node_concept: "#b8bb26",    // bright_green
+            node_key: "#d3869b",        // bright_purple
+            node_note: "#98971a",       // green
+            node_project: "#fabd2f",    // bright_yellow
+            node_category: "#8ec07c",   // bright_aqua
+            node_lesson: "#b8bb26",     // bright_green
+            node_tutorial: "#b8bb26",   // bright_green
+            node_meta: "#fb4934",       // bright_red
+            node_block: "#b16286",      // purple
+            node_scheme_api: "#83a598", // bright_blue
+            node_task: "#fb4934",       // bright_red
+            node_view: "#ebdbb2",       // fg1
+            node_selected: "#fabd2f",   // bright_yellow
+            node_hover: "#8ec07c",      // bright_aqua
+            edge: "#928374",            // gray
+            edge_boundary: "#fb4934",   // bright_red
+        }
+    }
+
+    /// `gruvbox-light.toml`.
+    pub const fn light() -> Self {
+        Self {
+            name: "light",
+            bg0: "#fbf1c7",
+            bg1: "#ebdbb2",
+            bg2: "#d5c4a1",
+            bg3: "#bdae93",
+            fg0: "#282828",
+            fg1: "#3c3836",
+            fg2: "#504945",
+            fg3: "#665c54",
+            fg4: "#7c6f64",
+            gray: "#928374",
+            node_index: "#d79921",      // yellow
+            node_command: "#cc241d",    // red
+            node_concept: "#98971a",    // green
+            node_key: "#b16286",        // purple
+            node_note: "#98971a",       // green
+            node_project: "#d79921",    // yellow
+            node_category: "#689d6a",   // aqua
+            node_lesson: "#98971a",     // green
+            node_tutorial: "#98971a",   // green
+            node_meta: "#cc241d",       // red
+            node_block: "#b16286",      // purple
+            node_scheme_api: "#458588", // blue
+            node_task: "#cc241d",       // red
+            node_view: "#3c3836",       // fg1
+            node_selected: "#d65d0e",   // orange
+            node_hover: "#689d6a",      // aqua
+            edge: "#928374",            // gray
+            edge_boundary: "#cc241d",   // red
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// Mermaid diagram pre-rendering
+// ---------------------------------------------------------------------
+
+/// Shell out to `npx @mermaid-js/mermaid-cli` (`mmdc`) to render one
+/// mermaid diagram to an inline SVG string, themed from `palette`. Mirrors
+/// the invocation shape of `~/.claude/skills/org-kb-to-pdf/scripts/render_diagrams.sh`
+/// (`npx mmdc -i in.mmd -o out.png -b white -s 4`), with `-o out.svg` for
+/// SVG instead of PNG and a `-c` mermaid config JSON (`themeVariables`)
+/// built from `palette` instead of a plain white background.
+fn try_render_mermaid_svg(source: &str, palette: &GruvboxPalette) -> Result<String, String> {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let scratch = std::env::temp_dir().join(format!(
+        "mae-mermaid-{}-{}-{}",
+        std::process::id(),
+        nanos,
+        source.len()
+    ));
+    std::fs::create_dir_all(&scratch)
+        .map_err(|e| format!("couldn't create scratch dir {}: {e}", scratch.display()))?;
+    let in_path = scratch.join("diagram.mmd");
+    let out_path = scratch.join("diagram.svg");
+    let config_path = scratch.join("mermaid-config.json");
+
+    std::fs::write(&in_path, source).map_err(|e| format!("couldn't write mermaid source: {e}"))?;
+
+    let config = serde_json::json!({
+        "theme": "base",
+        "themeVariables": {
+            "background": palette.bg0,
+            "primaryColor": palette.bg1,
+            "primaryTextColor": palette.fg1,
+            "primaryBorderColor": palette.node_scheme_api,
+            "lineColor": palette.gray,
+            "secondaryColor": palette.bg2,
+            "tertiaryColor": palette.bg1,
+            "textColor": palette.fg1,
+            "nodeTextColor": palette.fg1,
+            "mainBkg": palette.bg1,
+            "edgeLabelBackground": palette.bg0,
+            "clusterBkg": palette.bg2,
+            "clusterBorder": palette.bg3,
+            "fontFamily": "monospace",
+        },
+    });
+    std::fs::write(
+        &config_path,
+        serde_json::to_string(&config).unwrap_or_default(),
+    )
+    .map_err(|e| format!("couldn't write mermaid theme config: {e}"))?;
+
+    let result = Command::new("npx")
+        .args(["--yes", "@mermaid-js/mermaid-cli"])
+        .arg("-i")
+        .arg(&in_path)
+        .arg("-o")
+        .arg(&out_path)
+        .arg("-b")
+        .arg(palette.bg0)
+        .arg("-c")
+        .arg(&config_path)
+        .current_dir(&scratch)
+        .output();
+
+    let svg = match result {
+        Ok(output) if output.status.success() => std::fs::read_to_string(&out_path)
+            .map_err(|e| format!("mmdc reported success but the output SVG is unreadable: {e}")),
+        Ok(output) => Err(format!(
+            "mmdc exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+        Err(e) => Err(format!(
+            "couldn't launch `npx` — is Node.js installed? ({e})"
+        )),
+    };
+
+    let _ = std::fs::remove_dir_all(&scratch);
+    svg
+}
+
+/// Render one `#+begin_src mermaid` block's source to HTML: an inline
+/// `<svg>` on success, or (without failing the whole export) a warning +
+/// `<pre>` of the raw source on failure. `source` is the raw mermaid text
+/// (NOT html-escaped — the success path embeds mmdc's own SVG output
+/// as-is, the failure path escapes it going into `<pre>`).
+fn render_mermaid_block(source: &str, palette: &GruvboxPalette) -> String {
+    match try_render_mermaid_svg(source, palette) {
+        Ok(svg) => format!("<div class=\"mermaid-diagram\">{svg}</div>\n"),
+        Err(reason) => {
+            eprintln!(
+                "kb_export_subgraph_html: mermaid diagram render failed, falling back to raw \
+                 source ({reason})"
+            );
+            mermaid_fallback_html(source, &reason)
+        }
+    }
+}
+
+/// Pure (no subprocess) — the exact markup `render_mermaid_block` falls
+/// back to on a render failure. Split out so the fallback shape is
+/// unit-testable without depending on `mmdc`/`npx` being present in the
+/// test environment.
+fn mermaid_fallback_html(source: &str, reason: &str) -> String {
+    format!(
+        "<div class=\"mermaid-fallback\">\n\
+         <p class=\"mermaid-fallback-warning\">⚠ Diagram could not be rendered ({}) — showing raw source:</p>\n\
+         <pre><code class=\"language-mermaid\">{}</code></pre>\n\
+         </div>\n",
+        html_escape(reason),
+        html_escape(source)
+    )
+}
+
+// ---------------------------------------------------------------------
+// Node body -> HTML (org source blocks get mermaid special-casing;
+// everything else reuses crate::html's element renderer)
+// ---------------------------------------------------------------------
+
+/// Render a KB node's org-mode body to an HTML fragment safe to assign via
+/// `element.innerHTML` client-side: every bit of the source node's own
+/// text content is `html_escape`d (via `crate::html`'s existing element
+/// renderer — see `render_org_element`'s doc comment), and `#+begin_src
+/// mermaid` blocks are pre-rendered to inline SVG (or a safe raw-source
+/// fallback) instead of being dumped as a generic `<pre><code>` block.
+fn render_node_body_html(body: &str, palette: &GruvboxPalette) -> String {
+    let (meta, elements) = parse_org_document(body);
+    let mut html = String::with_capacity(body.len() * 2);
+    for element in &elements {
+        if let OrgElement::SrcBlock {
+            language,
+            body: src,
+            ..
+        } = element
+        {
+            if language.eq_ignore_ascii_case("mermaid") {
+                html.push_str(&render_mermaid_block(src, palette));
+                continue;
+            }
+        }
+        render_org_element(&mut html, element, &meta.options);
+    }
+    html
+}
+
+/// A short, plain-text (no markup) preview of a node body for the hover
+/// popover — org markup characters stripped, collapsed to single-line
+/// whitespace, truncated to `max_chars` (character-boundary-safe) with a
+/// trailing ellipsis if truncated.
+pub fn plain_text_preview(body: &str, max_chars: usize) -> String {
+    let (_, elements) = parse_org_document(body);
+    let mut text = String::new();
+    for element in &elements {
+        match element {
+            OrgElement::Paragraph(p) => {
+                text.push_str(p);
+                text.push(' ');
+            }
+            OrgElement::Heading { title, .. } => {
+                text.push_str(title);
+                text.push(' ');
+            }
+            OrgElement::Quote(q) => {
+                text.push_str(q);
+                text.push(' ');
+            }
+            OrgElement::List { items, .. } => {
+                for item in items {
+                    text.push_str(&item.content);
+                    text.push(' ');
+                }
+            }
+            _ => {}
+        }
+    }
+    // Collapse whitespace (newlines from multi-line paragraphs, etc.) and
+    // strip the plainest org emphasis markers so the preview doesn't show
+    // literal `*bold*`/`/italic/` asterisks/slashes.
+    let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let stripped: String = collapsed
+        .chars()
+        .filter(|c| !matches!(c, '*' | '/' | '=' | '~'))
+        .collect();
+    truncate_chars(stripped.trim(), max_chars)
+}
+
+fn truncate_chars(s: &str, max_chars: usize) -> String {
+    if s.chars().count() <= max_chars {
+        return s.to_string();
+    }
+    let mut out: String = s.chars().take(max_chars).collect();
+    out.push('…');
+    out
+}
+
+// ---------------------------------------------------------------------
+// Exported graph data model
+// ---------------------------------------------------------------------
+
+/// One node ready for HTML export: a flattened, already-positioned,
+/// already-rendered view over a `mae_kb::Node` (the caller in
+/// `crates/ai/src/tool_impls` bridges the types — see module docs).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GraphExportNode {
+    pub id: String,
+    pub kind: String,
+    pub x: f64,
+    pub y: f64,
+    /// `NodeSource::Seed` — see module docs' `is_seed` vs `is_anchor` note.
+    pub is_seed: bool,
+    /// The BFS starter/center node this subgraph export was rooted at —
+    /// drives the page's "distinct styling + Start here" affordance. See
+    /// module docs.
+    pub is_anchor: bool,
+    pub title_en: String,
+    pub body_en: String,
+    pub preview_en: String,
+    pub title_es: String,
+    pub body_es: String,
+    pub preview_es: String,
+}
+
+/// One internal edge (both endpoints present in the exported node set —
+/// boundary links are dropped for v1, see module docs).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct GraphExportEdge {
+    pub source: String,
+    pub target: String,
+    pub rel_type: String,
+    pub weight: f64,
+}
+
+/// Build a [`GraphExportNode`] from raw org-mode title/body content —
+/// applies mermaid pre-rendering, the plain-text hover preview, and the
+/// bilingual overlay (mirrors EN when no translation is present) in one
+/// place, so callers (the real tool impl AND tests) never have to
+/// duplicate this assembly.
+#[allow(clippy::too_many_arguments)]
+pub fn build_export_node(
+    id: impl Into<String>,
+    kind: impl Into<String>,
+    x: f64,
+    y: f64,
+    is_seed: bool,
+    is_anchor: bool,
+    title: &str,
+    body: &str,
+    translation: Option<&NodeTranslation>,
+    palette: &GruvboxPalette,
+) -> GraphExportNode {
+    let body_html = render_node_body_html(body, palette);
+    let preview_en = plain_text_preview(body, 200);
+    let title_es = translation
+        .and_then(|t| t.title_es.clone())
+        .unwrap_or_else(|| title.to_string());
+    let (body_es, preview_es) = match translation.and_then(|t| t.body_es.as_deref()) {
+        Some(es_body) => (
+            render_node_body_html(es_body, palette),
+            plain_text_preview(es_body, 200),
+        ),
+        None => (body_html.clone(), preview_en.clone()),
+    };
+    GraphExportNode {
+        id: id.into(),
+        kind: kind.into(),
+        x,
+        y,
+        is_seed,
+        is_anchor,
+        title_en: title.to_string(),
+        body_en: body_html,
+        preview_en,
+        title_es,
+        body_es,
+        preview_es,
+    }
+}
+
+// ---------------------------------------------------------------------
+// HTML assembly
+// ---------------------------------------------------------------------
+
+/// Exports a positioned KB subgraph to one self-contained HTML page.
+/// Mirrors `crate::html::HtmlExporter`'s "one function, one dependency-free
+/// HTML string" shape (see module docs for why this isn't the same
+/// `Exporter` trait).
+pub struct HtmlGraphExporter;
+
+impl HtmlGraphExporter {
+    /// `page_title`: `<title>`/`<h1>` text (e.g. "Terraform Onboarding").
+    /// `anchor_id`: the id of the node with `is_anchor: true` in `nodes` —
+    /// used to drive "Start here" without the page having to re-scan
+    /// `nodes` client-side for the flag.
+    pub fn export(
+        &self,
+        nodes: &[GraphExportNode],
+        edges: &[GraphExportEdge],
+        anchor_id: &str,
+        page_title: &str,
+    ) -> String {
+        let node_ids: std::collections::HashSet<&str> =
+            nodes.iter().map(|n| n.id.as_str()).collect();
+        // Defensive: drop any edge whose endpoint isn't in `nodes` — an
+        // internal-caller-contract violation (boundary links are supposed
+        // to already be filtered out before this point, see module docs),
+        // not a user-facing error, so this stays a silent filter rather
+        // than a panic/Result.
+        let edges: Vec<&GraphExportEdge> = edges
+            .iter()
+            .filter(|e| {
+                node_ids.contains(e.source.as_str()) && node_ids.contains(e.target.as_str())
+            })
+            .collect();
+
+        let has_translations = nodes.iter().any(|n| n.title_es != n.title_en);
+
+        let dark = GruvboxPalette::dark();
+        let light = GruvboxPalette::light();
+
+        let payload = serde_json::json!({
+            "anchorId": anchor_id,
+            "hasTranslations": has_translations,
+            "nodes": nodes,
+            "edges": edges,
+        });
+        let payload_json = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
+
+        let mut html = String::with_capacity(64 * 1024);
+        html.push_str("<!DOCTYPE html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n");
+        html.push_str("<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n");
+        html.push_str("<title>");
+        html.push_str(&html_escape(page_title));
+        html.push_str("</title>\n<style>\n");
+        html.push_str(&render_css_variables(&dark, &light));
+        html.push_str(STATIC_CSS);
+        html.push_str("</style>\n</head>\n<body>\n");
+
+        html.push_str("<header id=\"page-header\">\n<h1 id=\"page-title\">");
+        html.push_str(&html_escape(page_title));
+        html.push_str("</h1>\n<div class=\"controls\">\n");
+        html.push_str("<button id=\"start-here\" type=\"button\">Start here \u{2192}</button>\n");
+        html.push_str("<button id=\"lang-toggle\" type=\"button\" hidden>EN / ES</button>\n");
+        html.push_str("</div>\n</header>\n");
+
+        html.push_str(
+            "<main id=\"app-main\">\n\
+             <div id=\"graph-pane\">\n\
+             <svg id=\"graph-svg\" xmlns=\"http://www.w3.org/2000/svg\"></svg>\n\
+             <div id=\"popover\" class=\"popover\" hidden></div>\n\
+             </div>\n\
+             <aside id=\"detail-panel\">\n\
+             <p class=\"hint\">Click a node in the graph to see its details here.</p>\n\
+             </aside>\n\
+             </main>\n",
+        );
+
+        html.push_str("<script id=\"graph-data\" type=\"application/json\">");
+        html.push_str(&escape_for_inline_script(&payload_json));
+        html.push_str("</script>\n");
+
+        html.push_str("<script>\n");
+        html.push_str(&escape_for_inline_script(GRAPH_JS));
+        html.push_str("\n</script>\n");
+
+        html.push_str("</body>\n</html>\n");
+        html
+    }
+}
+
+/// Guard against a JSON string (or, defensively, the static JS constant)
+/// containing a literal `</script`/`</style` sequence that would
+/// prematurely close the surrounding `<script>` tag and let subsequent
+/// markup escape into the page as raw HTML/JS. Escaping every `</`
+/// occurrence to `<\/` is valid inside both a JSON string literal
+/// (backslash-solidus is a legal JSON escape, decodes back to `/`) and a
+/// `<script>` element's text content (browsers don't interpret `<\/` as a
+/// tag close) — so this is safe to apply unconditionally, not just when a
+/// dangerous substring is detected.
+fn escape_for_inline_script(s: &str) -> String {
+    s.replace("</", "<\\/")
+}
+
+fn render_css_variables(dark: &GruvboxPalette, light: &GruvboxPalette) -> String {
+    let mut css = String::new();
+    css.push_str(":root {\n");
+    push_palette_vars(&mut css, dark);
+    css.push_str("}\n");
+    css.push_str("@media (prefers-color-scheme: light) {\n:root {\n");
+    push_palette_vars(&mut css, light);
+    css.push_str("}\n}\n");
+    css.push_str(":root[data-theme=\"dark\"] {\n");
+    push_palette_vars(&mut css, dark);
+    css.push_str("}\n:root[data-theme=\"light\"] {\n");
+    push_palette_vars(&mut css, light);
+    css.push_str("}\n");
+    css
+}
+
+fn push_palette_vars(css: &mut String, p: &GruvboxPalette) {
+    let vars: [(&str, &str); 24] = [
+        ("--bg0", p.bg0),
+        ("--bg1", p.bg1),
+        ("--bg2", p.bg2),
+        ("--bg3", p.bg3),
+        ("--fg0", p.fg0),
+        ("--fg1", p.fg1),
+        ("--fg2", p.fg2),
+        ("--fg3", p.fg3),
+        ("--fg4", p.fg4),
+        ("--gray", p.gray),
+        ("--node-index", p.node_index),
+        ("--node-command", p.node_command),
+        ("--node-concept", p.node_concept),
+        ("--node-key", p.node_key),
+        ("--node-note", p.node_note),
+        ("--node-project", p.node_project),
+        ("--node-category", p.node_category),
+        ("--node-lesson", p.node_lesson),
+        ("--node-tutorial", p.node_tutorial),
+        ("--node-meta", p.node_meta),
+        ("--node-block", p.node_block),
+        ("--node-scheme_api", p.node_scheme_api),
+        ("--node-task", p.node_task),
+        ("--node-view", p.node_view),
+    ];
+    for (name, value) in vars {
+        css.push_str(name);
+        css.push_str(": ");
+        css.push_str(value);
+        css.push_str(";\n");
+    }
+    css.push_str("--node-anchor: ");
+    css.push_str(p.node_selected);
+    css.push_str(";\n--node-hover: ");
+    css.push_str(p.node_hover);
+    css.push_str(";\n--edge: ");
+    css.push_str(p.edge);
+    css.push_str(";\n--edge-boundary: ");
+    css.push_str(p.edge_boundary);
+    css.push_str(";\n");
+}
+
+const STATIC_CSS: &str = r#"
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; }
+body {
+  background: var(--bg0);
+  color: var(--fg1);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  display: flex;
+  flex-direction: column;
+}
+#page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1.25rem;
+  background: var(--bg1);
+  border-bottom: 1px solid var(--bg3);
+}
+#page-title { margin: 0; font-size: 1.25rem; }
+.controls button {
+  background: var(--bg2);
+  color: var(--fg1);
+  border: 1px solid var(--bg3);
+  border-radius: 4px;
+  padding: 0.4rem 0.8rem;
+  margin-left: 0.5rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.controls button:hover { background: var(--bg3); }
+#app-main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+#graph-pane {
+  flex: 2;
+  position: relative;
+  min-width: 0;
+  border-right: 1px solid var(--bg3);
+}
+#graph-svg { width: 100%; height: 100%; display: block; }
+#detail-panel {
+  flex: 1;
+  min-width: 260px;
+  max-width: 420px;
+  overflow-y: auto;
+  padding: 1rem 1.25rem;
+}
+#detail-panel .hint { color: var(--fg3); font-style: italic; }
+#detail-panel h2 { margin-top: 0; }
+#detail-panel .kind-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--bg0);
+  background: var(--fg3);
+  border-radius: 3px;
+  padding: 0.1rem 0.4rem;
+  margin-bottom: 0.5rem;
+}
+#detail-panel .anchor-note {
+  background: var(--bg1);
+  border-left: 3px solid var(--node-anchor);
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+}
+#detail-panel .link-list { list-style: none; padding: 0; margin: 0.5rem 0; }
+#detail-panel .link-list li { margin-bottom: 0.3rem; }
+#detail-panel .link-jump {
+  background: none;
+  border: 1px solid var(--bg3);
+  color: var(--fg1);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+#detail-panel .link-jump:hover { background: var(--bg1); }
+#detail-panel .external-link {
+  color: var(--fg4);
+  font-size: 0.85rem;
+}
+#detail-panel pre { background: var(--bg1); padding: 0.75rem; border-radius: 4px; overflow-x: auto; }
+#detail-panel code { font-family: "JetBrains Mono", "Fira Code", monospace; }
+#detail-panel blockquote { border-left: 3px solid var(--bg3); margin-left: 0; padding-left: 0.75rem; color: var(--fg3); }
+.mermaid-diagram { margin: 0.75rem 0; }
+.mermaid-diagram svg { max-width: 100%; height: auto; }
+.mermaid-fallback-warning { color: var(--node-command); font-size: 0.85rem; }
+
+.popover {
+  position: fixed;
+  max-width: 320px;
+  background: var(--bg1);
+  border: 1px solid var(--bg3);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  pointer-events: none;
+  z-index: 10;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.popover .popover-title { font-weight: bold; margin-bottom: 0.25rem; }
+.popover .popover-body { color: var(--fg3); }
+
+.node circle {
+  stroke: var(--bg0);
+  stroke-width: 1.5;
+}
+.node text {
+  fill: var(--fg2);
+  font-size: 11px;
+  pointer-events: none;
+  user-select: none;
+}
+.node { cursor: pointer; }
+.node-kind-index circle { fill: var(--node-index); }
+.node-kind-command circle { fill: var(--node-command); }
+.node-kind-concept circle { fill: var(--node-concept); }
+.node-kind-key circle { fill: var(--node-key); }
+.node-kind-note circle { fill: var(--node-note); }
+.node-kind-project circle { fill: var(--node-project); }
+.node-kind-category circle { fill: var(--node-category); }
+.node-kind-lesson circle { fill: var(--node-lesson); }
+.node-kind-tutorial circle { fill: var(--node-tutorial); }
+.node-kind-meta circle { fill: var(--node-meta); }
+.node-kind-block circle { fill: var(--node-block); }
+.node-kind-scheme_api circle { fill: var(--node-scheme_api); }
+.node-kind-task circle { fill: var(--node-task); }
+.node-kind-view circle { fill: var(--node-view); }
+.node.node-anchor circle { stroke: var(--node-anchor); stroke-width: 3; }
+.node.node-anchor text { font-weight: bold; }
+/* Selected wins over hovered when both apply to the same node — same
+   priority rule as crates/core/src/graph_view.rs's flatten_scene_graph
+   (`is_selected` checked before `is_hovered`). Ported here purely via CSS
+   cascade order: .node.selected's rule is declared AFTER .node.hovered's,
+   so at equal specificity it wins regardless of DOM class-application
+   order. */
+.node.hovered circle { fill: var(--node-hover); }
+.node.selected circle { fill: var(--node-anchor); stroke-width: 3; }
+
+.edge { stroke: var(--edge); stroke-width: 1.5; opacity: 0.7; }
+.edge-rel-implements { stroke: var(--node-scheme_api); }
+.edge-rel-extends { stroke: var(--node-category); }
+.edge-rel-contradicts { stroke: var(--node-meta); }
+.edge-rel-explains { stroke: var(--node-concept); }
+.edge-rel-supersedes { stroke: var(--node-index); }
+.edge-rel-part_of { stroke: var(--node-key); }
+"#;
+
+/// Vanilla JS graph interaction layer — no bundler, no external CDN, no
+/// npm dependency shipped in the output. 100% static (every dynamic value
+/// comes from the embedded `#graph-data` JSON payload read at runtime), so
+/// this constant needs no `format!`/placeholder interpolation and can't
+/// suffer brace-escaping bugs.
+const GRAPH_JS: &str = r#"
+(function () {
+  "use strict";
+  var data = JSON.parse(document.getElementById("graph-data").textContent);
+  var nodes = data.nodes;
+  var edges = data.edges;
+  var anchorId = data.anchorId;
+  var hasTranslations = data.hasTranslations;
+
+  var nodesById = {};
+  nodes.forEach(function (n, i) { n._idx = i; nodesById[n.id] = n; });
+
+  var svg = document.getElementById("graph-svg");
+  var popover = document.getElementById("popover");
+  var detailPanel = document.getElementById("detail-panel");
+  var langToggle = document.getElementById("lang-toggle");
+  var startHereBtn = document.getElementById("start-here");
+
+  var currentLang = "en";
+  var selectedId = null;
+
+  if (hasTranslations) {
+    langToggle.hidden = false;
+  }
+
+  // --- Layout: fit all node positions into the SVG viewBox ---
+  var pad = 60;
+  var minX = Math.min.apply(null, nodes.map(function (n) { return n.x; }));
+  var maxX = Math.max.apply(null, nodes.map(function (n) { return n.x; }));
+  var minY = Math.min.apply(null, nodes.map(function (n) { return n.y; }));
+  var maxY = Math.max.apply(null, nodes.map(function (n) { return n.y; }));
+  if (!isFinite(minX)) { minX = 0; maxX = 100; minY = 0; maxY = 100; }
+  var w = Math.max(1, maxX - minX);
+  var h = Math.max(1, maxY - minY);
+  svg.setAttribute("viewBox", (minX - pad) + " " + (minY - pad) + " " + (w + pad * 2) + " " + (h + pad * 2));
+  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+
+  function degreeOf(id) {
+    var d = 0;
+    edges.forEach(function (e) { if (e.source === id || e.target === id) d++; });
+    return d;
+  }
+
+  var svgNS = "http://www.w3.org/2000/svg";
+  function el(tag, attrs) {
+    var n = document.createElementNS(svgNS, tag);
+    for (var k in attrs) { n.setAttribute(k, attrs[k]); }
+    return n;
+  }
+  function relClass(rel) {
+    return "edge-rel-" + String(rel || "").toLowerCase().replace(/[^a-z0-9_-]/g, "_");
+  }
+
+  // --- Draw edges first (under nodes) ---
+  var edgeLayer = el("g", { id: "edge-layer" });
+  svg.appendChild(edgeLayer);
+  edges.forEach(function (e) {
+    var s = nodesById[e.source], t = nodesById[e.target];
+    if (!s || !t) { return; }
+    var line = el("line", {
+      x1: s.x, y1: s.y, x2: t.x, y2: t.y,
+      class: "edge " + relClass(e.rel_type),
+    });
+    edgeLayer.appendChild(line);
+  });
+
+  // --- Draw nodes ---
+  var nodeLayer = el("g", { id: "node-layer" });
+  svg.appendChild(nodeLayer);
+  var nodeGroups = [];
+  nodes.forEach(function (n) {
+    var deg = degreeOf(n.id);
+    var r = (n.is_anchor ? 14 : 9) + Math.min(deg, 6) * 0.8;
+    var g = el("g", {
+      class: "node node-kind-" + n.kind + (n.is_anchor ? " node-anchor" : ""),
+      "data-idx": n._idx,
+    });
+    var circle = el("circle", { cx: n.x, cy: n.y, r: r });
+    var text = el("text", { x: n.x + r + 3, y: n.y + 4 });
+    text.textContent = n["title_" + currentLang];
+    g.appendChild(circle);
+    g.appendChild(text);
+    g.addEventListener("mouseenter", function () { onHover(n, true); });
+    g.addEventListener("mousemove", movePopover);
+    g.addEventListener("mouseleave", function () { onHover(n, false); });
+    g.addEventListener("click", function () { selectNode(n.id); });
+    nodeLayer.appendChild(g);
+    nodeGroups.push(g);
+  });
+
+  function groupFor(id) {
+    var n = nodesById[id];
+    return n ? nodeGroups[n._idx] : null;
+  }
+
+  // --- Hover popover ---
+  function onHover(n, entering) {
+    var g = groupFor(n.id);
+    if (g) { g.classList.toggle("hovered", entering); }
+    if (!entering) { popover.hidden = true; return; }
+    popover.querySelector && null;
+    popover.innerHTML =
+      "<div class=\"popover-title\"></div><div class=\"popover-body\"></div>";
+    popover.querySelector(".popover-title").textContent = n["title_" + currentLang];
+    popover.querySelector(".popover-body").textContent = n["preview_" + currentLang];
+    popover.hidden = false;
+  }
+  function movePopover(ev) {
+    popover.style.left = (ev.clientX + 14) + "px";
+    popover.style.top = (ev.clientY + 14) + "px";
+  }
+
+  // --- Selection / detail panel ---
+  function outgoingLinks(id) {
+    return edges.filter(function (e) { return e.source === id; })
+      .map(function (e) { return { node: nodesById[e.target], rel: e.rel_type }; })
+      .filter(function (x) { return x.node; });
+  }
+  function incomingLinks(id) {
+    return edges.filter(function (e) { return e.target === id; })
+      .map(function (e) { return { node: nodesById[e.source], rel: e.rel_type }; })
+      .filter(function (x) { return x.node; });
+  }
+
+  function renderLinkList(title, links) {
+    if (links.length === 0) { return ""; }
+    var html = "<h3>" + title + "</h3><ul class=\"link-list\">";
+    links.forEach(function (l) {
+      html += "<li><button type=\"button\" class=\"link-jump\" data-target=\"" +
+        String(l.node.id).replace(/"/g, "&quot;") + "\">" +
+        escapeHtml(l.node["title_" + currentLang]) +
+        " <span class=\"external-link\">(" + escapeHtml(l.rel || "related_to") + ")</span></button></li>";
+    });
+    html += "</ul>";
+    return html;
+  }
+  function escapeHtml(s) {
+    return String(s == null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  }
+
+  function renderDetail(n) {
+    var html = "";
+    html += "<span class=\"kind-badge\"></span>";
+    html += "<h2 class=\"detail-title\"></h2>";
+    if (n.is_anchor) {
+      html += "<p class=\"anchor-note\">Starting point of this exported subgraph.</p>";
+    }
+    html += "<div class=\"detail-body\"></div>";
+    html += renderLinkList("Links to", outgoingLinks(n.id));
+    html += renderLinkList("Linked from", incomingLinks(n.id));
+    detailPanel.innerHTML = html;
+    detailPanel.querySelector(".kind-badge").textContent = n.kind;
+    detailPanel.querySelector(".detail-title").textContent = n["title_" + currentLang];
+    // n.body_en / n.body_es are pre-escaped HTML produced server-side by
+    // mae-export's org renderer (crate::html_escape on every bit of real
+    // node content) — safe to assign via innerHTML.
+    detailPanel.querySelector(".detail-body").innerHTML = n["body_" + currentLang];
+    detailPanel.querySelectorAll(".link-jump").forEach(function (btn) {
+      btn.addEventListener("click", function () { selectNode(btn.getAttribute("data-target")); });
+    });
+  }
+
+  function selectNode(id) {
+    var n = nodesById[id];
+    if (!n) { return; }
+    if (selectedId != null) {
+      var prevG = groupFor(selectedId);
+      if (prevG) { prevG.classList.remove("selected"); }
+    }
+    selectedId = id;
+    var g = groupFor(id);
+    if (g) { g.classList.add("selected"); }
+    renderDetail(n);
+  }
+
+  // --- Suggested reading order (BFS distance from the anchor node) +
+  // "Start here" walk ---
+  function computeReadingOrder() {
+    var adjacency = {};
+    nodes.forEach(function (n) { adjacency[n.id] = []; });
+    edges.forEach(function (e) {
+      if (adjacency[e.source]) { adjacency[e.source].push(e.target); }
+      if (adjacency[e.target]) { adjacency[e.target].push(e.source); }
+    });
+    var dist = {};
+    nodes.forEach(function (n) { dist[n.id] = Infinity; });
+    if (dist[anchorId] !== undefined) {
+      dist[anchorId] = 0;
+      var queue = [anchorId];
+      while (queue.length) {
+        var cur = queue.shift();
+        (adjacency[cur] || []).forEach(function (next) {
+          if (dist[next] === Infinity) { dist[next] = dist[cur] + 1; queue.push(next); }
+        });
+      }
+    }
+    var order = nodes.slice().sort(function (a, b) {
+      if (dist[a.id] !== dist[b.id]) { return dist[a.id] - dist[b.id]; }
+      var degA = degreeOf(a.id), degB = degreeOf(b.id);
+      if (degA !== degB) { return degB - degA; }
+      return a.id < b.id ? -1 : (a.id > b.id ? 1 : 0);
+    });
+    return order.map(function (n) { return n.id; });
+  }
+  var readingOrder = computeReadingOrder();
+  var walkIndex = -1;
+  startHereBtn.addEventListener("click", function () {
+    walkIndex = (walkIndex + 1) % readingOrder.length;
+    selectNode(readingOrder[walkIndex]);
+    startHereBtn.textContent = walkIndex === readingOrder.length - 1
+      ? "Restart ↺"
+      : "Next →";
+    if (walkIndex === readingOrder.length - 1) { walkIndex = -1; }
+  });
+
+  // --- EN/ES toggle: swaps all visible text in place, instantly ---
+  function applyLanguage() {
+    nodeGroups.forEach(function (g, i) {
+      var n = nodes[i];
+      var t = g.querySelector("text");
+      if (t) { t.textContent = n["title_" + currentLang]; }
+    });
+    if (selectedId != null) { renderDetail(nodesById[selectedId]); }
+    langToggle.textContent = currentLang === "en" ? "EN / ES → ES" : "ES / EN → EN";
+  }
+  langToggle.addEventListener("click", function () {
+    currentLang = currentLang === "en" ? "es" : "en";
+    applyLanguage();
+  });
+  applyLanguage();
+})();
+"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn palette() -> GruvboxPalette {
+        GruvboxPalette::dark()
+    }
+
+    fn simple_node(id: &str, title: &str, body: &str, is_anchor: bool) -> GraphExportNode {
+        build_export_node(
+            id,
+            "note",
+            0.0,
+            0.0,
+            false,
+            is_anchor,
+            title,
+            body,
+            None,
+            &palette(),
+        )
+    }
+
+    // --- Translation loading ---
+
+    #[test]
+    fn load_translations_parses_valid_file() {
+        let dir = std::env::temp_dir().join(format!("mae-html-graph-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("translations.json");
+        std::fs::write(
+            &path,
+            r#"{"node-a": {"title_es": "Título", "body_es": "Cuerpo"}}"#,
+        )
+        .unwrap();
+        let map = load_translations(&path).unwrap();
+        assert_eq!(map["node-a"].title_es.as_deref(), Some("Título"));
+        assert_eq!(map["node-a"].body_es.as_deref(), Some("Cuerpo"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_translations_fails_clearly_on_missing_file() {
+        let path = std::path::Path::new("/nonexistent/path/translations.json");
+        let err = load_translations(path).unwrap_err();
+        assert!(err.contains("translations file"), "{err}");
+        assert!(err.contains("nonexistent"), "{err}");
+    }
+
+    #[test]
+    fn load_translations_fails_clearly_on_malformed_json() {
+        let dir =
+            std::env::temp_dir().join(format!("mae-html-graph-test-bad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("translations.json");
+        std::fs::write(&path, "not json at all").unwrap();
+        let err = load_translations(&path).unwrap_err();
+        assert!(err.contains("valid JSON"), "{err}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // --- Bilingual mirroring ---
+
+    #[test]
+    fn node_without_translation_mirrors_en_into_es() {
+        let n = simple_node("a", "Title", "Body text.", false);
+        assert_eq!(n.title_es, n.title_en);
+        assert_eq!(n.body_es, n.body_en);
+        assert_eq!(n.preview_es, n.preview_en);
+    }
+
+    #[test]
+    fn node_with_translation_carries_es_fields() {
+        let t = NodeTranslation {
+            title_es: Some("Título ES".to_string()),
+            body_es: Some("Cuerpo ES.".to_string()),
+        };
+        let n = build_export_node(
+            "a",
+            "note",
+            0.0,
+            0.0,
+            false,
+            false,
+            "Title EN",
+            "Body EN.",
+            Some(&t),
+            &palette(),
+        );
+        assert_eq!(n.title_es, "Título ES");
+        assert!(n.body_es.contains("Cuerpo ES"));
+        assert_ne!(n.body_es, n.body_en);
+    }
+
+    // --- Mermaid fallback (pure, no subprocess) ---
+
+    #[test]
+    fn mermaid_fallback_escapes_source_and_reason() {
+        let html = mermaid_fallback_html("graph TD; A-->B;", "npx not found <script>");
+        assert!(html.contains("graph TD; A--&gt;B;"));
+        assert!(html.contains("&lt;script&gt;"));
+        assert!(!html.contains("<script>"));
+    }
+
+    // --- plain_text_preview ---
+
+    #[test]
+    fn plain_text_preview_strips_markup_and_truncates() {
+        let body = "A *bold* paragraph with /italic/ text. ".repeat(20);
+        let preview = plain_text_preview(&body, 50);
+        assert!(preview.chars().count() <= 51); // 50 + ellipsis
+        assert!(!preview.contains('*'));
+        assert!(!preview.contains('/'));
+    }
+
+    #[test]
+    fn plain_text_preview_short_body_not_truncated() {
+        let preview = plain_text_preview("Short body.", 200);
+        assert_eq!(preview, "Short body.");
+    }
+
+    // --- HtmlGraphExporter::export: serialization / structure ---
+
+    #[test]
+    fn export_produces_well_formed_standalone_html() {
+        let nodes = vec![
+            simple_node("a", "Node A", "Body A.", true),
+            simple_node("b", "Node B", "Body B, see [[id:a][A]].", false),
+        ];
+        let edges = vec![GraphExportEdge {
+            source: "a".to_string(),
+            target: "b".to_string(),
+            rel_type: "explains".to_string(),
+            weight: 1.0,
+        }];
+        let html = HtmlGraphExporter.export(&nodes, &edges, "a", "Test Subgraph");
+
+        assert!(html.starts_with("<!DOCTYPE html>"));
+        assert!(html.trim_end().ends_with("</html>"));
+        assert!(html.contains("<title>Test Subgraph</title>"));
+        assert!(html.contains("id=\"graph-data\""));
+        // Both nodes' ids appear in the embedded JSON payload.
+        assert!(html.contains("\"id\":\"a\""));
+        assert!(html.contains("\"id\":\"b\""));
+        // No external network requests of any kind.
+        assert!(!html.contains("<script src="));
+        // The SVG namespace URI legitimately contains "http://" — that's
+        // not a fetch, just an XML namespace string, so only the actual
+        // network-fetch shapes are disallowed.
+        assert!(!html.contains("<script src=\"http"));
+        assert!(!html.contains("<link rel=\"stylesheet\" href=\"http"));
+        assert!(!html.contains("cdn."));
+    }
+
+    #[test]
+    fn export_contains_no_external_script_or_style_references() {
+        let nodes = vec![simple_node("a", "Node A", "Body.", true)];
+        let html = HtmlGraphExporter.export(&nodes, &[], "a", "Title");
+        assert!(!html.contains("<script src=\"http"));
+        assert!(!html.contains("<link "));
+        assert!(!html.contains("<script src=\"https"));
+    }
+
+    #[test]
+    fn export_expected_node_count_reflected_in_payload() {
+        let nodes = vec![
+            simple_node("a", "A", "body", true),
+            simple_node("b", "B", "body", false),
+            simple_node("c", "C", "body", false),
+        ];
+        let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
+        // Crude but effective: three distinct `"id":"..."` occurrences.
+        let count = html.matches("\"id\":\"").count();
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn export_drops_edges_with_endpoints_outside_the_node_set() {
+        let nodes = vec![simple_node("a", "A", "body", true)];
+        let edges = vec![GraphExportEdge {
+            source: "a".to_string(),
+            target: "ghost".to_string(),
+            rel_type: "references".to_string(),
+            weight: 1.0,
+        }];
+        let html = HtmlGraphExporter.export(&nodes, &edges, "a", "T");
+        assert!(!html.contains("ghost"));
+    }
+
+    // --- Adversarial: node title/body containing </script>, <style>, quotes ---
+
+    #[test]
+    fn adversarial_title_and_body_cannot_break_out_of_script_or_style_tags() {
+        let evil_title = "Bad\"</script><style>body{display:none}</style><script>alert(1)";
+        let evil_body = "See </script> and <style>*{color:red}</style> and \"quotes\" and 'ticks'.";
+        let n = simple_node("a", evil_title, evil_body, true);
+        let html = HtmlGraphExporter.export(&[n], &[], "a", "Adversarial Test");
+
+        // The meaningful invariant isn't "no literal '<script' substring
+        // anywhere" — an adversarial title's raw text legitimately ends up
+        // inside the JSON payload's string content, and browsers only
+        // treat a CASE-INSENSITIVE "</script"/"</style" CLOSING sequence
+        // as ending a `<script>`/`<style>` element's raw-text content (a
+        // bare, slash-less "<script>" embedded in that text is inert). So
+        // the real oracle is: every "</script"/"</style" occurrence in the
+        // document must be one of the ones WE emitted (exactly 2 real
+        // `</script>` closes — graph-data + the JS body — and exactly 1
+        // real `</style>` close), never one smuggled in via node content.
+        let lower = html.to_lowercase();
+        assert_eq!(
+            lower.matches("</script").count(),
+            2,
+            "adversarial content must not introduce an extra real script-close: {html}"
+        );
+        assert_eq!(
+            lower.matches("</style").count(),
+            1,
+            "adversarial content must not introduce an extra real style-close: {html}"
+        );
+        // And the escaped form must be present where the adversarial
+        // content landed (proving the guard actually fired, not that the
+        // content was simply absent).
+        assert!(html.contains("<\\/script>"), "{html}");
+        assert!(html.contains("<\\/style>"), "{html}");
+    }
+
+    #[test]
+    fn adversarial_quotes_in_title_do_not_break_json() {
+        let evil_title = r#"Title with "quotes" and \backslash\ and 'ticks'"#;
+        let n = simple_node("a", evil_title, "body", false);
+        let html = HtmlGraphExporter.export(&[n], &[], "a", "T");
+        // Extract the JSON payload and confirm it round-trips.
+        let start = html
+            .find("<script id=\"graph-data\" type=\"application/json\">")
+            .unwrap();
+        let start = start + "<script id=\"graph-data\" type=\"application/json\">".len();
+        let end = html[start..].find("</script>").unwrap() + start;
+        let raw_json = &html[start..end];
+        // Undo the </ -> <\/ guard before parsing, exactly like the page's
+        // own JS does implicitly (JSON.parse decodes \/ back to /).
+        let parsed: serde_json::Value = serde_json::from_str(raw_json).expect("valid JSON");
+        assert_eq!(parsed["nodes"][0]["title_en"].as_str().unwrap(), evil_title);
+    }
+
+    #[test]
+    fn html_escape_guard_neutralizes_literal_close_script_sequences() {
+        let s = "</script>alert(1)</style>";
+        let escaped = escape_for_inline_script(s);
+        assert!(!escaped.contains("</script>"));
+        assert!(!escaped.contains("</style>"));
+        assert!(escaped.contains("<\\/script>"));
+    }
+
+    #[test]
+    fn no_translations_hides_toggle_flag_in_payload() {
+        let nodes = vec![simple_node("a", "A", "body", true)];
+        let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
+        assert!(html.contains("\"hasTranslations\":false"));
+    }
+
+    #[test]
+    fn translations_present_sets_flag_true() {
+        let t = NodeTranslation {
+            title_es: Some("Título".to_string()),
+            body_es: None,
+        };
+        let n = build_export_node(
+            "a",
+            "note",
+            0.0,
+            0.0,
+            false,
+            true,
+            "Title",
+            "body",
+            Some(&t),
+            &palette(),
+        );
+        let html = HtmlGraphExporter.export(&[n], &[], "a", "T");
+        assert!(html.contains("\"hasTranslations\":true"));
+    }
+
+    // --- is_seed vs is_anchor are genuinely independent ---
+
+    #[test]
+    fn is_seed_and_is_anchor_are_independent_fields() {
+        let n = build_export_node(
+            "a",
+            "concept",
+            0.0,
+            0.0,
+            true,
+            false,
+            "Builtin Concept",
+            "body",
+            None,
+            &palette(),
+        );
+        assert!(n.is_seed);
+        assert!(!n.is_anchor);
+    }
+
+    // --- Mermaid block routed through render_node_body_html ---
+
+    #[test]
+    fn non_mermaid_src_block_is_rendered_as_plain_code_not_mermaid_path() {
+        let body = "#+begin_src python\nprint(1)\n#+end_src\n";
+        let html = render_node_body_html(body, &palette());
+        assert!(html.contains("<pre><code class=\"language-python\">print(1)</code></pre>"));
+        assert!(!html.contains("mermaid"));
+    }
+
+    // --- Mermaid happy path (real subprocess: npx + @mermaid-js/mermaid-cli).
+    // Network/Node.js-dependent, so `#[ignore]`d by default — run explicitly
+    // with `cargo test -p mae-export -- --ignored mermaid_diagram_renders`
+    // in an environment known to have `npx` + network access. ---
+
+    #[test]
+    #[ignore = "shells out to `npx @mermaid-js/mermaid-cli`; requires Node.js + network"]
+    fn mermaid_diagram_renders_to_real_inline_svg_via_mmdc() {
+        let body =
+            "Some intro text.\n\n#+begin_src mermaid\ngraph TD;\nA-->B;\n#+end_src\n\nOutro.\n";
+        let html = render_node_body_html(body, &palette());
+        assert!(
+            html.contains("<svg"),
+            "expected a real inline <svg> from mmdc, got: {html}"
+        );
+        assert!(
+            !html.contains("mermaid-fallback"),
+            "should not have fallen back: {html}"
+        );
+    }
+
+    // --- Integration: export a small fixture to a real file ---
+
+    #[test]
+    fn integration_exports_fixture_subgraph_to_a_real_file() {
+        let nodes = vec![
+            simple_node(
+                "root",
+                "Root Node",
+                "The root. Links: [[id:child1][Child 1]].",
+                true,
+            ),
+            simple_node("child1", "Child One", "First child body.", false),
+            simple_node("child2", "Child Two", "Second child body.", false),
+            simple_node(
+                "child3",
+                "Child Three",
+                "Third child, unlinked to root directly.",
+                false,
+            ),
+        ];
+        let edges = vec![
+            GraphExportEdge {
+                source: "root".into(),
+                target: "child1".into(),
+                rel_type: "explains".into(),
+                weight: 1.0,
+            },
+            GraphExportEdge {
+                source: "root".into(),
+                target: "child2".into(),
+                rel_type: "related_to".into(),
+                weight: 1.0,
+            },
+            GraphExportEdge {
+                source: "child2".into(),
+                target: "child3".into(),
+                rel_type: "extends".into(),
+                weight: 1.0,
+            },
+        ];
+        let html = HtmlGraphExporter.export(&nodes, &edges, "root", "Fixture Subgraph");
+
+        let dir = tempfile::tempdir().unwrap();
+        let out_path = dir.path().join("export.html");
+        std::fs::write(&out_path, &html).unwrap();
+
+        let read_back = std::fs::read_to_string(&out_path).unwrap();
+        assert!(read_back.starts_with("<!DOCTYPE html>"));
+        assert!(read_back.trim_end().ends_with("</html>"));
+        assert_eq!(read_back.matches("\"id\":\"").count(), 4);
+        assert!(!read_back.contains("<script src=\"http"));
+        assert!(!read_back.contains("<script src=\"https"));
+    }
+}
