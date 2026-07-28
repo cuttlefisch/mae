@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.14.57] - 2026-07-28
+## [0.14.58] - 2026-07-28
 
 ### Bug Fixes
 
@@ -26,6 +26,7 @@ All notable changes to this project will be documented in this file.
 - *(kb)* Widen external_store_change_arms_a_background_reload's deadline (#494) ([5847e98](https://github.com/cuttlefisch/mae/commit/5847e983fb1636d308cbd03aea4bbccd339d724b))
 - *(kb)* The real fix for #494 -- simulate a genuinely separate writer ([cd25c41](https://github.com/cuttlefisch/mae/commit/cd25c4193760eca2cb13d3bac8a56b573cbcf2b0))
 - *(kb)* Root-cause and fix #455/#498 -- kb_reimport_file path canonicalization mismatch ([d0c9e76](https://github.com/cuttlefisch/mae/commit/d0c9e76945df20c315886d8df08473a1a83f9e14))
+- *(kb)* Bound SQLite busy-retry by wall-clock deadline, not attempt count (#484) ([932593b](https://github.com/cuttlefisch/mae/commit/932593bb857a56daba10fa975afb861a59d15b41))
 
 ### CI
 
@@ -76,6 +77,7 @@ All notable changes to this project will be documented in this file.
 - Sync Cargo.lock with 0.14.56 version bump ([a67263e](https://github.com/cuttlefisch/mae/commit/a67263eeca69590f28b838679731b804fefb63d9))
 - *(ci)* Efficiency pass -- composite actions, cache scoping, MSRV leg, path filters ([c420331](https://github.com/cuttlefisch/mae/commit/c42033181bd3e6fdf2d2f3fb4eb9a8f813738bb8))
 - *(adr-kb)* Regenerate assets/mae-adr.cozo for ADR-034's status correction ([909622b](https://github.com/cuttlefisch/mae/commit/909622bbc8cc55d5bd272570165c1704026a2b84))
+- Bump version to 0.14.57 ([15ec5de](https://github.com/cuttlefisch/mae/commit/15ec5de8879c4bf5345c49a4f32797d538a716cd))
 
 ### Performance
 
