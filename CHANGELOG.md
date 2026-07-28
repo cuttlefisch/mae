@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.61] - 2026-07-28
+
+### CI
+
+- Structurally isolate heavy-subprocess-e2e from the full-suite startup burst (#510) (#511) ([0862b82](https://github.com/cuttlefisch/mae/commit/0862b82e99c65c8d27b6725dccc8763a10e5751b))
+
 ## [0.14.60] - 2026-07-28
 
 ### Bug Fixes
@@ -98,6 +104,7 @@ All notable changes to this project will be documented in this file.
 - Bump version to 0.14.58 ([2d5855e](https://github.com/cuttlefisch/mae/commit/2d5855ebcd6c63ac8a0b33eeaf7cb4407555ae2e))
 - *(adr-kb)* Regenerate assets/mae-adr.cozo for ADR-069 ([9facbe7](https://github.com/cuttlefisch/mae/commit/9facbe71646ef5a9d5dd6b84f84b74affae06446))
 - Bump version to 0.14.59 ([ba9a5d5](https://github.com/cuttlefisch/mae/commit/ba9a5d5089384afb34fbee4c05e2d814f4efcf2d))
+- Bump version to 0.14.60 ([18b5c77](https://github.com/cuttlefisch/mae/commit/18b5c7780bc9354af37624ceebc00da5ac1beb41))
 
 ### Performance
 
