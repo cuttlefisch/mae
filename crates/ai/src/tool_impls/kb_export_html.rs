@@ -8,16 +8,22 @@
 //!
 //! Extraction reuses `mae_kb::KnowledgeBase::extract_subgraph` (the same
 //! BFS the native KB graph view uses, `crates/core/src/editor/
-//! graph_view_ops.rs`); layout reuses `mae_canvas::kb_graph::build_kb_graph`
-//! (sunflower seed positions + `ForceLayout::run`, the same pipeline that
-//! backs the native graph view's Force layout mode) so this tool doesn't
-//! reimplement either. HTML assembly lives entirely in
-//! `mae_export::html_graph` — this file is the bridge from `mae-kb`/
-//! `mae-canvas` types to that crate's leaf-crate `GraphExportNode`/
-//! `GraphExportEdge` shapes (mirrors `crates/core/src/editor/
-//! graph_view_ops.rs`'s own `to_kb_nodes`/`to_link_info` bridging for the
-//! exact same reason: `mae-canvas` and `mae-export` are deliberately kept
-//! free of a `mae-kb` dependency).
+//! graph_view_ops.rs`); layout reuses `mae_canvas::kb_graph::
+//! build_kb_graph_chord_positions` (nodes at even angular positions around
+//! a ring, the same chord/Circos-style placement the native graph view's
+//! Chord layout mode uses — see that function's doc comment) so this tool
+//! doesn't reimplement either. The exported nav widget is a small,
+//! secondary chord diagram (edges rendered as arcs through the interior
+//! client-side, see `mae_export::html_graph::GRAPH_JS`), not the primary
+//! force-directed graph view — `build_kb_graph` (Fruchterman-Reingold via
+//! `ForceLayout::run`) is available in the same module if a future caller
+//! wants that instead; swapping is a one-line change, not a new
+//! dependency. HTML assembly lives entirely in `mae_export::html_graph` —
+//! this file is the bridge from `mae-kb`/`mae-canvas` types to that
+//! crate's leaf-crate `GraphExportNode`/`GraphExportEdge` shapes (mirrors
+//! `crates/core/src/editor/graph_view_ops.rs`'s own `to_kb_nodes`/
+//! `to_link_info` bridging for the exact same reason: `mae-canvas` and
+//! `mae-export` are deliberately kept free of a `mae-kb` dependency).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -152,9 +158,18 @@ pub fn execute_kb_export_subgraph_html(
         .collect();
     // Boundary links are dropped for this export (see mae_export::html_graph
     // module docs: v1 is single-KB, read-only, no "... (+N)" stub concept)
-    // -- `build_kb_graph` only needs them to seed initial spacing/repulsion
-    // around a boundary stub, which doesn't apply here, so `&[]`.
-    let scene = mae_canvas::kb_graph::build_kb_graph(&kb_nodes, &kb_links, &[], 1.0);
+    // -- the chord layout doesn't consult them at all, so `&[]`.
+    //
+    // Chord ring positions (`build_kb_graph_chord_positions`), not
+    // force-directed (`build_kb_graph`): the exported nav widget is a
+    // small, secondary chord diagram (nodes at even angular positions,
+    // edges as arcs through the interior -- rendered client-side in
+    // `mae_export::html_graph::GRAPH_JS`), not the primary force-directed
+    // graph view. Both functions live in the same module and share the
+    // same `SceneGraph`/positions-only contract, so this is a one-line
+    // swap, not a new dependency.
+    let scene =
+        mae_canvas::kb_graph::build_kb_graph_chord_positions(&kb_nodes, &kb_links, &[], 1.0);
     let positions: HashMap<String, (f64, f64)> = scene
         .nodes
         .iter()
@@ -338,5 +353,98 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(!out.exists());
+    }
+
+    // --- Chord-ring layout bridge (mae_canvas::kb_graph::
+    // build_kb_graph_chord_positions), the widget's actual layout call ---
+
+    #[test]
+    fn chord_layout_places_three_nodes_at_distinct_positions() {
+        let kb_nodes = vec![
+            mae_canvas::kb_graph::KbNodeInfo {
+                id: "a".into(),
+                title: "A".into(),
+                kind: mae_canvas::scene::NodeKind::Note,
+                is_seed: false,
+            },
+            mae_canvas::kb_graph::KbNodeInfo {
+                id: "b".into(),
+                title: "B".into(),
+                kind: mae_canvas::scene::NodeKind::Note,
+                is_seed: false,
+            },
+            mae_canvas::kb_graph::KbNodeInfo {
+                id: "c".into(),
+                title: "C".into(),
+                kind: mae_canvas::scene::NodeKind::Note,
+                is_seed: false,
+            },
+        ];
+        let scene = mae_canvas::kb_graph::build_kb_graph_chord_positions(&kb_nodes, &[], &[], 1.0);
+        assert_eq!(scene.nodes.len(), 3);
+        let unique: std::collections::HashSet<(i64, i64)> = scene
+            .nodes
+            .iter()
+            .map(|n| ((n.x * 1000.0) as i64, (n.y * 1000.0) as i64))
+            .collect();
+        assert_eq!(
+            unique.len(),
+            3,
+            "chord ring nodes must be at distinct positions: {:?}",
+            scene.nodes.iter().map(|n| (n.x, n.y)).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn exported_subgraph_has_distinct_coordinates_per_node_end_to_end() {
+        let mut editor = editor_with_linked_notes();
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "grandchild",
+            "Grandchild Note",
+            mae_kb::NodeKind::Note,
+            "A grandchild note.",
+        ));
+        editor
+            .kb
+            .primary
+            .get_mut("child")
+            .unwrap()
+            .body
+            .push_str(" See [[grandchild][Grandchild]].");
+
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.html");
+        let result = execute_kb_export_subgraph_html(
+            &editor,
+            &serde_json::json!({"id": "root", "path": out.to_str().unwrap(), "depth": 2}),
+        );
+        assert!(result.is_ok(), "{result:?}");
+        let html = std::fs::read_to_string(&out).unwrap();
+        assert!(html.contains("\"id\":\"grandchild\""));
+
+        // Extract the embedded JSON payload and confirm every node got a
+        // distinct (x, y) from the chord layout, not all collapsed to the
+        // same point.
+        let marker = "<script id=\"graph-data\" type=\"application/json\">";
+        let start = html.find(marker).unwrap() + marker.len();
+        let end = html[start..].find("</script>").unwrap() + start;
+        let raw = html[start..end].replace("<\\/", "</");
+        let payload: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let nodes = payload["nodes"].as_array().unwrap();
+        assert_eq!(nodes.len(), 3);
+        let unique: std::collections::HashSet<(i64, i64)> = nodes
+            .iter()
+            .map(|n| {
+                (
+                    (n["x"].as_f64().unwrap() * 1000.0) as i64,
+                    (n["y"].as_f64().unwrap() * 1000.0) as i64,
+                )
+            })
+            .collect();
+        assert_eq!(
+            unique.len(),
+            3,
+            "expected 3 distinct chord positions: {nodes:?}"
+        );
     }
 }

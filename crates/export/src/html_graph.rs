@@ -153,6 +153,24 @@ pub struct GruvboxPalette {
     /// `"ui.graph.edge.boundary"` — unused by v1 (boundary links are
     /// dropped, see module docs) but kept for parity/future use.
     pub edge_boundary: &'static str,
+    /// Single emphasis accent for the chord-diagram nav widget's current
+    /// node + its incident edges (everything else in that widget renders
+    /// muted, see `push_palette_vars`/`STATIC_CSS`). This is deliberately
+    /// NOT one of the 14 `node_*` per-`NodeKind` hues above — those were
+    /// validated (dataviz skill's categorical-palette checker, run against
+    /// gruvbox's 7 accent hues as a 7-slot categorical set) to genuinely
+    /// FAIL as a simultaneous-discrimination categorical palette (chroma-
+    /// floor failures on `#83a598`/`#d3869b` in dark mode; a CVD ΔE of 1.9
+    /// on the `#d3869b`↔`#83a598` adjacent pair; a normal-vision floor of
+    /// 10.2 on `#fabd2f`↔`#b8bb26`, under the 15 threshold) — fine for the
+    /// full native graph view's 14-way kind legend (a much larger canvas,
+    /// point-read rather than simultaneous-discrimination), but not for a
+    /// small widget that needs exactly ONE color to reliably pop against a
+    /// muted field. `bright_orange` (dark) / `orange` (light) — gruvbox's
+    /// own literal palette values, both independently re-derivable: WCAG
+    /// contrast against this theme's own `bg0` is 5.84:1 (dark,
+    /// `#fe8019` on `#282828`) / 3.41:1 (light, `#d65d0e` on `#fbf1c7`).
+    pub accent: &'static str,
 }
 
 impl GruvboxPalette {
@@ -188,6 +206,7 @@ impl GruvboxPalette {
             node_hover: "#8ec07c",      // bright_aqua
             edge: "#928374",            // gray
             edge_boundary: "#fb4934",   // bright_red
+            accent: "#fe8019",          // bright_orange
         }
     }
 
@@ -223,6 +242,7 @@ impl GruvboxPalette {
             node_hover: "#689d6a",      // aqua
             edge: "#928374",            // gray
             edge_boundary: "#cc241d",   // red
+            accent: "#d65d0e",          // orange
         }
     }
 }
@@ -570,7 +590,13 @@ impl HtmlGraphExporter {
         html.push_str("<header id=\"page-header\">\n<h1 id=\"page-title\">");
         html.push_str(&html_escape(page_title));
         html.push_str("</h1>\n<div class=\"controls\">\n");
+        html.push_str(
+            "<button id=\"home-button\" type=\"button\" title=\"Jump to the spine/anchor node\">\u{2302} Home</button>\n",
+        );
         html.push_str("<button id=\"start-here\" type=\"button\">Start here \u{2192}</button>\n");
+        html.push_str(
+            "<button id=\"theme-toggle\" type=\"button\">\u{263D}/\u{2600} Theme</button>\n",
+        );
         html.push_str("<button id=\"lang-toggle\" type=\"button\" hidden>EN / ES</button>\n");
         html.push_str("</div>\n</header>\n");
 
@@ -581,7 +607,13 @@ impl HtmlGraphExporter {
              <div id=\"popover\" class=\"popover\" hidden></div>\n\
              </div>\n\
              <aside id=\"detail-panel\">\n\
+             <div id=\"detail-panel-content\">\n\
              <p class=\"hint\">Click a node in the graph to see its details here.</p>\n\
+             </div>\n\
+             <nav id=\"outline-panel\">\n\
+             <h3 id=\"outline-toggle\">On this page \u{25be}</h3>\n\
+             <ul class=\"outline-list\" id=\"outline-list\"></ul>\n\
+             </nav>\n\
              </aside>\n\
              </main>\n",
         );
@@ -669,6 +701,8 @@ fn push_palette_vars(css: &mut String, p: &GruvboxPalette) {
     css.push_str(p.edge);
     css.push_str(";\n--edge-boundary: ");
     css.push_str(p.edge_boundary);
+    css.push_str(";\n--accent: ");
+    css.push_str(p.accent);
     css.push_str(";\n");
 }
 
@@ -681,6 +715,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   display: flex;
   flex-direction: column;
+  transition: background-color 200ms ease, color 200ms ease;
 }
 #page-header {
   display: flex;
@@ -689,6 +724,7 @@ body {
   padding: 0.75rem 1.25rem;
   background: var(--bg1);
   border-bottom: 1px solid var(--bg3);
+  transition: background-color 200ms ease, border-color 200ms ease;
 }
 #page-title { margin: 0; font-size: 1.25rem; }
 .controls button {
@@ -700,8 +736,13 @@ body {
   margin-left: 0.5rem;
   cursor: pointer;
   font-size: 0.9rem;
+  /* >=24px hit target on every control, not just graph nodes. */
+  min-height: 24px;
+  transition: background-color 180ms ease, color 180ms ease, transform 180ms ease;
 }
 .controls button:hover { background: var(--bg3); }
+.controls button#home-button { background: var(--accent); color: var(--bg0); border-color: var(--accent); }
+.controls button#home-button:hover { transform: translateY(-1px); }
 #app-main {
   flex: 1;
   display: flex;
@@ -723,6 +764,8 @@ body {
 }
 #detail-panel .hint { color: var(--fg3); font-style: italic; }
 #detail-panel h2 { margin-top: 0; }
+#detail-panel-content { transition: opacity 180ms ease; opacity: 1; }
+#detail-panel-content.fading { opacity: 0; }
 #detail-panel .kind-badge {
   display: inline-block;
   font-size: 0.75rem;
@@ -780,49 +823,98 @@ body {
 .popover .popover-title { font-weight: bold; margin-bottom: 0.25rem; }
 .popover .popover-body { color: var(--fg3); }
 
+/* --- Chord nav widget: a small, muted-by-default view where exactly ONE
+   accent color (--accent, validated for simultaneous-discrimination
+   contrast — see GruvboxPalette::accent's doc comment) marks the current
+   node + its incident edges. Per-kind hues (still used for the kind badge
+   text in the detail panel) are deliberately NOT used for fill here — 14
+   simultaneously-visible hues failed a real categorical-palette check,
+   one accent against a muted field doesn't need to pass that check at
+   all. `transform`/`filter`/`fill`/`stroke` all transition over
+   150-250ms so navigation and hover read as motion, not a snap. */
+#graph-pane {
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+}
 .node circle {
+  fill: var(--fg4);
   stroke: var(--bg0);
   stroke-width: 1.5;
+  /* >=24px hit target regardless of the visible radius below this floor
+     — handled by clamping the drawn radius itself in GRAPH_JS (simpler
+     than a separate invisible hit-layer, and keeps click/hover geometry
+     identical). */
+  transition: transform 200ms ease, filter 200ms ease, fill 200ms ease;
+  transform-box: fill-box;
+  transform-origin: center;
 }
 .node text {
-  fill: var(--fg2);
+  fill: var(--fg3);
   font-size: 11px;
   pointer-events: none;
   user-select: none;
+  transition: fill 200ms ease;
 }
 .node { cursor: pointer; }
-.node-kind-index circle { fill: var(--node-index); }
-.node-kind-command circle { fill: var(--node-command); }
-.node-kind-concept circle { fill: var(--node-concept); }
-.node-kind-key circle { fill: var(--node-key); }
-.node-kind-note circle { fill: var(--node-note); }
-.node-kind-project circle { fill: var(--node-project); }
-.node-kind-category circle { fill: var(--node-category); }
-.node-kind-lesson circle { fill: var(--node-lesson); }
-.node-kind-tutorial circle { fill: var(--node-tutorial); }
-.node-kind-meta circle { fill: var(--node-meta); }
-.node-kind-block circle { fill: var(--node-block); }
-.node-kind-scheme_api circle { fill: var(--node-scheme_api); }
-.node-kind-task circle { fill: var(--node-task); }
-.node-kind-view circle { fill: var(--node-view); }
-.node.node-anchor circle { stroke: var(--node-anchor); stroke-width: 3; }
-.node.node-anchor text { font-weight: bold; }
-/* Selected wins over hovered when both apply to the same node — same
-   priority rule as crates/core/src/graph_view.rs's flatten_scene_graph
-   (`is_selected` checked before `is_hovered`). Ported here purely via CSS
-   cascade order: .node.selected's rule is declared AFTER .node.hovered's,
-   so at equal specificity it wins regardless of DOM class-application
-   order. */
-.node.hovered circle { fill: var(--node-hover); }
-.node.selected circle { fill: var(--node-anchor); stroke-width: 3; }
+/* Hover LIFTS (scale + drop-shadow), it does not recolor — recoloring is
+   reserved entirely for `.selected` (the current node). This also means
+   hover and selected no longer compete for the same visual channel, so
+   both can be simultaneously true and simultaneously visible (a lifted,
+   accent-colored current node under the cursor) with no priority rule
+   needed between them for color -- only `.selected` ever changes fill. */
+.node.hovered circle {
+  transform: scale(1.25);
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.45));
+}
+.node.selected circle {
+  fill: var(--accent);
+  stroke: var(--accent);
+}
+.node.selected text { fill: var(--fg1); font-weight: bold; }
 
-.edge { stroke: var(--edge); stroke-width: 1.5; opacity: 0.7; }
-.edge-rel-implements { stroke: var(--node-scheme_api); }
-.edge-rel-extends { stroke: var(--node-category); }
-.edge-rel-contradicts { stroke: var(--node-meta); }
-.edge-rel-explains { stroke: var(--node-concept); }
-.edge-rel-supersedes { stroke: var(--node-index); }
-.edge-rel-part_of { stroke: var(--node-key); }
+.edge {
+  stroke: var(--gray);
+  stroke-width: 1.25;
+  opacity: 0.35;
+  fill: none;
+  transition: stroke 200ms ease, opacity 200ms ease, stroke-width 200ms ease;
+}
+.edge.incident {
+  stroke: var(--accent);
+  opacity: 0.9;
+  stroke-width: 2;
+  cursor: pointer;
+}
+
+#outline-panel {
+  border-top: 1px solid var(--bg3);
+  padding: 0.5rem 1.25rem;
+  max-height: 40%;
+  overflow-y: auto;
+}
+#outline-panel.collapsed .outline-list { display: none; }
+#outline-panel h3 {
+  margin: 0.25rem 0;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg3);
+  cursor: pointer;
+  user-select: none;
+}
+.outline-list { list-style: none; padding: 0; margin: 0.25rem 0; }
+.outline-list li { margin-bottom: 0.15rem; }
+.outline-list button {
+  background: none;
+  border: none;
+  color: var(--fg2);
+  cursor: pointer;
+  text-align: left;
+  padding: 0.15rem 0;
+  font-size: 0.85rem;
+}
+.outline-list button:hover { color: var(--accent); }
 "#;
 
 /// Vanilla JS graph interaction layer — no bundler, no external CDN, no
@@ -844,9 +936,14 @@ const GRAPH_JS: &str = r#"
 
   var svg = document.getElementById("graph-svg");
   var popover = document.getElementById("popover");
-  var detailPanel = document.getElementById("detail-panel");
+  var detailContent = document.getElementById("detail-panel-content");
+  var outlinePanel = document.getElementById("outline-panel");
+  var outlineList = document.getElementById("outline-list");
+  var outlineToggle = document.getElementById("outline-toggle");
   var langToggle = document.getElementById("lang-toggle");
   var startHereBtn = document.getElementById("start-here");
+  var homeBtn = document.getElementById("home-button");
+  var themeToggle = document.getElementById("theme-toggle");
 
   var currentLang = "en";
   var selectedId = null;
@@ -855,7 +952,9 @@ const GRAPH_JS: &str = r#"
     langToggle.hidden = false;
   }
 
-  // --- Layout: fit all node positions into the SVG viewBox ---
+  // --- Layout: fit all node positions (chord-ring or force, whichever the
+  // export baked in) into the SVG viewBox. Center is used both for the
+  // viewBox fit AND as the pull-point for edge arcs below. ---
   var pad = 60;
   var minX = Math.min.apply(null, nodes.map(function (n) { return n.x; }));
   var maxX = Math.max.apply(null, nodes.map(function (n) { return n.x; }));
@@ -864,6 +963,7 @@ const GRAPH_JS: &str = r#"
   if (!isFinite(minX)) { minX = 0; maxX = 100; minY = 0; maxY = 100; }
   var w = Math.max(1, maxX - minX);
   var h = Math.max(1, maxY - minY);
+  var centerX = (minX + maxX) / 2, centerY = (minY + maxY) / 2;
   svg.setAttribute("viewBox", (minX - pad) + " " + (minY - pad) + " " + (w + pad * 2) + " " + (h + pad * 2));
   svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
 
@@ -879,33 +979,51 @@ const GRAPH_JS: &str = r#"
     for (var k in attrs) { n.setAttribute(k, attrs[k]); }
     return n;
   }
-  function relClass(rel) {
-    return "edge-rel-" + String(rel || "").toLowerCase().replace(/[^a-z0-9_-]/g, "_");
+  // DOM (not SVG) element helper for the sidebar/detail panel, used
+  // everywhere below instead of string-concatenated innerHTML so plain
+  // text content only ever goes through textContent, never through
+  // string interpolation into markup.
+  function dom(tag, attrs, text) {
+    var n = document.createElement(tag);
+    for (var k in (attrs || {})) { n.setAttribute(k, attrs[k]); }
+    if (text != null) { n.textContent = text; }
+    return n;
   }
 
-  // --- Draw edges first (under nodes) ---
+  // --- Draw edges first (under nodes), as arcs pulled toward the layout
+  // center -- the chord-diagram convention -- rather than straight chords.
+  // Each edge is independently clickable ("follow the link to the other
+  // node"): clicking navigates to whichever endpoint ISN'T currently
+  // selected (defaulting to the target when neither/both match). ---
   var edgeLayer = el("g", { id: "edge-layer" });
   svg.appendChild(edgeLayer);
+  var edgePaths = [];
   edges.forEach(function (e) {
     var s = nodesById[e.source], t = nodesById[e.target];
     if (!s || !t) { return; }
-    var line = el("line", {
-      x1: s.x, y1: s.y, x2: t.x, y2: t.y,
-      class: "edge " + relClass(e.rel_type),
+    var pullBack = 0.55; // 0 = straight line, 1 = fully at center
+    var cx = s.x + (t.x - s.x) / 2 + (centerX - (s.x + t.x) / 2) * pullBack;
+    var cy = s.y + (t.y - s.y) / 2 + (centerY - (s.y + t.y) / 2) * pullBack;
+    var d = "M " + s.x + " " + s.y + " Q " + cx + " " + cy + " " + t.x + " " + t.y;
+    var path = el("path", { d: d, class: "edge", "data-source": e.source, "data-target": e.target });
+    path.addEventListener("click", function () {
+      selectNode(selectedId === e.source ? e.target : e.source);
     });
-    edgeLayer.appendChild(line);
+    edgeLayer.appendChild(path);
+    edgePaths.push(path);
   });
 
-  // --- Draw nodes ---
+  // --- Draw nodes. Radius floors at 12 (>=24px hit target diameter). ---
   var nodeLayer = el("g", { id: "node-layer" });
   svg.appendChild(nodeLayer);
   var nodeGroups = [];
   nodes.forEach(function (n) {
     var deg = degreeOf(n.id);
-    var r = (n.is_anchor ? 14 : 9) + Math.min(deg, 6) * 0.8;
+    var r = Math.max(12, (n.is_anchor ? 14 : 9) + Math.min(deg, 6) * 0.8);
     var g = el("g", {
-      class: "node node-kind-" + n.kind + (n.is_anchor ? " node-anchor" : ""),
+      class: "node" + (n.is_anchor ? " node-anchor" : ""),
       "data-idx": n._idx,
+      "data-kind": n.kind,
     });
     var circle = el("circle", { cx: n.x, cy: n.y, r: r });
     var text = el("text", { x: n.x + r + 3, y: n.y + 4 });
@@ -925,16 +1043,14 @@ const GRAPH_JS: &str = r#"
     return n ? nodeGroups[n._idx] : null;
   }
 
-  // --- Hover popover ---
+  // --- Hover popover (title via textContent, never innerHTML) ---
   function onHover(n, entering) {
     var g = groupFor(n.id);
     if (g) { g.classList.toggle("hovered", entering); }
     if (!entering) { popover.hidden = true; return; }
-    popover.querySelector && null;
-    popover.innerHTML =
-      "<div class=\"popover-title\"></div><div class=\"popover-body\"></div>";
-    popover.querySelector(".popover-title").textContent = n["title_" + currentLang];
-    popover.querySelector(".popover-body").textContent = n["preview_" + currentLang];
+    popover.textContent = "";
+    popover.appendChild(dom("div", { class: "popover-title" }, n["title_" + currentLang]));
+    popover.appendChild(dom("div", { class: "popover-body" }, n["preview_" + currentLang]));
     popover.hidden = false;
   }
   function movePopover(ev) {
@@ -954,43 +1070,72 @@ const GRAPH_JS: &str = r#"
       .filter(function (x) { return x.node; });
   }
 
-  function renderLinkList(title, links) {
-    if (links.length === 0) { return ""; }
-    var html = "<h3>" + title + "</h3><ul class=\"link-list\">";
+  function renderLinkList(container, title, links) {
+    if (links.length === 0) { return; }
+    container.appendChild(dom("h3", {}, title));
+    var ul = dom("ul", { class: "link-list" });
     links.forEach(function (l) {
-      html += "<li><button type=\"button\" class=\"link-jump\" data-target=\"" +
-        String(l.node.id).replace(/"/g, "&quot;") + "\">" +
-        escapeHtml(l.node["title_" + currentLang]) +
-        " <span class=\"external-link\">(" + escapeHtml(l.rel || "related_to") + ")</span></button></li>";
+      var li = dom("li");
+      var btn = dom("button", { type: "button", class: "link-jump" });
+      btn.appendChild(document.createTextNode(l.node["title_" + currentLang] + " "));
+      btn.appendChild(dom("span", { class: "external-link" }, "(" + (l.rel || "related_to") + ")"));
+      btn.addEventListener("click", function () { selectNode(l.node.id); });
+      li.appendChild(btn);
+      ul.appendChild(li);
     });
-    html += "</ul>";
-    return html;
-  }
-  function escapeHtml(s) {
-    return String(s == null ? "" : s)
-      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    container.appendChild(ul);
   }
 
-  function renderDetail(n) {
-    var html = "";
-    html += "<span class=\"kind-badge\"></span>";
-    html += "<h2 class=\"detail-title\"></h2>";
-    if (n.is_anchor) {
-      html += "<p class=\"anchor-note\">Starting point of this exported subgraph.</p>";
-    }
-    html += "<div class=\"detail-body\"></div>";
-    html += renderLinkList("Links to", outgoingLinks(n.id));
-    html += renderLinkList("Linked from", incomingLinks(n.id));
-    detailPanel.innerHTML = html;
-    detailPanel.querySelector(".kind-badge").textContent = n.kind;
-    detailPanel.querySelector(".detail-title").textContent = n["title_" + currentLang];
-    // n.body_en / n.body_es are pre-escaped HTML produced server-side by
-    // mae-export's org renderer (crate::html_escape on every bit of real
-    // node content) — safe to assign via innerHTML.
-    detailPanel.querySelector(".detail-body").innerHTML = n["body_" + currentLang];
-    detailPanel.querySelectorAll(".link-jump").forEach(function (btn) {
-      btn.addEventListener("click", function () { selectNode(btn.getAttribute("data-target")); });
+  // --- "On this page" outline: scanned from the ACTUAL rendered heading
+  // elements inside .detail-body (not a second, possibly-diverging parse)
+  // -- single source of truth is whatever really ended up in the DOM. ---
+  function renderOutline(bodyEl) {
+    outlineList.textContent = "";
+    var headings = bodyEl.querySelectorAll("h1, h2, h3, h4, h5, h6");
+    if (headings.length === 0) { outlinePanel.hidden = true; return; }
+    outlinePanel.hidden = false;
+    headings.forEach(function (h, i) {
+      var id = "outline-h-" + i;
+      h.id = id;
+      var li = dom("li");
+      var btn = dom("button", { type: "button" }, h.textContent);
+      btn.style.paddingLeft = (Math.max(0, (parseInt(h.tagName.substring(1), 10) - 1)) * 0.75) + "rem";
+      btn.addEventListener("click", function () {
+        h.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+      li.appendChild(btn);
+      outlineList.appendChild(li);
     });
+  }
+  outlineToggle.addEventListener("click", function () {
+    outlinePanel.classList.toggle("collapsed");
+  });
+
+  function renderDetail(n) {
+    detailContent.classList.add("fading");
+    window.setTimeout(function () {
+      detailContent.textContent = "";
+      detailContent.appendChild(dom("span", { class: "kind-badge" }, n.kind));
+      detailContent.appendChild(dom("h2", { class: "detail-title" }, n["title_" + currentLang]));
+      if (n.is_anchor) {
+        detailContent.appendChild(dom(
+          "p", { class: "anchor-note" },
+          "Starting point of this exported subgraph."
+        ));
+      }
+      var body = dom("div", { class: "detail-body" });
+      // n.body_en / n.body_es are pre-escaped HTML produced server-side by
+      // mae-export's org renderer (crate::html_escape on every bit of real
+      // node content, plus pre-rendered mermaid <svg>) -- this is the ONE
+      // deliberate innerHTML assignment in this file; every other piece of
+      // text above/below goes through textContent/dom() instead.
+      body.innerHTML = n["body_" + currentLang];
+      detailContent.appendChild(body);
+      renderLinkList(detailContent, "Links to", outgoingLinks(n.id));
+      renderLinkList(detailContent, "Linked from", incomingLinks(n.id));
+      renderOutline(body);
+      detailContent.classList.remove("fading");
+    }, 120);
   }
 
   function selectNode(id) {
@@ -1003,8 +1148,13 @@ const GRAPH_JS: &str = r#"
     selectedId = id;
     var g = groupFor(id);
     if (g) { g.classList.add("selected"); }
+    edgePaths.forEach(function (p) {
+      var incident = p.getAttribute("data-source") === id || p.getAttribute("data-target") === id;
+      p.classList.toggle("incident", incident);
+    });
     renderDetail(n);
   }
+  homeBtn.addEventListener("click", function () { selectNode(anchorId); });
 
   // --- Suggested reading order (BFS distance from the anchor node) +
   // "Start here" walk ---
@@ -1060,7 +1210,24 @@ const GRAPH_JS: &str = r#"
     currentLang = currentLang === "en" ? "es" : "en";
     applyLanguage();
   });
+
+  // --- Dark/light theme toggle: overrides prefers-color-scheme via
+  // documentElement[data-theme], which CSS already defines at matching
+  // specificity (render_css_variables) -- background/color/fill/stroke
+  // all carry a 180-200ms transition, so this reads as a smooth cross-
+  // fade rather than a snap. ---
+  var themeOrder = ["dark", "light"];
+  var themeIdx = (window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches) ? 1 : 0;
+  themeToggle.addEventListener("click", function () {
+    themeIdx = (themeIdx + 1) % themeOrder.length;
+    document.documentElement.setAttribute("data-theme", themeOrder[themeIdx]);
+  });
+
   applyLanguage();
+  // Auto-select the anchor/spine node on load so the accent + detail panel
+  // are populated immediately, matching "Home" as a real default rather
+  // than an empty-state page.
+  selectNode(anchorId);
 })();
 "#;
 
@@ -1225,6 +1392,57 @@ mod tests {
         assert!(!html.contains("<script src=\"http"));
         assert!(!html.contains("<link "));
         assert!(!html.contains("<script src=\"https"));
+    }
+
+    // --- Chord nav widget additions: accent palette, home/outline/theme
+    // controls, arc (not straight-line) edges ---
+
+    #[test]
+    fn dark_and_light_accent_are_the_real_gruvbox_bright_orange_and_orange() {
+        // Independently re-derivable (see GruvboxPalette::accent's doc
+        // comment): WCAG contrast against each theme's own bg0 is
+        // 5.84:1 (dark) / 3.41:1 (light) -- both above the 3:1 UI-
+        // component floor, and both literal values in gruvbox's own
+        // upstream palette (bright_orange / orange), not hand-picked.
+        assert_eq!(GruvboxPalette::dark().accent, "#fe8019");
+        assert_eq!(GruvboxPalette::light().accent, "#d65d0e");
+    }
+
+    #[test]
+    fn css_defines_the_accent_variable_for_both_themes() {
+        let nodes = vec![simple_node("a", "A", "body", true)];
+        let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
+        assert!(html.contains("--accent: #fe8019"));
+        assert!(html.contains("--accent: #d65d0e"));
+    }
+
+    #[test]
+    fn export_includes_home_outline_and_theme_toggle_controls() {
+        let nodes = vec![simple_node("a", "A", "body", true)];
+        let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
+        assert!(html.contains("id=\"home-button\""));
+        assert!(html.contains("id=\"theme-toggle\""));
+        assert!(html.contains("id=\"outline-panel\""));
+        assert!(html.contains("id=\"outline-toggle\""));
+        assert!(html.contains("id=\"outline-list\""));
+    }
+
+    #[test]
+    fn edges_render_as_curved_arcs_not_straight_lines() {
+        // The chord-diagram convention: edges are quadratic-bezier <path>
+        // elements pulled toward the layout center, not <line> elements --
+        // this is a JS-side (GRAPH_JS) property, so assert on the emitted
+        // script source rather than the (server-rendered) DOM shell.
+        let nodes = vec![simple_node("a", "A", "body", true)];
+        let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
+        assert!(
+            html.contains("\"path\""),
+            "expected SVG <path> edges: {html}"
+        );
+        assert!(
+            !html.contains("el(\"line\""),
+            "must not still be constructing <line> edges: {html}"
+        );
     }
 
     #[test]
