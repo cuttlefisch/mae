@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.63] - 2026-07-28
+
+### CI
+
+- Add tool_schema_nested_e2e to heavy group via exhaustive sweep (#510) (#515) ([a4bda24](https://github.com/cuttlefisch/mae/commit/a4bda24d508d790495cfa794e71ba283f003ad2b))
+
 ## [0.14.62] - 2026-07-28
 
 ### CI
 
 - Fix 3 latent bugs surfaced by #511's own verification run (#513) ([00766e4](https://github.com/cuttlefisch/mae/commit/00766e4e34435bce17c3388b8a973f6e5d2a20c1))
+
+### Miscellaneous
+
+- Bump version to 0.14.62 ([3992423](https://github.com/cuttlefisch/mae/commit/399242398a8b1b13babc2069a5656acbb6a429b3))
 
 ## [0.14.61] - 2026-07-28
 
