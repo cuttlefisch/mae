@@ -511,6 +511,75 @@ fn kb_reimport_file_retracts_id_dropped_by_in_place_rename() {
     assert!(store.get_node("user:t-jenkins").unwrap().is_some());
 }
 
+// Issue #498/#502 (drift, principle #15): retraction on an in-place `:ID:` rename
+// used to depend ENTIRELY on a live `OrgDirWatcher`'s cached path->ids mapping --
+// silently doing nothing whenever no watcher was tracking a path. That's not a
+// hypothetical: it's exactly the real state whenever `kb_watcher_enabled` is off
+// (an explicitly documented, user-facing option, including the status message
+// `kb_adopt_instance` itself shows when recommending it as a workaround for an
+// exhausted inotify limit), or whenever `OrgDirWatcher::new` failed to attach for
+// any other reason. Confirmed as the actual root cause of the macOS CI flake this
+// test module intermittently hit (issue #498): reproduced LOCALLY (not just in CI)
+// by running this module under default full-parallelism `cargo test`, where many
+// concurrently-created real `OrgDirWatcher`s can exhaust the OS's inotify-instance
+// limit for exactly the same reason issue #502 already tracks for the sibling
+// watcher/concurrency test modules -- a watcher that fails to attach under that
+// contention silently disables retraction with the OLD (watcher-dependent-only)
+// code, exactly reproducing "old id must be retracted" failing intermittently.
+#[test]
+fn kb_reimport_file_retracts_stale_id_even_with_no_watcher_attached() {
+    let dir = TempDir::new().unwrap();
+    let mut editor = Editor::new();
+    let _td = with_test_dirs(&mut editor);
+    // No watcher at all -- the real, common (not just resource-exhausted) case
+    // this fix targets.
+    editor.kb.watcher_enabled = false;
+    let uuid = editor.kb_register("TestNotes", dir.path()).unwrap().uuid;
+    assert!(
+        !editor.kb.watchers.contains_key(&uuid),
+        "sanity: watcher_enabled=false must mean no watcher was created"
+    );
+
+    let f = dir.path().join("jenkinsp.org");
+    std::fs::write(
+        &f,
+        ":PROPERTIES:\n:ID: user:t-jenkinsp\n:END:\n#+title: jenkinsp\n\nJenkins\n",
+    )
+    .unwrap();
+    editor.kb_reimport_file(&f);
+    assert!(editor
+        .kb
+        .instances
+        .get(&uuid)
+        .unwrap()
+        .contains("user:t-jenkinsp"));
+
+    // In-place rename, same path, then reimport again (as a save would trigger) --
+    // with NO watcher ever having recorded a path->ids mapping for this file.
+    std::fs::write(
+        &f,
+        ":PROPERTIES:\n:ID: user:t-jenkins\n:END:\n#+title: jenkins\n\nJenkins\n",
+    )
+    .unwrap();
+    editor.kb_reimport_file(&f);
+
+    let mirror = editor.kb.instances.get(&uuid).unwrap();
+    assert!(
+        !mirror.contains("user:t-jenkinsp"),
+        "old id must be retracted from the in-memory mirror even with no watcher \
+         ever having attached -- the in-memory source_file fallback must cover \
+         exactly the case a watcher-only implementation silently misses"
+    );
+    assert!(mirror.contains("user:t-jenkins"));
+
+    let store = editor.kb.instance_stores.get(&uuid).unwrap();
+    assert!(
+        store.get_node("user:t-jenkinsp").unwrap().is_none(),
+        "old id must be retracted from the durable instance store too"
+    );
+    assert!(store.get_node("user:t-jenkins").unwrap().is_some());
+}
+
 #[test]
 fn kb_create_note_from_title_persists_durably_to_the_matching_instance() {
     // Reproduces the reported bug: a node created via SPC n f ("create new

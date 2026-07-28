@@ -108,7 +108,7 @@ pub(super) fn dispatch(
             execute_kb_decline_project_provisioning(editor, &call.arguments)
         }
         "kb_view_query" => execute_kb_view_query(editor, &call.arguments),
-        "kb_vector_search" => execute_kb_vector_search(editor, &call.arguments),
+        "kb_vector_search" => execute_kb_vector_search(editor, &call.arguments, requester_provider),
         "kb_graph_view_open" => execute_kb_graph_view_open(editor, &call.arguments),
         "kb_graph_view_close" => execute_kb_graph_view_close(editor, &call.arguments),
         "kb_graph_view_refresh" => execute_kb_graph_view_refresh(editor, &call.arguments),

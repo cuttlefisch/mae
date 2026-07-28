@@ -1,6 +1,8 @@
 # ADR-061: KB enrichment as a background daemon responsibility
 
-**Status:** Proposed.
+**Status:** Accepted — all six phases (A–F) implemented. See this doc's own per-phase
+"Implementation note (principle #15)" sections for what shipped vs. each phase's original
+Decision text, including named scope limits and corrections.
 **Extends:** ADR-031, ADR-033, ADR-034, ADR-057.
 **Depends on:** ADR-045, ADR-060.
 
@@ -668,3 +670,69 @@ nodes are attempted.
 
 `cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean across both
 workspaces; `cargo build --workspace --features gui` clean.
+
+## Implementation note (Phase F, principle #15)
+
+**Decision F's own text is corrected here, not just implemented as originally written.** It says
+this phase wires `kb_vector_search` to "the now-populated [HNSW] index" — but Phase B's own
+Implementation note (already in this file) flagged that the HNSW `embeddings` relation is
+hardcoded `<F32; 384>`, permanently mismatched with the shipped default embedding model
+(`nomic-embed-text`), and named this as "real and not fixed by this phase — it's Phase F's
+concern." This phase is that concern, resolved as Phase B's note anticipated: `kb_vector_search`
+is wired to a NEW `mae_kb::enrichment::search_cached_embeddings` (`shared/kb/src/enrichment.rs`),
+a brute-force cosine k-NN scan directly over the `embedding_cache` relation Phase B/C already
+populate — not the fixed-width HNSW index at all. KB sizes here are in the thousands of nodes at
+most, so a linear scan is single-digit-millisecond; no index-dimension coupling to the
+user-configurable `ai_embedding_model` option is needed. Reuses `body_hash`/`get_cached_embedding`
+exactly as `plan_enrichment_scan` already does (principle #8) — a node is a hit only if a prior
+`kb_enrich` sweep already embedded it under the SAME `(model, chunk_version)` pin; a mismatch is a
+silent miss, not an error, matching the cache's own contract.
+
+**The blend into `kb_federated_search_scoped` is real, but lives one layer up from the ADR's own
+line reference.** `crates/core` has no async runtime/HTTP client at all (by design — embedding a
+query is a network call), so `kb_federated_search_scoped` itself cannot embed a query string. The
+function instead gained a new sibling entry point, `kb_federated_search_scoped_with_vector`
+(`QueryVector<'_>` struct: an ALREADY-EMBEDDED vector + its `(model, chunk_version)` pin), which
+fuses the existing lexical ranking with `search_cached_embeddings`'s vector ranking via Reciprocal
+Rank Fusion (`score(id) = Σ 1/(60 + rank)`, standard RRF constant) — rank position, not raw score,
+since FTS relevance and cosine distance aren't on a comparable scale. `execute_kb_vector_search`
+(the un-stubbed `kb_vector_search` tool) is the one caller that has a query vector on hand (via
+the same blocking-embed path `execute_kb_enrich` already established in Phase E) and calls this
+entry point — so `kb_vector_search`'s own result is deliberately the fused lexical+semantic
+ranking (real hybrid search), not a pure-vector-only list. Plain `kb_search`/`kb_search_context`
+are UNCHANGED (still call the original `kb_federated_search_scoped`, no embedding call added to
+every lexical search) — blending is additive, reached only through the tool that already pays the
+embed cost. Primary KB only, matching Phase B/C/E's own scope limit: federated instances have no
+`Arc<dyn KbStore>` handle to search cached embeddings against.
+
+**A drift correction to `crates/mae/src/ai_residency.rs` was required, not optional.**
+`kb_vector_search` used to be classified `ScopedFederatedScan` (hard-deny outright when scope
+includes a restricted KB — appropriate for its old permanent-stub behavior, which never returned
+any real content). Now that it returns real `(Option<String>, Node)` results, leaving it under the
+old shape would have been strictly safer (a stricter gate is fail-safe) but still wrong — exactly
+the kind of drift principle #15 warns about. Reclassified to `ScopedFederatedScanFilterable`
+alongside `kb_search`/`kb_search_context`, with `execute_kb_vector_search` now calling
+`mae_core::ai_residency::filter_residency_exempt` on its own materialized results, matching its
+siblings exactly. `ScopedFederatedScan` itself (and its now-orphaned `any_restricted_kb_label_in_
+scope` gate-level pre-check helper) was removed rather than left as dead code once `kb_vector_
+search` was its last real user — the #351 scope-narrowing property it existed for is preserved by
+the Filterable path's own design (`kb_federated_search_scoped(query, scope)` already only includes
+KBs within the resolved scope; per-node filtering then drops non-exempt content from whichever
+restricted KB genuinely is in scope).
+
+**Verification**: `shared/kb/src/enrichment.rs`'s `search_cached_embeddings` has dedicated tests
+(ranks by ascending distance, ignores an uncached node, ignores a mismatched model pin, respects
+`k`). `crates/core/src/editor/kb_ops/tests/kb_ops_vector_blend_tests.rs` has the ADR's own named
+dual-signal verification test: a node lexically matching the query but semantically unrelated, and
+a node semantically close (a near-identical cached vector) but lexically distant, both surface in
+the blended top results — proving real fusion, not just "whichever signal ranks first" — plus a
+regression test that the plain (no-vector) entry point is byte-for-byte unaffected.
+`execute_kb_vector_search` itself is tested for every branch that doesn't require a live embedding
+provider (no local store, unreachable provider, residency-blocked before any network attempt) —
+matching Phase E's own established "unreachable `127.0.0.1:1`" technique for testing without a
+live Ollama server; the real fused-ranking property is exercised at the
+`kb_federated_search_scoped_with_vector` layer instead, since that's the fusion logic this tool
+delegates to once it has an embedded query vector in hand.
+
+`cargo test`/`cargo clippy --all-targets -- -D warnings`/`cargo fmt --check` clean across both
+workspaces; `cargo build --workspace --release --features gui` clean.

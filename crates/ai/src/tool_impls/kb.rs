@@ -2037,34 +2037,136 @@ pub fn execute_kb_view_query(editor: &Editor, args: &serde_json::Value) -> Resul
     .to_string())
 }
 
+/// ADR-061 Phase F1: semantic/vector search, the third modality alongside
+/// lexical `kb_search` and graph `kb_related` — un-stubbed. Embeds the query
+/// via the SAME blocking Ollama call `execute_kb_enrich` already uses (no
+/// second, divergently-implemented embed path), then blends the resulting
+/// vector against the primary KB's cached embeddings via
+/// `kb_federated_search_scoped_with_vector`'s RRF fusion (Phase F2) — this
+/// tool's own result is deliberately the fused lexical+semantic ranking
+/// (real hybrid search), not a pure-vector-only list, since the query text
+/// is already on hand for free once it's been embedded and fusing it costs
+/// nothing extra. Scoped to the primary KB only (Phase F1's named limit):
+/// federated instances have no `Arc<dyn KbStore>` handle to hold a cached
+/// embedding against.
+///
+/// Now returns REAL `(Option<String>, Node)` content (unlike the old
+/// permanent stub, which never returned any node data at all) — so, exactly
+/// like `kb_search`/`kb_search_context`, it must post-filter for the AI-
+/// residency seed exemption (#358) rather than relying on the classifier's
+/// coarser gate. `crates/mae/src/ai_residency.rs::classify_kb_tool` was
+/// updated in the same change to reclassify this tool from
+/// `ScopedFederatedScan` to `ScopedFederatedScanFilterable` — leaving it
+/// under the old shape after this tool started returning real content would
+/// have been exactly the kind of drift CLAUDE.md principle #15 warns about:
+/// a hard-deny-outright gate is a stricter default than filtering, so this
+/// direction of drift is fail-safe, but still wrong (a restricted KB's
+/// vector-search results would ALWAYS be denied outright even when the seed
+/// exemption should have allowed a subset through, unlike its `kb_search`
+/// sibling).
 pub fn execute_kb_vector_search(
     editor: &Editor,
     args: &serde_json::Value,
+    requester_provider: Option<&str>,
 ) -> Result<String, String> {
-    // Semantic/vector search is the third search modality (alongside lexical
-    // `kb_search` and graph `kb_related`). It shares their contract — `scope`
-    // and `limit` are accepted and validated here so the API shape is stable —
-    // but the ranked path is stubbed: the HNSW index + store/search APIs and
-    // the 0..1 score band are ready, yet no embedding provider is wired, so we
-    // can't embed the query. Fail gracefully and steer to the modalities that
-    // DO work rather than erroring opaquely.
-    let _scope = args
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required argument: query".to_string())?;
+    let scope = args
         .get("scope")
         .and_then(|v| v.as_str())
         .map(|s| editor.resolve_kb_scope(s))
         .unwrap_or_else(|| editor.resolve_kb_scope(&editor.kb.search_scope));
-    let _limit = args
+    let limit = args
         .get("limit")
         .and_then(|v| v.as_u64())
         .map(|n| n as usize)
         .unwrap_or(editor.kb.search_max_results);
-    Err(
-        "Semantic (vector) search is unavailable: no embedding provider is \
-         configured, so the query can't be embedded. The HNSW index and 0..1 \
-         score contract are ready for when one is wired. For now use kb_search \
-         (lexical relevance) or kb_related (graph relatedness) instead."
-            .to_string(),
-    )
+
+    const GRACEFUL_DEGRADE: &str = "Semantic (vector) search is unavailable: no embedding \
+        provider is configured/reachable, so the query can't be embedded. Use kb_search \
+        (lexical relevance) or kb_related (graph relatedness) instead.";
+
+    // Vector search needs the primary CozoDB store's embedding cache -- with
+    // no local content store there is nothing to search regardless of any
+    // embedding provider, the same genuinely-no-provider-equivalent case the
+    // original permanent stub covered.
+    if editor.kb.store.is_none() {
+        return Err(GRACEFUL_DEGRADE.to_string());
+    }
+
+    let provider = editor
+        .get_option("ai_embedding_provider")
+        .map(|(v, _)| v)
+        .unwrap_or_else(|| "ollama".to_string());
+    if !mae_kb::federation::residency_permits_provider(
+        editor.kb.registry.primary_ai_residency,
+        &provider,
+    ) {
+        return Err(format!(
+            "the primary KB's AI residency policy forbids provider '{provider}' -- semantic \
+             search is unavailable under this policy. Use kb_search or kb_related instead."
+        ));
+    }
+
+    let model = editor
+        .get_option("ai_embedding_model")
+        .map(|(v, _)| v)
+        .unwrap_or_else(|| "nomic-embed-text".to_string());
+    let base_url = editor
+        .get_option("ai_embedding_base_url")
+        .map(|(v, _)| v)
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| "http://localhost:11434".to_string());
+    let api_key = editor
+        .get_option("ai_embedding_api_key_command")
+        .map(|(v, _)| v)
+        .filter(|v| !v.is_empty())
+        .and_then(|cmd| run_embedding_api_key_command(&cmd));
+    let chunk_version: i64 = editor
+        .get_option("ai_embedding_chunk_version")
+        .and_then(|(v, _)| v.parse().ok())
+        .unwrap_or(1);
+
+    let client = reqwest::blocking::Client::new();
+    let query_vec = match mae_kb::embedding_client::ollama_embed_blocking(
+        &client,
+        &base_url,
+        api_key.as_deref(),
+        &model,
+        std::slice::from_ref(&query.to_string()),
+    ) {
+        Ok(mut vecs) if !vecs.is_empty() => vecs.remove(0),
+        _ => return Err(GRACEFUL_DEGRADE.to_string()),
+    };
+
+    let results = editor.kb_federated_search_scoped_with_vector(
+        query,
+        &scope,
+        mae_core::QueryVector {
+            vec: &query_vec,
+            model: &model,
+            chunk_version,
+        },
+    );
+    let results =
+        mae_core::ai_residency::filter_residency_exempt(editor, requester_provider, results);
+
+    let objs: Vec<serde_json::Value> = results
+        .into_iter()
+        .take(limit)
+        .map(|(instance, node)| {
+            serde_json::json!({
+                "id": node.id,
+                "title": node.title,
+                "kind": node.kind.as_str(),
+                "instance": instance,
+                "excerpt": kb_excerpt(&node.body, 160),
+            })
+        })
+        .collect();
+    serde_json::to_string_pretty(&objs).map_err(|e| e.to_string())
 }
 
 #[cfg(test)]
@@ -2925,14 +3027,23 @@ mod tests {
         assert!(scores.windows(2).all(|w| w[0] >= w[1]), "scores not sorted");
     }
 
+    // ADR-061 Phase F1: re-scoped to the genuinely-no-provider-equivalent case
+    // (no local KB store at all -- nothing to search embeddings against
+    // regardless of any embedding provider) now that the ranked path is
+    // un-stubbed. A fresh `Editor::new()` has no `kb.store` by default.
     #[test]
-    fn kb_vector_search_fails_gracefully_and_points_to_alternatives() {
+    fn kb_vector_search_fails_gracefully_with_no_local_store() {
         let editor = Editor::new();
+        assert!(
+            editor.kb.store.is_none(),
+            "sanity: fresh editor has no store"
+        );
         // Accepts the shared scope/limit contract without panicking, and the
         // error steers to the working modalities rather than failing opaquely.
         let err = execute_kb_vector_search(
             &editor,
             &serde_json::json!({"query": "buffers", "scope": "local", "limit": 5}),
+            None,
         )
         .unwrap_err();
         assert!(err.contains("kb_search"), "should suggest lexical search");
@@ -2941,6 +3052,57 @@ mod tests {
             "should suggest graph relatedness"
         );
     }
+
+    #[test]
+    fn kb_vector_search_degrades_gracefully_when_the_embedding_provider_is_unreachable() {
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        // Nothing listens here -- the embed HTTP call must fail cleanly, not panic.
+        editor
+            .set_option("ai_embedding_base_url", "http://127.0.0.1:1")
+            .unwrap();
+
+        let err =
+            execute_kb_vector_search(&editor, &serde_json::json!({"query": "anything"}), None)
+                .unwrap_err();
+        assert!(err.contains("kb_search"));
+        assert!(err.contains("kb_related"));
+    }
+
+    #[test]
+    fn kb_vector_search_residency_blocks_before_any_network_attempt() {
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+        editor
+            .set_option("ai_embedding_provider", "claude")
+            .unwrap(); // hosted, non-local
+                       // An address nothing listens on -- if residency were bypassed, this call
+                       // would hang/error trying to actually reach it instead of returning the
+                       // clean residency-blocked error asserted below.
+        editor
+            .set_option("ai_embedding_base_url", "http://127.0.0.1:1")
+            .unwrap();
+
+        let err =
+            execute_kb_vector_search(&editor, &serde_json::json!({"query": "anything"}), None)
+                .unwrap_err();
+        assert!(err.contains("residency"), "got: {err}");
+    }
+
+    // ADR-061 Phase F1/F2: the real ranked-hits property once the cache is
+    // populated is exercised directly at `kb_federated_search_scoped_with_vector`
+    // (`crates/core/src/editor/kb_ops/tests/kb_ops_vector_blend_tests.rs`) --
+    // the same fusion logic this tool delegates to once it has an embedded
+    // query vector in hand. Embedding the query TEXT itself requires a live
+    // network call to an embedding provider (no mock HTTP server in this
+    // crate's unit tests, matching `execute_kb_enrich`'s own untested-at-this-
+    // layer network boundary) -- the tests above prove every OTHER branch
+    // (no store, unreachable provider, residency-blocked) fails cleanly
+    // rather than panicking, which is the property this crate can actually
+    // verify without a live embedding server.
 
     #[test]
     fn kb_related_respects_limit() {

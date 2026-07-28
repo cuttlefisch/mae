@@ -33,13 +33,17 @@
 //! registered KB (or the primary) is `LocalModelsOnly` and the requester isn't
 //! local. This is coarser than ADR-048's original "post-filter, don't fail the
 //! whole call" design — a documented, honest simplification, not a silent gap.
-//! [`ToolResidencyShape::ScopedFederatedScan`]/[`ToolResidencyShape::ScopedFederatedScanFilterable`]
-//! tools (`kb_vector_search`; `kb_search`/`kb_search_context`, respectively)
-//! are the escape hatch from that coarseness: they accept a `scope` argument
-//! (or fall back to the `kb_search_scope` option) that names exactly which
-//! KB(s) participate, so the residency check can — and now does — restrict
-//! itself to that resolved scope instead of every registered KB (this is the
-//! actual #351 fix; see `any_restricted_kb_label_in_scope`).
+//! [`ToolResidencyShape::ScopedFederatedScanFilterable`] tools (`kb_search`,
+//! `kb_search_context`, `kb_vector_search`) are the escape hatch from that
+//! coarseness: they accept a `scope` argument (or fall back to the
+//! `kb_search_scope` option) that names exactly which KB(s) participate, so
+//! `kb_federated_search_scoped(query, scope)` itself only ever includes KBs
+//! within that resolved scope (the actual #351 fix — a call explicitly
+//! scoped away from a restricted KB is never blocked by that KB's policy),
+//! and each tool then post-filters its own materialized
+//! `(Option<String>, Node)` results via
+//! `mae_core::ai_residency::filter_residency_exempt` (#358) for the seed
+//! exemption within whatever restricted KB genuinely IS in scope.
 //!
 //! ## Seed-content exemption (#358)
 //!
@@ -142,20 +146,19 @@ enum ToolResidencyShape {
     /// `mae_core::ai_residency::filter_residency_exempt_primary` on its own
     /// materialized results (#358).
     PrimaryOnlyFilterable,
-    /// Scans across multiple KB instances AND accepts a `scope` argument (or
-    /// falls back to the `kb_search_scope` option) that can exclude a
-    /// specific instance — scope is resolved FIRST, then residency is
-    /// checked only for KBs within that resolved scope (the #351 fix). Has
-    /// no per-result filtering today — hard-denied when scope includes a
-    /// restricted KB. Distinct from [`Self::ScopedFederatedScanFilterable`]
-    /// below; currently only `kb_vector_search` (a permanent stub with no
-    /// real results to filter yet).
-    ScopedFederatedScan,
-    /// Scans across multiple KB instances via a `scope` arg AND its results
-    /// ARE real `(Option<String>, Node)` pairs — the gate allows the call
-    /// through; `kb_search`/`kb_search_context` call
-    /// `mae_core::ai_residency::filter_residency_exempt` on their own
-    /// materialized results (#358).
+    /// Scans across multiple KB instances via a `scope` argument (or falls
+    /// back to the `kb_search_scope` option) that names exactly which KB(s)
+    /// participate — scope is resolved FIRST, then residency is checked only
+    /// for KBs within that resolved scope (the #351 fix; see
+    /// `any_restricted_kb_label_in_scope`), rather than every registered KB.
+    /// Its results ARE real `(Option<String>, Node)` pairs — the gate allows
+    /// the call through; `kb_search`/`kb_search_context`/`kb_vector_search`
+    /// call `mae_core::ai_residency::filter_residency_exempt` on their own
+    /// materialized results (#358; `kb_vector_search` joined this shape in
+    /// ADR-061 Phase F1 once un-stubbing it gave it real results to filter —
+    /// previously a separate, now-removed `ScopedFederatedScan` shape
+    /// existed for its old no-real-results-to-filter stub behavior, hard-
+    /// denying outright instead of post-filtering).
     ScopedFederatedScanFilterable,
     /// Scans across multiple KB instances with no way to exclude one —
     /// denied outright whenever ANY registered KB (or primary) is
@@ -225,18 +228,16 @@ fn classify_kb_tool(tool_name: &str) -> Option<ToolResidencyShape> {
         // post-filters for the seed exemption (#358) ---
         "kb_agenda" => PrimaryOnlyFilterable,
 
-        // --- ScopedFederatedScan: has a `scope` argument that names
-        // exactly which KB(s) participate, but no real results to filter
-        // yet -- kb_vector_search is a permanent stub today (no embedding
-        // provider wired). Move it to ScopedFederatedScanFilterable
-        // alongside whatever work actually implements ranked vector
-        // search, not before. ---
-        "kb_vector_search" => ScopedFederatedScan,
-
         // --- ScopedFederatedScanFilterable: same scope-narrowing as above,
         // AND the tool impl post-filters its real (Option<String>, Node)
-        // results for the seed exemption (#358) ---
-        "kb_search" | "kb_search_context" => ScopedFederatedScanFilterable,
+        // results for the seed exemption (#358). kb_vector_search joined
+        // this shape in ADR-061 Phase F1/F2: un-stubbing it gave it real
+        // RRF-fused (Option<String>, Node) results (mae_core::
+        // ai_residency::filter_residency_exempt call in
+        // execute_kb_vector_search), the same shape kb_search/
+        // kb_search_context already have -- it is no longer the
+        // no-real-results-yet ScopedFederatedScan case. ---
+        "kb_search" | "kb_search_context" | "kb_vector_search" => ScopedFederatedScanFilterable,
 
         // --- UnscopedFederatedContent: genuinely scans multiple instances,
         // no scope argument to narrow it ---
@@ -374,24 +375,13 @@ pub fn check_kb_residency(
         // dropping non-seed-exempt hits from a restricted primary (#358).
         ToolResidencyShape::PrimaryOnlyFilterable => ResidencyDecision::Allow,
 
-        ToolResidencyShape::ScopedFederatedScan => {
-            let scope_arg = arguments.get("scope").and_then(|v| v.as_str());
-            if let Some(label) = any_restricted_kb_label_in_scope(editor, scope_arg) {
-                return ResidencyDecision::Deny(format!(
-                    "AI-residency policy: KB '{label}' is set to local_models_only, and this \
-                     session's AI provider ({}) isn't a local model. Use an explicit `scope` \
-                     argument that excludes it, or switch to a local (Ollama) provider.",
-                    requester_provider.unwrap_or("none/unauthenticated")
-                ));
-            }
-            ResidencyDecision::Allow
-        }
-
-        // Same scope-narrowing intent as ScopedFederatedScan, but the gate
-        // allows the call through unconditionally; execute_kb_search/
-        // execute_kb_search_context post-filter their own materialized
-        // (Option<String>, Node) results via
-        // mae_core::ai_residency::filter_residency_exempt (#358).
+        // The gate allows the call through unconditionally; execute_kb_search/
+        // execute_kb_search_context/execute_kb_vector_search post-filter
+        // their own materialized (Option<String>, Node) results via
+        // mae_core::ai_residency::filter_residency_exempt (#358). Scope
+        // narrowing (the #351 fix) happens naturally inside
+        // kb_federated_search_scoped(query, scope) itself, not as a
+        // separate gate-level pre-check.
         ToolResidencyShape::ScopedFederatedScanFilterable => ResidencyDecision::Allow,
 
         ToolResidencyShape::UnscopedFederatedContent => {
@@ -505,59 +495,6 @@ fn any_restricted_kb_label(editor: &Editor) -> Option<String> {
         .iter()
         .find(|inst| inst.ai_residency == mae_kb::federation::AiResidency::LocalModelsOnly)
         .map(|inst| inst.name.clone())
-}
-
-/// Like [`any_restricted_kb_label`], but resolves `scope_arg` (falling back
-/// to the `kb_search_scope` option, mirroring
-/// `crates/ai/src/tool_impls/kb.rs::execute_kb_search`'s own resolution
-/// exactly) FIRST, and only checks residency for KBs within that resolved
-/// scope — the actual #351 fix. A call explicitly scoped away from a
-/// restricted KB must not be blocked by that KB's policy.
-fn any_restricted_kb_label_in_scope(editor: &Editor, scope_arg: Option<&str>) -> Option<String> {
-    let scope = scope_arg
-        .filter(|s| !s.is_empty())
-        .map(|s| editor.resolve_kb_scope(s))
-        .unwrap_or_else(|| editor.resolve_kb_scope(&editor.kb.search_scope));
-
-    let is_restricted = |ai_residency: mae_kb::federation::AiResidency| {
-        ai_residency == mae_kb::federation::AiResidency::LocalModelsOnly
-    };
-
-    match scope {
-        mae_kb::KbScope::All => any_restricted_kb_label(editor),
-        mae_kb::KbScope::LocalOnly => {
-            is_restricted(editor.kb.registry.primary_ai_residency).then(|| "primary".to_string())
-        }
-        mae_kb::KbScope::RemoteOnly => editor
-            .kb
-            .registry
-            .instances
-            .iter()
-            .filter(|inst| inst.is_remote())
-            .find(|inst| is_restricted(inst.ai_residency))
-            .map(|inst| inst.name.clone()),
-        mae_kb::KbScope::Named(name) => {
-            if name.eq_ignore_ascii_case("primary") {
-                is_restricted(editor.kb.registry.primary_ai_residency)
-                    .then(|| "primary".to_string())
-            } else {
-                editor
-                    .kb
-                    .registry
-                    .find(&name)
-                    .filter(|inst| is_restricted(inst.ai_residency))
-                    .map(|inst| inst.name.clone())
-            }
-        }
-        mae_kb::KbScope::Project(root) => editor
-            .kb
-            .registry
-            .instances
-            .iter()
-            .filter(|inst| inst.matches_project_root(&root))
-            .find(|inst| is_restricted(inst.ai_residency))
-            .map(|inst| inst.name.clone()),
-    }
 }
 
 #[cfg(test)]
@@ -677,30 +614,19 @@ mod tests {
 
     #[test]
     fn federated_scan_filterable_tool_gate_allows_defers_to_tool_filter() {
-        // kb_search is now ScopedFederatedScanFilterable (#358) -- the gate
-        // no longer denies the whole call when a KB in scope is restricted;
-        // execute_kb_search post-filters its own materialized results
-        // instead (see crates/ai/src/tool_impls/kb.rs's behavioral tests
-        // for the actual filtering coverage). kb_vector_search (still plain
-        // ScopedFederatedScan, no real results to filter yet) keeps the
-        // old hard-deny behavior -- see
-        // `plain_scoped_federated_scan_tool_still_denied_outright`.
+        // kb_search/kb_search_context/kb_vector_search are all
+        // ScopedFederatedScanFilterable (#358, and kb_vector_search joined
+        // them in ADR-061 Phase F1 once it got real results to filter) --
+        // the gate no longer denies the whole call when a KB in scope is
+        // restricted; each tool impl post-filters its own materialized
+        // results instead (see crates/ai/src/tool_impls/kb.rs's behavioral
+        // tests for the actual filtering coverage).
         let editor = editor_with_restricted_primary();
-        let decision =
-            check_kb_residency(&editor, "kb_search", &serde_json::json!({}), Some("claude"));
-        assert_eq!(decision, ResidencyDecision::Allow);
-    }
-
-    #[test]
-    fn plain_scoped_federated_scan_tool_still_denied_outright() {
-        let editor = editor_with_restricted_primary();
-        let decision = check_kb_residency(
-            &editor,
-            "kb_vector_search",
-            &serde_json::json!({}),
-            Some("claude"),
-        );
-        assert!(matches!(decision, ResidencyDecision::Deny(_)));
+        for tool in ["kb_search", "kb_search_context", "kb_vector_search"] {
+            let decision =
+                check_kb_residency(&editor, tool, &serde_json::json!({}), Some("claude"));
+            assert_eq!(decision, ResidencyDecision::Allow, "tool: {tool}");
+        }
     }
 
     #[test]
@@ -802,119 +728,21 @@ mod tests {
         );
     }
 
-    // --- New: #351 fix — scope-aware ScopedFederatedScan ---
-
-    #[test]
-    fn kb_search_scope_excludes_restricted_kb_when_scope_names_an_open_instance() {
-        // The actual #351 repro, inverted to must-pass: primary is
-        // restricted, but scope explicitly names a different, open
-        // instance. Retargeted onto kb_vector_search (#358) -- kb_search
-        // itself no longer uses this gate path (see
-        // `federated_scan_filterable_tool_gate_allows_defers_to_tool_filter`),
-        // so real any_restricted_kb_label_in_scope coverage moves to the
-        // one remaining plain ScopedFederatedScan tool.
-        let mut editor = editor_with_restricted_primary();
-        editor
-            .kb
-            .registry
-            .instances
-            .push(open_instance("OpenInstance", "uuid-open"));
-
-        let decision = check_kb_residency(
-            &editor,
-            "kb_vector_search",
-            &serde_json::json!({"query": "x", "scope": "OpenInstance"}),
-            Some("claude"),
-        );
-        assert_eq!(
-            decision,
-            ResidencyDecision::Allow,
-            "scope excludes the restricted primary -- must not be denied"
-        );
-    }
-
-    #[test]
-    fn kb_search_scope_named_restricted_instance_is_still_denied() {
-        // Retargeted onto kb_vector_search (#358) -- kb_search itself is now
-        // ScopedFederatedScanFilterable and no longer denies at the gate
-        // (see `federated_scan_filterable_tool_gate_allows_defers_to_tool_filter`),
-        // but any_restricted_kb_label_in_scope still needs real coverage
-        // via the one remaining plain ScopedFederatedScan tool.
-        let mut editor = Editor::new(); // open primary
-        editor
-            .kb
-            .registry
-            .instances
-            .push(restricted_instance("RestrictedInstance", "uuid-r"));
-
-        let decision = check_kb_residency(
-            &editor,
-            "kb_vector_search",
-            &serde_json::json!({"query": "x", "scope": "RestrictedInstance"}),
-            Some("claude"),
-        );
-        assert!(matches!(decision, ResidencyDecision::Deny(_)));
-    }
-
-    #[test]
-    fn kb_search_scope_all_still_denied_when_any_kb_restricted() {
-        // Regression guard: unscoped ("all") behavior is unchanged for the
-        // still-hard-denied kb_vector_search -- still the conservative
-        // deny-outright per the module doc's "Scope note".
-        let mut editor = Editor::new();
-        editor
-            .kb
-            .registry
-            .instances
-            .push(restricted_instance("RestrictedInstance", "uuid-r"));
-
-        let decision = check_kb_residency(
-            &editor,
-            "kb_vector_search",
-            &serde_json::json!({"query": "x", "scope": "all"}),
-            Some("claude"),
-        );
-        assert!(matches!(decision, ResidencyDecision::Deny(_)));
-    }
-
-    #[test]
-    fn kb_search_scope_local_only_ignores_a_restricted_remote_instance() {
-        // Retargeted onto kb_vector_search (#358), same reasoning as above.
-        let mut editor = Editor::new(); // open primary
-        let mut remote = restricted_instance("RemoteRestricted", "uuid-remote");
-        remote.shared = true; // is_remote() == true
-        editor.kb.registry.instances.push(remote);
-
-        let decision = check_kb_residency(
-            &editor,
-            "kb_vector_search",
-            &serde_json::json!({"query": "x", "scope": "local"}),
-            Some("claude"),
-        );
-        assert_eq!(decision, ResidencyDecision::Allow);
-    }
-
-    #[test]
-    fn kb_search_missing_scope_falls_back_to_the_search_scope_option() {
-        // No `scope` arg given at all -- must resolve via kb.search_scope,
-        // exactly like execute_kb_search's own default resolution.
-        // Retargeted onto kb_vector_search (#358), same reasoning as above.
-        let mut editor = editor_with_restricted_primary();
-        editor
-            .kb
-            .registry
-            .instances
-            .push(open_instance("OpenInstance", "uuid-open"));
-        editor.kb.search_scope = "OpenInstance".to_string();
-
-        let decision = check_kb_residency(
-            &editor,
-            "kb_vector_search",
-            &serde_json::json!({"query": "x"}),
-            Some("claude"),
-        );
-        assert_eq!(decision, ResidencyDecision::Allow);
-    }
+    // --- New: #351 fix — scope-aware ScopedFederatedScanFilterable ---
+    //
+    // The original #351 fix shipped as a dedicated `any_restricted_kb_label_in_scope`
+    // gate-level pre-check (hard-deny the whole call if the resolved scope included a
+    // restricted KB), used only by the now-removed `ScopedFederatedScan` shape.
+    // ADR-061 Phase F1 moved `kb_vector_search` -- the last real tool in that shape --
+    // to `ScopedFederatedScanFilterable` once un-stubbing it gave it real per-node
+    // results to post-filter, leaving the pre-check with zero callers. Removed rather
+    // than kept as dead code (principle #15): the #351 property itself (a call scoped
+    // away from a restricted KB isn't blocked by that KB's policy) is preserved by the
+    // Filterable path's own design -- `kb_federated_search_scoped(query, scope)`
+    // already only includes KBs within the resolved scope, and per-node
+    // `filter_residency_exempt` then drops non-exempt content from whichever
+    // restricted KB genuinely IS in scope -- which is more precise than the old
+    // all-or-nothing gate-level deny, not a regression.
 
     // --- New: kb_agenda's inverse bug (PrimaryOnly, not UnscopedFederatedContent) ---
 

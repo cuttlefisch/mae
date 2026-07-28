@@ -17,7 +17,7 @@
 //! entry point.
 
 use crate::federation::{residency_permits_provider, AiResidency};
-use crate::store::KbStore;
+use crate::store::{KbStore, VectorHit};
 
 /// One node whose current content has no cached embedding under
 /// `(content_hash, model, chunk_version)` — a genuine cache miss the caller
@@ -131,6 +131,75 @@ pub fn apply_enrichment_results(
         }
     }
     errors
+}
+
+/// ADR-061 Phase F1: brute-force cosine k-NN over the `embedding_cache`
+/// relation `plan_enrichment_scan`/`apply_enrichment_results` already
+/// populate — NOT the fixed `<F32; 384>`-typed HNSW `embeddings` relation
+/// (`CozoKbStore::vector_search`), which is hardcoded to one dimensionality
+/// and cannot be coupled to the user-configurable `ai_embedding_model`
+/// option. KB sizes here are in the thousands of nodes at most, so a linear
+/// scan is single-digit-millisecond — no index needed for this to be usable.
+///
+/// Reuses `body_hash`/`get_cached_embedding` exactly as `plan_enrichment_scan`
+/// does, so a node is only a hit here if it was already embedded by a prior
+/// `kb_enrich` sweep under the SAME `(model, chunk_version)` pin — a cache
+/// miss is silently skipped (not an error), matching the cache's own
+/// "absence just means recompute/rescan later" contract.
+pub fn search_cached_embeddings(
+    store: &dyn KbStore,
+    model: &str,
+    chunk_version: i64,
+    query_vec: &[f32],
+    k: usize,
+) -> Result<Vec<VectorHit>, String> {
+    let ids = store.list_ids(None).map_err(|e| e.to_string())?;
+
+    let mut hits: Vec<VectorHit> = Vec::new();
+    for id in ids {
+        let node = match store.get_node(&id) {
+            Ok(Some(n)) => n,
+            Ok(None) => continue,
+            Err(_) => continue, // one bad row must not abort the whole scan
+        };
+        if node.body.trim().is_empty() {
+            continue;
+        }
+        let content_hash = crate::activity::body_hash(&node.body);
+        let Ok(Some(vec)) = store.get_cached_embedding(&content_hash, model, chunk_version) else {
+            continue; // no cached embedding under this pin -- not a hit
+        };
+        if let Some(distance) = cosine_distance(query_vec, &vec) {
+            hits.push(VectorHit { id, distance });
+        }
+    }
+
+    hits.sort_by(|a, b| {
+        a.distance
+            .partial_cmp(&b.distance)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    hits.truncate(k);
+    Ok(hits)
+}
+
+/// Cosine distance (`1.0 - cosine_similarity`, lower = more similar) —
+/// matches `VectorHit::distance`'s own documented convention ("lower = more
+/// similar for cosine"), the same sense `CozoKbStore::vector_search`'s HNSW
+/// index returns. `None` on a dimension mismatch (should not happen under a
+/// correctly pinned model, but a stale/corrupt cache entry must not panic or
+/// silently return a meaningless score) or a zero-magnitude vector.
+fn cosine_distance(a: &[f32], b: &[f32]) -> Option<f64> {
+    if a.len() != b.len() || a.is_empty() {
+        return None;
+    }
+    let dot: f64 = a.iter().zip(b).map(|(x, y)| *x as f64 * *y as f64).sum();
+    let mag_a: f64 = a.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+    let mag_b: f64 = b.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+    if mag_a == 0.0 || mag_b == 0.0 {
+        return None;
+    }
+    Some(1.0 - (dot / (mag_a * mag_b)))
 }
 
 #[cfg(test)]
@@ -341,5 +410,86 @@ mod tests {
             1,
             "the node whose embedding failed upstream remains a target -- picked up on the next sweep, never lost"
         );
+    }
+
+    #[test]
+    fn search_cached_embeddings_ranks_the_closest_vector_first() {
+        let (_tmp, store) = make_store();
+        for (id, body, vec) in [
+            ("n:close", "close", vec![1.0_f32, 0.0, 0.0]),
+            ("n:mid", "mid", vec![0.7_f32, 0.7, 0.0]),
+            ("n:far", "far", vec![0.0_f32, 1.0, 0.0]),
+        ] {
+            store
+                .insert_node(&Node::new(id, id, NodeKind::Note, body))
+                .unwrap();
+            let hash = crate::activity::body_hash(body);
+            store.put_cached_embedding(&hash, "m", 1, &vec).unwrap();
+        }
+
+        let hits = search_cached_embeddings(&store, "m", 1, &[1.0, 0.0, 0.0], 10).unwrap();
+        let ids: Vec<&str> = hits.iter().map(|h| h.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["n:close", "n:mid", "n:far"],
+            "must rank by ascending distance to the query vector, not insertion order"
+        );
+        assert!(hits[0].distance < hits[1].distance && hits[1].distance < hits[2].distance);
+    }
+
+    #[test]
+    fn search_cached_embeddings_ignores_nodes_with_no_cached_embedding() {
+        let (_tmp, store) = make_store();
+        store
+            .insert_node(&Node::new(
+                "n:uncached",
+                "Uncached",
+                NodeKind::Note,
+                "no vector yet",
+            ))
+            .unwrap();
+
+        let hits = search_cached_embeddings(&store, "m", 1, &[1.0, 0.0], 10).unwrap();
+        assert!(
+            hits.is_empty(),
+            "a node never embedded under this pin must not appear as a hit: {hits:?}"
+        );
+    }
+
+    #[test]
+    fn search_cached_embeddings_ignores_a_different_model_pin() {
+        let (_tmp, store) = make_store();
+        store
+            .insert_node(&Node::new("n:1", "One", NodeKind::Note, "body"))
+            .unwrap();
+        let hash = crate::activity::body_hash("body");
+        store
+            .put_cached_embedding(&hash, "model-a", 1, &[1.0, 0.0])
+            .unwrap();
+
+        let hits = search_cached_embeddings(&store, "model-b", 1, &[1.0, 0.0], 10).unwrap();
+        assert!(
+            hits.is_empty(),
+            "a cache entry under a different model pin must not be treated as interchangeable"
+        );
+    }
+
+    #[test]
+    fn search_cached_embeddings_respects_k() {
+        let (_tmp, store) = make_store();
+        for (id, body, vec) in [
+            ("n:1", "one", vec![1.0_f32, 0.0]),
+            ("n:2", "two", vec![0.9_f32, 0.1]),
+            ("n:3", "three", vec![0.8_f32, 0.2]),
+        ] {
+            store
+                .insert_node(&Node::new(id, id, NodeKind::Note, body))
+                .unwrap();
+            let hash = crate::activity::body_hash(body);
+            store.put_cached_embedding(&hash, "m", 1, &vec).unwrap();
+        }
+
+        let hits = search_cached_embeddings(&store, "m", 1, &[1.0, 0.0], 2).unwrap();
+        assert_eq!(hits.len(), 2, "k must cap the returned hit count");
     }
 }
