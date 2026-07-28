@@ -20,15 +20,43 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@nextest
 
       - uses: ./.github/actions/install-gui-deps
 
       - name: Count tests
         id: tests
+        # Issue reported directly by the user (2026-07-28): this badge showed
+        # "452 passing" against a real ~7,223+ test suite. Root cause, confirmed
+        # by local reproduction (not assumed): plain `cargo test --workspace`
+        # stops the ENTIRE workspace run at the FIRST test binary containing any
+        # failure -- it does not continue to later crates the way this step's own
+        # `|| true` implied. A real, separately-tracked flake (#502, `mae-core`'s
+        # kb_ops watcher tests under parallel execution) was tripping this exact
+        # trap: whichever crate's tests happened to fail first that run silently
+        # truncated the whole count to a tiny fraction of the real total, with
+        # zero visible error (`|| true` here and `continue-on-error` on the
+        # badge-update steps both swallowed it into a false "success"). nextest's
+        # own default is to run every test regardless of other failures, so its
+        # final summary line is a single authoritative total for the WHOLE run
+        # ("Summary [ Xs] N tests run: N passed (n slow), M skipped"), not a
+        # fragile per-binary sum vulnerable to early truncation. Doesn't run
+        # doctests (a known nextest limitation, already load-bearing knowledge
+        # from this repo's own CI migration) -- a non-issue here since
+        # `cargo test --doc` reports 0 doctests across every crate in this
+        # workspace today (confirmed by direct observation across many local/CI
+        # runs this session).
         run: |
-          OUTPUT=$(cargo test --workspace --features gui 2>&1) || true
-          TOTAL=$(echo "$OUTPUT" | grep -oP '\d+ passed' | awk '{s+=$1} END {print s}')
-          FORMATTED=$(printf "%'d" "${TOTAL:-0}")
+          set +e
+          cargo nextest run --workspace --features gui 2>&1 | tee /tmp/nextest-badge-output.log
+          set -e
+          TOTAL=$( (grep -oP '\d+(?= tests run)' /tmp/nextest-badge-output.log || true) | tail -1)
+          if [ -z "$TOTAL" ]; then
+            echo "::error::Could not parse a test count from nextest output -- see the raw log above. Refusing to publish a wrong/zero badge."
+            exit 1
+          fi
+          FORMATTED=$(printf "%'d" "$TOTAL")
+          echo "Parsed test count: $FORMATTED"
           echo "count=$FORMATTED" >> $GITHUB_OUTPUT
 
       - name: Count lines of code

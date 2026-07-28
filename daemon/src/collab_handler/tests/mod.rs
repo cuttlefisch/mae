@@ -5,6 +5,7 @@ pub(crate) use crate::storage::SqliteBackend;
 pub(crate) use mae_mcp::broadcast::EventBroadcaster;
 pub(crate) use mae_sync::text::TextSync;
 
+mod collab_handler_artifact_sharing_tests;
 mod collab_handler_block_enforcement_tests;
 mod collab_handler_connection_limits_tests;
 mod collab_handler_cross_kb_role_isolation_tests;
@@ -93,6 +94,7 @@ pub(crate) async fn kb_share_as(
         None,
         session_docs,
         Transport::Hub,
+        &crate::artifact_store::NoArtifactStore,
     )
     .await
 }
@@ -116,6 +118,35 @@ pub(crate) async fn dispatch_as(
         None,
         docs,
         Transport::Hub,
+        &crate::artifact_store::NoArtifactStore,
+    )
+    .await
+}
+
+/// Like [`dispatch_as`], but with an explicit `ArtifactStore` — for tests
+/// exercising `kb/fetch_artifact` (ADR-061 Phase D3) against a fake with
+/// pre-seeded cached vectors.
+pub(crate) async fn dispatch_as_with_artifacts(
+    store: &Arc<DocStore>,
+    bc: &SharedBroadcaster,
+    auth_label: Option<&str>,
+    auth_principal: Option<&str>,
+    msg: serde_json::Value,
+    docs: &mut HashSet<String>,
+    artifact_store: &dyn crate::artifact_store::ArtifactStore,
+) -> JsonRpcResponse {
+    handle_doc_request_inner(
+        &msg.to_string(),
+        store,
+        bc,
+        std::time::Instant::now(),
+        0,
+        auth_label,
+        auth_principal,
+        None,
+        docs,
+        Transport::Hub,
+        artifact_store,
     )
     .await
 }

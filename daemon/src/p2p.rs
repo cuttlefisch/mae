@@ -181,6 +181,7 @@ fn resolve_mesh_peer(
 /// wrapped in `collab_handler::HANDSHAKE_TIMEOUT_SECS` — without it, a
 /// connected-but-silent authorized peer parks its task forever (the same
 /// `#342` failure class, just past the handshake instead of during it).
+#[allow(clippy::too_many_arguments)]
 pub async fn serve(
     endpoint: Endpoint,
     authorized_keys_path: std::path::PathBuf,
@@ -189,6 +190,7 @@ pub async fn serve(
     broadcaster: SharedBroadcaster,
     start_time: Instant,
     limiter: crate::conn_limit::ConnLimiter,
+    artifact_store: Arc<dyn mae_daemon::artifact_store::ArtifactStore>,
 ) {
     while let Some(incoming) = endpoint.accept().await {
         let Some(guard) = limiter.try_acquire() else {
@@ -201,6 +203,7 @@ pub async fn serve(
         };
         let authorized_keys_path = authorized_keys_path.clone();
         let doc_store = Arc::clone(&doc_store);
+        let artifact_store = Arc::clone(&artifact_store);
         let broadcaster = broadcaster.clone();
         tokio::spawn(async move {
             let _guard = guard;
@@ -266,6 +269,7 @@ pub async fn serve(
                 broadcaster,
                 start_time,
                 mae_sync::kb::Transport::P2p,
+                artifact_store,
             )
             .await;
         });
@@ -577,6 +581,7 @@ mod tests {
             broadcaster,
             Instant::now(),
             crate::conn_limit::ConnLimiter::new(1),
+            Arc::new(mae_daemon::artifact_store::NoArtifactStore),
         ));
 
         // 1st peer: admitted, holds the connection open (matches max_connections=1).
@@ -649,6 +654,7 @@ mod tests {
             broadcaster,
             Instant::now(),
             crate::conn_limit::ConnLimiter::new(0),
+            Arc::new(mae_daemon::artifact_store::NoArtifactStore),
         ));
 
         let connector = bind_endpoint(&con_id, RelayMode::Disabled).await.unwrap();
