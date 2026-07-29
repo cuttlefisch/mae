@@ -667,3 +667,237 @@ fn mc_single_cursor_visual_uppercase_unchanged() {
     let idx = editor.active_buffer_idx();
     assert_eq!(editor.buffers[idx].rope().to_string(), "HELLO world\n");
 }
+
+// --- #368: multi-cursor visual-mode indent/dedent/join/paste ---
+
+#[test]
+fn mc_visual_indent_affects_all_cursor_lines() {
+    let mut editor = editor_with_text("line one\nline two\nline three\nline four\n");
+    editor.dispatch_builtin("move-to-first-line");
+    editor.dispatch_builtin("mc-add-cursor-below");
+    editor.dispatch_builtin("mc-add-cursor-below");
+    editor.dispatch_builtin("mc-add-cursor-below");
+
+    editor.enter_visual_mode(VisualType::Line);
+    editor.visual_indent();
+
+    let idx = editor.active_buffer_idx();
+    assert_eq!(
+        editor.buffers[idx].rope().to_string(),
+        "    line one\n    line two\n    line three\n    line four\n",
+        "all 4 cursor lines must indent, not just the primary's"
+    );
+    assert_eq!(editor.mode, Mode::Normal);
+}
+
+#[test]
+fn mc_visual_indent_skips_unselected_lines_between_cursors() {
+    let mut editor = editor_with_text("line one\nline two\nline three\nline four\n");
+    editor.dispatch_builtin("move-to-first-line");
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_set.add(2, 0); // line three, skipping lines two and four
+
+    editor.enter_visual_mode(VisualType::Line);
+    editor.visual_indent();
+
+    let idx = editor.active_buffer_idx();
+    assert_eq!(
+        editor.buffers[idx].rope().to_string(),
+        "    line one\nline two\n    line three\nline four\n",
+        "only the two cursor lines should indent; lines two and four must be untouched"
+    );
+}
+
+#[test]
+fn mc_single_cursor_visual_indent_dedent_unchanged() {
+    let mut buf = Buffer::new();
+    buf.insert_text_at(0, "aaa\nbbb\nccc\n");
+    let mut editor = Editor::with_buffer(buf);
+    editor.enter_visual_mode(VisualType::Line);
+    editor.dispatch_builtin("move-down");
+    editor.visual_indent();
+    assert_eq!(editor.active_buffer().line_text(0), "    aaa\n");
+    assert_eq!(editor.active_buffer().line_text(1), "    bbb\n");
+    assert_eq!(editor.active_buffer().line_text(2), "ccc\n");
+
+    {
+        let w = editor.window_mgr.focused_window_mut();
+        w.cursor_row = 0;
+    }
+    editor.enter_visual_mode(VisualType::Line);
+    editor.dispatch_builtin("move-down");
+    editor.visual_dedent();
+    assert_eq!(editor.active_buffer().line_text(0), "aaa\n");
+    assert_eq!(editor.active_buffer().line_text(1), "bbb\n");
+}
+
+#[test]
+fn mc_visual_dedent_affects_all_cursor_lines() {
+    let mut editor =
+        editor_with_text("    line one\n    line two\n    line three\n    line four\n");
+    editor.dispatch_builtin("move-to-first-line");
+    editor.dispatch_builtin("mc-add-cursor-below");
+    editor.dispatch_builtin("mc-add-cursor-below");
+    editor.dispatch_builtin("mc-add-cursor-below");
+
+    editor.enter_visual_mode(VisualType::Line);
+    editor.visual_dedent();
+
+    let idx = editor.active_buffer_idx();
+    assert_eq!(
+        editor.buffers[idx].rope().to_string(),
+        "line one\nline two\nline three\nline four\n",
+        "all 4 cursor lines must dedent, not just the primary's"
+    );
+}
+
+#[test]
+fn mc_visual_dedent_skips_unselected_lines_between_cursors() {
+    let mut editor =
+        editor_with_text("    line one\n    line two\n    line three\n    line four\n");
+    editor.dispatch_builtin("move-to-first-line");
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_set.add(2, 0); // line three, skipping lines two and four
+
+    editor.enter_visual_mode(VisualType::Line);
+    editor.visual_dedent();
+
+    let idx = editor.active_buffer_idx();
+    assert_eq!(
+        editor.buffers[idx].rope().to_string(),
+        "line one\n    line two\nline three\n    line four\n",
+        "only the two cursor lines should dedent; lines two and four must be untouched"
+    );
+}
+
+/// The riskiest #368 operator: `join_line()` REMOVES a line per call, so
+/// processing cursor spans in the wrong order silently shifts a
+/// not-yet-processed span's row numbers out from under it. Three
+/// NON-ADJACENT two-line spans (rows 0-1, 2-3, 4-5) — if this were
+/// (incorrectly) processed top-to-bottom, joining the first span would
+/// shift the second and third spans' rows up by one, corrupting the
+/// result. Assert the buffer is EXACTLY the correctly-joined text, not
+/// just "some joining happened."
+#[test]
+fn mc_visual_join_processes_non_adjacent_cursor_spans_bottom_to_top() {
+    let mut editor = editor_with_text("a1\na2\nb1\nb2\nc1\nc2\n");
+    {
+        let win = editor.window_mgr.focused_window_mut();
+        win.cursor_row = 0;
+        win.cursor_col = 0;
+        win.cursor_set.add(2, 0);
+        win.cursor_set.add(4, 0);
+    }
+    editor.enter_visual_mode(VisualType::Char);
+    // Extend each cursor's OWN span down by one row (anchor was stamped at
+    // entry -- rows 0/2/4 respectively).
+    {
+        let win = editor.window_mgr.focused_window_mut();
+        win.cursor_row = 1;
+        for (i, c) in win.cursor_set.iter_mut().enumerate() {
+            match i {
+                1 => c.row = 3,
+                2 => c.row = 5,
+                _ => {}
+            }
+        }
+    }
+    editor.visual_join();
+
+    let idx = editor.active_buffer_idx();
+    assert_eq!(
+        editor.buffers[idx].rope().to_string(),
+        "a1 a2\nb1 b2\nc1 c2\n",
+        "all 3 non-adjacent cursor spans must join correctly regardless of order"
+    );
+    assert_eq!(editor.mode, Mode::Normal);
+}
+
+#[test]
+fn mc_single_cursor_visual_join_unchanged() {
+    let mut buf = Buffer::new();
+    buf.insert_text_at(0, "aaa\nbbb\nccc\n");
+    let mut editor = Editor::with_buffer(buf);
+    editor.enter_visual_mode(VisualType::Line);
+    editor.dispatch_builtin("move-down");
+    editor.visual_join();
+    let idx = editor.active_buffer_idx();
+    assert_eq!(editor.buffers[idx].rope().to_string(), "aaa bbb\nccc\n");
+}
+
+#[test]
+fn mc_visual_paste_replaces_all_cursor_lines_with_the_same_register_text() {
+    let mut editor = editor_with_text("line one\nline two\nline three\nline four\n");
+    editor.vi.registers.insert('"', "REPLACED\n".to_string());
+    editor.dispatch_builtin("move-to-first-line");
+    editor.dispatch_builtin("mc-add-cursor-below");
+    editor.dispatch_builtin("mc-add-cursor-below");
+    editor.dispatch_builtin("mc-add-cursor-below");
+
+    editor.enter_visual_mode(VisualType::Line);
+    editor.visual_paste();
+
+    let idx = editor.active_buffer_idx();
+    assert_eq!(
+        editor.buffers[idx].rope().to_string(),
+        "REPLACED\nREPLACED\nREPLACED\nREPLACED\n",
+        "all 4 cursor lines must be replaced with the same register text"
+    );
+    assert_eq!(editor.mode, Mode::Normal);
+}
+
+#[test]
+fn mc_visual_paste_skips_unselected_lines_between_cursors() {
+    let mut editor = editor_with_text("line one\nline two\nline three\nline four\n");
+    editor.vi.registers.insert('"', "REPLACED\n".to_string());
+    editor.dispatch_builtin("move-to-first-line");
+    let win = editor.window_mgr.focused_window_mut();
+    win.cursor_set.add(2, 0); // line three, skipping lines two and four
+
+    editor.enter_visual_mode(VisualType::Line);
+    editor.visual_paste();
+
+    let idx = editor.active_buffer_idx();
+    assert_eq!(
+        editor.buffers[idx].rope().to_string(),
+        "REPLACED\nline two\nREPLACED\nline four\n",
+        "only the two cursor lines should be replaced; lines two and four must be untouched"
+    );
+}
+
+#[test]
+fn mc_single_cursor_visual_paste_unchanged() {
+    let mut editor = editor_with_text("hello world\n");
+    editor.vi.registers.insert('"', "bye".to_string());
+    editor.enter_visual_mode(VisualType::Char);
+    editor.dispatch_builtin("move-right");
+    editor.dispatch_builtin("move-right");
+    editor.dispatch_builtin("move-right");
+    editor.dispatch_builtin("move-right"); // selects "hello"
+    editor.visual_paste();
+    let idx = editor.active_buffer_idx();
+    assert_eq!(editor.buffers[idx].rope().to_string(), "bye world\n");
+}
+
+/// Adversarial (#14): `visual_paste` must black-hole the DELETED selection
+/// text, not clobber the register it just read the paste text from --
+/// pasting the SAME text at every cursor depends on the register surviving
+/// past the first cursor's own delete.
+#[test]
+fn mc_visual_paste_preserves_the_source_register_across_multiple_cursors() {
+    let mut editor = editor_with_text("aaa\nbbb\n");
+    editor.vi.registers.insert('"', "X\n".to_string());
+    editor.dispatch_builtin("move-to-first-line");
+    editor.dispatch_builtin("mc-add-cursor-below");
+    editor.enter_visual_mode(VisualType::Line);
+    editor.visual_paste();
+
+    assert_eq!(
+        editor.vi.registers.get(&'"').cloned().unwrap_or_default(),
+        "X\n",
+        "the source register must still hold the pasted text after both cursors used it, \
+         not the deleted selection text"
+    );
+    let idx = editor.active_buffer_idx();
+    assert_eq!(editor.buffers[idx].rope().to_string(), "X\nX\n");
+}
