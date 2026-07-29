@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.68] - 2026-07-29
+
+### Bug Fixes
+
+- *(kb)* #357/#366 search ranking + AI-residency Bucket B, #461 daemon --config (#525) ([f5750f9](https://github.com/cuttlefisch/mae/commit/f5750f963ef331d2e850a3c52f06546224046cad))
+
 ## [0.14.67] - 2026-07-29
 
 ### CI
 
 - Dispatch mae-release event to mae-vscode on every release (#520) ([d65f63c](https://github.com/cuttlefisch/mae/commit/d65f63c527179d7f3d82061f541fba4231d479ad))
+
+### Miscellaneous
+
+- Bump version to 0.14.67 ([3f447b9](https://github.com/cuttlefisch/mae/commit/3f447b99e81b3f4562b6e1c902cbe3518bc1a5fe))
 
 ## [0.14.66] - 2026-07-29
 
