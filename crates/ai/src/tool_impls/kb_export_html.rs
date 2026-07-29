@@ -209,7 +209,7 @@ pub fn execute_kb_export_subgraph_html(
         .iter()
         .map(|n| {
             let (x, y) = positions.get(&n.id).copied().unwrap_or((0.0, 0.0));
-            bilingual_kb_export::html_graph::build_export_node(
+            let mut export_node = bilingual_kb_export::html_graph::build_export_node(
                 n.id.clone(),
                 n.kind.as_str().to_string(),
                 x,
@@ -220,7 +220,14 @@ pub fn execute_kb_export_subgraph_html(
                 &n.body,
                 translations.get(&n.id),
                 &palette,
-            )
+            );
+            // Org `#+filetags:`, verbatim -- drives the exported page's
+            // header tag-filter UI. `build_export_node` defaults this to
+            // empty (it has no access to `mae_kb::Node` itself, only the
+            // raw title/body strings), so this is the one place that has
+            // the real tag data and sets it after construction.
+            export_node.tags = n.tags.clone();
+            export_node
         })
         .collect();
     let export_edges: Vec<bilingual_kb_export::html_graph::GraphExportEdge> = result
