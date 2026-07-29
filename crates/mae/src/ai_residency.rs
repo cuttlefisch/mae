@@ -99,11 +99,35 @@
 //! `GraphViewNodeState`, letting the AI's read of an already-open graph
 //! buffer filter itself without restricting what the human sees on screen.
 //!
-//! `kb_list`, `kb_links_to`, `kb_shortest_path`, `kb_links_from` are real,
-//! structurally feasible candidates for the same exemption but need deeper
-//! plumbing (shared trait extensions, new per-id lookups, or a Datalog
-//! query change) — tracked as a follow-up rather than silently left as a
-//! gap, see the issue cross-linked from #358.
+//! `kb_links_from`/`kb_links_to`/`kb_shortest_path` are now handled too
+//! (#366, "Bucket B" — `SingleTargetFilterable` above): unlike Bucket A,
+//! neither backend's links-relation query ever touched a target's full
+//! `Node`, so extending the exemption needed a genuine new per-target-id
+//! lookup rather than a mechanical thread-the-field change. Reuses the
+//! same `GraphNeighbors::describe()` backend `kb_graph`/`kb_related`
+//! already have (`LinksBackend` in `crates/ai/src/tool_impls/kb.rs`),
+//! accepting the per-result lookup cost rather than batching — these are
+//! typically small, bounded result sets in practice (#366's own scoping
+//! note). `kb_shortest_path`'s own `CozoKbStore` implementation is
+//! currently a reachability check, not real path reconstruction (only
+//! ever returns `[from, to]`, see that function's doc comment) — a
+//! separate, pre-existing correctness quirk, not this fix's scope — so
+//! filtering it re-resolves each returned id via `editor.kb.store`
+//! (always primary, matching `kb_neighborhood`'s scope) and drops the
+//! WHOLE path (not just the offending hop) if any id isn't seed-exempt,
+//! since a partial path is not a meaningful result.
+//!
+//! `kb_list`'s CozoDB-backed path is the one piece of #366 NOT done here —
+//! deliberately scoped out as a down payment (CLAUDE.md principle #15):
+//! extending it needs a `KbQueryLayer::list_ids` trait signature change
+//! (to carry `.source` per id) across all EIGHT implementors
+//! (`CozoQueryLayer`, `FederatedQuery`, `InMemoryQueryLayer`,
+//! `CachedQueryLayer`, `LruQueryLayer`, `RemoteHubQueryLayer`, plus two
+//! test-only layers) — a much larger blast radius than the other three
+//! tools for a precision improvement, not a security fix (`kb_list` stays
+//! `UnscopedFederatedContent`: safe today, just coarser than necessary).
+//! Tracked as a follow-up issue cross-linked from #366 rather than
+//! silently dropped.
 
 use mae_core::ai_residency::{is_local_provider, is_residency_exempt};
 use mae_core::Editor;
@@ -197,13 +221,19 @@ fn classify_kb_tool(tool_name: &str) -> Option<ToolResidencyShape> {
     Some(match tool_name {
         // --- SingleTarget: resolves to one node id or KB instance name ---
         "kb_get" | "kb_update" | "kb_delete" | "kb_promote" | "kb_restore" | "kb_add_link"
-        | "kb_links_from" | "kb_shortest_path" | "kb_history" | "kb_preview_show"
-        | "kb_create" | "kb_set_role" | "kb_reimport" | "help_open" => SingleTarget,
+        | "kb_history" | "kb_preview_show" | "kb_create" | "kb_set_role" | "kb_reimport"
+        | "help_open" => SingleTarget,
 
         // --- SingleTargetFilterable: same anchor-id gate check as
         // SingleTarget, PLUS the tool impl post-filters its own multi-node
-        // traversal results (#361 -- see the shape's doc comment) ---
-        "kb_related" | "kb_neighborhood" => SingleTargetFilterable,
+        // traversal results (#361 -- see the shape's doc comment). #366
+        // ("Bucket B") added kb_links_from/kb_links_to/kb_shortest_path to
+        // this bucket -- kb_links_to moved here FROM UnscopedFederatedContent
+        // (it has a well-defined anchor "id" argument after all, same as
+        // links_from) now that its aggregated backlink sources are actually
+        // filtered rather than the whole call being denied outright. ---
+        "kb_related" | "kb_neighborhood" | "kb_links_from" | "kb_links_to"
+        | "kb_shortest_path" => SingleTargetFilterable,
 
         // --- PrimaryOnly: implementation only ever reads editor.kb.store,
         // AND runs arbitrary Datalog with no per-row node-identity to
@@ -240,9 +270,13 @@ fn classify_kb_tool(tool_name: &str) -> Option<ToolResidencyShape> {
         "kb_search" | "kb_search_context" | "kb_vector_search" => ScopedFederatedScanFilterable,
 
         // --- UnscopedFederatedContent: genuinely scans multiple instances,
-        // no scope argument to narrow it ---
-        "kb_graph_view_open" | "kb_graph_view_refresh" | "kb_list" | "kb_id_audit"
-        | "kb_links_to" => UnscopedFederatedContent,
+        // no scope argument to narrow it. kb_list stays here (its CozoDB
+        // path isn't filterable yet -- #366's explicitly-scoped-out down
+        // payment, see module doc); kb_links_to moved to
+        // SingleTargetFilterable above (#366) ---
+        "kb_graph_view_open" | "kb_graph_view_refresh" | "kb_list" | "kb_id_audit" => {
+            UnscopedFederatedContent
+        }
 
         // --- UnscopedFederatedContentFilterable: same unscoped multi-instance
         // scan, AND the tool impl post-filters its real per-node results
@@ -988,11 +1022,13 @@ mod tests {
     }
 
     #[test]
-    fn kb_links_to_denied_outright_when_any_kb_restricted() {
-        // kb_links_to used to be SingleTarget, checking only the *target*
-        // id's home KB -- but it aggregates backlink *sources* across every
-        // federated instance, so a restricted instance's backlink could leak
-        // via an unrestricted target. Now UnscopedFederatedContent.
+    fn kb_links_to_allowed_at_the_gate_when_anchor_is_unrestricted() {
+        // #366: kb_links_to is now SingleTargetFilterable -- the GATE only
+        // checks the anchor "id" itself (same as kb_related/kb_neighborhood);
+        // a restricted-instance backlink SOURCE is no longer a reason to
+        // deny the whole call, since execute_kb_links_to now post-filters
+        // its own aggregated backlink list for the seed exemption (see
+        // crates/ai/src/tool_impls/kb.rs's behavioral coverage for that).
         let mut editor = Editor::new();
         editor
             .kb
@@ -1005,7 +1041,7 @@ mod tests {
             &serde_json::json!({"id": "index"}), // "index" itself is unrestricted
             Some("claude"),
         );
-        assert!(matches!(decision, ResidencyDecision::Deny(_)));
+        assert_eq!(decision, ResidencyDecision::Allow);
     }
 
     // --- New: omission-fix regressions ---

@@ -35,7 +35,7 @@ fn xdg_data_base() -> PathBuf {
 }
 
 /// Top-level daemon configuration.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(default)]
 pub struct DaemonConfig {
     /// Unix socket path for KB client connections.
