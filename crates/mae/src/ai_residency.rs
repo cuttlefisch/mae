@@ -304,6 +304,59 @@ pub enum ResidencyDecision {
     Deny(String),
 }
 
+/// KB-reading Scheme primitives with no MCP-tool sibling for `classify_kb_tool`
+/// to gate — the exact bypass #478 reported: `eval_scheme` is not `kb_*`-prefixed,
+/// so `classify_kb_tool` never sees it, and an AI agent could call
+/// `(eval_scheme "(kb-graph-view-state)")` (or any of these siblings) to read
+/// fully unfiltered content from a `LocalModelsOnly`-restricted KB, bypassing
+/// the MCP-layer gate entirely. `mae-scheme`'s `SharedState` has no requester
+/// identity field at all (used identically for AI and human evals), so the
+/// primitives themselves are structurally unable to self-gate — this is why
+/// the fix lives here, at the `eval_scheme` call itself, not inside each
+/// primitive (would mean duplicating this module's logic N times with no
+/// requester context to gate on — CLAUDE.md principle #8).
+///
+/// Every one of these genuinely reads/exposes KB-derived data (node ids,
+/// titles, link targets, raw body text, or block/member counts that confirm
+/// node existence) — conservatively includes `kb-block-count`/`kb-pending`/
+/// `kb-compose-meta` even though their exposure is narrower, since "fail
+/// closed" is cheaper than auditing each one's exact leak surface.
+const SENSITIVE_SCHEME_KB_PRIMITIVES: &[&str] = &[
+    "kb-graph-view-state",
+    "kb-preview-show",
+    "kb-agenda",
+    "kb-history",
+    "kb-restore",
+    "kb-raw-query",
+    "kb-links-from",
+    "kb-links-to",
+    "kb-graph",
+    "kb-neighborhood",
+    "kb-related",
+    "kb-shortest-path",
+    "kb-links-typed",
+    "kb-meta-members",
+    "kb-get-block",
+    "kb-block-count",
+    "kb-pending",
+    "kb-compose-meta",
+];
+
+/// If `code` references any [`SENSITIVE_SCHEME_KB_PRIMITIVES`] name, return it
+/// (the first match, for the deny message). A plain substring scan, not a
+/// real Scheme parse — deliberately: a false positive (the name appearing in
+/// a string literal or comment that would never actually execute) is the
+/// SAFE failure direction for a security gate, not a bug worth chasing down,
+/// and arbitrary Scheme code can call a primitive conditionally, in a loop,
+/// or build it dynamically, so there's no reliable static "will this actually
+/// run" analysis to do instead.
+fn scheme_code_references_sensitive_primitive(code: &str) -> Option<&'static str> {
+    SENSITIVE_SCHEME_KB_PRIMITIVES
+        .iter()
+        .find(|name| code.contains(*name))
+        .copied()
+}
+
 /// Check whether `requester_provider` may run `tool_name` with `arguments`,
 /// given the KBs' current AI-residency policies. `requester_provider` is
 /// `None` when the requester has no trusted provider identity at all (an
@@ -316,6 +369,38 @@ pub fn check_kb_residency(
 ) -> ResidencyDecision {
     if requester_provider.is_some_and(is_local_provider) {
         return ResidencyDecision::Allow;
+    }
+
+    // #478: eval_scheme is not kb_*-prefixed, so classify_kb_tool below never
+    // sees it and this gate would otherwise always Allow regardless of what
+    // KB-reading Scheme primitives the queued code calls. Denies the WHOLE
+    // call (not a post-hoc result filter, unlike the *Filterable MCP-tool
+    // shapes above) whenever the code references a sensitive primitive AND
+    // any registered KB is currently residency-restricted — coarser than the
+    // equivalent direct MCP tool call (which can post-filter a typed result),
+    // but arbitrary Scheme code has no equivalent post-hoc filtering point:
+    // it could call a primitive conditionally, in a loop, or construct its
+    // result programmatically, so there's no clean way to filter an opaque
+    // return value the way a typed MCP response can be. Fails closed per
+    // ADR-048, matching this module's existing UnscopedFederatedContent
+    // precedent (deny outright when a shape has no way to scope/filter).
+    if tool_name == "eval_scheme" {
+        if let Some(code) = arguments.get("code").and_then(|v| v.as_str()) {
+            if let Some(primitive) = scheme_code_references_sensitive_primitive(code) {
+                if let Some(label) = any_restricted_kb_label(editor) {
+                    return ResidencyDecision::Deny(format!(
+                        "AI-residency policy: KB '{label}' is set to local_models_only, and \
+                         this session's AI provider ({}) isn't a local model. This eval_scheme \
+                         call references '{primitive}', a KB-reading Scheme primitive with no \
+                         per-call residency filter — denied outright (not partially run) since \
+                         arbitrary Scheme code has no reliable post-hoc result filter the way a \
+                         direct MCP tool call does. Use the equivalent kb_* MCP tool instead (it \
+                         can filter/scope its result), or switch to a local (Ollama) provider.",
+                        requester_provider.unwrap_or("none/unauthenticated")
+                    ));
+                }
+            }
+        }
     }
 
     let Some(shape) = classify_kb_tool(tool_name) else {
@@ -1261,5 +1346,175 @@ mod tests {
             Some("claude"),
         );
         assert!(matches!(decision, ResidencyDecision::Deny(_)));
+    }
+
+    // --- #478: eval_scheme must not bypass residency filtering for KB-reading
+    // Scheme primitives. `check_kb_residency` is the exact function BOTH real
+    // call sites (`ai_event_handler::handle_ai_event:172` embedded,
+    // `handle_mcp_request:895` external-MCP) invoke unchanged with this same
+    // (editor, tool_name, arguments, requester_provider) shape -- there is no
+    // divergent logic between them for this decision, so testing the function
+    // directly here exercises the real fix both call sites rely on, not a
+    // mock. `handle_mcp_request` (895) additionally gets a full event-handler
+    // dispatch test below, proving the wiring itself; `handle_ai_event` (172)
+    // has no existing test harness at all (its `AiEventContext` needs live
+    // mpsc channels + an `McpClientMgrRef` with no prior test precedent to
+    // build one cheaply) -- not invented here since it would only re-prove
+    // what this direct test already covers for a second time via heavier
+    // scaffolding.
+
+    #[test]
+    fn eval_scheme_denies_the_exact_reported_bypass() {
+        // The literal repro from #478's own report.
+        let editor = editor_with_restricted_primary();
+        let decision = check_kb_residency(
+            &editor,
+            "eval_scheme",
+            &serde_json::json!({"code": "(kb-graph-view-state)"}),
+            Some("claude"),
+        );
+        assert!(
+            matches!(decision, ResidencyDecision::Deny(_)),
+            "eval_scheme calling kb-graph-view-state must be denied when primary is \
+             restricted, got: {decision:?}"
+        );
+    }
+
+    #[test]
+    fn eval_scheme_denies_a_second_sensitive_primitive_not_in_the_original_report() {
+        // #478 explicitly flagged this as "very likely true of other
+        // kb_*-reading Scheme primitives too" -- prove the fix covers more
+        // than just the one primitive the original report happened to name.
+        // kb-get-block returns raw node body text, one of the highest-
+        // sensitivity primitives in the inventory and one with no MCP
+        // sibling to have borrowed a classification from.
+        let editor = editor_with_restricted_primary();
+        let decision = check_kb_residency(
+            &editor,
+            "eval_scheme",
+            &serde_json::json!({"code": "(kb-get-block \"index\" 0)"}),
+            Some("claude"),
+        );
+        assert!(
+            matches!(decision, ResidencyDecision::Deny(_)),
+            "eval_scheme calling kb-get-block must be denied when primary is restricted, \
+             got: {decision:?}"
+        );
+    }
+
+    #[test]
+    fn eval_scheme_denies_when_the_restricted_kb_is_a_registered_instance_not_primary() {
+        // The bypass isn't primary-only -- a restricted federated instance
+        // must trigger the same denial.
+        let mut editor = Editor::new();
+        editor
+            .kb
+            .registry
+            .instances
+            .push(restricted_instance("Private", "uuid-private"));
+        let decision = check_kb_residency(
+            &editor,
+            "eval_scheme",
+            &serde_json::json!({"code": "(kb-neighborhood \"n1\" 2)"}),
+            Some("claude"),
+        );
+        assert!(matches!(decision, ResidencyDecision::Deny(_)));
+    }
+
+    #[test]
+    fn eval_scheme_allows_unrelated_code_even_with_a_restricted_kb() {
+        // No false-positive: an eval_scheme call that never references any
+        // sensitive primitive must still work normally, even while a KB is
+        // restricted -- the gate must not become a blanket eval_scheme ban.
+        let editor = editor_with_restricted_primary();
+        let decision = check_kb_residency(
+            &editor,
+            "eval_scheme",
+            &serde_json::json!({"code": "(+ 1 2)"}),
+            Some("claude"),
+        );
+        assert_eq!(decision, ResidencyDecision::Allow);
+    }
+
+    #[test]
+    fn eval_scheme_allows_sensitive_primitives_when_nothing_is_restricted() {
+        // No false-positive on the other axis: with no restricted KB at all,
+        // the exact same code that would be denied above must be allowed --
+        // proves the gate is conditioned on actual residency policy, not a
+        // static deny-list applied unconditionally.
+        let editor = Editor::new();
+        let decision = check_kb_residency(
+            &editor,
+            "eval_scheme",
+            &serde_json::json!({"code": "(kb-graph-view-state)"}),
+            Some("claude"),
+        );
+        assert_eq!(decision, ResidencyDecision::Allow);
+    }
+
+    #[test]
+    fn eval_scheme_allows_a_local_provider_even_with_sensitive_code_and_a_restriction() {
+        // Local (Ollama) providers are exempt from AI-residency policy
+        // entirely (that's the whole point of LocalModelsOnly) -- must still
+        // hold for the eval_scheme path specifically, not just the kb_* tools.
+        let editor = editor_with_restricted_primary();
+        let decision = check_kb_residency(
+            &editor,
+            "eval_scheme",
+            &serde_json::json!({"code": "(kb-graph-view-state)"}),
+            Some("ollama"),
+        );
+        assert_eq!(decision, ResidencyDecision::Allow);
+    }
+
+    #[tokio::test]
+    async fn eval_scheme_bypass_denied_end_to_end_via_the_real_external_mcp_dispatch_path() {
+        // Real event-handler wiring test (not just the classifier function in
+        // isolation) through `handle_mcp_request` -- the external-MCP call
+        // site (`ai_event_handler.rs:895`). Proves the actual bypass #478
+        // reported no longer works through the real dispatch path an
+        // external MCP client would use, including the psk_authenticated
+        // gating on `requester_provider`.
+        let mut editor = editor_with_restricted_primary();
+        let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        let req = mae_mcp::McpToolRequest {
+            tool_name: "eval_scheme".to_string(),
+            arguments: serde_json::json!({"code": "(kb-graph-view-state)"}),
+            reply: tx,
+            requester: mae_mcp::RequesterContext {
+                session_id: 1,
+                psk_authenticated: true,
+                declared_provider: Some("claude".to_string()),
+                ..Default::default()
+            },
+        };
+        let global_policy = mae_ai::PermissionPolicy {
+            auto_approve_up_to: mae_ai::PermissionTier::Shell,
+            allowed_categories: None,
+        };
+        let (lsp_tx, _lsp_rx) = tokio::sync::mpsc::channel(1);
+        let mut deferred = Vec::new();
+        crate::ai_event_handler::handle_mcp_request(
+            &mut editor,
+            req,
+            &[],
+            &global_policy,
+            &lsp_tx,
+            &mut deferred,
+            &mut scheme,
+        );
+        let result = rx.try_recv().expect("reply must have been sent");
+        assert!(
+            !result.success,
+            "the real external-MCP dispatch path must deny the eval_scheme bypass, got \
+             success with output: {}",
+            result.output
+        );
+        assert!(
+            result.output.contains("local_models_only"),
+            "expected an AI-residency denial message, got: {}",
+            result.output
+        );
     }
 }

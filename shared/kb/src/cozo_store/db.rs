@@ -5,6 +5,7 @@
 //! @ai-caution: [architecture-debt] These `pub(super)` helpers (run_mut*,
 //! run_immut*, now_epoch, node_put_params, ...) are called from ~12 sites
 //! across every sibling module in this directory. Keep signatures stable.
+//! Cross-referenced in ROADMAP.md's "Architecture Debt" section.
 
 use super::util::{btree_params, cozo_err, dv_str, kind_to_str};
 use super::*;

@@ -23,5 +23,15 @@ if ! make code-map-check 2>/dev/null; then
     exit 1
 fi
 
+# 4. ADR KB staleness check (ADR-059 Phase E) -- same check CI's "ADR KB staleness
+# gate" runs, just moved earlier: catches an ADR header field (Status/Extends/
+# Relates to/Depends on/Supersedes) changing without assets/mae-adr.cozo(.sha256)
+# being regenerated in the same range, before it costs a full CI cycle.
+echo "Checking ADR KB staleness..."
+if ! make verify-adr-kb-sync >/dev/null 2>&1; then
+    echo "❌ ADR KB is stale relative to a header-field change. Run 'make adr-kb' and commit the regenerated assets/mae-adr.cozo + assets/mae-adr.cozo.sha256."
+    exit 1
+fi
+
 echo "✅ Pre-commit checks passed."
 exit 0
