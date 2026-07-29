@@ -55,7 +55,11 @@ echo "=== Step 3: Test PATCH (write badge data) ==="
 echo "Counting tests..."
 command -v cargo-nextest >/dev/null 2>&1 || cargo install cargo-nextest --locked
 set +e
-cargo nextest run --workspace --features gui 2>&1 | tee /tmp/nextest-badge-output.log
+# --color never: a local shell with CARGO_TERM_COLOR=always set (or nextest's
+# own TTY auto-detection in some terminals) wraps the summary count in ANSI
+# codes, breaking the grep below the same way it broke badges.yml's own copy
+# of this exact pattern -- see that file's comment for the full repro.
+cargo nextest run --workspace --features gui --color never 2>&1 | tee /tmp/nextest-badge-output.log
 set -e
 TOTAL=$( (grep -oP '\d+(?= tests run)' /tmp/nextest-badge-output.log || true) | tail -1)
 if [ -z "$TOTAL" ]; then

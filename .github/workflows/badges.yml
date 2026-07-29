@@ -108,9 +108,23 @@ jobs:
           # `tee`'s own exit code unless the shell has `pipefail` set, and this
           # step deliberately doesn't assume that (explicit is safer than
           # relying on GitHub Actions' default bash flags, which could change).
-          cargo nextest run --workspace --features gui -E "$HEAVY_FILTER" 2>&1 | tee /tmp/nextest-badge-output-heavy.log
+          #
+          # --color never: this workflow's own `env: CARGO_TERM_COLOR: always`
+          # (top of file) forces nextest to emit ANSI color codes even into a
+          # piped, non-TTY `tee` -- which broke the summary-count grep below
+          # the FIRST time every single test in a run actually passed (every
+          # earlier run failed on a real test before ever reaching this parse
+          # step, so this bug had never been exercised until now). Reproduced
+          # locally: the digits in "Summary [...] N tests run" land as
+          # `\x1b[1mN\x1b[0m tests run`, and the grep's `(?= tests run)`
+          # lookahead requires the literal string immediately after the
+          # digits, which the escape code breaks. `--color never` on the CLI
+          # overrides the env var for just these two counting invocations
+          # (confirmed) -- the fix is to never colorize output this script is
+          # about to machine-parse, not to teach the regex about ANSI codes.
+          cargo nextest run --workspace --features gui --color never -E "$HEAVY_FILTER" 2>&1 | tee /tmp/nextest-badge-output-heavy.log
           RC_HEAVY=${PIPESTATUS[0]}
-          cargo nextest run --workspace --features gui -E "not ($HEAVY_FILTER)" 2>&1 | tee /tmp/nextest-badge-output-rest.log
+          cargo nextest run --workspace --features gui --color never -E "not ($HEAVY_FILTER)" 2>&1 | tee /tmp/nextest-badge-output-rest.log
           RC_REST=${PIPESTATUS[0]}
           set -e
           if [ "$RC_HEAVY" -ne 0 ] || [ "$RC_REST" -ne 0 ]; then
