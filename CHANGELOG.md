@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.67] - 2026-07-29
+
+### CI
+
+- Dispatch mae-release event to mae-vscode on every release (#520) ([d65f63c](https://github.com/cuttlefisch/mae/commit/d65f63c527179d7f3d82061f541fba4231d479ad))
+
 ## [0.14.66] - 2026-07-29
 
 ### Bug Fixes
 
 - *(security)* Close eval_scheme AI-residency bypass (#478) + doc hygiene pass (#519) ([8681120](https://github.com/cuttlefisch/mae/commit/868112056071c41f07bc9fcbd3901ce1029c258e))
+
+### Miscellaneous
+
+- Bump version to 0.14.66 ([3094155](https://github.com/cuttlefisch/mae/commit/30941558dc9bc2693016b94db35f275cca337b82))
 
 ## [0.14.65] - 2026-07-29
 
