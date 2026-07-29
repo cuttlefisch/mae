@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.66] - 2026-07-29
+
+### Bug Fixes
+
+- *(security)* Close eval_scheme AI-residency bypass (#478) + doc hygiene pass (#519) ([8681120](https://github.com/cuttlefisch/mae/commit/868112056071c41f07bc9fcbd3901ce1029c258e))
+
 ## [0.14.65] - 2026-07-29
 
 ### CI
 
 - Fix ANSI-color parse bug in test-count grep, closes CI reliability sweep (#510) (#517) ([c65fabf](https://github.com/cuttlefisch/mae/commit/c65fabf81f5a64628833e8cf6f8699e1bdf87aa6))
+
+### Miscellaneous
+
+- Bump version to 0.14.65 ([00f3cca](https://github.com/cuttlefisch/mae/commit/00f3cca4e796268eea7f789a8c72d03090be7b1a))
 
 ## [0.14.64] - 2026-07-28
 
