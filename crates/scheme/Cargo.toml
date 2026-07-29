@@ -9,7 +9,7 @@ license.workspace = true
 mae-core = { path = "../core" }
 mae-kb = { path = "../../shared/kb", features = ["storage-sled", "crdt"] }
 mae-sync = { path = "../../shared/sync" }
-base64 = "0.22"
+base64 = "0.23"
 tracing = { workspace = true }
 libc = "0.2"
 parking_lot = "0.12"
