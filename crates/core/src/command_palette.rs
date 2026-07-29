@@ -75,6 +75,24 @@ impl PalettePurpose {
             Self::SetKbSearchScope => "KB Scope",
         }
     }
+
+    /// Does this purpose's `entries` arrive PRE-ORDERED by recency (MRU
+    /// buffer focus, recent-files, recent-projects) or KB activity, rather
+    /// than alphabetically or some other non-recency order? When true,
+    /// `update_filter` biases the typed-query score by each entry's
+    /// position in `entries` (0 = most recent) so recently-used items keep
+    /// floating up once the user starts typing, not just in the untyped
+    /// default order (#359 fixed only the latter; this is #531). `false` for purposes
+    /// like `SetTheme`/`GitBranch`/`Execute` whose caller-supplied order is
+    /// alphabetical or otherwise not a recency signal — boosting by
+    /// position there would bias toward the start of the alphabet, not
+    /// toward recent use.
+    pub fn has_recency_ordering(&self) -> bool {
+        matches!(
+            self,
+            Self::SwitchBuffer | Self::RecentFile | Self::SwitchProject | Self::KbFindOrCreate
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -617,6 +635,7 @@ impl CommandPalette {
             self.filtered = (0..self.entries.len()).collect();
         } else {
             let q: Vec<char> = self.query.to_lowercase().chars().collect();
+            let recency_ranked = self.purpose.has_recency_ordering();
             let mut scored: Vec<(usize, i64)> = self
                 .entries
                 .iter()
@@ -630,6 +649,17 @@ impl CommandPalette {
                     };
                     let extra_score = e.searchable_extra.as_ref().and_then(|s| score_match(s, &q));
                     name_score.max(doc_score).max(extra_score).map(|s| (idx, s))
+                })
+                .map(|(idx, s)| {
+                    // `entries`' own position is already the recency rank
+                    // for purposes whose caller pre-sorts by recency/activity
+                    // (see `has_recency_ordering`'s doc comment).
+                    let bonus = if recency_ranked {
+                        crate::file_picker::recency_bonus(Some(idx))
+                    } else {
+                        0
+                    };
+                    (idx, s + bonus)
                 })
                 .collect();
             scored.sort_by_key(|b| std::cmp::Reverse(b.1));
@@ -769,6 +799,106 @@ mod tests {
         reg.register_builtin("b", "B");
         let palette = CommandPalette::from_registry(&reg);
         assert_eq!(palette.filtered.len(), 2);
+    }
+
+    // --- typed-query recency bonus (#531) ---
+
+    #[test]
+    fn recency_ordered_purposes_are_exactly_the_expected_set() {
+        let recency_ranked = [
+            PalettePurpose::SwitchBuffer,
+            PalettePurpose::RecentFile,
+            PalettePurpose::SwitchProject,
+            PalettePurpose::KbFindOrCreate,
+        ];
+        let not_recency_ranked = [
+            PalettePurpose::Execute,
+            PalettePurpose::Describe,
+            PalettePurpose::SetTheme,
+            PalettePurpose::KbSearch,
+            PalettePurpose::AiMode,
+            PalettePurpose::AiProfile,
+            PalettePurpose::GitBranch,
+            PalettePurpose::ForgetProject,
+            PalettePurpose::KbInsertLink,
+        ];
+        for p in recency_ranked {
+            assert!(p.has_recency_ordering(), "{:?} should be recency-ranked", p);
+        }
+        for p in not_recency_ranked {
+            assert!(
+                !p.has_recency_ordering(),
+                "{:?} should NOT be recency-ranked (its entries are alphabetical \
+                 or another non-recency order)",
+                p
+            );
+        }
+    }
+
+    #[test]
+    fn update_filter_prioritizes_the_most_recent_entry_among_same_tier_matches() {
+        // Caller (dispatch/file.rs) already sorts buffer names MRU-first
+        // before construction -- position 0 = most recent. Without a
+        // recency bonus, the SHORTER name would win the substring tier's
+        // path-length tie-break; the recency bonus must override that.
+        let mut palette = CommandPalette::for_buffers(&["helpers_two_longer", "helpers_one"]);
+        palette.query = "helpers".to_string();
+        palette.update_filter();
+        let names: Vec<&str> = palette
+            .filtered
+            .iter()
+            .map(|&i| palette.entries[i].name.as_str())
+            .collect();
+        assert_eq!(
+            names[0], "helpers_two_longer",
+            "the most-recently-focused buffer (position 0) must rank first \
+             despite being the longer name: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn update_filter_does_not_reorder_non_recency_purposes_by_position() {
+        // Adversarial (#14): SetTheme's entries are alphabetical, not
+        // recency-ordered -- applying a position-based bonus here would
+        // wrongly bias toward the start of the caller's list. Two
+        // same-tier matches differing only in length must resolve by
+        // score_match's own tie-break (shorter wins), NOT position.
+        let mut palette = CommandPalette::for_themes(&["theme-two-longer", "theme-one"]);
+        palette.query = "theme".to_string();
+        palette.update_filter();
+        let names: Vec<&str> = palette
+            .filtered
+            .iter()
+            .map(|&i| palette.entries[i].name.as_str())
+            .collect();
+        assert_eq!(
+            names[0], "theme-one",
+            "non-recency-ranked purposes must keep score_match's own \
+             (shorter-wins) tie-break, unaffected by list position: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn update_filter_recency_bonus_never_beats_a_strictly_better_match_tier() {
+        // Adversarial: a weak fuzzy-subsequence match at position 0 (max
+        // recency bonus) must not outrank a genuinely better contiguous
+        // substring match elsewhere in the list.
+        let mut palette = CommandPalette::for_buffers(&["c_o_n_f_i_g", "zzz_config_zzz"]);
+        palette.query = "config".to_string();
+        palette.update_filter();
+        let names: Vec<&str> = palette
+            .filtered
+            .iter()
+            .map(|&i| palette.entries[i].name.as_str())
+            .collect();
+        assert_eq!(
+            names[0], "zzz_config_zzz",
+            "a strictly better (substring) match must still win over a \
+             recent-but-weak (fuzzy) match: {:?}",
+            names
+        );
     }
 
     #[test]

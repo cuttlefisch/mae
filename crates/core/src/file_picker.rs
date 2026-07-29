@@ -22,6 +22,11 @@ pub struct FilePicker {
     pub max_depth: usize,
     /// Max number of candidates to collect.
     pub max_candidates: usize,
+    /// Recency rank per candidate path (0 = most recent), populated by
+    /// `reorder_by_recency`. Consulted by `update_filter` to keep recently
+    /// -used files prioritized once the user starts typing, not just in
+    /// the empty-query default order (#359 fixed only the latter; this is #531).
+    pub recency_rank: std::collections::HashMap<String, usize>,
 }
 
 /// Directories to skip during recursive scan.
@@ -69,6 +74,7 @@ impl FilePicker {
             query_selected: false,
             max_depth,
             max_candidates,
+            recency_rank: std::collections::HashMap::new(),
         }
     }
 
@@ -109,6 +115,7 @@ impl FilePicker {
         self.candidates
             .sort_by_key(|c| rank.get(c).copied().unwrap_or(usize::MAX));
         self.filtered = (0..self.candidates.len()).collect();
+        self.recency_rank = rank;
     }
 
     /// Re-filter candidates based on current query.
@@ -139,10 +146,11 @@ impl FilePicker {
                     } else {
                         path.as_str()
                     };
+                    let bonus = recency_bonus(self.recency_rank.get(path).copied());
                     if query_lower.is_empty() {
-                        Some((idx, 0i64 - path.len() as i64))
+                        Some((idx, 0i64 - path.len() as i64 + bonus))
                     } else {
-                        score_match(score_target, &query_lower).map(|s| (idx, s))
+                        score_match(score_target, &query_lower).map(|s| (idx, s + bonus))
                     }
                 })
                 .collect();
@@ -419,6 +427,38 @@ pub(crate) fn common_prefix_bytes(a: &str, b: &str) -> usize {
 /// via `crate::file_picker::score_match`.
 pub use mae_kb::fuzzy::score_match;
 
+/// How many most-recent ranks still earn a typed-query score bonus.
+/// Beyond this window, recency stops influencing ranking at all (falls
+/// back to pure `score_match`).
+pub const RECENCY_BONUS_WINDOW: usize = 20;
+const RECENCY_BONUS_PER_RANK: i64 = 40;
+
+/// Score bonus for a candidate's recency rank (0 = most recent; `None` =
+/// no recency signal for this candidate). Added to `score_match`'s raw
+/// score before sorting, so recently-used items float up not just in the
+/// EMPTY-query default order (already fixed, #359) but also while the
+/// user is actively typing — the request #531 tracks.
+///
+/// Deliberately small relative to `score_match`'s tier gaps (>= 10,000
+/// between adjacent tiers, see `mae_kb::fuzzy::score_match`'s doc
+/// comment): the max bonus (rank 0) is `RECENCY_BONUS_WINDOW *
+/// RECENCY_BONUS_PER_RANK` = 800, enough to reorder candidates WITHIN the
+/// same match tier (where scores typically differ only by a path-length
+/// tie-break of a few dozen points) but never enough to promote a
+/// materially worse match (e.g. a weak fuzzy subsequence) over a
+/// genuinely better one (e.g. a real substring match) just because it was
+/// used more recently — matches Emacs's own `ivy`/`vertico`-style
+/// behavior, where recency biases close calls without overriding
+/// relevance.
+pub fn recency_bonus(rank: Option<usize>) -> i64 {
+    match rank {
+        Some(r) if r < RECENCY_BONUS_WINDOW => {
+            (RECENCY_BONUS_WINDOW - r) as i64 * RECENCY_BONUS_PER_RANK
+        }
+        _ => 0,
+    }
+}
+
 /// Recursively walk a directory tree, collecting file paths.
 fn walk_dir(
     root: &Path,
@@ -629,6 +669,99 @@ mod tests {
         assert_eq!(
             rest, sorted_rest,
             "never-opened files should retain alphabetical relative order"
+        );
+    }
+
+    // --- typed-query recency bonus ---
+
+    #[test]
+    fn recency_bonus_decays_with_rank_and_is_zero_outside_the_window() {
+        let best = recency_bonus(Some(0));
+        let worse = recency_bonus(Some(5));
+        assert!(best > worse, "rank 0 must score higher than rank 5");
+        assert!(worse > 0);
+        assert_eq!(recency_bonus(Some(RECENCY_BONUS_WINDOW)), 0);
+        assert_eq!(recency_bonus(Some(RECENCY_BONUS_WINDOW + 100)), 0);
+        assert_eq!(recency_bonus(None), 0);
+    }
+
+    #[test]
+    fn update_filter_prioritizes_a_recently_used_file_among_same_tier_matches() {
+        // Two files that both substring-match "helpers" at the SAME tier
+        // (both non-boundary-aligned substring hits deep in a path) --
+        // without a recency signal, tie-break is purely by path length.
+        // Recently-using the LONGER one must still promote it to the top.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("src/aaa/helpers_one")).unwrap();
+        fs::create_dir_all(tmp.path().join("src/aaa/helpers_two_longer")).unwrap();
+        fs::write(tmp.path().join("src/aaa/helpers_one/mod.rs"), "").unwrap();
+        fs::write(tmp.path().join("src/aaa/helpers_two_longer/mod.rs"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
+
+        picker.query = "helpers".to_string();
+        picker.update_filter();
+        let without_recency: Vec<&String> = picker
+            .filtered
+            .iter()
+            .map(|&i| &picker.candidates[i])
+            .collect();
+        assert_eq!(
+            without_recency[0], "src/aaa/helpers_one/mod.rs",
+            "without a recency signal, the SHORTER path wins the tie-break: {:?}",
+            without_recency
+        );
+
+        // Mark the LONGER path as most-recently-used.
+        let recent: std::collections::VecDeque<PathBuf> =
+            [tmp.path().join("src/aaa/helpers_two_longer/mod.rs")]
+                .into_iter()
+                .collect();
+        picker.reorder_by_recency(&recent);
+        picker.update_filter();
+        let with_recency: Vec<&String> = picker
+            .filtered
+            .iter()
+            .map(|&i| &picker.candidates[i])
+            .collect();
+        assert_eq!(
+            with_recency[0], "src/aaa/helpers_two_longer/mod.rs",
+            "recently-used file must be promoted to the top of a TYPED-query \
+             result, not just the empty-query default order: {:?}",
+            with_recency
+        );
+    }
+
+    #[test]
+    fn update_filter_recency_bonus_never_beats_a_strictly_better_match_tier() {
+        // Adversarial (#14): a WEAK fuzzy match that's recent must NOT
+        // outrank a genuinely better (contiguous substring) match that
+        // isn't recent -- the bonus must stay confined within a tier.
+        let tmp = tempfile::tempdir().unwrap();
+        fs::create_dir_all(tmp.path().join("src")).unwrap();
+        // "zzz_config_zzz" contiguously substring-matches "config".
+        fs::write(tmp.path().join("src/zzz_config_zzz.rs"), "").unwrap();
+        // "c_o_n_f_i_g" only fuzzy-subsequence-matches "config" (weak tier).
+        fs::write(tmp.path().join("src/c_o_n_f_i_g.rs"), "").unwrap();
+        let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
+
+        // Make the WEAK match maximally recent (rank 0).
+        let recent: std::collections::VecDeque<PathBuf> = [tmp.path().join("src/c_o_n_f_i_g.rs")]
+            .into_iter()
+            .collect();
+        picker.reorder_by_recency(&recent);
+
+        picker.query = "config".to_string();
+        picker.update_filter();
+        let ranked: Vec<&String> = picker
+            .filtered
+            .iter()
+            .map(|&i| &picker.candidates[i])
+            .collect();
+        assert_eq!(
+            ranked[0], "src/zzz_config_zzz.rs",
+            "a strictly better (substring) match must still win over a \
+             recent-but-weak (fuzzy) match: {:?}",
+            ranked
         );
     }
 
