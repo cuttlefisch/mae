@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.70] - 2026-07-29
+
+### Bug Fixes
+
+- *(rendering)* #353 - expand literal tab characters to their tab-stop width (#527) ([d2767db](https://github.com/cuttlefisch/mae/commit/d2767dba187d80e8d192bd70a5757072bb9ff961))
+
 ## [0.14.69] - 2026-07-29
 
 ### Bug Fixes
 
 - *(core)* #368 - extend multi-cursor visual-mode to indent/dedent/join/paste (#526) ([1fbd46d](https://github.com/cuttlefisch/mae/commit/1fbd46d3607657ce55672c4737ce7690b5a2a117))
+
+### Miscellaneous
+
+- Bump version to 0.14.69 ([0ec84ab](https://github.com/cuttlefisch/mae/commit/0ec84ab961df8be9bb17439453d1c18c5403aa85))
 
 ## [0.14.68] - 2026-07-29
 
