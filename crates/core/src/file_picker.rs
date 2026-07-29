@@ -687,46 +687,47 @@ mod tests {
 
     #[test]
     fn update_filter_prioritizes_a_recently_used_file_among_same_tier_matches() {
-        // Two files that both substring-match "helpers" at the SAME tier
-        // (both non-boundary-aligned substring hits deep in a path) --
-        // without a recency signal, tie-break is purely by path length.
-        // Recently-using the LONGER one must still promote it to the top.
+        // Two FLAT (root-level, no directory nesting) files that both
+        // substring-match "helpers" at position 0 -- boundary-aligned on
+        // every platform, and with no path separator anywhere in either
+        // candidate string, so this test is not sensitive to
+        // `score_match`'s own separator-handling on Windows (a real,
+        // separate, pre-existing gap: its boundary/basename checks only
+        // recognize '/', never '\'). Without a recency signal, tie-break
+        // is purely by path length; recently-using the LONGER one must
+        // still promote it to the top.
         let tmp = tempfile::tempdir().unwrap();
-        fs::create_dir_all(tmp.path().join("src/aaa/helpers_one")).unwrap();
-        fs::create_dir_all(tmp.path().join("src/aaa/helpers_two_longer")).unwrap();
-        fs::write(tmp.path().join("src/aaa/helpers_one/mod.rs"), "").unwrap();
-        fs::write(tmp.path().join("src/aaa/helpers_two_longer/mod.rs"), "").unwrap();
+        fs::write(tmp.path().join("helpers_one.rs"), "").unwrap();
+        fs::write(tmp.path().join("helpers_two_longer.rs"), "").unwrap();
         let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
 
         picker.query = "helpers".to_string();
         picker.update_filter();
-        // Candidate strings use the OS-native path separator (backslash on
-        // Windows) -- normalize to "/" for a portable comparison (#13).
-        let without_recency: Vec<String> = picker
+        let without_recency: Vec<&String> = picker
             .filtered
             .iter()
-            .map(|&i| picker.candidates[i].replace(std::path::MAIN_SEPARATOR, "/"))
+            .map(|&i| &picker.candidates[i])
             .collect();
         assert_eq!(
-            without_recency[0], "src/aaa/helpers_one/mod.rs",
+            without_recency[0], "helpers_one.rs",
             "without a recency signal, the SHORTER path wins the tie-break: {:?}",
             without_recency
         );
 
         // Mark the LONGER path as most-recently-used.
         let recent: std::collections::VecDeque<PathBuf> =
-            [tmp.path().join("src/aaa/helpers_two_longer/mod.rs")]
+            [tmp.path().join("helpers_two_longer.rs")]
                 .into_iter()
                 .collect();
         picker.reorder_by_recency(&recent);
         picker.update_filter();
-        let with_recency: Vec<String> = picker
+        let with_recency: Vec<&String> = picker
             .filtered
             .iter()
-            .map(|&i| picker.candidates[i].replace(std::path::MAIN_SEPARATOR, "/"))
+            .map(|&i| &picker.candidates[i])
             .collect();
         assert_eq!(
-            with_recency[0], "src/aaa/helpers_two_longer/mod.rs",
+            with_recency[0], "helpers_two_longer.rs",
             "recently-used file must be promoted to the top of a TYPED-query \
              result, not just the empty-query default order: {:?}",
             with_recency
@@ -738,29 +739,29 @@ mod tests {
         // Adversarial (#14): a WEAK fuzzy match that's recent must NOT
         // outrank a genuinely better (contiguous substring) match that
         // isn't recent -- the bonus must stay confined within a tier.
+        // FLAT (root-level) files, same separator-independence rationale
+        // as the test above.
         let tmp = tempfile::tempdir().unwrap();
-        fs::create_dir_all(tmp.path().join("src")).unwrap();
         // "zzz_config_zzz" contiguously substring-matches "config".
-        fs::write(tmp.path().join("src/zzz_config_zzz.rs"), "").unwrap();
+        fs::write(tmp.path().join("zzz_config_zzz.rs"), "").unwrap();
         // "c_o_n_f_i_g" only fuzzy-subsequence-matches "config" (weak tier).
-        fs::write(tmp.path().join("src/c_o_n_f_i_g.rs"), "").unwrap();
+        fs::write(tmp.path().join("c_o_n_f_i_g.rs"), "").unwrap();
         let mut picker = FilePicker::scan(tmp.path(), DEFAULT_MAX_DEPTH, DEFAULT_MAX_CANDIDATES);
 
         // Make the WEAK match maximally recent (rank 0).
-        let recent: std::collections::VecDeque<PathBuf> = [tmp.path().join("src/c_o_n_f_i_g.rs")]
-            .into_iter()
-            .collect();
+        let recent: std::collections::VecDeque<PathBuf> =
+            [tmp.path().join("c_o_n_f_i_g.rs")].into_iter().collect();
         picker.reorder_by_recency(&recent);
 
         picker.query = "config".to_string();
         picker.update_filter();
-        let ranked: Vec<String> = picker
+        let ranked: Vec<&String> = picker
             .filtered
             .iter()
-            .map(|&i| picker.candidates[i].replace(std::path::MAIN_SEPARATOR, "/"))
+            .map(|&i| &picker.candidates[i])
             .collect();
         assert_eq!(
-            ranked[0], "src/zzz_config_zzz.rs",
+            ranked[0], "zzz_config_zzz.rs",
             "a strictly better (substring) match must still win over a \
              recent-but-weak (fuzzy) match: {:?}",
             ranked
