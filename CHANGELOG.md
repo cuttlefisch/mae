@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.69] - 2026-07-29
+
+### Bug Fixes
+
+- *(core)* #368 - extend multi-cursor visual-mode to indent/dedent/join/paste (#526) ([1fbd46d](https://github.com/cuttlefisch/mae/commit/1fbd46d3607657ce55672c4737ce7690b5a2a117))
+
 ## [0.14.68] - 2026-07-29
 
 ### Bug Fixes
 
 - *(kb)* #357/#366 search ranking + AI-residency Bucket B, #461 daemon --config (#525) ([f5750f9](https://github.com/cuttlefisch/mae/commit/f5750f963ef331d2e850a3c52f06546224046cad))
+
+### Miscellaneous
+
+- Bump version to 0.14.68 ([bbe8f49](https://github.com/cuttlefisch/mae/commit/bbe8f499e362fe9a8ee540edbd9906d5ef5a2ccf))
 
 ## [0.14.67] - 2026-07-29
 
