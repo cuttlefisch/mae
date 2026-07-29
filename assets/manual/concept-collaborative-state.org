@@ -6,11 +6,11 @@
 #+title: Collaborative State Engine
 #+filetags: :architecture:sync:vision:
 
-MAE is a **collaborative state engine** where AI and humans interact via text OR visual interfaces, backed by a federated knowledge base. The sync layer (powered by [[concept:sync-engine][yrs]]) is the universal substrate for ALL state:
+MAE is a *collaborative state engine* where AI and humans interact via text OR visual interfaces, backed by a federated knowledge base. The sync layer (powered by [[concept:sync-engine][yrs]]) is the universal substrate for ALL state:
 
-- **Editor buffers** — text and code (YText)
-- **Visual documents** — design components, scene graphs (YMap/YArray)
-- **Knowledge base nodes** — CRDT-synced across instances for offline editing
+- *Editor buffers* — text and code (YText)
+- *Visual documents* — design components, scene graphs (YMap/YArray)
+- *Knowledge base nodes* — CRDT-synced across instances for offline editing
 
 ** Requirements
 1. Real-time multi-user collaboration (text AND visual content)

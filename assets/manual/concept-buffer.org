@@ -6,13 +6,13 @@
 #+title: Buffer
 #+filetags: :data-model:core:
 
-A **buffer** is the unit of editable content in MAE.
+A *buffer* is the unit of editable content in MAE.
 It has an optional file path, a kind (BufferKind), modification state, and either a rope (for text) or a structured payload (for conversations, help, etc).
 
 ** Contrast with other editors
-- **Emacs buffer** = MAE buffer (same lineage).
-- **Vim buffer** = MAE buffer, but MAE does not have Vim's separate *tabs* or *windows-per-tab* concept.
-- **VSCode tab** is a UI affordance -- MAE exposes no such primitive.
+- *Emacs buffer* = MAE buffer (same lineage).
+- *Vim buffer* = MAE buffer, but MAE does not have Vim's separate *tabs* or *windows-per-tab* concept.
+- *VSCode tab* is a UI affordance -- MAE exposes no such primitive.
 
 ** What buffers do NOT own
 Cursor position lives on [[concept:window?rel=references][Window]], not on the buffer. Two windows can view the same buffer at different points -- the design is deliberately Emacs-shaped here.

@@ -5,25 +5,25 @@
 #+title: Scrollbar
 #+filetags: :gui:rendering:
 
-**Vertical scrollbar** for the GUI rendering backend.
+*Vertical scrollbar* for the GUI rendering backend.
 
 ** Configuration
-- `:set scrollbar true` (default: enabled)
-- `:set scrollbar false` to disable
+- ~:set scrollbar true~ (default: enabled)
+- ~:set scrollbar false~ to disable
 
 ** Layout
-The scrollbar occupies 1 column at the right edge of the text area. Space is allocated in `FrameLayout::compute_layout()` *before* wrap/layout computation, so text wrapping respects the reduced width.
+The scrollbar occupies 1 column at the right edge of the text area. Space is allocated in ~FrameLayout::compute_layout()~ *before* wrap/layout computation, so text wrapping respects the reduced width.
 
 ** Rendering
-- **Track**: full content-area height, theme color `ui.scrollbar.track`
-- **Thumb**: proportional to viewport/total ratio, theme color `ui.scrollbar.thumb`
+- *Track*: full content-area height, theme color ~ui.scrollbar.track~
+- *Thumb*: proportional to viewport/total ratio, theme color ~ui.scrollbar.thumb~
 - Minimum thumb height: 1 cell
 
 ** Mouse Interaction
 Click in the scrollbar column to jump to that scroll position.
 
 ** Nyan Mode
-`:set nyan_mode true` enables a rainbow progress bar in the status line, showing scroll position as a filled bar with a cat marker.
+~:set nyan_mode true~ enables a rainbow progress bar in the status line, showing scroll position as a filled bar with a cat marker.
 
 [[concept:gui?rel=part_of][Part of GUI Backend]].
 
