@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.71] - 2026-07-29
+
+### Miscellaneous
+
+- *(deps)* Bump the rust-dependencies group across 1 directory with 13 updates (#529) ([6e409ff](https://github.com/cuttlefisch/mae/commit/6e409ffde4c2e8f8ef8ca7a88b9e18659254d9d1))
+
 ## [0.14.70] - 2026-07-29
 
 ### Bug Fixes
 
 - *(rendering)* #353 - expand literal tab characters to their tab-stop width (#527) ([d2767db](https://github.com/cuttlefisch/mae/commit/d2767dba187d80e8d192bd70a5757072bb9ff961))
+
+### Miscellaneous
+
+- Bump version to 0.14.70 ([7602d10](https://github.com/cuttlefisch/mae/commit/7602d10ba0f6dbfa7b6e4ce2d11662e3d913564d))
 
 ## [0.14.69] - 2026-07-29
 
