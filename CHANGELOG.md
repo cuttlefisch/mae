@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.65] - 2026-07-29
+
+### CI
+
+- Fix ANSI-color parse bug in test-count grep, closes CI reliability sweep (#510) (#517) ([c65fabf](https://github.com/cuttlefisch/mae/commit/c65fabf81f5a64628833e8cf6f8699e1bdf87aa6))
+
 ## [0.14.64] - 2026-07-28
 
 ### CI
 
 - Migrate Windows leg to nextest, closing #484 for real (#510 CI reliability sweep) (#516) ([6520c87](https://github.com/cuttlefisch/mae/commit/6520c872eac6d58acdf7c5f2151807025be0b3d0))
+
+### Miscellaneous
+
+- Bump version to 0.14.64 ([3e5cb13](https://github.com/cuttlefisch/mae/commit/3e5cb131b921b945255bc2f78cdf1de63f7294ef))
 
 ## [0.14.63] - 2026-07-28
 
