@@ -290,7 +290,12 @@ async fn main() {
     let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
 
     // Start scheduler
-    let scheduler = DaemonScheduler::new(DaemonConfig::load(), Arc::clone(&state));
+    // #461: previously called the bare `DaemonConfig::load()` here (hardcoded
+    // default path) instead of the already-resolved `config` local -- a
+    // `--config <path>` override on the CLI was silently ignored by the
+    // scheduler's own config-derived behavior (maintenance/enrichment
+    // intervals) while everything else in `main()` correctly honored it.
+    let scheduler = DaemonScheduler::new(config.clone(), Arc::clone(&state));
     let scheduler_shutdown = shutdown_tx.subscribe();
     let scheduler_handle = tokio::spawn(async move {
         scheduler.run(scheduler_shutdown).await;

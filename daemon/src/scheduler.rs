@@ -460,6 +460,49 @@ mod tests {
         assert!(!s.running);
     }
 
+    /// #461: `main()` used to call `DaemonScheduler::new(DaemonConfig::load(),
+    /// ...)` -- the hardcoded-default-path config -- instead of the already
+    /// CLI-resolved `--config <path>` local, so a scheduler-relevant setting
+    /// (like `watcher_interval_ms`, consumed directly by `run()` above) was
+    /// silently ignored regardless of what the caller passed in. This proves
+    /// the actual property that fix depends on: the scheduler ticks at the
+    /// cadence of the `DaemonConfig` it's CONSTRUCTED with, not some other
+    /// (e.g. default) config -- a fast custom interval must produce
+    /// meaningfully more drain cycles, within a bounded window, than the
+    /// stock 500ms default could ever produce.
+    #[tokio::test]
+    async fn scheduler_honors_the_config_it_is_constructed_with_not_a_default() {
+        let mut config = DaemonConfig::default();
+        assert_ne!(config.watcher_interval_ms, 20, "test needs a real override");
+        config.watcher_interval_ms = 20;
+        let daemon_state = Arc::new(Mutex::new(DaemonState::new()));
+        let scheduler = DaemonScheduler::new(config, daemon_state);
+        let state = Arc::clone(&scheduler.state);
+
+        let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel(1);
+        let handle = tokio::spawn(async move {
+            scheduler.run(shutdown_rx).await;
+        });
+
+        // Comfortably below the 500ms DEFAULT interval's first tick, but
+        // several multiples of the 20ms CUSTOM interval this test configured.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        {
+            let s = state.lock().await;
+            assert!(
+                s.drain_cycles >= 4,
+                "expected several drain cycles from the configured 20ms interval \
+                 within 150ms (got {}) -- if this is 0, the scheduler is running \
+                 with a DIFFERENT config than the one it was constructed with",
+                s.drain_cycles
+            );
+        }
+
+        shutdown_tx.send(()).unwrap();
+        handle.await.unwrap();
+    }
+
     #[tokio::test]
     async fn watcher_tick_reimport_converges_after_a_partial_then_full_pass() {
         // Adversarial per CLAUDE.md principle #14 + ADR-065 item 2's DoD ("kill
