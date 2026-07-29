@@ -69,6 +69,18 @@ fn locate_seed_kb<'a>(editor: &'a Editor, id: &str) -> Result<&'a mae_kb::Knowle
     ))
 }
 
+/// Look up a single node by id across the primary KB and every registered
+/// federated instance (same search order as `locate_seed_kb`, but returning
+/// the node itself, not the owning `KnowledgeBase` — used for `guidance_ids`
+/// below, which are looked up independently of the BFS seed and may live in
+/// a different KB instance than it).
+fn find_node<'a>(editor: &'a Editor, id: &str) -> Option<&'a mae_kb::Node> {
+    if let Some(n) = editor.kb.primary.get(id) {
+        return Some(n);
+    }
+    editor.kb.instances.values().find_map(|kb| kb.get(id))
+}
+
 /// Export a KB subgraph rooted at `id` to one self-contained HTML file.
 ///
 /// Args: `id` (required, seed/anchor node), `path` (required, output file),
@@ -81,9 +93,17 @@ fn locate_seed_kb<'a>(editor: &'a Editor, id: &str) -> Result<&'a mae_kb::Knowle
 /// tool doesn't do yet), `translations` (optional, path to a `{id:
 /// {title_es, body_es}}` JSON overlay — see `bilingual_kb_export::html_graph` module
 /// docs), `title` (optional, page `<title>`/`<h1>`, default derived from
-/// the seed node's own title). If `node_cap` truncates the reachable set,
-/// the returned status string says so explicitly (`"N more node(s) hidden
-/// by node_cap"`) rather than reporting a plain success.
+/// the seed node's own title), `guidance_ids` (optional array of node ids —
+/// kb/adrs/0004 in bilingual-kb-export: editorial/meta content, e.g. a
+/// writing-style standard or a translation-provenance disclosure, always
+/// included regardless of BFS depth/reachability from `id` and rendered in
+/// a distinct "About this guide" colophon section; looked up independently
+/// of the seed, may live in a different KB instance). If `node_cap`
+/// truncates the reachable set, the returned status string says so
+/// explicitly (`"N more node(s) hidden by node_cap"`) rather than reporting
+/// a plain success; likewise a `guidance_ids` entry that doesn't resolve
+/// anywhere is reported (`"N guidance id(s) not found and skipped"`), never
+/// silently dropped.
 ///
 /// Fails with a clear, specific error (never a panic/generic error) when:
 /// the seed id doesn't exist anywhere in the KB; an explicitly-given
@@ -204,7 +224,7 @@ pub fn execute_kb_export_subgraph_html(
 
     // --- Bridge to mae-export for HTML rendering ---
     let palette = bilingual_kb_export::html_graph::GruvboxPalette::dark();
-    let export_nodes: Vec<bilingual_kb_export::html_graph::GraphExportNode> = result
+    let mut export_nodes: Vec<bilingual_kb_export::html_graph::GraphExportNode> = result
         .nodes
         .iter()
         .map(|n| {
@@ -230,6 +250,35 @@ pub fn execute_kb_export_subgraph_html(
             export_node
         })
         .collect();
+
+    // kb/adrs/0004 (bilingual-kb-export): "guidance nodes" -- editorial/meta
+    // content (writing-style standards, translation-provenance disclosures,
+    // etc.) always included regardless of BFS depth/reachability, rendered
+    // in a distinct colophon section. Looked up independently of the seed
+    // (may live in a different KB instance -- see `find_node`); a guidance
+    // id that doesn't resolve anywhere is reported in the status string
+    // (never silently dropped, matching `node_cap`'s own truncation
+    // reporting below) rather than failing the whole export over one bad id.
+    let mut missing_guidance_ids: Vec<String> = Vec::new();
+    if let Some(guidance_ids) = args.get("guidance_ids").and_then(|v| v.as_array()) {
+        for gid in guidance_ids.iter().filter_map(|v| v.as_str()) {
+            match find_node(editor, gid) {
+                Some(n) => {
+                    let mut guidance_node = bilingual_kb_export::html_graph::build_guidance_node(
+                        n.id.clone(),
+                        n.kind.as_str().to_string(),
+                        &n.title,
+                        &n.body,
+                        translations.get(&n.id),
+                        &palette,
+                    );
+                    guidance_node.tags = n.tags.clone();
+                    export_nodes.push(guidance_node);
+                }
+                None => missing_guidance_ids.push(gid.to_string()),
+            }
+        }
+    }
     let export_edges: Vec<bilingual_kb_export::html_graph::GraphExportEdge> = result
         .links
         .iter()
@@ -279,7 +328,7 @@ pub fn execute_kb_export_subgraph_html(
     })?;
 
     Ok(format!(
-        "Exported {} node{} ({} edges) rooted at '{id}' to {} ({} bytes){}{}",
+        "Exported {} node{} ({} edges) rooted at '{id}' to {} ({} bytes){}{}{}",
         export_nodes.len(),
         if export_nodes.len() == 1 { "" } else { "s" },
         export_edges.len(),
@@ -302,6 +351,15 @@ pub fn execute_kb_export_subgraph_html(
             )
         } else {
             String::new()
+        },
+        if missing_guidance_ids.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ", {} guidance id(s) not found and skipped: {}",
+                missing_guidance_ids.len(),
+                missing_guidance_ids.join(", ")
+            )
         }
     ))
 }
@@ -562,5 +620,60 @@ mod tests {
             3,
             "expected 3 distinct chord positions: {nodes:?}"
         );
+    }
+
+    #[test]
+    fn guidance_ids_are_always_included_regardless_of_bfs_reachability() {
+        let mut editor = editor_with_linked_notes();
+        // Deliberately unlinked from root/child -- BFS from "root" at any
+        // depth would never reach this on its own.
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "style-guide",
+            "Writing Style Guide",
+            mae_kb::NodeKind::Note,
+            "Standards this guide is written against.",
+        ));
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.html");
+        let msg = execute_kb_export_subgraph_html(
+            &editor,
+            &serde_json::json!({
+                "id": "root",
+                "path": out.to_str().unwrap(),
+                "depth": 1,
+                "guidance_ids": ["style-guide"],
+            }),
+        )
+        .unwrap();
+        assert!(!msg.contains("not found"), "{msg}");
+        let html = std::fs::read_to_string(&out).unwrap();
+        assert!(
+            html.contains("id=\"colophon\""),
+            "expected a colophon section: {html}"
+        );
+        assert!(html.contains("Writing Style Guide"));
+    }
+
+    #[test]
+    fn a_guidance_id_that_does_not_resolve_is_reported_not_silently_dropped() {
+        let editor = editor_with_linked_notes();
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.html");
+        let msg = execute_kb_export_subgraph_html(
+            &editor,
+            &serde_json::json!({
+                "id": "root",
+                "path": out.to_str().unwrap(),
+                "guidance_ids": ["does-not-exist"],
+            }),
+        )
+        .unwrap();
+        assert!(
+            msg.contains("1 guidance id(s) not found and skipped: does-not-exist"),
+            "{msg}"
+        );
+        // The rest of the export still succeeded -- one bad guidance id
+        // doesn't fail the whole export.
+        assert!(msg.contains("Exported 2 nodes"), "{msg}");
     }
 }

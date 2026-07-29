@@ -662,7 +662,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .build(),
         ToolDefBuilder::new(
             "kb_export_subgraph_html",
-            "Export a KB subgraph (a seed/anchor node plus its neighborhood) to ONE self-contained, standalone HTML file — no external network requests, works fully offline in a browser. BFS from `id` out to `depth` hops (default 2, clamped to 4) capped at `node_cap` reachable nodes (default 60, clamped to 200 — the returned status says explicitly if any were hidden by this cap, never a silent truncation), laid out as a compact chord ring (nodes on a circle, edges as interior arcs) in a sidebar nav widget alongside a collapsible per-node outline; the main content area shows the selected node's full rendered body. The anchor node gets distinct styling, a persistent Home button, and a Previous/Next reading-order walk. Click a node (in the chord ring, the outline, or an in-body link) to view it; hovering a chord node OR an in-body link shows a title+excerpt preview popover. Optional `translations` JSON overlay ({id: {title_es, body_es}}) adds an instant EN/ES toggle — omit it and the page just shows EN with the toggle hidden. `#+begin_src mermaid` blocks in node bodies are pre-rendered to inline SVG, themed to match the page. Fails with a clear error if `id` doesn't resolve anywhere in the KB, or if `translations` is given but unreadable/malformed.",
+            "Export a KB subgraph (a seed/anchor node plus its neighborhood) to ONE self-contained, standalone HTML file — no external network requests, works fully offline in a browser. BFS from `id` out to `depth` hops (default 2, clamped to 4) capped at `node_cap` reachable nodes (default 60, clamped to 200 — the returned status says explicitly if any were hidden by this cap, never a silent truncation), laid out as a compact chord ring (nodes on a circle, edges as interior arcs) in a sidebar nav widget alongside a collapsible per-node outline; the main content area shows the selected node's full rendered body. The anchor node gets distinct styling, a persistent Home button, and a Previous/Next reading-order walk (follows an authored `* Reading Order` Previous/Next chain in a node's body when present, falling back to BFS-distance order otherwise). A header search box does fuzzy jump-to-node, and a tag-filter picker dims non-matching chord nodes. Click a node (in the chord ring, the outline, or an in-body link) to view it; hovering a chord node OR an in-body link shows a title+excerpt preview popover. Optional `translations` JSON overlay ({id: {title_es, body_es}}) adds an instant EN/ES toggle — omit it and the page just shows EN with the toggle hidden. Optional `guidance_ids` always includes those specific nodes (regardless of BFS reachability) in a distinct \"About this guide\" colophon section — e.g. a writing-style standard or a translation-provenance disclosure. `#+begin_src mermaid` blocks in node bodies are pre-rendered to inline SVG, themed to match the page. Fails with a clear error if `id` doesn't resolve anywhere in the KB, or if `translations` is given but unreadable/malformed.",
         )
         .prop("id", "string", "Seed/anchor node id to center the export on")
         .prop("path", "string", "Output HTML file path (absolute, or relative to the project root)")
@@ -678,6 +678,11 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Optional path to a {id: {title_es, body_es}} JSON file adding an EN/ES toggle to the export",
         )
         .prop("title", "string", "Optional page title (default: derived from the seed node's own title)")
+        .prop(
+            "guidance_ids",
+            "array",
+            "Optional array of node ids always included regardless of BFS reachability, rendered in a distinct colophon section (kb/adrs/0004 in bilingual-kb-export) — e.g. a writing-style standard or translation-provenance disclosure",
+        )
         .required(["id", "path"])
         .permission(PermissionTier::Write)
         .build(),
