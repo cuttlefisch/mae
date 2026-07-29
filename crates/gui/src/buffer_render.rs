@@ -537,7 +537,17 @@ pub fn render_buffer_content(
                 }
             }
 
-            let visible_start = col_offset.min(full_count);
+            // #353: col_offset is a ROPE column (win.col_offset); full_chars
+            // is DISPLAY-indexed when this line has an active display region
+            // (tab expansion, link concealment) -- remap through the same
+            // display_map used above for span/link mapping on this line, or
+            // col_offset itself when no region touches it (mirrors the TUI
+            // backend's equivalent fix in crates/renderer/src/buffer_render.rs).
+            let visible_start = match ll.display_map.as_deref() {
+                Some(dm) => mae_core::display_region::rope_col_to_display_col(col_offset, dm),
+                None => col_offset,
+            }
+            .min(full_count);
             let visible_end = (visible_start + ll.char_count).min(full_count);
             let visible_chars = &full_chars[visible_start..visible_end];
             let visible_styles = &char_styles[visible_start..visible_end];

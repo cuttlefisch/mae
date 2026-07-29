@@ -66,6 +66,7 @@ impl super::Editor {
             "line_numbers" => self.show_line_numbers.to_string(),
             "relative_line_numbers" => self.relative_line_numbers.to_string(),
             "word_wrap" => self.word_wrap.to_string(),
+            "tab_width" => self.tab_width.to_string(),
             "break_indent" => self.break_indent.to_string(),
             "show_break" => self.show_break.clone(),
             "org_hide_emphasis_markers" => self.org_hide_emphasis_markers.to_string(),
@@ -757,6 +758,19 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.display_region_debounce_ms = v.clamp(0, 5000);
+            }
+            "tab_width" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.tab_width = v.clamp(1, 32);
+                // Force-recompute display regions on the next tick (existing
+                // cached tab-expansion regions were sized for the OLD
+                // tab_width) -- same explicit-force mechanism
+                // toggle-inline-images/toggle-image-at-point already use.
+                for buf in self.buffers.iter_mut() {
+                    buf.display_regions_gen = u64::MAX;
+                }
             }
             "syntax_reparse_debounce_ms" => {
                 let v: u64 = value

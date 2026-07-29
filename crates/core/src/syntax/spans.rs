@@ -157,11 +157,20 @@ pub fn compute_visible_syntax_spans(editor: &mut crate::editor::Editor) -> Synta
         })
         .collect();
     for idx in display_region_bufs {
-        // Skip display regions entirely for degraded (large) files —
-        // link concealment and inline images add no value when features are shed.
+        // Skip the EXPENSIVE (regex-based) link/image region scans for
+        // degraded (large) files -- those are opt-in cosmetic conveniences
+        // that add no value when features are shed. Tab expansion (#353)
+        // is NOT skipped even here: unlike link/image detection, it's a
+        // single cheap linear scan (no regex), and a raw unexpanded tab is
+        // a baseline rendering-correctness bug, not a cosmetic feature --
+        // degrading it would leave exactly the misaligned-cell artifact
+        // this issue reports, for precisely the large tab-indented files
+        // (logs, generated code) most likely to hit the degrade threshold.
         if editor.should_degrade_features(idx) {
             let gen = editor.buffers[idx].generation;
-            editor.buffers[idx].display_regions.clear();
+            let source: String = editor.buffers[idx].rope().chars().collect();
+            editor.buffers[idx].display_regions =
+                crate::display_region::compute_tab_regions(&source, editor.tab_width);
             editor.buffers[idx].display_regions_gen = gen;
             continue;
         }
@@ -184,7 +193,8 @@ pub fn compute_visible_syntax_spans(editor: &mut crate::editor::Editor) -> Synta
         editor.buffers[idx].display_regions_dirty_since = None;
         let link_descriptive = editor.link_descriptive_for(idx);
         let inline_images = editor.inline_images_for(idx);
-        editor.buffers[idx].recompute_display_regions(link_descriptive, inline_images);
+        let tab_width = editor.tab_width;
+        editor.buffers[idx].recompute_display_regions(link_descriptive, inline_images, tab_width);
     }
 
     // Set display_reveal_cursor per-frame for the focused window's buffer.

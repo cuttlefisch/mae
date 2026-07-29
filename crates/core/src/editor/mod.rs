@@ -1390,6 +1390,9 @@ pub struct Editor {
     pub display_region_debounce_ms: u64,
     /// Milliseconds to debounce syntax reparse after edits (default 50).
     pub syntax_reparse_debounce_ms: u64,
+    /// Display width of a `\t` character, in columns to the next tab-stop
+    /// (default 8, the universal terminal/Unix convention — see #353).
+    pub tab_width: usize,
     /// Per-buffer markup span cache, keyed by buffer index. Avoids recomputing
     /// regex-based markup spans every frame for org/markdown buffers.
     pub markup_cache: HashMap<usize, crate::syntax::MarkupCache>,
@@ -1678,6 +1681,7 @@ impl Editor {
             degrade_threshold_line_length: 10_000,
             display_region_debounce_ms: 150,
             syntax_reparse_debounce_ms: 50,
+            tab_width: 8,
             markup_cache: HashMap::new(),
             code_block_cache: HashMap::new(),
             org_agenda_files: Vec::new(),

@@ -6,6 +6,20 @@
 //!
 //! Cursor pixel positions come from `FrameLayout`, which bakes in heading
 //! scale from `syntax_spans`. No separate span parameter is needed here.
+//!
+//! @ai-caution: [rendering] `win.col_offset`/a secondary or collab peer
+//! cursor's `.col` are ROPE columns; `LineLayout.display_map`/`display_chars`
+//! are DISPLAY-indexed whenever a line has an active display region (tab
+//! expansion #353, link concealment). `compute_cursor_position()` (the
+//! PRIMARY cursor, both the FrameLayout and no-layout-fallback paths)
+//! correctly remaps via `display_region::rope_col_to_display_col` /
+//! `Buffer::display_text_and_col`. Known, NOT-yet-fixed gap (pre-existing
+//! for link concealment, not introduced here): secondary-cursor and
+//! collaborative-peer-cursor drawing further down this file still index
+//! with the raw rope column — cosmetic only (a highlight/cursor marker may
+//! land one tab-stop off), narrow (needs horizontal scroll + a tab/link
+//! before the cursor + multi-cursor or an active collab session). See the
+//! matching note in `crates/renderer/src/buffer_render.rs` (TUI backend).
 
 use mae_core::render_common::collab_cursor::{
     normalize_selection_range, offscreen_side, selection_col_range, OffscreenSide,
@@ -187,7 +201,17 @@ pub fn compute_cursor_position(
                     // No wrap: use layout's display_row directly (fold-aware).
                     let screen_row = display_row?;
                     // Compute column offset using FrameLayout::scaled_col.
-                    let visible_start = win.col_offset;
+                    // #353: win.col_offset is a ROPE column; display_cursor_col
+                    // (computed above) is already DISPLAY-mapped -- remap
+                    // col_offset through the same display_map before
+                    // subtracting, or the two operands are in different units
+                    // whenever this line has an active display region.
+                    let visible_start = match cursor_layout.and_then(|ll| ll.display_map.as_ref()) {
+                        Some(dm) => {
+                            mae_core::display_region::rope_col_to_display_col(win.col_offset, dm)
+                        }
+                        None => win.col_offset,
+                    };
                     let cursor_char_in_visible = display_cursor_col.saturating_sub(visible_start);
                     let visible_text: String = display_line_text
                         .chars()
@@ -226,11 +250,23 @@ pub fn compute_cursor_position(
                 }
             } else {
                 // No layout available — fall back to simple calculation.
+                // #353: measure against DISPLAY text/columns (tab expansion,
+                // link concealment) via the same helper the TUI backend's
+                // equivalent fallback uses, not the raw rope line + cursor_col.
+                let _ = &line_text; // superseded by buf.display_text_and_col below
                 let screen_row = win.cursor_row.saturating_sub(win.scroll_offset);
-                let display_col =
-                    mae_core::grapheme::display_width_up_to_grapheme(&line_text, win.cursor_col);
-                let scroll_col =
-                    mae_core::grapheme::display_width_up_to_grapheme(&line_text, win.col_offset);
+                let (fallback_text, fallback_display_col) =
+                    buf.display_text_and_col(win.cursor_row, win.cursor_col);
+                let (_, fallback_scroll_col) =
+                    buf.display_text_and_col(win.cursor_row, win.col_offset);
+                let display_col = mae_core::grapheme::display_width_up_to_grapheme(
+                    &fallback_text,
+                    fallback_display_col,
+                );
+                let scroll_col = mae_core::grapheme::display_width_up_to_grapheme(
+                    &fallback_text,
+                    fallback_scroll_col,
+                );
                 let visible_col = display_col.saturating_sub(scroll_col);
 
                 if screen_row < win_inner.height {
@@ -714,6 +750,65 @@ mod tests {
         let pos = compute_cursor_position(&editor, None, inner, 3, None);
         assert!(pos.is_some());
         assert_eq!(pos.unwrap().scale, 1.0);
+    }
+
+    #[test]
+    fn compute_cursor_position_expands_a_leading_tab_via_layout() {
+        // #353: cursor column math must agree with the renderer's tab
+        // expansion. "\tabc" with tab_width=4, cursor on 'c' (rope col 3)
+        // must land at display col 4 (tab) + 2 ('a','b') = 6, not rope
+        // col 3 — the raw-rope-column bug this issue's own text flagged.
+        let mut editor = Editor::new();
+        editor.tab_width = 4;
+        let idx = editor.active_buffer_idx();
+        editor.buffers[idx].insert_text_at(0, "\tabc\n");
+        editor.buffers[idx].generation = 1;
+        editor.buffers[idx].recompute_display_regions(false, false, 4);
+
+        let win = editor.window_mgr.focused_window_mut();
+        win.cursor_row = 0;
+        win.cursor_col = 3; // on 'c'
+        win.scroll_offset = 0;
+
+        let buf = &editor.buffers[idx];
+        let win = editor.window_mgr.focused_window();
+        let fl = layout::compute_layout(&editor, buf, win, 0, 0, 80, 20, 16.0, 8.0, None, None);
+        let inner = CellRect::new(0, 0, 80, 20);
+        let gutter_w = fl.gutter_width;
+        let pos = compute_cursor_position(&editor, Some(&fl), inner, gutter_w, None);
+        assert!(pos.is_some());
+        let p = pos.unwrap();
+        assert_eq!(
+            p.col,
+            gutter_w + 6,
+            "cursor must land past the EXPANDED tab, not the raw rope column"
+        );
+    }
+
+    #[test]
+    fn compute_cursor_position_expands_a_leading_tab_without_layout() {
+        // Same property as above, through the no-frame_layout fallback path.
+        let mut editor = Editor::new();
+        editor.tab_width = 4;
+        let idx = editor.active_buffer_idx();
+        editor.buffers[idx].insert_text_at(0, "\tabc\n");
+        editor.buffers[idx].generation = 1;
+        editor.buffers[idx].recompute_display_regions(false, false, 4);
+
+        let win = editor.window_mgr.focused_window_mut();
+        win.cursor_row = 0;
+        win.cursor_col = 3; // on 'c'
+        win.scroll_offset = 0;
+
+        let inner = CellRect::new(0, 0, 80, 24);
+        let pos = compute_cursor_position(&editor, None, inner, 3, None);
+        assert!(pos.is_some());
+        let p = pos.unwrap();
+        assert_eq!(
+            p.col,
+            3 + 6,
+            "gutter_w + expanded display column, not the raw rope column"
+        );
     }
 
     #[test]

@@ -16,6 +16,8 @@
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
 
+use unicode_width::UnicodeWidthChar;
+
 use crate::link_detect::is_image_path;
 use crate::link_detect::{detect_markdown_links, detect_org_links};
 
@@ -107,6 +109,55 @@ pub fn compute_link_regions(
         }
     }
 
+    regions
+}
+
+/// Compute display regions that expand `\t` (U+0009) to the next tab-stop
+/// boundary (a multiple of `tab_width` display columns) — see issue #353.
+/// A raw tab has no printable glyph width, so passed through unmodified it
+/// draws as nothing while still consuming one position in offset/column
+/// accounting, producing the misaligned/blank-looking cells the issue
+/// reports. Reuses the SAME `DisplayRegion`/`apply_display_regions_to_line`
+/// pipeline built for link concealment (see `crates/gui/RENDERING.md`'s
+/// "Display Region Pipeline") rather than inventing a parallel mechanism —
+/// cursor placement, mouse-click mapping, and syntax-span index remapping
+/// all already thread through that pipeline correctly for arbitrary
+/// replacement-length regions, so tab regions get all three for free.
+///
+/// Column tracking walks the RAW rope text only — it does NOT account for
+/// any OTHER display region (e.g. a concealed link) that might precede a
+/// tab earlier on the same line. This is a deliberate, documented
+/// simplification, not a silent gap: leading-whitespace tabs (indented
+/// code — the overwhelming real-world case this issue is about) are never
+/// preceded by another region on the same line, so column tracking is
+/// exact for that case. A tab appearing after a concealed link on the same
+/// line (rare) could land a tab-stop off; full region-composition-aware
+/// column tracking is out of scope for the isolated "control character has
+/// no glyph width" gap this issue reports.
+pub fn compute_tab_regions(text: &str, tab_width: usize) -> Vec<DisplayRegion> {
+    let tab_width = tab_width.max(1);
+    let mut regions = Vec::new();
+    let mut col = 0usize;
+    let mut byte_pos = 0usize;
+    for ch in text.chars() {
+        let ch_len = ch.len_utf8();
+        if ch == '\n' {
+            col = 0;
+        } else if ch == '\t' {
+            let next_stop = (col / tab_width + 1) * tab_width;
+            regions.push(DisplayRegion {
+                byte_start: byte_pos,
+                byte_end: byte_pos + ch_len,
+                replacement: Some(" ".repeat(next_stop - col)),
+                link_target: None,
+                image: None,
+            });
+            col = next_stop;
+        } else {
+            col += UnicodeWidthChar::width(ch).unwrap_or(0);
+        }
+        byte_pos += ch_len;
+    }
     regions
 }
 
@@ -404,6 +455,15 @@ pub fn region_at_byte(regions: &[DisplayRegion], cursor_byte: usize) -> Option<u
 /// If the cursor is inside a region, that region is suppressed (raw text visible).
 /// Returns `Cow::Borrowed` on the fast path (no reveal or cursor outside regions),
 /// avoiding a full clone every frame.
+///
+/// Only regions with a `link_target` (link concealment / inline images) are
+/// ever revealed — a tab-expansion region (#353, `link_target: None`) must
+/// NEVER be suppressed when the cursor sits on it: unlike a concealed link,
+/// there is no "raw text" a user would want to see or edit for a tab —
+/// reverting to the raw unexpanded `\t` on cursor-over would reintroduce
+/// exactly the invisible-cell rendering bug this issue reports, and for the
+/// single most common case (cursor sitting on leading-whitespace
+/// indentation) every single frame.
 pub fn regions_with_cursor_reveal<'a>(
     regions: &'a [DisplayRegion],
     reveal_cursor_byte: Option<usize>,
@@ -412,13 +472,13 @@ pub fn regions_with_cursor_reveal<'a>(
         return Cow::Borrowed(regions);
     };
     match region_at_byte(regions, cursor_byte) {
-        Some(idx) => {
+        Some(idx) if regions[idx].link_target.is_some() => {
             let mut out = Vec::with_capacity(regions.len() - 1);
             out.extend_from_slice(&regions[..idx]);
             out.extend_from_slice(&regions[idx + 1..]);
             Cow::Owned(out)
         }
-        None => Cow::Borrowed(regions),
+        _ => Cow::Borrowed(regions),
     }
 }
 
@@ -1121,5 +1181,81 @@ mod tests {
         let display_str: String = display.iter().collect();
         assert_eq!(display_str, "A x B y C z D");
         assert_eq!(map.len(), display_str.len());
+    }
+
+    // --- compute_tab_regions (#353) ---
+
+    #[test]
+    fn compute_tab_regions_single_leading_tab() {
+        let text = "\techo hi\n";
+        let regions = compute_tab_regions(text, 8);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].byte_start, 0);
+        assert_eq!(regions[0].byte_end, 1);
+        assert_eq!(regions[0].replacement.as_deref(), Some("        ")); // 8 spaces
+    }
+
+    #[test]
+    fn compute_tab_regions_aligns_to_the_next_stop_not_a_fixed_width() {
+        // A tab after 2 columns of content with tab_width=4 only needs 2
+        // spaces to reach the next stop (col 4), not a fixed 4.
+        let text = "ab\tc";
+        let regions = compute_tab_regions(text, 4);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].byte_start, 2);
+        assert_eq!(regions[0].replacement.as_deref(), Some("  ")); // 2 spaces
+    }
+
+    #[test]
+    fn compute_tab_regions_multiple_consecutive_tabs() {
+        let text = "\t\tdeep\n";
+        let regions = compute_tab_regions(text, 4);
+        assert_eq!(regions.len(), 2);
+        assert_eq!(regions[0].byte_start, 0);
+        assert_eq!(regions[0].replacement.as_deref(), Some("    ")); // col 0 -> 4
+        assert_eq!(regions[1].byte_start, 1);
+        assert_eq!(regions[1].replacement.as_deref(), Some("    ")); // col 4 -> 8
+    }
+
+    #[test]
+    fn compute_tab_regions_resets_column_at_newline() {
+        let text = "aa\ta\n\tb\n";
+        let regions = compute_tab_regions(text, 4);
+        assert_eq!(regions.len(), 2);
+        // First tab at col 2 (after "aa") -> 2 spaces to reach col 4.
+        assert_eq!(regions[0].replacement.as_deref(), Some("  "));
+        // Second tab is the first char on a NEW line (col reset to 0) -> 4 spaces.
+        assert_eq!(regions[1].replacement.as_deref(), Some("    "));
+    }
+
+    #[test]
+    fn compute_tab_regions_none_when_no_tabs() {
+        let regions = compute_tab_regions("plain text, no tabs\n", 8);
+        assert!(regions.is_empty());
+    }
+
+    #[test]
+    fn compute_tab_regions_zero_width_option_treated_as_one() {
+        // A misconfigured tab_width=0 must not divide-by-zero or infinite-loop.
+        let regions = compute_tab_regions("\tx", 0);
+        assert_eq!(regions.len(), 1);
+        assert_eq!(regions[0].replacement.as_deref(), Some(" "));
+    }
+
+    #[test]
+    fn compute_tab_regions_composes_with_apply_display_regions_to_line() {
+        // Adversarial (#14): prove the region actually round-trips through
+        // the SAME pipeline link concealment uses, not just that the region
+        // itself looks right in isolation.
+        let text = "\tindented\n";
+        let chars: Vec<char> = text.chars().collect();
+        let regions = compute_tab_regions(text, 4);
+        let (display, map) = apply_display_regions_to_line(&chars, 0, text.len(), &regions);
+        let display_str: String = display.iter().collect();
+        assert_eq!(display_str, "    indented\n");
+        // Every expanded space maps back to the source tab (char index 0).
+        assert!(map[..4].iter().all(|&c| c == 0));
+        // Content after the tab maps 1:1 to its own original char index.
+        assert_eq!(map[4], 1);
     }
 }
