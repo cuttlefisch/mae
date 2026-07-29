@@ -430,6 +430,34 @@ jobs:
           fail_on_unmatched_files: true
           token: ${{ secrets.RELEASE_PAT }}
 
+  # Fires the mae-vscode extension's `real-binaries` e2e check against THIS
+  # exact release immediately, instead of it waiting for that repo's own
+  # weekly cron. mae-vscode doesn't bundle the mae binary at all -- it spawns
+  # a separately-installed one (`mae.shimPath`/`mae.headlessBinaryPath`), so a
+  # new mae release never inherently requires a new mae-vscode release; this
+  # is purely fast drift detection (same day instead of up to a week) for the
+  # case where a release breaks something mae-vscode's code assumes (a CLI
+  # flag, the --print-socket-path contract, the MCP handshake shape). A
+  # passing check on the mae-vscode side is a no-op; a failing one auto-files
+  # a tracking issue there (see that repo's ci.yml). Best-effort notification
+  # only -- deliberately does NOT gate on this job's own success/failure, so a
+  # network hiccup or mae-vscode CI being down can never affect whether this
+  # mae release itself succeeds.
+  notify-vscode-extension:
+    name: Notify mae-vscode of this release
+    needs: [release]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Dispatch mae-release event to cuttlefisch/mae-vscode
+        env:
+          GH_TOKEN: ${{ secrets.MAE_VSCODE_DISPATCH_TOKEN }}
+        run: |
+          gh api repos/cuttlefisch/mae-vscode/dispatches \
+            -f event_type=mae-release \
+            -F "client_payload[tag]=${{ github.ref_name }}" \
+            || echo "::warning::Could not dispatch to mae-vscode (non-fatal -- this mae release already succeeded regardless)."
+
   update-homebrew:
     name: Update Homebrew tap
     needs: [release]
