@@ -1,5 +1,19 @@
 //! Text buffer rendering: gutter, syntax spans, hex color preview,
 //! search/selection highlights, cursorline, diagnostics, breakpoints.
+//!
+//! @ai-caution: [rendering] `win.col_offset`/a secondary cursor's `.col` are
+//! ROPE columns; `full_chars`/`styles`/`full_display` are DISPLAY-indexed
+//! whenever a line has an active display region (tab expansion #353, link
+//! concealment). The two main no-wrap drawing paths remap this correctly
+//! via `display_region::rope_col_to_display_col` — see the `has_display_regions`
+//! branches. Known, NOT-yet-fixed gap (pre-existing for link concealment,
+//! not introduced here): the secondary-cursor highlight cell and the
+//! collaborative peer cursor/selection overlay (`render_collab_cursors`)
+//! still index with the raw rope column. Narrow in practice (needs
+//! horizontal scroll + a tab/link before the cursor + multi-cursor or an
+//! active collab session), cosmetic only (a highlight cell may land one
+//! tab-stop off — never affects the actual drawn TEXT), left as a scoped
+//! follow-up rather than blocking this fix on every col_offset call site.
 
 use mae_core::render_common::collab_colors;
 use mae_core::render_common::collab_cursor::{
@@ -501,8 +515,17 @@ pub(crate) fn render_buffer(
                     display_row += 1;
                 }
             } else {
-                // No wrap: apply horizontal scroll.
-                let visible_start = col_offset.min(full_count);
+                // No wrap: apply horizontal scroll. #353: col_offset is a
+                // ROPE column; full_chars/styles are DISPLAY-indexed when
+                // regions are active (tab expansion, link concealment) --
+                // remap through the same display_map_vec used above, or
+                // col_offset itself when no regions touch this line.
+                let visible_start = if has_display_regions {
+                    mae_core::display_region::rope_col_to_display_col(col_offset, &display_map_vec)
+                } else {
+                    col_offset
+                }
+                .min(full_count);
                 let display_chars = &full_chars[visible_start..];
                 let visible_styles = &styles[visible_start..];
 
@@ -584,7 +607,17 @@ pub(crate) fn render_buffer(
             }
         } else {
             // No wrap, no spans: apply horizontal scroll to simple lines.
-            let display: String = full_display.chars().skip(col_offset).collect();
+            // #353: col_offset is a ROPE column (window.rs sets it from
+            // cursor_col); full_display is already DISPLAY text when
+            // regions are active (tab expansion, link concealment) -- skip
+            // by the REMAPPED display column, or col_offset itself when no
+            // regions touch this line (rope col == display col there).
+            let display_col_offset = if has_display_regions {
+                mae_core::display_region::rope_col_to_display_col(col_offset, &display_map_vec)
+            } else {
+                col_offset
+            };
+            let display: String = full_display.chars().skip(display_col_offset).collect();
             let mut spans = vec![
                 Span::styled(line_num, gutter_style),
                 Span::styled(marker_char.to_string(), marker_style),

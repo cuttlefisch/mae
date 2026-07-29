@@ -61,15 +61,19 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
                     .saturating_sub(focused_win.scroll_offset) as u16;
             frame.set_cursor_position(Position::new(cursor_x, cursor_y));
         } else {
-            let line_text = if focused_win.cursor_row < focused_buf.line_count() {
-                let line = focused_buf.rope().line(focused_win.cursor_row);
-                let s: String = line.chars().collect();
-                s.trim_end_matches('\n').to_string()
+            // #353: measure against the DISPLAY text (active display
+            // regions substituted in — tab expansion, link concealment),
+            // not the raw rope line, and remap cursor_col (a rope column)
+            // to its DISPLAY column via the same helper buffer_render.rs's
+            // drawing path is built on — otherwise cursor placement drifts
+            // out of sync with what's actually drawn whenever the line has
+            // a tab (or, pre-existing gap this also fixes as a side
+            // effect, a concealed link) before the cursor.
+            let (line_text, display_col) = if focused_win.cursor_row < focused_buf.line_count() {
+                focused_buf.display_text_and_col(focused_win.cursor_row, focused_win.cursor_col)
             } else {
-                String::new()
+                (String::new(), focused_win.cursor_col)
             };
-            let display_col =
-                grapheme::display_width_up_to_grapheme(&line_text, focused_win.cursor_col);
 
             let text_width = inner.width.saturating_sub(gutter_w as u16) as usize;
             let wrap = focused_buf
@@ -85,10 +89,9 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
                 let mut screen_row: u16 = 0;
                 for ln in focused_win.scroll_offset..focused_win.cursor_row {
                     if ln < focused_buf.line_count() {
-                        let line = focused_buf.rope().line(ln);
-                        let lt: String = line.chars().collect();
+                        let (lt, _) = focused_buf.display_text_and_col(ln, 0);
                         let rows = wrap_line_display_rows(
-                            lt.trim_end_matches('\n'),
+                            &lt,
                             text_width,
                             editor.break_indent,
                             show_break_w,
@@ -101,7 +104,7 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
                 // Add wrapped row/col offset within the cursor's own line.
                 let (wrap_row, wrap_col) = wrap_cursor_position(
                     &line_text,
-                    focused_win.cursor_col,
+                    display_col,
                     text_width,
                     editor.break_indent,
                     show_break_w,
@@ -134,8 +137,14 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
                     .cursor_row
                     .saturating_sub(focused_win.scroll_offset)
                     as u16;
+                // col_offset is a ROPE column (set from cursor_col during
+                // horizontal-scroll clamping, window.rs) -- remap it to a
+                // DISPLAY column the same way cursor_col was above, so both
+                // sides of the subtraction below are in the same unit.
+                let (_, scroll_display_col) = focused_buf
+                    .display_text_and_col(focused_win.cursor_row, focused_win.col_offset);
                 let scroll_col =
-                    grapheme::display_width_up_to_grapheme(&line_text, focused_win.col_offset);
+                    grapheme::display_width_up_to_grapheme(&line_text, scroll_display_col);
                 let screen_col = gutter_w as u16 + (display_col.saturating_sub(scroll_col)) as u16;
                 if screen_row < inner.height {
                     frame.set_cursor_position(Position::new(

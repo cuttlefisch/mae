@@ -445,9 +445,15 @@ impl Buffer {
         }
     }
 
-    /// Recompute display regions for link concealment and inline images.
-    /// Called when buffer generation changes or `link_descriptive` toggles.
-    pub fn recompute_display_regions(&mut self, link_descriptive: bool, inline_images: bool) {
+    /// Recompute display regions for link concealment, inline images, and
+    /// tab expansion (#353). Called when buffer generation changes,
+    /// `link_descriptive`/`inline_images` toggle, or `tab_width` changes.
+    pub fn recompute_display_regions(
+        &mut self,
+        link_descriptive: bool,
+        inline_images: bool,
+        tab_width: usize,
+    ) {
         self.display_regions.clear();
         self.display_regions_gen = self.generation;
 
@@ -485,9 +491,76 @@ impl Buffer {
                 &self.collapsed_images,
             );
             self.display_regions.extend(image_regions);
-            // Re-sort by byte_start so regions stay ordered for rendering.
-            self.display_regions.sort_by_key(|r| r.byte_start);
         }
+
+        // Tab expansion (#353) is NOT feature-gated like link_descriptive/
+        // inline_images above -- those are opt-in cosmetic conveniences, a
+        // literal tab rendering as an invisible, misaligned cell is a
+        // baseline correctness bug that must always be fixed regardless of
+        // those settings.
+        let tab_regions = crate::display_region::compute_tab_regions(&source, tab_width);
+        self.display_regions.extend(tab_regions);
+
+        // Re-sort by byte_start so regions from all three sources stay
+        // ordered for rendering (`apply_display_regions_to_line` requires
+        // sorted input).
+        self.display_regions.sort_by_key(|r| r.byte_start);
+    }
+
+    /// Resolve `line_idx`'s DISPLAY text (with active display regions —
+    /// link concealment, inline images, tab expansion #353 — substituted
+    /// in) plus the DISPLAY column corresponding to rope column `rope_col`
+    /// on that line. Cursor-positioning code (`crates/renderer/src/cursor.rs`,
+    /// the GUI equivalent) MUST measure display width against this, not the
+    /// raw rope line text — otherwise cursor placement drifts out of sync
+    /// with what `buffer_render.rs` actually draws (#353's own explicit
+    /// requirement: "cursor column math needs to agree with the renderer's
+    /// expansion"). Mirrors the exact has-regions/apply/rope_col_to_display_col
+    /// sequence `buffer_render.rs` already uses for drawing — one place this
+    /// logic lives, not reimplemented per call site (CLAUDE.md principle #8).
+    ///
+    /// Fast path: returns the raw line text + `rope_col` unchanged when no
+    /// active region overlaps this line (the common case — most lines have
+    /// no tabs, links, or images).
+    pub fn display_text_and_col(&self, line_idx: usize, rope_col: usize) -> (String, usize) {
+        let rope = self.rope();
+        if line_idx >= rope.len_lines() {
+            return (String::new(), rope_col);
+        }
+        let line_str: String = rope
+            .line(line_idx)
+            .chars()
+            .filter(|c| *c != '\n' && *c != '\r')
+            .collect();
+        if self.display_regions.is_empty() {
+            return (line_str, rope_col);
+        }
+
+        let effective_regions = crate::display_region::regions_with_cursor_reveal(
+            &self.display_regions,
+            self.display_reveal_cursor,
+        );
+        let line_char_start = rope.line_to_char(line_idx);
+        let line_byte_start = rope.char_to_byte(line_char_start);
+        let line_byte_end = rope.char_to_byte(line_char_start + line_str.chars().count());
+        let start_idx = effective_regions.partition_point(|r| r.byte_end <= line_byte_start);
+        let has_regions = effective_regions
+            .get(start_idx)
+            .is_some_and(|r| r.byte_start < line_byte_end);
+        if !has_regions {
+            return (line_str, rope_col);
+        }
+
+        let chars: Vec<char> = line_str.chars().collect();
+        let (display_chars, rope_col_map) = crate::display_region::apply_display_regions_to_line(
+            &chars,
+            line_byte_start,
+            line_byte_end,
+            &effective_regions,
+        );
+        let display_str: String = display_chars.iter().collect();
+        let display_col = crate::display_region::rope_col_to_display_col(rope_col, &rope_col_map);
+        (display_str, display_col)
     }
 
     /// Create a dashboard buffer (startup splash screen).
@@ -2693,7 +2766,7 @@ mod tests {
         buf.file_path = Some(assets.join("test.md"));
         buf.rope = ropey::Rope::from_str("![Test](test-image.png)\n");
         buf.generation = 1;
-        buf.recompute_display_regions(true, true);
+        buf.recompute_display_regions(true, true, 8);
         let has_image = buf.display_regions.iter().any(|r| r.image.is_some());
         assert!(has_image, "display_regions should include image regions");
     }
@@ -2710,9 +2783,53 @@ mod tests {
         buf.file_path = Some(assets.join("test.md"));
         buf.rope = ropey::Rope::from_str("![Test](test-image.png)\n");
         buf.generation = 1;
-        buf.recompute_display_regions(true, false);
+        buf.recompute_display_regions(true, false, 8);
         let has_image = buf.display_regions.iter().any(|r| r.image.is_some());
         assert!(!has_image, "no image regions when inline_images disabled");
+    }
+
+    #[test]
+    fn recompute_display_regions_includes_tab_regions_even_when_link_and_image_disabled() {
+        // #353: tab expansion must NOT be gated behind link_descriptive/
+        // inline_images -- unlike those, it's a baseline correctness fix,
+        // not an opt-in cosmetic feature.
+        let mut buf = Buffer::new();
+        buf.rope = ropey::Rope::from_str("\tindented\n");
+        buf.generation = 1;
+        buf.recompute_display_regions(false, false, 4);
+        assert_eq!(buf.display_regions.len(), 1);
+        assert_eq!(buf.display_regions[0].replacement.as_deref(), Some("    "));
+    }
+
+    #[test]
+    fn display_text_and_col_expands_a_leading_tab_and_remaps_the_cursor_column() {
+        let mut buf = Buffer::new();
+        buf.rope = ropey::Rope::from_str("\tabc\n");
+        buf.generation = 1;
+        buf.recompute_display_regions(false, false, 4);
+
+        // Cursor at rope col 0 (on the tab itself) -> display col 0.
+        let (text, col) = buf.display_text_and_col(0, 0);
+        assert_eq!(text, "    abc");
+        assert_eq!(col, 0);
+
+        // Cursor at rope col 3 (on 'c': "\t","a","b","c" -> rope cols
+        // 0,1,2,3) -> display col 4 (tab expanded to 4) + 2 = 6.
+        let (text, col) = buf.display_text_and_col(0, 3);
+        assert_eq!(text, "    abc");
+        assert_eq!(col, 6);
+    }
+
+    #[test]
+    fn display_text_and_col_fast_path_when_no_regions_on_the_line() {
+        let mut buf = Buffer::new();
+        buf.rope = ropey::Rope::from_str("plain\n");
+        buf.generation = 1;
+        buf.recompute_display_regions(false, false, 4);
+        assert!(buf.display_regions.is_empty());
+        let (text, col) = buf.display_text_and_col(0, 3);
+        assert_eq!(text, "plain");
+        assert_eq!(col, 3);
     }
 
     #[test]
