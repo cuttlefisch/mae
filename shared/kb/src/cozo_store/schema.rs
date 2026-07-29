@@ -82,6 +82,9 @@ impl CozoKbStore {
             None
         };
 
+        // See ROADMAP.md's "Architecture Debt" section for the cross-reference this
+        // marker (and its sibling below) is tracked under.
+        //
         // @ai-caution: [architecture-debt] sled 0.34's PageCache::start can panic
         // (not just Err) — "tried to serialize Uninitialized" in
         // sled::pagecache::snapshot — when opening a directory it can't use as a

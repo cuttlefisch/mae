@@ -1,6 +1,8 @@
 # ADR-048: AI residency policy for sensitive KBs
 
-**Status:** Proposed.
+**Status:** Accepted (implemented — see this doc's own Verification section and the
+2026-07-29 Implementation note below; the Status line had gone stale relative to the
+already-shipped `check_kb_residency`/`classify_kb_tool` mechanism this ADR describes).
 **Extends:** ADR-045 (provider parity — the `editor.ai.provider` value this gate keys on for
 MAE's own in-process sessions), ADR-046 (the CLI harness this gate's PSK handshake exists to
 authenticate).
@@ -250,3 +252,47 @@ embedded path later is additive, not a redesign, if this trade-off is ever revis
 - `kb_raw_query`/`kb_view_query` remain denied outright when `primary` is restricted, regardless
   of whether the queried content would otherwise be seed-only — confirms they did not silently
   get the filterable treatment (#358).
+
+## Implementation note (2026-07-29, #478 — Scheme-primitive bypass closed)
+
+`check_kb_residency`'s classification-based gate only ever inspected the OUTER MCP tool call's
+name. `eval_scheme` is itself an MCP tool but is not `kb_*`-prefixed, so `classify_kb_tool`
+never saw it and the gate unconditionally `Allow`ed regardless of what the queued Scheme code
+did — an AI agent could call `(eval_scheme "(kb-graph-view-state)")` (or 17 sibling KB-reading
+Scheme primitives, `crates/scheme/src/runtime/{kb_graph_view,kb_preview,kb_queries,
+kb_primitives}.rs` + `io_packages.rs`) and read fully unfiltered content from a
+`LocalModelsOnly`-restricted KB, completely bypassing this ADR's mechanism. `mae-scheme`'s
+`SharedState` has no requester-identity field at all (used identically for AI and human evals),
+so the primitives themselves are structurally unable to self-gate — ruling out adding filtering
+inside each primitive (would duplicate this file's logic N times with no requester context to
+gate on, violating CLAUDE.md principle #8).
+
+Fixed with a chokepoint inside `check_kb_residency` itself: a special case for
+`tool_name == "eval_scheme"`, scanning the queued code string (`arguments["code"]`, the same
+JSON both real call sites already receive) against a static list of the 18 sensitive primitive
+names (`SENSITIVE_SCHEME_KB_PRIMITIVES`). If the code references one AND any registered KB is
+currently residency-restricted, the WHOLE `eval_scheme` call is denied — not filtered — since
+arbitrary Scheme code has no reliable post-hoc result-filtering point the way a typed MCP tool
+response does (it could call a primitive conditionally, in a loop, or build its result
+programmatically). This is coarser than the equivalent direct MCP tool call for `*Filterable`
+shapes, a deliberate, documented tradeoff (in-code comment on the same `if` block), matching this
+module's existing `UnscopedFederatedContent` precedent of denying outright when a shape has no
+way to scope/filter. A plain substring scan (not a real Scheme parse) is intentional: a false
+positive — the primitive name appearing in a string literal or comment that would never actually
+execute — is the SAFE failure direction for a security gate.
+
+Both real call sites (`ai_event_handler::handle_ai_event:172` embedded,
+`handle_mcp_request:895` external-MCP) get the fix for free, since both already funnel through
+`check_kb_residency` unchanged — zero changes needed at either call site itself.
+
+Adversarial tests (`crates/mae/src/ai_residency.rs`'s test module): the exact reported bypass
+denied; a second sensitive primitive with no MCP sibling (`kb-get-block`, raw node body text)
+denied; denial confirmed for a restricted registered instance (not just `primary`); no
+false-positive on unrelated `eval_scheme` code even with a restriction active; no false-positive
+when nothing is restricted even with sensitive code; a local (Ollama) provider stays exempt.
+Plus one real end-to-end test through `handle_mcp_request`'s actual dispatch path (not just the
+classifier function in isolation), proving the real external-MCP wiring denies the bypass.
+Verified the deny-path tests genuinely fail against the pre-fix code (temporarily disabled the
+new `if` block, confirmed 4/7 tests failed with the exact leaked content visible in the
+end-to-end test's own failure output, restored the fix, confirmed all 7 pass) — not asserting a
+trivially-true condition.

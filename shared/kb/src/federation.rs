@@ -685,7 +685,8 @@ impl FederatedKb {
 /// through anything that explicitly requests `Incremental` won't get the
 /// fix. Tracked more broadly (the daemon has no way to surface "this
 /// instance's persisted data predates the code currently running") in
-/// https://github.com/cuttlefisch/mae/issues/323.
+/// https://github.com/cuttlefisch/mae/issues/323. Also cross-referenced in
+/// ROADMAP.md's "Architecture Debt" section.
 #[derive(Debug, Clone, Default)]
 pub enum IngestMode {
     /// Re-parse all files. Existing nodes updated, deleted files' nodes removed.

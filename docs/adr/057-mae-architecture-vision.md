@@ -347,3 +347,21 @@ rewritten to describe the post-fix state), consistent with how row 11 was handle
 
 Issue #394 (the overarching epic this ADR's Tracking line now correctly points to, see
 above) has been updated with this same status breakdown.
+
+### Progress note (2026-07-29, correction — this note's own table above went stale)
+
+The 2026-07-27 table's ADR-061 row ("Not started") is now wrong — ADR-061 shipped all six
+phases (A-F) in commits dated 2026-07-27 through 2026-07-28, after that note was written
+but before this correction. Per this ADR's own stated policy of appending a new dated note
+rather than rewriting prior status text: ADR-061 (KB enrichment) is now **Shipped, all 6
+phases** — `docs/adr/061-kb-enrichment-background-daemon.md`'s own Status line: "Accepted
+— all six phases (A–F) implemented." Its tracking issues (#416 epic, #420/#421/#422
+phases D/E/F) were still open on GitHub despite the landed commits (a tracker-lag hygiene
+gap, not a code gap) — closed 2026-07-29 with commit/PR evidence cited in each.
+
+Updated net count: **eight of nine children fully shipped**; ADR-064 (second native
+frontend) is now the sole child not yet started at all — still matching this ADR's own
+original sizing prediction that named it (alongside ADR-060 and ADR-061) as comparable in
+scope to the entire ADR-050-055 initiative.
+
+Issue #394 updated with this same correction.
