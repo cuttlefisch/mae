@@ -165,7 +165,62 @@ pub fn execute_kb_list(editor: &Editor, args: &serde_json::Value) -> Result<Stri
     serde_json::to_string_pretty(&ids).map_err(|e| e.to_string())
 }
 
-pub fn execute_kb_links_from(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+/// Build whichever [`mae_kb::graph_query::GraphNeighbors`] backend the
+/// current KB config supports, for the per-target `describe()` lookups
+/// `execute_kb_links_from`/`execute_kb_links_to` need (#366 "Bucket B"):
+/// unlike `kb_related`/`kb_graph` (Bucket A), neither backend's plain
+/// links-relation query ever touches a target's full `Node`, so there is no
+/// `.source`/`.instance` to thread through without a new per-id lookup —
+/// cheap in practice since these are typically small, bounded result sets
+/// (see #366's own scoping discussion).
+enum LinksBackend<'a> {
+    Query(mae_kb::graph_query::QueryLayerBackend<'a>),
+    InMemory(mae_kb::graph_query::InMemoryFederatedBackend<'a>),
+}
+
+impl LinksBackend<'_> {
+    /// `(instance, is_seed)` for `id`, or `(None, true)` if `id` doesn't
+    /// resolve at all — a dangling link target carries no content to
+    /// protect, so it's always kept (mirrors `execute_kb_graph`'s treatment
+    /// of missing/dangling BFS nodes).
+    fn describe_for_filter(&self, id: &str) -> (Option<String>, bool) {
+        use mae_kb::graph_query::GraphNeighbors;
+        let described = match self {
+            LinksBackend::Query(b) => b.describe(id),
+            LinksBackend::InMemory(b) => b.describe(id),
+        };
+        match described {
+            Some((_, _, instance, is_seed)) => (instance, is_seed),
+            None => (None, true),
+        }
+    }
+}
+
+fn links_backend(editor: &Editor) -> LinksBackend<'_> {
+    if let Some(q) = editor.kb.query_layer() {
+        LinksBackend::Query(mae_kb::graph_query::QueryLayerBackend(q))
+    } else {
+        LinksBackend::InMemory(mae_kb::graph_query::InMemoryFederatedBackend {
+            primary: &editor.kb.primary,
+            instances: &editor.kb.instances,
+            registry: &editor.kb.registry,
+        })
+    }
+}
+
+/// `requester_provider` -- the caller's AI provider, when known -- lets this
+/// SingleTargetFilterable tool (#366, "Bucket B" of #358/#361's AI-residency
+/// seed-content exemption) post-filter its own materialized dst list: each
+/// dst can live in a DIFFERENT KB than the anchor `id`, so a permitted
+/// (open or seed) anchor could otherwise leak a restricted KB's non-seed
+/// content reached by traversal — same shape as `kb_related`/`kb_graph`
+/// (Bucket A), just without a full `Node` already in hand for each result,
+/// hence the new per-dst `describe()` lookup via [`links_backend`].
+pub fn execute_kb_links_from(
+    editor: &Editor,
+    args: &serde_json::Value,
+    requester_provider: Option<&str>,
+) -> Result<String, String> {
     let id = args
         .get("id")
         .and_then(|v| v.as_str())
@@ -176,34 +231,71 @@ pub fn execute_kb_links_from(editor: &Editor, args: &serde_json::Value) -> Resul
     let (_, resolution) = editor
         .kb_resolve_anywhere(id)
         .ok_or_else(|| format!("No KB node: {}", id))?;
-    let links = match resolution {
+    let raw: Vec<(String, Option<String>)> = match resolution {
         mae_core::KbResolution::Query => {
             let q = editor
                 .kb
                 .query_layer()
                 .expect("KbResolution::Query implies a query layer is available");
-            serde_json::to_value(
-                q.links_from(id)
-                    .into_iter()
-                    .map(|l| serde_json::json!({ "dst": l.dst, "rel_type": l.rel_type }))
-                    .collect::<Vec<_>>(),
-            )
+            q.links_from(id)
+                .into_iter()
+                .map(|l| (l.dst, Some(l.rel_type)))
+                .collect()
         }
-        mae_core::KbResolution::Primary => serde_json::to_value(editor.kb.primary.links_from(id)),
+        mae_core::KbResolution::Primary => editor
+            .kb
+            .primary
+            .links_from(id)
+            .into_iter()
+            .map(|dst| (dst, None))
+            .collect(),
         mae_core::KbResolution::Instance(uuid) => {
             let kb = editor
                 .kb
                 .instances
                 .get(&uuid)
                 .expect("KbResolution::Instance implies that instance is loaded");
-            serde_json::to_value(kb.links_from(id))
+            kb.links_from(id)
+                .into_iter()
+                .map(|dst| (dst, None))
+                .collect()
         }
-    }
-    .map_err(|e| e.to_string())?;
+    };
+
+    let backend = links_backend(editor);
+    let enriched: Vec<(String, Option<String>, Option<String>, bool)> = raw
+        .into_iter()
+        .map(|(dst, rel_type)| {
+            let (instance, is_seed) = backend.describe_for_filter(&dst);
+            (dst, rel_type, instance, is_seed)
+        })
+        .collect();
+    let filtered = mae_core::ai_residency::filter_residency_exempt_by(
+        editor,
+        requester_provider,
+        enriched,
+        |(_, _, instance, _)| instance.as_deref(),
+        |(_, _, _, is_seed)| *is_seed,
+    );
+
+    let links: Vec<serde_json::Value> = filtered
+        .into_iter()
+        .map(|(dst, rel_type, _, _)| match rel_type {
+            Some(rel_type) => serde_json::json!({ "dst": dst, "rel_type": rel_type }),
+            None => serde_json::json!({ "dst": dst }),
+        })
+        .collect();
     serde_json::to_string_pretty(&links).map_err(|e| e.to_string())
 }
 
-pub fn execute_kb_links_to(editor: &Editor, args: &serde_json::Value) -> Result<String, String> {
+/// `requester_provider` -- same seed-content post-filter as
+/// [`execute_kb_links_from`] (#366), applied to the incoming-link src ids
+/// this tool aggregates across every federated tier.
+pub fn execute_kb_links_to(
+    editor: &Editor,
+    args: &serde_json::Value,
+    requester_provider: Option<&str>,
+) -> Result<String, String> {
     let id = args
         .get("id")
         .and_then(|v| v.as_str())
@@ -219,25 +311,49 @@ pub fn execute_kb_links_to(editor: &Editor, args: &serde_json::Value) -> Result<
     if editor.kb_get_node_anywhere(id).is_none() {
         return Err(format!("No KB node: {}", id));
     }
-    if let Some(q) = editor.kb.query_layer() {
-        let links: Vec<serde_json::Value> = q
-            .links_to(id)
+    let raw: Vec<(String, Option<String>)> = if let Some(q) = editor.kb.query_layer() {
+        q.links_to(id)
             .into_iter()
-            .map(|l| serde_json::json!({ "src": l.src, "rel_type": l.rel_type }))
-            .collect();
-        return serde_json::to_string_pretty(&links).map_err(|e| e.to_string());
-    }
-    // Fallback: in-memory KB, aggregated across the primary + every
-    // federated instance (an incoming link can originate from any of them).
-    let mut links = editor.kb.primary.links_to(id);
-    for kb in editor.kb.instances.values() {
-        for l in kb.links_to(id) {
-            if !links.contains(&l) {
-                links.push(l);
+            .map(|l| (l.src, Some(l.rel_type)))
+            .collect()
+    } else {
+        // Fallback: in-memory KB, aggregated across the primary + every
+        // federated instance (an incoming link can originate from any of them).
+        let mut links = editor.kb.primary.links_to(id);
+        for kb in editor.kb.instances.values() {
+            for l in kb.links_to(id) {
+                if !links.contains(&l) {
+                    links.push(l);
+                }
             }
         }
-    }
-    links.sort();
+        links.sort();
+        links.into_iter().map(|src| (src, None)).collect()
+    };
+
+    let backend = links_backend(editor);
+    let enriched: Vec<(String, Option<String>, Option<String>, bool)> = raw
+        .into_iter()
+        .map(|(src, rel_type)| {
+            let (instance, is_seed) = backend.describe_for_filter(&src);
+            (src, rel_type, instance, is_seed)
+        })
+        .collect();
+    let filtered = mae_core::ai_residency::filter_residency_exempt_by(
+        editor,
+        requester_provider,
+        enriched,
+        |(_, _, instance, _)| instance.as_deref(),
+        |(_, _, _, is_seed)| *is_seed,
+    );
+
+    let links: Vec<serde_json::Value> = filtered
+        .into_iter()
+        .map(|(src, rel_type, _, _)| match rel_type {
+            Some(rel_type) => serde_json::json!({ "src": src, "rel_type": rel_type }),
+            None => serde_json::json!({ "src": src }),
+        })
+        .collect();
     serde_json::to_string_pretty(&links).map_err(|e| e.to_string())
 }
 
@@ -1662,9 +1778,22 @@ pub fn execute_kb_search_context(
 
 // --- Graph-native tools (delegate to KbStore trait) ---
 
+/// `requester_provider` -- same seed-content post-filter as
+/// [`execute_kb_links_from`] (#366). `editor.kb.store` is always the PRIMARY
+/// KB's durable store (no federation here, matching `execute_kb_neighborhood`'s
+/// scope), so this re-resolves each returned path node via `store.get_node`
+/// exactly like that tool does. NOTE: `CozoKbStore::shortest_path` is
+/// currently a reachability check, not real path reconstruction — it only
+/// ever returns `[from, to]` (never intermediate hops, see that function's
+/// own doc comment) — so today `from`/`to` are the only ids this could ever
+/// leak, and both are already covered by the anchor gate (`TARGET_ARG_KEYS`
+/// includes both). Filtering here anyway rather than leaving it SingleTarget
+/// keeps this tool correct if/when that reachability check is ever upgraded
+/// to return genuine intermediate hops, instead of silently regressing.
 pub fn execute_kb_shortest_path(
     editor: &Editor,
     args: &serde_json::Value,
+    requester_provider: Option<&str>,
 ) -> Result<String, String> {
     let from = args
         .get("from")
@@ -1679,10 +1808,32 @@ pub fn execute_kb_shortest_path(
         .store
         .as_ref()
         .ok_or_else(|| "No KB store configured".to_string())?;
-    match store.shortest_path(from, to) {
-        Ok(path) => serde_json::to_string_pretty(&path).map_err(|e| e.to_string()),
-        Err(e) => Err(e.to_string()),
-    }
+    let path = store.shortest_path(from, to).map_err(|e| e.to_string())?;
+
+    let local_bypass = requester_provider.is_some_and(mae_core::ai_residency::is_local_provider);
+    let primary_restricted = !local_bypass
+        && editor.kb.registry.primary_ai_residency
+            == mae_kb::federation::AiResidency::LocalModelsOnly;
+    let filtered: Vec<&String> = path
+        .iter()
+        .filter(|nid| {
+            !primary_restricted
+                || store
+                    .get_node(nid)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|n| mae_core::ai_residency::is_residency_exempt(&n))
+        })
+        .collect();
+    // A path is a single ordered structure, not a list of independent
+    // results -- if any hop was dropped, the remainder no longer represents
+    // a real connected path, so report "no path" rather than a broken one.
+    let out: &[&String] = if filtered.len() == path.len() {
+        &filtered
+    } else {
+        &[]
+    };
+    serde_json::to_string_pretty(out).map_err(|e| e.to_string())
 }
 
 /// `requester_provider` -- the caller's AI provider, when known -- lets this
@@ -2286,6 +2437,7 @@ mod tests {
         let links_result = execute_kb_links_from(
             &editor,
             &serde_json::json!({"id": "test:promote-lifecycle"}),
+            None,
         )
         .unwrap();
         assert!(links_result.contains("test:promote-lifecycle-target"));
@@ -3144,15 +3296,22 @@ mod tests {
     #[test]
     fn kb_links_from_returns_array() {
         let editor = Editor::new();
-        let result = execute_kb_links_from(&editor, &serde_json::json!({"id": "index"})).unwrap();
-        let links: Vec<String> = serde_json::from_str(&result).unwrap();
+        let result =
+            execute_kb_links_from(&editor, &serde_json::json!({"id": "index"}), None).unwrap();
+        // #366: output shape is now consistently `[{"dst": ...}]` regardless
+        // of query-layer vs. in-memory path (previously the in-memory path
+        // returned bare id strings -- an inconsistency this fix removed as
+        // a side effect of needing a uniform shape to enrich-then-filter).
+        let links: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
         assert!(!links.is_empty());
+        assert!(links[0].get("dst").is_some());
     }
 
     #[test]
     fn kb_links_from_missing_is_error() {
         let editor = Editor::new();
-        let err = execute_kb_links_from(&editor, &serde_json::json!({"id": "nope"})).unwrap_err();
+        let err =
+            execute_kb_links_from(&editor, &serde_json::json!({"id": "nope"}), None).unwrap_err();
         assert!(err.contains("No KB node"));
     }
 
@@ -3165,8 +3324,9 @@ mod tests {
         // known to exist so we don't rely on dangling behaviour in the
         // default seed.
         let result =
-            execute_kb_links_to(&editor, &serde_json::json!({"id": "concept:buffer"})).unwrap();
-        let _ids: Vec<String> = serde_json::from_str(&result).unwrap();
+            execute_kb_links_to(&editor, &serde_json::json!({"id": "concept:buffer"}), None)
+                .unwrap();
+        let _ids: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
     }
 
     #[test]
@@ -3380,9 +3540,9 @@ mod tests {
         ));
         editor.kb.instances.insert("inst-1".to_string(), inst);
         let result =
-            execute_kb_links_from(&editor, &serde_json::json!({"id": "fed-node"})).unwrap();
-        let links: Vec<String> = serde_json::from_str(&result).unwrap();
-        assert!(links.contains(&"index".to_string()));
+            execute_kb_links_from(&editor, &serde_json::json!({"id": "fed-node"}), None).unwrap();
+        let links: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(links.iter().any(|l| l["dst"] == "index"));
     }
 
     /// Regression test for the audit finding that `execute_kb_links_to`
@@ -3393,8 +3553,8 @@ mod tests {
     #[test]
     fn kb_links_to_unknown_id_is_error() {
         let editor = Editor::new();
-        let err =
-            execute_kb_links_to(&editor, &serde_json::json!({"id": "no:such:node"})).unwrap_err();
+        let err = execute_kb_links_to(&editor, &serde_json::json!({"id": "no:such:node"}), None)
+            .unwrap_err();
         assert!(err.contains("No KB node"));
     }
 
@@ -3410,9 +3570,10 @@ mod tests {
         ));
         editor.kb.instances.insert("inst-1".to_string(), inst);
         let result =
-            execute_kb_links_to(&editor, &serde_json::json!({"id": "concept:buffer"})).unwrap();
-        let links: Vec<String> = serde_json::from_str(&result).unwrap();
-        assert!(links.contains(&"fed-linker".to_string()));
+            execute_kb_links_to(&editor, &serde_json::json!({"id": "concept:buffer"}), None)
+                .unwrap();
+        let links: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(links.iter().any(|l| l["src"] == "fed-linker"));
     }
 
     #[test]
@@ -4977,6 +5138,252 @@ mod tests {
             nodes.iter().any(|n| n["id"] == "user:nbhd-sibling2"),
             "a local provider must bypass filtering entirely: {nodes:?}"
         );
+    }
+
+    // --- #366 ("Bucket B"): kb_links_from/kb_links_to/kb_shortest_path ---
+
+    fn restricted_instance_for_links(uuid: &str, name: &str) -> mae_kb::federation::KbInstance {
+        mae_kb::federation::KbInstance {
+            uuid: uuid.into(),
+            name: name.into(),
+            org_dir: std::path::PathBuf::new(),
+            db_path: std::path::PathBuf::new(),
+            primary: false,
+            enabled: true,
+            last_import: None,
+            collab_id: None,
+            shared: false,
+            remote_peers: Vec::new(),
+            last_sync: None,
+            ai_residency: mae_kb::federation::AiResidency::LocalModelsOnly,
+            project_root: None,
+            kind: mae_kb::federation::KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
+        }
+    }
+
+    #[test]
+    fn kb_links_from_keeps_seed_drops_non_seed_dst_in_restricted_federated_instance() {
+        let mut editor = Editor::new(); // open primary
+        editor.kb.primary.insert(mae_core::KbNode::new(
+            "anchor:links-from",
+            "Anchor",
+            mae_core::KbNodeKind::Note,
+            "see [[fed-seed-dst]] and [[fed-user-dst]]",
+        ));
+        let mut inst = mae_core::KnowledgeBase::new();
+        inst.insert(seed_node_with("fed-seed-dst", "seed dst content"));
+        inst.insert(non_seed_node_with("fed-user-dst", "user dst content"));
+        editor
+            .kb
+            .instances
+            .insert("uuid-restricted".to_string(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(restricted_instance_for_links(
+                "uuid-restricted",
+                "Restricted",
+            ));
+
+        let result = execute_kb_links_from(
+            &editor,
+            &serde_json::json!({"id": "anchor:links-from"}),
+            Some("claude"),
+        )
+        .unwrap();
+        let links: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(
+            links.iter().any(|l| l["dst"] == "fed-seed-dst"),
+            "seed content in a restricted federated instance must stay reachable: {links:?}"
+        );
+        assert!(
+            !links.iter().any(|l| l["dst"] == "fed-user-dst"),
+            "non-seed content in a restricted federated instance must be filtered out: {links:?}"
+        );
+    }
+
+    #[test]
+    fn kb_links_from_local_provider_bypasses_residency_filter_entirely() {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(mae_core::KbNode::new(
+            "anchor:links-from2",
+            "Anchor",
+            mae_core::KbNodeKind::Note,
+            "see [[fed-user-dst2]]",
+        ));
+        let mut inst = mae_core::KnowledgeBase::new();
+        inst.insert(non_seed_node_with("fed-user-dst2", "user dst content"));
+        editor
+            .kb
+            .instances
+            .insert("uuid-restricted".to_string(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(restricted_instance_for_links(
+                "uuid-restricted",
+                "Restricted",
+            ));
+
+        let result = execute_kb_links_from(
+            &editor,
+            &serde_json::json!({"id": "anchor:links-from2"}),
+            Some("ollama"),
+        )
+        .unwrap();
+        let links: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(
+            links.iter().any(|l| l["dst"] == "fed-user-dst2"),
+            "a local provider must bypass filtering entirely: {links:?}"
+        );
+    }
+
+    #[test]
+    fn kb_links_to_keeps_seed_drops_non_seed_src_in_restricted_federated_instance() {
+        let mut editor = Editor::new(); // open primary target
+        editor.kb.primary.insert(mae_core::KbNode::new(
+            "target:links-to",
+            "Target",
+            mae_core::KbNodeKind::Note,
+            "target body",
+        ));
+        let mut inst = mae_core::KnowledgeBase::new();
+        inst.insert(seed_node_with("fed-seed-src", "see [[target:links-to]]"));
+        inst.insert(non_seed_node_with(
+            "fed-user-src",
+            "see [[target:links-to]]",
+        ));
+        editor
+            .kb
+            .instances
+            .insert("uuid-restricted".to_string(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(restricted_instance_for_links(
+                "uuid-restricted",
+                "Restricted",
+            ));
+
+        let result = execute_kb_links_to(
+            &editor,
+            &serde_json::json!({"id": "target:links-to"}),
+            Some("claude"),
+        )
+        .unwrap();
+        let links: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(
+            links.iter().any(|l| l["src"] == "fed-seed-src"),
+            "seed backlink source in a restricted federated instance must stay reachable: {links:?}"
+        );
+        assert!(
+            !links.iter().any(|l| l["src"] == "fed-user-src"),
+            "non-seed backlink source in a restricted federated instance must be filtered out: {links:?}"
+        );
+    }
+
+    #[test]
+    fn kb_links_to_local_provider_bypasses_residency_filter_entirely() {
+        let mut editor = Editor::new();
+        editor.kb.primary.insert(mae_core::KbNode::new(
+            "target:links-to2",
+            "Target",
+            mae_core::KbNodeKind::Note,
+            "target body",
+        ));
+        let mut inst = mae_core::KnowledgeBase::new();
+        inst.insert(non_seed_node_with(
+            "fed-user-src2",
+            "see [[target:links-to2]]",
+        ));
+        editor
+            .kb
+            .instances
+            .insert("uuid-restricted".to_string(), inst);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(restricted_instance_for_links(
+                "uuid-restricted",
+                "Restricted",
+            ));
+
+        let result = execute_kb_links_to(
+            &editor,
+            &serde_json::json!({"id": "target:links-to2"}),
+            Some("ollama"),
+        )
+        .unwrap();
+        let links: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
+        assert!(
+            links.iter().any(|l| l["src"] == "fed-user-src2"),
+            "a local provider must bypass filtering entirely: {links:?}"
+        );
+    }
+
+    #[test]
+    fn kb_shortest_path_denies_whole_path_when_an_endpoint_is_not_seed_exempt() {
+        use mae_kb::KbStore;
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store
+            .insert_node(&seed_node_with("seed:path-from", "from content"))
+            .unwrap();
+        store
+            .insert_node(&non_seed_node_with("user:path-to", "to content"))
+            .unwrap();
+        store
+            .add_typed_link("seed:path-from", "user:path-to", "related", 1.0)
+            .unwrap();
+
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+
+        let result = execute_kb_shortest_path(
+            &editor,
+            &serde_json::json!({"from": "seed:path-from", "to": "user:path-to"}),
+            Some("claude"),
+        )
+        .unwrap();
+        let path: Vec<String> = serde_json::from_str(&result).unwrap();
+        assert!(
+            path.is_empty(),
+            "a path with a non-seed-exempt endpoint in a restricted primary must not be revealed: {path:?}"
+        );
+    }
+
+    #[test]
+    fn kb_shortest_path_local_provider_bypasses_residency_filter_entirely() {
+        use mae_kb::KbStore;
+        let store = mae_kb::CozoKbStore::open_mem().unwrap();
+        store
+            .insert_node(&seed_node_with("seed:path-from2", "from content"))
+            .unwrap();
+        store
+            .insert_node(&non_seed_node_with("user:path-to2", "to content"))
+            .unwrap();
+        store
+            .add_typed_link("seed:path-from2", "user:path-to2", "related", 1.0)
+            .unwrap();
+
+        let mut editor = Editor::new();
+        editor.kb.store = Some(std::sync::Arc::new(store));
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+
+        let result = execute_kb_shortest_path(
+            &editor,
+            &serde_json::json!({"from": "seed:path-from2", "to": "user:path-to2"}),
+            Some("ollama"),
+        )
+        .unwrap();
+        let path: Vec<String> = serde_json::from_str(&result).unwrap();
+        assert_eq!(path, vec!["seed:path-from2", "user:path-to2"]);
     }
 
     #[test]

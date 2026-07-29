@@ -27,9 +27,10 @@ use crate::types::ToolCall;
 /// threaded to the ScopedFederatedScanFilterable/PrimaryOnlyFilterable/
 /// SingleTargetFilterable/UnscopedFederatedContentFilterable tools
 /// (kb_search, kb_search_context, kb_agenda, kb_related, kb_graph,
-/// kb_health, kb_neighborhood) so they can post-filter their own results
-/// for the AI-residency seed-content exemption (ADR-048/#358, extended
-/// #361); every other arm is unaffected.
+/// kb_health, kb_neighborhood, and — #366 — kb_links_from, kb_links_to,
+/// kb_shortest_path) so they can post-filter their own results for the
+/// AI-residency seed-content exemption (ADR-048/#358, extended #361/#366);
+/// every other arm is unaffected.
 pub(super) fn dispatch(
     editor: &mut Editor,
     call: &ToolCall,
@@ -58,14 +59,14 @@ pub(super) fn dispatch(
         "kb_search" => execute_kb_search(editor, &call.arguments, requester_provider),
         "kb_list" => execute_kb_list(editor, &call.arguments),
         "kb_links_from" => {
-            let r = execute_kb_links_from(editor, &call.arguments);
+            let r = execute_kb_links_from(editor, &call.arguments, requester_provider);
             if let Some(id) = call.arguments.get("id").and_then(|v| v.as_str()) {
                 record_kb_visit(editor, id);
             }
             r
         }
         "kb_links_to" => {
-            let r = execute_kb_links_to(editor, &call.arguments);
+            let r = execute_kb_links_to(editor, &call.arguments, requester_provider);
             if let Some(id) = call.arguments.get("id").and_then(|v| v.as_str()) {
                 record_kb_visit(editor, id);
             }
@@ -95,7 +96,7 @@ pub(super) fn dispatch(
         "kb_search_context" => {
             execute_kb_search_context(editor, &call.arguments, requester_provider)
         }
-        "kb_shortest_path" => execute_kb_shortest_path(editor, &call.arguments),
+        "kb_shortest_path" => execute_kb_shortest_path(editor, &call.arguments, requester_provider),
         "kb_neighborhood" => execute_kb_neighborhood(editor, &call.arguments, requester_provider),
         "kb_add_link" => execute_kb_add_link(editor, &call.arguments),
         "kb_raw_query" => execute_kb_raw_query(editor, &call.arguments),
