@@ -785,6 +785,14 @@
           "kind": "struct"
         },
         {
+          "name": "filter_stopwords",
+          "kind": "fn"
+        },
+        {
+          "name": "stem",
+          "kind": "fn"
+        },
+        {
           "name": "KnowledgeBase",
           "kind": "struct"
         },

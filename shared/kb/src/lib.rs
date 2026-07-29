@@ -671,6 +671,88 @@ impl LowerCache {
 /// tight byte-scan with zero per-query allocation. At ~1500 nodes with
 /// typical 500-byte bodies this keeps search sub-millisecond; a proper
 /// FTS5 backend replaces this in Phase 5.
+/// Common English function words that carry no topical meaning on their own
+/// — filtered out of query terms before the strict/soft-AND hit-counting
+/// gate in [`KnowledgeBase::search_ranked_pass`] (#357). Without this, a
+/// natural conversational query like "how should I annotate code for other
+/// AI agents" has 4+ terms ("how"/"should"/"i"/"for") that never literally
+/// appear in ANY node's title/body, so even the soft-AND fallback (which
+/// only relaxes by exactly one unmatched term) excludes the correct target
+/// entirely — the real content words ("annotate"/"code"/"other"/"ai"/
+/// "agents") are what should gate retrieval, not incidental grammar.
+/// Deliberately a small, standard, well-known stopword set (not a research
+/// project) — question words, articles, common prepositions/conjunctions,
+/// auxiliary/modal verbs, and pronouns. Also used downstream by `mae-ai`'s
+/// `score_node` re-ranker for the same reason: a bare `contains(term)`
+/// check on a one-letter stopword like "a" or "i" would spuriously "match"
+/// almost every title.
+const STOPWORDS: &[&str] = &[
+    "how", "what", "why", "when", "where", "who", "which", "whom", "whose", "is", "are", "was",
+    "were", "be", "been", "being", "do", "does", "did", "doing", "should", "would", "could", "can",
+    "will", "shall", "may", "might", "must", "the", "a", "an", "of", "to", "in", "on", "at", "for",
+    "with", "by", "from", "about", "as", "into", "through", "after", "over", "between", "out",
+    "against", "during", "without", "before", "under", "and", "or", "but", "if", "then", "this",
+    "that", "these", "those", "i", "you", "we", "they", "it", "he", "she", "me", "him", "her",
+    "us", "them", "my", "your", "our", "their", "its", "his", "so", "than", "too", "just", "not",
+    "no",
+];
+
+/// Filter `words` down to non-stopwords, falling back to the ORIGINAL
+/// (unfiltered) list if that would leave nothing — an all-stopword query
+/// like "what is this" should still match on its own literal words rather
+/// than degrading to "no terms at all" (which `search_ranked_pass` already
+/// handles as a special empty-query case, not this function's concern).
+pub fn filter_stopwords<'a>(words: &[&'a str]) -> Vec<&'a str> {
+    let filtered: Vec<&str> = words.iter().copied().filter(|w| !is_stopword(w)).collect();
+    if filtered.is_empty() {
+        words.to_vec()
+    } else {
+        filtered
+    }
+}
+
+/// A word is a stopword either literally, or as a contraction of one (e.g.
+/// "what's" -> "what", "it's" -> "it") -- queries are natural English
+/// sentences, not pre-tokenized search strings, and a bare `'s` suffix is
+/// the single most common contraction shape that would otherwise slip past
+/// the literal STOPWORDS list entirely.
+fn is_stopword(word: &str) -> bool {
+    STOPWORDS.contains(&word)
+        || word
+            .strip_suffix("'s")
+            .is_some_and(|w| STOPWORDS.contains(&w))
+}
+
+/// Longest-suffix-first so a word ending in a longer suffix (e.g.
+/// "-ation") isn't first mis-stripped by a shorter one it also happens to
+/// end with (e.g. "-s" fired at wrong length before "-ations" gets a
+/// chance). NOT a real stemmer (Porter/Snowball) — just the handful of
+/// English morphological suffixes common enough in prose-KB content to
+/// matter for #357-style queries (plural "targets"/"target", nominalized
+/// "self-documented"/"self-documentation"), gated on a minimum remaining
+/// stem length so short unrelated words don't collapse together (e.g. "as"
+/// staying "as", not stripped to "a"). Real fuzzy/FTS matching remains out
+/// of scope, tracked separately as #81.
+const STEM_SUFFIXES: &[&str] = &[
+    "ations", "ements", "ation", "ement", "ingly", "edly", "ing", "ed", "es", "s",
+];
+const MIN_STEM_LEN: usize = 4;
+
+/// Best-effort stem of `word`, or `word` itself if no suffix applies (or
+/// stripping one would leave too short a remainder). Used by
+/// `search_ranked_pass` to widen a term's substring match beyond its exact
+/// literal form.
+pub fn stem(word: &str) -> &str {
+    for suffix in STEM_SUFFIXES {
+        if let Some(stripped) = word.strip_suffix(suffix) {
+            if stripped.chars().count() >= MIN_STEM_LEN {
+                return stripped;
+            }
+        }
+    }
+    word
+}
+
 /// Relevance prior by id namespace, used to break ties in `search_ranked`:
 /// primary content (concept/cmd/scheme/option/category) ranks above
 /// navigational/glossary nodes (term/lesson/tutorial/key/index) for the same
@@ -1664,15 +1746,20 @@ impl KnowledgeBase {
     ///
     /// **Soft-AND fallback (#357):** a natural-language query commonly
     /// contains one word (filler, synonym, typo) absent from an otherwise
-    /// relevant node, which strict AND would drop entirely. If the strict
-    /// pass (every term must match) returns nothing and the query has more
-    /// than one term, a second, relaxed pass allows exactly one term to miss
-    /// (`terms.len() - 1` required hits) and applies a fixed penalty so
-    /// fallback-tier results always score below any strict match. This is a
-    /// bounded down payment on #357's immediate symptom, not a replacement
-    /// for real fuzzy/FTS body search (tracked separately as #81) — it only
-    /// ever converts a zero-result query into a low-confidence one; every
-    /// currently-non-empty query's results and order are unaffected.
+    /// relevant node, which strict AND would drop entirely. When the query
+    /// has more than one term, a second, relaxed pass (`terms.len() - 1`
+    /// required hits) always runs ALONGSIDE the strict pass — not only when
+    /// the strict pass is empty — and the two candidate pools are merged by
+    /// id: a strict-pass hit keeps its full score, a relaxed-only hit is
+    /// added with a fixed penalty applied. Merging unconditionally (rather
+    /// than gating the relaxed pass on strict-pass emptiness) matters
+    /// because a hub/meta node satisfying strict AND in full must not
+    /// silently keep a more specific target — which just misses strict AND
+    /// by one real content term — out of the candidate pool entirely; both
+    /// need to enter scoring so `kind_role_prior`'s hub down-weight can
+    /// actually compare them. This is a bounded down payment on #357's
+    /// symptom, not a replacement for real fuzzy/FTS body search (tracked
+    /// separately as #81).
     pub fn search_ranked(&self, query: &str, limit: usize) -> Vec<(String, f64)> {
         let q = query.trim().to_lowercase();
         if q.is_empty() {
@@ -1684,16 +1771,26 @@ impl KnowledgeBase {
                 .collect();
         }
 
-        let terms: Vec<Vec<char>> = q.split_whitespace().map(|t| t.chars().collect()).collect();
+        // #357: strip stopwords before they count toward the strict/soft-AND
+        // hit gate below — see `filter_stopwords`'s own doc comment for why
+        // (a conversational query's filler words otherwise sink retrieval
+        // entirely, since the soft-AND fallback only relaxes by one term).
+        let words: Vec<&str> = q.split_whitespace().collect();
+        let words = filter_stopwords(&words);
+        let terms: Vec<Vec<char>> = words.iter().map(|t| t.chars().collect()).collect();
 
         const FALLBACK_PENALTY: f64 = 0.5;
-        let mut scored = self.search_ranked_pass(&q, &terms, terms.len());
-        if scored.is_empty() && terms.len() > 1 {
-            scored = self.search_ranked_pass(&q, &terms, terms.len() - 1);
-            for (_, score) in scored.iter_mut() {
-                *score *= FALLBACK_PENALTY;
+        let strict = self.search_ranked_pass(&q, &terms, terms.len());
+        let mut merged: std::collections::HashMap<String, f64> = strict.into_iter().collect();
+        if terms.len() > 1 {
+            let relaxed = self.search_ranked_pass(&q, &terms, terms.len() - 1);
+            for (id, score) in relaxed {
+                // Strict-pass score wins if the id already made the strict pool;
+                // otherwise it's a relaxed-only hit and gets the penalty.
+                merged.entry(id).or_insert(score * FALLBACK_PENALTY);
             }
         }
+        let mut scored: Vec<(String, f64)> = merged.into_iter().collect();
         scored.sort_by(|a, b| {
             b.1.partial_cmp(&a.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
@@ -1756,20 +1853,38 @@ impl KnowledgeBase {
             let mut total = whole_bonus;
             let mut hits = 0usize;
             for term in terms {
+                let term_str: String = term.iter().collect();
+                let stemmed = stem(&term_str);
+                let stem_chars: Vec<char> = stemmed.chars().collect();
+                // #357: also try the stemmed form of the term so a query
+                // word's morphological variant ("targets") still matches a
+                // field's literal form ("target") — see `stem`'s doc
+                // comment. When stemming is a no-op, `stem_chars == term`
+                // and this is exactly the pre-stemming behavior.
+                let best_of = |s: &str| -> Option<i64> {
+                    let exact = fuzzy::score_match(s, term);
+                    if stemmed == term_str {
+                        exact
+                    } else {
+                        let stemmed_score = fuzzy::score_match(s, &stem_chars);
+                        exact.into_iter().chain(stemmed_score).max()
+                    }
+                };
                 let title_alias = [cache.lowered_id.as_str(), local_id, cache.title.as_str()]
                     .into_iter()
                     .chain(cache.aliases.iter().map(|s| s.as_str()))
-                    .filter_map(|s| fuzzy::score_match(s, term))
+                    .filter_map(best_of)
                     .max()
                     .map(|s| s as f64 * W_TITLE);
                 let tag = cache
                     .tags
                     .iter()
-                    .filter_map(|t| fuzzy::score_match(t, term))
+                    .filter_map(|t| best_of(t))
                     .max()
                     .map(|s| s as f64 * W_TAG);
-                let term_str: String = term.iter().collect();
-                let body = cache.body.contains(&term_str).then_some(BODY_HIT * W_BODY);
+                let body = (cache.body.contains(&term_str)
+                    || (stemmed != term_str && cache.body.contains(stemmed)))
+                .then_some(BODY_HIT * W_BODY);
 
                 // Best field for this term. A term with no match anywhere
                 // contributes no score (and no hit) — whether that drops the

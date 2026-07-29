@@ -1486,7 +1486,14 @@ fn excerpt_body(body: &str, max_bytes: usize, start_hint: usize) -> String {
 /// down-weighted so its broad incidental keyword coverage doesn't outscore
 /// a specific atom with a few precise hits.
 fn score_node(query_lower: &str, node: &mae_core::KbNode) -> u32 {
-    let terms: Vec<&str> = query_lower.split_whitespace().collect();
+    // #357: strip stopwords before per-term title/tag/id contains-checks --
+    // without this, a one-letter stopword like "a" or "i" spuriously
+    // "matches" almost every title as a substring, inflating unrelated
+    // nodes' scores. Shared with search_ranked_pass's retrieval-stage gate
+    // (shared/kb/src/lib.rs) so the two stages agree on what counts as a
+    // real content term.
+    let words: Vec<&str> = query_lower.split_whitespace().collect();
+    let terms: Vec<&str> = mae_kb::filter_stopwords(&words);
     if terms.is_empty() {
         return 1;
     }
@@ -3665,6 +3672,192 @@ mod tests {
                 .iter()
                 .any(|i| i["id"] == "practice:caution-annotations"),
             "target node should be present in results: {items:?}"
+        );
+    }
+
+    #[test]
+    fn kb_search_context_dev_practices_shaped_kb_surfaces_all_six_originally_reported_queries() {
+        // #357's own verification gap (flagged during this session's re-triage,
+        // not just trusting the fix commit's message): the existing two tests
+        // above cover a 2-node toy KB. The ORIGINAL report was against a real
+        // 85-note hub/atom-structured KB (multiple hub-*.org category nodes,
+        // many practice-*.org atom notes, one keyword-dense "meta" note that
+        // happened to outrank the real target by mentioning many topic words
+        // while surveying the whole KB) -- reproduced here at a comparable
+        // shape (several hubs + several atoms + one keyword-dense meta note,
+        // all genuinely competing for the same query terms), not the
+        // minimal 2-node case. Re-runs the issue's own 6 canonical
+        // (query, target) pairs against it and asserts the SAME bar the
+        // issue itself used: no zero-result queries, target in the top 3.
+        let mut editor = Editor::new();
+
+        // Multiple hub/category nodes, each covering several topics broadly
+        // (real competition, not a single strawman hub).
+        editor
+            .kb_create_node(
+                "hub:start-here",
+                "Start here",
+                "Orientation for this project: read the testing philosophy, commit \
+                 conventions, code review practices, audit checklist, and annotation \
+                 conventions before contributing.",
+                mae_core::KbNodeKind::Category,
+            )
+            .unwrap();
+        editor
+            .kb_create_node(
+                "hub:build-and-vcs-workflow",
+                "Build and VCS workflow",
+                "Covers Makefile targets, self-documentation conventions, commit message \
+                 format, periodic code audits, and build tooling practices.",
+                mae_core::KbNodeKind::Category,
+            )
+            .unwrap();
+        editor
+            .kb_create_node(
+                "hub:dev-practices",
+                "Development practices hub",
+                "Links out to testing philosophy, commit conventions, code review, \
+                 annotation conventions, and audit practices used across this project.",
+                mae_core::KbNodeKind::Category,
+            )
+            .unwrap();
+        // A keyword-dense "meta" note surveying the whole KB -- mirrors the
+        // issue's own "token-efficiency-evidence" example: mentions many
+        // topic words incidentally while being about something else
+        // (evidence/metrics), the exact shape that structurally outranked
+        // real targets under the old whole-substring scoring.
+        editor
+            .kb_create_node(
+                "meta:coverage-evidence",
+                "Coverage evidence",
+                "Evidence that this KB's practices are followed: testing philosophy \
+                 checks pass, commit conventions are enforced, annotation conventions \
+                 are present, Makefile targets are self-documented, and periodic audits \
+                 are logged.",
+                mae_core::KbNodeKind::Meta,
+            )
+            .unwrap();
+
+        // The 6 target atom notes, none with an :ALIASES: property (matching
+        // the original report exactly -- the alias-check fix from #350
+        // deliberately doesn't apply to any of these).
+        editor
+            .kb_create_node(
+                "practice:adversarial-testing",
+                "Adversarial testing philosophy",
+                "Tests exist to falsify the implementation, not confirm it. Prefer \
+                 property/round-trip tests over one fixed happy path.",
+                mae_core::KbNodeKind::Note,
+            )
+            .unwrap();
+        editor
+            .kb_create_node(
+                "practice:caution-annotations",
+                "Caution annotation convention",
+                "Use @ai-caution comments to flag invariants for other AI agents \
+                 reading or editing this code.",
+                mae_core::KbNodeKind::Note,
+            )
+            .unwrap();
+        editor
+            .kb_create_node(
+                "practice:makefile-self-documentation",
+                "Makefile self-documentation",
+                "Every Makefile target has a `## target: description` comment line \
+                 immediately above it, parsed by `make help`.",
+                mae_core::KbNodeKind::Note,
+            )
+            .unwrap();
+        editor
+            .kb_create_node(
+                "practice:deep-audit-checklist",
+                "Deep audit checklist",
+                "A periodic code audit walks every file against a fixed checklist: \
+                 dead code, missing tests, stale comments, unhandled errors.",
+                mae_core::KbNodeKind::Note,
+            )
+            .unwrap();
+        editor
+            .kb_create_node(
+                "practice:commit-convention",
+                "Commit message convention",
+                "Commit messages use a type(scope): summary header, body explaining \
+                 why not what, and a trailing issue reference when applicable.",
+                mae_core::KbNodeKind::Note,
+            )
+            .unwrap();
+
+        // The issue's own 6 canonical queries, verbatim, each with its
+        // reported target. "adversarial testing philosophy" is the issue's
+        // own vocabulary-matched retry of query 1, kept as a separate case
+        // since the issue reported it STILL failing even after retrying
+        // with better-matched vocabulary.
+        let cases: &[(&str, &str)] = &[
+            (
+                "what's the testing philosophy for this project",
+                "practice:adversarial-testing",
+            ),
+            (
+                "adversarial testing philosophy",
+                "practice:adversarial-testing",
+            ),
+            (
+                "how should I annotate code for other AI agents",
+                "practice:caution-annotations",
+            ),
+            (
+                "how are Makefile targets self-documented",
+                "practice:makefile-self-documentation",
+            ),
+            (
+                "how do I run a periodic code audit",
+                "practice:deep-audit-checklist",
+            ),
+            (
+                "what commit message format should I use",
+                "practice:commit-convention",
+            ),
+        ];
+
+        let mut failures = Vec::new();
+        for (query, target) in cases {
+            let result =
+                execute_kb_search_context(&editor, &serde_json::json!({"query": query}), None)
+                    .unwrap();
+            // Zero results returns a guidance OBJECT, not an empty array (see
+            // execute_kb_search_context's `if items.is_empty()` branch) --
+            // parse as a generic Value first so that real shape is a genuine
+            // test failure ("zero results"), not a panic on the unwrap.
+            let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+            let ids: Vec<&str> = match parsed.as_array() {
+                Some(items) => items.iter().map(|i| i["id"].as_str().unwrap()).collect(),
+                None => Vec::new(),
+            };
+            if ids.is_empty() {
+                failures.push(format!(
+                    "{query:?} -> ZERO results (want {target} in top 3)"
+                ));
+                continue;
+            }
+            let pos = ids.iter().position(|&id| id == *target);
+            match pos {
+                Some(p) if p < 3 => {} // pass: in top 3, matching the issue's own bar
+                Some(p) => failures.push(format!(
+                    "{query:?} -> {target} present but ranked #{} (want top 3), got {ids:?}",
+                    p + 1
+                )),
+                None => failures.push(format!(
+                    "{query:?} -> {target} not in results at all, got {ids:?}"
+                )),
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "kb_search_context still fails {}/{} of #357's originally-reported queries \
+             against a realistically-shaped hub/atom KB:\n{}",
+            failures.len(),
+            cases.len(),
+            failures.join("\n")
         );
     }
 

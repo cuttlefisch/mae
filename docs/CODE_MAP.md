@@ -303,6 +303,8 @@ Source: `shared/kb/src/lib.rs`
 | `StaleNode` | struct |
 | `GhostNode` | struct |
 | `KbHealthReport` | struct |
+| `filter_stopwords` | fn |
+| `stem` | fn |
 | `KnowledgeBase` | struct |
 | `ReconcileAction` | enum |
 | `ReconcileOutcome` | struct |
