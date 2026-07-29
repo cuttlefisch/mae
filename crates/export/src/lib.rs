@@ -144,26 +144,17 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
             continue;
         }
 
-        // Headings
-        if trimmed.starts_with("* ") || trimmed == "*" {
-            let level = trimmed.chars().take_while(|&c| c == '*').count() as u8;
-            let rest = trimmed[level as usize..].trim();
-            let (title, tags) = parse_heading_tags(rest);
-            let (todo, clean_title) = parse_heading_todo(&title);
-            elements.push(OrgElement::Heading {
-                level,
-                title: clean_title,
-                tags,
-                todo,
-                children: Vec::new(),
-            });
-            i += 1;
-            continue;
-        }
-
-        // Multi-level headings
-        if trimmed.starts_with("**") {
-            let level = trimmed.chars().take_while(|&c| c == '*').count() as u8;
+        // Headings (any level). A heading requires a space directly after
+        // the leading `*` run (or nothing after it at all) -- without this
+        // check, markdown-style `**bold text**` gets misparsed as a
+        // level-2 heading, since `starts_with("**")` alone doesn't
+        // distinguish "** " from "**bold".
+        let leading_stars = trimmed.chars().take_while(|&c| c == '*').count();
+        let is_heading = leading_stars > 0
+            && (trimmed.len() == leading_stars
+                || trimmed.as_bytes().get(leading_stars) == Some(&b' '));
+        if is_heading {
+            let level = leading_stars as u8;
             let rest = trimmed[level as usize..].trim();
             let (title, tags) = parse_heading_tags(rest);
             let (todo, clean_title) = parse_heading_todo(&title);
@@ -556,14 +547,30 @@ pub fn convert_inline_markup_str(text: &str, target: InlineTarget) -> String {
             }
             _ => {}
         }
-        match (ch, target) {
+        // `ch` above (`bytes[i] as char`) is only valid for dispatching on
+        // the ASCII markup-trigger bytes matched in the arms above -- every
+        // one of `*`/`/`/`~`/`=`/`+`/`[` is a single UTF-8 byte, and no
+        // ASCII byte value ever collides with a UTF-8 continuation
+        // (0x80-0xBF) or leading (0xC0-0xF4) byte, so that dispatch is
+        // byte-position-safe even with multibyte content nearby. But
+        // falling through to here and still using `ch`/`i += 1` for the
+        // general case was a real bug: any non-ASCII character (an
+        // em-dash, any accented character) got decoded one raw byte at a
+        // time instead of one Unicode scalar at a time, corrupting it into
+        // 2-4 garbage Latin-1-ish characters. Decode the real char here
+        // instead.
+        let real_ch = text[i..]
+            .chars()
+            .next()
+            .expect("i is always a valid char boundary at this point");
+        match (real_ch, target) {
             ('<', InlineTarget::Html) => result.push_str("&lt;"),
             ('>', InlineTarget::Html) => result.push_str("&gt;"),
             ('&', InlineTarget::Html) => result.push_str("&amp;"),
             ('"', InlineTarget::Html) => result.push_str("&quot;"),
-            _ => result.push(ch),
+            _ => result.push(real_ch),
         }
-        i += 1;
+        i += real_ch.len_utf8();
     }
 
     result
@@ -706,6 +713,45 @@ mod tests {
     }
 
     #[test]
+    fn markdown_style_bold_without_a_space_is_not_misparsed_as_a_heading() {
+        // Real bug traced from mae's own manual (concept-modules.org): a
+        // paragraph starting with markdown-style "**bold**" (not valid org
+        // syntax -- org bold is "*bold*" -- but real content that exists)
+        // was silently swallowed whole into a level-2 heading, because the
+        // "Multi-level headings" branch of heading detection only checked
+        // `starts_with("**")`, with no check that a space (or nothing)
+        // follows the stars the way the level-1 branch correctly required.
+        // See cuttlefisch/mae#528.
+        let src = "**Key invariant:** Module autoloads run BEFORE config.\n";
+        let (_, elements) = parse_org_document(src);
+        assert_eq!(elements.len(), 1);
+        assert!(
+            matches!(&elements[0], OrgElement::Paragraph(p) if p.starts_with("**Key invariant:**")),
+            "expected a real paragraph, not a heading: {:?}",
+            elements[0]
+        );
+    }
+
+    #[test]
+    fn a_real_heading_with_no_text_after_the_stars_still_parses() {
+        // Guards the OTHER edge of the same fix: a bare "**" (stars are
+        // the entire trimmed line, nothing after them at all) must still
+        // parse as a real, empty-title heading -- the fix must not
+        // require a trailing space when there's nothing to have space
+        // before, only when there's real content directly after the
+        // stars with no separating space.
+        let src = "**\n";
+        let (_, elements) = parse_org_document(src);
+        assert_eq!(elements.len(), 1);
+        if let OrgElement::Heading { level, title, .. } = &elements[0] {
+            assert_eq!(*level, 2);
+            assert_eq!(title, "");
+        } else {
+            panic!("expected a heading: {:?}", elements[0]);
+        }
+    }
+
+    #[test]
     fn parse_heading_with_tags() {
         let src = "* My Heading  :tag1:tag2:\n";
         let (_, elements) = parse_org_document(src);
@@ -772,6 +818,23 @@ mod tests {
     fn inline_markup_bold_html() {
         let result = convert_inline_markup_str("hello *world*", InlineTarget::Html);
         assert_eq!(result, "hello <b>world</b>");
+    }
+
+    #[test]
+    fn non_ascii_characters_survive_unmangled() {
+        // Regression: the main loop decoded one raw BYTE at a time
+        // (`bytes[i] as char`, `i += 1`) instead of one Unicode scalar at
+        // a time -- every non-ASCII character (an em-dash, any accented
+        // character) got split into its 2-4 individual UTF-8 bytes, each
+        // reinterpreted as a bogus Latin-1-ish char. Found by actually
+        // running a real Spanish translation through this path -- every
+        // accented word came out mangled (e.g. "configuración" ->
+        // "configuraciÃ³n"). See cuttlefisch/mae#528.
+        let result = convert_inline_markup_str(
+            "el flujo — la configuración, todavía, ¿cómo?",
+            InlineTarget::Html,
+        );
+        assert_eq!(result, "el flujo — la configuración, todavía, ¿cómo?");
     }
 
     #[test]
