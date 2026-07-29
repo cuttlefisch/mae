@@ -700,10 +700,12 @@ mod tests {
 
         picker.query = "helpers".to_string();
         picker.update_filter();
-        let without_recency: Vec<&String> = picker
+        // Candidate strings use the OS-native path separator (backslash on
+        // Windows) -- normalize to "/" for a portable comparison (#13).
+        let without_recency: Vec<String> = picker
             .filtered
             .iter()
-            .map(|&i| &picker.candidates[i])
+            .map(|&i| picker.candidates[i].replace(std::path::MAIN_SEPARATOR, "/"))
             .collect();
         assert_eq!(
             without_recency[0], "src/aaa/helpers_one/mod.rs",
@@ -718,10 +720,10 @@ mod tests {
                 .collect();
         picker.reorder_by_recency(&recent);
         picker.update_filter();
-        let with_recency: Vec<&String> = picker
+        let with_recency: Vec<String> = picker
             .filtered
             .iter()
-            .map(|&i| &picker.candidates[i])
+            .map(|&i| picker.candidates[i].replace(std::path::MAIN_SEPARATOR, "/"))
             .collect();
         assert_eq!(
             with_recency[0], "src/aaa/helpers_two_longer/mod.rs",
@@ -752,10 +754,10 @@ mod tests {
 
         picker.query = "config".to_string();
         picker.update_filter();
-        let ranked: Vec<&String> = picker
+        let ranked: Vec<String> = picker
             .filtered
             .iter()
-            .map(|&i| &picker.candidates[i])
+            .map(|&i| picker.candidates[i].replace(std::path::MAIN_SEPARATOR, "/"))
             .collect();
         assert_eq!(
             ranked[0], "src/zzz_config_zzz.rs",
