@@ -5,28 +5,28 @@
 #+title: Keymap Inheritance
 #+filetags: :data-model:modal-editing:extensibility:
 
-**Keymap inheritance** lets buffer-kind overlay keymaps (git-status, help, debug, file-tree) inherit bindings from a parent keymap.
+*Keymap inheritance* lets buffer-kind overlay keymaps (git-status, help, debug, file-tree) inherit bindings from a parent keymap.
 
 ** Mechanism
-- `Keymap` has a `parent: Option<String>` field.
+- ~Keymap~ has a ~parent: Option<String>~ field.
 - Key lookup: overlay keymap -> parent -> fallback.
-- `which_key_entries_for_current_keymap()` merges overlay + parent entries for the which-key popup.
+- ~which_key_entries_for_current_keymap()~ merges overlay + parent entries for the which-key popup.
 
 ** Scheme API
-`(define-keymap "name" "parent")` creates a keymap with inheritance.
+~(define-keymap "name" "parent")~ creates a keymap with inheritance.
 
 ** Current Overlay Keymaps
 | Keymap | Parent | Buffer Kind |
 |--------|--------|-------------|
-| `git-status` | `normal` | GitStatus |
-| `help` | `normal` | Help |
-| `debug` | `normal` | Debug |
-| `file-tree` | `normal` | FileTree |
+| ~git-status~ | ~normal~ | GitStatus |
+| ~help~ | ~normal~ | Help |
+| ~debug~ | ~normal~ | Debug |
+| ~file-tree~ | ~normal~ | FileTree |
 
-** The `leader` keymap
-The kernel also creates an empty `leader` keymap, populated by the embedded
-`keymap-leader` module + feature modules. It holds the entire mae which-key menu
-(bound WITHOUT an `SPC` prefix) and is consulted by the transient leader keypad
+** The ~leader~ keymap
+The kernel also creates an empty ~leader~ keymap, populated by the embedded
+~keymap-leader~ module + feature modules. It holds the entire mae which-key menu
+(bound WITHOUT an ~SPC~ prefix) and is consulted by the transient leader keypad
 regardless of which keymap flavor is active. See [[concept:keymap-flavors]].
 
 [[concept:mode?rel=part_of][Part of Mode]].

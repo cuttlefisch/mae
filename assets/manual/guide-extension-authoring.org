@@ -10,19 +10,19 @@
 This guide covers creating, testing, and publishing MAE modules.
 
 ** Quick start
-```bash
+#+begin_src bash
 mae pkg create my-module
 cd modules/my-module
 # edit module.toml, autoloads.scm, init.scm
 mae pkg doctor my-module
-```
+#+end_src
 
 ** Module structure
 
 Every module has three files:
 
-*** `module.toml` — identity
-```toml
+*** ~module.toml~ — identity
+#+begin_src toml
 [module]
 name = "my-module"
 version = "0.1.0"
@@ -39,11 +39,11 @@ extra = { doc = "Enable extra feature" }
 [entry]
 init = "init.scm"
 autoloads = "autoloads.scm"
-```
+#+end_src
 
-*** `autoloads.scm` — eager registration
+*** ~autoloads.scm~ — eager registration
 Runs at startup before user config. Register commands, keybindings, options:
-```scheme
+#+begin_src scheme
 ;; Commands
 (define-command "my-greet" (lambda () (buffer-insert "Hello!")) "Greet")
 
@@ -59,86 +59,86 @@ Runs at startup before user config. Register commands, keybindings, options:
 ;; Conditional on flags
 (when-flag "+extra"
   (define-key "normal" "SPC x e" "my-extra-cmd"))
-```
+#+end_src
 
-*** `init.scm` — lazy initialization
+*** ~init.scm~ — lazy initialization
 Loaded on first command use via autoload:
-```scheme
+#+begin_src scheme
 ;; Full feature logic here
 (provide-feature "my-module")
-```
+#+end_src
 
 ** Scheme API reference
 
 *** Buffer operations
-- `(buffer-insert text)` — insert text at cursor
-- `(buffer-delete-range start end)` — delete range
-- `(buffer-replace-range start end text)` — replace range
-- `(buffer-text-range start end)` — read range
-- `*buffer-name*`, `*buffer-text*`, `*buffer-char-count*` — buffer state
+- ~(buffer-insert text)~ — insert text at cursor
+- ~(buffer-delete-range start end)~ — delete range
+- ~(buffer-replace-range start end text)~ — replace range
+- ~(buffer-text-range start end)~ — read range
+- ~*buffer-name*~, ~*buffer-text*~, ~*buffer-char-count*~ — buffer state
 
 *** Cursor & navigation
-- `(cursor-goto row col)` — move cursor
-- `*cursor-row*`, `*cursor-col*` — current position
-- `(open-file path)` — open a file
-- `(switch-to-buffer name)` — switch buffer
+- ~(cursor-goto row col)~ — move cursor
+- ~*cursor-row*~, ~*cursor-col*~ — current position
+- ~(open-file path)~ — open a file
+- ~(switch-to-buffer name)~ — switch buffer
 
 *** Commands
-- `(define-command name fn doc)` — register a command
-- `(run-command name)` — execute a command
-- `(command-exists? name)` — check if registered
-- `(undefine-command! name)` — remove (for unload)
+- ~(define-command name fn doc)~ — register a command
+- ~(run-command name)~ — execute a command
+- ~(command-exists? name)~ — check if registered
+- ~(undefine-command! name)~ — remove (for unload)
 
 *** Keymaps
-- `(define-key keymap key command)` — bind key to command
-- `(define-keymap name parent)` — create a new keymap
-- `(undefine-key! keymap key)` — remove binding
+- ~(define-key keymap key command)~ — bind key to command
+- ~(define-keymap name parent)~ — create a new keymap
+- ~(undefine-key! keymap key)~ — remove binding
 
 *** Options
-- `(define-option! name type default doc)` — register option
-- `(set-option! name value)` — set value
-- `(get-option name)` — read value
-- `(undefine-option! name)` — remove (for unload)
+- ~(define-option! name type default doc)~ — register option
+- ~(set-option! name value)~ — set value
+- ~(get-option name)~ — read value
+- ~(undefine-option! name)~ — remove (for unload)
 
 *** Hooks
-- `(add-hook! hook fn)` — subscribe to event
-- `(remove-hook! hook fn)` — unsubscribe
-- `(run-hook! hook)` — trigger event
+- ~(add-hook! hook fn)~ — subscribe to event
+- ~(remove-hook! hook fn)~ — unsubscribe
+- ~(run-hook! hook)~ — trigger event
 
 *** Module queries
-- `(module-loaded? name)` — is module active?
-- `(module-version name)` — version string or `#f`
-- `(module-list)` — all active module names
-- `(module-flags name)` — enabled flags for module
-- `(when-module name fn)` — conditional on module presence
-- `(when-flag flag fn)` — conditional on flag
+- ~(module-loaded? name)~ — is module active?
+- ~(module-version name)~ — version string or ~#f~
+- ~(module-list)~ — all active module names
+- ~(module-flags name)~ — enabled flags for module
+- ~(when-module name fn)~ — conditional on module presence
+- ~(when-flag flag fn)~ — conditional on flag
 
 *** Deprecation
-- `(deprecate-function! old new since)` — register deprecation
-- `(check-deprecated name)` — check and warn once
+- ~(deprecate-function! old new since)~ — register deprecation
+- ~(check-deprecated name)~ — check and warn once
 
 ** Testing your module
 
-1. **Manifest validation:** `mae pkg doctor my-module`
-2. **Load validation:** `mae --check-config` (loads all modules)
-3. **Live development:** `:module-reload my-module` after editing
-4. **Disable test:** comment out module in init.scm, verify editor starts
-5. **Override test:** add overrides in config.scm, verify they take effect
+1. *Manifest validation:* ~mae pkg doctor my-module~
+2. *Load validation:* ~mae --check-config~ (loads all modules)
+3. *Live development:* ~:module-reload my-module~ after editing
+4. *Disable test:* comment out module in init.scm, verify editor starts
+5. *Override test:* add overrides in config.scm, verify they take effect
 
 ** Naming conventions
 
 Module authors MUST prefix definitions with the module name:
-- Commands: `my-module-command` (not `command`)
-- Options: `my_module_option` (underscores for TOML)
-- Scheme symbols: `my-module-helper` (not `helper`)
+- Commands: ~my-module-command~ (not ~command~)
+- Options: ~my_module_option~ (underscores for TOML)
+- Scheme symbols: ~my-module-helper~ (not ~helper~)
 
-`mae pkg doctor` warns about unprefixed definitions.
+~mae pkg doctor~ warns about unprefixed definitions.
 
 ** Reference implementation
 
-The `dashboard` module is the simplest complete example. See `modules/dashboard/` for the canonical three-file pattern.
+The ~dashboard~ module is the simplest complete example. See ~modules/dashboard/~ for the canonical three-file pattern.
 
-For a more complex example with module-owned keymaps, see `modules/file-tree/`.
+For a more complex example with module-owned keymaps, see ~modules/file-tree/~.
 
 This guide [[concept:modules?rel=explains][explains the Module System]] and [[concept:scheme-api?rel=explains][explains the Scheme API]].
 
