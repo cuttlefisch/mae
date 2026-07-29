@@ -332,29 +332,71 @@ impl Editor {
         win.cursor_col = ac;
     }
 
-    /// Indent all lines in the visual selection by 4 spaces.
-    pub fn visual_indent(&mut self) {
-        self.save_visual_state();
+    /// Row range `(min_row, max_row)` PER ACTIVE CURSOR for the current
+    /// visual selection (#368) — the line-oriented counterpart to
+    /// `visual_selection_ranges()`, used by operators (indent/dedent/join)
+    /// that act on whole lines regardless of char-vs-line visual type,
+    /// mirroring pre-#368 single-cursor `visual_indent`/`visual_dedent`/
+    /// `visual_join`'s own row-range computation. Single-cursor: returns
+    /// exactly `vec![(min_row, max_row)]`, identical to the pre-#368
+    /// computation. Block mode stays primary-only (out of scope per #368's
+    /// own text — block-visual + multi-cursor is a rarer combination left
+    /// for a follow-up).
+    fn visual_selection_row_ranges(&self) -> Vec<(usize, usize)> {
         let win = self.window_mgr.focused_window();
         let min_row = self.vi.visual_anchor_row.min(win.cursor_row);
         let max_row = self.vi.visual_anchor_row.max(win.cursor_row);
+        if win.cursor_set.is_single() || matches!(self.mode, Mode::Visual(VisualType::Block)) {
+            return vec![(min_row, max_row)];
+        }
+        let mut ranges = vec![(min_row, max_row)];
+        for c in win.cursor_set.secondaries() {
+            let (anchor_row, _) = c.anchor.unwrap_or((c.row, c.col));
+            ranges.push((anchor_row.min(c.row), anchor_row.max(c.row)));
+        }
+        ranges
+    }
+
+    /// Indent all lines in the visual selection(s) by 4 spaces. Multi-cursor
+    /// (#368): every cursor's own row range is indented. Indenting only ever
+    /// inserts characters WITHIN existing lines (never adds/removes a line),
+    /// so unlike delete/paste, row numbers across different cursors' ranges
+    /// never shift relative to each other — rows are deduped once across
+    /// every range (overlapping cursor selections on the same row must not
+    /// double-indent it) and order doesn't otherwise matter.
+    pub fn visual_indent(&mut self) {
+        self.save_visual_state();
         let idx = self.active_buffer_idx();
-        for row in min_row..=max_row {
+        let mut rows: Vec<usize> = self
+            .visual_selection_row_ranges()
+            .into_iter()
+            .flat_map(|(min_row, max_row)| min_row..=max_row)
+            .collect();
+        rows.sort_unstable();
+        rows.dedup();
+        for row in rows {
             let line_start = self.buffers[idx].rope().line_to_char(row);
             self.buffers[idx].insert_text_at(line_start, "    ");
         }
         self.set_mode(Mode::Normal);
     }
 
-    /// Dedent all lines in the visual selection by up to 4 spaces.
+    /// Dedent all lines in the visual selection(s) by up to 4 spaces.
+    /// Multi-cursor (#368): same row-dedup rationale as `visual_indent` —
+    /// dedenting also never adds/removes a line, so processing order across
+    /// distinct rows doesn't matter (each row's own offset is re-read fresh
+    /// from the buffer immediately before its own mutation).
     pub fn visual_dedent(&mut self) {
         self.save_visual_state();
-        let win = self.window_mgr.focused_window();
-        let min_row = self.vi.visual_anchor_row.min(win.cursor_row);
-        let max_row = self.vi.visual_anchor_row.max(win.cursor_row);
         let idx = self.active_buffer_idx();
-        // Process in reverse so char offsets stay valid.
-        for row in (min_row..=max_row).rev() {
+        let mut rows: Vec<usize> = self
+            .visual_selection_row_ranges()
+            .into_iter()
+            .flat_map(|(min_row, max_row)| min_row..=max_row)
+            .collect();
+        rows.sort_unstable();
+        rows.dedup();
+        for row in rows {
             let line_start = self.buffers[idx].rope().line_to_char(row);
             let line_text = self.buffers[idx].line_text(row);
             let spaces: usize = line_text.chars().take(4).take_while(|c| *c == ' ').count();
@@ -365,56 +407,125 @@ impl Editor {
         self.set_mode(Mode::Normal);
     }
 
-    /// Join all lines in the visual selection.
+    /// Join all lines in the visual selection(s). Multi-cursor (#368): each
+    /// cursor's own row span is joined independently. Unlike indent/dedent,
+    /// `join_line()` REMOVES a line per call, shifting every row number
+    /// below the join point upward — so spans are processed bottom-to-top
+    /// (highest `min_row` first): joining a span only ever shifts rows AT OR
+    /// BELOW its own `min_row`, never rows above it, so every
+    /// not-yet-processed (higher-up) span's row numbers stay valid
+    /// throughout. Processing top-to-bottom instead would join an upper
+    /// span, silently shift every lower span's rows out from under it, and
+    /// join the wrong lines — exactly the risk this issue flagged.
     pub fn visual_join(&mut self) {
         self.save_visual_state();
-        let win = self.window_mgr.focused_window();
-        let min_row = self.vi.visual_anchor_row.min(win.cursor_row);
-        let max_row = self.vi.visual_anchor_row.max(win.cursor_row);
-        let join_count = max_row - min_row;
-        // Position cursor at min_row for joining.
+        let mut row_ranges = self.visual_selection_row_ranges();
+        row_ranges.sort_by_key(|&(min_row, _)| std::cmp::Reverse(min_row));
+        let mut final_positions: Vec<usize> = Vec::with_capacity(row_ranges.len());
+        for (min_row, max_row) in row_ranges {
+            if max_row > min_row {
+                let win = self.window_mgr.focused_window_mut();
+                win.cursor_row = min_row;
+                for _ in 0..(max_row - min_row) {
+                    self.join_line();
+                }
+            }
+            final_positions.push(min_row);
+        }
+        final_positions.sort_unstable();
+        final_positions.dedup();
+        let idx = self.active_buffer_idx();
         let win = self.window_mgr.focused_window_mut();
-        win.cursor_row = min_row;
-        for _ in 0..join_count {
-            self.join_line();
+        win.cursor_set.clear_secondaries();
+        if let Some(&row) = final_positions.first() {
+            win.cursor_row = row;
+            win.cursor_col = 0;
+        }
+        win.clamp_cursor(&self.buffers[idx]);
+        win.sync_primary();
+        for &row in &final_positions[1..] {
+            win.cursor_set.add(row, 0);
         }
         self.set_mode(Mode::Normal);
     }
 
-    /// Replace visual selection with register contents without clobbering the register.
+    /// Replace visual selection(s) with register contents without
+    /// clobbering the register. Multi-cursor (#368): every cursor's own
+    /// range is replaced with the SAME register text (mirroring
+    /// `visual_delete`'s single-register-for-all-ranges approach — there is
+    /// only one "the" register to paste from), processed in descending
+    /// offset order so an earlier (higher-offset) replacement never shifts
+    /// a later (lower-offset) range's start/end out from under it.
     pub fn visual_paste(&mut self) {
         self.save_visual_state();
-        // Read paste text before the delete so we don't lose it.
+        // Read paste text before any delete so we don't lose it.
         let paste = self.paste_text();
-        let (start, end) = self.visual_selection_range();
-        if start >= end {
+        let mut ranges = self.visual_selection_ranges();
+        if ranges.iter().all(|(s, e)| s >= e) {
             self.set_mode(Mode::Normal);
             return;
         }
         let idx = self.active_buffer_idx();
-        // Delete the selection (save to black-hole by using active_register = '_').
+
+        // Capture deleted text in ascending order BEFORE any mutation
+        // invalidates later ranges' offsets (mirrors visual_delete).
+        let mut ascending = ranges.clone();
+        ascending.sort_by_key(|(s, _)| *s);
+        let combined: String = ascending
+            .iter()
+            .filter(|(s, e)| s < e)
+            .map(|(s, e)| self.buffers[idx].text_range(*s, *e))
+            .collect();
+        // Black-hole the deleted selection text -- visual_delete's own
+        // register write would clobber the just-read `paste` register
+        // otherwise (same rationale as the pre-#368 single-cursor path).
         self.vi.active_register = Some('_');
-        let text = self.buffers[idx].text_range(start, end);
-        self.buffers[idx].delete_range(start, end);
-        self.save_delete(text);
-        // Insert paste text at the deletion point.
-        if let Some(ref paste_text) = paste {
-            self.buffers[idx].insert_text_at(start, paste_text);
-            let end_pos = start + paste_text.chars().count().saturating_sub(1);
+        self.save_delete(combined);
+
+        ranges.sort_by_key(|b| std::cmp::Reverse(b.0));
+        let mut new_positions: Vec<(usize, usize)> = Vec::with_capacity(ranges.len());
+        for (start, end) in &ranges {
+            if start >= end {
+                continue;
+            }
+            self.buffers[idx].delete_range(*start, *end);
+            let insert_pos = *start;
+            if let Some(ref paste_text) = paste {
+                self.buffers[idx].insert_text_at(insert_pos, paste_text);
+            }
+            let end_pos = insert_pos
+                + paste
+                    .as_ref()
+                    .map(|t| t.chars().count())
+                    .unwrap_or(0)
+                    .saturating_sub(1);
             let rope = self.buffers[idx].rope();
             let new_row = rope.char_to_line(end_pos.min(rope.len_chars().saturating_sub(1)));
             let line_start = rope.line_to_char(new_row);
-            let win = self.window_mgr.focused_window_mut();
-            win.cursor_row = new_row;
-            win.cursor_col = end_pos.saturating_sub(line_start);
-        } else {
-            // No paste text — just position cursor at start.
-            let rope = self.buffers[idx].rope();
-            let new_row = rope.char_to_line(start.min(rope.len_chars().saturating_sub(1)));
-            let line_start = rope.line_to_char(new_row);
-            let win = self.window_mgr.focused_window_mut();
-            win.cursor_row = new_row;
-            win.cursor_col = start.saturating_sub(line_start);
+            new_positions.push((new_row, end_pos.saturating_sub(line_start)));
+        }
+        // Re-clamp every position against the FINAL buffer state before
+        // dedup, same rationale as visual_delete: earlier (higher-offset)
+        // entries can go stale once later deletions/insertions further
+        // change the buffer size.
+        let final_line_count = self.buffers[idx].line_count();
+        for (row, col) in &mut new_positions {
+            *row = (*row).min(final_line_count.saturating_sub(1));
+            *col = (*col).min(self.buffers[idx].line_len(*row));
+        }
+        new_positions.sort();
+        new_positions.dedup();
+
+        let win = self.window_mgr.focused_window_mut();
+        win.cursor_set.clear_secondaries();
+        if let Some(&(row, col)) = new_positions.first() {
+            win.cursor_row = row;
+            win.cursor_col = col;
+        }
+        win.clamp_cursor(&self.buffers[idx]);
+        win.sync_primary();
+        for &(row, col) in &new_positions[1..] {
+            win.cursor_set.add(row, col);
         }
         self.set_mode(Mode::Normal);
     }
