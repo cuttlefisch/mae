@@ -445,6 +445,12 @@ mod tests {
             ("foo.scm", Language::Scheme),
             ("foo.yaml", Language::Yaml),
             ("foo.yml", Language::Yaml),
+            ("main.tf", Language::Terraform),
+            ("terraform.tfvars", Language::Terraform),
+            ("network.hcl", Language::Terraform),
+            ("Dockerfile", Language::Dockerfile),
+            ("Dockerfile.prod", Language::Dockerfile),
+            ("app.dockerfile", Language::Dockerfile),
         ];
         for (path, expected) in cases {
             assert_eq!(
@@ -494,6 +500,53 @@ mod tests {
         let spans = languages::compute_spans(Language::Json, "{\"name\": \"mae\", \"count\": 42}");
         assert!(spans.iter().any(|s| s.theme_key == "string"));
         assert!(spans.iter().any(|s| s.theme_key == "number"));
+    }
+
+    /// Adversarial (principle #14): a filename merely containing "docker"
+    /// must not false-positive the Dockerfile filename-match branch.
+    #[test]
+    fn docker_compose_yaml_is_not_dockerfile() {
+        assert_eq!(
+            language_for_path(Path::new("docker-compose.yml")),
+            Some(Language::Yaml)
+        );
+    }
+
+    /// Terraform's highlights query is hand-authored (no bundled query in
+    /// `tree-sitter-hcl` — see `queries/hcl_highlights.scm`'s doc comment),
+    /// so this is a real correctness test, not just convention-following:
+    /// it proves the query actually parses against the real grammar and
+    /// produces spans, catching the failure mode where `build_configuration`
+    /// would otherwise silently return `None` (via `.ok()?`) and Terraform
+    /// files would render with zero highlighting.
+    #[test]
+    fn terraform_highlights_keyword_string_number_and_comment() {
+        let spans = languages::compute_spans(
+            Language::Terraform,
+            "# comment\nresource \"aws_instance\" \"web\" {\n  ami = \"ami-123\"\n  count = 2\n}\n",
+        );
+        assert!(!spans.is_empty(), "expected non-empty spans, got none");
+        assert!(spans.iter().any(|s| s.theme_key == "comment"));
+        assert!(spans.iter().any(|s| s.theme_key == "string"));
+        assert!(spans.iter().any(|s| s.theme_key == "number"));
+        assert!(spans.iter().any(|s| s.theme_key == "keyword"));
+    }
+
+    #[test]
+    fn dockerfile_highlights_keyword_and_string() {
+        // JSON exec form (`RUN ["...", "..."]`), not shell form -- the
+        // grammar tokenizes shell-form RUN bodies as an opaque fragment (no
+        // injection resolution wired up in MAE, see languages.rs's module
+        // doc comment), so a shell-form `RUN echo "hi"` produces no
+        // `string` capture at all. JSON exec form's strings are real
+        // `json_string` grammar nodes, captured unconditionally.
+        let spans = languages::compute_spans(
+            Language::Dockerfile,
+            "FROM rust:1.80\nENTRYPOINT [\"echo\", \"hi\"]\n",
+        );
+        assert!(!spans.is_empty(), "expected non-empty spans, got none");
+        assert!(spans.iter().any(|s| s.theme_key == "keyword"));
+        assert!(spans.iter().any(|s| s.theme_key == "string"));
     }
 
     #[test]

@@ -69,6 +69,12 @@ fn default_config_version() -> u32 {
 /// [lsp.typescript]
 /// command = "typescript-language-server"
 /// args = ["--stdio"]
+///
+/// [lsp.yaml]
+/// command = "yaml-language-server"
+/// args = ["--stdio"]
+/// [lsp.yaml.init_options.yaml.schemas]
+/// kubernetes = "k8s/*.yaml"
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct LspSection {
@@ -85,6 +91,13 @@ pub struct LspLanguageConfig {
     /// Arguments to pass to the command.
     #[serde(default)]
     pub args: Vec<String>,
+    /// Server-specific `initializationOptions`, sent verbatim on the
+    /// `initialize` request (see `mae_lsp::client::LspServerConfig::init_options`'s
+    /// doc comment). E.g. `yaml-language-server`'s `yaml.schemas` glob→schema-URL
+    /// map for Kubernetes-manifest association — MAE has no per-file detection
+    /// for this; the server does its own glob matching once configured.
+    #[serde(default)]
+    pub init_options: Option<serde_json::Value>,
 }
 
 impl LspLanguageConfig {
@@ -1719,6 +1732,7 @@ mod tests {
             LspLanguageConfig {
                 command: "zls".into(),
                 args: vec![],
+                init_options: None,
             },
         );
         let cfg = Config {
@@ -1728,6 +1742,31 @@ mod tests {
         let s = toml::to_string(&cfg).unwrap();
         let back: Config = toml::from_str(&s).unwrap();
         assert_eq!(back.lsp.servers["zig"].command, "zls");
+    }
+
+    /// `init_options` (ADR-075) parses from real TOML in the exact nested-table
+    /// shape documented on `LspSection`'s doc comment (yaml-language-server's
+    /// `yaml.schemas` Kubernetes association) and is `None` (not an error) when
+    /// omitted entirely — additive, doesn't force every `[lsp.<lang>]` entry to
+    /// specify it.
+    #[test]
+    fn lsp_init_options_parses_from_toml_and_defaults_to_none_when_omitted() {
+        let s = r#"
+            [lsp.yaml]
+            command = "yaml-language-server"
+            args = ["--stdio"]
+            [lsp.yaml.init_options.yaml.schemas]
+            kubernetes = "k8s/*.yaml"
+
+            [lsp.rust]
+            command = "rust-analyzer"
+        "#;
+        let cfg: Config = toml::from_str(s).unwrap();
+        assert_eq!(
+            cfg.lsp.servers["yaml"].init_options.as_ref().unwrap()["yaml"]["schemas"]["kubernetes"],
+            "k8s/*.yaml"
+        );
+        assert!(cfg.lsp.servers["rust"].init_options.is_none());
     }
 
     // --- PSK config deserialization tests ---

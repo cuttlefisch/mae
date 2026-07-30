@@ -135,9 +135,35 @@ pub fn path_to_uri(path: &std::path::Path) -> String {
     }
 }
 
-/// Map a file extension (or filename) to an LSP language id.
-/// Mirrors `mae-lsp`'s helper for a consistent set of languages.
+/// Map a file path to an LSP language id — the SOLE authority for LSP
+/// `language_id` routing in MAE (ADR-075). Every `LspIntent`/`did_open` call
+/// site derives its `language_id` from this function (directly or via a
+/// thin wrapper), and `LspManager` routes purely on that string
+/// (`HashMap<String, LspServerConfig>` keyed by language id) — completely
+/// decoupled from `crate::syntax::Language`/tree-sitter grammar selection.
+/// This is intentional, not an accident: a "dialect" of an existing
+/// tree-sitter language (e.g. an Ansible playbook, still plain
+/// `Language::Yaml` for highlighting) can route to a different LSP server
+/// by returning a different string here, without touching tree-sitter or
+/// any of this function's ~18 call sites.
+///
+/// **Single choke point**: any future dialect override (path-heuristic or
+/// otherwise) belongs INSIDE this function, never duplicated at a call
+/// site — every consumer inherits it for free. `should_auto_complete`
+/// (`editor/lsp_ops.rs`) calls this on every keystroke in insert mode, so
+/// anything added here must stay pure lexical path-string inspection
+/// (`Path::file_name()`/`Path::extension()`/`Path::components()`) — no
+/// filesystem I/O (`.exists()`, directory walks), which would make every
+/// keystroke pay a syscall.
 pub fn language_id_from_path(path: &std::path::Path) -> Option<String> {
+    // Filename-first: `Dockerfile` conventionally carries no extension at
+    // all, so the extension-only match below can never see it. Shared with
+    // `syntax::detection::language_for_path` (tree-sitter grammar
+    // selection) so the two registries can't drift on what counts as a
+    // Dockerfile, even though they're intentionally decoupled otherwise.
+    if crate::syntax::detection::is_dockerfile_filename(path) {
+        return Some("dockerfile".to_string());
+    }
     let ext = path.extension()?.to_string_lossy().to_ascii_lowercase();
     let id = match ext.as_str() {
         "rs" => "rust",
@@ -158,9 +184,49 @@ pub fn language_id_from_path(path: &std::path::Path) -> Option<String> {
         "yaml" | "yml" => "yaml",
         "html" | "htm" => "html",
         "css" => "css",
+        "tf" | "tfvars" | "hcl" => "terraform",
         _ => return None,
     };
+    if id == "yaml" {
+        if let Some(dialect) = ansible_lsp_dialect(path) {
+            return Some(dialect.to_string());
+        }
+    }
     Some(id.to_string())
+}
+
+/// Client-side path heuristic for routing a YAML file to
+/// `ansible-language-server` instead of the generic `yaml-language-server`
+/// (ADR-075 Phase 4). Replicates `ansible-language-server`'s own detection
+/// convention (`vscode-ansible#582` confirms there is no server-side
+/// content-sniffing to defer to — filename/path heuristics are the real
+/// mechanism upstream uses too): a `site.yml`/`site.yaml` filename, a
+/// filename containing "playbook", an ancestor path component that is
+/// EXACTLY `playbooks` (not merely a substring — `playbooks-archive/` must
+/// not match), or the double-extension `.ansible.yml`/`.ansible.yaml`
+/// convention.
+///
+/// Pure lexical path inspection only — no filesystem I/O — matching
+/// `language_id_from_path`'s own hot-path constraint (this function is
+/// reached on every keystroke via `should_auto_complete`).
+fn ansible_lsp_dialect(path: &std::path::Path) -> Option<&'static str> {
+    let file_name = path.file_name()?.to_str()?.to_ascii_lowercase();
+    if file_name == "site.yml" || file_name == "site.yaml" {
+        return Some("ansible");
+    }
+    if file_name.contains("playbook") {
+        return Some("ansible");
+    }
+    if file_name.ends_with(".ansible.yml") || file_name.ends_with(".ansible.yaml") {
+        return Some("ansible");
+    }
+    let has_playbooks_ancestor = path
+        .components()
+        .any(|c| c.as_os_str().eq_ignore_ascii_case("playbooks"));
+    if has_playbooks_ancestor {
+        return Some("ansible");
+    }
+    None
 }
 
 #[cfg(test)]
@@ -202,5 +268,80 @@ mod tests {
     fn language_id_scheme() {
         let p = PathBuf::from("init.scm");
         assert_eq!(language_id_from_path(&p).as_deref(), Some("scheme"));
+    }
+
+    #[test]
+    fn language_id_terraform() {
+        for name in ["main.tf", "terraform.tfvars", "network.hcl"] {
+            assert_eq!(
+                language_id_from_path(&PathBuf::from(name)).as_deref(),
+                Some("terraform"),
+                "{name} should resolve to terraform"
+            );
+        }
+    }
+
+    /// Dockerfile has no extension at all, the exact case the shared
+    /// `is_dockerfile_filename` helper (also used by
+    /// `syntax::detection::language_for_path`) exists to catch.
+    #[test]
+    fn language_id_dockerfile() {
+        for name in ["Dockerfile", "Dockerfile.prod", "app.dockerfile"] {
+            assert_eq!(
+                language_id_from_path(&PathBuf::from(name)).as_deref(),
+                Some("dockerfile"),
+                "{name} should resolve to dockerfile"
+            );
+        }
+    }
+
+    /// Adversarial (principle #14): a plain file merely mentioning "docker"
+    /// in its name must NOT false-positive as a Dockerfile.
+    #[test]
+    fn language_id_docker_compose_is_not_dockerfile() {
+        let p = PathBuf::from("docker-compose.yml");
+        assert_eq!(language_id_from_path(&p).as_deref(), Some("yaml"));
+    }
+
+    #[test]
+    fn language_id_ansible_dialect_positive_cases() {
+        let cases = [
+            "playbooks/site.yml",
+            "site.yaml",
+            "deploy-playbook.yml",
+            "roles/webserver/tasks/playbook_main.yaml",
+            "config.ansible.yml",
+            "/home/user/project/playbooks/deploy.yaml",
+        ];
+        for path in cases {
+            assert_eq!(
+                language_id_from_path(&PathBuf::from(path)).as_deref(),
+                Some("ansible"),
+                "{path} should resolve to ansible"
+            );
+        }
+    }
+
+    /// Adversarial (principle #14): plain YAML files, including ones that
+    /// superficially resemble the positive cases, must NOT false-positive.
+    /// `playbooks-archive/` is the critical case -- an ancestor-component
+    /// check (not substring) must not match a directory that merely
+    /// CONTAINS "playbooks" as a prefix.
+    #[test]
+    fn language_id_ansible_dialect_negative_cases() {
+        let cases = [
+            "values.yaml",
+            "k8s/deployment.yaml",
+            "docker-compose.yml",
+            "playbooks-archive/old.yaml",
+            ".github/workflows/ci.yml",
+        ];
+        for path in cases {
+            assert_eq!(
+                language_id_from_path(&PathBuf::from(path)).as_deref(),
+                Some("yaml"),
+                "{path} should resolve to plain yaml, not ansible"
+            );
+        }
     }
 }

@@ -45,7 +45,7 @@ Near-term, code-grounded work extracted from this roadmap + the ADR backlog (fil
 | 1. Core + Renderer | ✅ Complete | Buffer (rope), event loop, terminal renderer, vi modal editing |
 | 2. Scheme Runtime | ✅ Complete | R7RS-small (mae-scheme), `init.scm`, `define-key`, `set-option!`, REPL |
 | 3. AI Integration | ✅ Complete | Claude/OpenAI/Gemini/DeepSeek, 450+ tool-calling, conversation UI, permissions |
-| 4. LSP + DAP + Syntax | ✅ Complete | Full LSP (rename, format, outline, breadcrumbs, peek), DAP (watches, exceptions), 13-language tree-sitter |
+| 4. LSP + DAP + Syntax | ✅ Complete | Full LSP (rename, format, outline, breadcrumbs, peek), DAP (watches, exceptions), 17-language tree-sitter |
 | 5. Knowledge Base | ✅ Complete | CozoDB graph store, 1,300+ nodes, typed relationships, pre-built manual, ingestion pipeline |
 | 6. Embedded Shell | ✅ Complete | alacritty_terminal, MCP bridge, file auto-reload, send-to-shell |
 | 7. Documentation | ✅ Complete | Tutor (13 lessons), `:describe-configuration`, `--check-config`, `--init-config` |

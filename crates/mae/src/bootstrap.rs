@@ -1818,6 +1818,19 @@ pub fn setup_lsp(
         ),
         ("toml", "MAE_LSP_TOML", "taplo", &["lsp", "stdio"]),
         ("bash", "MAE_LSP_BASH", "bash-language-server", &["start"]),
+        ("terraform", "MAE_LSP_TERRAFORM", "terraform-ls", &["serve"]),
+        (
+            "dockerfile",
+            "MAE_LSP_DOCKERFILE",
+            "docker-language-server",
+            &["start", "--stdio"],
+        ),
+        (
+            "ansible",
+            "MAE_LSP_ANSIBLE",
+            "ansible-language-server",
+            &["--stdio"],
+        ),
     ];
 
     let mut configs: HashMap<String, LspServerConfig> = HashMap::new();
@@ -1847,6 +1860,11 @@ pub fn setup_lsp(
                 command,
                 args,
                 root_uri: root_uri.clone(),
+                init_options: config
+                    .lsp
+                    .servers
+                    .get(lang)
+                    .and_then(|c| c.init_options.clone()),
             },
         );
     }
@@ -1884,6 +1902,7 @@ pub fn setup_lsp(
                 command,
                 args,
                 root_uri: root_uri.clone(),
+                init_options: lsp_cfg.init_options.clone(),
             },
         );
     }

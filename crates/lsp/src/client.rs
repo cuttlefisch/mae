@@ -43,6 +43,15 @@ pub struct LspServerConfig {
     pub args: Vec<String>,
     /// Root URI for the workspace (e.g., "file:///home/user/project").
     pub root_uri: Option<String>,
+    /// Server-specific `initializationOptions`, sent verbatim as the
+    /// `initialize` request's `initializationOptions` field when present
+    /// (never sent at all when `None` — a server that doesn't expect the key
+    /// sees no behavior change). Sourced from `config.toml`'s
+    /// `[lsp.<lang>] init_options`. Added for `yaml-language-server`'s
+    /// `yaml.schemas` glob→JSON-schema-URL map (the standard way to tell it
+    /// "this file is a Kubernetes manifest") — MAE had no way to pass any
+    /// server-specific settings object through before this field existed.
+    pub init_options: Option<serde_json::Value>,
 }
 
 /// An active LSP client connected to a language server.
@@ -236,6 +245,9 @@ impl LspClient {
         });
         if let Some(folders) = workspace_folders {
             params["workspaceFolders"] = folders;
+        }
+        if let Some(ref init_options) = config.init_options {
+            params["initializationOptions"] = init_options.clone();
         }
 
         let response = self
@@ -812,34 +824,6 @@ pub fn path_to_uri(path: &Path) -> String {
     format!("file://{}", abs.display())
 }
 
-/// Guess the LSP language ID from a file extension.
-pub fn language_id_from_path(path: &Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("rs") => "rust",
-        Some("py") => "python",
-        Some("js") => "javascript",
-        Some("ts") => "typescript",
-        Some("tsx") => "typescriptreact",
-        Some("jsx") => "javascriptreact",
-        Some("go") => "go",
-        Some("c") | Some("h") => "c",
-        Some("cpp") | Some("cc") | Some("cxx") | Some("hpp") => "cpp",
-        Some("java") => "java",
-        Some("rb") => "ruby",
-        Some("scm") | Some("ss") => "scheme",
-        Some("toml") => "toml",
-        Some("json") => "json",
-        Some("yaml") | Some("yml") => "yaml",
-        Some("md") => "markdown",
-        Some("html") | Some("htm") => "html",
-        Some("css") => "css",
-        Some("sh") | Some("bash") | Some("zsh") => "shellscript",
-        Some("lua") => "lua",
-        Some("zig") => "zig",
-        _ => "plaintext",
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Test-only harness for constructing an LspClient without a real subprocess.
 // ---------------------------------------------------------------------------
@@ -933,45 +917,6 @@ mod tests {
         assert_eq!(uri, "file:///home/user/project/main.rs");
     }
 
-    #[test]
-    fn language_id_rust() {
-        assert_eq!(language_id_from_path(Path::new("foo.rs")), "rust");
-    }
-
-    #[test]
-    fn language_id_python() {
-        assert_eq!(language_id_from_path(Path::new("script.py")), "python");
-    }
-
-    #[test]
-    fn language_id_unknown_extension() {
-        assert_eq!(language_id_from_path(Path::new("data.xyz")), "plaintext");
-    }
-
-    #[test]
-    fn language_id_no_extension() {
-        assert_eq!(language_id_from_path(Path::new("Makefile")), "plaintext");
-    }
-
-    #[test]
-    fn language_id_scheme() {
-        assert_eq!(language_id_from_path(Path::new("init.scm")), "scheme");
-    }
-
-    #[test]
-    fn language_id_toml() {
-        assert_eq!(language_id_from_path(Path::new("Cargo.toml")), "toml");
-    }
-
-    #[test]
-    fn language_id_typescript() {
-        assert_eq!(language_id_from_path(Path::new("app.ts")), "typescript");
-        assert_eq!(
-            language_id_from_path(Path::new("App.tsx")),
-            "typescriptreact"
-        );
-    }
-
     /// Parse the outgoing bytes as a JSON-RPC Request.
     fn parse_outgoing(bytes: &[u8]) -> Request {
         serde_json::from_slice::<Request>(bytes).expect("outgoing should be a valid Request")
@@ -1020,6 +965,74 @@ mod tests {
         let def_resp = handle.await.unwrap().unwrap();
         assert_eq!(def_resp.locations.len(), 1);
         assert_eq!(def_resp.locations[0].uri, "file:///def.rs");
+    }
+
+    /// `LspServerConfig.init_options`, when set, must be sent verbatim as the
+    /// `initialize` request's `initializationOptions` field — the whole point
+    /// of this field existing (e.g. yaml-language-server's `yaml.schemas`).
+    #[tokio::test]
+    async fn initialize_sends_configured_init_options() {
+        let (mut client, mut harness) = LspClient::new_for_test();
+        let config = LspServerConfig {
+            command: "test-server".to_string(),
+            args: vec![],
+            root_uri: None,
+            init_options: Some(serde_json::json!({
+                "yaml": {"schemas": {"kubernetes": "k8s/*.yaml"}}
+            })),
+        };
+
+        let handle = tokio::spawn(async move { client.initialize(&config).await });
+
+        let bytes = harness.outgoing_rx.recv().await.expect("outgoing");
+        let req = parse_outgoing(&bytes);
+        assert_eq!(req.method, "initialize");
+        let params = req.params.expect("initialize must send params");
+        assert_eq!(
+            params["initializationOptions"]["yaml"]["schemas"]["kubernetes"],
+            "k8s/*.yaml"
+        );
+
+        let response = Response::ok(req.id.clone(), serde_json::json!({"capabilities": {}}));
+        harness
+            .incoming_tx
+            .send(LspEvent::Response(response))
+            .await
+            .unwrap();
+        handle.await.unwrap().unwrap();
+    }
+
+    /// Comparative counterpart to the above (principle #14): when
+    /// `init_options` is `None`, the `initializationOptions` key must be
+    /// absent entirely, never sent as `null` — some servers distinguish
+    /// "no options" from "an explicit null options object."
+    #[tokio::test]
+    async fn initialize_omits_init_options_key_when_unset() {
+        let (mut client, mut harness) = LspClient::new_for_test();
+        let config = LspServerConfig {
+            command: "test-server".to_string(),
+            args: vec![],
+            root_uri: None,
+            init_options: None,
+        };
+
+        let handle = tokio::spawn(async move { client.initialize(&config).await });
+
+        let bytes = harness.outgoing_rx.recv().await.expect("outgoing");
+        let req = parse_outgoing(&bytes);
+        let params = req.params.clone().expect("initialize must send params");
+        assert!(
+            params.get("initializationOptions").is_none(),
+            "expected no initializationOptions key when init_options is None, got: {params}"
+        );
+
+        let response = Response::ok(req.id.clone(), serde_json::json!({"capabilities": {}}));
+        harness
+            .incoming_tx
+            .send(LspEvent::Response(response))
+            .await
+            .unwrap();
+        handle.await.unwrap().unwrap();
     }
 
     #[tokio::test]

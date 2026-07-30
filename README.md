@@ -49,8 +49,8 @@ Rust core with an embedded R7RS-small runtime. GUI + terminal.
   human — CozoDB (Datalog), agenda queries, node versioning, federated
   instances, HNSW vector index. Bugs get checked against existing ADRs before
   being patched, so fixes land at the root cause instead of accumulating drift.
-- **Tree-sitter** — 16 languages (incl. C, C++, Ruby) with structural parse
-  trees. AI can query syntax trees for code reasoning.
+- **Tree-sitter** — 17 languages (incl. C, C++, Ruby, Terraform/HCL) with
+  structural parse trees. AI can query syntax trees for code reasoning.
 - **GUI + Terminal** — winit + Skia 2D hardware-accelerated GUI, ratatui
   terminal fallback. Inline images (PNG/JPG/SVG), variable-height rendering,
   inertial scrolling. Desktop launcher for freedesktop environments.
@@ -465,7 +465,7 @@ suppression.
 | AI | Claude / OpenAI / Gemini / DeepSeek | Tool-calling maps 1:1 to command API |
 | Protocols | LSP + DAP | First-class — exposed to Scheme and AI |
 | Knowledge base | CozoDB (Datalog) + SQLite | Graph store, typed relationships, versioning, HNSW vector index |
-| Syntax | tree-sitter | 16 languages, structural parse trees |
+| Syntax | tree-sitter | 17 languages, structural parse trees |
 | Literate programming | Org-babel | 12 execution languages, tangle, noweb, export |
 
 ## Roadmap
@@ -477,7 +477,7 @@ See [ROADMAP.md](ROADMAP.md) for detailed milestone tracking.
 | 1. Core + Renderer | ✅ Complete | Buffer (rope), event loop, terminal renderer, modal editing |
 | 2. Scheme Runtime | ✅ Complete | R7RS-small (mae-scheme), config loading, `define-key`, REPL |
 | 3. AI Integration | ✅ Complete | Multi-provider tool-calling, conversation, permissions |
-| 4. LSP + DAP + Syntax | ✅ Complete | Full LSP client, DAP client, 13-language tree-sitter |
+| 4. LSP + DAP + Syntax | ✅ Complete | Full LSP client, DAP client, 17-language tree-sitter |
 | 5. Knowledge Base | ✅ Complete | CozoDB graph, org parser, typed relationships, versioning, federation |
 | 6. Embedded Shell | ✅ Complete | alacritty_terminal, MCP bridge, file auto-reload |
 | 7. Documentation | ✅ Complete | Tutor (13 lessons), `:describe-configuration`, `--check-config` |
