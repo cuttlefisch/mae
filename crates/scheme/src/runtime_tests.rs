@@ -2231,3 +2231,105 @@ fn kb_export_subgraph_html_from_scheme_reports_a_missing_seed_id_via_status() {
         editor.status_msg
     );
 }
+
+// Positions 5 (NODE-CAP), 6 (GUIDANCE-IDS), 7 (CHORD-CONFIG) --
+// bilingual-kb-export/kb/adrs/0005/0006. Reaching a later positional arg
+// means supplying REAL values for every earlier one too (arg_string
+// doesn't accept `#f`/`'()` as a "skip this slot" placeholder) -- a real,
+// already-existing friction of this primitive's plain positional-arg
+// design, not something these tests work around by accident.
+
+#[test]
+fn kb_export_subgraph_html_from_scheme_with_node_cap_and_guidance_ids() {
+    let dir = std::env::temp_dir().join("mae_test_kb_export_subgraph_html_guidance");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("guidance_export.html");
+    let translations_path = dir.join("empty_translations.json");
+    std::fs::write(&translations_path, "{}").unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let mut rt = new_runtime();
+    let mut editor = Editor::new(); // seeds the built-in "index" node
+    editor.kb.primary.insert(mae_kb::Node::new(
+        "style-guide",
+        "Style Guide",
+        mae_kb::NodeKind::Note,
+        "Editorial guidance, not linked from index.",
+    ));
+    editor.kb.primary.insert(mae_kb::Node::new(
+        "provenance-note",
+        "Provenance Note",
+        mae_kb::NodeKind::Note,
+        "Translation-provenance disclosure, not linked from index.",
+    ));
+
+    // GUIDANCE-IDS mixes a string id and a bare-symbol id -- confirms
+    // value_as_id_str's String/Symbol tolerance (mirrors arg_string's own).
+    rt.eval(&format!(
+        r#"(kb-export-subgraph-html "index" "{}" 2 "{}" "Guidance Test" 60 '("style-guide" provenance-note))"#,
+        path.display(),
+        translations_path.display()
+    ))
+    .unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    let written = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "kb-export-subgraph-html should have written {path:?}: {e}; status={}",
+            editor.status_msg
+        )
+    });
+    assert!(
+        written.contains("Style Guide"),
+        "expected the string-id guidance node to be included: status={}",
+        editor.status_msg
+    );
+    assert!(
+        written.contains("Provenance Note"),
+        "expected the symbol-id guidance node to be included too: status={}",
+        editor.status_msg
+    );
+}
+
+#[test]
+fn kb_export_subgraph_html_from_scheme_with_chord_config_alist_override() {
+    let dir = std::env::temp_dir().join("mae_test_kb_export_subgraph_html_chord_config");
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("chord_config_export.html");
+    let translations_path = dir.join("empty_translations.json");
+    std::fs::write(&translations_path, "{}").unwrap();
+    let _ = std::fs::remove_file(&path);
+
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+
+    // CHORD-CONFIG mixes a symbol key with a float value (hover-growth-factor)
+    // and a string key with an INTEGER value (history-depth-cap) -- confirms
+    // Value::as_float()'s Int->f64 coercion feeds a real integer through
+    // correctly, not just literal float syntax.
+    rt.eval(&format!(
+        r#"(kb-export-subgraph-html "index" "{}" 2 "{}" "Chord Config Test" 60 '()
+             '((hover-growth-factor . 2.75) ("history-depth-cap" . 15)))"#,
+        path.display(),
+        translations_path.display()
+    ))
+    .unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    let written = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "kb-export-subgraph-html should have written {path:?}: {e}; status={}",
+            editor.status_msg
+        )
+    });
+    assert!(
+        written.contains("var HOVER_GROWTH_FACTOR = 2.75;"),
+        "expected the symbol-keyed float override to apply: status={}",
+        editor.status_msg
+    );
+    assert!(
+        written.contains("var HISTORY_DEPTH_CAP = 15;"),
+        "expected the string-keyed integer override to apply: status={}",
+        editor.status_msg
+    );
+}

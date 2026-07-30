@@ -326,6 +326,23 @@ impl super::Editor {
             "kb_graph_doi_distance_falloff" => self.kb_graph_doi_distance_falloff.to_string(),
             "kb_graph_dense_cluster_threshold" => self.kb_graph_dense_cluster_threshold.to_string(),
             "kb_graph_cluster_group_by" => self.kb_graph_cluster_group_by.as_str().to_string(),
+            "kb_export_default_depth" => self.kb_export_default_depth.to_string(),
+            "kb_export_max_depth" => self.kb_export_max_depth.to_string(),
+            "kb_export_default_node_cap" => self.kb_export_default_node_cap.to_string(),
+            "kb_export_max_node_cap" => self.kb_export_max_node_cap.to_string(),
+            "kb_export_hover_growth_factor" => self.kb_export_hover_growth_factor.to_string(),
+            "kb_export_stroke_buffer_px" => self.kb_export_stroke_buffer_px.to_string(),
+            "kb_export_cosmetic_cushion_px" => self.kb_export_cosmetic_cushion_px.to_string(),
+            "kb_export_min_onscreen_radius_px" => self.kb_export_min_onscreen_radius_px.to_string(),
+            "kb_export_initial_pad_px" => self.kb_export_initial_pad_px.to_string(),
+            "kb_export_edge_pull_back" => self.kb_export_edge_pull_back.to_string(),
+            "kb_export_wedge_gap_radians" => self.kb_export_wedge_gap_radians.to_string(),
+            "kb_export_history_depth_cap" => self.kb_export_history_depth_cap.to_string(),
+            "kb_export_wedge_corner_radius_fraction" => {
+                self.kb_export_wedge_corner_radius_fraction.to_string()
+            }
+            "kb_export_search_debounce_ms" => self.kb_export_search_debounce_ms.to_string(),
+            "kb_export_ui_transition_ms" => self.kb_export_ui_transition_ms.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -1426,6 +1443,96 @@ impl super::Editor {
                     format!("Invalid kb_graph_cluster_group_by '{value}' (expected kind|degree_bucket)")
                 })?;
                 self.kb_graph_cluster_group_by = group_by;
+            }
+            "kb_export_default_depth" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_export_default_depth = v.clamp(1, 20);
+            }
+            "kb_export_max_depth" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_export_max_depth = v.clamp(1, 20);
+            }
+            "kb_export_default_node_cap" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_export_default_node_cap = v.clamp(1, 5000);
+            }
+            "kb_export_max_node_cap" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_export_max_node_cap = v.clamp(10, 5000);
+            }
+            "kb_export_hover_growth_factor" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_export_hover_growth_factor = v.clamp(1.0, 5.0);
+            }
+            "kb_export_stroke_buffer_px" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_export_stroke_buffer_px = v.clamp(0.0, 50.0);
+            }
+            "kb_export_cosmetic_cushion_px" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_export_cosmetic_cushion_px = v.clamp(0.0, 200.0);
+            }
+            "kb_export_min_onscreen_radius_px" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_export_min_onscreen_radius_px = v.clamp(1.0, 200.0);
+            }
+            "kb_export_initial_pad_px" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_export_initial_pad_px = v.clamp(0.0, 500.0);
+            }
+            "kb_export_edge_pull_back" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_export_edge_pull_back = v.clamp(0.0, 1.0);
+            }
+            "kb_export_wedge_gap_radians" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_export_wedge_gap_radians = v.clamp(0.0, 0.5);
+            }
+            "kb_export_history_depth_cap" => {
+                let v: u32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_export_history_depth_cap = v.clamp(1, 100);
+            }
+            "kb_export_wedge_corner_radius_fraction" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_export_wedge_corner_radius_fraction = v.clamp(0.0, 1.0);
+            }
+            "kb_export_search_debounce_ms" => {
+                let v: u32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_export_search_debounce_ms = v.clamp(0, 5000);
+            }
+            "kb_export_ui_transition_ms" => {
+                let v: u32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.kb_export_ui_transition_ms = v.clamp(0, 5000);
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }
@@ -2760,6 +2867,82 @@ mod graph_view_option_tests {
             .set_option("kb_graph_node_count_cap", "not-a-number")
             .is_err());
         assert_eq!(editor.kb_graph_node_count_cap, before);
+    }
+
+    #[test]
+    fn kb_export_max_node_cap_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor.get_option("kb_export_max_node_cap").unwrap().0,
+            "200"
+        );
+
+        editor.set_option("kb_export_max_node_cap", "500").unwrap();
+        assert_eq!(editor.kb_export_max_node_cap, 500);
+        assert_eq!(
+            editor.get_option("kb_export_max_node_cap").unwrap().0,
+            "500"
+        );
+
+        // The kebab-case alias resolves to the same option.
+        editor.set_option("kb-export-max-node-cap", "1000").unwrap();
+        assert_eq!(editor.kb_export_max_node_cap, 1000);
+
+        // Out-of-range values clamp rather than error.
+        editor.set_option("kb_export_max_node_cap", "1").unwrap();
+        assert_eq!(editor.kb_export_max_node_cap, 10);
+        editor
+            .set_option("kb_export_max_node_cap", "999999")
+            .unwrap();
+        assert_eq!(editor.kb_export_max_node_cap, 5000);
+
+        // Invalid input is rejected, state unchanged.
+        let before = editor.kb_export_max_node_cap;
+        assert!(editor
+            .set_option("kb_export_max_node_cap", "not-a-number")
+            .is_err());
+        assert_eq!(editor.kb_export_max_node_cap, before);
+    }
+
+    #[test]
+    fn kb_export_hover_growth_factor_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor
+                .get_option("kb_export_hover_growth_factor")
+                .unwrap()
+                .0,
+            "1.6"
+        );
+
+        editor
+            .set_option("kb_export_hover_growth_factor", "2.5")
+            .unwrap();
+        assert_eq!(editor.kb_export_hover_growth_factor, 2.5);
+        assert_eq!(
+            editor
+                .get_option("kb_export_hover_growth_factor")
+                .unwrap()
+                .0,
+            "2.5"
+        );
+
+        // Out-of-range values clamp rather than error (1.0 disables growth
+        // entirely, so 1.0 is the real floor -- see the option's own doc).
+        editor
+            .set_option("kb_export_hover_growth_factor", "0.1")
+            .unwrap();
+        assert_eq!(editor.kb_export_hover_growth_factor, 1.0);
+        editor
+            .set_option("kb_export_hover_growth_factor", "50")
+            .unwrap();
+        assert_eq!(editor.kb_export_hover_growth_factor, 5.0);
+
+        let before = editor.kb_export_hover_growth_factor;
+        assert!(editor
+            .set_option("kb_export_hover_growth_factor", "not-a-number")
+            .is_err());
+        assert_eq!(editor.kb_export_hover_growth_factor, before);
     }
 
     #[test]
