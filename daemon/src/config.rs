@@ -532,6 +532,16 @@ pub struct OAuthConfig {
     /// did). Same shape as `collab.max_connections`/`p2p.max_connections`
     /// (`conn_limit::ConnLimiter`, `0` = unlimited).
     pub max_connections: usize,
+    /// ADR-073/Phase E (#547): whether `GET /kb/{kb_id}/view` — the live,
+    /// network-shareable HTML KB view — is reachable on this listener.
+    /// Independently toggleable from `kb_query_enabled` (a sibling
+    /// capability on the SAME listener, following that field's own
+    /// established pattern exactly), default `false` (principle #12 — a
+    /// real capability is earned by an explicit operator opt-in). Also
+    /// requires `collab.enabled` for the same reason `kb_query_enabled`
+    /// does: this view is a pure new *consumer* of `kb/query.*`, with no
+    /// content path of its own.
+    pub webview_enabled: bool,
 }
 
 impl Default for OAuthConfig {
@@ -551,6 +561,7 @@ impl Default for OAuthConfig {
             kb_query_max_scan_nodes: 500,
             kb_query_max_search_results: 20,
             max_connections: 256,
+            webview_enabled: false,
         }
     }
 }

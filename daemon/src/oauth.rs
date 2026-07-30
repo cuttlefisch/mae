@@ -60,6 +60,14 @@ pub struct ResourceServerConfig {
     pub kb_query_max_scan_nodes: usize,
     /// Cap on the number of results a single `kb/query.search` call returns.
     pub kb_query_max_search_results: usize,
+    /// ADR-073/Phase E (#547): whether `GET /kb/{kb_id}/view` (the live
+    /// HTML KB view) is reachable at all. Independently toggleable from
+    /// `kb_query_enabled` and the listener being up, mirroring that field's
+    /// own doc comment exactly — a real capability is earned by an explicit
+    /// operator opt-in (default `false`, principle #12), not implied by
+    /// `kb_query_enabled` alone. Also requires a `DocStore` to exist (same
+    /// `collab.enabled` prerequisite `kb_query_enabled` has).
+    pub webview_enabled: bool,
 }
 
 /// A single JSON Web Key, the subset of RFC 7517 fields this module uses
@@ -327,6 +335,37 @@ fn extract_bearer_token(req: &Request<Incoming>) -> Option<&str> {
         .and_then(|v| v.strip_prefix("Bearer "))
 }
 
+/// Extract a bearer token for `GET /kb/{kb_id}/view` specifically: header
+/// first (unchanged precedence), falling back to an `?access_token=`
+/// query-string parameter (RFC 6750 §2.3's URI-query bearer convention) ONLY
+/// for this route. A plain browser address-bar navigation cannot set a
+/// custom `Authorization` header at all — this is the sole practical way a
+/// human can open a shared link and have the page itself authenticate,
+/// mirroring how e.g. Grafana/Datadog shared-snapshot links work. Every
+/// OTHER route on this listener (including the `kb/query.*` JSON-RPC POST
+/// endpoint this page's own polling JS calls) stays header-only —
+/// `extract_bearer_token` is untouched and this function is never consulted
+/// for them. No percent-decoding is performed: a compact JWT's charset
+/// (`[A-Za-z0-9._-]`, RFC 7515) never requires it.
+fn extract_view_bearer_token(req: &Request<Incoming>) -> Option<String> {
+    if let Some(t) = extract_bearer_token(req) {
+        return Some(t.to_string());
+    }
+    let query = req.uri().query()?;
+    for pair in query.split('&') {
+        // `continue`, not `?` -- a malformed pair (no `=`) must be skipped,
+        // never abort scanning the rest of the query string for a valid
+        // `access_token` that could appear later.
+        let Some((key, val)) = pair.split_once('=') else {
+            continue;
+        };
+        if key == "access_token" && !val.is_empty() {
+            return Some(val.to_string());
+        }
+    }
+    None
+}
+
 fn json_response(status: StatusCode, body: serde_json::Value) -> Response<Full<Bytes>> {
     Response::builder()
         .status(status)
@@ -369,7 +408,22 @@ async fn handle_request(
         ));
     }
 
-    let Some(token) = extract_bearer_token(&req) else {
+    // ADR-073/Phase E (#547): only ever `Some` when `webview_enabled` AND the
+    // path genuinely matches `/kb/{kb_id}/view` — every other path (still
+    // the overwhelming majority) takes the exact pre-existing codepath below
+    // unchanged, including header-only bearer extraction.
+    let view_kb_id = if config.webview_enabled {
+        crate::webview::parse_view_path(req.uri().path()).map(|s| s.to_string())
+    } else {
+        None
+    };
+
+    let token = if view_kb_id.is_some() {
+        extract_view_bearer_token(&req)
+    } else {
+        extract_bearer_token(&req).map(|s| s.to_string())
+    };
+    let Some(token) = token else {
         return Ok(unauthorized(&config, "missing bearer token"));
     };
 
@@ -384,13 +438,24 @@ async fn handle_request(
         }
     };
 
-    let principal = match validate_bearer_token(token, &keys, &config) {
+    let principal = match validate_bearer_token(&token, &keys, &config) {
         Ok(p) => p,
         Err(e) => {
             tracing::debug!(?e, "bearer token rejected");
             return Ok(unauthorized(&config, &format!("{e:?}")));
         }
     };
+
+    if let Some(kb_id) = view_kb_id {
+        return Ok(render_webview_response(
+            &kb_id,
+            &token,
+            &config,
+            doc_store.as_ref(),
+            &principal,
+        )
+        .await);
+    }
 
     // Read the body (never done before this phase) to see if this is a
     // kb/query.* JSON-RPC call. An empty/unparseable body is not an error —
@@ -436,6 +501,64 @@ async fn handle_request(
     let body =
         route_authenticated_request(rpc_request, &config, doc_store.as_ref(), &principal).await;
     Ok(json_response(StatusCode::OK, body))
+}
+
+/// Build the response for a validated `GET /kb/{kb_id}/view` request
+/// (ADR-073/Phase E, #547) — split out for the same unit-testability reason
+/// as `route_authenticated_request` (no real HTTP connection needed to
+/// construct these already-parsed pieces).
+///
+/// Gated by `kb/query.capabilities` FIRST (the same Read-access check every
+/// other `kb/query.*` method already goes through) so a principal without
+/// access to `kb_id` gets a real, immediate error here — never a page that
+/// renders successfully and only fails on its first background poll. This
+/// is a genuinely new consumer of the existing gated surface (ADR-073 D3),
+/// not a new access path: the page itself carries zero KB content, only the
+/// `kb_id`/token needed for the client's OWN subsequent `kb/query.*` calls.
+pub(crate) async fn render_webview_response(
+    kb_id: &str,
+    token: &str,
+    config: &ResourceServerConfig,
+    doc_store: Option<&Arc<DocStore>>,
+    principal: &ValidatedPrincipal,
+) -> Response<Full<Bytes>> {
+    let Some(store) = doc_store else {
+        return json_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            serde_json::json!({
+                "error": "kb webview is enabled but no DocStore is available on this daemon \
+                          (collab.enabled is false)"
+            }),
+        );
+    };
+
+    let limits = crate::kb_query::KbQueryLimits {
+        max_body_bytes: config.kb_query_max_body_bytes,
+        max_scan_nodes: config.kb_query_max_scan_nodes,
+        max_search_results: config.kb_query_max_search_results,
+    };
+    let params = serde_json::json!({"kb_id": kb_id});
+    if let Err(e) = crate::kb_query::dispatch(
+        "kb/query.capabilities",
+        &params,
+        store,
+        Some(&principal.principal),
+        limits,
+    )
+    .await
+    {
+        return json_response(
+            StatusCode::FORBIDDEN,
+            serde_json::json!({"error": "access_denied", "error_description": e.message}),
+        );
+    }
+
+    let html = crate::webview::render_page(kb_id, token);
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(hyper::header::CONTENT_TYPE, "text/html; charset=utf-8")
+        .body(Full::new(Bytes::from(html)))
+        .expect("building a response from a fixed status/body never fails")
 }
 
 /// The routing decision `handle_request` makes once a bearer token has
@@ -657,6 +780,7 @@ mod tests {
             kb_query_max_body_bytes: 65_536,
             kb_query_max_scan_nodes: 500,
             kb_query_max_search_results: 20,
+            webview_enabled: false,
         }
     }
 

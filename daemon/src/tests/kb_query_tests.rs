@@ -33,7 +33,7 @@ fn generous_limits() -> KbQueryLimits {
     }
 }
 
-async fn fresh_doc_store() -> Arc<DocStore> {
+pub(super) async fn fresh_doc_store() -> Arc<DocStore> {
     let backend = Arc::new(SqliteBackend::open_memory().unwrap());
     Arc::new(DocStore::new(backend, 500))
 }
@@ -44,7 +44,7 @@ async fn fresh_doc_store() -> Arc<DocStore> {
 /// over `Transport::Hub`, seeded with one real node (`node_id`/`title`/`body`
 /// and any `links`).
 #[allow(clippy::too_many_arguments)]
-async fn seed_unencrypted_kb(
+pub(super) async fn seed_unencrypted_kb(
     doc_store: &DocStore,
     owner: &Arc<Identity>,
     kb_id: &str,
@@ -611,6 +611,7 @@ async fn kb_query_unreachable_when_disabled() {
         kb_query_max_body_bytes: 65_536,
         kb_query_max_scan_nodes: 500,
         kb_query_max_search_results: 20,
+        webview_enabled: false,
     };
     let principal = mae_mcp_test_principal("oauth:someone@example.com");
     let rpc = mae_mcp::protocol::JsonRpcRequest {
@@ -654,6 +655,7 @@ async fn kb_query_enabled_but_no_doc_store_gets_a_distinct_jsonrpc_error() {
         kb_query_max_body_bytes: 65_536,
         kb_query_max_scan_nodes: 500,
         kb_query_max_search_results: 20,
+        webview_enabled: false,
     };
     let principal = mae_mcp_test_principal("oauth:someone@example.com");
     let rpc = mae_mcp::protocol::JsonRpcRequest {
