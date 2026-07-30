@@ -1626,6 +1626,54 @@ fn render_visual_buffer_with_bg(
                         }
                     }
                 }
+                VisualElement::Wedge {
+                    cx,
+                    cy,
+                    inner_r,
+                    outer_r,
+                    start_angle,
+                    sweep_angle,
+                    corner_radius,
+                    fill,
+                    stroke,
+                } => {
+                    // ADR-070/071 — MAE's first arc/wedge shape primitive.
+                    // Geometry built once via canvas::build_wedge_path, then
+                    // filled and/or stroked, mirroring Circle's fill+stroke
+                    // handling above.
+                    let clamped_corner_radius = mae_core::visual_buffer::wedge_corner_radius_clamp(
+                        *inner_r,
+                        *outer_r,
+                        *sweep_angle,
+                        *corner_radius,
+                    );
+                    let path = canvas::build_wedge_path(
+                        x_off + cx,
+                        y_off + cy,
+                        *inner_r,
+                        *outer_r,
+                        *start_angle,
+                        *sweep_angle,
+                        clamped_corner_radius,
+                    );
+                    if let Some(f) = fill {
+                        if let Some(c) = theme::parse_hex_to_skia(f) {
+                            let mut paint = Paint::new(c, None);
+                            paint.set_anti_alias(true);
+                            paint.set_style(PaintStyle::Fill);
+                            canvas.canvas().draw_path(&path, &paint);
+                        }
+                    }
+                    if let Some(s) = stroke {
+                        if let Some(c) = theme::parse_hex_to_skia(s) {
+                            let mut paint = Paint::new(c, None);
+                            paint.set_anti_alias(true);
+                            paint.set_style(PaintStyle::Stroke);
+                            paint.set_stroke_width(1.0);
+                            canvas.canvas().draw_path(&path, &paint);
+                        }
+                    }
+                }
                 VisualElement::Text {
                     x,
                     y,

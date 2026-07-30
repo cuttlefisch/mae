@@ -41,6 +41,69 @@ pub fn hit_test(graph: &SceneGraph, scene_x: f64, scene_y: f64, radii: &[f64]) -
     None
 }
 
+/// Per-node wedge geometry for `hit_test_wedge` — the clickable-area
+/// counterpart to a `VisualElement::Wedge`'s drawn geometry (ADR-070 D1/D3).
+/// Deliberately mirrors `VisualElement::Wedge`'s own field shape (minus
+/// `cx`/`cy`, which come from `SceneNode.x`/`.y` the same way `hit_test`'s
+/// `radii` already omits per-node center) so a caller building one from the
+/// other can't accidentally desync radius/angle values between what's drawn
+/// and what's clickable.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WedgeGeom {
+    pub inner_r: f64,
+    pub outer_r: f64,
+    /// Radians, 0 = positive x-axis, increasing clockwise in screen space —
+    /// same convention as `VisualElement::Wedge`.
+    pub start_angle: f64,
+    /// Radians. `<= 0` (or any value that leaves the swept range empty)
+    /// degrades to "never hits" rather than panicking or wrapping oddly.
+    pub sweep_angle: f64,
+}
+
+/// Test whether a scene-space point hits a wedge-shaped node (Chord-mode
+/// nodes, ADR-071) — the angular-sector counterpart to `hit_test`'s plain
+/// circle-distance test (Force-mode nodes stay circles, so both functions
+/// coexist; see ADR-070 D3 for why this is a parallel function rather than
+/// a `hit_test` generalization).
+///
+/// `wedges` is PARALLEL to `graph.nodes`, exactly like `hit_test`'s `radii`
+/// — a missing entry fails closed (unclickable), never a spurious hit.
+pub fn hit_test_wedge(
+    graph: &SceneGraph,
+    scene_x: f64,
+    scene_y: f64,
+    wedges: &[WedgeGeom],
+) -> Option<usize> {
+    const TWO_PI: f64 = std::f64::consts::PI * 2.0;
+    for (i, node) in graph.nodes.iter().enumerate().rev() {
+        let Some(w) = wedges.get(i) else {
+            continue;
+        };
+        let dx = scene_x - node.x;
+        let dy = scene_y - node.y;
+        let r = (dx * dx + dy * dy).sqrt();
+        if r < w.inner_r || r > w.outer_r {
+            continue;
+        }
+        let angle = dy.atan2(dx).rem_euclid(TWO_PI);
+        let start = w.start_angle.rem_euclid(TWO_PI);
+        let end = start + w.sweep_angle;
+        let in_range = if w.sweep_angle <= 0.0 {
+            false
+        } else if end <= TWO_PI {
+            angle >= start && angle <= end
+        } else {
+            // The swept range wraps past 2π (e.g. start=350°, sweep=20° ->
+            // covers [350°,360°) U [0°,10°]) — split into the two arcs.
+            angle >= start || angle <= end - TWO_PI
+        };
+        if in_range {
+            return Some(i);
+        }
+    }
+    None
+}
+
 /// Convert viewport (screen) coordinates to scene coordinates.
 pub fn viewport_to_scene(vp: &Viewport, screen_x: f64, screen_y: f64) -> (f64, f64) {
     let sx = (screen_x - vp.width / 2.0) / vp.zoom + vp.center_x;
@@ -218,6 +281,173 @@ mod tests {
         sg.nodes.push(test_node("b", 110.0, 100.0)); // overlapping
                                                      // Later node wins (rendered on top)
         assert_eq!(hit_test(&sg, 105.0, 100.0, &[50.0, 50.0]), Some(1));
+    }
+
+    #[test]
+    fn hit_test_wedge_inside_node() {
+        let mut sg = SceneGraph::new();
+        sg.nodes.push(test_node("a", 0.0, 0.0));
+        // Wedge spans 0..PI/2 (the first quadrant), radius 10..20.
+        let w = WedgeGeom {
+            inner_r: 10.0,
+            outer_r: 20.0,
+            start_angle: 0.0,
+            sweep_angle: std::f64::consts::FRAC_PI_2,
+        };
+        // At angle PI/4 (mid-sweep), radius 15 (mid-thickness) — well inside.
+        let (x, y) = (
+            15.0 * (std::f64::consts::FRAC_PI_4).cos(),
+            15.0 * (std::f64::consts::FRAC_PI_4).sin(),
+        );
+        assert_eq!(hit_test_wedge(&sg, x, y, &[w]), Some(0));
+    }
+
+    #[test]
+    fn hit_test_wedge_outside_node() {
+        let mut sg = SceneGraph::new();
+        sg.nodes.push(test_node("a", 0.0, 0.0));
+        let w = WedgeGeom {
+            inner_r: 10.0,
+            outer_r: 20.0,
+            start_angle: 0.0,
+            sweep_angle: std::f64::consts::FRAC_PI_2,
+        };
+        // Correct angle, but radius far outside [inner_r, outer_r].
+        assert_eq!(hit_test_wedge(&sg, 100.0, 0.0, &[w]), None);
+        // Correct radius, but wrong angle (opposite side of the circle).
+        assert_eq!(hit_test_wedge(&sg, -15.0, 0.0, &[w]), None);
+    }
+
+    #[test]
+    fn hit_test_wedge_respects_angular_bounds() {
+        // A narrow wedge (PI/6 wide) — a point at an angle well outside the
+        // sweep must miss even though its radius is correct.
+        let mut sg = SceneGraph::new();
+        sg.nodes.push(test_node("a", 0.0, 0.0));
+        let w = WedgeGeom {
+            inner_r: 10.0,
+            outer_r: 20.0,
+            start_angle: 0.0,
+            sweep_angle: std::f64::consts::FRAC_PI_6,
+        };
+        // Angle PI (180 degrees) is far outside [0, PI/6].
+        assert_eq!(hit_test_wedge(&sg, -15.0, 0.0, &[w]), None);
+    }
+
+    #[test]
+    fn hit_test_wedge_boundary_edges_are_inclusive() {
+        // Exactly at start_angle and exactly at start_angle+sweep_angle
+        // must both hit — the boundary is inclusive on both ends, not just
+        // the wedge's angular center.
+        let mut sg = SceneGraph::new();
+        sg.nodes.push(test_node("a", 0.0, 0.0));
+        let w = WedgeGeom {
+            inner_r: 10.0,
+            outer_r: 20.0,
+            start_angle: 0.0,
+            sweep_angle: std::f64::consts::FRAC_PI_2,
+        };
+        // Exactly at start_angle (0 radians): point (15, 0).
+        assert_eq!(hit_test_wedge(&sg, 15.0, 0.0, &[w]), Some(0));
+        // Exactly at start_angle + sweep_angle (PI/2 radians): point (0, 15).
+        assert_eq!(hit_test_wedge(&sg, 0.0, 15.0, &[w]), Some(0));
+        // Just past the end boundary must miss.
+        let past_end = std::f64::consts::FRAC_PI_2 + 0.01;
+        assert_eq!(
+            hit_test_wedge(&sg, 15.0 * past_end.cos(), 15.0 * past_end.sin(), &[w]),
+            None
+        );
+    }
+
+    #[test]
+    fn hit_test_wedge_radius_boundary_edges_are_inclusive() {
+        // Exactly at inner_r and exactly at outer_r must both hit.
+        let mut sg = SceneGraph::new();
+        sg.nodes.push(test_node("a", 0.0, 0.0));
+        let w = WedgeGeom {
+            inner_r: 10.0,
+            outer_r: 20.0,
+            start_angle: 0.0,
+            sweep_angle: std::f64::consts::FRAC_PI_2,
+        };
+        assert_eq!(hit_test_wedge(&sg, 10.0, 0.0, &[w]), Some(0)); // exactly inner_r
+        assert_eq!(hit_test_wedge(&sg, 20.0, 0.0, &[w]), Some(0)); // exactly outer_r
+        assert_eq!(hit_test_wedge(&sg, 9.99, 0.0, &[w]), None); // just inside inner_r (hole)
+        assert_eq!(hit_test_wedge(&sg, 20.01, 0.0, &[w]), None); // just outside outer_r
+    }
+
+    #[test]
+    fn hit_test_wedge_missing_radius_entry_fails_closed() {
+        let mut sg = SceneGraph::new();
+        sg.nodes.push(test_node("a", 0.0, 0.0));
+        sg.nodes.push(test_node("b", 200.0, 0.0));
+        // "a"'s own wedge does NOT reach anywhere near "b" (outer_r 50 vs.
+        // the 200-unit distance between them), so only a (missing, and
+        // thus defaulted-unclickable) entry for "b" itself could cause a
+        // hit at "b"'s own location.
+        let w = WedgeGeom {
+            inner_r: 0.0,
+            outer_r: 50.0,
+            start_angle: 0.0,
+            sweep_angle: std::f64::consts::TAU,
+        };
+        // Only ONE entry provided (for "a") — "b" has no wedge entry, so a
+        // point right on "b"'s own center must still miss.
+        assert_eq!(hit_test_wedge(&sg, 200.0, 0.0, &[w]), None);
+    }
+
+    #[test]
+    fn hit_test_wedge_topmost_wins() {
+        let mut sg = SceneGraph::new();
+        sg.nodes.push(test_node("a", 0.0, 0.0));
+        sg.nodes.push(test_node("a-dup", 0.0, 0.0)); // same center, overlapping wedge
+        let w = WedgeGeom {
+            inner_r: 0.0,
+            outer_r: 20.0,
+            start_angle: 0.0,
+            sweep_angle: std::f64::consts::TAU,
+        };
+        assert_eq!(hit_test_wedge(&sg, 5.0, 0.0, &[w, w]), Some(1));
+    }
+
+    #[test]
+    fn hit_test_wedge_zero_or_negative_sweep_never_hits() {
+        let mut sg = SceneGraph::new();
+        sg.nodes.push(test_node("a", 0.0, 0.0));
+        let zero = WedgeGeom {
+            inner_r: 0.0,
+            outer_r: 20.0,
+            start_angle: 0.0,
+            sweep_angle: 0.0,
+        };
+        let negative = WedgeGeom {
+            sweep_angle: -1.0,
+            ..zero
+        };
+        assert_eq!(hit_test_wedge(&sg, 5.0, 0.0, &[zero]), None);
+        assert_eq!(hit_test_wedge(&sg, 5.0, 0.0, &[negative]), None);
+    }
+
+    #[test]
+    fn hit_test_wedge_handles_wraparound_past_2pi() {
+        // start_angle near 2*PI with a sweep that wraps past it into the
+        // low-angle range on the other side.
+        let mut sg = SceneGraph::new();
+        sg.nodes.push(test_node("a", 0.0, 0.0));
+        let w = WedgeGeom {
+            inner_r: 10.0,
+            outer_r: 20.0,
+            start_angle: std::f64::consts::TAU - 0.2, // ~350 degrees
+            sweep_angle: 0.4,                         // wraps ~10 degrees past 0
+        };
+        // A point at angle ~0.1 rad (just past the wrap) should hit.
+        let angle: f64 = 0.1;
+        assert_eq!(
+            hit_test_wedge(&sg, 15.0 * angle.cos(), 15.0 * angle.sin(), &[w]),
+            Some(0)
+        );
+        // A point at angle PI (opposite side) should miss.
+        assert_eq!(hit_test_wedge(&sg, -15.0, 0.0, &[w]), None);
     }
 
     #[test]

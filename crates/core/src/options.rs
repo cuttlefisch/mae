@@ -926,6 +926,40 @@ impl OptionRegistry {
                      kb_graph_view_mode=multi.",
                     OptionKind::String, "kind", Some("kb-graph.cluster-group-by"),
                     &["kind", "degree_bucket"]),
+                opt!("kb_graph_wedge_enabled", &["kb-graph-wedge-enabled"],
+                    "ADR-070/071: whether Chord-mode graph-view nodes render as annular-sector \
+                     'wedges' (flower-petal-styled ring slices with rounded corners) instead of \
+                     plain circles. Off by default (principle #12 — a new, first-appearance Skia \
+                     shape primitive ships opt-in until proven). Force-mode nodes are unaffected \
+                     either way — they stay circles regardless of this option.",
+                    OptionKind::Bool, "false", Some("kb-graph.wedge-enabled"), &[]),
+                opt!("kb_graph_wedge_corner_radius_fraction", &["kb-graph-wedge-corner-radius-fraction"],
+                    "Fraction (0.0-1.0) of a wedge's own radial half-thickness used as its rounded-\
+                     corner radius when kb_graph_wedge_enabled is on — the 'petal' look comes purely \
+                     from this rounding (no stroke is ever drawn on a wedge). Always clamped further \
+                     at draw time (see wedge_corner_radius_clamp) so a large value can never self-\
+                     intersect a narrow or thin wedge's own geometry.",
+                    OptionKind::Float, "0.6", Some("kb-graph.wedge-corner-radius-fraction"), &[]),
+                opt!("kb_graph_wedge_hover_growth_factor", &["kb-graph-wedge-hover-growth-factor"],
+                    "How much a wedge's outer radius grows on hover, as a multiple of the diagram's \
+                     minimum node radius (only the outer radius grows — inner radius and angular \
+                     span never change, so growth always reads as radially outward, never sideways). \
+                     1.0 = no growth; only consulted when kb_graph_wedge_enabled is on.",
+                    OptionKind::Float, "1.6", Some("kb-graph.wedge-hover-growth-factor"), &[]),
+                opt!("kb_graph_wedge_neighbor_growth_fraction",
+                    &["kb-graph-wedge-neighbor-growth-fraction"],
+                    "How much a wedge's outer radius grows when it's a directly-linked neighbor of \
+                     the current selection (and not itself hovered — hover's own, larger growth \
+                     factor above takes priority when both apply), as a fraction of the diagram's \
+                     minimum node radius. Only consulted when kb_graph_wedge_enabled is on.",
+                    OptionKind::Float, "0.35", Some("kb-graph.wedge-neighbor-growth-fraction"), &[]),
+                opt!("kb_graph_wedge_gap_radians", &["kb-graph-wedge-gap-radians"],
+                    "Angular gap (radians) left empty between adjacent wedges when \
+                     kb_graph_wedge_enabled is on. 0.0 (default) means wedges sit flush against each \
+                     other — separation comes entirely from each wedge's own rounded corners \
+                     (kb_graph_wedge_corner_radius_fraction), matching the reference 'petal' design \
+                     this was ported from, which deliberately uses no drawn gap or border.",
+                    OptionKind::Float, "0.0", Some("kb-graph.wedge-gap-radians"), &[]),
                 // --- File tree ---
                 opt!("file_tree_focus_on_open", &["file-tree-focus-on-open"],
                     "Auto-focus the file tree window when it opens",
@@ -1247,6 +1281,55 @@ mod tests {
         assert!(reg.find("heading_scale_h1").is_some());
         assert!(reg.find("heading_scale_h2").is_some());
         assert!(reg.find("heading_scale_h3").is_some());
+        assert!(reg.find("kb_graph_wedge_enabled").is_some());
+        assert!(reg.find("kb_graph_wedge_corner_radius_fraction").is_some());
+        assert!(reg.find("kb_graph_wedge_hover_growth_factor").is_some());
+        assert!(reg
+            .find("kb_graph_wedge_neighbor_growth_fraction")
+            .is_some());
+        assert!(reg.find("kb_graph_wedge_gap_radians").is_some());
+    }
+
+    #[test]
+    fn kb_graph_wedge_options_have_correct_defaults_and_kebab_aliases() {
+        // ADR-070 D: registration correctness + default values a Phase G
+        // consumer will rely on, plus the kebab-case Scheme-alias
+        // convention every other kb_graph_* option already follows.
+        let reg = OptionRegistry::new();
+        assert_eq!(
+            reg.find("kb_graph_wedge_enabled").unwrap().default_value,
+            "false",
+            "ships opt-in per principle #12"
+        );
+        assert_eq!(
+            reg.find("kb-graph-wedge-enabled").unwrap().name,
+            "kb_graph_wedge_enabled"
+        );
+        assert_eq!(
+            reg.find("kb_graph_wedge_corner_radius_fraction")
+                .unwrap()
+                .default_value,
+            "0.6"
+        );
+        assert_eq!(
+            reg.find("kb_graph_wedge_hover_growth_factor")
+                .unwrap()
+                .default_value,
+            "1.6"
+        );
+        assert_eq!(
+            reg.find("kb_graph_wedge_neighbor_growth_fraction")
+                .unwrap()
+                .default_value,
+            "0.35"
+        );
+        assert_eq!(
+            reg.find("kb_graph_wedge_gap_radians")
+                .unwrap()
+                .default_value,
+            "0.0",
+            "flush by default — separation is rounding-only, matching the reference design"
+        );
     }
 
     #[test]

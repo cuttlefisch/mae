@@ -787,6 +787,55 @@ pub enum LayoutNode {
 pub const MIN_WINDOW_HEIGHT: u16 = 3;
 pub const MIN_WINDOW_WIDTH: u16 = 20;
 
+/// A split's sizing mode (ADR-072 D1) — either a proportional ratio
+/// (`LayoutNode::Split`'s existing, only mode) or a target fixed pixel
+/// width/height for the first child, resolved to an equivalent ratio via
+/// `resolve()` against whatever the current available dimension is at the
+/// moment of splitting.
+///
+/// @ai-caution: [architecture-debt] `resolve()` is currently consulted only
+/// at split time (`WindowManager::split_with_sizing`), NOT on every
+/// subsequent layout pass — `LayoutNode::Split` still stores a single
+/// frozen `ratio: f32` after the split, the same as every other split, so a
+/// `FixedPixels` split's width re-flows proportionally on a LATER resize
+/// exactly like a plain ratio split would, rather than continuing to hold
+/// its pixel width. Making it hold across every subsequent resize requires
+/// `LayoutNode::Split` itself to carry `SplitSizing` (not a bare `ratio`)
+/// so `compute_rects` can re-resolve it every call — a real design that
+/// touches ~25 existing exhaustive-destructure call sites in this file
+/// (most with no `..` rest pattern), deliberately deferred to when KB read
+/// mode (ADR-072 D2/D3, issue #551) has a concrete consumer to validate the
+/// migration against, rather than done speculatively here. Tracked
+/// alongside this file's other `ROADMAP.md` "Architecture Debt" entries.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SplitSizing {
+    /// Proportion allocated to the first child (0.0..1.0) — identical
+    /// meaning to `LayoutNode::Split.ratio`.
+    Ratio(f32),
+    /// Target pixel width (`SplitDirection::Vertical`) or height
+    /// (`SplitDirection::Horizontal`) for the first child.
+    FixedPixels(u16),
+}
+
+impl SplitSizing {
+    /// Resolve to an effective ratio (0.0..1.0) given the CURRENT available
+    /// dimension (width for a vertical split, height for a horizontal
+    /// one) in the same units as the `FixedPixels` value. `dimension_px`
+    /// `<= 0` degrades to `0.5` rather than dividing by zero/producing
+    /// NaN or Infinity.
+    pub fn resolve(&self, dimension_px: u16) -> f32 {
+        match self {
+            SplitSizing::Ratio(r) => r.clamp(0.0, 1.0),
+            SplitSizing::FixedPixels(px) => {
+                if dimension_px == 0 {
+                    return 0.5;
+                }
+                (*px as f32 / dimension_px as f32).clamp(0.0, 1.0)
+            }
+        }
+    }
+}
+
 /// Simple rectangle for layout computation (avoids depending on ratatui in core).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
@@ -1015,6 +1064,32 @@ impl WindowManager {
         );
 
         Ok(new_id)
+    }
+
+    /// Split the focused window using a `SplitSizing` (ratio OR a target
+    /// fixed pixel width/height), resolved against the focused window's
+    /// CURRENT rect within `available` before delegating to
+    /// `split_with_ratio`. See `SplitSizing`'s own doc comment for the
+    /// current not-yet-resize-persistent limitation.
+    pub fn split_with_sizing(
+        &mut self,
+        direction: SplitDirection,
+        buffer_idx: usize,
+        available: Rect,
+        sizing: SplitSizing,
+    ) -> Result<WindowId, String> {
+        let rects = self.layout_rects(available);
+        let focused_rect = rects
+            .iter()
+            .find(|(id, _)| *id == self.focused)
+            .map(|(_, r)| *r)
+            .unwrap_or(available);
+        let dimension = match direction {
+            SplitDirection::Vertical => focused_rect.width,
+            SplitDirection::Horizontal => focused_rect.height,
+        };
+        let ratio = sizing.resolve(dimension);
+        self.split_with_ratio(direction, buffer_idx, available, ratio)
     }
 
     // @ai-caution: [window-split] Pop-up windows and agent shells MUST use
@@ -1879,6 +1954,78 @@ mod tests {
         let result = wm.split(SplitDirection::Horizontal, 1, default_area());
         assert!(result.is_ok());
         assert_eq!(wm.window_count(), 2);
+    }
+
+    #[test]
+    fn split_sizing_ratio_resolves_unchanged() {
+        assert_eq!(SplitSizing::Ratio(0.3).resolve(120), 0.3);
+        // Clamped even for an out-of-range ratio input.
+        assert_eq!(SplitSizing::Ratio(1.5).resolve(120), 1.0);
+        assert_eq!(SplitSizing::Ratio(-0.5).resolve(120), 0.0);
+    }
+
+    #[test]
+    fn split_sizing_fixed_pixels_resolves_proportionally_to_the_given_dimension() {
+        // Comparative: the SAME FixedPixels value resolves to a SMALLER
+        // ratio against a LARGER dimension, and vice versa — proving the
+        // resolution genuinely depends on the passed-in current dimension,
+        // not a hand-picked coincidental match.
+        let narrow = SplitSizing::FixedPixels(30).resolve(60); // 0.5
+        let wide = SplitSizing::FixedPixels(30).resolve(300); // 0.1
+        assert!((narrow - 0.5).abs() < 1e-6, "got {narrow}");
+        assert!((wide - 0.1).abs() < 1e-6, "got {wide}");
+        assert!(wide < narrow);
+    }
+
+    #[test]
+    fn split_sizing_fixed_pixels_degenerate_zero_dimension_does_not_panic_or_nan() {
+        let resolved = SplitSizing::FixedPixels(100).resolve(0);
+        assert!(resolved.is_finite());
+        assert_eq!(resolved, 0.5);
+    }
+
+    #[test]
+    fn split_sizing_fixed_pixels_larger_than_dimension_clamps_to_one() {
+        let resolved = SplitSizing::FixedPixels(500).resolve(100);
+        assert_eq!(resolved, 1.0);
+    }
+
+    #[test]
+    fn split_with_sizing_fixed_pixels_produces_the_requested_child_width() {
+        let mut wm = WindowManager::new(0);
+        let area = default_area(); // width 120
+        let new_id = wm
+            .split_with_sizing(
+                SplitDirection::Vertical,
+                1,
+                area,
+                SplitSizing::FixedPixels(30),
+            )
+            .unwrap();
+        let rects = wm.layout_rects(area);
+        let original_rect = rects.iter().find(|(id, _)| *id == 0).unwrap().1;
+        let new_rect = rects.iter().find(|(id, _)| *id == new_id).unwrap().1;
+        // The FIRST child (the original, still-focused window) should be
+        // ~30px wide; the second gets the remainder. `split_with_ratio`'s
+        // own `as u16` truncation means this is approximate, not exact.
+        assert!(
+            (original_rect.width as i32 - 30).abs() <= 1,
+            "expected ~30px, got {}",
+            original_rect.width
+        );
+        assert_eq!(original_rect.width + new_rect.width, area.width);
+    }
+
+    #[test]
+    fn split_with_sizing_fixed_pixels_below_minimum_width_errors() {
+        let mut wm = WindowManager::new(0);
+        let result = wm.split_with_sizing(
+            SplitDirection::Vertical,
+            1,
+            default_area(),
+            SplitSizing::FixedPixels(2), // well under MIN_WINDOW_WIDTH
+        );
+        assert!(result.is_err(), "must reject an unusably narrow split");
     }
 
     #[test]
