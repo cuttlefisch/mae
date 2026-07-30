@@ -464,6 +464,10 @@
           "kind": "mod"
         },
         {
+          "name": "tween",
+          "kind": "mod"
+        },
+        {
           "name": "visual_buffer",
           "kind": "mod"
         },

@@ -21,6 +21,7 @@
 
 use crate::driven_window::DrivenWindow;
 use crate::editor::Editor;
+use crate::tween::parse_hex_rgb;
 use crate::visual_buffer::{VisualBuffer, VisualElement};
 use crate::window::WindowId;
 use std::collections::HashMap;
@@ -318,57 +319,23 @@ pub struct GraphColorTween {
 }
 
 impl GraphColorTween {
-    /// The eased, interpolated color at the current instant.
+    /// The eased, interpolated color at the current instant. Delegates to
+    /// `crate::tween::ValueTween<String>` (ADR-070 D2) rather than a
+    /// second, hand-copied ease/lerp implementation — `GraphColorTween`'s
+    /// own field names/shape are unchanged so every existing call site and
+    /// test keeps compiling as-is.
     pub fn current_color(&self) -> String {
-        let elapsed = self.started_at.elapsed().as_secs_f32();
-        let dur = self.duration.as_secs_f32().max(0.0001);
-        lerp_hex(&self.from_hex, &self.to_hex, ease_out_cubic(elapsed / dur))
+        let inner = crate::tween::ValueTween {
+            from: self.from_hex.clone(),
+            to: self.to_hex.clone(),
+            started_at: self.started_at,
+            duration: self.duration,
+        };
+        inner.current()
     }
 
     pub fn is_complete(&self) -> bool {
         self.started_at.elapsed() >= self.duration
-    }
-}
-
-/// Ease-out cubic: `1 - (1-t)^3`, `t` clamped to `[0, 1]` — starts fast,
-/// settles gently, the standard "pop in" curve for a UI highlight.
-fn ease_out_cubic(t: f32) -> f32 {
-    let t = t.clamp(0.0, 1.0);
-    1.0 - (1.0 - t).powi(3)
-}
-
-/// Parse a `"#rrggbb"` hex string into `(r, g, b)` byte components.
-/// `None` for anything malformed — callers fall back to the raw `to`
-/// color verbatim rather than panicking on a bad hex string.
-fn parse_hex_rgb(hex: &str) -> Option<(u8, u8, u8)> {
-    let hex = hex.strip_prefix('#')?;
-    if hex.len() != 6 {
-        return None;
-    }
-    let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
-    Some((r, g, b))
-}
-
-/// Linearly interpolate between two `"#rrggbb"` hex colors at `t` (already
-/// eased, `[0, 1]`). Falls back to `to` verbatim if either color fails to
-/// parse — a malformed color never panics, it just snaps instead of
-/// animating.
-fn lerp_hex(from: &str, to: &str, t: f32) -> String {
-    let t = t.clamp(0.0, 1.0);
-    match (parse_hex_rgb(from), parse_hex_rgb(to)) {
-        (Some((fr, fg, fb)), Some((tr, tg, tb))) => {
-            let lerp_byte =
-                |a: u8, b: u8| -> u8 { (a as f32 + (b as f32 - a as f32) * t).round() as u8 };
-            format!(
-                "#{:02x}{:02x}{:02x}",
-                lerp_byte(fr, tr),
-                lerp_byte(fg, tg),
-                lerp_byte(fb, tb)
-            )
-        }
-        _ => to.to_string(),
     }
 }
 
@@ -493,7 +460,7 @@ fn ensure_min_contrast(fg: &str, bg: &str, min_ratio: f64) -> String {
     let endpoint = if toward_white { "#ffffff" } else { "#000000" };
     for step in 1..=10 {
         let t = step as f32 / 10.0;
-        let candidate = lerp_hex(fg, endpoint, t);
+        let candidate = crate::tween::lerp_hex(fg, endpoint, t);
         if contrast_ratio(&candidate, bg) >= min_ratio {
             return candidate;
         }
@@ -4716,35 +4683,6 @@ mod tests {
             after_selection_change + 1,
             "a genuine hover change must also invalidate the cache and recompute exactly once"
         );
-    }
-
-    #[test]
-    fn ease_out_cubic_endpoints_and_monotonic() {
-        assert_eq!(ease_out_cubic(0.0), 0.0);
-        assert!((ease_out_cubic(1.0) - 1.0).abs() < 1e-6);
-        // Monotonically increasing across the range.
-        let samples = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0];
-        for pair in samples.windows(2) {
-            assert!(ease_out_cubic(pair[0]) < ease_out_cubic(pair[1]));
-        }
-        // "Ease OUT" — starts fast: the first half covers MORE than half
-        // the distance (unlike linear, which covers exactly half).
-        assert!(ease_out_cubic(0.5) > 0.5);
-    }
-
-    #[test]
-    fn lerp_hex_endpoints_and_midpoint() {
-        assert_eq!(lerp_hex("#000000", "#ffffff", 0.0), "#000000");
-        assert_eq!(lerp_hex("#000000", "#ffffff", 1.0), "#ffffff");
-        // Midpoint of black->white is mid-gray (127 or 128, rounding-dependent).
-        let mid = lerp_hex("#000000", "#ffffff", 0.5);
-        assert!(mid == "#808080" || mid == "#7f7f7f");
-    }
-
-    #[test]
-    fn lerp_hex_falls_back_to_to_color_on_malformed_input() {
-        assert_eq!(lerp_hex("not-a-color", "#ff0000", 0.5), "#ff0000");
-        assert_eq!(lerp_hex("#ff0000", "also-bad", 0.5), "also-bad");
     }
 
     #[test]
