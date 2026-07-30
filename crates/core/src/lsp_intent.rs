@@ -191,6 +191,9 @@ pub fn language_id_from_path(path: &std::path::Path) -> Option<String> {
         if let Some(dialect) = ansible_lsp_dialect(path) {
             return Some(dialect.to_string());
         }
+        if let Some(dialect) = helm_lsp_dialect(path) {
+            return Some(dialect.to_string());
+        }
     }
     Some(id.to_string())
 }
@@ -225,6 +228,42 @@ fn ansible_lsp_dialect(path: &std::path::Path) -> Option<&'static str> {
         .any(|c| c.as_os_str().eq_ignore_ascii_case("playbooks"));
     if has_playbooks_ancestor {
         return Some("ansible");
+    }
+    None
+}
+
+/// Client-side path heuristic for routing a YAML file to `helm-ls` instead
+/// of the generic `yaml-language-server` (ADR-075 Phase 5, LSP-only —
+/// real Go-template-aware syntax highlighting is explicitly deferred, see
+/// `syntax::languages`' module doc comment on why: MAE has no tree-sitter
+/// injection-callback resolver today).
+///
+/// Only checked when `ansible_lsp_dialect` didn't already claim the file
+/// (checked first, in `language_id_from_path`) — Ansible's own `templates/`
+/// convention is Jinja2, conventionally `.j2`-suffixed (e.g.
+/// `roles/x/templates/nginx.conf.j2`), so a BARE `.yaml`/`.yml` file under
+/// a `templates/` directory that reached this function at all (i.e. the
+/// Ansible check already declined it) is a meaningfully better Helm signal
+/// than "templates" alone would be for an arbitrary `.j2` file.
+///
+/// **Known, accepted limitation**: real Helm chart detection needs a
+/// `Chart.yaml` sibling check, which requires filesystem I/O this function
+/// cannot do (hot path — see `language_id_from_path`'s own doc comment).
+/// A chart's own directory name is arbitrary (named after the app, not
+/// literally "chart"/"charts" — those names only appear for Helm's
+/// dependency-subchart convention, `parent/charts/sub/templates/...`), so
+/// there's no second cheap lexical signal to cross-check against. This
+/// heuristic WILL false-positive on non-Helm `templates/*.yaml` layouts
+/// (CI templates, email templates, etc.); a project where that's
+/// disruptive can override `[lsp.yaml]`/`[lsp.helm]` explicitly in
+/// `config.toml`. Documented plainly rather than silently overclaiming
+/// precision — see ADR-075.
+fn helm_lsp_dialect(path: &std::path::Path) -> Option<&'static str> {
+    let has_templates_ancestor = path
+        .components()
+        .any(|c| c.as_os_str().eq_ignore_ascii_case("templates"));
+    if has_templates_ancestor {
+        return Some("helm");
     }
     None
 }
@@ -343,5 +382,40 @@ mod tests {
                 "{path} should resolve to plain yaml, not ansible"
             );
         }
+    }
+
+    #[test]
+    fn language_id_helm_dialect_positive_cases() {
+        let cases = [
+            "mychart/templates/deployment.yaml",
+            "/home/user/charts/nginx/templates/service.yaml",
+            "templates/_helpers.yaml",
+        ];
+        for path in cases {
+            assert_eq!(
+                language_id_from_path(&PathBuf::from(path)).as_deref(),
+                Some("helm"),
+                "{path} should resolve to helm"
+            );
+        }
+    }
+
+    #[test]
+    fn language_id_helm_dialect_negative_cases() {
+        // Plain yaml with no `templates/` ancestor stays plain yaml.
+        assert_eq!(
+            language_id_from_path(&PathBuf::from("mychart/values.yaml")).as_deref(),
+            Some("yaml")
+        );
+    }
+
+    /// Ansible's own `templates/` convention must keep winning over Helm's
+    /// -- checked first in `language_id_from_path` -- since a `playbooks/`
+    /// or `site.yml`-named file under a `templates/`-containing path is
+    /// unambiguously Ansible, not Helm.
+    #[test]
+    fn language_id_ansible_wins_over_helm_when_both_heuristics_could_match() {
+        let p = PathBuf::from("playbooks/templates/site.yml");
+        assert_eq!(language_id_from_path(&p).as_deref(), Some("ansible"));
     }
 }

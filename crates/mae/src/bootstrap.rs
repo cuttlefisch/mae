@@ -1831,6 +1831,7 @@ pub fn setup_lsp(
             "ansible-language-server",
             &["--stdio"],
         ),
+        ("helm", "MAE_LSP_HELM", "helm-ls", &["serve"]),
     ];
 
     let mut configs: HashMap<String, LspServerConfig> = HashMap::new();

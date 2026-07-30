@@ -242,6 +242,11 @@ pub fn run_doctor() -> i32 {
             "Ansible",
             "npm install -g @ansible/ansible-language-server",
         ),
+        (
+            "helm-ls",
+            "Helm",
+            "see https://github.com/mrjosh/helm-ls#installation",
+        ),
     ];
 
     for (binary, lang, install) in &lsp_servers {
