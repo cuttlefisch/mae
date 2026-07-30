@@ -28,6 +28,7 @@ mod tenant;
 #[cfg(test)]
 mod tests;
 mod ticket;
+mod webview;
 
 use config::DaemonConfig;
 use handler::DaemonState;
@@ -350,6 +351,7 @@ async fn main() {
                 kb_query_max_body_bytes: config.oauth.kb_query_max_body_bytes,
                 kb_query_max_scan_nodes: config.oauth.kb_query_max_scan_nodes,
                 kb_query_max_search_results: config.oauth.kb_query_max_search_results,
+                webview_enabled: config.oauth.webview_enabled,
             };
             let bind = config.oauth.bind;
             let cert_path = config.oauth.cert_path.clone();

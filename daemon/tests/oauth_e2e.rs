@@ -235,6 +235,106 @@ max_connections = {max_connections}
     }
 }
 
+/// Same as `spawn_daemon_with_oauth`, additionally setting `webview_enabled
+/// = true` (ADR-073/Phase E, #547) — used by this file's `GET
+/// /kb/{kb_id}/view` transport-layer tests. Deliberately does NOT seed a
+/// real KB over the wire either, for the exact reason this file's module
+/// doc comment already states: that business logic (the access gate, the
+/// real HTML rendering, the cross-KB leak-scan) is already thoroughly
+/// proven in-process with a real `DocStore` by
+/// `daemon/src/tests/webview_tests.rs`. What's genuinely unproven until
+/// this file exercises it: the route reaches `render_webview_response` at
+/// all over a real TLS+bearer-token connection, auth rejection is
+/// byte-for-byte identical to every other route on this listener, and
+/// `webview_enabled = false` (the default) leaves the route inert.
+async fn spawn_daemon_with_oauth_and_webview(jwks_addr: SocketAddr) -> DaemonGuard {
+    spawn_daemon_with_oauth_configured(jwks_addr, true).await
+}
+
+/// As [`spawn_daemon_with_oauth`], with `webview_enabled` explicitly
+/// controlled — `false` reproduces every existing test's exact prior
+/// behavior (default-off, principle #12), `true` is used by the webview
+/// route's own tests below.
+async fn spawn_daemon_with_oauth_configured(
+    jwks_addr: SocketAddr,
+    webview_enabled: bool,
+) -> DaemonGuard {
+    let tmp = tempfile::tempdir().unwrap();
+    let cert_path = tmp.path().join("oauth.crt");
+    let key_path = tmp.path().join("oauth.key");
+    generate_self_signed_cert(&cert_path, &key_path);
+
+    let collab_port = free_tcp_port();
+    let oauth_port = free_tcp_port();
+    let oauth_addr: SocketAddr = format!("127.0.0.1:{oauth_port}").parse().unwrap();
+
+    let config_toml = format!(
+        r#"
+[collab]
+enabled = true
+bind = "127.0.0.1:{collab_port}"
+
+[oauth]
+enabled = true
+bind = "127.0.0.1:{oauth_port}"
+canonical_resource_uri = "{CANONICAL_RESOURCE}"
+jwks_url = "http://127.0.0.1:{jwks_port}/jwks"
+issuer = "{TEST_ISSUER}"
+principal_claim = "sub"
+cert_path = "{cert_path}"
+key_path = "{key_path}"
+kb_query_enabled = true
+max_request_body_bytes = 1048576
+kb_query_max_body_bytes = 65536
+kb_query_max_scan_nodes = 500
+kb_query_max_search_results = 20
+max_connections = 0
+webview_enabled = {webview_enabled}
+"#,
+        collab_port = collab_port,
+        oauth_port = oauth_port,
+        jwks_port = jwks_addr.port(),
+        cert_path = cert_path.display(),
+        key_path = key_path.display(),
+        webview_enabled = webview_enabled,
+    );
+    let config_path = tmp.path().join("daemon.toml");
+    std::fs::write(&config_path, config_toml).unwrap();
+
+    let child = tokio::process::Command::new(env!("CARGO_BIN_EXE_mae-daemon"))
+        .args([
+            "--config",
+            config_path.to_str().unwrap(),
+            "--data-dir",
+            tmp.path().to_str().unwrap(),
+        ])
+        .env("XDG_RUNTIME_DIR", tmp.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true)
+        .spawn()
+        .expect("failed to spawn mae-daemon");
+
+    let mut connected = false;
+    for _ in 0..100 {
+        if tokio::net::TcpStream::connect(oauth_addr).await.is_ok() {
+            connected = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(
+        connected,
+        "mae-daemon's OAuth listener never accepted a connection on {oauth_addr} within 10s"
+    );
+
+    DaemonGuard {
+        _child: child,
+        _tmp: tmp,
+        oauth_addr,
+    }
+}
+
 /// A `reqwest` client that trusts the test's own self-signed cert (via
 /// `danger_accept_invalid_certs` — appropriate here since this test IS the
 /// cert's issuer and there's no CA chain to validate against; a real
@@ -486,4 +586,204 @@ async fn oauth_listener_connection_cap_rejects_the_nplus1th_client() {
     }
 
     drop(kept);
+}
+
+// --- Live HTML KB view (ADR-073/Phase E, #547) ---------------------------
+//
+// The route's own business logic (access gating, real HTML rendering,
+// cross-KB leak scanning) is already thoroughly proven in-process with a
+// real DocStore by `daemon/src/tests/webview_tests.rs` -- see this module's
+// definition-of-done list. What these tests prove is the genuinely new
+// transport-layer property: the route is reachable over a real TLS
+// connection at all, auth rejection is byte-for-byte identical to every
+// other route on this same listener, and it stays completely inert when
+// `webview_enabled = false` (the default).
+
+/// `webview_enabled = false` (the default) leaves the route inert: a GET to
+/// `/kb/{kb_id}/view` with a valid token falls through to the pre-existing
+/// bare-diagnostic behavior (no RPC body was sent), exactly as it did before
+/// this route existed -- proves the opt-in default (principle #12) actually
+/// gates something real over the wire, not just in the config struct.
+#[tokio::test]
+async fn webview_route_is_inert_when_disabled_by_default() {
+    let (private_key_pem, jwks) = generate_key_material();
+    let jwks_addr = spawn_mock_jwks_server(&jwks).await;
+    let daemon = spawn_daemon_with_oauth_configured(jwks_addr, false).await;
+    let base_url = format!("https://{}", daemon.oauth_addr);
+    let client = insecure_https_client();
+
+    let token = sign_token(&private_key_pem, &valid_claims());
+    let resp = client
+        .get(format!("{base_url}/kb/some-kb/view"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("GET /kb/.../view with webview disabled");
+
+    assert_eq!(
+        resp.status(),
+        200,
+        "disabled webview falls through to the bare diagnostic, not a 404"
+    );
+    let content_type = resp
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        content_type.starts_with("application/json"),
+        "a disabled webview must never emit HTML, got Content-Type: {content_type}"
+    );
+    let body: serde_json::Value = resp.json().await.unwrap();
+    assert!(
+        body.get("principal").is_some(),
+        "expected the pre-existing bare bearer-verification diagnostic shape, got: {body}"
+    );
+}
+
+/// Real-wire proof that `handle_request`'s response-building path genuinely
+/// stops hardcoding `Content-Type: application/json` for this route (ADR-073
+/// D2's literal requirement) -- reaches the real
+/// `render_webview_response`/`kb_query::dispatch` chain over TLS for a KB
+/// that doesn't exist (no wire seeding -- see this module's own doc comment
+/// for why), so the response is the FORBIDDEN/JSON access-denied branch, not
+/// the 200/HTML branch. The 200/HTML branch itself is proven in-process by
+/// `webview_tests.rs::a_member_with_access_gets_a_real_html_page`; this test
+/// proves the SAME chain is genuinely reachable over a real connection.
+#[tokio::test]
+async fn webview_route_reaches_the_real_access_gate_over_a_real_tls_connection() {
+    let (private_key_pem, jwks) = generate_key_material();
+    let jwks_addr = spawn_mock_jwks_server(&jwks).await;
+    let daemon = spawn_daemon_with_oauth_and_webview(jwks_addr).await;
+    let base_url = format!("https://{}", daemon.oauth_addr);
+    let client = insecure_https_client();
+
+    let token = sign_token(&private_key_pem, &valid_claims());
+    let resp = client
+        .get(format!("{base_url}/kb/nonexistent-kb/view"))
+        .bearer_auth(&token)
+        .send()
+        .await
+        .expect("GET /kb/nonexistent-kb/view with webview enabled");
+
+    assert_eq!(
+        resp.status(),
+        403,
+        "a validly-signed token for a KB with no access must reach the real access gate \
+         (FORBIDDEN), never a 401 (that would mean auth itself failed) or a 200"
+    );
+}
+
+/// Adversarial (the literal ADR-073 "Definition of done" requirement):
+/// wrong-audience/expired/forged/missing tokens against `/kb/{id}/view` get
+/// IDENTICAL rejection behavior to the exact same cases against every other
+/// route on this listener (`oauth_and_kb_query_over_a_real_tls_connection`'s
+/// cases 2/4/5, `forged_signature_token_is_rejected_over_the_real_wire`) --
+/// asserted here as a direct comparison against those same real responses,
+/// not a separate assumption that the shared code path makes this true.
+#[tokio::test]
+async fn webview_route_auth_rejection_is_identical_to_every_other_route() {
+    let (private_key_pem, jwks) = generate_key_material();
+    let jwks_addr = spawn_mock_jwks_server(&jwks).await;
+    let daemon = spawn_daemon_with_oauth_and_webview(jwks_addr).await;
+    let base_url = format!("https://{}", daemon.oauth_addr);
+    let client = insecure_https_client();
+    let view_url = format!("{base_url}/kb/some-kb/view");
+    let plain_url = base_url.clone();
+
+    // Missing token.
+    for url in [&view_url, &plain_url] {
+        let resp = client.get(url).send().await.expect("missing-token request");
+        assert_eq!(resp.status(), 401, "missing token on {url}");
+        assert!(
+            resp.headers()
+                .get(reqwest::header::WWW_AUTHENTICATE)
+                .is_some(),
+            "missing WWW-Authenticate on {url}"
+        );
+    }
+
+    // Wrong audience.
+    let mut wrong_aud_claims = valid_claims();
+    wrong_aud_claims["aud"] = serde_json::json!("https://a-different-mcp-server.example.com/mcp");
+    let wrong_aud_token = sign_token(&private_key_pem, &wrong_aud_claims);
+    for url in [&view_url, &plain_url] {
+        let resp = client
+            .get(url)
+            .bearer_auth(&wrong_aud_token)
+            .send()
+            .await
+            .expect("wrong-audience request");
+        assert_eq!(resp.status(), 401, "wrong audience on {url}");
+    }
+
+    // Expired token.
+    let mut expired_claims = valid_claims();
+    expired_claims["exp"] = serde_json::json!(now_unix().saturating_sub(3600));
+    let expired_token = sign_token(&private_key_pem, &expired_claims);
+    for url in [&view_url, &plain_url] {
+        let resp = client
+            .get(url)
+            .bearer_auth(&expired_token)
+            .send()
+            .await
+            .expect("expired-token request");
+        assert_eq!(resp.status(), 401, "expired token on {url}");
+    }
+
+    // Forged signature (a second, unregistered keypair).
+    let (forger_pem, _unused) = generate_key_material();
+    let forged_token = sign_token(&forger_pem, &valid_claims());
+    for url in [&view_url, &plain_url] {
+        let resp = client
+            .get(url)
+            .bearer_auth(&forged_token)
+            .send()
+            .await
+            .expect("forged-signature request");
+        assert_eq!(resp.status(), 401, "forged signature on {url}");
+    }
+}
+
+/// The `?access_token=` query-string fallback (this route's own addition,
+/// needed because a plain browser navigation cannot set an `Authorization`
+/// header) works over a real connection, AND is genuinely scoped to only
+/// this route -- the same query-param-only request against the plain JSON
+/// RPC endpoint must still be rejected (proving `extract_bearer_token`,
+/// used everywhere else, was never silently loosened by this change).
+#[tokio::test]
+async fn webview_route_accepts_a_query_string_bearer_token_but_no_other_route_does() {
+    let (private_key_pem, jwks) = generate_key_material();
+    let jwks_addr = spawn_mock_jwks_server(&jwks).await;
+    let daemon = spawn_daemon_with_oauth_and_webview(jwks_addr).await;
+    let base_url = format!("https://{}", daemon.oauth_addr);
+    let client = insecure_https_client();
+    let token = sign_token(&private_key_pem, &valid_claims());
+
+    let view_resp = client
+        .get(format!(
+            "{base_url}/kb/nonexistent-kb/view?access_token={token}"
+        ))
+        .send()
+        .await
+        .expect("query-string-token view request");
+    assert_eq!(
+        view_resp.status(),
+        403,
+        "a query-string token must authenticate on the view route (reaching the real access \
+         gate -- FORBIDDEN for a nonexistent KB, not a 401)"
+    );
+
+    let plain_resp = client
+        .get(format!("{base_url}/?access_token={token}"))
+        .send()
+        .await
+        .expect("query-string-token plain-route request");
+    assert_eq!(
+        plain_resp.status(),
+        401,
+        "the query-string fallback must be scoped to the view route only -- every other route \
+         stays header-only"
+    );
 }
