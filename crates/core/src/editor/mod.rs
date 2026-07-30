@@ -972,6 +972,22 @@ pub struct Editor {
     /// aggregate "... (+N)" stubs. Mirrors `kb_graph_layout_algorithm`'s
     /// exact enum-option shape; see `crate::graph_view::ClusterGroupBy`.
     pub kb_graph_cluster_group_by: crate::graph_view::ClusterGroupBy,
+    /// ADR-070/071: whether Chord-mode nodes render as wedges instead of
+    /// circles. Mirrors `kb_graph_wedge_enabled`.
+    pub kb_graph_wedge_enabled: bool,
+    /// Fraction of a wedge's radial half-thickness used as its rounded-
+    /// corner radius. Mirrors `kb_graph_wedge_corner_radius_fraction`.
+    pub kb_graph_wedge_corner_radius_fraction: f32,
+    /// Hover outer-radius growth, as a multiple of the diagram's minimum
+    /// node radius. Mirrors `kb_graph_wedge_hover_growth_factor`.
+    pub kb_graph_wedge_hover_growth_factor: f32,
+    /// Neighbor-of-selection outer-radius growth, as a fraction of the
+    /// diagram's minimum node radius. Mirrors
+    /// `kb_graph_wedge_neighbor_growth_fraction`.
+    pub kb_graph_wedge_neighbor_growth_fraction: f32,
+    /// Angular gap (radians) left between adjacent wedges. Mirrors
+    /// `kb_graph_wedge_gap_radians`.
+    pub kb_graph_wedge_gap_radians: f32,
     /// Queued background layout request for the open/refreshed graph-view
     /// buffer (`mae::graph_layout_bridge`, Part C Phase 1) — drained once
     /// per GUI event-loop tick, see `crate::graph_view::GraphLayoutIntent`'s
@@ -1517,6 +1533,11 @@ impl Editor {
             kb_graph_dense_cluster_threshold: 20,
             kb_graph_min_legible_radius_px: 6.0,
             kb_graph_cluster_group_by: crate::graph_view::ClusterGroupBy::Kind,
+            kb_graph_wedge_enabled: false,
+            kb_graph_wedge_corner_radius_fraction: 0.6,
+            kb_graph_wedge_hover_growth_factor: 1.6,
+            kb_graph_wedge_neighbor_growth_fraction: 0.35,
+            kb_graph_wedge_gap_radians: 0.0,
             pending_graph_layout: None,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)
             messages_synced_seq: None,

@@ -200,6 +200,7 @@ Source: `crates/core/src/lib.rs`
 | `table` | mod |
 | `text_utils` | mod |
 | `theme` | mod |
+| `tween` | mod |
 | `visual_buffer` | mod |
 | `window` | mod |
 | `word` | mod |

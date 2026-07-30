@@ -58,6 +58,7 @@ pub mod syntax;
 pub mod table;
 pub mod text_utils;
 pub mod theme;
+pub mod tween;
 pub mod visual_buffer;
 pub mod window;
 pub mod word;

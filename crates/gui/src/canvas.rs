@@ -1288,6 +1288,69 @@ impl SkiaCanvas {
     }
 }
 
+/// Build the closed Skia path for a `VisualElement::Wedge` — an annular
+/// sector with optionally-rounded corners (ADR-070/071's "petal" chord-
+/// diagram node shape). `corner_radius` must already be clamped (see
+/// `mae_core::visual_buffer::wedge_corner_radius_clamp`) — this function
+/// does not re-clamp, it trusts its input.
+///
+/// Uses `skia_safe::PathBuilder::arc_to_tangent` (Skia's HTML-Canvas-`arcTo`-
+/// equivalent: a two-tangent-line, one-radius rounded corner) rather than
+/// hand-computing SVG-style elliptical-arc endpoints — `arc_to_tangent`
+/// degrades to a plain line when `radius <= 0` or the tangents are nearly
+/// parallel (per its own doc comment), so this same code path produces a
+/// correct sharp-cornered wedge for `corner_radius == 0` with no separate
+/// branch needed.
+///
+/// Angle convention: radians, `0` = positive x-axis, increasing clockwise
+/// in screen space (y-down) — matches `skia_safe::PathBuilder::arc_to`'s own
+/// "positive sweeps extends arc clockwise" convention exactly, so no sign
+/// flip is needed for the two main (outer/inner) arcs.
+pub fn build_wedge_path(
+    cx: f32,
+    cy: f32,
+    inner_r: f32,
+    outer_r: f32,
+    start_angle: f32,
+    sweep_angle: f32,
+    corner_radius: f32,
+) -> skia_safe::Path {
+    let polar = |r: f32, angle: f32| -> skia_safe::Point {
+        (cx + r * angle.cos(), cy + r * angle.sin()).into()
+    };
+    let outer_start = polar(outer_r, start_angle);
+    let outer_end = polar(outer_r, start_angle + sweep_angle);
+    let inner_end = polar(inner_r, start_angle + sweep_angle);
+    let inner_start = polar(inner_r, start_angle);
+
+    let outer_oval =
+        skia_safe::Rect::from_xywh(cx - outer_r, cy - outer_r, outer_r * 2.0, outer_r * 2.0);
+    let inner_oval =
+        skia_safe::Rect::from_xywh(cx - inner_r, cy - inner_r, inner_r * 2.0, inner_r * 2.0);
+
+    let mut builder = skia_safe::PathBuilder::new();
+    builder
+        .move_to(outer_start)
+        .arc_to(
+            outer_oval,
+            start_angle.to_degrees(),
+            sweep_angle.to_degrees(),
+            false,
+        )
+        .arc_to_tangent(outer_end, inner_end, corner_radius)
+        .line_to(inner_end)
+        .arc_to(
+            inner_oval,
+            (start_angle + sweep_angle).to_degrees(),
+            -sweep_angle.to_degrees(),
+            false,
+        )
+        .arc_to_tangent(inner_start, outer_start, corner_radius)
+        .line_to(outer_start)
+        .close();
+    builder.detach()
+}
+
 /// Cell-based rectangle for layout computation.
 #[derive(Debug, Clone, Copy)]
 pub struct CellRect {

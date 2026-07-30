@@ -332,6 +332,17 @@ impl super::Editor {
             "kb_graph_dense_cluster_threshold" => self.kb_graph_dense_cluster_threshold.to_string(),
             "kb_graph_min_legible_radius_px" => self.kb_graph_min_legible_radius_px.to_string(),
             "kb_graph_cluster_group_by" => self.kb_graph_cluster_group_by.as_str().to_string(),
+            "kb_graph_wedge_enabled" => self.kb_graph_wedge_enabled.to_string(),
+            "kb_graph_wedge_corner_radius_fraction" => {
+                self.kb_graph_wedge_corner_radius_fraction.to_string()
+            }
+            "kb_graph_wedge_hover_growth_factor" => {
+                self.kb_graph_wedge_hover_growth_factor.to_string()
+            }
+            "kb_graph_wedge_neighbor_growth_fraction" => {
+                self.kb_graph_wedge_neighbor_growth_fraction.to_string()
+            }
+            "kb_graph_wedge_gap_radians" => self.kb_graph_wedge_gap_radians.to_string(),
             _ => return None,
         };
         Some((value, def))
@@ -1472,6 +1483,33 @@ impl super::Editor {
                     format!("Invalid kb_graph_cluster_group_by '{value}' (expected kind|degree_bucket)")
                 })?;
                 self.kb_graph_cluster_group_by = group_by;
+            }
+            "kb_graph_wedge_enabled" => {
+                self.kb_graph_wedge_enabled = parse_option_bool(value)?;
+            }
+            "kb_graph_wedge_corner_radius_fraction" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_wedge_corner_radius_fraction = v.clamp(0.0, 1.0);
+            }
+            "kb_graph_wedge_hover_growth_factor" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_wedge_hover_growth_factor = v.clamp(1.0, 10.0);
+            }
+            "kb_graph_wedge_neighbor_growth_fraction" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_wedge_neighbor_growth_fraction = v.clamp(0.0, 10.0);
+            }
+            "kb_graph_wedge_gap_radians" => {
+                let v: f32 = value
+                    .parse()
+                    .map_err(|_| format!("Invalid float: '{}'", value))?;
+                self.kb_graph_wedge_gap_radians = v.clamp(0.0, std::f32::consts::PI);
             }
             _ => return Err(format!("Unknown option: {}", name)),
         }
@@ -3553,6 +3591,109 @@ mod graph_view_option_tests {
             editor.kb_graph_cluster_group_by,
             crate::graph_view::ClusterGroupBy::DegreeBucket
         );
+    }
+
+    #[test]
+    fn kb_graph_wedge_enabled_option_roundtrips() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor.get_option("kb_graph_wedge_enabled").unwrap().0,
+            "false"
+        );
+        editor.set_option("kb_graph_wedge_enabled", "true").unwrap();
+        assert!(editor.kb_graph_wedge_enabled);
+        assert_eq!(
+            editor.get_option("kb_graph_wedge_enabled").unwrap().0,
+            "true"
+        );
+    }
+
+    #[test]
+    fn kb_graph_wedge_corner_radius_fraction_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor
+                .get_option("kb_graph_wedge_corner_radius_fraction")
+                .unwrap()
+                .0,
+            "0.6"
+        );
+        editor
+            .set_option("kb_graph_wedge_corner_radius_fraction", "0.9")
+            .unwrap();
+        assert_eq!(editor.kb_graph_wedge_corner_radius_fraction, 0.9);
+        editor
+            .set_option("kb_graph_wedge_corner_radius_fraction", "5.0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_wedge_corner_radius_fraction, 1.0);
+        editor
+            .set_option("kb_graph_wedge_corner_radius_fraction", "-1.0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_wedge_corner_radius_fraction, 0.0);
+    }
+
+    #[test]
+    fn kb_graph_wedge_hover_growth_factor_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor
+                .get_option("kb_graph_wedge_hover_growth_factor")
+                .unwrap()
+                .0,
+            "1.6"
+        );
+        editor
+            .set_option("kb_graph_wedge_hover_growth_factor", "2.5")
+            .unwrap();
+        assert_eq!(editor.kb_graph_wedge_hover_growth_factor, 2.5);
+        // Below 1.0 would mean "shrinks on hover" — clamp to the floor.
+        editor
+            .set_option("kb_graph_wedge_hover_growth_factor", "0.1")
+            .unwrap();
+        assert_eq!(editor.kb_graph_wedge_hover_growth_factor, 1.0);
+    }
+
+    #[test]
+    fn kb_graph_wedge_neighbor_growth_fraction_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor
+                .get_option("kb_graph_wedge_neighbor_growth_fraction")
+                .unwrap()
+                .0,
+            "0.35"
+        );
+        editor
+            .set_option("kb_graph_wedge_neighbor_growth_fraction", "1.0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_wedge_neighbor_growth_fraction, 1.0);
+        editor
+            .set_option("kb_graph_wedge_neighbor_growth_fraction", "-1.0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_wedge_neighbor_growth_fraction, 0.0);
+    }
+
+    #[test]
+    fn kb_graph_wedge_gap_radians_option_roundtrips_and_clamps() {
+        let mut editor = Editor::new();
+        assert_eq!(
+            editor.get_option("kb_graph_wedge_gap_radians").unwrap().0,
+            "0"
+        );
+        editor
+            .set_option("kb_graph_wedge_gap_radians", "0.5")
+            .unwrap();
+        assert_eq!(editor.kb_graph_wedge_gap_radians, 0.5);
+        // Clamped to [0, PI] — a gap can't be negative or exceed a full
+        // half-turn per wedge.
+        editor
+            .set_option("kb_graph_wedge_gap_radians", "-1.0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_wedge_gap_radians, 0.0);
+        editor
+            .set_option("kb_graph_wedge_gap_radians", "10.0")
+            .unwrap();
+        assert_eq!(editor.kb_graph_wedge_gap_radians, std::f32::consts::PI);
     }
 }
 
