@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.80] - 2026-07-30
+
+### Refactor
+
+- *(daemon)* Move kb_query into lib crate, fix ADR-067 doc drift (Phase D1) (#558) ([a97e2ba](https://github.com/cuttlefisch/mae/commit/a97e2ba37a1aebb51729869f237b934d209825c3))
+
 ## [0.14.79] - 2026-07-30
 
 ### Features
 
 - *(syntax,lsp)* IaC/DevOps language support — Terraform, Dockerfile, Ansible, Kubernetes, Helm (ADR-075) (#557) ([8ea8d1d](https://github.com/cuttlefisch/mae/commit/8ea8d1d93068cdfe405887d28f341728d5e4fe32))
+
+### Miscellaneous
+
+- Bump version to 0.14.79 ([9c3a3b8](https://github.com/cuttlefisch/mae/commit/9c3a3b8346095285e9954c7545db82098150610e))
 
 ## [0.14.78] - 2026-07-30
 
