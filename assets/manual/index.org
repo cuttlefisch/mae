@@ -4,7 +4,7 @@
 :END:
 #+title: MAE Help Index
 
-Welcome to MAE's built-in help. This knowledge base is the same data surface the AI agent queries via its `kb_*` tools -- you and the AI read the same pages.
+Welcome to MAE's built-in help. This knowledge base is the same data surface the AI agent queries via its ~kb_*~ tools -- you and the AI read the same pages.
 
 ** Core concepts
 - [[concept:buffer][Buffer]] -- the unit of editable content
@@ -18,7 +18,7 @@ Welcome to MAE's built-in help. This knowledge base is the same data surface the
 - [[concept:hooks][Hooks]] -- Scheme extension points for editor events
 - [[concept:options][Editor Options]] -- configuring MAE from Scheme
 - [[concept:agent-bootstrap][Agent Bootstrap]] -- zero-config MCP tool discovery for AI agents
-- [[concept:self-test][AI Self-Test]] -- validate editor tools and integrations via `:self-test`
+- [[concept:self-test][AI Self-Test]] -- validate editor tools and integrations via ~:self-test~
 - [[concept:debugging][Debugging (DAP)]] -- DAP client, debug panel, breakpoints, AI debug tools
 - [[concept:watchdog][Watchdog]] -- event loop stall detection and thread dumps
 - [[concept:event-recording][Event Recording]] -- session capture and JSON export
@@ -28,7 +28,7 @@ Welcome to MAE's built-in help. This knowledge base is the same data surface the
 - [[concept:fonts][Font & Icon Configuration]] -- font_family/size, bundled Nerd Font, icon config
 - [[concept:git-status][Git Status]] -- Magit-lite porcelain UI
 - [[concept:org-mode][Org-mode]] -- Structural editing, folding, narrowing, and task management
-- [[concept:markdown][Markdown]] -- Structural editing parity with org-mode for `#` headings
+- [[concept:markdown][Markdown]] -- Structural editing parity with org-mode for ~#~ headings
 - [[concept:ex-commands][Ex-Command Grammar]] -- Tokenizer for w/q/x compound commands
 - [[concept:set-syntax][:set Syntax]] -- Vim-style option configuration (no-prefix, toggle, query)
 - [[concept:autosave][Autosave]] -- interval-based background save with idle debounce
@@ -60,14 +60,14 @@ Welcome to MAE's built-in help. This knowledge base is the same data surface the
 - [[key:normal-mode][Normal-mode keys]]
 - [[key:leader-keys][SPC leader bindings]] (14 groups, Doom Emacs style)
 - [[concept:project][Project management]]
-- Commands: run `:command-list` for the full list, or visit any `cmd:<name>` node.
-- Browse by category: `category:movement`, `category:editing`, `category:git`, etc.
+- Commands: run ~:command-list~ for the full list, or visit any ~cmd:<name>~ node.
+- Browse by category: ~category:movement~, ~category:editing~, ~category:git~, etc.
 
 ** Tutorial
 - [[tutorial:getting-started][Getting Started]] -- progressive guide (Vim track / Beginner track / AI setup)
 - [[tutor:index][Lesson-style Tutorial]] -- 12 focused lessons covering all essentials
 
 ** Getting around
-- **Enter** on a link follows it.
-- **C-o** goes back, **C-i** goes forward (history, like vim jumps).
-- **q** closes the KB viewer.
+- *Enter* on a link follows it.
+- *C-o* goes back, *C-i* goes forward (history, like vim jumps).
+- *q* closes the KB viewer.

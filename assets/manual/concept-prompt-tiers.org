@@ -19,14 +19,14 @@ Explicit guardrails (~70 lines) for smaller/cheaper models:
 - Includes: tool preferences, fallback chains, anti-looping rules, common recipes
 
 *** Default Assignments
-Unknown models default to **compact** (safe: over-prompting wastes a few tokens; under-prompting wastes millions in looping).
+Unknown models default to *compact* (safe: over-prompting wastes a few tokens; under-prompting wastes millions in looping).
 
 *** Override
-Set `[ai] prompt_tier = "full"` or `"compact"` in `config.toml` to force a tier regardless of model.
+Set ~[ai] prompt_tier = "full"~ or ~"compact"~ in ~config.toml~ to force a tier regardless of model.
 
 *** Custom Prompts
-Place `pair-programmer.xml` or `pair-programmer-compact.xml` in:
-- `~/.config/mae/prompts/` (user override)
-- `.mae/prompts/` (project-local override)
+Place ~pair-programmer.xml~ or ~pair-programmer-compact.xml~ in:
+- ~~/.config/mae/prompts/~ (user override)
+- ~.mae/prompts/~ (project-local override)
 
 See also: [[concept:ai-modes?rel=explains][AI Agent vs Chat]], [[concept:ai-as-peer?rel=references][AI as Peer]]

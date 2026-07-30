@@ -5,7 +5,7 @@
 #+title: ADR-002: Text Sync (Accepted)
 #+filetags: :adr:sync:architecture:
 
-**ADR-002: Text Synchronization Model** — Status: **Accepted (yrs/YATA)**
+*ADR-002: Text Synchronization Model* — Status: *Accepted (yrs/YATA)*
 
 ** Decision
 Use yrs (Yjs Rust port) as the sync engine for all collaborative state. Dual structure: yrs YText + ropey mirror for rendering.
@@ -23,7 +23,7 @@ Use yrs (Yjs Rust port) as the sync engine for all collaborative state. Dual str
 | diamond-types | Text-only, bus factor = 1 |
 | Custom OT | Combinatorial explosion for visual operations |
 
-Full ADR: `docs/adr/002-text-sync-model.md`
+Full ADR: ~docs/adr/002-text-sync-model.md~
 
 This ADR [[concept:sync-engine?rel=documents][documents the Sync Engine]].
 

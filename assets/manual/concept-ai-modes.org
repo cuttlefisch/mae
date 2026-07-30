@@ -7,43 +7,43 @@
 
 MAE provides two distinct AI interfaces, each suited to different workflows.
 
-** AI Agent (`SPC a a`)
-An **external tool** (Claude Code, gemini-cli, etc.) running in MAE's embedded terminal.
+** AI Agent (~SPC a a~)
+An *external tool* (Claude Code, gemini-cli, etc.) running in MAE's embedded terminal.
 
-**When to use:**
+*When to use:*
 - Autonomous coding: writing features, fixing bugs, multi-file refactors
 - Tasks that need shell access: running tests, installing packages, git operations
 - When you want the AI to drive and you review the results
 
-**Configuration:**
-```toml
+*Configuration:*
+#+begin_src toml
 [ai]
 editor = "claude"  # command to run in terminal
-```
+#+end_src
 
 The agent communicates with MAE via the MCP bridge — it can call editor tools just like the built-in AI.
 
-** AI Chat (`SPC a p`)
-MAE's **native conversation** interface with full editor context.
+** AI Chat (~SPC a p~)
+MAE's *native conversation* interface with full editor context.
 
-**When to use:**
+*When to use:*
 - Quick questions about code in your current buffer
 - LSP-aware code review (the AI sees diagnostics, types, references)
 - Editor-integrated tasks: explain this function, suggest a refactor, write a docstring
 - When you want to stay in the editor flow without context-switching
 
-**Configuration:**
-```toml
+*Configuration:*
+#+begin_src toml
 [ai]
 provider = "claude"  # or openai, gemini, deepseek
 model = "claude-sonnet-4-20250514"
-```
+#+end_src
 
 ** Shared configuration
 Both interfaces respect:
-- **Permission tiers:** `readonly`, `standard`, `trusted`, `privileged`
-- **Budget limits:** `budget_warn_tokens`, `budget_limit_tokens`
-- **API keys:** env vars (ANTHROPIC_API_KEY, etc.) or `api_key_command`
+- *Permission tiers:* ~readonly~, ~standard~, ~trusted~, ~privileged~
+- *Budget limits:* ~budget_warn_tokens~, ~budget_limit_tokens~
+- *API keys:* env vars (ANTHROPIC_API_KEY, etc.) or ~api_key_command~
 
 This concept is [[concept:ai-as-peer?rel=explains][explained by The AI as Peer Actor]].
 

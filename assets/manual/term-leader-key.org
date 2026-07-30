@@ -5,8 +5,8 @@
 #+title: Leader Key
 #+filetags: :terminology:
 
-The key that opens MAE's which-key command menu (the **leader keypad**). In the
-`doom` flavor it's ~SPC~ from Normal mode; in the `nonmodal` flavor it's ~C-;~
+The key that opens MAE's which-key command menu (the *leader keypad*). In the
+~doom~ flavor it's ~SPC~ from Normal mode; in the ~nonmodal~ flavor it's ~C-;~
 from Insert. Inspired by Doom Emacs / Meow's keypad. The menu itself is the same
 shared tree in either flavor: ~f f~ = find file, ~b s~ = save buffer, ~h~ = help,
 ~a~ = AI agent, etc. The bindings live in the shared ~leader~ keymap (not under an

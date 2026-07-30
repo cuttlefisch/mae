@@ -5,15 +5,15 @@
 #+title: Autosave
 #+filetags: :files:configuration:
 
-**Autosave** periodically saves all modified file-backed buffers in the background.
+*Autosave* periodically saves all modified file-backed buffers in the background.
 
 ** Configuration
-- `:set autosave_interval 300` -- save every 5 minutes (0 = disabled)
-- `config.toml`: `autosave_interval = 300` under `[editor]`
-- Scheme: `(set-option! "autosave-interval" "300")`
+- ~:set autosave_interval 300~ -- save every 5 minutes (0 = disabled)
+- ~config.toml~: ~autosave_interval = 300~ under ~[editor]~
+- Scheme: ~(set-option! "autosave-interval" "300")~
 
 ** Idle Debounce
-Autosave waits at least **5 seconds** after the last edit before saving. This prevents saving mid-typing. The timer resets with each keystroke.
+Autosave waits at least *5 seconds* after the last edit before saving. This prevents saving mid-typing. The timer resets with each keystroke.
 
 ** Behavior
 - Only file-backed buffers (not scratch, conversation, or shell) are saved.
