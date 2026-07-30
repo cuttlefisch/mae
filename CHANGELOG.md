@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.74] - 2026-07-30
+
+### Bug Fixes
+
+- *(manual)* Convert markdown-flavored syntax to real org syntax (#535) ([ab170d6](https://github.com/cuttlefisch/mae/commit/ab170d66e870b2538bb4fc294967c5d03ba47f61))
+
 ## [0.14.73] - 2026-07-30
 
 ### Bug Fixes
 
 - *(export)* Heading misparse + UTF-8 byte-cast mangling (#536) ([90b0cd5](https://github.com/cuttlefisch/mae/commit/90b0cd514cefec8873852464d2011f72ded46e61))
+
+### Miscellaneous
+
+- Bump version to 0.14.73 ([7176010](https://github.com/cuttlefisch/mae/commit/717601002335f9d3c6499924c8c35f9ce11a4b43))
 
 ## [0.14.72] - 2026-07-29
 
