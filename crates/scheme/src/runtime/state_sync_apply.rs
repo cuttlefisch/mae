@@ -316,6 +316,12 @@ impl SchemeRuntime {
             editor.queue_kb_collab_action(action);
         }
 
+        // Apply KB registration requests from `(kb-register NAME DIR)` — the
+        // same `Editor::kb_register` the `:kb-register` ex-command calls.
+        for (name, dir) in state.pending_kb_register_requests.drain(..) {
+            editor.kb_register(&name, std::path::Path::new(&dir));
+        }
+
         // Apply native KB graph-view intents from `(kb-graph-view-open)` etc.
         // (Part C Phase 1) — each variant maps 1:1 onto the same
         // `Editor::kb_graph_view_*` method the human keybindings + MCP tools

@@ -2177,3 +2177,52 @@ fn kb_graph_view_set_pinned_from_scheme_rejects_a_lone_x_argument() {
         "error should explain the expected arity: {err}"
     );
 }
+
+/// `(kb-register NAME DIR)` (issue #522 step 1) -- queue/drain roundtrip
+/// test mirroring `kb_graph_view_set_depth_from_scheme_updates_depth_in_place`
+/// above: real `Editor`, real Scheme eval, real `apply_to_editor` drain, real
+/// (isolated, tempdir-backed) filesystem org import -- not a mock.
+#[test]
+fn kb_register_from_scheme_imports_a_real_org_directory() {
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+
+    let dir = std::env::temp_dir().join(format!(
+        "mae-scheme-kb-register-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("note.org"),
+        ":PROPERTIES:\n:ID: note-1\n:END:\n#+title: Note One\n\nHello from a scheme-registered KB.\n",
+    )
+    .unwrap();
+    // Isolate the registry write (`~/.local/share/mae`) from the real
+    // user's data dir, same seam `with_test_dirs` uses in mae-core's own
+    // registry tests.
+    editor.data_dir_override = Some(dir.clone());
+
+    rt.eval(&format!(
+        r#"(kb-register "SchemeRegisteredKb" "{}")"#,
+        dir.display()
+    ))
+    .unwrap();
+    rt.apply_to_editor(&mut editor);
+
+    let instance = editor
+        .kb
+        .registry
+        .find("SchemeRegisteredKb")
+        .expect("kb-register must add the instance to the registry");
+    assert_eq!(instance.name, "SchemeRegisteredKb");
+    assert!(
+        editor.kb.instances.contains_key(&instance.uuid),
+        "kb-register must actually import + adopt the instance, not just register the name"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
+}

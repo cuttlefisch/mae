@@ -392,6 +392,80 @@ Modules are Scheme-only packages. They call Rust functions already in the kernel
 (exposed via `register_fn`). This is exactly how Emacs works — `org-mode.el` calls
 C functions for buffer operations.
 
+## Adding a Kernel Primitive: the `pending_*` Queue Pattern
+
+A module can only call Scheme primitives the kernel already registered via
+`register_fn` (see "Kernel Boundary" above) — there is no path to add a
+*new* kernel primitive without touching `crates/scheme` itself. If you're
+extending mae's Rust core rather than authoring a Scheme module, this is
+the shape nearly every stateful primitive already follows, and the one you
+should reuse rather than inventing a new mechanism.
+
+The problem it solves: a Scheme primitive body runs on the VM thread and
+only has `&Arc<Mutex<SharedState>>` — it does not have `&mut Editor`
+(buffer contents, windows, KB store, ...), because the editor isn't
+running on that thread. So a primitive that needs to actually *do*
+something to editor state can't just call an `Editor` method directly.
+Instead:
+
+1. **Queue** — the primitive pushes a small intent value onto a
+   `pending_*` field on `SharedState` and returns immediately.
+2. **Drain** — once per event-loop tick, `apply_to_editor` (which DOES
+   have `&mut Editor`) drains that field in order and calls the matching
+   `Editor` method for each queued intent.
+
+This is exactly the same "eval → apply" split the Scheme testing framework
+itself uses (see CLAUDE.md's "Adding New Test Primitives": *"Mutations:
+Add pending field to `SharedState`, register Scheme function that sets it,
+process in `apply_to_editor`"*) — a test primitive and a real user-facing
+primitive are the same pattern because they solve the same threading
+problem.
+
+A concrete, fully worked example — the KB graph-view primitives
+(`crates/scheme/src/runtime/kb_graph_view.rs`):
+
+- **Field**: `SharedState::pending_graph_view_intents: Vec<GraphViewIntent>`.
+- **Queue side** — `(kb-graph-view-open [id] [depth])`'s `register_fn` body
+  does nothing but parse its Scheme args and push:
+  ```rust
+  s.lock()
+      .pending_graph_view_intents
+      .push(mae_core::GraphViewIntent::Open { center, depth });
+  ```
+- **Drain side** — `apply_kb_mutations` in
+  `crates/scheme/src/runtime/state_sync_apply.rs` drains the queue and
+  maps each variant onto the real `Editor` method:
+  ```rust
+  for intent in state.pending_graph_view_intents.drain(..) {
+      match intent {
+          GraphViewIntent::Open { center, depth } => {
+              editor.kb_graph_view_open(center, depth);
+          }
+          // ... one arm per GraphViewIntent variant
+      }
+  }
+  ```
+
+Because the drain side calls the *same* `Editor::kb_graph_view_open` the
+`kb_graph_view_open` MCP tool and the buffer-local keybinding also call,
+this pattern is also what makes CLAUDE.md principle #3 (human and AI are
+peer actors on the same API) mechanically true rather than aspirational —
+there's only one code path to drift out of sync with.
+
+Where to add the pieces for a new primitive:
+
+- New pending field + its doc comment: `crates/scheme/src/runtime.rs`
+  (`SharedState` struct, near the existing `pending_*` fields).
+- Queue-side `register_fn`: a `runtime/*.rs` submodule, registered from
+  the `register_*_fns(&mut vm, &shared)` call list in
+  `crates/scheme/src/runtime.rs`.
+- Drain-side match arm: `crates/scheme/src/runtime/state_sync_apply.rs`.
+
+If your primitive only *reads* state (no mutation), you don't need this at
+all — register a plain `register_fn` that reads straight from
+`SharedState` (see "Read-only state" in CLAUDE.md's "Adding New Test
+Primitives" section for the equivalent read-only shape).
+
 ## Reference Implementations
 
 - **Simplest:** `modules/dashboard/` — 1 command, splash screen rendering

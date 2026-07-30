@@ -35,6 +35,25 @@ pub(super) fn register_kb_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedSt
         },
     );
 
+    // (kb-register NAME DIR) — register an external org directory as a
+    // federated KB instance (recursively imports all `.org` files). Mirrors
+    // the `:kb-register` ex-command (`crates/core/src/editor/command.rs`)
+    // and the underlying `Editor::kb_register`
+    // (`crates/core/src/editor/kb_ops/registry.rs`) -- same code path as the
+    // human-facing command, per CLAUDE.md principle #3.
+    let s = shared.clone();
+    vm.register_fn(
+        "kb-register",
+        "Register an external org directory NAME at DIR as a federated KB instance",
+        Arity::Fixed(2),
+        move |args: &[Value]| {
+            let name = arg_string(args, 0, "kb-register")?;
+            let dir = arg_string(args, 1, "kb-register")?;
+            s.lock().pending_kb_register_requests.push((name, dir));
+            Ok(Value::Void)
+        },
+    );
+
     // --- KB collaboration lifecycle (first-class, route through CollabIntent) ---
 
     // (kb-share [KB-NAME]) — share a KB (default = primary).
