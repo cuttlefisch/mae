@@ -1,6 +1,8 @@
 # ADR-067: Admin-enforced live-query-only KB access (no full local replication)
 
-**Status:** Proposed.
+**Status:** In progress (Phases A/B/C/E landed and shipped; Phase D — self-pointing
+`RemoteHub` + OAuth self-minting + mTLS `kb/query.*` wiring — remains, tracked as issue
+#453).
 **Extends:** ADR-018 (identity-anchored KB access control — this ADR adds a new axis to
 the same `kb_access` chokepoint), ADR-026 (peer-verifiable signed membership op-log — the
 new policy field lives in this log).
@@ -11,7 +13,9 @@ resource server — the transport a query-only member authenticates over), ADR-0
 scoped read-through KB query surface — the mechanism this ADR extends from non-members to
 restricted members), ADR-062 (federation registry scaling + unified local/remote-hub
 search — `RemoteHubQueryLayer` is the client-side vehicle this ADR reuses).
-**Tracking:** issue #448 (the gap this ADR resolves).
+**Tracking:** issue #449 (epic tracker). Issue #448 was the original "an ADR is needed
+for this gap" request issue — resolved by #449's creation, now closed; #449 is the real,
+open tracking issue.
 
 ## Context
 

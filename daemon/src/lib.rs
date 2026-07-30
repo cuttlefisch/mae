@@ -7,6 +7,7 @@ pub mod artifact_store;
 pub mod checkpoint;
 pub mod collab_handler;
 pub mod doc_store;
+pub mod kb_query;
 pub mod lease_fence;
 pub mod projector;
 pub mod storage;

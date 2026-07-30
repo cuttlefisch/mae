@@ -23,7 +23,7 @@ use mae_sync::kb::{KbCollectionDoc, KbNodeDoc, Role, TransportPolicy};
 use mae_sync::op_set;
 use serde_json::json;
 
-use crate::kb_query::{self, KbQueryLimits};
+use mae_daemon::kb_query::{self, KbQueryLimits};
 
 fn generous_limits() -> KbQueryLimits {
     KbQueryLimits {
