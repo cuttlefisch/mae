@@ -3,12 +3,17 @@
 //! Extracted here so both `mae-kb` (KB search fallback) and `mae-core`
 //! (file picker, command palette) can use it without circular deps.
 
-/// Normalize separator characters: space and underscore become hyphen.
-/// This allows `"kb daily"` to match `"kb-daily"` and `"window_groups"`.
+/// Normalize separator characters: space and underscore become hyphen,
+/// and backslash becomes forward slash. The backslash mapping matters on
+/// Windows, where `FilePicker::scan` yields OS-native paths (`src\main.rs`)
+/// -- every boundary/basename check below keys off `/` specifically, so
+/// without this a Windows path never hits the basename or boundary-aligned
+/// tiers. See cuttlefisch/mae#534.
 fn normalize_sep(s: &str) -> String {
     s.chars()
         .map(|c| match c {
             ' ' | '_' => '-',
+            '\\' => '/',
             o => o,
         })
         .collect()
@@ -71,13 +76,11 @@ pub fn score_match(path: &str, query: &[char]) -> Option<i64> {
     }
 
     let path_chars: Vec<char> = path_lower.chars().collect();
-    let query_chars: Vec<char> = query
-        .iter()
-        .map(|&c| match c {
-            ' ' | '_' => '-',
-            o => o,
-        })
-        .collect();
+    // Reuse `query_str` (already ran through `normalize_sep`) rather than
+    // re-deriving from `query` with a second, easily-divergent copy of the
+    // same normalization -- this is what caused #534's Tier-5 half of the
+    // bug (the duplicate closure here mapped space/underscore but not `\`).
+    let query_chars: Vec<char> = query_str.chars().collect();
     let mut qi = 0;
     let mut score: i64 = 0;
     let mut last_match_pos: Option<usize> = None;
@@ -188,5 +191,71 @@ mod tests {
             score_match("kb-daily", &q).is_some(),
             "underscore should match hyphen"
         );
+    }
+
+    // Windows-path adversarial coverage (cuttlefisch/mae#534). The oracle
+    // throughout is exact score equality against the equivalent `/`-path,
+    // not just `is_some()` -- a weaker check would pass even if the
+    // Windows path fell into a lower-scoring tier, which is exactly the
+    // bug that shipped unnoticed.
+
+    #[test]
+    fn windows_path_basename_exact_match_same_tier_as_unix() {
+        // Tier 1.5: query exactly equals the basename.
+        let q: Vec<char> = "main.rs".chars().collect();
+        let unix = score_match("src/main.rs", &q);
+        let windows = score_match("src\\main.rs", &q);
+        assert_eq!(unix, windows, "unix: {unix:?}, windows: {windows:?}");
+        assert!(windows.unwrap() >= 750_000 - 11, "expected tier 1.5 score");
+    }
+
+    #[test]
+    fn windows_path_boundary_aligned_match_same_tier_as_unix() {
+        // Tier 4: a contiguous-substring match right after a path
+        // separator should be boundary-aligned (50,000 base) regardless
+        // of which separator byte the platform used.
+        let q: Vec<char> = "config".chars().collect();
+        let unix = score_match("crates/core/config.rs", &q);
+        let windows = score_match("crates\\core\\config.rs", &q);
+        assert_eq!(unix, windows, "unix: {unix:?}, windows: {windows:?}");
+        assert!(
+            windows.unwrap() >= 50_000 - 22,
+            "expected boundary-aligned tier"
+        );
+    }
+
+    #[test]
+    fn windows_path_filename_bonus_same_tier_as_unix() {
+        // Tier 4's filename_bonus: a match inside the final path segment
+        // should score the same whether that segment was split off by
+        // `/` or `\`.
+        let q: Vec<char> = "options".chars().collect();
+        let unix = score_match("crates/core/src/options.rs", &q);
+        let windows = score_match("crates\\core\\src\\options.rs", &q);
+        assert_eq!(unix, windows, "unix: {unix:?}, windows: {windows:?}");
+    }
+
+    #[test]
+    fn windows_path_fuzzy_subsequence_same_score_as_unix() {
+        // Tier 5: the fuzzy subsequence pass also keys off `/` for its
+        // own boundary/last-segment bonuses (`path_chars`/`query_chars`
+        // both go through `normalize_sep`/`query_str` now) -- use a query
+        // that only subsequence-matches, not substring-matches, so this
+        // exercises tier 5 specifically rather than tier 4.
+        let q: Vec<char> = "cfpr".chars().collect();
+        let unix = score_match("crates/core/src/file_picker.rs", &q);
+        let windows = score_match("crates\\core\\src\\file_picker.rs", &q);
+        assert_eq!(unix, windows, "unix: {unix:?}, windows: {windows:?}");
+        assert!(unix.is_some(), "expected a tier-5 fuzzy match, got None");
+    }
+
+    #[test]
+    fn windows_path_no_spurious_match_stays_none_on_both() {
+        // Negative case: a query that shouldn't match at all must stay
+        // `None` on both separator styles -- guards against a fix that
+        // over-normalizes and starts matching things it shouldn't.
+        let q: Vec<char> = "zzz-nonexistent".chars().collect();
+        assert_eq!(score_match("src/main.rs", &q), None);
+        assert_eq!(score_match("src\\main.rs", &q), None);
     }
 }

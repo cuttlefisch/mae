@@ -546,9 +546,13 @@ pub(crate) fn retry_on_transient_sqlite_busy<T, E: std::fmt::Display>(
     retry_on_transient_sqlite_busy_with_deadline(f, DEFAULT_BUSY_RETRY_DEADLINE)
 }
 
-/// Production default — matches `Db::run_with_busy_retry`'s own budget exactly
-/// (principle #8: one tuned constant, not two that can drift apart).
-const DEFAULT_BUSY_RETRY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(20);
+/// Production default — matches `Db::run_with_busy_retry`'s own budget
+/// (principle #8: one tuned constant, not two that can drift apart). That
+/// budget was raised from 20s to 45s after a real Windows CI miss (see
+/// `Db::run_with_busy_retry`'s doc comment in `db.rs` for the full story);
+/// this constant was not updated to match at the time (cuttlefisch/mae#518
+/// item 5) — kept in sync here.
+const DEFAULT_BUSY_RETRY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(45);
 
 /// Test-only seam: the "gives up eventually" tests need a SHORT deadline to
 /// stay fast (a persistent-contention closure genuinely runs for the entire
