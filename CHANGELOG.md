@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.77] - 2026-07-30
+
+### Features
+
+- *(canvas)* Mae-canvas substrate hardening — Wedge, ValueTween<T>, angular hit-testing, wedge options, fixed-pixel split primitive (ADR-070/072) (#555) ([b5769fa](https://github.com/cuttlefisch/mae/commit/b5769fa1a1d46b1368e61dfa6d11d74b1a7044d7))
+
 ## [0.14.76] - 2026-07-30
 
 ### Bug Fixes
@@ -21,6 +27,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - Bump version to 0.14.75 ([42dbf6d](https://github.com/cuttlefisch/mae/commit/42dbf6d7bd264b7149fad68aa59c3f6ee70e9345))
+- Bump version to 0.14.76 ([f8587dd](https://github.com/cuttlefisch/mae/commit/f8587dd76f9066bd923a225ce611099e3c421a62))
 
 ## [0.14.74] - 2026-07-30
 
