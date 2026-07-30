@@ -81,6 +81,7 @@ pub async fn handle_client_with_auth<R, W, A>(
     transport: Transport,
     artifact_store: Arc<dyn crate::artifact_store::ArtifactStore>,
     kb_query_limits: crate::kb_query::KbQueryLimits,
+    self_issue: Option<crate::oauth_self_issue::SelfIssueConfig>,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send,
@@ -125,6 +126,7 @@ pub async fn handle_client_with_auth<R, W, A>(
         transport,
         artifact_store,
         kb_query_limits,
+        self_issue,
     )
     .await;
 }
@@ -140,6 +142,7 @@ pub async fn handle_client<R, W>(
     transport: Transport,
     artifact_store: Arc<dyn crate::artifact_store::ArtifactStore>,
     kb_query_limits: crate::kb_query::KbQueryLimits,
+    self_issue: Option<crate::oauth_self_issue::SelfIssueConfig>,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -154,6 +157,7 @@ pub async fn handle_client<R, W>(
         transport,
         artifact_store,
         kb_query_limits,
+        self_issue,
     )
     .await;
 }
@@ -171,6 +175,7 @@ pub async fn handle_client_authenticated<R, W>(
     transport: Transport,
     artifact_store: Arc<dyn crate::artifact_store::ArtifactStore>,
     kb_query_limits: crate::kb_query::KbQueryLimits,
+    self_issue: Option<crate::oauth_self_issue::SelfIssueConfig>,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -185,6 +190,7 @@ pub async fn handle_client_authenticated<R, W>(
         transport,
         artifact_store,
         kb_query_limits,
+        self_issue,
     )
     .await;
 }
@@ -209,6 +215,7 @@ async fn run_session<R, W>(
     transport: Transport,
     artifact_store: Arc<dyn crate::artifact_store::ArtifactStore>,
     kb_query_limits: crate::kb_query::KbQueryLimits,
+    self_issue: Option<crate::oauth_self_issue::SelfIssueConfig>,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -330,7 +337,7 @@ async fn run_session<R, W>(
                 }
 
                 let mut response = if is_doc {
-                    handle_doc_request_inner(&msg, &doc_store, &broadcaster, start_time, session_id, auth_label.as_deref(), auth_principal.as_deref(), auth_pubkey.as_ref(), &mut session_docs, transport, artifact_store.as_ref(), kb_query_limits).await
+                    handle_doc_request_inner(&msg, &doc_store, &broadcaster, start_time, session_id, auth_label.as_deref(), auth_principal.as_deref(), auth_pubkey.as_ref(), &mut session_docs, transport, artifact_store.as_ref(), kb_query_limits, self_issue.clone()).await
                 } else {
                     mae_mcp::handle_request(
                         &msg, &tool_defs, &tool_tx, &mut session, &broadcaster,
@@ -647,6 +654,7 @@ async fn handle_doc_request(
         Transport::Hub,
         &crate::artifact_store::NoArtifactStore,
         crate::kb_query::KbQueryLimits::default(),
+        None,
     )
     .await
 }
@@ -1635,6 +1643,7 @@ async fn handle_doc_request_inner(
     transport: Transport,
     artifact_store: &dyn crate::artifact_store::ArtifactStore,
     kb_query_limits: crate::kb_query::KbQueryLimits,
+    self_issue: Option<crate::oauth_self_issue::SelfIssueConfig>,
 ) -> JsonRpcResponse {
     let request: JsonRpcRequest = match serde_json::from_str(msg) {
         Ok(r) => r,
@@ -2008,6 +2017,60 @@ async fn handle_doc_request_inner(
             {
                 Ok(result) => JsonRpcResponse::success(id, result),
                 Err(e) => JsonRpcResponse::error(id, e),
+            }
+        }
+
+        // ADR-067 Phase D3: mint a self-issued OAuth bearer token for THIS
+        // connection's own already-mTLS-verified principal -- what lets a
+        // `QueryOnly`-restricted member (or any member) obtain OAuth
+        // `kb/query.*` access without an external authorization server, by
+        // pointing a `RemoteHubQueryLayer` (ADR-062) at this daemon's own
+        // OAuth listener. Deliberately takes NO params: the token is never
+        // KB-scoped (every `kb/query.*` call independently re-checks
+        // `kb_access` using the token's `sub`, exactly like an externally-
+        // issued token already does), so there is nothing here for a caller
+        // to smuggle a different identity through -- `auth_principal` (this
+        // TLS handshake's own verified fingerprint) is the ONLY source of
+        // the minted `sub`, zero additional trust decision needed.
+        "kb/query.self_token" => {
+            let Some(principal) = auth_principal else {
+                return JsonRpcResponse::error(
+                    id,
+                    McpError::internal_error(
+                        "kb/query.self_token requires an authenticated connection".to_string(),
+                    ),
+                );
+            };
+            let Some(si) = self_issue else {
+                return JsonRpcResponse::error(
+                    id,
+                    McpError::internal_error(
+                        "self-issued tokens are not enabled on this daemon \
+                         (oauth.self_issued_tokens_enabled is false, or no \
+                         key-mode identity is configured)"
+                            .to_string(),
+                    ),
+                );
+            };
+            match crate::oauth_self_issue::mint_self_token(
+                &si.identity,
+                principal,
+                &si.audience,
+                si.ttl_secs,
+            ) {
+                Ok(token) => JsonRpcResponse::success(
+                    id,
+                    serde_json::json!({
+                        "token": token,
+                        "token_type": "Bearer",
+                        "expires_in": si.ttl_secs,
+                        "audience": si.audience,
+                    }),
+                ),
+                Err(e) => JsonRpcResponse::error(
+                    id,
+                    McpError::internal_error(format!("failed to mint self-issued token: {e}")),
+                ),
             }
         }
 

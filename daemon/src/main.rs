@@ -308,6 +308,11 @@ async fn main() {
     // access to the same `DocStore`, independent of whether the TCP
     // listener's own auth setup succeeds.
     let mut doc_store_for_query: Option<Arc<doc_store::DocStore>> = None;
+    // ADR-067 Phase D3: the daemon's own key-mode identity, shared with the
+    // OAuth listener below for self-issued-token minting/validation. `None`
+    // for psk/none collab auth (no Ed25519 identity exists) or when collab
+    // is disabled entirely.
+    let mut daemon_identity_for_oauth: Option<Arc<mae_mcp::identity::Identity>> = None;
     if config.collab.enabled {
         let collab_issues = config.check_collab();
         if !collab_issues.is_empty() {
@@ -320,7 +325,7 @@ async fn main() {
             init_doc_store(&config).await
         {
             doc_store_for_query = Some(Arc::clone(&doc_store));
-            spawn_collab_server(
+            daemon_identity_for_oauth = spawn_collab_server(
                 &config,
                 Arc::clone(&state),
                 doc_store,
@@ -357,6 +362,23 @@ async fn main() {
             let key_path = config.oauth.key_path.clone();
             let doc_store = doc_store_for_query.clone();
             let oauth_limiter = conn_limit::ConnLimiter::new(config.oauth.max_connections);
+            // ADR-067 Phase D3: `None` unless BOTH the operator opted in AND
+            // this daemon actually has a key-mode identity to validate
+            // against (see `daemon_identity_for_oauth`'s own doc comment) —
+            // a `kid: "self"` token on any other daemon just falls through
+            // to the ordinary JWKS path (`oauth::handle_request`), where it
+            // fails as an unknown key like any other bogus `kid`.
+            let self_issue = if config.oauth.self_issued_tokens_enabled {
+                daemon_identity_for_oauth.clone().map(|identity| {
+                    mae_daemon::oauth_self_issue::SelfIssueConfig {
+                        identity,
+                        audience: config.oauth.canonical_resource_uri.clone(),
+                        ttl_secs: config.oauth.self_issued_token_ttl_secs,
+                    }
+                })
+            } else {
+                None
+            };
             tokio::spawn(async move {
                 if let Err(e) = oauth::run_oauth_listener(
                     server_config,
@@ -365,6 +387,7 @@ async fn main() {
                     &key_path,
                     doc_store,
                     oauth_limiter,
+                    self_issue,
                 )
                 .await
                 {
@@ -449,6 +472,7 @@ async fn spawn_p2p_mesh(
     start_time: std::time::Instant,
     state: Arc<Mutex<DaemonState>>,
     kb_query_limits: mae_daemon::kb_query::KbQueryLimits,
+    self_issue: Option<mae_daemon::oauth_self_issue::SelfIssueConfig>,
 ) {
     let relay_mode = match p2p::relay_mode_from_config(&p2p.relay) {
         Ok(mode) => mode,
@@ -493,6 +517,7 @@ async fn spawn_p2p_mesh(
         conn_limit::ConnLimiter::new(p2p.max_connections),
         Arc::new(handler::DaemonArtifactStore(Arc::clone(&state))),
         kb_query_limits,
+        self_issue,
     ));
 }
 
@@ -558,13 +583,18 @@ async fn init_doc_store(
     Some((doc_store, broadcaster, server_start_time))
 }
 
+/// ADR-067 Phase D3: returns the daemon's own key-mode identity (`None` for
+/// psk/none auth, which have no such identity) so the caller can share it
+/// with the OAuth listener's self-issued-token support -- the SAME identity
+/// already installed as the doc-store signer and, when P2P is enabled, the
+/// iroh node identity, never a second independently-loaded one.
 async fn spawn_collab_server(
     config: &DaemonConfig,
     state: Arc<Mutex<DaemonState>>,
     doc_store: Arc<doc_store::DocStore>,
     broadcaster: SharedBroadcaster,
     server_start_time: std::time::Instant,
-) {
+) -> Option<Arc<mae_mcp::identity::Identity>> {
     let collab = &config.collab;
     let collab_data_dir = config.resolve_collab_data_dir();
     // ADR-067 Phase D2: `Copy`, reused for both the P2P mesh listener below
@@ -585,6 +615,14 @@ async fn spawn_collab_server(
     //   "key": asymmetric Ed25519 — own identity + authorized_keys (ADR-017).
     //   else:  no auth (trusted loopback).
     let auth_mode = collab.auth.mode.clone();
+    // ADR-067 Phase D3: set inside the "key" arm below; stays `None` for
+    // psk/none auth, which have no Ed25519 identity to self-issue with.
+    let mut identity_for_oauth: Option<Arc<mae_mcp::identity::Identity>> = None;
+    // The mint-side counterpart: `Some` only when self-issued tokens are
+    // BOTH operator-enabled AND this daemon has a key-mode identity to sign
+    // with -- threaded into `collab_handler`'s new `kb/query.self_token` RPC
+    // the same way `kb_query_limits` already is (ADR-067 Phase D2).
+    let mut self_issue_for_collab: Option<mae_daemon::oauth_self_issue::SelfIssueConfig> = None;
     let collab_auth: CollabAuth = match auth_mode.as_str() {
         "psk" => {
             let mut keys: Vec<(Option<String>, String)> = Vec::new();
@@ -620,7 +658,7 @@ async fn spawn_collab_server(
                     "collab.auth.mode = 'psk' but no keys available (empty keystore and no psk)"
                 );
                 warn!("collab service disabled");
-                return;
+                return None;
             }
             info!(
                 auth = "psk",
@@ -635,7 +673,7 @@ async fn spawn_collab_server(
                 None => {
                     error!("collab.auth.mode = 'key' but no identity dir (set XDG_DATA_HOME/HOME)");
                     warn!("collab service disabled");
-                    return;
+                    return None;
                 }
             };
             let identity = match mae_mcp::identity::Identity::load_or_generate(&dir, "daemon") {
@@ -643,9 +681,17 @@ async fn spawn_collab_server(
                 Err(e) => {
                     error!(error = %e, dir = %dir.display(), "failed to load daemon identity");
                     warn!("collab service disabled");
-                    return;
+                    return None;
                 }
             };
+            identity_for_oauth = Some(Arc::clone(&identity));
+            if config.oauth.self_issued_tokens_enabled {
+                self_issue_for_collab = Some(mae_daemon::oauth_self_issue::SelfIssueConfig {
+                    identity: Arc::clone(&identity),
+                    audience: config.oauth.canonical_resource_uri.clone(),
+                    ttl_secs: config.oauth.self_issued_token_ttl_secs,
+                });
+            }
             let ak_path = collab
                 .auth
                 .authorized_keys_path()
@@ -658,7 +704,7 @@ async fn spawn_collab_server(
                     ak_path.display()
                 );
                 warn!("collab service disabled");
-                return;
+                return None;
             }
             let authorized = Arc::new(authorized);
 
@@ -700,6 +746,7 @@ async fn spawn_collab_server(
                     server_start_time,
                     Arc::clone(&state),
                     kb_query_limits,
+                    self_issue_for_collab.clone(),
                 )
                 .await;
             }
@@ -727,7 +774,7 @@ async fn spawn_collab_server(
                     Err(e) => {
                         error!(error = %e, "failed to build TLS server config");
                         warn!("collab service disabled");
-                        return;
+                        return None;
                     }
                 }
             } else {
@@ -756,12 +803,12 @@ async fn spawn_collab_server(
         Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
             error!(addr = %collab.bind, "collab address already in use");
             warn!("collab service disabled");
-            return;
+            return None;
         }
         Err(e) => {
             error!(error = %e, addr = %collab.bind, "failed to bind collab TCP");
             warn!("collab service disabled");
-            return;
+            return None;
         }
     };
 
@@ -836,6 +883,7 @@ async fn spawn_collab_server(
                     let bc = Arc::clone(&broadcaster);
                     let auth = collab_auth.clone();
                     let artifacts = Arc::clone(&artifact_store);
+                    let self_issue = self_issue_for_collab.clone();
                     tokio::spawn(async move {
                         let _guard = guard;
                         // mTLS path needs the whole stream (cannot pre-split).
@@ -898,6 +946,7 @@ async fn spawn_collab_server(
                                         mae_sync::kb::Transport::Hub,
                                         artifacts,
                                         kb_query_limits,
+                                        self_issue,
                                     )
                                     .await;
                                 }
@@ -920,6 +969,7 @@ async fn spawn_collab_server(
                                     mae_sync::kb::Transport::Hub,
                                     artifacts,
                                     kb_query_limits,
+                                    self_issue,
                                 )
                                 .await;
                             }
@@ -938,6 +988,7 @@ async fn spawn_collab_server(
                                     mae_sync::kb::Transport::Hub,
                                     artifacts,
                                     kb_query_limits,
+                                    self_issue,
                                 )
                                 .await;
                             }
@@ -951,6 +1002,7 @@ async fn spawn_collab_server(
                                     mae_sync::kb::Transport::Hub,
                                     artifacts,
                                     kb_query_limits,
+                                    self_issue,
                                 )
                                 .await;
                             }
@@ -962,6 +1014,8 @@ async fn spawn_collab_server(
             }
         }
     });
+
+    identity_for_oauth
 }
 
 fn run_check_config() {

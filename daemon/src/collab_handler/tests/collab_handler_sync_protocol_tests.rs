@@ -246,6 +246,7 @@ async fn full_client_session_over_pipe() {
             Transport::Hub,
             Arc::new(crate::artifact_store::NoArtifactStore),
             crate::kb_query::KbQueryLimits::default(),
+            None,
         )
         .await;
     });

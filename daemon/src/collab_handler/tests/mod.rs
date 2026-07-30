@@ -23,6 +23,7 @@ mod collab_handler_protocol_dispatch_tests;
 mod collab_handler_rebind_gate_tests;
 mod collab_handler_recovery_key_tests;
 mod collab_handler_replication_policy_tests;
+mod collab_handler_self_issue_token_tests;
 mod collab_handler_signed_content_relay_tests;
 mod collab_handler_sync_protocol_tests;
 mod collab_handler_transport_oplog_tests;
@@ -97,6 +98,7 @@ pub(crate) async fn kb_share_as(
         Transport::Hub,
         &crate::artifact_store::NoArtifactStore,
         crate::kb_query::KbQueryLimits::default(),
+        None,
     )
     .await
 }
@@ -122,6 +124,7 @@ pub(crate) async fn dispatch_as(
         Transport::Hub,
         &crate::artifact_store::NoArtifactStore,
         crate::kb_query::KbQueryLimits::default(),
+        None,
     )
     .await
 }
@@ -151,6 +154,38 @@ pub(crate) async fn dispatch_as_with_artifacts(
         Transport::Hub,
         artifact_store,
         crate::kb_query::KbQueryLimits::default(),
+        None,
+    )
+    .await
+}
+
+/// Like [`dispatch_as`], but with an explicit `self_issue` config — for
+/// tests exercising `kb/query.self_token` (ADR-067 Phase D3), which needs a
+/// real `Some(SelfIssueConfig)` rather than `dispatch_as`'s hardcoded
+/// `None`.
+pub(crate) async fn dispatch_as_with_self_issue(
+    store: &Arc<DocStore>,
+    bc: &SharedBroadcaster,
+    auth_label: Option<&str>,
+    auth_principal: Option<&str>,
+    msg: serde_json::Value,
+    docs: &mut HashSet<String>,
+    self_issue: Option<crate::oauth_self_issue::SelfIssueConfig>,
+) -> JsonRpcResponse {
+    handle_doc_request_inner(
+        &msg.to_string(),
+        store,
+        bc,
+        std::time::Instant::now(),
+        0,
+        auth_label,
+        auth_principal,
+        None,
+        docs,
+        Transport::Hub,
+        &crate::artifact_store::NoArtifactStore,
+        crate::kb_query::KbQueryLimits::default(),
+        self_issue,
     )
     .await
 }

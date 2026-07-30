@@ -707,6 +707,7 @@ mod tests {
             crate::conn_limit::ConnLimiter::new(0),
             Arc::new(mae_daemon::artifact_store::NoArtifactStore),
             mae_daemon::kb_query::KbQueryLimits::default(),
+            None,
         ));
         (addr, a_store, a_bc)
     }
