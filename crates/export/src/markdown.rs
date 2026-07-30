@@ -122,6 +122,14 @@ fn render_element(md: &mut String, element: &OrgElement) {
             }
             md.push('\n');
         }
+        OrgElement::Example(content) => {
+            // Fenced code block with no language, matching how SrcBlock's
+            // markdown output is rendered a few lines above -- markdown has
+            // no separate "verbatim, unhighlighted" construct.
+            md.push_str("```\n");
+            md.push_str(content);
+            md.push_str("\n```\n\n");
+        }
         OrgElement::HorizontalRule => {
             md.push_str("---\n\n");
         }

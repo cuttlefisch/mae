@@ -70,6 +70,10 @@ pub enum OrgElement {
         has_header: bool,
     },
     Quote(String),
+    /// `#+begin_example` ... `#+end_example` -- like `SrcBlock` but with no
+    /// language/syntax highlighting and no inline-markup conversion of its
+    /// contents, only escaping.
+    Example(String),
     HorizontalRule,
     Comment(String),
     ExportBlock {
@@ -144,17 +148,29 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
             continue;
         }
 
-        // Headings (any level). A heading requires a space directly after
-        // the leading `*` run (or nothing after it at all) -- without this
-        // check, markdown-style `**bold text**` gets misparsed as a
-        // level-2 heading, since `starts_with("**")` alone doesn't
-        // distinguish "** " from "**bold".
-        let leading_stars = trimmed.chars().take_while(|&c| c == '*').count();
-        let is_heading = leading_stars > 0
-            && (trimmed.len() == leading_stars
-                || trimmed.as_bytes().get(leading_stars) == Some(&b' '));
-        if is_heading {
-            let level = leading_stars as u8;
+        // PROPERTIES drawers (`:PROPERTIES:` ... `:END:`, e.g. `:ID:`,
+        // `:KIND:`). Org property drawers are metadata, not renderable
+        // content -- without this branch they fall through to the generic
+        // paragraph collector below and leak into the rendered output
+        // verbatim. Matched case-insensitively like the other keyword
+        // checks above; org drawer markers are conventionally uppercase
+        // but nothing in the spec requires it.
+        if trimmed.eq_ignore_ascii_case(":properties:") {
+            i += 1;
+            while i < lines.len() {
+                if lines[i].trim().eq_ignore_ascii_case(":end:") {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            continue;
+        }
+
+        // Headings (any level). See `is_heading_line`'s doc comment for why
+        // a naive `starts_with("**")` is wrong.
+        if is_heading_line(trimmed) {
+            let level = trimmed.chars().take_while(|&c| c == '*').count() as u8;
             let rest = trimmed[level as usize..].trim();
             let (title, tags) = parse_heading_tags(rest);
             let (todo, clean_title) = parse_heading_todo(&title);
@@ -245,6 +261,29 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
                 i += 1;
             }
             elements.push(OrgElement::Quote(quote_lines.join("\n")));
+            i += 1;
+            continue;
+        }
+
+        // Example blocks -- like a src block, but with no language/syntax
+        // highlighting and (per org convention) no inline-markup conversion
+        // of its contents, only HTML-escaping. Same shape as the quote-block
+        // branch above.
+        if lower.starts_with("#+begin_example") {
+            let mut example_lines = Vec::new();
+            i += 1;
+            while i < lines.len() {
+                if lines[i]
+                    .trim()
+                    .to_ascii_lowercase()
+                    .starts_with("#+end_example")
+                {
+                    break;
+                }
+                example_lines.push(lines[i]);
+                i += 1;
+            }
+            elements.push(OrgElement::Example(example_lines.join("\n")));
             i += 1;
             continue;
         }
@@ -393,8 +432,7 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
         while i < lines.len() {
             let pl = lines[i].trim();
             if pl.is_empty()
-                || pl.starts_with("* ")
-                || pl.starts_with("**")
+                || is_heading_line(pl)
                 || pl.starts_with("#+")
                 || pl.starts_with("| ")
                 || pl.starts_with("- ")
@@ -410,6 +448,20 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
     }
 
     (meta, elements)
+}
+
+/// A heading requires a space directly after the leading `*` run (or
+/// nothing after it at all) -- without this check, markdown-style
+/// `**bold text**` gets misparsed as a level-2 heading, since
+/// `starts_with("**")` alone doesn't distinguish "** " from "**bold".
+/// `trimmed` must already be `.trim()`-ed. Shared by both the heading
+/// element detector and the paragraph-continuation break check, which had
+/// the same latent bug independently (cuttlefisch/mae#528) since it
+/// duplicated the naive check instead of sharing this one.
+fn is_heading_line(trimmed: &str) -> bool {
+    let leading_stars = trimmed.chars().take_while(|&c| c == '*').count();
+    leading_stars > 0
+        && (trimmed.len() == leading_stars || trimmed.as_bytes().get(leading_stars) == Some(&b' '))
 }
 
 fn strip_keyword<'a>(line: &'a str, keyword: &str) -> Option<&'a str> {
@@ -525,6 +577,24 @@ pub fn convert_inline_markup_str(text: &str, target: InlineTarget) -> String {
                     continue;
                 }
             }
+            'h' if is_bare_url_start(text, i) => {
+                let end = find_bare_url_end(text, i);
+                let url = &text[i..end];
+                match target {
+                    InlineTarget::Html => {
+                        result.push_str(&format!(
+                            "<a href=\"{}\">{}</a>",
+                            html_escape(url),
+                            html_escape(url)
+                        ));
+                    }
+                    InlineTarget::Markdown => {
+                        result.push_str(&format!("<{}>", url));
+                    }
+                }
+                i = end;
+                continue;
+            }
             '[' if text[i..].starts_with("[[") => {
                 if let Some((end, link_target, label)) = parse_org_link_str(text, i) {
                     match target {
@@ -610,6 +680,37 @@ fn find_markup_end_str(text: &str, start: usize, marker: char) -> Option<(usize,
     None
 }
 
+/// True if `text[pos..]` begins a bare (unbracketed) `http://`/`https://`
+/// URL that should be autolinked. Unlike the emphasis markers, a URL scheme
+/// is an unambiguous enough signal on its own -- no preceding-whitespace
+/// requirement, so `(see https://example.com)` still autolinks even though
+/// the scheme starts right after `(`.
+fn is_bare_url_start(text: &str, pos: usize) -> bool {
+    let rest = &text[pos..];
+    rest.starts_with("http://") || rest.starts_with("https://")
+}
+
+/// Find the end (exclusive byte offset) of a bare URL starting at `start`.
+/// Runs until whitespace, or a trailing punctuation mark that's more likely
+/// to be sentence punctuation than part of the URL (mirrors common
+/// autolink conventions, e.g. GFM's).
+fn find_bare_url_end(text: &str, start: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut end = start;
+    while end < bytes.len() && !bytes[end].is_ascii_whitespace() {
+        end += 1;
+    }
+    while end > start
+        && matches!(
+            bytes[end - 1],
+            b'.' | b',' | b')' | b']' | b'!' | b'?' | b':' | b';'
+        )
+    {
+        end -= 1;
+    }
+    end
+}
+
 fn parse_org_link_str(text: &str, start: usize) -> Option<(usize, &str, Option<&str>)> {
     // [[target][label]] or [[target]]
     if !text[start..].starts_with("[[") {
@@ -631,6 +732,32 @@ fn parse_org_link_str(text: &str, start: usize) -> Option<(usize, &str, Option<&
         return Some((after_open + close_pos + 1, target, None));
     }
     None
+}
+
+/// State of a parsed org checkbox marker (`[ ]`/`[X]`/`[-]`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CheckboxState {
+    Unchecked,
+    Checked,
+    /// `[-]` -- a parent checklist item with some but not all children
+    /// checked. Org itself derives this automatically; we only need to
+    /// render whatever marker is already in the source.
+    Partial,
+}
+
+/// Parse a leading org checkbox marker from a list item's content, if
+/// present. `- [ ] Buy milk`'s `ListItem::content` (bullet already
+/// stripped by the list parser) is `"[ ] Buy milk"` -- returns the marker
+/// state and the remaining text with the marker and its trailing
+/// whitespace removed.
+pub fn parse_checkbox_marker(content: &str) -> Option<(CheckboxState, &str)> {
+    let state = match content.get(0..3)? {
+        "[ ]" => CheckboxState::Unchecked,
+        "[X]" | "[x]" => CheckboxState::Checked,
+        "[-]" => CheckboxState::Partial,
+        _ => return None,
+    };
+    Some((state, content[3..].trim_start()))
 }
 
 pub fn html_escape(s: &str) -> String {
@@ -952,5 +1079,172 @@ mod tests {
             &elements2[0],
             OrgElement::Heading { level: 1, .. }
         ));
+    }
+
+    // cuttlefisch/mae#528's remaining bug + #523's three missing features.
+
+    #[test]
+    fn properties_drawer_is_skipped_not_leaked_into_output() {
+        // Real repro from assets/manual/concept-modules.org.
+        let src = ":PROPERTIES:\n:ID: concept:modules\n:KIND: concept\n:ALIASES: plugins, packages\n:END:\n#+title: Module System\n\nBody text.\n";
+        let (meta, elements) = parse_org_document(src);
+        assert_eq!(meta.title.as_deref(), Some("Module System"));
+        assert_eq!(elements.len(), 1, "got {elements:?}");
+        assert!(matches!(&elements[0], OrgElement::Paragraph(p) if p == "Body text."));
+    }
+
+    #[test]
+    fn properties_drawer_mid_document_after_a_heading_is_also_skipped() {
+        // Org drawers commonly appear right after a heading, not only at
+        // the very top of the file.
+        let src = "* Heading\n:PROPERTIES:\n:ID: h1\n:END:\nBody under heading.\n";
+        let (_, elements) = parse_org_document(src);
+        assert_eq!(elements.len(), 2, "got {elements:?}");
+        assert!(matches!(&elements[0], OrgElement::Heading { .. }));
+        assert!(matches!(&elements[1], OrgElement::Paragraph(p) if p == "Body under heading."));
+    }
+
+    #[test]
+    fn unterminated_properties_drawer_consumes_to_eof_without_hanging() {
+        // Adversarial: a drawer missing its `:END:` must not infinite-loop
+        // or panic -- it should just consume the rest of the document.
+        let src = ":PROPERTIES:\n:ID: x\nno end marker here\n";
+        let (_, elements) = parse_org_document(src);
+        assert_eq!(elements.len(), 0, "got {elements:?}");
+    }
+
+    #[test]
+    fn paragraph_continuation_with_unspaced_double_star_is_not_split_early() {
+        // The same latent bug #536 fixed in heading DETECTION also existed,
+        // independently, in the paragraph-continuation break check -- a
+        // continuation line like "**Note:** ..." would wrongly end the
+        // paragraph early (as if a heading were starting) even though
+        // heading detection itself would correctly reject it. Both now
+        // share `is_heading_line`.
+        let src = "First line of the paragraph.\n**Note:** this continues the SAME paragraph, not a new one.\n";
+        let (_, elements) = parse_org_document(src);
+        assert_eq!(elements.len(), 1, "got {elements:?}");
+        assert!(matches!(&elements[0], OrgElement::Paragraph(p)
+            if p.contains("First line") && p.contains("**Note:**")));
+    }
+
+    #[test]
+    fn begin_example_block_parses_and_is_not_inline_markup_converted() {
+        let src = "#+begin_example\nliteral *not bold* text\n#+end_example\n";
+        let (_, elements) = parse_org_document(src);
+        assert_eq!(elements.len(), 1, "got {elements:?}");
+        assert!(matches!(&elements[0], OrgElement::Example(c) if c == "literal *not bold* text"));
+
+        let html = html::HtmlExporter.export(&OrgMeta::default(), &elements);
+        assert!(
+            html.contains("<pre class=\"example\">literal *not bold* text</pre>"),
+            "example content must be escaped-only, not markup-converted: {html}"
+        );
+    }
+
+    #[test]
+    fn begin_example_block_html_escapes_its_content() {
+        let src = "#+begin_example\n<script>alert(1)</script>\n#+end_example\n";
+        let (_, elements) = parse_org_document(src);
+        let html = html::HtmlExporter.export(&OrgMeta::default(), &elements);
+        assert!(!html.contains("<script>"), "must be escaped: {html}");
+        assert!(html.contains("&lt;script&gt;"), "got: {html}");
+    }
+
+    #[test]
+    fn bare_url_is_autolinked_in_html() {
+        let result = convert_inline_markup_str(
+            "See https://example.com/docs for details.",
+            InlineTarget::Html,
+        );
+        assert_eq!(
+            result,
+            "See <a href=\"https://example.com/docs\">https://example.com/docs</a> for details."
+        );
+    }
+
+    #[test]
+    fn bare_url_trailing_punctuation_is_excluded_from_the_link() {
+        // "https://example.com." (with a trailing period ending the
+        // sentence) must link only the URL, not swallow the period.
+        let result = convert_inline_markup_str("Go to https://example.com.", InlineTarget::Html);
+        assert_eq!(
+            result,
+            "Go to <a href=\"https://example.com\">https://example.com</a>."
+        );
+    }
+
+    #[test]
+    fn bare_url_inside_parens_still_autolinks() {
+        let result = convert_inline_markup_str("(see https://example.com)", InlineTarget::Html);
+        assert_eq!(
+            result,
+            "(see <a href=\"https://example.com\">https://example.com</a>)"
+        );
+    }
+
+    #[test]
+    fn bracketed_org_link_is_unaffected_by_bare_url_handling() {
+        // Regression guard: an existing [[url][label]] link must still go
+        // through the dedicated org-link arm, not get double-processed by
+        // the new bare-URL arm.
+        let result =
+            convert_inline_markup_str("[[https://example.com][Example]]", InlineTarget::Html);
+        assert_eq!(result, "<a href=\"https://example.com\">Example</a>");
+    }
+
+    #[test]
+    fn checkbox_marker_parses_all_three_states() {
+        assert_eq!(
+            parse_checkbox_marker("[ ] Buy milk"),
+            Some((CheckboxState::Unchecked, "Buy milk"))
+        );
+        assert_eq!(
+            parse_checkbox_marker("[X] Done thing"),
+            Some((CheckboxState::Checked, "Done thing"))
+        );
+        assert_eq!(
+            parse_checkbox_marker("[x] also done"),
+            Some((CheckboxState::Checked, "also done"))
+        );
+        assert_eq!(
+            parse_checkbox_marker("[-] Partially done"),
+            Some((CheckboxState::Partial, "Partially done"))
+        );
+    }
+
+    #[test]
+    fn checkbox_marker_negative_cases() {
+        assert_eq!(parse_checkbox_marker("Not a checkbox at all"), None);
+        assert_eq!(parse_checkbox_marker("[Not a checkbox]"), None);
+        assert_eq!(parse_checkbox_marker(""), None);
+        assert_eq!(parse_checkbox_marker("[Q]"), None);
+    }
+
+    #[test]
+    fn checkbox_list_items_render_as_disabled_html_checkboxes() {
+        let src = "- [ ] Unchecked task\n- [X] Checked task\n- [-] Partial task\n- Plain item, no checkbox\n";
+        let (_, elements) = parse_org_document(src);
+        let html = html::HtmlExporter.export(&OrgMeta::default(), &elements);
+        assert!(
+            html.contains(
+                "<input type=\"checkbox\" disabled aria-checked=\"false\"> Unchecked task"
+            ),
+            "got: {html}"
+        );
+        assert!(
+            html.contains(
+                "<input type=\"checkbox\" disabled checked aria-checked=\"true\"> Checked task"
+            ),
+            "got: {html}"
+        );
+        assert!(
+            html.contains("<input type=\"checkbox\" disabled aria-checked=\"mixed\"> Partial task"),
+            "got: {html}"
+        );
+        assert!(
+            html.contains("<li>Plain item, no checkbox</li>"),
+            "a plain list item must render exactly as before, no stray checkbox markup: {html}"
+        );
     }
 }
