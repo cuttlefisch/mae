@@ -61,8 +61,18 @@ use test_primitives::register_test_primitive_fns;
 /// Foreign functions require Send + Sync + 'static closures.
 /// Arc<Mutex<>> satisfies these bounds, and since the VM is
 /// single-threaded, the mutex is never contended.
+///
+/// @stability: unstable -- the struct is `pub` only so its type can be
+/// named by extra-kernel-crates registrar functions (see
+/// `crates/scheme-extra`, #521); fields are deliberately still private.
+/// Do not add `pub` to individual fields speculatively -- widen only when
+/// a real out-of-tree consumer needs a specific one, and add it as a
+/// narrow accessor method (see `kb_store()` below), matching this file's
+/// existing `vm()`/`vm_mut()` accessor precedent, not blanket field
+/// exposure.
+#[doc(hidden)]
 #[derive(Default)]
-struct SharedState {
+pub struct SharedState {
     /// (keymap_name, key_string, command_name)
     keymap_bindings: Vec<(String, String, String)>,
     /// (keymap_name, parent_name) — new keymaps to create
@@ -310,6 +320,20 @@ struct SharedState {
     gc_stats_snapshot: crate::vm::GcStats,
 }
 
+impl SharedState {
+    /// Read-only access to the primary KB store, if one is registered
+    /// (mirrors `kb_queries.rs`'s internal `state.kb_store` reads). The
+    /// narrow public accessor out-of-tree kernel-primitive crates use
+    /// instead of reaching into `SharedState`'s (deliberately still-private)
+    /// field list. Grow this impl block on demand as real third-party
+    /// crates need specific additional reads -- do not pre-emptively wrap
+    /// every field.
+    #[doc(hidden)]
+    pub fn kb_store(&self) -> Option<Arc<dyn mae_kb::KbStore>> {
+        self.kb_store.clone()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum VisualOp {
     AddRect {
@@ -417,6 +441,22 @@ impl SchemeRuntime {
     /// Read-only access to the VM for LSP introspection.
     pub fn vm(&self) -> &Vm {
         &self.vm
+    }
+
+    /// The shared, `Arc`-cloned handle to this runtime's `SharedState` --
+    /// the extra-kernel-crates extension point (#521) uses this, together
+    /// with [`vm_mut`](Self::vm_mut), to register additional out-of-tree
+    /// primitives right after construction (see `crates/mae/src/main.rs`'s
+    /// call to `mae_scheme_extra::register_all`). `crates/scheme` itself
+    /// deliberately does not call into `crates/scheme-extra` -- that would
+    /// be a circular crate dependency (`scheme-extra` already depends on
+    /// `scheme` for the `Vm`/`SharedState` types); the caller that
+    /// constructs a `SchemeRuntime` is the one that wires the two together.
+    ///
+    /// @stability: unstable (#521)
+    #[doc(hidden)]
+    pub fn shared_state(&self) -> Arc<Mutex<SharedState>> {
+        self.shared.clone()
     }
 
     /// Mutable access to the VM for DAP debugging (breakpoints, step mode, debug mode).

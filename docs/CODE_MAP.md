@@ -16,6 +16,7 @@ graph TD
     mae --> mae_mcp
     mae --> mae_renderer
     mae --> mae_scheme
+    mae --> mae_scheme_extra
     mae --> mae_shell
     mae --> mae_sync
     mae_agent_cli --> mae_ai
@@ -55,6 +56,7 @@ graph TD
     mae_scheme --> mae_core
     mae_scheme --> mae_kb
     mae_scheme --> mae_sync
+    mae_scheme_extra --> mae_scheme
     mae_shell[mae-shell]
     mae_snippets[mae-snippets]
     mae_spell[mae-spell]
@@ -402,6 +404,14 @@ Source: `crates/scheme/src/lib.rs`
 | `stdlib` | mod |
 | `value` | mod |
 | `vm` | mod |
+
+## mae-scheme-extra
+
+Source: `crates/scheme-extra/src/lib.rs`
+
+| Item | Kind |
+|------|------|
+| `register_all` | fn |
 
 ## mae-shell
 

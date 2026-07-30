@@ -578,6 +578,17 @@ fn main() -> io::Result<()> {
         }
     };
 
+    // Extra-kernel-crates extension point (#521): a downstream fork wires
+    // additional out-of-tree Scheme primitives by editing
+    // crates/scheme-extra's own Cargo.toml + lib.rs (see that crate's doc
+    // comment) and building with --features mae/extra-kernel-crates.
+    // Nothing else in this file changes when a new extra crate is added.
+    #[cfg(feature = "extra-kernel-crates")]
+    {
+        let shared = scheme.shared_state();
+        mae_scheme_extra::register_all(scheme.vm_mut(), &shared);
+    }
+
     // Load init.scm and history.scm (skipped in clean mode)
     if !clean_mode {
         debug!("loading init.scm and history");

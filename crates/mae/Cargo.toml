@@ -39,6 +39,7 @@ mae-mcp = { path = "../../shared/mcp" }
 mae-sync = { path = "../../shared/sync" }
 mae-gui = { path = "../gui", optional = true }
 winit = { version = "0.30", optional = true }
+mae-scheme-extra = { path = "../scheme-extra", optional = true }
 crossterm = { version = "0.29", features = ["event-stream"] }
 tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "sync"] }
 futures = "0.3"
@@ -69,6 +70,11 @@ gui = ["dep:mae-gui", "dep:winit"]
 # ADR-053 surface, no local replication). Off by default — pulls a TLS+HTTP client into
 # the binary only when opted in.
 remote-hub = ["mae-core/remote-hub"]
+# Issue #521: compile in additional out-of-tree Scheme kernel primitives
+# via crates/scheme-extra (a downstream fork's own extension point) — see
+# that crate's doc comment. Off by default; a no-op until a downstream
+# fork adds its own crate as a dependency there.
+extra-kernel-crates = ["dep:mae-scheme-extra"]
 
 [dev-dependencies]
 tempfile = "3.27.0"

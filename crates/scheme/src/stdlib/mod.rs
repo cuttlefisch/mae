@@ -19,6 +19,7 @@
 mod base;
 mod char;
 mod io;
+pub mod json;
 pub mod libraries;
 pub mod mae_async;
 mod string;
@@ -46,4 +47,5 @@ pub fn register_r7rs_libraries(vm: &mut Vm) {
 /// Register mae-specific libraries (beyond R7RS).
 pub fn register_mae_libs(vm: &mut Vm) {
     mae_async::register(vm);
+    json::register(vm);
 }
