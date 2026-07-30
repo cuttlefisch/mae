@@ -2,11 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.14.75] - 2026-07-30
+## [0.14.76] - 2026-07-30
 
 ### Bug Fixes
 
 - *(kb)* Backslash path-separator scoring bug (#534) + retry-deadline alignment (#518) (#537) ([8820f02](https://github.com/cuttlefisch/mae/commit/8820f028df14599b0a45b1f24268a1e10481a984))
+- *(export)* PROPERTIES drawer leak (#528) + bare URLs, example blocks, checkboxes (#523) (#538) ([312baca](https://github.com/cuttlefisch/mae/commit/312baca3eaa03e66be9cc5a784f963935b3c3d59))
+
+### Documentation
+
+- *(adr)* ADR-070..074 — KB graph-view UX overhaul (canvas substrate, chord redesign, live daemon-hosted HTML view) (#541) ([bfc9c00](https://github.com/cuttlefisch/mae/commit/bfc9c00ef41f79cf3bb4cb7cc25392aa175983b9))
+
+### Features
+
+- *(module-system)* Init.scm KB graph-view guidance, pending_* docs, kb-register primitive (#539) ([d928f00](https://github.com/cuttlefisch/mae/commit/d928f006bf0b4c044e39f5411a72850edcaeb3bc))
+- *(scheme)* Extra-kernel-crates extension point + JSON primitives (#540) ([128f0f5](https://github.com/cuttlefisch/mae/commit/128f0f5028c02b921f0af9434084ce282c24213b))
+
+### Miscellaneous
+
+- Bump version to 0.14.75 ([42dbf6d](https://github.com/cuttlefisch/mae/commit/42dbf6d7bd264b7149fad68aa59c3f6ee70e9345))
 
 ## [0.14.74] - 2026-07-30
 
