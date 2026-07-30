@@ -50,6 +50,8 @@ pub fn register_all(_vm: &mut Vm, _shared: &Arc<Mutex<SharedState>>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mae_scheme::lisp_error::Arity;
+    use mae_scheme::value::Value;
 
     /// Compile-time-only assertion that `register_all` genuinely has the
     /// documented shape, and that `SharedState` is reachable as
@@ -58,5 +60,32 @@ mod tests {
     #[test]
     fn register_all_matches_the_documented_registrar_shape() {
         let _: fn(&mut Vm, &Arc<Mutex<SharedState>>) = register_all;
+    }
+
+    /// End-to-end validation of the actual mechanism a real downstream
+    /// crate would rely on: `Vm::register_fn` called from OUTSIDE
+    /// `crates/scheme` genuinely registers a primitive callable via
+    /// `Vm::eval`, and a closure defined here can read `SharedState`
+    /// through its own narrow accessor -- not just that the types compile.
+    #[test]
+    fn a_primitive_registered_from_this_crate_is_callable_via_eval() {
+        let mut vm = Vm::new();
+        let shared: Arc<Mutex<SharedState>> = Arc::new(Mutex::new(SharedState::default()));
+        let shared_for_closure = shared.clone();
+        vm.register_fn(
+            "extra-kernel-crate-test-primitive",
+            "Validation-only primitive proving the extension point works end to end",
+            Arity::Fixed(0),
+            move |_args: &[Value]| {
+                let has_store = shared_for_closure.lock().kb_store().is_some();
+                Ok(Value::Bool(has_store))
+            },
+        );
+        let result = vm.eval("(extra-kernel-crate-test-primitive)").unwrap();
+        assert_eq!(
+            result,
+            Value::Bool(false),
+            "no KB store was injected into this SharedState, so kb_store() should read None"
+        );
     }
 }
