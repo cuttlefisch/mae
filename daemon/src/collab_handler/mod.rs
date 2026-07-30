@@ -80,6 +80,7 @@ pub async fn handle_client_with_auth<R, W, A>(
     start_time: std::time::Instant,
     transport: Transport,
     artifact_store: Arc<dyn crate::artifact_store::ArtifactStore>,
+    kb_query_limits: crate::kb_query::KbQueryLimits,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin + Send,
@@ -123,6 +124,7 @@ pub async fn handle_client_with_auth<R, W, A>(
         start_time,
         transport,
         artifact_store,
+        kb_query_limits,
     )
     .await;
 }
@@ -137,6 +139,7 @@ pub async fn handle_client<R, W>(
     start_time: std::time::Instant,
     transport: Transport,
     artifact_store: Arc<dyn crate::artifact_store::ArtifactStore>,
+    kb_query_limits: crate::kb_query::KbQueryLimits,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -150,6 +153,7 @@ pub async fn handle_client<R, W>(
         start_time,
         transport,
         artifact_store,
+        kb_query_limits,
     )
     .await;
 }
@@ -166,6 +170,7 @@ pub async fn handle_client_authenticated<R, W>(
     start_time: std::time::Instant,
     transport: Transport,
     artifact_store: Arc<dyn crate::artifact_store::ArtifactStore>,
+    kb_query_limits: crate::kb_query::KbQueryLimits,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -179,6 +184,7 @@ pub async fn handle_client_authenticated<R, W>(
         start_time,
         transport,
         artifact_store,
+        kb_query_limits,
     )
     .await;
 }
@@ -202,6 +208,7 @@ async fn run_session<R, W>(
     start_time: std::time::Instant,
     transport: Transport,
     artifact_store: Arc<dyn crate::artifact_store::ArtifactStore>,
+    kb_query_limits: crate::kb_query::KbQueryLimits,
 ) where
     R: AsyncBufRead + Unpin + Send + 'static,
     W: AsyncWrite + Unpin,
@@ -323,7 +330,7 @@ async fn run_session<R, W>(
                 }
 
                 let mut response = if is_doc {
-                    handle_doc_request_inner(&msg, &doc_store, &broadcaster, start_time, session_id, auth_label.as_deref(), auth_principal.as_deref(), auth_pubkey.as_ref(), &mut session_docs, transport, artifact_store.as_ref()).await
+                    handle_doc_request_inner(&msg, &doc_store, &broadcaster, start_time, session_id, auth_label.as_deref(), auth_principal.as_deref(), auth_pubkey.as_ref(), &mut session_docs, transport, artifact_store.as_ref(), kb_query_limits).await
                 } else {
                     mae_mcp::handle_request(
                         &msg, &tool_defs, &tool_tx, &mut session, &broadcaster,
@@ -639,6 +646,7 @@ async fn handle_doc_request(
         session_docs,
         Transport::Hub,
         &crate::artifact_store::NoArtifactStore,
+        crate::kb_query::KbQueryLimits::default(),
     )
     .await
 }
@@ -1626,6 +1634,7 @@ async fn handle_doc_request_inner(
     session_docs: &mut HashSet<String>,
     transport: Transport,
     artifact_store: &dyn crate::artifact_store::ArtifactStore,
+    kb_query_limits: crate::kb_query::KbQueryLimits,
 ) -> JsonRpcResponse {
     let request: JsonRpcRequest = match serde_json::from_str(msg) {
         Ok(r) => r,
@@ -1971,6 +1980,35 @@ async fn handle_doc_request_inner(
                 &params,
             )
             .await
+        }
+
+        // ADR-067 Phase D2: the live scoped read-through KB query surface
+        // (ADR-053), previously reachable only over the OAuth HTTPS listener
+        // (`daemon/src/oauth.rs`) — closes the gap where ADR-053's own
+        // Decision-1 prose claimed mTLS reachability that was never actually
+        // implemented. Reuses `crate::kb_query::dispatch` UNCHANGED — same
+        // access gate (`check_kb_read_access`, Read-only), same encryption-
+        // aware branching, same per-call caps. `auth_principal` is already
+        // the exact `SHA256:...` fingerprint-or-`psk:<keyid>` shape
+        // `kb_query::dispatch`'s `principal` parameter expects (see this
+        // function's own doc comment) — zero translation needed.
+        "kb/query.capabilities"
+        | "kb/query.get"
+        | "kb/query.search"
+        | "kb/query.graph"
+        | "kb/query.my_wrapped_key" => {
+            match crate::kb_query::dispatch(
+                &request.method,
+                &params,
+                doc_store,
+                auth_principal,
+                kb_query_limits,
+            )
+            .await
+            {
+                Ok(result) => JsonRpcResponse::success(id, result),
+                Err(e) => JsonRpcResponse::error(id, e),
+            }
         }
 
         other => JsonRpcResponse::error(

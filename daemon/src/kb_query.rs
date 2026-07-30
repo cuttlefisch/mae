@@ -45,6 +45,24 @@ pub struct KbQueryLimits {
     pub max_search_results: usize,
 }
 
+impl Default for KbQueryLimits {
+    /// Mirrors `OAuthConfig`'s own hardcoded defaults (`daemon/src/config.rs`)
+    /// — real, sane limits, never `0`/unbounded. Used by both the OAuth
+    /// listener's own config-derived construction (when `[oauth]` is absent
+    /// from `daemon.toml` entirely) and the many call sites across the test
+    /// suite that need *some* real limits but aren't testing the limits
+    /// themselves (ADR-067 Phase D2 — added when mTLS wiring introduced a
+    /// second production caller, multiplying how many test call sites
+    /// needed a `KbQueryLimits` value).
+    fn default() -> Self {
+        KbQueryLimits {
+            max_body_bytes: 65_536,
+            max_scan_nodes: 500,
+            max_search_results: 20,
+        }
+    }
+}
+
 /// Dispatch one `kb/query.*` method. `principal` is always `Some` in
 /// practice — the caller has already validated a bearer token before
 /// reaching here — but kept as `Option` to match `check_kb_read_access`'s

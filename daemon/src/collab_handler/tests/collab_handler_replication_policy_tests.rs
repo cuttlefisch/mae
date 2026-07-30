@@ -2,42 +2,6 @@ use super::*;
 
 // ADR-067 Phase B: `kb_access` Join/Read split + `kb_join` enforcement.
 
-// No RPC surface exists yet to set `ReplicationPolicy` on a member (that's out of
-// this phase's scope -- Phase B is the gate, not the admin command surface). Builds and
-// signs a `SetRole(QueryOnly)` op directly against the collection's own signed op-log,
-// mirroring exactly what `append_signed_membership` does internally for the RPC-driven
-// path, just with the one new field the RPC layer doesn't expose yet.
-async fn set_replication_query_only(
-    store: &Arc<DocStore>,
-    kb_id: &str,
-    owner_secret: &[u8; 32],
-    owner_pubkey: &[u8; 32],
-    owner_fp: &str,
-    subject: &str,
-) {
-    use mae_sync::membership::ReplicationPolicy;
-    let mut coll = load_coll(store, kb_id).await;
-    let epoch = coll.epoch_of(subject);
-    let mut op = coll.build_membership_op(
-        kb_id,
-        MembershipAction::SetRole,
-        subject,
-        Some(SyncRole::Viewer),
-        false,
-        owner_fp,
-        now_unix(),
-        None,
-        epoch,
-    );
-    op.replication = ReplicationPolicy::QueryOnly;
-    let sig = op.sign(owner_secret);
-    let update = coll.append_signed_op(&op, &sig, owner_pubkey);
-    store
-        .apply_update(&format!("kbc:{kb_id}"), &update, None)
-        .await
-        .unwrap();
-}
-
 /// Sets up an anchored KB with 4 real principals -- Owner, Editor, a Full-policy
 /// Viewer, and a QueryOnly-policy Viewer -- all via the real signed op-log (not a
 /// synthetic fixture), returning their fingerprints plus the owner's signing material

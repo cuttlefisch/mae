@@ -191,6 +191,7 @@ pub async fn serve(
     start_time: Instant,
     limiter: crate::conn_limit::ConnLimiter,
     artifact_store: Arc<dyn mae_daemon::artifact_store::ArtifactStore>,
+    kb_query_limits: mae_daemon::kb_query::KbQueryLimits,
 ) {
     while let Some(incoming) = endpoint.accept().await {
         let Some(guard) = limiter.try_acquire() else {
@@ -270,6 +271,7 @@ pub async fn serve(
                 start_time,
                 mae_sync::kb::Transport::P2p,
                 artifact_store,
+                kb_query_limits,
             )
             .await;
         });
@@ -582,6 +584,7 @@ mod tests {
             Instant::now(),
             crate::conn_limit::ConnLimiter::new(1),
             Arc::new(mae_daemon::artifact_store::NoArtifactStore),
+            mae_daemon::kb_query::KbQueryLimits::default(),
         ));
 
         // 1st peer: admitted, holds the connection open (matches max_connections=1).
@@ -655,6 +658,7 @@ mod tests {
             Instant::now(),
             crate::conn_limit::ConnLimiter::new(0),
             Arc::new(mae_daemon::artifact_store::NoArtifactStore),
+            mae_daemon::kb_query::KbQueryLimits::default(),
         ));
 
         let connector = bind_endpoint(&con_id, RelayMode::Disabled).await.unwrap();

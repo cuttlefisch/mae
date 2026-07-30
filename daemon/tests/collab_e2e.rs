@@ -65,6 +65,7 @@ impl Client {
                 std::time::Instant::now(),
                 mae_sync::kb::Transport::Hub,
                 Arc::new(mae_daemon::artifact_store::NoArtifactStore),
+                mae_daemon::kb_query::KbQueryLimits::default(),
             )
             .await;
         });
