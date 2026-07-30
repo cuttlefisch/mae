@@ -2326,6 +2326,174 @@ mod tests {
         let _ = std::fs::remove_file(&socket_path);
     }
 
+    /// Wire-level counterpart to `handle_request_request_tools_unlocks_the_
+    /// tool_for_a_subsequent_tools_list` (cuttlefisch/mae#533's remaining
+    /// gap): that test only proves the in-process session state changes.
+    /// A real external client doesn't call `handle_request` directly -- it
+    /// reads raw framed bytes off the socket, exactly like
+    /// `push_notification_after_subscribe` above. This proves the actual
+    /// `handle_client` write path (lib.rs's post-dispatch check-and-notify)
+    /// delivers an unsolicited `notifications/tools/list_changed` frame,
+    /// not just that session state was mutated.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn tools_list_changed_notification_sent_over_the_wire_after_request_tools() {
+        let socket_path = format!("/tmp/mae-test-list-changed-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        let (tool_tx, mut tool_rx) = mpsc::channel::<McpToolRequest>(16);
+        tokio::spawn(async move {
+            while let Some(req) = tool_rx.recv().await {
+                let output = if req.tool_name == "request_tools" {
+                    r#"[{"name":"kb_health","description":"Compute KB health report","input_schema":{"type":"object","properties":{}},"permission":"ReadOnly"}]"#.to_string()
+                } else {
+                    "{}".to_string()
+                };
+                let _ = req.reply.send(McpToolResult {
+                    success: true,
+                    output,
+                });
+            }
+        });
+        let bc = dummy_broadcaster();
+        let server = McpServer::new(&socket_path, tool_tx, bc.clone());
+
+        tokio::spawn(async move {
+            server.run(vec![]).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+
+        // Initialize -- capability response should already advertise
+        // listChanged: true (the other half of #533's fix).
+        let init_resp = send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "list-changed-test"}}
+            }),
+        )
+        .await;
+        assert_eq!(
+            init_resp.result.unwrap()["capabilities"]["tools"]["listChanged"],
+            true
+        );
+
+        // Call request_tools over the real socket -- this both unlocks the
+        // tool AND (per the response-write ordering in `handle_client`)
+        // should be immediately followed by a standalone notification
+        // frame, before we ever ask for tools/list.
+        let call_resp = send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "request_tools", "arguments": {"tools": "kb_health"}}
+            }),
+        )
+        .await;
+        assert!(call_resp.error.is_none(), "{call_resp:?}");
+
+        let notification = read_framed_message(&mut client, 1000).await;
+        assert!(
+            notification.is_some(),
+            "client never received a tools/list_changed frame after request_tools unlocked a tool"
+        );
+        let notif = notification.unwrap();
+        assert!(
+            notif.get("id").is_none(),
+            "notification must have no id field: {notif:?}"
+        );
+        assert_eq!(notif["jsonrpc"], "2.0");
+        assert_eq!(notif["method"], "notifications/tools/list_changed");
+        assert!(
+            notif.get("params").is_none(),
+            "this notification carries no params: {notif:?}"
+        );
+
+        // And the follow-up tools/list a spec-compliant client would now
+        // make must actually include the newly-unlocked tool.
+        let list_resp = send_and_recv(
+            &mut client,
+            &serde_json::json!({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}),
+        )
+        .await;
+        let list_result = list_resp.result.unwrap();
+        let names: Vec<String> = list_result["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["name"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            names.contains(&"kb_health".to_string()),
+            "tools/list after the notification must include the unlocked tool: {names:?}"
+        );
+
+        drop(client);
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
+    /// Negative case for the same fix: a `tools/call` that does NOT unlock
+    /// anything (an ordinary already-Core tool call, or a failed
+    /// `request_tools`) must NOT produce a spurious `list_changed` frame --
+    /// a client that gets one unprompted every call would re-poll
+    /// `tools/list` on every turn for no reason.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn no_tools_list_changed_notification_when_nothing_was_unlocked() {
+        let socket_path = format!("/tmp/mae-test-no-list-changed-{}.sock", std::process::id());
+        let _ = std::fs::remove_file(&socket_path);
+
+        let (tool_tx, mut tool_rx) = mpsc::channel::<McpToolRequest>(16);
+        tokio::spawn(async move {
+            while let Some(req) = tool_rx.recv().await {
+                let _ = req.reply.send(McpToolResult {
+                    success: true,
+                    output: r#"[{"name":"kb_health","description":"d","score":42}]"#.to_string(),
+                });
+            }
+        });
+        let bc = dummy_broadcaster();
+        let server = McpServer::new(&socket_path, tool_tx, bc.clone());
+
+        tokio::spawn(async move {
+            server.run(vec![]).await;
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        let mut client = tokio::net::UnixStream::connect(&socket_path).await.unwrap();
+
+        send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": {"clientInfo": {"name": "no-list-changed-test"}}
+            }),
+        )
+        .await;
+
+        // search_tools never unlocks anything (see
+        // handle_request_search_tools_never_unlocks_a_tool).
+        send_and_recv(
+            &mut client,
+            &serde_json::json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": {"name": "search_tools", "arguments": {"query": "health"}}
+            }),
+        )
+        .await;
+
+        let notification = read_framed_message(&mut client, 300).await;
+        assert!(
+            notification.is_none(),
+            "should not have received a tools/list_changed notification: {notification:?}"
+        );
+
+        drop(client);
+        let _ = std::fs::remove_file(&socket_path);
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn push_notification_not_sent_before_subscribe() {
