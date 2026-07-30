@@ -6,6 +6,7 @@ members = [
     "crates/renderer",
     "crates/gui",
     "crates/scheme",
+    "crates/scheme-extra",
     "crates/lsp",
     "crates/dap",
     "crates/ai",

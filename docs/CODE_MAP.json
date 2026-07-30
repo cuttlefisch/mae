@@ -13,6 +13,7 @@
         "mae-mcp",
         "mae-renderer",
         "mae-scheme",
+        "mae-scheme-extra",
         "mae-shell",
         "mae-sync"
       ],
@@ -1046,6 +1047,18 @@
         {
           "name": "vm",
           "kind": "mod"
+        }
+      ]
+    },
+    "mae-scheme-extra": {
+      "path": "crates/scheme-extra/src/lib.rs",
+      "dependencies": [
+        "mae-scheme"
+      ],
+      "public_items": [
+        {
+          "name": "register_all",
+          "kind": "fn"
         }
       ]
     },

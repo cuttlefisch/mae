@@ -460,6 +460,32 @@ fn kb_graph_primitive_errors_on_unknown_root() {
     );
 }
 
+/// The extra-kernel-crates extension point (#521): `SchemeRuntime::shared_state()`
+/// plus `SharedState::kb_store()` are the two narrow public accessors an
+/// out-of-tree kernel-primitive crate uses (via `crates/scheme-extra`)
+/// instead of reaching into `SharedState`'s otherwise-private field list.
+/// This confirms both accessors are reachable and return the real,
+/// currently-injected KB store -- not just that they compile.
+#[test]
+fn shared_state_kb_store_accessor_exposes_the_injected_store() {
+    let mut rt = new_runtime();
+    let mut editor = editor_with_cozo_store();
+    editor
+        .kb_create_node("extra-kernel:a", "Node A", "", mae_kb::NodeKind::Note)
+        .unwrap();
+    rt.inject_editor_state(&editor);
+
+    let shared = rt.shared_state();
+    let store = shared
+        .lock()
+        .kb_store()
+        .expect("kb_store() should return the injected store");
+    assert!(
+        store.get_node("extra-kernel:a").unwrap().is_some(),
+        "the accessor's store should be the SAME real store injected from the editor"
+    );
+}
+
 #[test]
 fn kb_graph_primitive_without_a_store_returns_empty_list_not_an_error() {
     // No CozoDB store configured (the common in-process-only case) — degrades

@@ -1,0 +1,12 @@
+[package]
+name = "mae-scheme-extra"
+description = "Extension point for out-of-tree Scheme kernel primitives (issue #521). Ships as a no-op; downstream forks add their own crates as dependencies here."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+mae-scheme = { path = "../scheme" }
+parking_lot = "0.12"
+# Downstream forks: add your own crate(s) here, e.g.:
+# mae-html-export = { path = "../../../mae-html-export" }
