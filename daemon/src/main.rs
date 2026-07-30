@@ -439,6 +439,7 @@ async fn main() {
 /// `broadcaster` so mesh peers and local clients see one document set.
 /// Best-effort: a bad relay config or a bind failure disables the mesh but
 /// leaves the rest of the daemon running.
+#[allow(clippy::too_many_arguments)]
 async fn spawn_p2p_mesh(
     p2p: &config::P2pConfig,
     identity: &mae_mcp::identity::Identity,
@@ -447,6 +448,7 @@ async fn spawn_p2p_mesh(
     broadcaster: SharedBroadcaster,
     start_time: std::time::Instant,
     state: Arc<Mutex<DaemonState>>,
+    kb_query_limits: mae_daemon::kb_query::KbQueryLimits,
 ) {
     let relay_mode = match p2p::relay_mode_from_config(&p2p.relay) {
         Ok(mode) => mode,
@@ -490,6 +492,7 @@ async fn spawn_p2p_mesh(
         start_time,
         conn_limit::ConnLimiter::new(p2p.max_connections),
         Arc::new(handler::DaemonArtifactStore(Arc::clone(&state))),
+        kb_query_limits,
     ));
 }
 
@@ -564,6 +567,18 @@ async fn spawn_collab_server(
 ) {
     let collab = &config.collab;
     let collab_data_dir = config.resolve_collab_data_dir();
+    // ADR-067 Phase D2: `Copy`, reused for both the P2P mesh listener below
+    // and the TCP collab loop further down -- reuses the SAME `[oauth].
+    // kb_query_*` limits the OAuth HTTPS listener already uses (config.rs's
+    // `#[serde(default)]` gives sane defaults even when `[oauth]` is absent
+    // from daemon.toml entirely, so this needs no new config surface to
+    // work out of the box; a deployment wanting different limits per
+    // transport would need a real config split, not attempted here).
+    let kb_query_limits = mae_daemon::kb_query::KbQueryLimits {
+        max_body_bytes: config.oauth.kb_query_max_body_bytes,
+        max_scan_nodes: config.oauth.kb_query_max_scan_nodes,
+        max_search_results: config.oauth.kb_query_max_search_results,
+    };
 
     // Create the auth provider for this listener.
     //   "psk": trust a SET of symmetric keys (keystore + legacy psk/psk_command).
@@ -684,6 +699,7 @@ async fn spawn_collab_server(
                     broadcaster.clone(),
                     server_start_time,
                     Arc::clone(&state),
+                    kb_query_limits,
                 )
                 .await;
             }
@@ -881,6 +897,7 @@ async fn spawn_collab_server(
                                         server_start_time,
                                         mae_sync::kb::Transport::Hub,
                                         artifacts,
+                                        kb_query_limits,
                                     )
                                     .await;
                                 }
@@ -902,6 +919,7 @@ async fn spawn_collab_server(
                                     server_start_time,
                                     mae_sync::kb::Transport::Hub,
                                     artifacts,
+                                    kb_query_limits,
                                 )
                                 .await;
                             }
@@ -919,6 +937,7 @@ async fn spawn_collab_server(
                                     server_start_time,
                                     mae_sync::kb::Transport::Hub,
                                     artifacts,
+                                    kb_query_limits,
                                 )
                                 .await;
                             }
@@ -931,6 +950,7 @@ async fn spawn_collab_server(
                                     server_start_time,
                                     mae_sync::kb::Transport::Hub,
                                     artifacts,
+                                    kb_query_limits,
                                 )
                                 .await;
                             }

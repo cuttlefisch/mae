@@ -12,6 +12,7 @@ mod collab_handler_cross_kb_role_isolation_tests;
 mod collab_handler_derive_cache_tests;
 mod collab_handler_governance_quorum_tests;
 mod collab_handler_kb_lifecycle_tests;
+mod collab_handler_kb_query_mtls_tests;
 mod collab_handler_lease_race_tests;
 mod collab_handler_legacy_migration_tests;
 mod collab_handler_member_access_tests;
@@ -95,6 +96,7 @@ pub(crate) async fn kb_share_as(
         session_docs,
         Transport::Hub,
         &crate::artifact_store::NoArtifactStore,
+        crate::kb_query::KbQueryLimits::default(),
     )
     .await
 }
@@ -119,6 +121,7 @@ pub(crate) async fn dispatch_as(
         docs,
         Transport::Hub,
         &crate::artifact_store::NoArtifactStore,
+        crate::kb_query::KbQueryLimits::default(),
     )
     .await
 }
@@ -147,6 +150,7 @@ pub(crate) async fn dispatch_as_with_artifacts(
         docs,
         Transport::Hub,
         artifact_store,
+        crate::kb_query::KbQueryLimits::default(),
     )
     .await
 }
@@ -157,6 +161,46 @@ pub(crate) async fn load_coll(store: &Arc<DocStore>, kb_id: &str) -> KbCollectio
         .await
         .expect("collection exists");
     KbCollectionDoc::from_bytes(&state).expect("valid collection")
+}
+
+/// No RPC surface exists to set `ReplicationPolicy` on a member (that's
+/// deliberately out of ADR-067 Phase B's scope -- Phase B is the gate, not
+/// the admin command surface). Builds and signs a `SetRole(QueryOnly)` op
+/// directly against the collection's own signed op-log, mirroring exactly
+/// what `append_signed_membership` does internally for the RPC-driven path,
+/// just with the one new field the RPC layer doesn't expose yet. Shared
+/// between `collab_handler_replication_policy_tests.rs` (Phase B) and
+/// `collab_handler_kb_query_mtls_tests.rs` (Phase D2) -- both need a real
+/// QueryOnly member fixture.
+pub(crate) async fn set_replication_query_only(
+    store: &Arc<DocStore>,
+    kb_id: &str,
+    owner_secret: &[u8; 32],
+    owner_pubkey: &[u8; 32],
+    owner_fp: &str,
+    subject: &str,
+) {
+    use mae_sync::membership::ReplicationPolicy;
+    let mut coll = load_coll(store, kb_id).await;
+    let epoch = coll.epoch_of(subject);
+    let mut op = coll.build_membership_op(
+        kb_id,
+        MembershipAction::SetRole,
+        subject,
+        Some(SyncRole::Viewer),
+        false,
+        owner_fp,
+        now_unix(),
+        None,
+        epoch,
+    );
+    op.replication = ReplicationPolicy::QueryOnly;
+    let sig = op.sign(owner_secret);
+    let update = coll.append_signed_op(&op, &sig, owner_pubkey);
+    store
+        .apply_update(&format!("kbc:{kb_id}"), &update, None)
+        .await
+        .unwrap();
 }
 
 pub(crate) fn kb_join_msg(kb_id: &str) -> serde_json::Value {
