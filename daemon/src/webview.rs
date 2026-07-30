@@ -4,7 +4,7 @@
 //!
 //! Deliberately dependency-free of `mae-canvas`/`mae-core`/`mae-gui` (ADR-073
 //! D2) — this module only generates text. All data access goes through the
-//! EXISTING `kb/query.*` surface (ADR-053, `crate::kb_query`) unchanged; the
+//! EXISTING `kb/query.*` surface (ADR-053, `mae_daemon::kb_query`) unchanged; the
 //! page's own client-side JS polls it on an interval using the same bearer
 //! token the page itself was fetched with (D3). This is v1's whole "live"
 //! story — poll-based, not push (see ADR-074 for the deferred SSE upgrade) —

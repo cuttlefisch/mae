@@ -15,9 +15,21 @@
 //! branches accordingly. For `Encryption::E2e`, `search`/`graph` never even
 //! attempt server-side plaintext operations — this is a structural property
 //! of the code path taken, not a runtime check that could be bypassed.
+//!
+//! Lives in the `mae-daemon` LIBRARY crate (ADR-067 Phase D1), not the binary
+//! crate — moved here specifically so the mTLS collab handler
+//! (`crate::collab_handler`, itself lib-crate-only) can call `dispatch`
+//! directly as a sibling module. A binary crate can depend on its own lib
+//! crate but never the reverse, so this module could not stay bin-crate-
+//! private once a second, lib-crate caller needed it; `daemon/src/oauth.rs`
+//! (still bin-crate-private) reaches it as `mae_daemon::kb_query::dispatch`,
+//! the same pattern it already uses for `mae_daemon::collab_handler`/
+//! `mae_daemon::doc_store`. Every dependency this module has was already
+//! either lib-crate-local or an external shared crate — this was a pure code
+//! move, no behavior change.
 
-use mae_daemon::collab_handler::{self, AccessDecision};
-use mae_daemon::doc_store::DocStore;
+use crate::collab_handler::{self, AccessDecision};
+use crate::doc_store::DocStore;
 use mae_mcp::protocol::McpError;
 use mae_sync::encoding::update_to_base64;
 use mae_sync::kb::{Encryption, KbCollectionDoc, KbNodeDoc, Transport};

@@ -17,7 +17,6 @@ mod dialer;
 pub mod enrichment;
 mod handler;
 pub mod hygiene;
-mod kb_query;
 #[cfg(test)]
 mod lazy_fetch_client;
 pub mod maintenance;

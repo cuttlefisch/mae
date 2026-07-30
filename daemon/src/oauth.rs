@@ -532,13 +532,13 @@ pub(crate) async fn render_webview_response(
         );
     };
 
-    let limits = crate::kb_query::KbQueryLimits {
+    let limits = mae_daemon::kb_query::KbQueryLimits {
         max_body_bytes: config.kb_query_max_body_bytes,
         max_scan_nodes: config.kb_query_max_scan_nodes,
         max_search_results: config.kb_query_max_search_results,
     };
     let params = serde_json::json!({"kb_id": kb_id});
-    if let Err(e) = crate::kb_query::dispatch(
+    if let Err(e) = mae_daemon::kb_query::dispatch(
         "kb/query.capabilities",
         &params,
         store,
@@ -574,13 +574,13 @@ pub(crate) async fn route_authenticated_request(
 ) -> serde_json::Value {
     match (rpc_request, config.kb_query_enabled, doc_store) {
         (Some(rpc), true, Some(store)) => {
-            let limits = crate::kb_query::KbQueryLimits {
+            let limits = mae_daemon::kb_query::KbQueryLimits {
                 max_body_bytes: config.kb_query_max_body_bytes,
                 max_scan_nodes: config.kb_query_max_scan_nodes,
                 max_search_results: config.kb_query_max_search_results,
             };
             let params = rpc.params.unwrap_or(serde_json::Value::Null);
-            let rpc_response = match crate::kb_query::dispatch(
+            let rpc_response = match mae_daemon::kb_query::dispatch(
                 &rpc.method,
                 &params,
                 store,
