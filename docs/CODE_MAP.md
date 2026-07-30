@@ -236,6 +236,8 @@ Source: `crates/export/src/lib.rs`
 | `parse_org_document` | fn |
 | `InlineTarget` | enum |
 | `convert_inline_markup_str` | fn |
+| `CheckboxState` | enum |
+| `parse_checkbox_marker` | fn |
 | `html_escape` | fn |
 | `filter_by_tags` | fn |
 | `extract_subtree` | fn |

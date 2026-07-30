@@ -1,8 +1,8 @@
 //! HTML export backend for org documents.
 
 use super::{
-    convert_inline_markup_str, html_escape, ExportOptions, Exporter, InlineTarget, OrgElement,
-    OrgMeta,
+    convert_inline_markup_str, html_escape, parse_checkbox_marker, CheckboxState, ExportOptions,
+    Exporter, InlineTarget, OrgElement, OrgMeta,
 };
 
 pub struct HtmlExporter;
@@ -117,10 +117,7 @@ fn render_element(html: &mut String, element: &OrgElement, opts: &ExportOptions)
             html.push_str(&format!("<{}>\n", tag));
             for item in items {
                 html.push_str("<li>");
-                html.push_str(&convert_inline_markup_str(
-                    &item.content,
-                    InlineTarget::Html,
-                ));
+                push_list_item_content(html, &item.content);
                 html.push_str("</li>\n");
             }
             html.push_str(&format!("</{}>\n", tag));
@@ -152,6 +149,15 @@ fn render_element(html: &mut String, element: &OrgElement, opts: &ExportOptions)
             html.push_str(&convert_inline_markup_str(text, InlineTarget::Html));
             html.push_str("</p>\n</blockquote>\n");
         }
+        OrgElement::Example(content) => {
+            // Like SrcBlock: only escaped, never run through inline-markup
+            // conversion -- example blocks are meant to show literal text
+            // verbatim (including any `*`/`/`/`~` that would otherwise be
+            // read as emphasis markers).
+            html.push_str("<pre class=\"example\">");
+            html.push_str(&html_escape(content));
+            html.push_str("</pre>\n");
+        }
         OrgElement::HorizontalRule => {
             html.push_str("<hr>\n");
         }
@@ -162,6 +168,27 @@ fn render_element(html: &mut String, element: &OrgElement, opts: &ExportOptions)
                 html.push('\n');
             }
         }
+    }
+}
+
+/// Render a list item's content, first checking for a leading checkbox
+/// marker (`- [ ] text` / `- [X] text` / `- [-] text`) and rendering it as
+/// a disabled `<input type="checkbox">` (disabled since this is a static
+/// export, not the live editor) ahead of the item's own inline-markup-
+/// converted text.
+fn push_list_item_content(html: &mut String, content: &str) {
+    if let Some((state, rest)) = parse_checkbox_marker(content) {
+        let (checked_attr, aria) = match state {
+            CheckboxState::Checked => (" checked", "true"),
+            CheckboxState::Partial => ("", "mixed"),
+            CheckboxState::Unchecked => ("", "false"),
+        };
+        html.push_str(&format!(
+            "<input type=\"checkbox\" disabled{checked_attr} aria-checked=\"{aria}\"> "
+        ));
+        html.push_str(&convert_inline_markup_str(rest, InlineTarget::Html));
+    } else {
+        html.push_str(&convert_inline_markup_str(content, InlineTarget::Html));
     }
 }
 

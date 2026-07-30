@@ -120,6 +120,11 @@ fn render_element(out: &mut String, element: &OrgElement) {
             out.push_str(text);
             out.push_str("\n#+end_quote\n\n");
         }
+        OrgElement::Example(content) => {
+            out.push_str("#+begin_example\n");
+            out.push_str(content);
+            out.push_str("\n#+end_example\n\n");
+        }
         OrgElement::HorizontalRule => {
             out.push_str("-----\n\n");
         }

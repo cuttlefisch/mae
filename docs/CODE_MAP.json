@@ -575,6 +575,14 @@
           "kind": "fn"
         },
         {
+          "name": "CheckboxState",
+          "kind": "enum"
+        },
+        {
+          "name": "parse_checkbox_marker",
+          "kind": "fn"
+        },
+        {
           "name": "html_escape",
           "kind": "fn"
         },
