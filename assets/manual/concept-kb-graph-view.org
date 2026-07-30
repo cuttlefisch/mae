@@ -6,35 +6,35 @@
 #+title: Native KB Graph View
 #+filetags: :kb:visualization:ai:
 
-The **native KB graph view** (`SPC h g`, `BufferKind::Graph`) is a chord-diagram/force-directed panel showing a KB node's local ego-network -- nodes and links within a hop radius, rendered directly in an editor window (Sigma.js/org-roam-ui-style), navigable by both the human and the AI agent via the same primitives.
+The *native KB graph view* (~SPC h g~, ~BufferKind::Graph~) is a chord-diagram/force-directed panel showing a KB node's local ego-network -- nodes and links within a hop radius, rendered directly in an editor window (Sigma.js/org-roam-ui-style), navigable by both the human and the AI agent via the same primitives.
 
 ** Opening and centering
-`(kb-graph-view-open [id] [depth])` (or the `kb_graph_view_open` AI tool) centers the view on `id`. When omitted, the center resolves in order: (1) whichever KB node the `*KB*` buffer is currently showing, (2) the active project's own registered KB instance's default node -- its own `"index"` node if it has one, else a `NodeKind::Index` node, else its highest-degree hub node -- when a KB instance is registered whose project root matches the active project (issue #462 Part 1), (3) the local KB's `"index"` node. Hop radius defaults to `kb_graph_default_depth` (1 hop).
+~(kb-graph-view-open [id] [depth])~ (or the ~kb_graph_view_open~ AI tool) centers the view on ~id~. When omitted, the center resolves in order: (1) whichever KB node the ~*KB*~ buffer is currently showing, (2) the active project's own registered KB instance's default node -- its own ~"index"~ node if it has one, else a ~NodeKind::Index~ node, else its highest-degree hub node -- when a KB instance is registered whose project root matches the active project (issue #462 Part 1), (3) the local KB's ~"index"~ node. Hop radius defaults to ~kb_graph_default_depth~ (1 hop).
 
 ** Layout
-`kb_graph_layout_algorithm` selects `chord` (default -- nodes evenly spaced on a circle's circumference, curved chord edges through the interior, computed once) or `force` (force-directed physics simulation, iteratively refined on a background thread). `kb_graph_node_count_cap` (default 300) is a safety-net cap on total nodes; a walk that would exceed it keeps starters plus the highest-degree remaining nodes and surfaces the rest as a "... (+N)" boundary stub, never a silent drop.
+~kb_graph_layout_algorithm~ selects ~chord~ (default -- nodes evenly spaced on a circle's circumference, curved chord edges through the interior, computed once) or ~force~ (force-directed physics simulation, iteratively refined on a background thread). ~kb_graph_node_count_cap~ (default 300) is a safety-net cap on total nodes; a walk that would exceed it keeps starters plus the highest-degree remaining nodes and surfaces the rest as a "... (+N)" boundary stub, never a silent drop.
 
 ** Single vs. multi mode (issue #462)
-`kb_graph_view_mode` controls whether the view composes ONE KB instance's subgraph (`single`, default -- output is byte-for-byte unchanged from before #462) or the seed instance plus related instances, laid out as a grid of small-multiple chord diagrams in one merged scene (`multi`). In `multi` mode:
-- `kb_graph_multi_kb_scope` selects which related instances join the seed: `linked` (default -- one hop of the seed's own cross-instance links; the related instances' own cross-links are not transitively re-walked) or `all` (every registered instance, linked or not).
-- `kb_graph_multi_kb_max_related_instances` (default 6) caps how many related instances are composed alongside the seed; an exceeded candidate set surfaces its overflow as a count rather than composing an unbounded number of diagrams into one scene.
+~kb_graph_view_mode~ controls whether the view composes ONE KB instance's subgraph (~single~, default -- output is byte-for-byte unchanged from before #462) or the seed instance plus related instances, laid out as a grid of small-multiple chord diagrams in one merged scene (~multi~). In ~multi~ mode:
+- ~kb_graph_multi_kb_scope~ selects which related instances join the seed: ~linked~ (default -- one hop of the seed's own cross-instance links; the related instances' own cross-links are not transitively re-walked) or ~all~ (every registered instance, linked or not).
+- ~kb_graph_multi_kb_max_related_instances~ (default 6) caps how many related instances are composed alongside the seed; an exceeded candidate set surfaces its overflow as a count rather than composing an unbounded number of diagrams into one scene.
 
 ** Cross-instance link detection
-A subgraph's boundary/fringe links (links pointing outside the extracted neighborhood) are resolved against every registered KB instance's own node ids, not just the instance the subgraph was extracted from. In `single` mode this changes nothing observable -- a boundary link still renders as a plain dashed "... (+N)" stub regardless of whether its target happens to live in another instance. In `multi` mode, a boundary link whose target resolves to a DIFFERENT composed instance is instead rendered as a real dashed edge (carrying its true relationship type, not collapsed into a stub) connecting the two diagrams' nodes directly. A link whose target instance isn't among the ones actually composed (stale/unregistered/capped away by `kb_graph_multi_kb_max_related_instances`) is dropped WITH a count, surfaced as `(kb-graph-view-state)`'s `hidden-cross-instance-link-count` -- never silently lost.
+A subgraph's boundary/fringe links (links pointing outside the extracted neighborhood) are resolved against every registered KB instance's own node ids, not just the instance the subgraph was extracted from. In ~single~ mode this changes nothing observable -- a boundary link still renders as a plain dashed "... (+N)" stub regardless of whether its target happens to live in another instance. In ~multi~ mode, a boundary link whose target resolves to a DIFFERENT composed instance is instead rendered as a real dashed edge (carrying its true relationship type, not collapsed into a stub) connecting the two diagrams' nodes directly. A link whose target instance isn't among the ones actually composed (stale/unregistered/capped away by ~kb_graph_multi_kb_max_related_instances~) is dropped WITH a count, surfaced as ~(kb-graph-view-state)~'s ~hidden-cross-instance-link-count~ -- never silently lost.
 
 ** Introspection
-`(kb-graph-view-state)` (or the `kb_graph_view_state` AI tool) returns the full rendered snapshot: center, depth, mode, selected/hovered node, every node and edge, and -- in `multi` mode -- a `diagrams` list, one entry per composed instance (`instance-or-#f name node-count`). `nodes`/`edges` are laid out in CONTIGUOUS per-diagram blocks matching `diagrams`' order, so a consumer determines which instance a node/edge belongs to purely positionally, by walking `diagrams`' node-counts cumulatively -- no separate per-node/per-edge instance tag needed.
+~(kb-graph-view-state)~ (or the ~kb_graph_view_state~ AI tool) returns the full rendered snapshot: center, depth, mode, selected/hovered node, every node and edge, and -- in ~multi~ mode -- a ~diagrams~ list, one entry per composed instance (~instance-or-#f name node-count~). ~nodes~/~edges~ are laid out in CONTIGUOUS per-diagram blocks matching ~diagrams~' order, so a consumer determines which instance a node/edge belongs to purely positionally, by walking ~diagrams~' node-counts cumulatively -- no separate per-node/per-edge instance tag needed.
 
 ** Keybindings (graph-view buffer)
 | Key | Command | Description |
 |-----|---------|-------------|
-| `h`/`j`/`k`/`l` | `kb-graph-view-navigate-{left,down,up,right}` | Move node selection |
-| `Enter` | `kb-graph-view-select-current` | Navigate the companion window to the selected node |
-| `g r` | `kb-graph-view-refresh` | Refresh in place |
-| `q` / `Escape` | `kb-graph-view-close` | Close the graph view |
-| `SPC h g` | `kb-graph-view-open-default` | Open (from anywhere) |
+| ~h~/~j~/~k~/~l~ | ~kb-graph-view-navigate-{left,down,up,right}~ | Move node selection |
+| ~Enter~ | ~kb-graph-view-select-current~ | Navigate the companion window to the selected node |
+| ~g r~ | ~kb-graph-view-refresh~ | Refresh in place |
+| ~q~ / ~Escape~ | ~kb-graph-view-close~ | Close the graph view |
+| ~SPC h g~ | ~kb-graph-view-open-default~ | Open (from anywhere) |
 
 ** AI tools (10, all ReadOnly)
-`kb_graph_view_open`, `kb_graph_view_close`, `kb_graph_view_refresh`, `kb_graph_view_set_depth`, `kb_graph_view_navigate`, `kb_graph_view_select_current`, `kb_graph_view_zoom_to`, `kb_graph_view_set_pinned`, `kb_graph_view_toggle_overlay`, `kb_graph_view_state` -- the same primitives the Scheme `(kb-graph-view-*)` functions queue/read, so human and AI provably drive the identical code path (CLAUDE.md principle #3).
+~kb_graph_view_open~, ~kb_graph_view_close~, ~kb_graph_view_refresh~, ~kb_graph_view_set_depth~, ~kb_graph_view_navigate~, ~kb_graph_view_select_current~, ~kb_graph_view_zoom_to~, ~kb_graph_view_set_pinned~, ~kb_graph_view_toggle_overlay~, ~kb_graph_view_state~ -- the same primitives the Scheme ~(kb-graph-view-*)~ functions queue/read, so human and AI provably drive the identical code path (CLAUDE.md principle #3).
 
 See also: [[concept:knowledge-base?rel=references][Knowledge Base]], [[concept:kb-federation?rel=references][KB Federation]], [[concept:ai-as-peer?rel=references][The AI as Peer Actor]], [[index]]

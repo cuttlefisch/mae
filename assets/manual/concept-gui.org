@@ -5,34 +5,34 @@
 #+title: GUI Backend
 #+filetags: :rendering:gui:
 
-MAE has a **dual rendering backend** — terminal (ratatui/crossterm) and GUI (winit + Skia 2D). Both backends share the same editor core, commands, and AI integration.
+MAE has a *dual rendering backend* — terminal (ratatui/crossterm) and GUI (winit + Skia 2D). Both backends share the same editor core, commands, and AI integration.
 
 ** Launching
 GUI is the default when a graphical display is available (like Emacs):
-- `mae file.rs` — opens the GUI on a desktop session; transparently falls back
+- ~mae file.rs~ — opens the GUI on a desktop session; transparently falls back
   to the terminal UI when there is no graphics frontend (over SSH, on a bare
   tty, or on a headless server).
-- `mae --gui file.rs` — force the GUI backend (overrides display detection;
+- ~mae --gui file.rs~ — force the GUI backend (overrides display detection;
   this is what the MAE.app launcher uses).
-- `mae --no-gui file.rs` (also `--tui` / `-nw`) — force terminal mode.
+- ~mae --no-gui file.rs~ (also ~--tui~ / ~-nw~) — force terminal mode.
 - A TUI-only build always runs in the terminal.
-- Desktop launcher: installed via `make install` to `~/.local/share/applications/mae.desktop`.
+- Desktop launcher: installed via ~make install~ to ~~/.local/share/applications/mae.desktop~.
 
 ** GUI features
-- **Mouse support:** click to place cursor, wheel scroll.
-- **Font & icon configuration:** `font_family`, `font_size`, `icon_font_family`.
+- *Mouse support:* click to place cursor, wheel scroll.
+- *Font & icon configuration:* ~font_family~, ~font_size~, ~icon_font_family~.
   A patched JetBrains Mono Nerd Font is bundled, so text *and* icons render out
   of the box, and a missing font never blocks launch. See [[concept:fonts]].
-- **Dirty-flag rendering:** GPU idle when nothing changes (~0% CPU).
-- **Shell colors:** terminal emulator respects editor theme.
-- **Shell scrollback:** Shift-PageUp/PageDown.
-- **FPS overlay:** `SPC t F` or `:set show_fps true`.
+- *Dirty-flag rendering:* GPU idle when nothing changes (~0% CPU).
+- *Shell colors:* terminal emulator respects editor theme.
+- *Shell scrollback:* Shift-PageUp/PageDown.
+- *FPS overlay:* ~SPC t F~ or ~:set show_fps true~.
 
 ** Architecture
-The `Renderer` trait (in `mae-renderer`) defines the backend-agnostic HAL. The `mae-gui` crate implements it using winit for windowing and skia-safe for 2D rendering. The terminal backend uses ratatui/crossterm. The binary selects the backend at startup: the GUI is used when compiled in and a display is available (unless `--no-gui`), or when `--gui` is passed explicitly.
+The ~Renderer~ trait (in ~mae-renderer~) defines the backend-agnostic HAL. The ~mae-gui~ crate implements it using winit for windowing and skia-safe for 2D rendering. The terminal backend uses ratatui/crossterm. The binary selects the backend at startup: the GUI is used when compiled in and a display is available (unless ~--no-gui~), or when ~--gui~ is passed explicitly.
 
 ** Event loop
-- **Terminal:** `crossterm::EventStream` + tokio `select!`.
-- **GUI:** `winit::pump_app_events()` + tokio `select!` with dirty-flag gating.
+- *Terminal:* ~crossterm::EventStream~ + tokio ~select!~.
+- *GUI:* ~winit::pump_app_events()~ + tokio ~select!~ with dirty-flag gating.
 
 See also: [[concept:terminal]], [[concept:mode]], [[index]]

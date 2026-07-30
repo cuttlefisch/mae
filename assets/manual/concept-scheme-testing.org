@@ -6,12 +6,12 @@
 #+title: Scheme Testing Framework
 #+filetags: :testing:scheme:development:
 
-MAE has a headless **Scheme test framework** inspired by Emacs ERT/Buttercup and Neovim Plenary. Tests boot a real editor (no mocks) and exercise the same Scheme API available to users.
+MAE has a headless *Scheme test framework* inspired by Emacs ERT/Buttercup and Neovim Plenary. Tests boot a real editor (no mocks) and exercise the same Scheme API available to users.
 
 ** BDD Structure
-Tests use `describe-group` / `it-test` blocks (like Buttercup's `describe`/`it`):
+Tests use ~describe-group~ / ~it-test~ blocks (like Buttercup's ~describe~/~it~):
 
-```scheme
+#+begin_src scheme
 (describe-group "Feature name"
   (lambda ()
     (it-test "setup"
@@ -20,7 +20,7 @@ Tests use `describe-group` / `it-test` blocks (like Buttercup's `describe`/`it`)
       (lambda () (buffer-insert "hello")))
     (it-test "verify"
       (lambda () (should-equal (buffer-string) "hello")))))
-```
+#+end_src
 
 ** Assertions
 | Function | Purpose |
@@ -29,16 +29,16 @@ Tests use `describe-group` / `it-test` blocks (like Buttercup's `describe`/`it`)
 | [[scheme:should-not]] | Assert falsy |
 | [[scheme:should-equal]] | Assert equality |
 | [[scheme:should-contain]] | Assert substring |
-| `(should-mode MODE)` | Assert editor mode |
+| ~(should-mode MODE)~ | Assert editor mode |
 
 ** Running Tests
-```
+#+begin_src
 mae --test tests/crdt/               # CRDT sync tests
 mae --test tests/editor/             # Editor feature tests
 mae --test tests/collab-e2e/test_smoke.scm  # Single file
-```
+#+end_src
 
 ** Key Principle: One Op Per Step
-Each `it-test` is one eval→apply cycle. Pending mutations (`buffer-insert`, `goto-char`, etc.) execute during `apply_to_editor` after eval completes. Multiple mutations in one step may execute in unexpected order — split them.
+Each ~it-test~ is one eval→apply cycle. Pending mutations (~buffer-insert~, ~goto-char~, etc.) execute during ~apply_to_editor~ after eval completes. Multiple mutations in one step may execute in unexpected order — split them.
 
 See also: [[concept:test-runner?rel=references][Test Runner]], [[scheme:describe-group]], [[scheme:it-test]], [[index]]

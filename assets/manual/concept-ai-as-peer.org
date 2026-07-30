@@ -6,22 +6,22 @@
 #+title: The AI as Peer Actor
 #+filetags: :ai:architecture:
 
-MAE's single-most-important design stance: **the AI agent is a peer actor, not a plugin.**
+MAE's single-most-important design stance: *the AI agent is a peer actor, not a plugin.*
 
-A keybinding and an AI tool-call both resolve to the same [[concept:command?rel=references][Command]] via the same dispatcher. There is no separate "AI mode", no simulated keystrokes, no shadow API. When you type `dd` to delete a line, the agent can invoke `cmd:delete-line` with the same effect, and vice versa.
+A keybinding and an AI tool-call both resolve to the same [[concept:command?rel=references][Command]] via the same dispatcher. There is no separate "AI mode", no simulated keystrokes, no shadow API. When you type ~dd~ to delete a line, the agent can invoke ~cmd:delete-line~ with the same effect, and vice versa.
 
 ** What the agent can see
-- Buffer contents (`buffer_read`) across all buffers (`list_buffers`).
-- Cursor state (`cursor_info`) and editor state (`editor_state`).
-- LSP diagnostics (`lsp_diagnostics`) and tree-sitter parse trees (`syntax_tree`).
-- DAP debug state (`debug_state`) when a session is active.
-- This knowledge base (`kb_get`, `kb_search`, `kb_list`).
-- [[concept:project?rel=references][Project state]] via `project_info`, `project_files`, `project_search`.
-- **[[concept:introspect?rel=references][Introspection]]**: The agent can see thread stacks, performance counters, and lock contention.
+- Buffer contents (~buffer_read~) across all buffers (~list_buffers~).
+- Cursor state (~cursor_info~) and editor state (~editor_state~).
+- LSP diagnostics (~lsp_diagnostics~) and tree-sitter parse trees (~syntax_tree~).
+- DAP debug state (~debug_state~) when a session is active.
+- This knowledge base (~kb_get~, ~kb_search~, ~kb_list~).
+- [[concept:project?rel=references][Project state]] via ~project_info~, ~project_files~, ~project_search~.
+- *[[concept:introspect?rel=references][Introspection]]*: The agent can see thread stacks, performance counters, and lock contention.
 
 ** Interaction Surfaces
-1. **Internal Peer**: Embedded directly in MAE, sharing your active workspace context. Trigger via `SPC a p`.
-2. **External Agent**: Any MCP-capable client (like Gemini CLI or Claude Code) can connect to MAE via the `mae-mcp-shim`. The external agent gains full control of the editor's tool surface.
+1. *Internal Peer*: Embedded directly in MAE, sharing your active workspace context. Trigger via ~SPC a p~.
+2. *External Agent*: Any MCP-capable client (like Gemini CLI or Claude Code) can connect to MAE via the ~mae-mcp-shim~. The external agent gains full control of the editor's tool surface.
 
 ** Permission tiers
 Every tool has a permission tier: ReadOnly, Write, Shell, Privileged. Users control how far the agent can act autonomously.
