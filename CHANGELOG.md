@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.78] - 2026-07-30
+
+### Features
+
+- *(daemon)* Live HTML KB view over OAuth listener, poll-based v1 (ADR-073, Phase E, #547) (#556) ([7b9ce30](https://github.com/cuttlefisch/mae/commit/7b9ce30e954623ba0b387c8e5e461adaf6a3b737))
+
 ## [0.14.77] - 2026-07-30
 
 ### Features
 
 - *(canvas)* Mae-canvas substrate hardening — Wedge, ValueTween<T>, angular hit-testing, wedge options, fixed-pixel split primitive (ADR-070/072) (#555) ([b5769fa](https://github.com/cuttlefisch/mae/commit/b5769fa1a1d46b1368e61dfa6d11d74b1a7044d7))
+
+### Miscellaneous
+
+- Bump version to 0.14.77 ([75f64e6](https://github.com/cuttlefisch/mae/commit/75f64e60ee5b384f3a6ccfe127c2fa644c096be3))
 
 ## [0.14.76] - 2026-07-30
 
