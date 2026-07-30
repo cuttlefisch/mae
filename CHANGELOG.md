@@ -2,11 +2,18 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.72] - 2026-07-29
+
+### Features
+
+- *(pickers)* #531 - boost recently-used items in typed-query ranking (#532) ([687955f](https://github.com/cuttlefisch/mae/commit/687955f9694836d9a4cd8f3fabe9ab2b752db444))
+
 ## [0.14.71] - 2026-07-29
 
 ### Miscellaneous
 
 - *(deps)* Bump the rust-dependencies group across 1 directory with 13 updates (#529) ([6e409ff](https://github.com/cuttlefisch/mae/commit/6e409ffde4c2e8f8ef8ca7a88b9e18659254d9d1))
+- Bump version to 0.14.71 ([23d9bac](https://github.com/cuttlefisch/mae/commit/23d9bacd6c849c09c60cdcee3f541333c7812219))
 
 ## [0.14.70] - 2026-07-29
 
