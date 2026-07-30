@@ -32,7 +32,7 @@ Moving a subtree automatically clears any folds in the affected range.
 
 *** 5. Heading Font Scaling
 Org headings render at scaled font sizes for visual hierarchy:
-~*~ = 1.5x, ~*~ = 1.3x, ~**~ = 1.15x.
+~*~ = 1.5x, ~**~ = 1.3x, ~***~ = 1.15x.
 Disable with ~:set heading_scale false~.
 
 *** 6. Insert Heading (M-Enter)
