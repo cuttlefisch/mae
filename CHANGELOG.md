@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.79] - 2026-07-30
+
+### Features
+
+- *(syntax,lsp)* IaC/DevOps language support — Terraform, Dockerfile, Ansible, Kubernetes, Helm (ADR-075) (#557) ([8ea8d1d](https://github.com/cuttlefisch/mae/commit/8ea8d1d93068cdfe405887d28f341728d5e4fe32))
+
 ## [0.14.78] - 2026-07-30
 
 ### Features
 
 - *(daemon)* Live HTML KB view over OAuth listener, poll-based v1 (ADR-073, Phase E, #547) (#556) ([7b9ce30](https://github.com/cuttlefisch/mae/commit/7b9ce30e954623ba0b387c8e5e461adaf6a3b737))
+
+### Miscellaneous
+
+- Bump version to 0.14.78 ([c71bb91](https://github.com/cuttlefisch/mae/commit/c71bb913901a33ab43323ef78edb536dde9baf26))
 
 ## [0.14.77] - 2026-07-30
 
