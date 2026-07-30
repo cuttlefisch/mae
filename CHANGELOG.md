@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.73] - 2026-07-30
+
+### Bug Fixes
+
+- *(export)* Heading misparse + UTF-8 byte-cast mangling (#536) ([90b0cd5](https://github.com/cuttlefisch/mae/commit/90b0cd514cefec8873852464d2011f72ded46e61))
+
 ## [0.14.72] - 2026-07-29
 
 ### Features
 
 - *(pickers)* #531 - boost recently-used items in typed-query ranking (#532) ([687955f](https://github.com/cuttlefisch/mae/commit/687955f9694836d9a4cd8f3fabe9ab2b752db444))
+
+### Miscellaneous
+
+- Bump version to 0.14.72 ([e3f4017](https://github.com/cuttlefisch/mae/commit/e3f4017752d8238e4fdc14b58a5ed87184f7bf08))
 
 ## [0.14.71] - 2026-07-29
 
