@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.82] - 2026-07-30
+
+### Features
+
+- *(daemon)* OAuth self-issued tokens bound to this daemon's identity (ADR-067 Phase D3a) (#561) ([a507a04](https://github.com/cuttlefisch/mae/commit/a507a044607fa255978839ab2cd46232090aff08))
+
 ## [0.14.81] - 2026-07-30
 
 ### Features
 
 - *(daemon)* Wire kb/query.* into the mTLS collab handler (ADR-067 Phase D2) (#560) ([0fb8156](https://github.com/cuttlefisch/mae/commit/0fb81565eb45bdd5b6cc20c9cf6fa0b8653a64bc))
+
+### Miscellaneous
+
+- Bump version to 0.14.81 ([e219138](https://github.com/cuttlefisch/mae/commit/e219138d5ae3c37bb49bffb98499d2be6adc2429))
 
 ## [0.14.80] - 2026-07-30
 
