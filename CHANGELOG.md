@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.75] - 2026-07-30
+
+### Bug Fixes
+
+- *(kb)* Backslash path-separator scoring bug (#534) + retry-deadline alignment (#518) (#537) ([8820f02](https://github.com/cuttlefisch/mae/commit/8820f028df14599b0a45b1f24268a1e10481a984))
+
 ## [0.14.74] - 2026-07-30
 
 ### Bug Fixes
 
 - *(manual)* Convert markdown-flavored syntax to real org syntax (#535) ([ab170d6](https://github.com/cuttlefisch/mae/commit/ab170d66e870b2538bb4fc294967c5d03ba47f61))
+
+### Miscellaneous
+
+- Bump version to 0.14.74 ([895ea3f](https://github.com/cuttlefisch/mae/commit/895ea3f9337580b900ad9da2bdf7c2aa852338a8))
 
 ## [0.14.73] - 2026-07-30
 
