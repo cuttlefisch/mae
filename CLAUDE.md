@@ -185,7 +185,7 @@ All phases below are COMPLETE. See ROADMAP.md for granular milestone details.
 | 2. Scheme Runtime | R7RS-small, `init.scm`, `(define-key ...)`, REPL | — |
 | 3. AI Integration | Claude/OpenAI/Gemini/DeepSeek, tool-calling, permission tiers | 1,148 |
 | 3d–3h. Hardening | Full vim, multi-file AI, agent reliability, context compaction | 1,673 |
-| 4. LSP + DAP + Syntax | LSP nav/completion, DAP debugging, tree-sitter (13 langs), KB | — |
+| 4. LSP + DAP + Syntax | LSP nav/completion, DAP debugging, tree-sitter (17 langs), KB | — |
 | 5. Knowledge Base | CozoDB graph (Datalog), federated queries, org parser, HNSW vectors | — |
 | 6. Embedded Shell | alacritty_terminal, MCP server, file auto-reload | — |
 | 7. Documentation | Help system (1,300+ KB nodes), tutorials, `:describe-configuration` | — |
@@ -336,7 +336,16 @@ Quick setup: `make setup-dev` (auto-detects package manager).
 
 Environment variable overrides for adapter/server paths:
 - **DAP:** `MAE_DAP_LLDB`, `MAE_DAP_CODELLDB`, `MAE_DAP_DEBUGPY`
-- **LSP:** `MAE_LSP_RUST`, `MAE_LSP_PYTHON`, `MAE_LSP_TYPESCRIPT`, `MAE_LSP_GO`, `MAE_LSP_CPP`, `MAE_LSP_C`
+- **LSP:** `MAE_LSP_RUST`, `MAE_LSP_PYTHON`, `MAE_LSP_TYPESCRIPT`, `MAE_LSP_GO`, `MAE_LSP_CPP`, `MAE_LSP_C`, `MAE_LSP_RUBY`, `MAE_LSP_YAML`, `MAE_LSP_JSON`, `MAE_LSP_TOML`, `MAE_LSP_BASH`, `MAE_LSP_TERRAFORM`, `MAE_LSP_DOCKERFILE`, `MAE_LSP_ANSIBLE`, `MAE_LSP_HELM` — see `crates/mae/src/bootstrap.rs::setup_lsp()`'s `defaults` table for the full, authoritative list (this line is a convenience summary, not the source of truth)
+- **LSP `initializationOptions` passthrough (ADR-075):** `config.toml`'s `[lsp.<lang>]` sections accept an optional `init_options` table, sent verbatim as the server's `initialize` request `initializationOptions` field — e.g. `yaml-language-server`'s Kubernetes-manifest association, which has no per-file client-side detection in MAE (the server does its own glob matching once configured):
+  ```toml
+  [lsp.yaml]
+  command = "yaml-language-server"
+  args = ["--stdio"]
+  [lsp.yaml.init_options.yaml.schemas]
+  kubernetes = "k8s/*.yaml"
+  ```
+- **YAML dialect routing (ADR-075):** a `.yaml`/`.yml` file whose path looks like an Ansible playbook (`site.yml`, a `*playbook*` filename, an ancestor path component exactly `playbooks`, or a `.ansible.yml`/`.ansible.yaml` double extension) or a Helm chart template (an ancestor path component exactly `templates`, checked only when the Ansible heuristic didn't already claim it) is routed to `ansible-language-server`/`helm-ls` instead of the generic `yaml-language-server` — LSP completions/diagnostics only, tree-sitter highlighting stays plain YAML in both cases (Helm's Go-template-aware highlighting needs a tree-sitter injection-callback resolver MAE doesn't have yet). Both heuristics are pure client-side path matching (no `Chart.yaml`/project-marker verification — that would need filesystem I/O this hot path can't afford) and can false-positive on non-Ansible/non-Helm projects using the same directory names for unrelated reasons; override `[lsp.yaml]` (or the dialect-specific `[lsp.ansible]`/`[lsp.helm]`) in `config.toml` if that's disruptive for a given project.
 - **Babel compilers:** `MAE_BABEL_CXX` (C++), `MAE_BABEL_CC` (C) — or the `babel_cxx_compiler` / `babel_c_compiler` / `babel_cxx_std` options, or a per-block `:cmd`
 - **Browser:** `MAE_BROWSER` — command used to open external `http(s)://` links (default `xdg-open`). Automated tests set this to a harmless no-op (`true`) so `cargo test` never pops a real GUI browser window; for interactive manual verification of link-opening without a GUI window, `export MAE_BROWSER=lynx` (or `w3m`/`elinks`) — those are optional and not required by any test.
 

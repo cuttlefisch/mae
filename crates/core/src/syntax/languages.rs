@@ -67,10 +67,21 @@ pub enum Language {
     C,
     Cpp,
     Ruby,
+    Terraform,
+    Dockerfile,
 }
 
 impl Language {
-    /// The language id that matches MAE's LSP `language_id_from_path`.
+    /// A tree-sitter/display identifier for this variant (used for injection
+    /// query names and status/tool-output display, e.g.
+    /// `render_common/status.rs`, `tool_impls/syntax.rs`). Deliberately NOT
+    /// guaranteed to equal the LSP wire `language_id` a given path resolves
+    /// to via `lsp_intent::language_id_from_path` — the two registries are
+    /// intentionally decoupled (ADR-075): tree-sitter grammar selection and
+    /// LSP server routing are independently-owned concerns, and nothing in
+    /// this codebase relies on their strings matching (see e.g. `Tsx.id()`
+    /// returning `"tsx"` while `.tsx` files resolve to `"typescript"` for
+    /// LSP purposes — both are correct for their own registry).
     pub fn id(self) -> &'static str {
         match self {
             Language::Rust => "rust",
@@ -89,6 +100,8 @@ impl Language {
             Language::C => "c",
             Language::Cpp => "cpp",
             Language::Ruby => "ruby",
+            Language::Terraform => "terraform",
+            Language::Dockerfile => "dockerfile",
         }
     }
 
@@ -139,6 +152,8 @@ impl Language {
             Language::C => tree_sitter_c::LANGUAGE.into(),
             Language::Cpp => tree_sitter_cpp::LANGUAGE.into(),
             Language::Ruby => tree_sitter_ruby::LANGUAGE.into(),
+            Language::Terraform => tree_sitter_hcl::LANGUAGE.into(),
+            Language::Dockerfile => tree_sitter_containerfile::LANGUAGE.into(),
             Language::Org => return None,
         })
     }
@@ -204,6 +219,16 @@ pub(crate) fn build_configuration(lang: Language) -> Option<HighlightConfigurati
         Language::Bash => (tree_sitter_bash::HIGHLIGHT_QUERY, "", ""),
         Language::Scheme => (tree_sitter_scheme::HIGHLIGHTS_QUERY, "", ""),
         Language::Yaml => (tree_sitter_yaml::HIGHLIGHTS_QUERY, "", ""),
+        // tree-sitter-hcl ships no highlights query at all (crate or
+        // upstream repo) -- see queries/hcl_highlights.scm's own doc
+        // comment for the full explanation of this deliberate exception to
+        // "no local .scm files."
+        Language::Terraform => (include_str!("queries/hcl_highlights.scm"), "", ""),
+        Language::Dockerfile => (
+            tree_sitter_containerfile::HIGHLIGHTS_QUERY,
+            tree_sitter_containerfile::INJECTIONS_QUERY,
+            "",
+        ),
         // Org has no tree-sitter grammar compatible with tree-sitter 0.25;
         // `compute_spans` handles it via a regex fallback.
         Language::Org => return None,

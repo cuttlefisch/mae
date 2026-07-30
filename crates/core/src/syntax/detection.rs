@@ -2,6 +2,27 @@
 
 use super::Language;
 
+/// True for the canonical `Dockerfile` filename shape: `Dockerfile`,
+/// `Dockerfile.<stage>` (multi-stage build convention, e.g.
+/// `Dockerfile.prod`), or a `*.dockerfile` extension. Dockerfiles
+/// conventionally carry no extension at all, so extension-only matching
+/// (`language_for_path`'s main table below) can't detect them — this is a
+/// SHARED helper (not duplicated) so `lsp_intent::language_id_from_path`
+/// (LSP routing) and this module's `language_for_path` (tree-sitter grammar
+/// selection) can't drift apart on what counts as a Dockerfile, matching
+/// ADR-075's decoupled-but-consistent registry design.
+pub fn is_dockerfile_filename(path: &std::path::Path) -> bool {
+    let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    name == "Dockerfile"
+        || name.starts_with("Dockerfile.")
+        || name
+            .rsplit('.')
+            .next()
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("dockerfile"))
+}
+
 /// Detect the language for a file based on its extension.
 pub fn language_for_path(path: &std::path::Path) -> Option<Language> {
     // Filename-first match for files without extensions (Makefile, Dockerfile...).
@@ -10,6 +31,9 @@ pub fn language_for_path(path: &std::path::Path) -> Option<Language> {
         Some(".bashrc" | ".bash_profile" | ".profile" | ".zshrc")
     ) {
         return Some(Language::Bash);
+    }
+    if is_dockerfile_filename(path) {
+        return Some(Language::Dockerfile);
     }
     let ext = path.extension()?.to_str()?;
     Some(match ext {
@@ -31,6 +55,7 @@ pub fn language_for_path(path: &std::path::Path) -> Option<Language> {
         "c" | "h" => Language::C,
         "cpp" | "cxx" | "cc" | "hpp" | "hxx" | "hh" => Language::Cpp,
         "rb" | "rake" | "gemspec" => Language::Ruby,
+        "tf" | "tfvars" | "hcl" => Language::Terraform,
         _ => return None,
     })
 }
@@ -54,6 +79,8 @@ pub fn language_from_id(id: &str) -> Option<Language> {
         "c" => Language::C,
         "cpp" | "c++" | "cxx" | "cc" => Language::Cpp,
         "ruby" | "rb" => Language::Ruby,
+        "terraform" | "tf" | "hcl" => Language::Terraform,
+        "dockerfile" => Language::Dockerfile,
         _ => return None,
     })
 }

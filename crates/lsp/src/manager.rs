@@ -872,6 +872,7 @@ mod tests {
                 command: "rust-analyzer".into(),
                 args: vec![],
                 root_uri: None,
+                init_options: None,
             },
         );
         configs.insert(
@@ -880,6 +881,7 @@ mod tests {
                 command: "pylsp".into(),
                 args: vec![],
                 root_uri: None,
+                init_options: None,
             },
         );
         let (tx, _rx) = mpsc::channel(16);
@@ -921,6 +923,7 @@ mod tests {
                 command: "rust-analyzer".into(),
                 args: vec![],
                 root_uri: None,
+                init_options: None,
             },
         );
         configs.insert(
@@ -929,6 +932,7 @@ mod tests {
                 command: "pylsp".into(),
                 args: vec![],
                 root_uri: Some("file:///old".into()),
+                init_options: None,
             },
         );
         let (tx, _rx) = mpsc::channel(16);

@@ -196,7 +196,7 @@ pub fn run_doctor() -> i32 {
             "Rust",
             "rustup component add rust-analyzer",
         ),
-        ("pyright", "Python", "pip install pyright"),
+        ("pyright-langserver", "Python", "pip install pyright"),
         (
             "typescript-language-server",
             "TypeScript",
@@ -226,6 +226,26 @@ pub fn run_doctor() -> i32 {
             "clangd",
             "Cpp",
             "sudo dnf install clang-tools-extra (Fedora) / sudo apt install clangd (Debian) / brew install llvm (macOS)",
+        ),
+        (
+            "terraform-ls",
+            "Terraform",
+            "see https://github.com/hashicorp/terraform-ls#installation",
+        ),
+        (
+            "docker-language-server",
+            "Dockerfile",
+            "see https://github.com/docker/docker-language-server#installation",
+        ),
+        (
+            "ansible-language-server",
+            "Ansible",
+            "npm install -g @ansible/ansible-language-server",
+        ),
+        (
+            "helm-ls",
+            "Helm",
+            "see https://github.com/mrjosh/helm-ls#installation",
         ),
     ];
 

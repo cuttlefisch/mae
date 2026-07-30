@@ -2897,7 +2897,7 @@ dependencies = [
 
 [[package]]
 name = "mae"
-version = "0.14.73"
+version = "0.14.77"
 dependencies = [
  "async-trait",
  "base64 0.23.0",
@@ -2937,7 +2937,7 @@ dependencies = [
 
 [[package]]
 name = "mae-agent-cli"
-version = "0.14.73"
+version = "0.14.77"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2956,7 +2956,7 @@ dependencies = [
 
 [[package]]
 name = "mae-ai"
-version = "0.14.73"
+version = "0.14.77"
 dependencies = [
  "async-trait",
  "chrono",
@@ -2977,11 +2977,11 @@ dependencies = [
 
 [[package]]
 name = "mae-babel"
-version = "0.14.73"
+version = "0.14.77"
 
 [[package]]
 name = "mae-canvas"
-version = "0.14.73"
+version = "0.14.77"
 dependencies = [
  "serde",
  "serde_json",
@@ -2989,7 +2989,7 @@ dependencies = [
 
 [[package]]
 name = "mae-core"
-version = "0.14.73"
+version = "0.14.77"
 dependencies = [
  "criterion",
  "hex",
@@ -3021,8 +3021,10 @@ dependencies = [
  "tree-sitter",
  "tree-sitter-bash",
  "tree-sitter-c",
+ "tree-sitter-containerfile",
  "tree-sitter-cpp",
  "tree-sitter-go",
+ "tree-sitter-hcl",
  "tree-sitter-highlight",
  "tree-sitter-javascript",
  "tree-sitter-json",
@@ -3040,7 +3042,7 @@ dependencies = [
 
 [[package]]
 name = "mae-dap"
-version = "0.14.73"
+version = "0.14.77"
 dependencies = [
  "mae-core",
  "serde",
@@ -3051,18 +3053,18 @@ dependencies = [
 
 [[package]]
 name = "mae-export"
-version = "0.14.73"
+version = "0.14.77"
 dependencies = [
  "mae-babel",
 ]
 
 [[package]]
 name = "mae-format"
-version = "0.14.73"
+version = "0.14.77"
 
 [[package]]
 name = "mae-gui"
-version = "0.14.73"
+version = "0.14.77"
 dependencies = [
  "mae-core",
  "mae-renderer",
@@ -3076,7 +3078,7 @@ dependencies = [
 
 [[package]]
 name = "mae-kb"
-version = "0.14.73"
+version = "0.14.77"
 dependencies = [
  "cozo",
  "hex",
@@ -3097,14 +3099,14 @@ dependencies = [
 
 [[package]]
 name = "mae-lookup"
-version = "0.14.73"
+version = "0.14.77"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-lsp"
-version = "0.14.73"
+version = "0.14.77"
 dependencies = [
  "serde",
  "serde_json",
@@ -3114,14 +3116,14 @@ dependencies = [
 
 [[package]]
 name = "mae-make"
-version = "0.14.73"
+version = "0.14.77"
 dependencies = [
  "regex",
 ]
 
 [[package]]
 name = "mae-mcp"
-version = "0.14.73"
+version = "0.14.77"
 dependencies = [
  "async-trait",
  "base64 0.23.0",
@@ -3148,7 +3150,7 @@ dependencies = [
 
 [[package]]
 name = "mae-renderer"
-version = "0.14.73"
+version = "0.14.77"
 dependencies = [
  "crossterm",
  "mae-core",
@@ -3160,7 +3162,7 @@ dependencies = [
 
 [[package]]
 name = "mae-scheme"
-version = "0.14.73"
+version = "0.14.77"
 dependencies = [
  "base64 0.23.0",
  "libc",
@@ -3174,7 +3176,7 @@ dependencies = [
 
 [[package]]
 name = "mae-scheme-extra"
-version = "0.14.73"
+version = "0.14.77"
 dependencies = [
  "mae-scheme",
  "parking_lot 0.12.5",
@@ -3182,7 +3184,7 @@ dependencies = [
 
 [[package]]
 name = "mae-shell"
-version = "0.14.73"
+version = "0.14.77"
 dependencies = [
  "alacritty_terminal",
  "portable-pty",
@@ -3192,15 +3194,15 @@ dependencies = [
 
 [[package]]
 name = "mae-snippets"
-version = "0.14.73"
+version = "0.14.77"
 
 [[package]]
 name = "mae-spell"
-version = "0.14.73"
+version = "0.14.77"
 
 [[package]]
 name = "mae-sync"
-version = "0.14.73"
+version = "0.14.77"
 dependencies = [
  "base64 0.23.0",
  "chacha20poly1305",
@@ -6469,6 +6471,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tree-sitter-containerfile"
+version = "0.9.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4811d55a5a2c32bb024b441c32b7417c3ec1af1a080a25fa20d321627b65a2b"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
 name = "tree-sitter-cpp"
 version = "0.23.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6483,6 +6495,16 @@ name = "tree-sitter-go"
 version = "0.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c8560a4d2f835cc0d4d2c2e03cbd0dde2f6114b43bc491164238d333e28b16ea"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-hcl"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a7b2cc3d7121553b84309fab9d11b3ff3d420403eef9ae50f9fd1cd9d9cf012"
 dependencies = [
  "cc",
  "tree-sitter-language",
