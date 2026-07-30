@@ -152,6 +152,13 @@ struct SharedState {
     declared_packages: Vec<DeclaredPackage>,
     /// KB nodes registered from Scheme via `(define-kb-node! ID TITLE BODY)`.
     pending_kb_nodes: Vec<(String, String, String)>,
+    /// Pending KB registration requests from `(kb-register NAME DIR)`:
+    /// (name, org_dir). Drained via a direct `Editor::kb_register` call,
+    /// mirroring `pending_kb_nodes` above -- `kb_register` needs live
+    /// `&mut Editor` (it imports an org directory + adopts the resulting
+    /// instance), so it doesn't fit the synchronous-return primitive shape
+    /// either, same as `pending_kb_nodes`'s own reasoning.
+    pending_kb_register_requests: Vec<(String, String)>,
     /// Pending KB typed links: (source, target, rel_type).
     pending_kb_links: Vec<(String, String, String)>,
     /// Pending KB link removals: (source, target).

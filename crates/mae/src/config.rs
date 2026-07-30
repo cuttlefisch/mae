@@ -441,6 +441,27 @@ fn default_init_template() -> &'static str {
 ;; existing daemon only, never spawn. Try `:eval (daemon-status)`.
 ;; (set-option! "daemon-mode" "off")
 
+;; ── KB graph view (org-roam-ui-style, SPC h g) ───────────
+;; Enable the "kb-graph-view" module above first, then tune how the
+;; force/chord diagram looks. Hop radius from the centered node:
+;; (set-option! "kb-graph-default-depth" "1")
+;; Cap on nodes drawn at once (denser graphs get progressively decluttered
+;; rather than rendering every node at full detail — see the DOI/LOD
+;; options below):
+;; (set-option! "kb-graph-node-count-cap" "300")
+;; Layout algorithm: "force" (physics-based) or "chord" (circular):
+;; (set-option! "kb-graph-layout-algorithm" "force")
+;; How far a freshly opened graph zooms OUT to fit a dense diagram —
+;; deliberately one-directional, a sparse graph is left at its natural
+;; 1.0 scale rather than zoomed artificially far in:
+;; (set-option! "kb-graph-zoom-to-fit-margin" "0.85")
+;; "single" = only the KB the centered node belongs to; "multi" = compose
+;; every KB instance linked from the centered node into one diagram:
+;; (set-option! "kb-graph-view-mode" "single")
+;; Try `:eval (kb-graph-view-state)` for the full live snapshot, or
+;; `:describe-option kb-graph-node-count-cap` for any option's current
+;; value + docstring.
+
 ;; ── Keybindings ─────────────────────────────────────────
 ;; (define-key "normal" "SPC t t" "cycle-theme")
 
@@ -1295,6 +1316,41 @@ mod tests {
     /// Tests that manipulate environment variables must hold this lock
     /// to avoid races when cargo runs tests in parallel.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Every `(set-option! "name" ...)` referenced in the default init.scm
+    /// template (commented-out examples included) must resolve against the
+    /// real `OptionRegistry` -- a doc/reality drift guard for exactly the
+    /// kind of gap issue #512 reported (the template mentioning an option
+    /// that doesn't exist, or never getting updated when one is renamed).
+    #[test]
+    fn every_set_option_in_the_default_template_resolves_to_a_real_option() {
+        let registry = mae_core::options::OptionRegistry::new();
+        let template = default_init_template();
+        let mut checked = 0;
+        for line in template.lines() {
+            let Some(after) = line
+                .trim_start()
+                .trim_start_matches(";; ")
+                .strip_prefix("(set-option! \"")
+            else {
+                continue;
+            };
+            let Some(name_end) = after.find('"') else {
+                continue;
+            };
+            let name = &after[..name_end];
+            assert!(
+                registry.find(name).is_some(),
+                "default init.scm template references unknown option {name:?} \
+                 (line: {line:?})"
+            );
+            checked += 1;
+        }
+        assert!(
+            checked >= 5,
+            "expected to find several set-option! examples in the template, found {checked}"
+        );
+    }
 
     #[test]
     fn default_config_is_empty() {
