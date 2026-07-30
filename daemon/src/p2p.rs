@@ -192,6 +192,7 @@ pub async fn serve(
     limiter: crate::conn_limit::ConnLimiter,
     artifact_store: Arc<dyn mae_daemon::artifact_store::ArtifactStore>,
     kb_query_limits: mae_daemon::kb_query::KbQueryLimits,
+    self_issue: Option<mae_daemon::oauth_self_issue::SelfIssueConfig>,
 ) {
     while let Some(incoming) = endpoint.accept().await {
         let Some(guard) = limiter.try_acquire() else {
@@ -206,6 +207,7 @@ pub async fn serve(
         let doc_store = Arc::clone(&doc_store);
         let artifact_store = Arc::clone(&artifact_store);
         let broadcaster = broadcaster.clone();
+        let self_issue = self_issue.clone();
         tokio::spawn(async move {
             let _guard = guard;
             // Complete the QUIC handshake.
@@ -272,6 +274,7 @@ pub async fn serve(
                 mae_sync::kb::Transport::P2p,
                 artifact_store,
                 kb_query_limits,
+                self_issue,
             )
             .await;
         });
@@ -585,6 +588,7 @@ mod tests {
             crate::conn_limit::ConnLimiter::new(1),
             Arc::new(mae_daemon::artifact_store::NoArtifactStore),
             mae_daemon::kb_query::KbQueryLimits::default(),
+            None,
         ));
 
         // 1st peer: admitted, holds the connection open (matches max_connections=1).
@@ -659,6 +663,7 @@ mod tests {
             crate::conn_limit::ConnLimiter::new(0),
             Arc::new(mae_daemon::artifact_store::NoArtifactStore),
             mae_daemon::kb_query::KbQueryLimits::default(),
+            None,
         ));
 
         let connector = bind_endpoint(&con_id, RelayMode::Disabled).await.unwrap();

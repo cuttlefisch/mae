@@ -542,6 +542,23 @@ pub struct OAuthConfig {
     /// does: this view is a pure new *consumer* of `kb/query.*`, with no
     /// content path of its own.
     pub webview_enabled: bool,
+    /// ADR-067 Phase D3: whether this daemon mints AND accepts its own
+    /// self-issued bearer tokens (`kid: "self"`, EdDSA-signed with this
+    /// daemon's own Ed25519 identity) for the `kb/query.*` surface, instead
+    /// of requiring a real external authorization server. What makes a
+    /// self-pointing `RemoteHubQueryLayer` (ADR-062) work for a
+    /// `QueryOnly`-restricted member with no external AS available. Default
+    /// `false` (principle #12) — also requires `collab.auth.mode = "key"`
+    /// (an Ed25519 identity must exist to sign with; psk/none auth has
+    /// none) and `enabled = true` on this same listener; a daemon with
+    /// neither is a silent no-op, not an error, mirroring `kb_query_enabled`
+    /// and `webview_enabled`'s own established pattern.
+    pub self_issued_tokens_enabled: bool,
+    /// Self-issued token lifetime, seconds. Config-driven (principle #7),
+    /// never hardcoded — an operator running a long-lived restricted-viewer
+    /// integration may want longer than the default; one running a
+    /// short-lived CLI probe may want shorter.
+    pub self_issued_token_ttl_secs: u64,
 }
 
 impl Default for OAuthConfig {
@@ -562,6 +579,8 @@ impl Default for OAuthConfig {
             kb_query_max_search_results: 20,
             max_connections: 256,
             webview_enabled: false,
+            self_issued_tokens_enabled: false,
+            self_issued_token_ttl_secs: 3600,
         }
     }
 }

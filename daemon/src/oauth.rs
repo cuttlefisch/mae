@@ -22,6 +22,8 @@ use std::sync::RwLock;
 use std::time::{Duration, Instant};
 
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
+use mae_daemon::oauth_self_issue;
+pub use mae_daemon::oauth_self_issue::{TokenValidationError, ValidatedPrincipal};
 use serde::Deserialize;
 
 /// Resource-server identity and mapping configuration (the `[oauth]` section
@@ -84,49 +86,6 @@ struct Jwk {
 #[derive(Debug, Clone, Deserialize)]
 struct JwksResponse {
     keys: Vec<Jwk>,
-}
-
-/// Why a bearer token was rejected. Deliberately specific (not a single
-/// opaque "invalid") so callers can log/test the exact failure mode —
-/// several of ADR-052's required adversarial tests assert on these variants
-/// directly, not just "it failed."
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TokenValidationError {
-    /// No `Authorization: Bearer <token>` header, or the token isn't
-    /// well-formed JWT (bad base64, missing `kid`, etc.).
-    Malformed,
-    /// The token's `kid` doesn't match any key in the cached JWKS — either
-    /// a genuinely unknown key, or one that's been rotated out (this is
-    /// this module's stateless equivalent of "revoked": a resource server
-    /// validating JWTs via JWKS has no live revocation list, so key
-    /// rotation removing the old key from the JWKS is how the AS revokes).
-    UnknownKey,
-    /// Signature verification failed — a tampered or forged token.
-    InvalidSignature,
-    /// The token's `exp` claim is in the past.
-    Expired,
-    /// The token's `aud` claim does not include this server's
-    /// `canonical_resource_uri` — RFC 8707's confused-deputy defense. This
-    /// is also what catches a validly-signed token issued for a
-    /// *different* resource server (a different MCP server, or a
-    /// different MAE deployment) being replayed here.
-    WrongAudience,
-    /// The token's `iss` claim doesn't match the configured issuer.
-    WrongIssuer,
-    /// The mapped principal claim (`principal_claim`) was absent from the
-    /// token, or not a string.
-    MissingPrincipalClaim,
-}
-
-/// A validated bearer token's outcome: the mapped principal plus enough of
-/// the raw claims for logging/attribution. This principal is what feeds
-/// `kb_access` (ADR-018) — an OAuth identity SOURCE, never a parallel
-/// authorization system.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ValidatedPrincipal {
-    pub principal: String,
-    pub audience: Vec<String>,
-    pub expires_at: u64,
 }
 
 /// Validate a bearer token against an already-fetched JWKS. Pure (no I/O,
@@ -400,6 +359,7 @@ async fn handle_request(
     config: Arc<ResourceServerConfig>,
     jwks: Arc<JwksCache>,
     doc_store: Option<Arc<DocStore>>,
+    self_issue: Arc<Option<oauth_self_issue::SelfIssueConfig>>,
 ) -> Result<Response<Full<Bytes>>, std::convert::Infallible> {
     if req.uri().path() == "/.well-known/oauth-protected-resource" {
         return Ok(json_response(
@@ -427,22 +387,51 @@ async fn handle_request(
         return Ok(unauthorized(&config, "missing bearer token"));
     };
 
-    let keys = match jwks.get().await {
-        Ok(keys) => keys,
-        Err(e) => {
-            tracing::warn!(error = %e, "failed to fetch JWKS");
-            return Ok(json_response(
-                StatusCode::SERVICE_UNAVAILABLE,
-                serde_json::json!({"error": "temporarily_unavailable"}),
-            ));
-        }
-    };
+    // ADR-067 Phase D3: a cheap, unauthenticated header PEEK (never the
+    // signature -- that's still verified below, by the real validator for
+    // whichever population this token claims membership in) decides which
+    // of two entirely separate validators runs. `kid == "self"` never
+    // collides with a real external JWKS key id, and `self_issue` being
+    // `None` (the config gate, principle #12) means this branch is
+    // unreachable regardless of what any token claims -- a `kid: "self"`
+    // token on a daemon that never opted in just falls through to the
+    // ordinary JWKS path below, where it fails as an unknown key like any
+    // other bogus `kid`.
+    let self_issue_ctx = self_issue.as_ref().as_ref().filter(|_| {
+        jsonwebtoken::decode_header(&token)
+            .ok()
+            .and_then(|h| h.kid)
+            .as_deref()
+            == Some(oauth_self_issue::SELF_ISSUED_KID)
+    });
 
-    let principal = match validate_bearer_token(&token, &keys, &config) {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::debug!(?e, "bearer token rejected");
-            return Ok(unauthorized(&config, &format!("{e:?}")));
+    let principal = if let Some(si) = self_issue_ctx {
+        let daemon_pubkey = si.identity.public().to_bytes();
+        match oauth_self_issue::validate_self_issued_token(&token, &daemon_pubkey, &si.audience) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::debug!(?e, "self-issued bearer token rejected");
+                return Ok(unauthorized(&config, &format!("{e:?}")));
+            }
+        }
+    } else {
+        let keys = match jwks.get().await {
+            Ok(keys) => keys,
+            Err(e) => {
+                tracing::warn!(error = %e, "failed to fetch JWKS");
+                return Ok(json_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    serde_json::json!({"error": "temporarily_unavailable"}),
+                ));
+            }
+        };
+
+        match validate_bearer_token(&token, &keys, &config) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::debug!(?e, "bearer token rejected");
+                return Ok(unauthorized(&config, &format!("{e:?}")));
+            }
         }
     };
 
@@ -653,6 +642,7 @@ pub async fn run_oauth_listener(
     key_path: &Path,
     doc_store: Option<Arc<DocStore>>,
     limiter: ConnLimiter,
+    self_issue: Option<oauth_self_issue::SelfIssueConfig>,
 ) -> std::io::Result<()> {
     let tls_config = load_tls_config(cert_path, key_path).map_err(std::io::Error::other)?;
     let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(tls_config));
@@ -661,6 +651,7 @@ pub async fn run_oauth_listener(
 
     let config = Arc::new(server_config);
     let jwks = Arc::new(JwksCache::new(config.jwks_url.clone()));
+    let self_issue = Arc::new(self_issue);
 
     loop {
         let (tcp_stream, peer_addr) = match listener.accept().await {
@@ -682,6 +673,7 @@ pub async fn run_oauth_listener(
         let config = config.clone();
         let jwks = jwks.clone();
         let doc_store = doc_store.clone();
+        let self_issue = self_issue.clone();
 
         tokio::spawn(async move {
             let _guard = guard;
@@ -707,7 +699,13 @@ pub async fn run_oauth_listener(
             };
             let io = hyper_util::rt::TokioIo::new(tls_stream);
             let service = hyper::service::service_fn(move |req| {
-                handle_request(req, config.clone(), jwks.clone(), doc_store.clone())
+                handle_request(
+                    req,
+                    config.clone(),
+                    jwks.clone(),
+                    doc_store.clone(),
+                    self_issue.clone(),
+                )
             });
             if let Err(e) =
                 hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())

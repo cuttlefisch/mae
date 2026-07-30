@@ -36,6 +36,7 @@ async fn silent_client_is_dropped_within_the_handshake_timeout() {
             mae_sync::kb::Transport::Hub,
             std::sync::Arc::new(crate::artifact_store::NoArtifactStore),
             crate::kb_query::KbQueryLimits::default(),
+            None,
         )
         .await;
     });
