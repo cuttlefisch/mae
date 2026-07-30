@@ -2,7 +2,17 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.81] - 2026-07-30
+
+### Features
+
+- *(daemon)* Wire kb/query.* into the mTLS collab handler (ADR-067 Phase D2) (#560) ([0fb8156](https://github.com/cuttlefisch/mae/commit/0fb81565eb45bdd5b6cc20c9cf6fa0b8653a64bc))
+
 ## [0.14.80] - 2026-07-30
+
+### Miscellaneous
+
+- Bump version to 0.14.80 ([475b35d](https://github.com/cuttlefisch/mae/commit/475b35de53849132fee5caa6f62c165e6fd03b91))
 
 ### Refactor
 
