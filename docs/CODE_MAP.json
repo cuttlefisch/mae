@@ -702,6 +702,10 @@
           "kind": "mod"
         },
         {
+          "name": "kb_build",
+          "kind": "mod"
+        },
+        {
           "name": "migrate",
           "kind": "mod"
         },
