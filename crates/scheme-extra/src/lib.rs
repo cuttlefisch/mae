@@ -43,8 +43,8 @@ use mae_scheme::vm::Vm;
 /// Called once from `crates/mae/src/main.rs` right after `SchemeRuntime::
 /// new()`, when `extra-kernel-crates` is enabled. No-op by default --
 /// downstream forks add calls here.
-pub fn register_all(_vm: &mut Vm, _shared: &Arc<Mutex<SharedState>>) {
-    // register_html_export::register_fns(_vm, _shared);  // example
+pub fn register_all(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>) {
+    bilingual_kb_export_mae_bridge::register_fns(vm, shared);
 }
 
 #[cfg(test)]
