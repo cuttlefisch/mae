@@ -62,6 +62,19 @@ pub struct OptionDef {
 /// Registry of all known editor options.
 pub struct OptionRegistry {
     options: Vec<OptionDef>,
+    /// Current values for options with no hardcoded Rust field --
+    /// `register_dynamic` (e.g. from Scheme's `(define-option! ...)`)
+    /// only ever added a NAME/default/doc to `options` above; nothing
+    /// backed the actual VALUE, so `Editor::get_option`/`set_option`
+    /// both fell through to `None`/`Err("Unknown option")` for any name
+    /// not in their own hardcoded match (confirmed a real, live bug this
+    /// way -- a module-registered option was listed in `*option-list*`/
+    /// docs but genuinely unreadable/unsettable). Seeded with the
+    /// option's own default at registration time, so it's readable
+    /// immediately; `register_dynamic` never overwrites an existing
+    /// entry here (a live-set value must survive `:reload-modules`
+    /// re-registering the same option name).
+    dynamic_values: std::collections::HashMap<String, String>,
 }
 
 impl Default for OptionRegistry {
@@ -491,7 +504,7 @@ impl OptionRegistry {
                      client, the initialize response's instructions field. Empty (default) \
                      disables this — no behavior change from today. Not validated against the \
                      KB registry at set time (init.scm evaluates before KB federation loads, so \
-                     the shipped default \"MaePractices\" must still be settable before it's \
+                     the shipped default \"DevPractices\" must still be settable before it's \
                      registered) — an unresolvable name is a silent no-op at read time instead, \
                      never a startup error. \"primary\" (the built-in help KB) is accepted here \
                      but not yet wired in `crates/ai/src/guidance.rs`'s reader — setting it \
@@ -1091,6 +1104,7 @@ impl OptionRegistry {
                     "EXPERIMENTAL (Phase D, ADR-029): when a local daemon hosts the primary KB, host + thin-start it on the daemon (CRDT source of truth) instead of the editor's on-disk store. Default off. Known gaps until the thin-client ADR: agenda + ranked KB search are not yet daemon-routed and read empty under a thin mirror.",
                     OptionKind::Bool, "false", Some("daemon.host_primary"), &[]),
             ],
+            dynamic_values: std::collections::HashMap::new(),
         }
     }
 
@@ -1134,6 +1148,13 @@ impl OptionRegistry {
             );
             self.options.retain(|o| o.name.as_ref() != name);
         }
+        // Seed the live value from this registration's default, but ONLY
+        // if nothing's there yet -- re-registering the same name (e.g. a
+        // module re-running `(define-option! ...)` on `:reload-modules`)
+        // must not silently reset a value the user already `:set-save`d.
+        self.dynamic_values
+            .entry(name.clone())
+            .or_insert_with(|| default_value.clone());
         self.options.push(OptionDef {
             name: Cow::Owned(name),
             aliases: aliases.into_iter().map(Cow::Owned).collect(),
@@ -1149,7 +1170,29 @@ impl OptionRegistry {
     pub fn unregister(&mut self, name: &str) -> bool {
         let before = self.options.len();
         self.options.retain(|o| o.name.as_ref() != name);
+        self.dynamic_values.remove(name);
         self.options.len() < before
+    }
+
+    /// Current value of a dynamically-registered option (one with no
+    /// hardcoded Rust field on `Editor`) -- the read side `Editor::
+    /// get_option`'s fallback arm uses. `None` if `name` was never
+    /// registered via `register_dynamic` at all (a hardcoded/built-in
+    /// option never has an entry here; its value lives in a real
+    /// `Editor` field instead).
+    pub fn dynamic_value(&self, name: &str) -> Option<&str> {
+        self.dynamic_values.get(name).map(|s| s.as_str())
+    }
+
+    /// Set a dynamically-registered option's current value -- the write
+    /// side `Editor::set_option`'s fallback arm uses. Silently a no-op if
+    /// `name` was never registered (mirrors `dynamic_value`'s `None`
+    /// case; the caller is expected to have already confirmed the option
+    /// exists via `find`/`has_option` before calling this).
+    pub fn set_dynamic_value(&mut self, name: &str, value: String) {
+        if let Some(slot) = self.dynamic_values.get_mut(name) {
+            *slot = value;
+        }
     }
 }
 
@@ -1199,6 +1242,79 @@ mod tests {
     fn registry_lists_all_options() {
         let reg = OptionRegistry::new();
         assert!(reg.list().len() >= 8);
+    }
+
+    /// Real, previously-confirmed bug: `register_dynamic` added a NAME to
+    /// `list()`/`find()`, but nothing backed an actual readable value --
+    /// `dynamic_value` returned nothing for it at all. This is the fix's
+    /// core round-trip: register, read back the seeded default, write a
+    /// new value, read that back too.
+    #[test]
+    fn dynamic_option_value_is_readable_and_writable_after_registration() {
+        let mut reg = OptionRegistry::new();
+        assert!(reg.dynamic_value("kb_export_default_depth").is_none());
+
+        reg.register_dynamic(
+            "kb_export_default_depth".to_string(),
+            vec![],
+            "doc".to_string(),
+            OptionKind::Int,
+            "2".to_string(),
+            None,
+        );
+        assert!(reg.find("kb_export_default_depth").is_some());
+        assert_eq!(reg.dynamic_value("kb_export_default_depth"), Some("2"));
+
+        reg.set_dynamic_value("kb_export_default_depth", "3".to_string());
+        assert_eq!(reg.dynamic_value("kb_export_default_depth"), Some("3"));
+    }
+
+    /// Re-registering the SAME dynamic option (e.g. `:reload-modules`
+    /// re-running a module's `(define-option! ...)`) must not silently
+    /// reset a value the user already set -- confirmed the fix's
+    /// `.entry(...).or_insert_with(...)` seeding actually preserves it,
+    /// not just that it compiles.
+    #[test]
+    fn re_registering_a_dynamic_option_preserves_its_current_value() {
+        let mut reg = OptionRegistry::new();
+        reg.register_dynamic(
+            "kb_export_default_depth".to_string(),
+            vec![],
+            "doc".to_string(),
+            OptionKind::Int,
+            "2".to_string(),
+            None,
+        );
+        reg.set_dynamic_value("kb_export_default_depth", "5".to_string());
+
+        reg.register_dynamic(
+            "kb_export_default_depth".to_string(),
+            vec![],
+            "doc".to_string(),
+            OptionKind::Int,
+            "2".to_string(),
+            None,
+        );
+        assert_eq!(
+            reg.dynamic_value("kb_export_default_depth"),
+            Some("5"),
+            "expected the live-set value to survive re-registration"
+        );
+    }
+
+    #[test]
+    fn unregister_removes_the_dynamic_value_too() {
+        let mut reg = OptionRegistry::new();
+        reg.register_dynamic(
+            "kb_export_default_depth".to_string(),
+            vec![],
+            "doc".to_string(),
+            OptionKind::Int,
+            "2".to_string(),
+            None,
+        );
+        assert!(reg.unregister("kb_export_default_depth"));
+        assert!(reg.dynamic_value("kb_export_default_depth").is_none());
     }
 
     #[test]
