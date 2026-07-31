@@ -453,6 +453,37 @@ jobs:
         shell: wsl-bash {0}
         run: cat /tmp/mae-daemon-phase-e.log || true
 
+  windows-gui-spike:
+    name: ADR-066 Phase D / windows GUI build spike
+    runs-on: windows-latest
+    # First iteration of genuinely new CI infrastructure -- skia-safe/
+    # skia-bindings 0.99 (the --features gui dependency) built for
+    # x86_64-pc-windows-msvc for the very first time. GUI already builds
+    # fine on Linux (install-gui-deps' apt-get fontconfig/freetype) and
+    # macOS (zero extra system packages, native CoreText/CoreGraphics) --
+    # Windows is simply UNATTEMPTED, not previously-failed, and there is
+    # zero local pre-verification possible (no Windows toolchain available
+    # to the author). Same posture windows-remote-e2e/macos/msrv all
+    # started with. Promote to hard-blocking once proven stable across a
+    # few real runs, matching that same precedent -- not a permanent
+    # leniency.
+    #
+    # Deliberately scoped to BUILD ONLY (no test/clippy) -- this is Phase 1
+    # of ADR-066 Phase D's own planned 2-PR sequence (spike, then full
+    # smoke test): answering "does this dependency even compile here" before
+    # betting further CI engineering (launching a real window, driving
+    # SendInput) on an unproven foundation. See docs/adr/066-windows-client-
+    # support.md's Phase D section.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-rust
+        with:
+          sccache: "true"
+          incremental: "false"
+      - name: cargo build --workspace --features gui (debug, fast signal)
+        run: cargo build --workspace --features gui
+
   daemon:
     name: daemon / check + test
     runs-on: ubuntu-latest
