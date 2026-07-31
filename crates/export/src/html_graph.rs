@@ -1,5 +1,15 @@
 //! Self-contained, offline-first HTML export of a KB subgraph.
 //!
+//! @ai-caution: [architecture-debt] ~6,205 lines, ~7.75x the 800-line source
+//! ceiling — tracked in `.claude/commands/mae-audit.md`'s "Known exceptions"
+//! list and `ROADMAP.md`'s "Architecture Debt" section. Folded back in-tree
+//! from a standalone sibling project (`bilingual-kb-export`) during the
+//! `feat/subgraph-html-export` integration; most of the size is two large
+//! embedded string constants (`GRAPH_JS`, `STATIC_CSS`) plus this module's
+//! own extensive test suite, not tangled Rust control flow. Not split this
+//! pass -- see the audit doc's entry for the candidate seam (extracting the
+//! JS/CSS constants to sibling asset files via `include_str!`).
+//!
 //! One Rust entry point (`HtmlGraphExporter::export`) returns one complete
 //! HTML `String` — inline `<style>`, inline `<script>`, an embedded JSON
 //! data payload, no external network requests, no bundler, no npm

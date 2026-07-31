@@ -129,6 +129,21 @@ the 2026-07 splitting pass above — the KB graph view feature and ongoing membe
 None split this pass — that's design work, appropriately deferred; this entry exists so the debt is
 discoverable (per this file's own cross-reference discipline above) instead of silently untracked.
 
+**Added integrating `feat/subgraph-html-export`** (kb-export-subgraph-html primitive):
+- `crates/export/src/html_graph.rs` — ~6,205 lines. The whole-KB-subgraph -> self-contained
+  interactive HTML export (chord-diagram nav widget, bilingual EN/ES overlay, theming): Rust HTML
+  assembly + one large embedded JS interaction layer (`GRAPH_JS`) + one large embedded CSS constant
+  (`STATIC_CSS`) as string literals, plus this module's own extensive test suite (adversarial
+  script-injection escaping, wedge geometry, per-field `ChordDiagramConfig` override tests). Not
+  split this pass — it was folded back in-tree from a standalone sibling project
+  (`bilingual-kb-export`) as part of this integration (see that file's own `@ai-caution` marker),
+  and the JS/CSS constants in particular don't have an obvious seam (splitting the Rust assembly
+  code from the string constants would separate logic from the literal text it string-replaces
+  against, which is more likely to introduce drift than reduce it). A future pass could split the
+  constants into sibling `.js`/`.css` asset files loaded via `include_str!` (dropping their line
+  count from this file's own total) without touching the assembly logic — not attempted here since
+  it's out of scope for a merge-conflict-resolution pass.
+
 Flag these if they've grown since last audit, but don't remediate without explicit request.
 
 **2026-07 full-codebase audit** found ~60 additional files over these ceilings beyond the list
