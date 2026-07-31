@@ -951,7 +951,7 @@ impl super::Editor {
                 // registry (other options like `kb_notes_dir`/`daemon_mode`/
                 // `kb_storage_engine` depend on that exact ordering, so
                 // reordering bootstrap isn't an option), so an init.scm-set
-                // name — including the shipped default "MaePractices" —
+                // name — including the shipped default "DevPractices" —
                 // would ALWAYS fail eager validation here even though it
                 // resolves correctly moments later. That's inconsistent with
                 // this option's own documented contract: `guidance.rs`'s

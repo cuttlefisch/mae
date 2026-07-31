@@ -2401,14 +2401,21 @@ pub(crate) fn init_kb_federation(editor: &mut Editor, clean_mode: bool) {
                 info!("migrated kb-registry.toml from config to data directory");
             }
         }
-        // Issue #370: auto-register the shipped dev-practices KB as a
-        // federated instance, if one is installed and not already
-        // registered, so `ai_guidance_kb` (default "MaePractices" in the
-        // shipped init.scm template) resolves out of the box. Additive-only
-        // and a silent no-op otherwise — run BEFORE the registry load below
-        // so a newly-added entry is picked up by the same import loop that
-        // handles every other instance, with no separate import path needed.
+        // Issue #370: auto-register the shipped MAE-contributor practices KB
+        // as a federated instance, if one is installed and not already
+        // registered, so `ai_guidance_kb` resolves to it when a contributor
+        // explicitly switches to "MaePractices" (the shipped init.scm
+        // template defaults to "DevPractices" since ADR-076 — see the call
+        // below). Additive-only and a silent no-op otherwise — run BEFORE
+        // the registry load below so a newly-added entry is picked up by the
+        // same import loop that handles every other instance, with no
+        // separate import path needed.
         crate::practices_kb::ensure_registered(&data_dir);
+        // Issue #514 / ADR-076: same auto-registration, for the generic
+        // DevPractices KB (the fresh-install default `ai_guidance_kb`
+        // target per ADR-076 D6). Same ordering guarantee as above — must
+        // run before the registry load below.
+        crate::devpractices_kb::ensure_registered(&data_dir);
 
         let registry = mae_kb::federation::KbRegistry::load(&data_dir);
         for inst in &registry.instances {
@@ -2950,6 +2957,63 @@ mod tests {
         assert!(
             kb.get("index").is_some(),
             "the real practices KB's index node must have loaded"
+        );
+    }
+
+    /// Issue #514 / ADR-076, end-to-end: same proof as
+    /// `init_kb_federation_auto_registers_and_loads_the_practices_kb`, for
+    /// the DevPractices sibling. Requires the REAL built
+    /// `assets/mae-devpractices.cozo` (`make devpractices-kb` /
+    /// `build_devpractices_kb`) — if that asset hasn't been built yet (e.g.
+    /// this lands ahead of the parallel content-fork/build-binary work), this
+    /// test fails loudly with a clear message rather than silently skipping,
+    /// same as the MaePractices test above does for its own asset.
+    #[test]
+    fn init_kb_federation_auto_registers_and_loads_the_devpractices_kb() {
+        // Isolate from any ambient env override so this test's own
+        // `MAE_DEVPRACTICES_KB_PATH` is authoritative regardless of what
+        // else might be running in this process.
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _lock = ENV_LOCK.lock().unwrap();
+        let prev = std::env::var("MAE_DEVPRACTICES_KB_PATH").ok();
+
+        let real_asset = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/mae-devpractices.cozo");
+        assert!(
+            real_asset.exists(),
+            "expected the real built DevPractices KB at {} -- run `make devpractices-kb` first",
+            real_asset.display()
+        );
+        let staged = copy_kb_asset_to_tempdir(&real_asset);
+        let staged_asset = staged.path().join(real_asset.file_name().unwrap());
+        std::env::set_var("MAE_DEVPRACTICES_KB_PATH", &staged_asset);
+
+        let tmp = tempfile::tempdir().unwrap();
+        let mut editor = mae_core::Editor::new();
+        editor.data_dir_override = Some(tmp.path().to_path_buf());
+
+        init_kb_federation(&mut editor, false);
+
+        match prev {
+            Some(v) => std::env::set_var("MAE_DEVPRACTICES_KB_PATH", v),
+            None => std::env::remove_var("MAE_DEVPRACTICES_KB_PATH"),
+        }
+
+        let inst = editor
+            .kb
+            .registry
+            .find(crate::devpractices_kb::INSTANCE_NAME)
+            .expect("DevPractices must be auto-registered");
+        assert_eq!(inst.db_path, tmp.path().join("mae-devpractices.cozo"));
+        assert!(
+            editor.kb.instances.contains_key(&inst.uuid),
+            "the newly-registered instance must be imported into kb.instances \
+             this same session, not only persisted to the registry file"
+        );
+        let kb = &editor.kb.instances[&inst.uuid];
+        assert!(
+            kb.get("index").is_some(),
+            "the real DevPractices KB's index node must have loaded"
         );
     }
 

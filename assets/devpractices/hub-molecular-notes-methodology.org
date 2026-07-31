@@ -1,0 +1,49 @@
+:PROPERTIES:
+:ID: hub:molecular-notes-methodology
+:ROLE: hub
+:KIND: category
+:END:
+#+title: Molecular Notes Methodology
+#+filetags: :hub:molecular-notes:devpractice:
+
+How this knowledge base itself is built, and how to extend it correctly. Read this
+before adding or editing notes anywhere in this knowledge base.
+
+* Fundamentals
+- [[id:practice:molecular-notes-overview][Molecular Notes Overview]] — start here.
+- [[id:practice:atoms-vs-molecules-vs-hubs][Atoms vs. Molecules vs. Hubs]]
+- [[id:practice:source-preservation][Source Preservation]]
+
+* Structure
+- [[id:practice:node-linking][Node Linking]] — the mandatory link form.
+- [[id:practice:tagging-conventions][Tagging Conventions]]
+- [[id:practice:adr-node-crosslinking][ADR / Node Crosslinking]]
+- [[id:practice:when-to-create-a-new-node][When to Create a New Node]]
+
+* Authoring and auditing
+- [[id:practice:kb-authoring-workflow][KB Authoring Workflow]]
+- [[id:practice:kb-audit-checklist][KB Audit Checklist]]
+- [[id:practice:kb-pdf-export-pipeline][KB PDF Export Pipeline]]
+- [[id:workflow:verify-before-finalizing][Verify Before Finalizing]] — the discipline
+  behind treating any claim in this KB (or elsewhere) as settled.
+
+* Related process practices
+- [[id:workflow:dev-journal-chaining][Dev Journal Chaining]] — the same
+  linked-note structure applied to a dated journal instead of a topic-organized KB.
+- [[id:practice:guidance-skill-or-code][Guidance, Skill, or Deterministic Code]] —
+  when a rule needs prose, a parameterized procedure, or a script that guarantees
+  the outcome instead of relying on anyone remembering the rule.
+
+* Does this actually work?
+- [[id:practice:kb-token-efficiency-evidence][Token-Efficiency Evidence for This KB's
+  Structure]] — a real measurement, not just an assertion, of how much smaller a
+  targeted note fetch is than reading the full corpus or a merged category doc.
+
+* Writing style
+- [[id:practice:writing-style][Writing Style]]
+- [[id:practice:avoiding-ai-prose-tendencies][Avoiding AI Prose Tendencies]]
+- [[id:practice:subgraph-export-content-standards][Subgraph-Export Content Standards]] —
+  the additional documentation contract for content authored to be exported out of a KB,
+  rather than read as notes-to-self.
+
+Back to [[id:hub:start-here][Start Here]].

@@ -1,0 +1,34 @@
+:PROPERTIES:
+:ID: template:makefile-target
+:ROLE: atom
+:END:
+#+title: Template: Adding a New Makefile Target
+#+filetags: :makefile:template:devpractice:
+
+A fill-in skeleton for adding a new target to a `Makefile` correctly on the first attempt — self-documented, declared phony, and built from existing variables rather than a fresh hardcoded path.
+
+```make
+## <target-name>: <one-line description shown in `make help`>
+<target-name>: <prerequisite-targets-if-any>
+	$(EXISTING_VAR) <command> $(EXISTING_FLAGS_VAR)
+
+.PHONY: ... <target-name>
+```
+
+Checklist before considering the target finished:
+
+- **Doc-comment line** (`## <target-name>: ...`) is present directly above the target, phrased as a short imperative description a stranger could understand out of context — this is what feeds the generated `help` catalog, see [[id:practice:makefile-self-documentation][Makefile self-documentation]].
+- **Added to `.PHONY`** in the same edit that adds the target, if the target does not produce a file matching its own name (true for nearly every task-runner-style target: build/test/lint/deploy/release-style actions). A target missing from `.PHONY` is a latent bug, not a style nit — see [[id:practice:makefile-hygiene][Makefile hygiene]].
+- **Reuses existing variables** (`$(CARGO)`, `$(BIN_DIR)`, `$(COMPOSE)`, whatever the project has already centralized) instead of hardcoding a new path or binary name inline. If the target genuinely needs a new overridable value, add it as a new `?=` variable near the top of the file alongside the others, not inline in the recipe.
+- **Stays a thin dispatch**, not a multi-line shell block. If the logic needs a conditional, a loop, or more than a couple of piped commands, move it to `scripts/<name>.sh` and have the target call that script — see [[id:practice:makefile-hygiene][Makefile hygiene]] for the complexity-budget rationale.
+- **If it belongs in the CI-parity aggregate** (a `ci` target or similar that claims to mirror the pipeline), add it there too in the same change — see [[id:practice:makefile-canonical-interface][Makefile as the canonical interface]] for why that parity claim has to stay true.
+
+Worked example — adding a `fmt` target that reuses an existing `$(CARGO)` variable:
+
+```make
+## fmt: apply formatting in place
+fmt:
+	$(CARGO) fmt
+
+.PHONY: build test lint ci fmt
+```

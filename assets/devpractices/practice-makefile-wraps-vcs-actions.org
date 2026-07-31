@@ -1,0 +1,34 @@
+:PROPERTIES:
+:ID: practice:makefile-wraps-vcs-actions
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Wrapping Git/GitLab Actions Behind Makefile Targets
+#+filetags: :makefile:vcs:devpractice:
+
+Beyond build/test/lint, a `Makefile` can extend the same "one discoverable interface" treatment to the version-control and code-review actions a contributor performs repeatedly: opening a merge request, checking pipeline status, cutting a release tag. This is a recommended pattern worth adopting deliberately, not something most projects already do out of the box — it typically has to be built and maintained on purpose, the same way the build/test targets were.
+
+The case for it is the same as for build targets: an AI agent (or a new contributor) that has memorized `make mr` behaves identically across every project that adopts the convention, without needing to know whether the underlying tool is `glab`, `gh`, or a raw `git push` plus a manually-opened web page. It also gives a natural place to bake in project-specific defaults — a target field, a label, a template path — that would otherwise have to be re-typed correctly by hand every time.
+
+```make
+## mr: open a merge request for the current branch (draft by default)
+mr:
+	glab mr create --draft --fill
+
+## mr-ready: mark the current branch's MR as ready for review
+mr-ready:
+	glab mr update --ready
+
+## pipeline-status: show CI pipeline status for the current branch
+pipeline-status:
+	glab ci status
+
+## release: tag and push a new release (usage: make release VERSION=v1.4.0)
+release:
+	git tag -a $(VERSION) -m "Release $(VERSION)"
+	git push origin $(VERSION)
+```
+
+Keep these targets thin wrappers, not reimplementations — `make mr` should call `glab mr create` with the project's preferred defaults, not duplicate `glab`'s option-parsing logic in shell. If the wrapped command needs real branching logic (checking whether an MR already exists, choosing a template based on branch name), that complexity belongs in a `scripts/` file the target calls into, following the same escape hatch as any other non-trivial recipe.
+
+This pairs directly with [[id:practice:glab-cli-usage][glab CLI usage patterns]] — the Makefile target is a thin, project-specific alias over the general-purpose `glab` commands, not a replacement for knowing them — and with [[id:practice:gitlab-mr-workflow][the GitLab MR workflow]], which defines what "ready" and "draft" actually mean for a given project. See [[id:practice:makefile-canonical-interface][Makefile as the canonical interface]] for the broader rationale this pattern extends into VCS territory.

@@ -1,0 +1,108 @@
+:PROPERTIES:
+:ID: practice:subgraph-export-content-standards
+:ROLE: molecule
+:KIND: concept
+:END:
+#+title: Subgraph-Export Content Standards
+#+filetags: :writing-style:devpractice:
+
+Content authored for export out of a knowledge base — a curated subgraph rendered as a
+standalone guide, rather than notes-to-self read inside the KB itself — needs a documentation
+contract on top of [[id:practice:writing-style][general writing style]] and
+[[id:practice:avoiding-ai-prose-tendencies][avoiding AI prose tendencies]]. Those two cover tone
+and register; this note covers what else changes when the reader is an external audience who
+did not write the notes and has no access to the author's context.
+
+* Write to a named reader
+
+Pick a specific persona (a junior sysadmin, a new team member, a specific customer role) and
+write every sentence against it, rather than an undefined generic reader. Established
+documentation style guides — Red Hat's and Google's developer-documentation guides, in
+particular — are a reasonable concrete model: active voice, short declarative sentences, no
+hedge-everything qualifiers, no marketing language. Ground new concepts in something the persona
+plausibly already knows when the analogy does real clarifying work; skip it when it would just
+be decoration.
+
+* Match structure to job
+
+A tutorial (one concrete path, start to finish, depth deferred via links) and a reference atom
+(stands alone, opened mid-task, not read start to finish) are different jobs — the Diátaxis
+tutorial/reference split. Forcing one shape onto the other produces a tutorial bloated with
+reference detail, or a reference note that assumes narrative context the reader doesn't have.
+
+* Verify every technical claim before writing it, not after
+
+Syntax, CLI flags, and precedence/ordering claims get checked against the authoritative source
+for that tool *before* they're written, not written from memory and corrected later if someone
+happens to notice. A real example: a first draft of a Terraform variable-precedence explanation
+stated environment variables as highest-priority. That is wrong — the real order is
+=default= < =TF_VAR_*= env var < =terraform.tfvars= < =*.auto.tfvars= < =-var=/=-var-file=
+flags — and it only surfaced by checking HashiCorp's own docs against the draft, not by
+re-reading the draft more carefully. Diagrams are a technical claim rendered visually and need
+the same fact-check pass a code snippet gets, not an exemption because the content is a picture
+rather than text.
+
+* Ground diagrams and visual chrome in real design discipline
+
+A diagram or navigation widget shipped in exported content earns the same rigor as a data
+visualization: contrast-validated colors (run a validator; don't eyeball whether two colors
+"look different enough"), restrained chrome over heavy decoration (a hairline divider reads more
+professionally than a drop-shadowed card in a contrasting color scheme, confirmed the hard way
+building an exported nav widget's first version — it read as a bolted-on prototype element, not
+part of the page), and deliberate mark/label placement — a label that biases a diagram's apparent
+visual center needs its placement logic fixed, not its padding papered over.
+
+* Keep extraction opinionated
+
+An export should pull in what is genuinely load-bearing for its topic and leave the rest as
+plain, unlinked prose, even when some other note is technically reachable by a link from the
+content being exported — a curator choosing what to link is making an editorial decision, not
+just recording connectivity. When a real content gap shows up during the walkthrough, author a
+new, correctly-scoped note for it rather than stretching an old, narrower, tangentially-related
+note to cover a job it wasn't written for.
+
+* Review in rotating lenses, not one pass
+
+Applying [[id:practice:multi-lens-audit-review][multi-lens review]] to content specifically means
+rotating through a distinct lens set from the general engineering one: accuracy against
+authoritative sources (the verification pass above, but as its own deliberate lens, not folded
+into a single read-through); target-audience calibration (does an example, an analogy, or a
+depth-of-detail choice actually match who's reading this, checked against real information about
+that audience where it exists, not assumed); structural ordering against an established framework
+(Diátaxis's tutorial/reference split above is one instance of this — check the *order* content
+appears in, not just whether the right topics are present); redundancy and overexplanation (two
+notes making the same claim in different words is a bug the same way dead code is, and a topic
+covered in more depth than the audience needs is a gap in the opposite direction from a missing
+topic); and terminology consistency across every note a reader will encounter in one sitting. Each
+of these caught a real, distinct problem in one guide's review pass that the others would have
+missed — accuracy verification alone would not have caught two notes duplicating the same backend
+explanation, and duplication-checking alone would not have caught a wrong variable-precedence
+order.
+
+* Ground authoring decisions in the real target, not just the general audience
+
+When curated content exists to prepare a reader for a specific real project or system (not just
+"junior engineers in general"), research that real target directly — its actual patterns, its own
+onboarding docs if any exist, and its team's real skill profile — rather than writing only from
+general best practice. This surfaced concrete, non-obvious fixes a generic pass would have missed:
+a diagram implying an automated integration between two tools that, in the real target project (and
+in the general case without extra tooling), is actually manual; a genuinely non-obvious language
+constraint the real project's own workaround pattern depends on, missing from the guide entirely;
+and content covering a topic (multi-environment layout) the real target explicitly doesn't need
+yet, which is the *overexplained* half of "missing or overexplained," not just the missing half.
+
+* Guidance nodes travel with the export, not just in the author's head
+
+A curated export can carry pointers to the standards it was written against (this note, the
+writing-style notes it builds on) as part of the exported artifact itself — not just as private
+context the curator happened to have applied. This makes the standard auditable by anyone reading
+the output, not only discoverable by someone who already knows to go looking for it in the source
+KB. A rendering tool can support this mechanically (an explicit list of "always include these
+nodes regardless of graph reachability" alongside the curated subgraph, rendered as a distinct
+colophon/about-this-guide section) — but the tool can only *display* the standard, never enforce
+it; verifying content against it is still the review pass above, done by whoever authors or
+revises the content, before export.
+
+See [[id:practice:atoms-vs-molecules-vs-hubs][atoms vs. molecules vs. hubs]] for note-role
+sizing, which still applies to notes written for export — a reference atom exported into a guide
+is still one idea, stated once.

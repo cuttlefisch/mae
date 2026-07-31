@@ -1,0 +1,17 @@
+:PROPERTIES:
+:ID: practice:kb-audit-checklist
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: KB Audit Checklist
+#+filetags: :molecular-notes:audit:devpractice:
+
+Before treating an addition to a molecular notes knowledge base — or the KB as a whole — as final, review it against five checks. Each catches a distinct failure mode; a KB can pass three of the five and still be unusable because it fails the other two.
+
+- **Organizational soundness.** Does the new material fit the existing structure, or does it fight it — introducing a topic that overlaps an existing hub's territory under a different name, duplicating an atom that already exists under different phrasing, or picking a role (atom, molecule, hub, source) that does not match what the note actually does? Check for near-duplicate notes before adding a new one, and check that the role property matches the note's actual content, not just the role that was convenient to assign.
+- **Link and reference accuracy.** Every `[[id:...][...]]` link should resolve to a note that actually exists, using the correct namespace and ID. Every new note should have at least one incoming link (nothing links to it purely by accident of proximity) and at least one outgoing link, so it is neither an orphan nor a dead end. Check this by actually tracing the links, not by assuming they are correct because they look syntactically well-formed.
+- **Technical correctness.** Does the note's content hold up — is the claim actually true, current, and correctly scoped, not just plausible-sounding? This is the check most often skipped because it requires the most effort, but a wrong or outdated claim in a KB an AI agent queries for guidance is worse than no claim at all, because it is trusted without the skepticism a human might apply to an unfamiliar source.
+- **Claim and milestone concreteness.** Reject vague, unfalsifiable statements — "improve reliability," "follow best practices," "handle errors appropriately" — in favor of specific, checkable ones. A good test: could a reader tell, from the note alone, whether a given implementation satisfies or violates the claim? If not, the note needs to be more concrete or it is not actually guidance.
+- **Right-sized design.** Is the note appropriately scoped — not a trivial fragment that should have been folded into a sibling note, and not a mega-note quietly covering several unrelated ideas that should have been split? See [[id:practice:when-to-create-a-new-node][when to create a new node]] for the threshold this check applies.
+
+Run this checklist as a deliberate final pass, separate from the authoring work itself — the same way a deep code audit is a distinct pass from ordinary review, because each individual addition can look fine in isolation while the checklist catches drift that only shows up in aggregate. See [[id:practice:multi-lens-audit-review][multi-lens audit review]] for the broader discipline of rotating through distinct review perspectives that this checklist specializes for KB content specifically.

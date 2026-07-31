@@ -1,0 +1,17 @@
+:PROPERTIES:
+:ID: practice:source-preservation
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Source Preservation
+#+filetags: :molecular-notes:devpractice:
+
+Never state a claim in a molecular notes knowledge base without a traceable origin. The mechanism for this is a strict separation between two roles: a source note holds raw external reference material close to verbatim — an RFC excerpt, a quoted meeting decision, a citation with its surrounding context — and an atom note holds a claim distilled from that source, written in the author's own words. The atom links back to the source it was drawn from. This separation matters because it survives editing: the atom can be rephrased, re-scoped, or corrected over time without losing the ability to check it against what was originally said, and the source can be re-read later to check whether the distillation still holds or whether a newer atom should be drawn from it.
+
+Without this separation, a note that mixes verbatim quotation with the author's own interpretation degrades over successive edits — each small rewording nudges the note further from what the source actually said, with no way to tell, months later, where the line between "the source said this" and "I inferred this" originally was. Keeping the two roles in separate notes, connected by a link, keeps that line permanent and checkable.
+
+This particular knowledge base is, by design, entirely atom, molecule, and hub content. It contains synthesized general practice knowledge, restated as established software-engineering wisdom, and holds no source-role nodes of its own — there is no raw external material embedded in it to preserve, because every claim here is already a distillation rather than a first-hand citation. That is a deliberate property of a KB meant to hold portable, vendor-neutral guidance rather than project- or vendor-specific reference material.
+
+A concrete case where a user extending this KB *would* create a source-role node: pulling in a vendor's official documentation excerpt — for example, a cloud provider's stated retry-and-backoff guidance, or a language's official style guide section — before writing a practice note that distills a general rule from it. The workflow is to first create a source note containing the excerpt (with its origin: document title, section, URL or version), then write a separate atom note stating the distilled practice in the author's own words, linking the atom back to the source. If the vendor's guidance changes in a later revision, the source note is what a reader checks to see whether the distilled atom is still accurate, and the atom is what stays reusable and quotable without dragging the full excerpt along everywhere it is referenced.
+
+See [[id:practice:molecular-notes-overview][the molecular notes overview]] for how the source role fits alongside atom, molecule, and hub, [[id:practice:node-linking][node linking]] for the link mechanism that connects an atom back to its source, and [[id:practice:atoms-vs-molecules-vs-hubs][atoms, molecules, and hubs]] for the boundary between a source-derived atom and a personal-synthesis molecule.

@@ -1,0 +1,21 @@
+:PROPERTIES:
+:ID: practice:tagging-conventions
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Tagging Conventions
+#+filetags: :molecular-notes:devpractice:
+
+A note in this kind of knowledge base carries three independent axes of structure, and tagging is the one most often neglected. The role/kind property (source, atom, molecule, hub, and an optional finer-grained kind like "concept") says what *type* of claim a note makes. The link graph says what a note is *connected to*. The file tags say what *topic* a note belongs to — and that axis is deliberately orthogonal to the other two, so a reader or an agent can filter by subject without caring whether the result is an atom or a molecule, and without having to already know which notes link to which.
+
+Tags are declared per-file through a file-tags mechanism (a `#+filetags:` line or equivalent), applied at the whole-note level rather than per-paragraph. A note typically carries two to four tags: one or two topical tags describing its subject area, and one KB-identity tag shared by every note in the collection (marking it as belonging to this KB at all, useful once notes from different KBs might be searched together). Keep the topical tag vocabulary small and reused deliberately — a new tag should be added when a genuinely new topic area appears, not coined fresh for every note, or the tag axis degenerates into a second, noisier copy of the title.
+
+What tagging buys that links and roles do not: scoped search. "Show me every testing-related note regardless of whether it is an atom or a molecule, and regardless of what it happens to link to" is a query the tag axis answers directly and the other two axes answer only indirectly, by first building a link-graph traversal or filtering by role and hoping the topic boundary lines up with the structural one. It usually does not — a testing-related atom might link mostly to AI-collaboration notes because that is where the practice originated, and a purely link-based or role-based query would miss it. The tag is attached regardless of where the note sits in the graph.
+
+Guidelines for keeping the tag vocabulary useful rather than noisy:
+
+- Reuse existing tags before inventing a new one — check the tags already in use across the KB before adding a topical tag that is a near-synonym of one that exists.
+- Keep tags at topic granularity, not note granularity — a tag shared by zero or one other note is not doing filtering work and is a sign the concept probably belongs in the note's title or a link instead.
+- Do not use tags to encode the role/kind property redundantly (no `:atom:` or `:molecule:` tag) — that information already lives in the dedicated role property and duplicating it in tags just means two places can drift out of sync.
+
+See [[id:practice:node-linking][node linking]] for the link-graph axis this complements, and [[id:practice:atoms-vs-molecules-vs-hubs][atoms, molecules, and hubs]] for the role/kind axis tagging is deliberately kept independent from.

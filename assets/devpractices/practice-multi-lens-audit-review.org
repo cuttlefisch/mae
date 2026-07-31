@@ -1,0 +1,25 @@
+:PROPERTIES:
+:ID: practice:multi-lens-audit-review
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Multi-Lens Audit Review
+#+filetags: :audit:devpractice:
+
+A single reviewer, however careful, examines a project through one habitual lens — usually whatever their own specialty or the task's stated goal happens to be. That lens finds real problems, but it structurally cannot find the problems outside its field of view. The fix is not "review harder"; it is to deliberately rotate through distinct vantage points, each of which asks a different question of the same material, and treat a pass that only used one lens as incomplete by construction.
+
+Useful vantage points to rotate through, applied to a feature, a plan, or a whole project:
+
+- **Security** — what can a hostile or merely careless actor do with this that the design didn't intend? Where is trust assumed rather than verified?
+- **Performance and scalability** — what happens at ten times the current load, data volume, or user count? Where is an operation accidentally quadratic, or a resource unbounded?
+- **UX and accessibility** — can someone unfamiliar with the internals use this successfully? Does it work for someone not using it the way the builder does (screen reader, low bandwidth, non-expert)?
+- **Operability and observability** — when this breaks in production, is there a signal? Can an on-call engineer diagnose it without reading the source?
+- **Maintainability and onboarding** — can someone new to the project extend or fix this six months from now without asking the original author?
+- **Product and business fit** — does this actually solve the problem it was commissioned for, or does it solve an interesting adjacent problem instead?
+- **Data and privacy** — what is collected, retained, or exposed that shouldn't be, and who besides the intended audience can see it?
+
+Each lens is a distinct question, not a rephrasing of the others — a change can be secure, fast, and well-tested while being unusable, or accessible and usable while leaking data. Running the full rotation, even briefly, catches classes of issue a differently-motivated but equally careful single pass reliably misses, because the reviewer wasn't asking that question at all.
+
+This generalizes the same discipline that [[id:practice:adversarial-review-question][the adversarial review question]] applies at test-suite granularity ("what did these tests not try to break?") up to project- and plan-level review. It also pairs with [[id:practice:deep-audit-checklist][the deep audit checklist]], which supplies the structural/code-level sweep this practice complements with stakeholder-perspective rotation — run both regularly rather than treating either as sufficient alone.
+
+The same rotate-through-distinct-vantage-points discipline applies to reviewing written content, not just code or plans, with a different lens set: accuracy against authoritative sources, target-audience/persona calibration, structural ordering against an established framework, redundancy/overexplanation, and terminology consistency. See [[id:practice:subgraph-export-content-standards][subgraph-export content standards]] for that lens set worked out concretely against a real curated guide.

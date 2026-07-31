@@ -1,0 +1,23 @@
+:PROPERTIES:
+:ID: practice:test-isolation-state-snapshot
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Snapshot and Restore Global State Between Tests, and Warn on Leaks
+#+filetags: :testing:devpractice:
+
+Tests that share global or process-wide state — a mode setting, a configuration flag, a registered set of handlers, an environment variable — are vulnerable to a specific and miserable failure class: state leaking from one test into the next, producing intermittent, order-dependent failures. The test that fails is rarely the one that caused the problem; it is whichever test happened to run next and depended on the state the previous test silently mutated and didn't clean up. These failures are hard to reproduce because they depend on execution order, and hard to diagnose because the stack trace points at the victim, not the cause.
+
+A robust pattern addresses this at the suite-infrastructure level rather than trusting every individual test to clean up perfectly:
+
+- **Snapshot the relevant global state before each test** (or at each test-file or suite boundary, whichever grain matches how the state is scoped).
+- **Automatically restore it afterward**, regardless of whether the test passed, failed, or threw partway through.
+- **Warn loudly if a test left state different from what it started with** and had to be auto-restored — do not silently mask the leak.
+
+The warning is as important as the restoration, and it is the part that is easy to skip. Silent auto-restore turns a real bug — a test that mutated shared state and didn't clean up after itself — into something that "just works" by accident. The suite stays green, so nobody investigates, and the underlying sloppiness compounds: more tests get written against the same pattern, more state gets left dirty, and the auto-restore mechanism is now silently doing more cleanup work than it was designed for. The day that mechanism has a gap — a state field it doesn't know to snapshot, a case where restoration itself throws — the leak becomes visible for the first time, likely in circumstances closer to production than a local test run, and by then there may be many contributing tests to untangle instead of one.
+
+A visible warning ("test X left state different from where it started; auto-restored") converts a silent, compounding problem into a specific, attributable one: it names the offending test, at the moment the leak happens, while the fix is cheap. Treat these warnings as build-quality signal worth acting on, not noise to suppress — a test suite that logs dozens of these and nobody looks at the log has the infrastructure without the discipline.
+
+This is a safety net, not a substitute for tests cleaning up properly on their own. A test that intentionally changes shared state should restore it explicitly as part of its own teardown; the snapshot/restore/warn mechanism exists to catch the cases where that explicit cleanup was forgotten or was itself incomplete, not to make explicit cleanup optional.
+
+This is a related but distinct concern from [[id:practice:test-through-real-mechanism][testing through the real mechanism]] — both are about testing infrastructure quality rather than the content of any single test's assertions. It is also an instance of the broader discipline in [[id:principle:no-weakened-tests][never weaken a test to make it pass]]: silently masking a state leak is a soft form of weakening the suite's ability to tell you something is wrong. [[id:hub:testing][testing hub]] indexes the rest of the testing practices.

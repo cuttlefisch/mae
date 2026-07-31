@@ -1,0 +1,25 @@
+:PROPERTIES:
+:ID: practice:when-to-create-a-new-node
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: When to Create a New Node
+#+filetags: :molecular-notes:devpractice:
+
+A molecular notes knowledge base fails in two opposite directions, and both are common. Node bloat: every minor observation gets its own note, producing dozens of trivial fragments that add link-graph noise without adding retrievable value, and a reader has to open five one-sentence notes to get what should have been one paragraph. Mega-notes: one note quietly accretes a second, third, and fourth unrelated idea over successive edits because extending an existing note felt easier than deciding a new one was warranted, until the note's title no longer describes most of its content.
+
+A practical threshold for the split-or-extend decision, modeled on the rule of three: an idea earns its own node once it is referenced, or would need to be referenced, from three or more distinct places. Below that, folding it into the most relevant existing note as a paragraph or bullet is usually fine — a single-use elaboration does not yet need independent addressability. At three or more distinct referencing contexts, the idea is clearly load-bearing enough that other notes need to point at it precisely, and leaving it embedded inside a larger note means every one of those three references has to link to the whole containing note and hope the reader finds the right paragraph.
+
+Signals that an existing note has become a mega-note and should be split, independent of the reference-count threshold:
+
+- The note's title no longer accurately describes a significant fraction of its content.
+- Two sections of the note are never both relevant to the same reader query — one section is useful when looking up X, the other only when looking up Y, and they do not inform each other.
+- The note has grown past the point where a reader can hold its whole claim in mind — if summarizing "what does this note say" takes more than one or two sentences, it is probably stating more than one idea.
+
+Signals that a proposed new node is premature (favor extending an existing note instead):
+
+- The idea is a single-sentence elaboration or caveat on an existing atom's claim, not a separate claim.
+- No other note would plausibly link to it independently of the note it would be extracted from.
+- It exists mainly to avoid lengthening a note that is still well under a size where length is itself a problem.
+
+This threshold is a judgment aid, not a hard rule — a genuinely important idea can deserve its own node on its first mention if it is clearly going to be referenced from elsewhere soon, and a fourth reference to a minor detail does not always justify extraction if all four references are really the same context restated. Apply it as a default that requires a reason to override, not a formula to satisfy mechanically. See [[id:practice:atoms-vs-molecules-vs-hubs][atoms, molecules, and hubs]] for the companion question of which role a new node should have once you have decided to create one, and [[id:practice:node-linking][node linking]] for why an unlinked new node — one nobody would reference — is itself a signal that it was not warranted yet.

@@ -1,0 +1,34 @@
+:PROPERTIES:
+:ID: hub:build-and-vcs-workflow
+:ROLE: hub
+:KIND: category
+:END:
+#+title: Build & VCS Workflow
+#+filetags: :hub:devpractice:
+
+Using a Makefile as the canonical, self-documenting entry point for build/test/lint/CI,
+and a git workflow for merge/pull requests, pipelines, and branching — with parallel
+GitLab and GitHub note sets, since the two platforms' mechanics differ non-cosmetically.
+
+* Makefile conventions
+- [[id:practice:makefile-canonical-interface][Makefile Canonical Interface]]
+- [[id:practice:makefile-self-documentation][Makefile Self-Documentation]]
+- [[id:practice:makefile-hygiene][Makefile Hygiene]]
+- [[id:practice:makefile-ci-tiers][Makefile CI Tiers]]
+- [[id:practice:makefile-doctor-target][Makefile Doctor Target]]
+- [[id:template:makefile-target][Makefile Target Template]]
+
+* Git and GitLab
+- [[id:practice:makefile-wraps-vcs-actions][Makefile Wraps VCS Actions]]
+- [[id:practice:gitlab-mr-workflow][GitLab MR Workflow]]
+- [[id:practice:gitlab-ci-pipeline-conventions][GitLab CI Pipeline Conventions]]
+- [[id:practice:git-branch-release-strategy][Git Branch/Release Strategy]]
+- [[id:practice:glab-cli-usage][glab CLI Usage]]
+
+* Git and GitHub
+- [[id:practice:github-pr-workflow][GitHub PR Workflow]]
+- [[id:practice:github-actions-conventions][GitHub Actions Conventions]]
+- [[id:practice:gh-cli-usage][gh CLI Usage]]
+- [[id:practice:label-driven-release-automation][Label-Driven Release Automation]]
+
+Back to [[id:hub:start-here][Start Here]].

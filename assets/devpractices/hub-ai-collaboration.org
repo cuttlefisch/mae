@@ -1,0 +1,23 @@
+:PROPERTIES:
+:ID: hub:ai-collaboration
+:ROLE: hub
+:KIND: category
+:END:
+#+title: AI Collaboration
+#+filetags: :hub:devpractice:
+
+How a human and an AI coding agent work together effectively, and how to build or
+operate the tooling that harnesses an AI agent reliably.
+
+- [[id:workflow:ai-pairing-loop][AI Pairing Loop]]
+- [[id:practice:agent-harness-lessons][Agent Harness Lessons]]
+- [[id:workflow:human-ai-debugging-loop][Human-AI Debugging Loop]]
+- [[id:template:post-mortem][Post-Mortem Template]]
+- [[id:practice:tiered-agent-permissions][Tiered Agent Permissions]]
+- [[id:practice:model-certification-harness][Model Certification Harness]]
+
+Related: [[id:principle:ai-as-peer-actor][AI as Peer Actor]] in
+[[id:hub:code-quality][Code Quality]]; [[id:practice:caution-annotations][Caution
+Annotations]] for AI-facing code comments.
+
+Back to [[id:hub:start-here][Start Here]].

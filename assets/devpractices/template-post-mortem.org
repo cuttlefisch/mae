@@ -1,0 +1,30 @@
+:PROPERTIES:
+:ID: template:post-mortem
+:ROLE: atom
+:END:
+#+title: Post-Mortem Template
+#+filetags: :ai-collaboration:template:devpractice:
+
+A fill-in skeleton for recording a debugging session or incident once it's resolved, so the record is searchable and comparable across incidents rather than a free-form narrative. Pairs with [[id:workflow:human-ai-debugging-loop][the human-AI debugging loop]], whose four stages this template mirrors directly.
+
+- **Symptom**
+  - What was observed (exact error, exact behavior)?
+  - How was it reproduced (exact steps, exact conditions)?
+  - Under what conditions did it *not* occur, if known?
+
+- **Root Cause**
+  - What is the actual mechanism, traced concretely (not just the first plausible hypothesis)?
+  - What evidence confirms this is the mechanism, rather than a correlated but incidental factor?
+  - What made this mechanism possible — a missing check, a false assumption, an untested interaction?
+
+- **Fix**
+  - What changed, and why does it address the root cause rather than only the symptom?
+  - What did the fix *not* change, and why was that judged out of scope?
+  - What new test or check now guards against a regression of this specific bug?
+
+- **Lessons**
+  - Does this trace back to drift from an existing decision, convention, or design principle? (See [[id:principle:bugs-are-drift-signals][bugs are drift signals]].)
+  - What would have caught this earlier — a test, a review question, a stronger invariant?
+  - Is this an isolated defect, or a symptom of a broader gap that should be tracked separately rather than considered closed with this one fix?
+
+Fill in every section before closing the loop, even briefly — a section left blank because "it was obvious" is exactly the section a future reader most needs, since the obviousness rarely survives the passage of time. [[id:hub:ai-collaboration][AI collaboration hub]] indexes the rest of the AI-collaboration practices.

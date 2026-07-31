@@ -580,7 +580,7 @@ pub(crate) fn handle_check_config(args: &[String]) -> Option<io::Result<()>> {
 ///
 /// Set-if-unset only, for both options independently:
 /// - `ai_guidance_kb`: if already non-empty (e.g. the shipped init.scm
-///   template's default `"MaePractices"`, or a user's own explicit choice),
+///   template's default `"DevPractices"`, or a user's own explicit choice),
 ///   left untouched. If empty and `--guidance-kb <name>` was given, set to
 ///   that name. If empty and no `--guidance-kb` given, left empty (nothing
 ///   to default to — printed as a no-op, not an error).
@@ -637,7 +637,7 @@ pub(crate) fn handle_ensure_guidance_config(args: &[String]) -> Option<io::Resul
             None => println!(
                 "mae: ai_guidance_kb is unset and no --guidance-kb given -- leaving unset \
                  (a fresh install's shipped init.scm template already defaults to \
-                 \"MaePractices\"; nothing to do for an existing config with no KB chosen)"
+                 \"DevPractices\"; nothing to do for an existing config with no KB chosen)"
             ),
         }
     } else {

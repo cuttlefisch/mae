@@ -1,0 +1,18 @@
+:PROPERTIES:
+:ID: practice:avoiding-ai-prose-tendencies
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Avoiding AI Prose Tendencies
+#+filetags: :writing-style:ai-slop:devpractice:
+
+Generated documentation, commit messages, PR descriptions, and code comments carry a recognizable set of tics distinct from ordinary human writing quality problems. Naming them makes them easy to catch in review, whether the text was produced by a model or a person who has absorbed the same habits from reading a lot of it.
+
+- **Throat-clearing preambles.** "I'd be happy to help with that" or "Let's take a look at how this works" before the actual content. The reader wants the answer, not an announcement that an answer is coming. Delete the preamble; start with the first substantive sentence.
+- **Sycophantic openers.** Praising the question, the codebase, or the task before addressing it ("Great question," "This is a well-structured approach"). This adds nothing a reader needs and reads as performative rather than genuine in written technical material.
+- **Hedge-everything phrasing.** Qualifying routine, confident statements with unnecessary caveats ("it's worth noting that," "it should be mentioned that," "generally speaking, in most cases"). If a claim is true and the writer knows it is true, state it directly; reserve hedging for claims that are genuinely uncertain.
+- **Unsolicited restate-what-I-just-did summaries.** A closing paragraph that repeats, in slightly different words, everything the preceding text already said. A reader who just read the content does not need it summarized immediately afterward; if a summary is warranted, it belongs at the top as context, not appended as padding at the bottom.
+- **Overused rule-of-three lists and em-dashes.** A genuine three-item list is fine; reflexively grouping everything into exactly three bullets, or reaching for an em-dash as a default punctuation choice in nearly every sentence, is a stylistic tell rather than a structural choice driven by the content. Vary sentence and list structure to match what the content actually needs.
+- **Unprompted "next steps" offers.** Appending "Would you like me to also do X, Y, or Z?" to a piece of writing that was not asked to propose next steps. Answer what was asked; do not pad the response with unsolicited scope expansion.
+
+These patterns show up identically in code comments and docstrings, just with code as the medium instead of prose — a docstring that restates what the function signature already says, a comment that repeats the line below it in English, defensive error handling written for cases the surrounding invariants already rule out. See [[id:practice:deep-audit-checklist][the deep audit checklist]] for the code-level counterpart of this catalog, applied during a structural audit pass rather than a prose review. See [[id:practice:writing-style][writing style]] for the positive standard — neutral, third-person, artifact-focused writing — that avoiding these tics is in service of, not an end in itself.

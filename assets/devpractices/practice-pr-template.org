@@ -1,0 +1,33 @@
+:PROPERTIES:
+:ID: practice:pr-template
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Pull Request Description Shape
+#+filetags: :pr:devpractice:
+
+A pull request description has three required parts, each answering a different question a reviewer (or an AI agent asked to review or merge it) needs answered before evaluating the diff:
+
+- **Summary** — what changed and why, in a few sentences. Not a restatement of the commit list; a reviewer should be able to read this and know what to expect from the diff before opening it. If the change implements a decision recorded elsewhere, link it (see [[id:practice:adr-format][ADR format]]) instead of re-explaining the reasoning inline.
+- **Test plan** — a checklist of what was actually verified, not what *should* be verified in theory. Each item is something the author did: "ran the existing suite", "added a regression test for the empty-input case", "manually exercised the new endpoint against a local server". An empty or vague test plan ("tested locally") is a signal the change wasn't adequately verified, not evidence that it was.
+- **Versioning / release-impact label** — an explicit marker of what kind of release this change implies: breaking / feature / fix / internal-only-no-release-impact. This is the same classification a [[id:practice:commit-convention][Conventional Commit]] type implies, surfaced at the PR level so a reviewer or release process doesn't have to infer it by reading every commit in the branch. See [[id:practice:label-driven-release-automation][label-driven release automation]] for making this an enforced, machine-checked gate rather than a checkbox someone can forget.
+
+A numeric size ceiling is worth adding as its own explicit merge-gate checklist item, distinct from a general "is this reviewable" judgment call: no file touched by the change should exceed a chosen line-count threshold (the specific number matters less than having one and enforcing it consistently). A file quietly growing past a size ceiling is exactly the kind of structural decay that's easy to individually justify in any single PR and expensive in aggregate — flagging it at PR time, not only during a periodic audit (see [[id:practice:deep-audit-checklist][deep audit checklist]]), catches it while the context for fixing it is still fresh in the author's mind.
+
+```
+## Summary
+[what changed, why, and what decision or issue motivated it]
+
+## Test plan
+- [ ] existing test suite passes
+- [ ] [specific new coverage added, if any]
+- [ ] [manual verification performed, if applicable]
+
+## Release impact
+[breaking | feature | fix | internal / no release impact]
+
+## Size check
+- [ ] no touched file exceeds the project's line-count ceiling
+```
+
+The three sections exist for different readers: the summary is for a reviewer deciding whether the *approach* is right, the test plan is for a reviewer (or automated gate) deciding whether the *change* is safe to merge, and the release-impact label is for whoever cuts the next release deciding what changed for consumers. Omitting any one of them pushes that judgment call onto someone else later, usually with less context than the author had at write time. See [[id:template:pr-description][PR description template]] for a literal fill-in version of this shape, and [[id:practice:validation-gate][validation gate]] for how the test-plan section connects to a project's merge-blocking checks.

@@ -1,0 +1,29 @@
+:PROPERTIES:
+:ID: practice:caution-annotations
+:ROLE: atom
+:KIND: concept
+:ALIASES: ai agent guidance in comments, guiding ai agents via code comments
+:END:
+#+title: Caution Annotations (Invariant / Landmine Comments)
+#+filetags: :code-annotation:ai-guidance:devpractice:
+
+A caution annotation is a comment convention for marking an invariant, a non-obvious constraint, or a "landmine" — code that looks safe to change but isn't, for a reason that isn't visible from the code itself. It is explicitly framed as **AI agent guidance embedded in code comments**: an autonomous coding agent working from local context has no access to the tribal knowledge, the postmortem, or the design discussion that produced the constraint, so the warning has to travel with the code itself, in the one place an agent (and a human skimming a diff) is guaranteed to look.
+
+Format: a short bracketed category tag plus a concrete explanation of what will break and why, placed either directly above the guarded block or as a file-header line when a single invariant governs the whole file.
+
+```
+// CAUTION [ordering]: this list must stay sorted by priority descending —
+// the scheduler binary-searches it and will silently drop low-priority
+// items if the order is violated. Do not "simplify" with an unsorted insert.
+```
+
+```
+//! CAUTION [concurrency]: every function in this file assumes the caller
+//! already holds the writer lock. None of them lock internally.
+```
+
+The category tag (`[ordering]`, `[concurrency]`, `[security]`, `[api-contract]`, etc.) groups related warnings so they can be found together across a codebase by grep, the same way a fixed vocabulary makes any tagged-comment convention greppable.
+
+This is deliberately distinct from a flag comment: a flag comment (BUG/KLUDGE/PERF/FIXME, see [[id:practice:flag-comments][flag comments]]) marks something that is *broken or compromised and should eventually change*. A caution annotation marks something that is *working correctly on purpose* and must *not* be casually changed — it warns why not to touch code, not what's wrong with it. Conflating the two trains readers (and agents) to either ignore both or over-flag stable code as debt.
+
+Because an AI agent making a plausible-looking local edit is exactly the failure mode this convention defends against, place caution annotations wherever an agent is statistically likely to "improve" something that is actually load-bearing: implicit ordering, lock ownership assumptions, magic-seeming constants tied to an external contract, or code that was already "fixed" once and regressed. Pair with [[id:practice:stability-markers][stability markers]] for the complementary per-module signal of how much scrutiny an area needs overall, and see [[id:hub:ai-collaboration][AI collaboration hub]] for the broader set of practices for working alongside an AI coding agent.
