@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.83] - 2026-07-31
+
+### CI
+
+- *(windows)* Add GUI build spike job (ADR-066 Phase D, spike 1/2) (#562) ([a420aa2](https://github.com/cuttlefisch/mae/commit/a420aa25b4e117b3b55866f6bf887df63f6bab0a))
+
 ## [0.14.82] - 2026-07-30
 
 ### Features
 
 - *(daemon)* OAuth self-issued tokens bound to this daemon's identity (ADR-067 Phase D3a) (#561) ([a507a04](https://github.com/cuttlefisch/mae/commit/a507a044607fa255978839ab2cd46232090aff08))
+
+### Miscellaneous
+
+- Bump version to 0.14.82 ([d5d8c9c](https://github.com/cuttlefisch/mae/commit/d5d8c9cb2e88af92f85fec19db3be959667db91a))
 
 ## [0.14.81] - 2026-07-30
 
