@@ -2,11 +2,33 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.86] - 2026-07-31
+
+### Bug Fixes
+
+- *(options)* Set_option's dynamic-option fallback must not mask a genuinely unwired hardcoded option ([6a3140c](https://github.com/cuttlefisch/mae/commit/6a3140c415ce7c74f4536b7bb4f9ed648bdfaaca))
+
+### Miscellaneous
+
+- Sync Cargo.lock package versions to 0.14.85 ([3a05ded](https://github.com/cuttlefisch/mae/commit/3a05ded377cdf0a412905149aa4f88082de5715c))
+
 ## [0.14.85] - 2026-07-31
+
+### Bug Fixes
+
+- *(options)* Dynamic (define-option!) options were listed but unreadable ([04969b6](https://github.com/cuttlefisch/mae/commit/04969b663dc372b37b3dfa1652587ca89e495c79))
+- *(ai-residency)* Classify kb_export_subgraph_html, a real gap this gate self-diagnoses ([5b51974](https://github.com/cuttlefisch/mae/commit/5b51974edfb8d156d60b031714198466d49cd085))
 
 ### Features
 
+- *(scheme)* Three narrow SharedState accessors for #521 out-of-tree primitives ([a7e831a](https://github.com/cuttlefisch/mae/commit/a7e831a1f729c79ab880f2a74aa8c058d96d07fa))
+- *(scheme-extra)* Wire in bilingual-kb-export-mae-bridge (#521) ([dd0f9c4](https://github.com/cuttlefisch/mae/commit/dd0f9c471354fa1012bcb4601266995e879125a2))
 - *(kb)* Bundle a generic DevPractices KB, fix release/install gaps (#514, ADR-076) (#564) ([631a702](https://github.com/cuttlefisch/mae/commit/631a702e2ec84f4432778cfdf2f4d88fd9291022))
+
+### Miscellaneous
+
+- Update Cargo.lock for bilingual-kb-export-mae-bridge + pending 0.14.84 bump ([933714f](https://github.com/cuttlefisch/mae/commit/933714f6ce658e8555752cb093d20aad6107ef6a))
+- Bump version to 0.14.85 ([e46d77e](https://github.com/cuttlefisch/mae/commit/e46d77e183acdb3b14ed0cb9b4e3b6918c5ee876))
 
 ## [0.14.84] - 2026-07-31
 
