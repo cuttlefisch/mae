@@ -285,6 +285,14 @@ pub struct SharedState {
     /// KB store reference for read-only queries (updated by inject_editor_state).
     kb_store: Option<Arc<dyn mae_kb::KbStore>>,
 
+    /// Every registered KB instance's store (primary + all federated
+    /// instances), for a read-only query that must search across KB
+    /// boundaries the same way `Editor.kb.instances`-aware code does --
+    /// `kb_store` alone only ever covers the primary instance (updated by
+    /// inject_editor_state, mirrors `kb_store`'s own single-field
+    /// precedent).
+    kb_instance_stores: Vec<Arc<dyn mae_kb::KbStore>>,
+
     // --- Visual/region state (updated by inject_editor_state) ---
     /// Whether a visual selection is active.
     region_active: bool,
@@ -318,6 +326,17 @@ pub struct SharedState {
     // --- Introspection (Phase 13h) ---
     /// Cached GC stats snapshot (updated each eval cycle).
     gc_stats_snapshot: crate::vm::GcStats,
+
+    /// Generic async-completion channel for out-of-tree kernel primitives
+    /// (#521): `(tag, outcome)` pairs pushed by a background thread a
+    /// `scheme-extra`-registered primitive spawned (mirroring
+    /// `git_ops.rs`'s pending-field + idle-poll convention, but at the
+    /// `SharedState` level since an out-of-tree primitive never holds a
+    /// live `Editor` to stash a pending field on). Deliberately generic
+    /// (a string tag, not a KB-export-specific shape) so any future
+    /// out-of-tree async primitive can reuse this same channel instead of
+    /// each growing its own bespoke one.
+    pending_extra_results: Vec<(String, Result<String, String>)>,
 }
 
 impl SharedState {
@@ -331,6 +350,50 @@ impl SharedState {
     #[doc(hidden)]
     pub fn kb_store(&self) -> Option<Arc<dyn mae_kb::KbStore>> {
         self.kb_store.clone()
+    }
+
+    /// Read-only access to every registered KB instance's store (primary
+    /// first, then each federated instance) -- for an out-of-tree primitive
+    /// that needs to search across KB boundaries for a seed node id the
+    /// same way `Editor.kb.instances`-aware code does, since `kb_store()`
+    /// alone only ever covers the primary instance.
+    #[doc(hidden)]
+    pub fn kb_instance_stores(&self) -> Vec<Arc<dyn mae_kb::KbStore>> {
+        self.kb_instance_stores.clone()
+    }
+
+    /// Read-only access to one option's current value by name, from the
+    /// same generic `option_values` snapshot `(get-option)` itself reads
+    /// (`state_sync_inject_kb.rs`) -- populated for every registered
+    /// option, including ones a `scheme-extra` primitive registered itself
+    /// via `(define-option! ...)`. Returns `None` if `name` isn't a
+    /// registered option (not "option is unset" -- every option always has
+    /// a stringified value once registered).
+    #[doc(hidden)]
+    pub fn option_value(&self, name: &str) -> Option<String> {
+        self.option_values
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.clone())
+    }
+
+    /// Push a completed async result onto the generic out-of-tree-primitive
+    /// completion channel (see `pending_extra_results`'s doc comment).
+    /// `tag` is caller-chosen (e.g. a primitive name) so multiple
+    /// concurrent async primitives sharing this one channel can tell their
+    /// own results apart in `drain_extra_results()`.
+    #[doc(hidden)]
+    pub fn push_extra_result(&mut self, tag: impl Into<String>, outcome: Result<String, String>) {
+        self.pending_extra_results.push((tag.into(), outcome));
+    }
+
+    /// Drain every completed async result queued since the last drain --
+    /// the poll side a `scheme-extra` primitive's own registered
+    /// "poll results" primitive (or an `"idle"`-hook-driven Scheme handler)
+    /// calls to notice and report background-thread completions.
+    #[doc(hidden)]
+    pub fn drain_extra_results(&mut self) -> Vec<(String, Result<String, String>)> {
+        std::mem::take(&mut self.pending_extra_results)
     }
 }
 

@@ -363,6 +363,19 @@ impl SchemeRuntime {
             state.sync_enabled = sync_enabled;
             state.pending_update_count = buf.pending_sync_updates.len();
             state.kb_store = editor.kb.store.clone();
+            state.kb_instance_stores = editor
+                .kb
+                .store
+                .iter()
+                .cloned()
+                .chain(
+                    editor
+                        .kb
+                        .instance_stores
+                        .values()
+                        .map(|s| s.clone() as std::sync::Arc<dyn mae_kb::KbStore>),
+                )
+                .collect();
             state.sync_content = buf.sync_doc.as_ref().map(|s| s.content());
             state.encoded_state = buf.sync_doc.as_ref().map(|s| {
                 use base64::Engine as _;

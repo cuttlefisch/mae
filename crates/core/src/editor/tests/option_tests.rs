@@ -1252,6 +1252,51 @@ fn every_registered_option_is_reachable_via_get_option() {
     );
 }
 
+/// Mirrors the test above for the write side. Round-trips every registered
+/// option's OWN current value back through `set_option` — always a valid,
+/// no-op write (the value already passed its own validator once to become
+/// the current value), EXCEPT for the one thing this test actually guards:
+/// a hardcoded option (registered via `register`, not `register_dynamic`)
+/// missing a `set_option` match arm. Before the fix this landed alongside,
+/// that case silently no-op'd (nothing to update — the name was never
+/// seeded into `dynamic_values`) while still reporting success, converting
+/// what should be a loud, CI-catchable gap into one that looks like it
+/// worked but never actually changed anything. `set_option`'s fallback arm
+/// now returns a specific, recognizable error ("has no set_option
+/// handler") for exactly this case — distinguished here from any other
+/// validation error (which is out of scope for a completeness check and
+/// shouldn't occur anyway, since we're only ever writing a value that
+/// already round-tripped through `get_option` once).
+#[test]
+fn every_registered_option_is_settable_via_set_option() {
+    let mut editor = Editor::new();
+    let names: Vec<String> = editor
+        .option_registry
+        .list()
+        .iter()
+        .filter(|def| !def.doc.starts_with("RESERVED"))
+        .map(|def| def.name.to_string())
+        .collect();
+
+    let mut unwired = Vec::new();
+    for name in names {
+        let Some((current, _)) = editor.get_option(&name) else {
+            continue; // already caught by every_registered_option_is_reachable_via_get_option
+        };
+        if let Err(e) = editor.set_option(&name, &current) {
+            if e.contains("has no set_option handler") {
+                unwired.push(name);
+            }
+        }
+    }
+    assert!(
+        unwired.is_empty(),
+        "options registered but unreachable via set_option (missing an \
+         option_ops.rs match arm): {:?}",
+        unwired
+    );
+}
+
 // --- #353: tab_width option ---
 
 #[test]

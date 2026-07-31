@@ -343,7 +343,21 @@ impl super::Editor {
                 self.kb_graph_wedge_neighbor_growth_fraction.to_string()
             }
             "kb_graph_wedge_gap_radians" => self.kb_graph_wedge_gap_radians.to_string(),
-            _ => return None,
+            // Any name reaching here already resolved via `find()` above,
+            // so it's a real, registered option -- just not one of the
+            // hardcoded Rust fields covered by an arm above. That's
+            // exactly the shape a dynamically-registered option (Scheme's
+            // `(define-option! ...)`, `crate::options::OptionRegistry::
+            // register_dynamic`) has: no backing Rust field, only a
+            // registry entry + a value tracked in `dynamic_value`. A real,
+            // previously-confirmed gap: this used to `return None`
+            // unconditionally here, silently making every dynamically-
+            // registered option unreadable via `(get-option ...)` despite
+            // being listed in `*option-list*`/docs.
+            _ => self
+                .option_registry
+                .dynamic_value(def.name.as_ref())?
+                .to_string(),
         };
         Some((value, def))
     }
@@ -1511,7 +1525,64 @@ impl super::Editor {
                     .map_err(|_| format!("Invalid float: '{}'", value))?;
                 self.kb_graph_wedge_gap_radians = v.clamp(0.0, std::f32::consts::PI);
             }
-            _ => return Err(format!("Unknown option: {}", name)),
+            // Same real gap `get_option`'s matching fallback comment
+            // describes, on the write side: `def_name` already resolved
+            // via `find()` above, so it's a REGISTERED option, just with
+            // no hardcoded Rust field above -- but that's true of two
+            // different cases, and they must not be handled the same way.
+            //
+            // Case 1: a genuine dynamically-registered option
+            // (`OptionRegistry::register_dynamic`, e.g. Scheme's
+            // `(define-option! ...)`) -- `dynamic_value` returns `Some`,
+            // seeded at registration time. This is the case this fix
+            // exists for: validate (kind-aware, matching the
+            // parse-then-assign shape every hardcoded arm above already
+            // follows), then write through to `OptionRegistry`'s value
+            // store.
+            //
+            // Case 2: a HARDCODED option (registered via `register`, not
+            // `register_dynamic`) that's simply missing a match arm above
+            // -- an editor bug, not a user error. `dynamic_value` returns
+            // `None` here, since it was never seeded via
+            // `register_dynamic`. The registry-wide completeness guard
+            // this codebase already has for the read side
+            // (`every_registered_option_is_reachable_via_get_option`,
+            // `crates/core/src/editor/tests/option_tests.rs`) exists
+            // specifically because this exact gap shape (registered but
+            // unwired) has happened for real more than once. Silently
+            // calling `set_dynamic_value` here would be a no-op (nothing
+            // to update — this name was never in `dynamic_values`) that
+            // reports success anyway, converting what used to be a loud
+            // `Err("Unknown option: ...")` — the exact signal that caught
+            // those earlier gaps — into a value that looks like it was
+            // set but never actually changed anywhere. Must still error,
+            // not silently no-op.
+            _ => {
+                if self.option_registry.dynamic_value(&def_name).is_none() {
+                    return Err(format!(
+                        "Option '{}' is registered but has no set_option handler \
+                         (this is an editor bug, not a user error — file it)",
+                        def_name
+                    ));
+                }
+                if let Some(def) = self.option_registry.find(&def_name) {
+                    match def.kind {
+                        crate::options::OptionKind::Bool => {
+                            parse_option_bool(value)?;
+                        }
+                        crate::options::OptionKind::Int => {
+                            parse_option_int(value)?;
+                        }
+                        crate::options::OptionKind::Float => {
+                            value
+                                .parse::<f64>()
+                                .map_err(|_| format!("Invalid float: '{}'", value))?;
+                        }
+                        crate::options::OptionKind::String | crate::options::OptionKind::Theme => {}
+                    }
+                }
+                self.option_registry.set_dynamic_value(&def_name, value.to_string());
+            }
         }
         // ADR-063 Phase B: record that this option was explicitly set (by init.scm,
         // `:set`, or an MCP/Scheme `set-option!` call) — distinct from "still at its
