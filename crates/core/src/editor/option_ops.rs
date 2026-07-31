@@ -1527,12 +1527,44 @@ impl super::Editor {
             }
             // Same real gap `get_option`'s matching fallback comment
             // describes, on the write side: `def_name` already resolved
-            // via `find()` above, so it's a real dynamically-registered
-            // option, just with no hardcoded Rust field. Light,
-            // kind-aware validation (matching the parse-then-assign shape
-            // every hardcoded arm above already follows) before writing
-            // through to `OptionRegistry`'s own value store.
+            // via `find()` above, so it's a REGISTERED option, just with
+            // no hardcoded Rust field above -- but that's true of two
+            // different cases, and they must not be handled the same way.
+            //
+            // Case 1: a genuine dynamically-registered option
+            // (`OptionRegistry::register_dynamic`, e.g. Scheme's
+            // `(define-option! ...)`) -- `dynamic_value` returns `Some`,
+            // seeded at registration time. This is the case this fix
+            // exists for: validate (kind-aware, matching the
+            // parse-then-assign shape every hardcoded arm above already
+            // follows), then write through to `OptionRegistry`'s value
+            // store.
+            //
+            // Case 2: a HARDCODED option (registered via `register`, not
+            // `register_dynamic`) that's simply missing a match arm above
+            // -- an editor bug, not a user error. `dynamic_value` returns
+            // `None` here, since it was never seeded via
+            // `register_dynamic`. The registry-wide completeness guard
+            // this codebase already has for the read side
+            // (`every_registered_option_is_reachable_via_get_option`,
+            // `crates/core/src/editor/tests/option_tests.rs`) exists
+            // specifically because this exact gap shape (registered but
+            // unwired) has happened for real more than once. Silently
+            // calling `set_dynamic_value` here would be a no-op (nothing
+            // to update — this name was never in `dynamic_values`) that
+            // reports success anyway, converting what used to be a loud
+            // `Err("Unknown option: ...")` — the exact signal that caught
+            // those earlier gaps — into a value that looks like it was
+            // set but never actually changed anywhere. Must still error,
+            // not silently no-op.
             _ => {
+                if self.option_registry.dynamic_value(&def_name).is_none() {
+                    return Err(format!(
+                        "Option '{}' is registered but has no set_option handler \
+                         (this is an editor bug, not a user error — file it)",
+                        def_name
+                    ));
+                }
                 if let Some(def) = self.option_registry.find(&def_name) {
                     match def.kind {
                         crate::options::OptionKind::Bool => {
