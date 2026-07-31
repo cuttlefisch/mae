@@ -10,4 +10,3 @@ mae-scheme = { path = "../scheme" }
 parking_lot = "0.12"
 # Downstream forks: add your own crate(s) here, e.g.:
 # mae-html-export = { path = "../../../mae-html-export" }
-bilingual-kb-export-mae-bridge = { path = "../../../bilingual-kb-export/crates/mae-bridge" }
