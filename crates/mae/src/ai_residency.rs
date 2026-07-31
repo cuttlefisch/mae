@@ -235,6 +235,14 @@ fn classify_kb_tool(tool_name: &str) -> Option<ToolResidencyShape> {
         // subgraph, with no cross-instance leak possible for a
         // post-filter to catch. Unlike kb_graph/kb_neighborhood (federated
         // BFS, genuinely can cross instances -- SingleTargetFilterable).
+        // NOT yet residency-filtered: the tool's optional `guidance_ids`
+        // argument (crates/ai/src/tool_impls/kb_export_html.rs) independently
+        // resolves EACH id across every registered store, and a guidance id
+        // landing in a DIFFERENT, restricted KB than the seed isn't
+        // re-checked -- a real, narrow, deliberately scoped-out gap
+        // (guidance_ids is a rare, opt-in feature) rather than an oversight;
+        // tighten with a SingleTargetFilterable-style post-filter on
+        // guidance_ids specifically if this becomes a real concern.
         "kb_export_subgraph_html" => SingleTarget,
 
         // --- SingleTargetFilterable: same anchor-id gate check as
@@ -1240,6 +1248,65 @@ mod tests {
             Some("claude"),
         );
         assert!(matches!(decision, ResidencyDecision::Deny(_)));
+    }
+
+    // --- kb_export_subgraph_html ---
+
+    #[test]
+    fn kb_export_subgraph_html_seed_content_allowed_when_primary_restricted() {
+        let editor = editor_with_restricted_primary();
+        let decision = check_kb_residency(
+            &editor,
+            "kb_export_subgraph_html",
+            &serde_json::json!({"id": "index", "path": "/tmp/out.html"}),
+            Some("claude"),
+        );
+        assert_eq!(decision, ResidencyDecision::Allow);
+    }
+
+    #[test]
+    fn kb_export_subgraph_html_denied_for_a_non_seed_node_in_a_restricted_kb() {
+        // The adversarial case this gate exists for: a real, user-authored
+        // node in a residency-restricted KB must not be exportable by a
+        // non-local provider just because the tool also happens to take a
+        // "path" argument -- same gate, same seed-exemption boundary as
+        // plain kb_get.
+        let mut editor = editor_with_restricted_primary();
+        editor
+            .kb_create_node(
+                "user:private-note",
+                "Private",
+                "body",
+                mae_kb::NodeKind::Note,
+            )
+            .unwrap();
+        let decision = check_kb_residency(
+            &editor,
+            "kb_export_subgraph_html",
+            &serde_json::json!({"id": "user:private-note", "path": "/tmp/out.html"}),
+            Some("claude"),
+        );
+        assert!(matches!(decision, ResidencyDecision::Deny(_)));
+    }
+
+    #[test]
+    fn kb_export_subgraph_html_allowed_from_a_local_provider_regardless() {
+        let mut editor = editor_with_restricted_primary();
+        editor
+            .kb_create_node(
+                "user:private-note",
+                "Private",
+                "body",
+                mae_kb::NodeKind::Note,
+            )
+            .unwrap();
+        let decision = check_kb_residency(
+            &editor,
+            "kb_export_subgraph_html",
+            &serde_json::json!({"id": "user:private-note", "path": "/tmp/out.html"}),
+            Some("ollama"),
+        );
+        assert_eq!(decision, ResidencyDecision::Allow);
     }
 
     // --- New: NonContent view-state tools stay ungated ---
