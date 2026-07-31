@@ -9,17 +9,17 @@
 
 ## Why this doc exists
 
-Earlier real exports of this session (the gitlab-migration project, mae's own help manual, a
-RoamNotes Terraform guide) were each produced by a small, throwaway `cargo run --example ...`
-Rust binary under `crates/ai/examples/` that hardcoded a real KB path, a real anchor id, and a
-real output path directly in source. Per CLAUDE.md principle #3 (AI/human parity), the Scheme
-primitive and the MCP tool are provably the same code path (`kb_export.rs` queues the exact JSON
+Earlier real exports of this session (the gitlab-migration project, mae's own help manual) were
+each produced by a small, throwaway `cargo run --example ...` Rust binary under
+`crates/ai/examples/` that hardcoded a real KB path, a real anchor id, and a real output path
+directly in source. Per CLAUDE.md principle #3 (AI/human parity), the Scheme primitive and the
+MCP tool are provably the same code path (`kb_export.rs` queues the exact JSON
 `execute_kb_export_subgraph_html` consumes) — so a Scheme call *is* the real production interface,
 not a third, parallel thing. The recipes below replace those throwaway binaries; see
 `crates/ai/examples/export_demo.rs` for a synthetic (no real paths) smoke test kept for
 contributors who want to `cargo run --example export_demo` against fixture data.
 
-## The three real exports, as Scheme calls
+## The real exports, as Scheme calls
 
 **mae's own help manual** (a scaling/portability stress test — 237 org files, developed/tested
 against a 6-7 node fixture and a 21-node real guide, neither near this KB's actual density):
@@ -41,14 +41,15 @@ since that's the more idiomatic path now that this is configurable at all (see b
                           4)
 ```
 
-**A RoamNotes Terraform onboarding guide**, with a real Spanish translation overlay:
+**An onboarding guide with a translation overlay** (the optional 4th/5th args — a translations
+JSON file and a display title override):
 
 ```scheme
-(kb-export-subgraph-html "dff8dcc6-913a-4234-b001-f17136a33775"
-                          "~/RoamNotes/media/terraform_zero_to_running.html"
+(kb-export-subgraph-html "<seed-node-id>"
+                          "~/notes/media/onboarding-guide.html"
                           1
-                          "~/RoamNotes/media/terraform_zero_to_running.translations.es.json"
-                          "Terraform: Zero to Running")
+                          "~/notes/media/onboarding-guide.translations.es.json"
+                          "Onboarding Guide")
 ```
 
 ## Configuring the chord diagram itself
