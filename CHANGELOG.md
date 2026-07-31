@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.84] - 2026-07-31
+
+### CI
+
+- *(windows)* Real window launch + SendInput click spike (ADR-066 Phase D, spike 2/2) (#563) ([62f89ce](https://github.com/cuttlefisch/mae/commit/62f89ce78a4a841bd7298a941a52504b58175559))
+
 ## [0.14.83] - 2026-07-31
 
 ### CI
 
 - *(windows)* Add GUI build spike job (ADR-066 Phase D, spike 1/2) (#562) ([a420aa2](https://github.com/cuttlefisch/mae/commit/a420aa25b4e117b3b55866f6bf887df63f6bab0a))
+
+### Miscellaneous
+
+- Bump version to 0.14.83 ([2d97d3b](https://github.com/cuttlefisch/mae/commit/2d97d3bcd95a2166e4fd0a2e5d147bdb0b149c60))
 
 ## [0.14.82] - 2026-07-30
 
