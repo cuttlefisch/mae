@@ -4,9 +4,17 @@
 //! @since: 0.9.0
 
 pub mod html;
+pub mod html_graph;
 pub mod markdown;
 pub mod markdown_parser;
 pub mod org_writer;
+
+// `html_graph` (the KB-subgraph -> bilingual interactive HTML export) is
+// back in-tree here (previously extracted to the standalone
+// `bilingual-kb-export` sibling project; see that project's
+// `kb/adrs/0001-extract-into-standalone-project.org` for the original
+// extraction rationale) so this feature ships as a normal, self-contained
+// upstream module with no path-dependency on a sibling checkout.
 
 /// Document-level metadata extracted from org keywords.
 #[derive(Debug, Clone, Default)]
@@ -540,6 +548,14 @@ fn parse_heading_todo(title: &str) -> (Option<String>, String) {
 pub enum InlineTarget {
     Html,
     Markdown,
+    /// Bare text, no markup at all — emphasis markers vanish (not `<b>`/
+    /// `**`, just the inner text) and links resolve to their label alone
+    /// (or the bare target, `id:`-stripped, if unlabeled) with no
+    /// brackets/href. Added specifically so `plain_text_preview` (used for
+    /// hover-popover previews) can reuse this one parser instead of a
+    /// second, separate link-stripping implementation — see that
+    /// function's doc comment.
+    PlainText,
 }
 
 /// Convert org inline markup using string slicing (not char-based).
@@ -560,6 +576,9 @@ pub fn convert_inline_markup_str(text: &str, target: InlineTarget) -> String {
                         ('*', InlineTarget::Markdown) => {
                             format!("**{}**", convert_inline_markup_str(content, target))
                         }
+                        ('*' | '/', InlineTarget::PlainText) => {
+                            convert_inline_markup_str(content, target)
+                        }
                         ('/', InlineTarget::Html) => {
                             format!("<i>{}</i>", convert_inline_markup_str(content, target))
                         }
@@ -568,6 +587,7 @@ pub fn convert_inline_markup_str(text: &str, target: InlineTarget) -> String {
                         }
                         ('~' | '=', InlineTarget::Html) => format!("<code>{}</code>", content),
                         ('~' | '=', InlineTarget::Markdown) => format!("`{}`", content),
+                        ('~' | '=' | '+', InlineTarget::PlainText) => content.to_string(),
                         ('+', InlineTarget::Html) => format!("<del>{}</del>", content),
                         ('+', InlineTarget::Markdown) => format!("~~{}~~", content),
                         _ => content.to_string(),
@@ -591,24 +611,71 @@ pub fn convert_inline_markup_str(text: &str, target: InlineTarget) -> String {
                     InlineTarget::Markdown => {
                         result.push_str(&format!("<{}>", url));
                     }
+                    // No brackets, no href -- just the bare URL text, same
+                    // "no markup at all" contract as the org-link PlainText
+                    // arm below (this is the same hover-popover-preview use
+                    // case: a bare URL should read as plain text there too,
+                    // not `<...>`-wrapped Markdown-style markup).
+                    InlineTarget::PlainText => {
+                        result.push_str(url);
+                    }
                 }
                 i = end;
                 continue;
             }
             '[' if text[i..].starts_with("[[") => {
                 if let Some((end, link_target, label)) = parse_org_link_str(text, i) {
+                    // `id:` prefix survives on raw-org-file input but is
+                    // already stripped on `mae_kb`-normalized input (see
+                    // `parse_org_link_str`'s doc comment) -- strip
+                    // defensively either way so it's never shown/used
+                    // inconsistently. A stripped/bare (non-URL) target is
+                    // an internal KB reference: give it a `#`-prefixed
+                    // href (a real, if currently unhandled, in-page
+                    // anchor form) rather than an invalid bare-UUID href.
+                    let stripped_target = link_target.strip_prefix("id:").unwrap_or(link_target);
+                    let is_external = stripped_target.contains("://");
+                    let href = if is_external {
+                        stripped_target.to_string()
+                    } else {
+                        format!("#{stripped_target}")
+                    };
                     match target {
                         InlineTarget::Html => {
-                            let display = label.unwrap_or(link_target);
+                            // `Some(l)` is already HTML-escaped by the
+                            // recursive call (it walks the same char-by-
+                            // char escaping this whole function does);
+                            // the `None` (bare-target-as-label) case
+                            // isn't escaped yet, so it still needs it
+                            // here -- escaping `display` unconditionally
+                            // would double-escape the `Some` case.
+                            let display_html = match &label {
+                                Some(l) => convert_inline_markup_str(l, target),
+                                None => html_escape(stripped_target),
+                            };
                             result.push_str(&format!(
                                 "<a href=\"{}\">{}</a>",
-                                html_escape(link_target),
-                                html_escape(display)
+                                html_escape(&href),
+                                display_html
                             ));
                         }
                         InlineTarget::Markdown => {
-                            let display = label.unwrap_or(link_target);
-                            result.push_str(&format!("[{}]({})", display, link_target));
+                            let display = match &label {
+                                Some(l) => convert_inline_markup_str(l, target),
+                                None => stripped_target.to_string(),
+                            };
+                            result.push_str(&format!("[{display}]({href})"));
+                        }
+                        InlineTarget::PlainText => {
+                            // No brackets, no href -- just the label (or
+                            // the bare, id:-stripped target if unlabeled).
+                            // This is the fix for hover-popover previews
+                            // that used to show raw "[[UUID|label]]" text.
+                            let display = match &label {
+                                Some(l) => convert_inline_markup_str(l, target),
+                                None => stripped_target.to_string(),
+                            };
+                            result.push_str(&display);
                         }
                     }
                     i = end + 1;
@@ -625,10 +692,11 @@ pub fn convert_inline_markup_str(text: &str, target: InlineTarget) -> String {
         // byte-position-safe even with multibyte content nearby. But
         // falling through to here and still using `ch`/`i += 1` for the
         // general case was a real bug: any non-ASCII character (an
-        // em-dash, any accented character) got decoded one raw byte at a
-        // time instead of one Unicode scalar at a time, corrupting it into
-        // 2-4 garbage Latin-1-ish characters. Decode the real char here
-        // instead.
+        // em-dash, any accented character -- i.e. this function silently
+        // mangled every Spanish translation) got decoded one raw byte at
+        // a time instead of one Unicode scalar at a time, corrupting it
+        // into 2-4 garbage Latin-1-ish characters. Decode the real char
+        // here instead.
         let real_ch = text[i..]
             .chars()
             .next()
@@ -712,7 +780,20 @@ fn find_bare_url_end(text: &str, start: usize) -> usize {
 }
 
 fn parse_org_link_str(text: &str, start: usize) -> Option<(usize, &str, Option<&str>)> {
-    // [[target][label]] or [[target]]
+    // [[target][label]] (raw org-file two-bracket-group form) or [[target]]
+    // (bare) -- AND `[[target|label]]` (single bracket-group, pipe-
+    // separated), which is NOT standard org-file syntax but IS the literal
+    // storage form `mae_kb`'s own org parser canonicalizes every internal
+    // `[[id:UUID][label]]` link into (see `shared/kb/src/org.rs`'s link
+    // normalization, "the internal pipe-display convention"). Both this
+    // module's exporters (`html.rs`'s `HtmlExporter`, `html_graph.rs`'s
+    // graph export) render `mae_kb::Node::body` -- i.e. the ALREADY-
+    // normalized pipe form, not raw org-file text -- so without this,
+    // every internal link renders as a garbled, unsplit "UUID|label"
+    // string used as both href and visible text. Recognizing `|` here is
+    // safe/non-regressive for genuine raw-org-file callers: standard
+    // Org-mode link syntax never legitimately puts a bare `|` inside a
+    // single `[[...]]` bracket pair.
     if !text[start..].starts_with("[[") {
         return None;
     }
@@ -728,8 +809,12 @@ fn parse_org_link_str(text: &str, start: usize) -> Option<(usize, &str, Option<&
         }
     }
     if let Some(close_pos) = rest.find("]]") {
-        let target = &text[after_open..after_open + close_pos];
-        return Some((after_open + close_pos + 1, target, None));
+        let inner = &text[after_open..after_open + close_pos];
+        let end = after_open + close_pos + 1;
+        if let Some(bar) = inner.find('|') {
+            return Some((end, &inner[..bar], Some(&inner[bar + 1..])));
+        }
+        return Some((end, inner, None));
     }
     None
 }

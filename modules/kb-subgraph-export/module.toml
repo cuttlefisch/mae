@@ -1,0 +1,12 @@
+[module]
+name = "kb-subgraph-export"
+version = "0.1.0"
+description = "Export a KB subgraph to a standalone bilingual (EN/ES) HTML file — keybinding over the native graph view's current center node"
+mae_version = ">=0.14.0"
+category = "tools"
+
+[dependencies]
+kb-graph-view = "*"
+
+[entry]
+autoloads = "autoloads.scm"

@@ -8,6 +8,7 @@ mod help;
 mod image;
 mod introspect;
 pub(crate) mod kb;
+mod kb_export_html;
 pub(crate) mod lsp;
 mod project;
 mod shell;
@@ -65,6 +66,7 @@ pub use kb::{
     execute_kb_shortest_path, execute_kb_sync_status, execute_kb_unregister, execute_kb_update,
     execute_kb_vector_search, execute_kb_view_query,
 };
+pub use kb_export_html::execute_kb_export_subgraph_html;
 pub use lsp::execute_lsp_diagnostics;
 pub use project::{
     execute_create_plan, execute_project_files, execute_project_info, execute_project_search,

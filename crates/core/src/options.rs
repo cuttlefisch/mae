@@ -973,6 +973,85 @@ impl OptionRegistry {
                      (kb_graph_wedge_corner_radius_fraction), matching the reference 'petal' design \
                      this was ported from, which deliberately uses no drawn gap or border.",
                     OptionKind::Float, "0.0", Some("kb-graph.wedge-gap-radians"), &[]),
+                // --- KB subgraph HTML export (kb-export-subgraph-html /
+                // kb_export_subgraph_html) -- bilingual-kb-export/kb/adrs/0005/0006 ---
+                opt!("kb_export_default_depth", &["kb-export-default-depth"],
+                    "Default BFS hop radius for kb-export-subgraph-html/kb_export_subgraph_html \
+                     when a call doesn't specify `depth` explicitly.",
+                    OptionKind::Int, "2", Some("kb-export.default-depth"), &[]),
+                opt!("kb_export_max_depth", &["kb-export-max-depth"],
+                    "Hard ceiling on kb-export-subgraph-html's `depth`, regardless of what a \
+                     given call requests -- a per-call `depth` above this is silently clamped, \
+                     not rejected. Not itself overridable per-call, unlike the default depth, \
+                     by design: a ceiling every call can defeat isn't a real safety net.",
+                    OptionKind::Int, "4", Some("kb-export.max-depth"), &[]),
+                opt!("kb_export_default_node_cap", &["kb-export-default-node-cap"],
+                    "Default reachable-set safety-net cap for kb-export-subgraph-html when a \
+                     call doesn't specify `node_cap` explicitly.",
+                    OptionKind::Int, "60", Some("kb-export.default-node-cap"), &[]),
+                opt!("kb_export_max_node_cap", &["kb-export-max-node-cap"],
+                    "Hard ceiling on kb-export-subgraph-html's `node_cap`, regardless of what a \
+                     given call requests. Not itself overridable per-call, same rationale as \
+                     kb_export_max_depth.",
+                    OptionKind::Int, "200", Some("kb-export.max-node-cap"), &[]),
+                opt!("kb_export_hover_growth_factor", &["kb-export-hover-growth-factor"],
+                    "Multiplier applied to a chord node's world radius on hover in \
+                     kb-export-subgraph-html's generated HTML page \
+                     (mae_export::html_graph::ChordDiagramConfig). 1.0 disables the \
+                     hover-growth effect entirely. Read as this option's value only when a given \
+                     export call's `chord_config` JSON/alist argument doesn't override it.",
+                    OptionKind::Float, "1.6", Some("kb-export.hover-growth-factor"), &[]),
+                opt!("kb_export_stroke_buffer_px", &["kb-export-stroke-buffer-px"],
+                    "ChordDiagramConfig::stroke_buffer_px default -- viewBox padding reserved \
+                     for stroke width beyond the strict hover-growth radius in the exported \
+                     chord diagram.",
+                    OptionKind::Float, "2.0", Some("kb-export.stroke-buffer-px"), &[]),
+                opt!("kb_export_cosmetic_cushion_px", &["kb-export-cosmetic-cushion-px"],
+                    "ChordDiagramConfig::cosmetic_cushion_px default -- extra flat viewBox \
+                     padding in the exported chord diagram, beyond the strict correctness \
+                     minimum, purely for visual breathing room.",
+                    OptionKind::Float, "16.0", Some("kb-export.cosmetic-cushion-px"), &[]),
+                opt!("kb_export_min_onscreen_radius_px", &["kb-export-min-onscreen-radius-px"],
+                    "ChordDiagramConfig::min_onscreen_radius_px default -- the guaranteed \
+                     minimum on-screen wedge thickness (hit-target floor) in the exported chord \
+                     diagram.",
+                    OptionKind::Float, "12.0", Some("kb-export.min-onscreen-radius-px"), &[]),
+                opt!("kb_export_initial_pad_px", &["kb-export-initial-pad-px"],
+                    "ChordDiagramConfig::initial_pad_px default -- the exported chord diagram's \
+                     two-pass viewBox-fit convergence SEED, not the final padding value (the fit \
+                     loop overwrites it). A different seed only changes where the approximation \
+                     starts converging from, never the final result.",
+                    OptionKind::Float, "40.0", Some("kb-export.initial-pad-px"), &[]),
+                opt!("kb_export_edge_pull_back", &["kb-export-edge-pull-back"],
+                    "ChordDiagramConfig::edge_pull_back default -- how far a chord's control \
+                     point is pulled toward the ring center in the exported chord diagram (0 = \
+                     straight line, 1 = fully at center).",
+                    OptionKind::Float, "0.55", Some("kb-export.edge-pull-back"), &[]),
+                opt!("kb_export_wedge_gap_radians", &["kb-export-wedge-gap-radians"],
+                    "ChordDiagramConfig::wedge_gap_radians default -- angular gap left between \
+                     adjacent wedge slots in the exported chord diagram (0 = flush, separated \
+                     only by rounded corners).",
+                    OptionKind::Float, "0.0", Some("kb-export.wedge-gap-radians"), &[]),
+                opt!("kb_export_history_depth_cap", &["kb-export-history-depth-cap"],
+                    "ChordDiagramConfig::history_depth_cap default -- how many visited nodes the \
+                     exported page's history panel keeps before evicting the oldest.",
+                    OptionKind::Int, "8", Some("kb-export.history-depth-cap"), &[]),
+                opt!("kb_export_wedge_corner_radius_fraction",
+                    &["kb-export-wedge-corner-radius-fraction"],
+                    "ChordDiagramConfig::wedge_corner_radius_fraction default -- the exported \
+                     chord diagram wedges' \"petal\" corner rounding, as a fraction of each \
+                     wedge's own thickness.",
+                    OptionKind::Float, "0.6", Some("kb-export.wedge-corner-radius-fraction"), &[]),
+                opt!("kb_export_search_debounce_ms", &["kb-export-search-debounce-ms"],
+                    "ChordDiagramConfig::search_debounce_ms default -- how long the exported \
+                     page's node-search input waits before hiding stale results.",
+                    OptionKind::Int, "150", Some("kb-export.search-debounce-ms"), &[]),
+                opt!("kb_export_ui_transition_ms", &["kb-export-ui-transition-ms"],
+                    "ChordDiagramConfig::ui_transition_ms default -- the exported page's dominant \
+                     CSS transition/animation duration. Deliberately does NOT touch its two fixed \
+                     180ms micro-interaction rules or its 220ms fullscreen-enter asymmetry -- one \
+                     coarse knob, not a per-rule timing system.",
+                    OptionKind::Int, "200", Some("kb-export.ui-transition-ms"), &[]),
                 // --- File tree ---
                 opt!("file_tree_focus_on_open", &["file-tree-focus-on-open"],
                     "Auto-focus the file tree window when it opens",

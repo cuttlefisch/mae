@@ -34,7 +34,9 @@ pub use provider::{
     StopReason, Usage,
 };
 pub use session::AgentSession;
-pub use tool_impls::{execute_audit_configuration, execute_kb_export_guidance};
+pub use tool_impls::{
+    execute_audit_configuration, execute_kb_export_guidance, execute_kb_export_subgraph_html,
+};
 pub use tools::{
     ai_specific_tools, annotations_for_tier, classify_command_permission, classify_tool_tier,
     parse_categories, request_tools_definition, scheme_tools_to_definitions, tools_from_registry,

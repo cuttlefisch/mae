@@ -224,6 +224,19 @@ fn classify_kb_tool(tool_name: &str) -> Option<ToolResidencyShape> {
         | "kb_history" | "kb_preview_show" | "kb_create" | "kb_set_role" | "kb_reimport"
         | "help_open" => SingleTarget,
 
+        // --- SingleTarget (not Filterable): kb_export_subgraph_html's BFS
+        // walk (mae_kb::KnowledgeBase::extract_subgraph) runs against ONE
+        // already-resolved KnowledgeBase (primary, or exactly one federated
+        // instance) and structurally never crosses into a different
+        // instance -- it only ever follows edges within `self.nodes`. So
+        // every node the export can possibly include is guaranteed to live
+        // in the SAME KB `id` resolves to; gating on `id` alone (the
+        // anchor-id check below) already covers the entire exported
+        // subgraph, with no cross-instance leak possible for a
+        // post-filter to catch. Unlike kb_graph/kb_neighborhood (federated
+        // BFS, genuinely can cross instances -- SingleTargetFilterable).
+        "kb_export_subgraph_html" => SingleTarget,
+
         // --- SingleTargetFilterable: same anchor-id gate check as
         // SingleTarget, PLUS the tool impl post-filters its own multi-node
         // traversal results (#361 -- see the shape's doc comment). #366

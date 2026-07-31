@@ -988,6 +988,56 @@ pub struct Editor {
     /// Angular gap (radians) left between adjacent wedges. Mirrors
     /// `kb_graph_wedge_gap_radians`.
     pub kb_graph_wedge_gap_radians: f32,
+
+    // --- KB subgraph HTML export (kb-export-subgraph-html /
+    // kb_export_subgraph_html) -- bilingual-kb-export/kb/adrs/0005/0006 ---
+    /// Default BFS hop radius when `depth` isn't given to
+    /// `kb-export-subgraph-html`. Mirrors `kb_export_default_depth`.
+    pub kb_export_default_depth: usize,
+    /// Hard ceiling on `depth` regardless of what's requested, a per-call
+    /// override cannot exceed this. Mirrors `kb_export_max_depth`.
+    pub kb_export_max_depth: usize,
+    /// Default `node_cap` (reachable-set safety net) when not given.
+    /// Mirrors `kb_export_default_node_cap`.
+    pub kb_export_default_node_cap: usize,
+    /// Hard ceiling on `node_cap` regardless of what's requested. Mirrors
+    /// `kb_export_max_node_cap`.
+    pub kb_export_max_node_cap: usize,
+    /// `mae_export::html_graph::ChordDiagramConfig::hover_growth_factor`
+    /// default when a call doesn't override it via `chord_config`. Mirrors
+    /// `kb_export_hover_growth_factor`.
+    pub kb_export_hover_growth_factor: f32,
+    /// `ChordDiagramConfig::stroke_buffer_px` default. Mirrors
+    /// `kb_export_stroke_buffer_px`.
+    pub kb_export_stroke_buffer_px: f32,
+    /// `ChordDiagramConfig::cosmetic_cushion_px` default. Mirrors
+    /// `kb_export_cosmetic_cushion_px`.
+    pub kb_export_cosmetic_cushion_px: f32,
+    /// `ChordDiagramConfig::min_onscreen_radius_px` default. Mirrors
+    /// `kb_export_min_onscreen_radius_px`.
+    pub kb_export_min_onscreen_radius_px: f32,
+    /// `ChordDiagramConfig::initial_pad_px` default. Mirrors
+    /// `kb_export_initial_pad_px`.
+    pub kb_export_initial_pad_px: f32,
+    /// `ChordDiagramConfig::edge_pull_back` default. Mirrors
+    /// `kb_export_edge_pull_back`.
+    pub kb_export_edge_pull_back: f32,
+    /// `ChordDiagramConfig::wedge_gap_radians` default. Mirrors
+    /// `kb_export_wedge_gap_radians`.
+    pub kb_export_wedge_gap_radians: f32,
+    /// `ChordDiagramConfig::history_depth_cap` default. Mirrors
+    /// `kb_export_history_depth_cap`.
+    pub kb_export_history_depth_cap: u32,
+    /// `ChordDiagramConfig::wedge_corner_radius_fraction` default. Mirrors
+    /// `kb_export_wedge_corner_radius_fraction`.
+    pub kb_export_wedge_corner_radius_fraction: f32,
+    /// `ChordDiagramConfig::search_debounce_ms` default. Mirrors
+    /// `kb_export_search_debounce_ms`.
+    pub kb_export_search_debounce_ms: u32,
+    /// `ChordDiagramConfig::ui_transition_ms` default. Mirrors
+    /// `kb_export_ui_transition_ms`.
+    pub kb_export_ui_transition_ms: u32,
+
     /// Queued background layout request for the open/refreshed graph-view
     /// buffer (`mae::graph_layout_bridge`, Part C Phase 1) — drained once
     /// per GUI event-loop tick, see `crate::graph_view::GraphLayoutIntent`'s
@@ -1538,6 +1588,21 @@ impl Editor {
             kb_graph_wedge_hover_growth_factor: 1.6,
             kb_graph_wedge_neighbor_growth_fraction: 0.35,
             kb_graph_wedge_gap_radians: 0.0,
+            kb_export_default_depth: 2,
+            kb_export_max_depth: 4,
+            kb_export_default_node_cap: 60,
+            kb_export_max_node_cap: 200,
+            kb_export_hover_growth_factor: 1.6,
+            kb_export_stroke_buffer_px: 2.0,
+            kb_export_cosmetic_cushion_px: 16.0,
+            kb_export_min_onscreen_radius_px: 12.0,
+            kb_export_initial_pad_px: 40.0,
+            kb_export_edge_pull_back: 0.55,
+            kb_export_wedge_gap_radians: 0.0,
+            kb_export_history_depth_cap: 8,
+            kb_export_wedge_corner_radius_fraction: 0.6,
+            kb_export_search_debounce_ms: 150,
+            kb_export_ui_transition_ms: 200,
             pending_graph_layout: None,
             message_log: MessageLog::new(1000), // Max message log entries (internal bound)
             messages_synced_seq: None,
