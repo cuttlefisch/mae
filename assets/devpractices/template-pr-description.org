@@ -1,0 +1,44 @@
+:PROPERTIES:
+:ID: template:pr-description
+:ROLE: atom
+:END:
+#+title: PR Description Template
+#+filetags: :pr:template:devpractice:
+
+A literal copy-paste template matching the shape described in [[id:practice:pr-template][PR description shape]]. Fill every section — an empty test plan or missing release-impact label is a reviewable defect in its own right, not an acceptable omission.
+
+#+begin_example
+## Summary
+
+[What does this change do, and why? Link the issue, ADR, or discussion
+that motivated it rather than re-deriving the reasoning here:
+Fixes #[NNN] / Refs #[NNN] / Implements ADR-[NNN].]
+
+## Test plan
+
+- [ ] Existing automated test suite passes
+- [ ] [New test added covering: specific case / edge case / regression]
+- [ ] [Manual verification: what was run, against what environment]
+- [ ] [Any adversarial / negative case exercised, if this touches
+      auth, sync, or data integrity — see the attacker-model testing
+      practice for what "adversarial" means here]
+
+## Release impact
+
+[ ] Breaking change (requires major version bump / migration notes)
+[ ] Feature (new capability, backward compatible)
+[ ] Fix (bug fix, backward compatible)
+[ ] Internal only (no consumer-visible change, no release impact)
+
+## Size check
+
+[ ] No touched file exceeds the project's line-count ceiling
+
+## Notes for reviewers (optional)
+
+[Anything a reviewer should know that isn't obvious from the diff: a
+deliberate tradeoff made, an alternative considered and rejected, a
+follow-up left for a later PR.]
+#+end_example
+
+Keep the checklist items concrete and specific to the actual change rather than leaving the bracketed placeholders generic — a test-plan item that just says "tested" carries no more information than an unchecked box. See [[id:practice:pr-template][PR description shape]] for the rationale behind each section and [[id:practice:commit-convention][commit convention]] for the matching format used in the commits that make up the PR.

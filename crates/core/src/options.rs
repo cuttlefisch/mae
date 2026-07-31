@@ -491,7 +491,7 @@ impl OptionRegistry {
                      client, the initialize response's instructions field. Empty (default) \
                      disables this — no behavior change from today. Not validated against the \
                      KB registry at set time (init.scm evaluates before KB federation loads, so \
-                     the shipped default \"MaePractices\" must still be settable before it's \
+                     the shipped default \"DevPractices\" must still be settable before it's \
                      registered) — an unresolvable name is a silent no-op at read time instead, \
                      never a startup error. \"primary\" (the built-in help KB) is accepted here \
                      but not yet wired in `crates/ai/src/guidance.rs`'s reader — setting it \

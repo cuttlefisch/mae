@@ -572,7 +572,7 @@ fn ai_guidance_kb_option_round_trip() {
     // Issue #370 drift fix: unlike `kb_search_scope`, an unknown/not-yet-registered
     // instance name is intentionally ACCEPTED, not rejected -- init.scm evaluates
     // BEFORE KB federation populates `self.kb.registry`, so the shipped default
-    // ("MaePractices") would always fail eager validation here even though it
+    // ("DevPractices") would always fail eager validation here even though it
     // resolves correctly moments later. Resolution is deliberately deferred to
     // read time (`crates/ai/src/guidance.rs::read_guidance_kb_context`, which is
     // already best-effort and silently no-ops for an unresolvable name).

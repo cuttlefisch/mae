@@ -1,0 +1,18 @@
+:PROPERTIES:
+:ID: practice:validation-gate
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Validation Gates for Roadmap Items
+#+filetags: :roadmap:devpractice:
+
+A phase or work item marked "done" because the person who did it says so is not verified — it is self-declared. Self-declaration is fine as a first signal but is not sufficient evidence of completion, especially once an AI agent is doing some of the work and has every incentive (explicit or emergent) to report success. Every phase and every meaningfully sized work item should name, up front, how its completion will be independently confirmed — not after the fact, when the temptation is to fit the evidence to the claim.
+
+A validation gate is a concrete, checkable statement, decided at the time the work is scoped: "this phase is done when the new integration test suite passes in CI," "when the benchmark shows p99 latency under 50ms on the reference dataset," "when a second engineer has reviewed and merged the change," "when the audit checklist finds zero instances of the old pattern." A vague gate ("when it works well") is not a gate — restate it as something a person or a script could check without asking the author.
+
+Two optional fields make dependency structure explicit and prevent phases from silently starting before their prerequisites are actually validated (not just started):
+
+- **Depends-on** — the phase(s) or item(s) whose validation gate must already be satisfied before this one can begin, or before its own gate can be checked.
+- **Unblocks** — the phase(s) or item(s) waiting on this one's gate passing. Useful for spotting the current bottleneck in a plan at a glance, rather than having to trace dependency chains manually.
+
+Recording both directions turns a roadmap from a flat sequential list into an actual dependency graph, and makes it possible to answer "what is blocking progress right now" without re-deriving it from scratch each time. See [[id:template:roadmap-phase][the roadmap phase template]] for where these fields go in a phase write-up, and [[id:practice:issue-roadmap-crosslink][issue/roadmap cross-linking]] for tying a gate to the issue that will actually confirm it (test run, review, benchmark) rather than leaving verification implicit.

@@ -1,0 +1,21 @@
+:PROPERTIES:
+:ID: practice:tech-debt-tracking
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Tracking Technical Debt as Closeable Items
+#+filetags: :tech-debt:devpractice:
+
+Technical debt tracked as a loose prose paragraph in a roadmap document ("we should really clean up the X module at some point") never closes, because nothing marks it done and nothing forces a revisit. Treat each piece of debt as a discrete, closeable item with the same rigor as a work item: a name, a reason it exists, and a condition under which it is considered paid off.
+
+Each tracked debt item records at minimum:
+
+- **Discovery source** — how the debt was found: a specific audit pass, a bug that revealed a root-cause shortcut, a review comment, a deliberate "we're doing this the fast way for now" decision made during a phase. This matters because debt discovered as a symptom of a deeper drift (see the drift-signal principle) should be fixed at the level of the drift, not patched locally.
+- **Issue link (optional)** — a pointer to the tracked issue/ticket doing the work, when the item is large enough to warrant one. Small items may stay roadmap-only; see [[id:practice:issue-roadmap-crosslink][issue/roadmap cross-linking]] for the distinction between roadmap-only and issue-tracked work.
+- **Closure evidence** — what will exist once the item is actually resolved: a passing test, a merged change, a metric crossing a threshold, a follow-up audit finding it clean. Not "done when it feels done" — a checkable fact.
+
+A debt list without closure evidence degrades into an append-only graveyard: items accumulate, nobody removes them, and the list stops being useful as a signal of what is genuinely outstanding. Periodically re-walking the list (ideally as part of a scheduled audit — see [[id:practice:deep-audit-checklist][the deep audit checklist]]) and removing or re-verifying stale items keeps it trustworthy. Debt items that turn out to be structural rather than incidental — the same shortcut keeps reappearing in new code — are a signal to fix the underlying pattern once rather than logging the same debt repeatedly.
+
+For debt that lives partly in code and partly in a tracking document, a single-location record isn't enough — a reader landing at any one of the relevant places should be able to find the others. A robust pattern is a three-way cross-reference: a marker directly in the code at the point of the shortcut (see [[id:practice:caution-annotations][caution annotations]] for one comment-level convention this can build on), an entry in the project's central debt list (this practice), and, if the debt is also a known, accepted exception to some other checklist (a size ceiling, an audit rule), a line in that checklist explicitly naming the exception. Each of the three should link to the other two by name or id. This costs more to set up than a single list entry, and is worth it specifically for debt that a reader might otherwise stumble into from any of several directions — a code reviewer reading the marker, someone running the audit, someone browsing the roadmap — without three separate people rediscovering and re-explaining the same known issue.
+
+Use [[id:template:tech-debt-item][the tech-debt item template]] as the fill-in form for a new entry. A tracked-debt list that a reader (human or AI agent) can scan and trust is worth far more than a longer list nobody believes.

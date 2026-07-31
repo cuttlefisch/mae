@@ -1,0 +1,34 @@
+:PROPERTIES:
+:ID: practice:makefile-hygiene
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Makefile Hygiene: Variables, .PHONY, and Complexity Budget
+#+filetags: :makefile:build:devpractice:
+
+A `Makefile` accumulates cruft the same way any long-lived file does: paths get hardcoded inline instead of centralized, `.PHONY` falls out of sync with the targets it should cover, and a recipe that started as two lines grows into an unreadable shell script wedged into a `make` rule. None of this is fatal individually, but together it turns the one file meant to be the simplest, most-read entry point in the repo into the least trustworthy one.
+
+**Centralize overridable variables at the top.** Any path, binary name, or flag that might reasonably differ between environments (a developer's machine, CI, a container) belongs in a variable declared near the top of the file, not hardcoded into individual recipes. This gives a single override point (`make test CARGO=cross`) and a single place to audit when something needs to change project-wide.
+
+```make
+CARGO       ?= cargo
+BIN_DIR     ?= target/release
+COMPOSE     ?= docker compose
+TEST_FLAGS  ?= --workspace --all-features
+
+## build: compile the project
+build:
+	$(CARGO) build --release
+
+## test: run the full suite
+test:
+	$(CARGO) test $(TEST_FLAGS)
+```
+
+The `?=` assignment is deliberate — it sets a default while still letting an environment variable or command-line override win, which is what makes the variable genuinely overridable rather than just a renamed constant.
+
+**Keep one `.PHONY` declaration, and keep it in sync.** Every target that doesn't produce a file matching its own name (which is nearly all of them in a task-runner-style Makefile: `build`, `test`, `lint`, `clean`, `ci`) must be listed in `.PHONY`, or `make` can silently skip the recipe if a same-named file or directory ever appears in the working tree. Treat adding a new target and adding it to `.PHONY` as one atomic edit — a target missing from the list is a latent bug waiting for an unlucky filename collision.
+
+**Push genuinely complex logic out to a script.** A recipe that is a single command, or a short pipeline, belongs inline — that's the whole value of a Makefile as a thin, readable dispatch layer. A recipe that grows into multi-line conditionals, loops, or more than a handful of piped commands should move to `scripts/<name>.sh` (or `.py`, whatever fits) and the Makefile target should become a one-line call into it: `scripts/release.sh $(VERSION)`. This keeps the Makefile skimmable as a table of contents, gives the complex logic a place where it can have its own tests and shellcheck-style linting, and avoids the common failure mode where debugging a Makefile means debugging `make`'s shell-quoting and line-continuation rules at the same time as the actual logic.
+
+See [[id:practice:makefile-canonical-interface][Makefile as the canonical interface]] for why keeping this file trustworthy matters beyond tidiness, and [[id:practice:makefile-self-documentation][Makefile self-documentation]] for the doc-comment convention that pairs with a clean `.PHONY` list.

@@ -1,0 +1,40 @@
+:PROPERTIES:
+:ID: practice:glab-cli-usage
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: glab CLI as the Scriptable GitLab Interface
+#+filetags: :gitlab:cli:devpractice:
+
+`glab`, GitLab's official command-line client, is the scriptable equivalent of the GitLab web UI, in the same role `gh` fills for GitHub. Prefer it over manual web-UI actions for anything that can be expressed as a command: it produces the same result with a reviewable, repeatable invocation, and — critically for an AI agent working in a terminal — it is directly callable as a tool action, where a web UI is not.
+
+Common patterns:
+
+```bash
+# Create a merge request from the current branch, draft by default
+glab mr create --draft --fill
+
+# View the current branch's open MR, including pipeline status
+glab mr view
+
+# Merge an MR once approved and pipeline is green
+glab mr merge 123 --squash
+
+# Check CI pipeline status for the current branch
+glab ci status
+
+# Watch a running pipeline live
+glab ci view --web=false
+
+# Create an issue with a title and description
+glab issue create --title "Fix stale cache on reconnect" --description "..."
+
+# List open MRs assigned to the current user
+glab mr list --assignee=@me
+```
+
+Two properties make this worth defaulting to over the browser. First, scriptability: any of these commands can be embedded in a Makefile target (see [[id:practice:makefile-wraps-vcs-actions][wrapping VCS actions behind Makefile targets]]), a script, or run directly by an agent — no clicking through multi-step forms that change layout between platform versions. Second, output is text — greppable, parseable, feedable into the next step of a script or an agent's reasoning — where a web UI's state lives only in rendered HTML a script can't easily interrogate.
+
+This doesn't mean the web UI is never appropriate — reading a long threaded discussion or reviewing a large diff with inline comments is often genuinely easier visually. The convention is specifically about *actions*: creating, updating, merging, checking status. Any action a contributor or agent performs routinely enough to want documented should have a known `glab` invocation, so it stays scriptable and consistent rather than becoming tribal knowledge about which button to click.
+
+See [[id:practice:gitlab-mr-workflow][the GitLab MR workflow]] for what these commands should actually produce (draft convention, description shape), and [[id:practice:makefile-wraps-vcs-actions][Makefile-wrapped VCS actions]] for turning a frequently-used `glab` invocation into a project-specific one-word command.

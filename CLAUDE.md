@@ -229,19 +229,33 @@ Features" and "Architecture Debt" for the full breakdown.
 
 **Also shipped — dev-practices KB dogfooding** (issue #370): `ai_guidance_kb`
 (`crates/ai/src/guidance.rs`) already shipped as an opt-in mechanism to surface a registered
-KB's standing practices to every AI session; MAE's own shipped `init.scm` template
-(`crates/mae/src/config.rs::default_init_template`) now defaults it to `"MaePractices"` — a
-small curated KB (`assets/practices/*.org`, built via `make practices-kb` into
-`assets/mae-practices.cozo`, same pipeline as the manual/help KB) distilled from this file's
-design principles, the ADR process, and the architecture-debt tracking convention above.
-Auto-registered as a federated instance at every startup (`crates/mae/src/practices_kb.rs`)
-whenever the pre-built KB is found — additive-only, never overwrites a contributor's own
-customized entry of the same name, and a silent no-op if nothing is found (e.g. a
-terminal-only build that skipped `make practices-kb`). `ai_guidance_kb`'s validation was
+KB's standing practices to every AI session. Auto-registered as a federated instance at every
+startup whenever the pre-built KB is found — additive-only, never overwrites a contributor's own
+customized entry of the same name, and a silent no-op if nothing is found (e.g. a terminal-only
+build that skipped `make practices-kb`/`make devpractices-kb`). `ai_guidance_kb`'s validation was
 relaxed to accept any name unconditionally at set time (previously it hard-rejected an
-unregistered name, which broke the moment this shipped default was added: `init.scm`
-evaluates before KB federation populates the registry) — resolution is deferred to read
-time, matching `read_guidance_kb_context`'s already-existing best-effort design.
+unregistered name, which broke the moment a shipped default was added: `init.scm` evaluates
+before KB federation populates the registry) — resolution is deferred to read time, matching
+`read_guidance_kb_context`'s already-existing best-effort design.
+
+**Also shipped — the system of bundled KBs** (issue #514, **ADR-076**): a fourth bundled KB,
+**DevPractices** (`assets/devpractices/*.org`, forked from the independent `dev-practices-kb`
+project, generic and vendor-neutral — commit conventions, adversarial testing, ADR process, code
+annotation, all written for *any* software project, not MAE-specific), joins the manual/help KB,
+**MaePractices** (`assets/practices/*.org` — MAE-contributor-specific conventions, this file's own
+design principles distilled), and the **ADR KB** (`docs/adr/*.md`, ADR-059 — MAE's own decision
+history). MAE's shipped `init.scm` template (`crates/mae/src/config.rs::default_init_template`)
+now defaults `ai_guidance_kb` to `"DevPractices"` — the right default for the overwhelming
+majority of users, who are building other software with MAE, not contributing to MAE itself.
+Working on MAE? Switch to MAE's own conventions with one command:
+`:set-save ai-guidance-kb MaePractices`. The ADR KB stays deliberately **opt-in**, not
+auto-registered (per ADR-059 — injecting dozens of ADR summaries into every AI session by default
+would be noise, not signal); `kb_register` it manually to query MAE's own architecture decisions.
+All four are built via a shared pipeline (`shared/kb/src/kb_build.rs`) and bundled into every
+release artifact except Windows (TUI-only, ADR-066 Phase B) — see ADR-076 for the full taxonomy,
+the shared auto-registration engine (`crates/mae/src/guidance_kb_engine.rs`), and the "a
+contributor's own same-named registration always wins over the bundled default" precedent that
+makes this whole system safely overridable.
 
 **Next — P2P decentralized KB sync** (multi-session/multi-machine initiative): a **daemon mesh** so global
 peers maintain shared KBs with **no central server**. Design = **ADR-025** (iroh QUIC transport, Ed25519

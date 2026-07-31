@@ -443,10 +443,14 @@ fn default_init_template() -> &'static str {
 
 ;; ── AI ──────────────────────────────────────────────────
 ;; (set-option! "ai-provider" "claude")
-;; Standing dev-practices guidance surfaced to every AI session (issue #370)
-;; — a no-op if "MaePractices" isn't registered (e.g. a terminal-only build
-;; that skipped `make practices-kb`), so this is always safe to leave on.
-(set-option! "ai-guidance-kb" "MaePractices")
+;; Standing dev-practices guidance surfaced to every AI session (issue #514,
+;; ADR-076). "DevPractices" is generic, vendor-neutral guidance for building
+;; ANY software with MAE — the right default for a fresh install. Working
+;; on MAE itself? Switch to MAE's own contributor conventions (issue #370)
+;; with: :set-save ai-guidance-kb MaePractices
+;; A no-op if the named KB isn't registered (e.g. a terminal-only build that
+;; skipped `make devpractices-kb`), so this is always safe to leave on.
+(set-option! "ai-guidance-kb" "DevPractices")
 
 ;; ── Daemon (KB persistence & hosting, ADR-035) ───────────
 ;; off (default) = in-process embedded KB only, no daemon needed.
@@ -1362,6 +1366,22 @@ mod tests {
         assert!(
             checked >= 5,
             "expected to find several set-option! examples in the template, found {checked}"
+        );
+    }
+
+    /// Issue #514 / ADR-076: the shipped template's fresh-install default for
+    /// `ai_guidance_kb` is the generic "DevPractices" KB, not the
+    /// MAE-contributor-specific "MaePractices" (issue #370's original
+    /// default) -- see `guidance.rs`'s
+    /// `read_guidance_kb_context_resolves_the_real_shipped_devpractices_kb`
+    /// for the end-to-end proof that this actually resolves to real content.
+    #[test]
+    fn default_template_defaults_ai_guidance_kb_to_devpractices() {
+        let template = default_init_template();
+        assert!(
+            template.contains("(set-option! \"ai-guidance-kb\" \"DevPractices\")"),
+            "expected the shipped template to default ai-guidance-kb to \"DevPractices\", \
+             got template:\n{template}"
         );
     }
 

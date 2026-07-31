@@ -1,0 +1,27 @@
+:PROPERTIES:
+:ID: practice:commit-convention
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Conventional Commit Format
+#+filetags: :commit:devpractice:
+
+A commit message follows a fixed structural format: `type(scope): subject`, where `type` is one of a small closed vocabulary (`feat`, `fix`, `docs`, `refactor`, `test`, `chore`, `perf`, `build`, `ci`), `scope` is the area of the codebase touched (a module, package, or subsystem name), and `subject` is a short imperative-mood description ("add", not "added" or "adds").
+
+```
+feat(auth): add rate limiting to login endpoint
+fix(parser): handle empty input without panicking
+refactor(cache): extract eviction policy into its own strategy type
+```
+
+A breaking change is marked with a `!` after the type/scope or a `BREAKING CHANGE:` footer, so it stands out from a routine change even at a glance over `git log --oneline`.
+
+The commit body — not the subject line — is where issue and PR references belong: `Fixes #142`, `Refs #98`, `Part of #201`. Keeping references out of the subject line keeps the one-line log readable while still making every commit traceable back to the discussion, requirements, or bug report that motivated it.
+
+This format specifically (not just "write good commit messages" in general) matters because it is machine-parseable:
+
+- **Automated changelog generation** — a tool can group commits by `type` and produce a changelog with "Features", "Fixes", "Breaking Changes" sections without a human curating the release notes by hand.
+- **Semantic versioning (with a caveat)** — `fix` commits since the last release suggest at least a patch bump, `feat` suggests at least a minor bump, and any `BREAKING CHANGE` suggests a major bump, which lets a release process compute a candidate version number directly from commit history instead of a person guessing from scratch. Treat this as a fallback signal, not the authoritative one: a merge that squashes several differently-typed commits into one, or a single mistyped `type`, silently produces the wrong version bump with no one noticing until after release. Where the two are both available, an explicit, deliberately-set signal captured elsewhere — most commonly a merge-request/pull-request label the author sets on purpose — should take precedence over inferring the bump from commit type. See [[id:practice:label-driven-release-automation][label-driven release automation]] for that stronger pattern; commit-type inference is still worth having as a secondary signal or for projects too small to justify a label-based gate.
+- **Searchability** — `git log --grep '^fix(auth)'` finds every auth bugfix without relying on prose consistency across contributors and over years of project history.
+
+The format is worth the small friction of learning it because the payoff compounds: every commit written this way makes the next automated release, audit, or changelog cheaper, while a free-form commit message is a one-time convenience that has to be manually reconciled later. See [[id:practice:pr-template][PR description template]] for how this same referencing discipline carries into pull request descriptions, and [[id:hub:build-and-vcs-workflow][build and VCS workflow hub]] for the surrounding release and branching practices.

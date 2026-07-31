@@ -1,0 +1,18 @@
+:PROPERTIES:
+:ID: practice:kb-pdf-export-pipeline
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: KB PDF Export Pipeline
+#+filetags: :molecular-notes:export:devpractice:
+
+A molecular notes knowledge base is optimized for querying: small, precisely-retrievable notes navigated by an agent or a search tool, not read start to finish. That is the wrong shape for a human-readable deliverable — a review packet, a proposal handed to someone without access to the live KB, an archival snapshot. For that audience, an optional export pipeline compiles the linked tree of notes into one navigable PDF, without losing the properties that made the KB useful as a graph in the first place.
+
+Two properties of the source material are easy to lose in a naive export and must be preserved deliberately:
+
+- **Diagrams render as real images, not left as source markup.** A diagram embedded in a note as text-based diagram source (a graph description language, an ASCII sketch meant for a renderer) is meaningless to a reader of the compiled document if the export pipeline just dumps the source text onto the page. The pipeline must render each diagram to an actual image at export time and embed the image, not the markup that produces it.
+- **Internal cross-reference links stay clickable in the PDF, not flattened to plain text.** The whole value of the link graph — jumping from an atom to the molecule that synthesizes it, from a hub to the atoms it indexes — disappears if `[[id:...][Display Text]]` links are exported as inert "Display Text" with no way to follow them. The pipeline must map each internal ID link to a real in-document PDF link (an anchor plus a clickable reference), so a reader of the compiled document can navigate the same graph structure a live query against the KB would expose, just via clicking instead of querying.
+
+Getting both of these right generally requires a dedicated compile step rather than a generic document converter: resolve the note tree (or a chosen subtree, since a full KB export may be more than a given deliverable needs), pre-render any diagrams to images, rewrite internal links to PDF-internal anchors before or during the document build, and only then run the actual PDF generation. Treat "does clicking a rendered link actually jump to the right place" and "does every diagram appear as a rendered image, not source text" as required checks on the exported artifact before treating an export as done — a broken link or an unrendered diagram in a distributed PDF is far more visible and embarrassing than the same defect in the live, query-driven KB, precisely because a PDF reader has no other way to reach the content.
+
+This export path is optional and additive: it does not change how the KB itself is authored or queried, and the note graph described in [[id:practice:molecular-notes-overview][the molecular notes overview]] remains the primary, queryable form of the knowledge base. The export exists for the specific case where a human-readable, shareable artifact is needed alongside it. See [[id:practice:node-linking][node linking]] for the link convention the export pipeline has to correctly translate into PDF-internal links.

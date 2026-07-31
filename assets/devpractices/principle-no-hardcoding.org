@@ -1,0 +1,17 @@
+:PROPERTIES:
+:ID: principle:no-hardcoding
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: No Hardcoding — Make Differing Behavior Configurable
+#+filetags: :principle:configurability:devpractice:
+
+Any user-facing or environment-facing behavior that could reasonably differ between users, deployments, or contexts should be exposed as a configurable option, not embedded as a magic constant somewhere in the implementation. The test is simple: if you can imagine a legitimate reason a different user or a different environment would want a different value here, it belongs in a configuration surface with a sane default — not inline in the logic that uses it. Truly fixed constants (protocol limits, physical buffer sizes, values mandated by an external spec) are the exception, and even those deserve a comment explaining why they're fixed rather than configurable.
+
+The failure mode when this is ignored is incremental and easy to miss in any single instance: a developer needs a specific behavior for their immediate use case, so they hardcode the value directly into the function that needs it — a timeout, a path, a threshold, a feature toggle implemented as a boolean baked into an if-statement. It works, ships, and is forgotten. Multiply this across a codebase over years and you get a system where dozens of behaviors that different users legitimately need to differ on are instead fixed at whatever value the original author happened to need, discoverable only by reading source code, and changeable only by a code change and a redeploy. Users route around this with forks, patches, or by asking for a new hardcoded value to replace the old one — the same mistake repeating one call at a time.
+
+The corrective is to route every such value through a single, centralized configuration mechanism (a settings registry, an options struct, an environment-aware config loader) rather than reading ad hoc environment variables or defining local constants scattered through the codebase. Centralizing configuration has compounding benefits beyond the immediate flexibility: it gives you one place to validate values, one place to document them, one place to expose them through multiple surfaces (a CLI flag, a config file, a runtime API, a UI settings panel) without re-implementing the plumbing each time, and one place future maintainers look first instead of grepping for a suspicious literal.
+
+A useful discipline: the moment you find yourself special-casing a value for one deployment, user, or test scenario — an `if (environment == "staging")`, a locally overridden constant, a comment saying "change this for your setup" — that is the signal to promote it to a real option instead of hardcoding the special case. This applies recursively: a workaround that hardcodes an exception to another hardcoded value is doubling down on the same debt, not paying it off.
+
+This principle is closely tied to [[id:principle:single-source-shared-computation][single source for shared computation]] — a hardcoded value duplicated in two places is a magic constant and a duplication problem at once — and to [[id:principle:downstream-impact-checklist][the downstream-impact checklist]], since introducing a new hardcoded value is exactly the kind of change that should prompt asking "will this need to differ for someone else, later, in a way I can't predict from here?"

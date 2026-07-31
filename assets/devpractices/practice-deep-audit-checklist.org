@@ -1,0 +1,30 @@
+:PROPERTIES:
+:ID: practice:deep-audit-checklist
+:ROLE: molecule
+:KIND: concept
+:END:
+#+title: Deep Audit Checklist
+#+filetags: :audit:devpractice:
+
+A deep audit is a periodic, scheduled sweep of a codebase or project distinct from day-to-day code review — it looks for accumulated drift that no single review catches because each individual change looked fine in isolation. Run it on a cadence (per release, per quarter, per major phase boundary) rather than only reactively after something breaks. It moves through several distinct phases, each with a different lens; skipping a phase leaves a systematic blind spot.
+
+**Structural size and complexity ceilings.** Flag files, functions, and modules that have grown past a reasonable size or cyclomatic complexity threshold. A file that was a clean 200 lines at creation and is now 3,000 lines rarely got that way through one bad decision — it grew past every natural point where someone should have split it. Set explicit ceilings (line counts, nesting depth, argument counts) and treat exceptions as tracked, justified debt rather than silent normalization.
+
+**AI-generated "slop" pattern detection.** Where an AI agent authored or heavily assisted a change, scan specifically for the failure modes that pattern differs from human-authored sprawl:
+- Verbose, restating documentation that describes *that* code does something rather than *why* — comments and docstrings that could be deleted with zero information loss.
+- Defensive-but-pointless code: exhaustive match arms or error handling for cases that cannot occur given the surrounding invariants, added out of an excess of caution rather than a real requirement.
+- Redundant comments that repeat the line directly below them in English.
+- Filler phrases and hedge language leaking into code comments, commit messages, or docs ("It's worth noting that...", "As an AI, I should mention...", unnecessary caveats).
+See [[id:practice:avoiding-ai-prose-tendencies][avoiding AI prose tendencies]] for the prose-level counterpart of this phase — the same failure modes show up in written documentation and notes, not just code.
+
+**Language- and framework-specific anti-pattern scanning.** Every language and major framework has a known set of foot-guns and idioms it discourages (unchecked panics/unwraps, string-typed enums where a real enum exists, ignored error returns, N+1 query patterns, mutable shared state without synchronization). Maintain a checklist per stack in active use and scan against it explicitly rather than relying on reviewers to remember all of it ad hoc.
+
+**Cross-component consistency.** Compare how the same kind of problem is solved in different parts of the project — error handling shape, logging conventions, naming, module layout. Divergence here is often invisible within a single component's review but glaring when compared side by side.
+
+**DRY and rule-of-three adherence.** Look for logic duplicated three or more times that has not yet been extracted, and conversely for premature abstractions built after only one or two use cases that add indirection without earning it.
+
+**Documentation and onboarding coverage.** Check that a newcomer (human or AI agent) can find how to build, test, and run the project, and that core architectural decisions are discoverable rather than living only in people's heads or old chat logs.
+
+**Metadata and test-coverage checks.** Confirm tracked items (issues, ADRs, debt entries) have current status, and that coverage tooling reflects reality rather than a stale baseline.
+
+This checklist is deliberately broad because a single audit pass, even a careful one, has systematic blind spots — see [[id:practice:multi-lens-audit-review][multi-lens audit review]] for rotating through distinct stakeholder vantage points on top of this structural sweep, and [[id:practice:tech-debt-tracking][tech-debt tracking]] for how findings become closeable items rather than another list nobody revisits.

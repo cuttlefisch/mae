@@ -1,0 +1,70 @@
+:PROPERTIES:
+:ID: practice:github-actions-conventions
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: GitHub Actions Workflow Structure and Permissions
+#+filetags: :github:ci:devpractice:
+
+A GitHub Actions workflow lives as one YAML file under `.github/workflows/`, and every workflow shares the same three-part shape: `on:` declares what triggers it, `jobs:` declares the named units of work (which can depend on each other), and `permissions:` declares what the job's automatically-issued token is allowed to do. This is the GitHub-specific sibling to [[id:practice:gitlab-ci-pipeline-conventions][GitLab CI pipeline conventions]] — same underlying concerns (stage ordering, merge gating, cost-aware trigger scoping) — but the mechanism is meaningfully different: GitLab's `stages:`-based `.gitlab-ci.yml` versus GitHub's independent workflow files triggered by named events, each with per-workflow token scoping.
+
+**Trigger events (`on:`).** A workflow can trigger on `push`, `pull_request`, `workflow_dispatch` (manual trigger, useful for a human or an agent to run a workflow on demand without a code change), `schedule` (cron), and many other GitHub-emitted events. Scope triggers narrowly — a `pull_request` trigger with `paths:` filters so a docs-only PR doesn't spend CI minutes running a full test matrix:
+
+```yaml
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+  workflow_dispatch:
+```
+
+**Named jobs and dependencies (`jobs:`).** Each job under `jobs:` runs in its own fresh runner by default — jobs are parallel unless a dependency is declared with `needs:`. A job's name is significant beyond readability: it's the identifier a branch-protection required-status-check rule references (see [[id:practice:github-pr-workflow][GitHub PR workflow]]), so renaming a job is a two-file change, not a local one.
+
+```yaml
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: make build
+
+  test:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - run: make test
+```
+
+**`permissions:` is a security control, not boilerplate.** Unless a workflow explicitly narrows it, the `GITHUB_TOKEN` issued to a workflow run defaults to broad permissions — on many repositories, read/write across contents, issues, pull requests, and packages. This is a real, common attack surface: a workflow that runs on `pull_request` from a fork, includes a step that can be influenced by attacker-controlled input (a dependency install script, an untrusted action, a value pulled from the PR body), and holds a broad-scope token is a path to repository compromise, not a hypothetical one. Set `permissions:` explicitly at the workflow or job level, scoped to the minimum the job actually needs:
+
+```yaml
+permissions:
+  contents: read       # most jobs need only this
+  pull-requests: write # only a job that comments on PRs needs this
+  id-token: write       # only a job doing OIDC-based cloud auth needs this
+```
+
+Treat any job requesting a write permission as something to justify explicitly during review, the same way an unusually broad file-access grant would be treated in any other context.
+
+**Reusable workflows.** A workflow that calls another workflow via `uses:` (pointing at a `.github/workflows/reusable-*.yml` file with `on: workflow_call`) avoids duplicating CI logic across many workflow files — the same problem, and the same fix, as not copy-pasting Makefile targets across projects (see [[id:practice:makefile-canonical-interface][Makefile as the canonical interface]]). A shared "build and test" reusable workflow called from a per-language wrapper workflow keeps the actual build/test steps defined once:
+
+```yaml
+jobs:
+  ci:
+    uses: ./.github/workflows/reusable-build-test.yml
+    with:
+      target: linux
+    secrets: inherit
+```
+
+**Workflow steps should call the Makefile, not reimplement it.** A workflow step should typically invoke a project's Makefile target (`run: make test`) rather than reimplementing the underlying build/test/lint logic inline in YAML. The Makefile is the canonical interface for these actions (see [[id:practice:makefile-canonical-interface][Makefile as the canonical interface]]); a workflow that instead runs `cargo test --workspace --all-features` directly creates a second, YAML-embedded definition of "how to test this project" that can silently drift from the Makefile's version. Keep the workflow file a thin trigger for the Makefile target, not a parallel implementation.
+
+See [[id:practice:gh-cli-usage][gh CLI usage]] for inspecting workflow run status from the command line.

@@ -1,0 +1,35 @@
+:PROPERTIES:
+:ID: practice:makefile-canonical-interface
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Makefile as the Canonical Build/Test/Lint Interface
+#+filetags: :makefile:build:devpractice:
+
+A project's `Makefile` should be the one documented entry point for every routine action a contributor or an AI agent needs to perform — building, testing, linting, running CI locally, cleaning artifacts. Guidance text (README, CONTRIBUTING, onboarding docs, agent instructions) should reference `make test`, `make build`, `make lint`, never the raw underlying invocation (`cargo test --workspace --all-features`, `npm run test -- --coverage`, `docker compose run --rm ci`). The raw command becomes an implementation detail hidden behind the target; it can change (a new flag, a different test runner, a container wrapper) without a single doc or muscle-memory habit breaking.
+
+This matters more, not less, once an AI agent is a regular actor in the repository. An agent that has been told "run `make test`" behaves identically across every project that follows the convention, regardless of what language or tool actually sits underneath. An agent left to guess the underlying command re-derives it from a `package.json`, a `Cargo.toml`, a `pyproject.toml`, or worse, from stale doc text — and gets it subtly wrong (missing a flag that CI sets, running a subset of the suite, skipping a required env var). One canonical entry point removes an entire class of "worked locally, failed in CI" reports.
+
+The interface should be complete enough that nobody needs to drop below it for common work: build, test (unit + integration if separate), lint/format-check, and — critically — an aggregate target that mirrors what CI actually runs, so a contributor can reproduce a CI failure locally before pushing. Example shape:
+
+```make
+## build: compile the project
+build:
+	cargo build --workspace
+
+## test: run the full test suite
+test:
+	cargo test --workspace --all-features
+
+## lint: run formatter check + linter
+lint:
+	cargo fmt --check
+	cargo clippy --workspace -- -D warnings
+
+## ci: full pipeline, mirrors .gitlab-ci.yml exactly
+ci: build test lint
+```
+
+The `ci` target deserves special discipline: it should *explicitly claim* parity with the real pipeline definition (a comment naming the CI config file it mirrors, as above) and that claim has to be kept true as both evolve. A `make ci` that silently drifts from `.gitlab-ci.yml` — skipping a stage the pipeline added, or running one the pipeline dropped — is worse than no aggregate target at all, because it gives false local confidence. Treat any pipeline-definition change as incomplete until the corresponding Makefile aggregate target is updated to match, and treat any Makefile change to `build`/`test`/`lint` as incomplete until confirmed the pipeline still calls the same target rather than duplicating the underlying command inline.
+
+See [[id:practice:makefile-self-documentation][Makefile self-documentation]] for how targets announce themselves to a new contributor, [[id:practice:makefile-hygiene][Makefile hygiene]] for keeping the file itself maintainable as it grows, and [[id:practice:gitlab-ci-pipeline-conventions][GitLab CI pipeline conventions]] for the pipeline side of the parity claim.

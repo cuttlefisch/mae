@@ -1,0 +1,35 @@
+:PROPERTIES:
+:ID: hub:adr-and-process
+:ROLE: hub
+:KIND: category
+:END:
+#+title: ADR & Process
+#+filetags: :hub:devpractice:
+
+Conventions for recording decisions, structuring changes, tracking debt, and keeping
+issues and roadmap items connected to the decisions that justify them.
+
+* Architecture decision records
+- [[id:practice:adr-format][ADR Format]]
+- [[id:template:adr][ADR Template]]
+- [[id:practice:adr-node-crosslinking][ADR / Node Crosslinking]]
+
+* Commits and pull requests
+- [[id:practice:commit-convention][Commit Convention]]
+- [[id:practice:pr-template][PR Template]]
+- [[id:template:pr-description][PR Description Template]]
+
+* Tech debt and audits
+- [[id:practice:tech-debt-tracking][Tech Debt Tracking]]
+- [[id:practice:deep-audit-checklist][Deep Audit Checklist]]
+- [[id:practice:multi-lens-audit-review][Multi-Lens Audit Review]]
+- [[id:practice:audit-as-invokable-procedure][Audit as an Invokable Procedure]]
+- [[id:template:tech-debt-item][Tech Debt Item Template]]
+
+* Issues and roadmap
+- [[id:practice:issue-roadmap-crosslink][Issue / Roadmap Crosslinking]]
+- [[id:practice:validation-gate][Validation Gate]]
+- [[id:practice:phased-roadmap-structure][Phased Roadmap Structure]]
+- [[id:template:roadmap-phase][Roadmap Phase Template]]
+
+Back to [[id:hub:start-here][Start Here]].

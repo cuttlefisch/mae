@@ -1,0 +1,34 @@
+:PROPERTIES:
+:ID: practice:makefile-ci-tiers
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Graduated Makefile CI Tiers
+#+filetags: :makefile:build:ci:devpractice:
+
+A single monolithic `make ci` target that runs every check — lint, unit tests, integration tests, end-to-end tests, cross-platform builds — forces a bad tradeoff. Run it constantly and local iteration slows to a crawl; run it only occasionally and fast feedback loops go unused, so regressions surface later than they need to. The fix is a graduated family of aggregate targets, each more thorough than the last, so the cost of a check matches how often it needs to run.
+
+A typical three-tier shape:
+
+```make
+## check: fast tier — lint + unit tests, run on every save or pre-commit
+check: lint test-unit
+
+## verify: fuller tier — check plus integration tests, run before pushing
+verify: check test-integration
+
+## ci: most-thorough tier — verify plus slow/expensive checks, run in CI or before release
+ci: verify test-e2e test-cross-platform
+```
+
+The tier above must *compose* the tier below by depending on its target, never by duplicating its steps inline. `verify: check test-integration` guarantees that anything added to `check` is automatically covered every time `verify` or `ci` runs, with nothing to remember to update in two places. The alternative — writing out `lint`, `test-unit`, and `test-integration` explicitly inside `verify`'s recipe instead of depending on `check` — creates two copies of the fast tier's definition that will eventually diverge: someone updates `check` to add a new lint pass and forgets `verify` has its own separate copy, and the fuller tier silently stops running the new check. Composition makes drift structurally impossible instead of relying on someone remembering to keep two lists in sync.
+
+Name the tiers so the escalation is legible without reading the recipe bodies — a base name with suffixes or prefixes that clearly indicate scope (`check` / `verify` / `ci`, or `test-fast` / `test-full` / `test-slow`) rather than names that require memorizing which one is more thorough. A contributor or an agent should be able to guess the relative cost and coverage of `make verify` versus `make ci` from the target name alone, before ever reading the Makefile.
+
+Match the tier to when it runs, not just what it contains:
+
+- The **fast tier** runs on every save or as a pre-commit hook — it has to be fast enough that running it constantly is not annoying, which usually rules out anything that spawns a container, hits a network, or takes more than a few seconds.
+- The **fuller tier** runs before pushing or opening a pull request — slower than the fast tier is acceptable here because it runs per-push, not per-save, but it should still complete in a timeframe that doesn't make a contributor want to skip it.
+- The **most-thorough tier** runs in CI itself, or manually before a release — this is where genuinely expensive checks belong (end-to-end suites, cross-platform matrix builds, container-based integration tests) because it only has to run once per merge or release, not once per local iteration.
+
+See [[id:practice:makefile-canonical-interface][Makefile as the canonical interface]] for why these targets, not the raw commands underneath them, are what documentation and agent instructions should reference, [[id:practice:makefile-self-documentation][Makefile self-documentation]] for making the tier list itself discoverable via `make help`, and [[id:practice:makefile-hygiene][Makefile hygiene]] for keeping the growing set of tier and sub-tier targets from turning into unmanageable sprawl as the project's check surface grows.

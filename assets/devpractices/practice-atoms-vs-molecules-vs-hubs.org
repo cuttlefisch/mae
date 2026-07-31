@@ -1,0 +1,19 @@
+:PROPERTIES:
+:ID: practice:atoms-vs-molecules-vs-hubs
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Atoms vs. Molecules vs. Hubs
+#+filetags: :molecular-notes:devpractice:
+
+Three of the four note roles in a molecular notes knowledge base make claims (source notes, the fourth role, make none — they hold raw material). The distinction between the three claim-bearing roles is about scope and originality, not length or importance:
+
+- **Atom** — one idea, stated once, in the author's own words. An atom does not depend on other atoms to make sense; it is the smallest independently useful unit of knowledge in the KB. If a note is doing two unrelated jobs, it is not one atom, it is two atoms that have not been split yet.
+- **Molecule** — a synthesis that connects several atoms into something none of them states alone: a workflow built from several individually-simple rules, a judgment call that weighs two atoms' tradeoffs against each other, an insight that only exists at the intersection of multiple established ideas. A molecule links to its constituent atoms rather than restating their content, so the atoms remain the single source of truth for their own claims and the molecule stays focused on the connective reasoning.
+- **Hub** — pure navigation. A hub makes no claim of its own; every sentence in it is either a link or context for a link. Its job is to give a reader arriving at a topic a map of what exists under it, organized in whatever grouping is most useful for finding the right note quickly.
+
+Worked examples from this KB's own manifest: [[id:practice:adr-format][ADR format]] is an atom — it states one self-contained idea (the standard section skeleton an ADR should follow) that does not depend on synthesizing other notes together. [[id:practice:deep-audit-checklist][the deep audit checklist]] is a molecule — it does not introduce a new claim of its own so much as it sequences several distinct audit lenses (structural size, AI-slop detection, anti-pattern scanning, cross-component consistency, and more) into one ordered workflow, linking out to the atoms and companion practices each phase draws on rather than restating them. [[id:hub:adr-and-process][the ADR and process hub]] is a hub — it asserts nothing about how ADRs should be written or reviewed; it exists purely to point a reader toward the atoms and molecules that do.
+
+The practical test for which role a new note should have: if writing it required inventing zero new connective reasoning — it is just "here is a fact, restated clearly" — it is an atom. If writing it required deciding how two or more existing ideas relate, trade off, or combine — it is a molecule. If writing it required no new content at all, only deciding what belongs on a list and how to group it — it is a hub. A note that seems to need more than one of these at once is usually a sign that a molecule is trying to also be its own hub, or an atom is trying to also justify itself — split it along the role boundary rather than letting one note do two jobs.
+
+See [[id:practice:molecular-notes-overview][the molecular notes overview]] for how these three roles relate to the fourth (source), and [[id:practice:node-linking][node linking]] for how linking style itself differs by role — a molecule links to synthesize, a hub links to index.

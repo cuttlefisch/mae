@@ -22,6 +22,10 @@ name = "build-adr-kb"
 path = "src/bin/build_adr_kb.rs"
 
 [[bin]]
+name = "build-devpractices-kb"
+path = "src/bin/build_devpractices_kb.rs"
+
+[[bin]]
 name = "verify-adr-kb-sync"
 path = "src/bin/verify_adr_kb_sync.rs"
 

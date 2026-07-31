@@ -313,6 +313,61 @@ mod tests {
         );
     }
 
+    /// Issue #514 / ADR-076, end-to-end against the REAL shipped asset —
+    /// mirrors `read_guidance_kb_context_resolves_the_real_shipped_practices_kb`
+    /// above, but for the shipped `init.scm` template's NEW fresh-install
+    /// default (`ai_guidance_kb = "DevPractices"`, set in
+    /// `crates/mae/src/config.rs::default_init_template`). Asserts a real
+    /// substring from `assets/devpractices/index.org`'s actual title/body —
+    /// not just `is_some()`, which would pass even if some other KB's
+    /// content leaked through under the wrong name.
+    #[test]
+    fn read_guidance_kb_context_resolves_the_real_shipped_devpractices_kb() {
+        let real_asset =
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/mae-devpractices.cozo");
+        assert!(
+            real_asset.exists(),
+            "expected the real built DevPractices KB at {} -- run `make devpractices-kb` first",
+            real_asset.display()
+        );
+        let staged = copy_kb_asset_to_tempdir(&real_asset);
+        let staged_asset = staged.path().join(real_asset.file_name().unwrap());
+
+        let data_dir = tempfile::tempdir().unwrap();
+        let mut registry = mae_kb::federation::KbRegistry::default();
+        registry.instances.push(mae_kb::federation::KbInstance {
+            uuid: "uuid-mae-devpractices".into(),
+            name: "DevPractices".into(),
+            org_dir: PathBuf::new(),
+            db_path: staged_asset,
+            primary: false,
+            enabled: true,
+            last_import: None,
+            collab_id: None,
+            shared: false,
+            remote_peers: Vec::new(),
+            last_sync: None,
+            ai_residency: mae_kb::federation::AiResidency::default(),
+            project_root: None,
+            kind: mae_kb::federation::KbInstanceKind::default(),
+            priority: 0,
+            remote_hub: None,
+        });
+        std::fs::write(
+            data_dir.path().join("kb-registry.toml"),
+            toml::to_string(&registry).unwrap(),
+        )
+        .unwrap();
+
+        let ctx = read_guidance_kb_context(data_dir.path(), "DevPractices")
+            .expect("the real DevPractices KB's index node must resolve");
+        assert!(ctx.contains("DevPractices"));
+        assert!(
+            ctx.contains("vendor-neutral"),
+            "expected the real index.org title/body content, got: {ctx}"
+        );
+    }
+
     #[test]
     fn build_guidance_context_none_when_nothing_configured() {
         let tmp = tempfile::tempdir().unwrap();

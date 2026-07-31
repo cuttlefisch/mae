@@ -1,0 +1,54 @@
+:PROPERTIES:
+:ID: hub:start-here
+:ROLE: hub
+:KIND: category
+:ALIASES: how should I approach development in this project, what are the conventions here, coding standards, development practices, project conventions, does this knowledge base actually help, why atomic notes instead of one big document
+:END:
+#+title: Start Here — Development Practices
+#+filetags: :hub:devpractice:
+
+This knowledge base is a portable, vendor-neutral collection of software-development
+practices: how to write architecture decisions, how to structure commits and pull
+requests, how to test adversarially, how to annotate code for both human and AI
+readers, how to run periodic audits, how to run a build through a Makefile, and how
+this very note-taking system works. It is not tied to any specific codebase, language,
+or client — every note here is written as general guidance, adoptable in any project.
+
+Before reading further: any internal link in this knowledge base uses the explicit
+form ~[[id:NAMESPACE:node][display text]]~ — for example
+[[id:practice:node-linking][Node Linking]]. Links that omit the ~id:~ prefix are not
+guaranteed to resolve correctly in every system that can ingest notes like these. This
+rule matters most if you are extending this knowledge base yourself — see
+[[id:hub:molecular-notes-methodology][Molecular Notes Methodology]] before adding new
+notes.
+
+* Where to go next
+
+- [[id:hub:molecular-notes-methodology][Molecular Notes Methodology]] — read this
+  first if you intend to add or edit notes in this knowledge base. It explains what
+  atom, molecule, hub, and source notes are, how to link and tag them, and how to
+  audit a knowledge base for soundness before treating it as finished.
+- [[id:hub:adr-and-process][ADR & Process]] — architecture decision records, commit
+  and pull-request conventions, tech-debt tracking, and issue/roadmap structure.
+- [[id:hub:code-quality][Code Quality]] — the design-principles checklist and the
+  code-annotation conventions (including annotations meant specifically to guide an
+  AI agent working in the code).
+- [[id:hub:testing][Testing]] — adversarial testing, attacker-model tests for
+  security-relevant code, and the testing-pyramid balance.
+- [[id:hub:ai-collaboration][AI Collaboration]] — how a human and an AI agent pair
+  effectively, lessons for building reliable agent harnesses, and a structured
+  debugging loop.
+- [[id:hub:build-and-vcs-workflow][Build & VCS Workflow]] — Makefile-as-canonical-
+  interface conventions and GitLab-centered git workflow (merge requests, CI
+  pipelines, branching, the ~glab~ CLI).
+- [[id:practice:writing-style][Writing Style]] — the neutral, non-AI-sounding prose
+  style this knowledge base itself tries to model.
+- [[id:practice:kb-token-efficiency-evidence][Does This Actually Work?]] — a real
+  measurement of how much smaller a targeted note fetch is than reading everything.
+
+* Scope
+
+Every note here describes a generic practice, not a fact about any one project. If a
+note ever drifts into describing a specific codebase's file layout or a specific
+organization's internal details, that is a defect in the note, not a feature — see
+[[id:practice:kb-audit-checklist][KB Audit Checklist]].

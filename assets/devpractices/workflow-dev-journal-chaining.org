@@ -1,0 +1,21 @@
+:PROPERTIES:
+:ID: workflow:dev-journal-chaining
+:ROLE: atom
+:END:
+#+title: Dev Journal Chaining
+#+filetags: :process:journal:devpractice:
+
+A dev journal is a sequence of dated entries, each one capturing what was tried, decided, or discovered during a work session. Individually these are timestamped fragments. The practice that makes them useful over months is chaining: every entry links explicitly to the entry before it and, once it exists, to the entry after it, forming a doubly-linked temporal spine through the note graph rather than a flat pile of dated files.
+
+Mechanics of the chain:
+
+- Each new entry carries a "Previous" link to the prior entry. The prior entry's "Next" link is filled in at the same time, retroactively, when the new entry is created.
+- Never leave the "Next" link as a TODO to backfill later. Deferred backfilling of forward links reliably does not happen; the only reliable moment to add a forward link is the moment the entry it points to is written.
+- Entries are named or dated consistently (an ISO date in the title is enough) so chronological order is recoverable even without the links, but the links carry the actual navigable order and are not redundant with the filename — a reader follows the chain, not a directory listing.
+- The chain lets a reader start at any point and walk forward or backward through the reasoning trail without sorting a flat list or reconstructing sequence from file timestamps.
+
+Periodic index and summary notes sit on top of the raw chain. At a natural cadence — weekly, per milestone, per release — write a short summary note listing the entries it covers, stating the net decisions or direction changes that emerged, and linking to each entry it summarizes. This gives a reader two altitudes: the fine-grained chain for exactly what happened and why, in order, and the periodic summary for the overall arc of a period without reading every entry in it.
+
+Journal entries are a natural source of atoms once a conclusion stabilizes. When an entry captures a claim worth keeping independent of its date, distill it into its own atom note and link the journal entry to it, rather than letting a durable conclusion live only inside a dated, easily-buried fragment. The journal is where reasoning happens in real time; the atom layer is where a conclusion becomes reusable, retrievable knowledge.
+
+A dev journal does not replace an issue tracker or a decision record. It captures the messier, in-progress reasoning that precedes a clean decision. Once a decision is finalized, record it properly and cross-link back to the journal entries that led to it, so a reader tracing "why" can walk from the clean decision back into the working notes that produced it. The day-to-day agenda half of that same gap — turning an entry's own action items into tracked tasks instead of letting them go stale inside the entry — is covered separately by [[id:workflow:daily-capture-to-task-lifecycle][daily capture to task lifecycle]]. See [[id:practice:node-linking][node linking]] for the general linking convention this practice depends on, [[id:template:post-mortem][the post-mortem template]] for a related chained, dated artifact used after incidents, and [[id:workflow:human-ai-debugging-loop][the human/AI debugging loop]] for a workflow that regularly generates journal-worthy entries.

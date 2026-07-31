@@ -1,0 +1,24 @@
+:PROPERTIES:
+:ID: hub:testing
+:ROLE: hub
+:KIND: category
+:END:
+#+title: Testing
+#+filetags: :hub:devpractice:
+
+Testing philosophy oriented around trying to break the implementation rather than
+confirming it works on the path someone already expects.
+
+- [[id:practice:adversarial-testing][Adversarial Testing]]
+- [[id:practice:attacker-model-tests][Attacker-Model Tests]]
+- [[id:practice:adversarial-review-question][Adversarial Review Question]]
+- [[id:practice:testing-pyramid][Testing Pyramid]]
+- [[id:practice:test-through-real-mechanism][Test Through the Real Mechanism]]
+- [[id:practice:test-isolation-state-snapshot][Test Isolation via State Snapshot]]
+
+Related: [[id:principle:no-weakened-tests][No Weakened Tests]],
+[[id:principle:tests-as-spec][Tests as Spec]] in
+[[id:hub:code-quality][Code Quality]]; [[id:practice:multi-lens-audit-review][Multi-Lens
+Audit Review]] in [[id:hub:adr-and-process][ADR & Process]].
+
+Back to [[id:hub:start-here][Start Here]].

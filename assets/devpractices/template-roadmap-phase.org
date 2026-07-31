@@ -1,0 +1,34 @@
+:PROPERTIES:
+:ID: template:roadmap-phase
+:ROLE: atom
+:END:
+#+title: Roadmap Phase Template
+#+filetags: :roadmap:template:devpractice:
+
+Fill-in template for a single roadmap phase or milestone entry. The fixed shape — implementation steps followed by an explicit validation gate — is what keeps a roadmap checkable rather than aspirational prose. See [[id:practice:phased-roadmap-structure][phased roadmap structure]] for the phase-vs-milestone distinction this template assumes, and [[id:practice:validation-gate][validation gates]] for why the gate field is mandatory, not optional.
+
+- **Name** — short, specific phase or milestone name.
+- **Goal** — one or two sentences: what becomes true, or possible, once this lands.
+- **Implementation Steps** — the concrete steps or sub-items that make up the work, in enough detail that someone unfamiliar with the surrounding discussion could pick one up and start.
+- **Validation Gate** — the specific, checkable condition that marks this phase done. Not "when it's finished" — name the test, benchmark, review, or audit result that will be checked.
+- **Depends-on** (optional) — the phase(s)/item(s) whose validation gate must already pass before this one starts.
+- **Unblocks** (optional) — the phase(s)/item(s) waiting on this one's gate.
+- **Validated-by** (optional) — once the gate is actually checked, the concrete evidence: a merged PR, a CI run link, a benchmark result, a reviewer's sign-off. Filled in at closure time, not at planning time.
+
+Example instantiation:
+
+#+begin_example
+- Name: Phase 2 — Authenticated sync
+- Goal: External clients can authenticate and sync state without a shared
+  static secret.
+- Implementation Steps:
+  1. Add per-client keypair generation and registration flow.
+  2. Replace static-secret handshake with challenge-response auth.
+  3. Add a negative test: forged/replayed handshake is rejected.
+- Validation Gate: full auth test suite (including the adversarial replay
+  case) passes in CI; a manual pairing walkthrough with a fresh client
+  succeeds against a clean server instance.
+- Depends-on: Phase 1 (transport layer)
+- Unblocks: Phase 3 (multi-client sync)
+- Validated-by: PR #58 merged; CI run #1291 green.
+#+end_example

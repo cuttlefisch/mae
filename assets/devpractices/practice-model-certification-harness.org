@@ -1,0 +1,21 @@
+:PROPERTIES:
+:ID: practice:model-certification-harness
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Certify Models Against a Deterministic Tool-Calling Exam
+#+filetags: :ai-collaboration:reliability:devpractice:
+
+Before trusting a new AI model or provider to operate real tools against a real system, run it through a deterministic, repeatable exam that checks actual tool-calling reliability — not just an impression that "it seems to understand the task" formed from a handful of manual tries. Manual spot-checking is a poor substitute for a real evaluation: it's unrepeatable (a different set of prompts next time produces a different impression), it's biased toward whatever cases happened to be tried, and it leaves no record that can be compared against the next model that comes along.
+
+A workable shape has several components:
+
+- **A fixed set of test scenarios** spanning the categories of tool use the system actually needs — multi-step tool sequences where later steps depend on earlier results, recovering gracefully from a tool error instead of retrying blindly or giving up, respecting a stated constraint across the whole interaction, and correctly producing structured output in the exact shape downstream code expects.
+- **A deterministic pass/fail grading rule per scenario**, not a fuzzy "did this seem good" judgment call made by a human reading the transcript after the fact. If a scenario's success criterion can't be stated as a mechanical check, it isn't ready to be part of the exam yet — it needs to be narrowed until it can be.
+- **Persisted results**, so a model or provider's track record accumulates over time instead of being re-litigated from scratch every time the question comes up. A new model version, a new provider, or a configuration change should produce a comparable result against the same fixed scenarios, not a fresh round of anecdotal impressions.
+
+This is the AI-agent-tooling equivalent of a compatibility test suite for a new dependency version: it's a fixed cost to build once, and after that it converts a vague, hard-to-act-on feeling — "this new model seems worse at tools somehow" — into a specific, comparable, actionable result: which scenario failed, in what way, compared to which baseline.
+
+The exam earns its keep at two decision points in particular. First, before raising a model's or agent's permission ceiling — see [[id:practice:tiered-agent-permissions][tiered agent permissions]] — since a model that hasn't demonstrated reliable tool sequencing and error recovery at a lower tier is a poor candidate to trust with a higher one. Second, before defaulting a production-facing agent harness to a new model or provider, where an untested regression in tool-calling reliability would otherwise only surface once real users hit it. Failures the exam catches are exactly the kind of reliability gap that [[id:practice:agent-harness-lessons][agent harness lessons]] describes harnesses needing to design around — validated malformed-response handling, targeted retries, and sequencing enforcement all assume a baseline of tool-calling competence that the exam is what actually measures rather than assumes.
+
+Treat the exam itself as something that evolves: when a new failure mode shows up in production that the existing scenarios didn't catch, add a scenario for it, the same way a regression in code gets a regression test. An exam that stops growing stops catching the failure modes that are actually happening. This certification step belongs early in [[id:workflow:ai-pairing-loop][the AI pairing loop]] whenever the model or provider on the other end of that loop changes — reviewing diffs and verifying results only helps if the model producing them has already demonstrated it can reliably call the tools the loop depends on. [[id:hub:ai-collaboration][AI collaboration hub]] indexes the rest.

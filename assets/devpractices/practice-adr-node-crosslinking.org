@@ -1,0 +1,19 @@
+:PROPERTIES:
+:ID: practice:adr-node-crosslinking
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: ADR / Note Cross-Linking
+#+filetags: :molecular-notes:adr:devpractice:
+
+An architecture decision record does not stand alone in a molecular notes knowledge base — it links forward to the principle and practice notes it embodies or relies on, and those principle and practice notes link back to the ADR as a worked example of the general rule applied to a specific, concrete decision. The relationship is bidirectional by construction: the ADR names the principles that justified it, and the principle gains, over time, a growing set of incoming links from every ADR that actually applied it.
+
+Why both directions matter:
+
+- The forward link (ADR → principle) makes the ADR's reasoning auditable. A reader can check whether the decision genuinely follows from the principle it cites, rather than the principle being invoked as an unexamined label.
+- The backward link (principle → ADR) turns an abstract principle into a set of concrete precedents. A principle with three or four ADRs linked back to it stops being a slogan and becomes a pattern with a track record — a future decision-maker facing a similar tradeoff can read how it played out the last several times, not just what the principle says in the abstract.
+- Together the two directions form a decision-traceability graph: starting from any principle, walk forward to every decision that applied it; starting from any decision, walk backward to every principle it drew on.
+
+This graph is exactly the structure that makes it possible to trace a bug or a regression back through the reasoning that produced it, rather than just the commit that introduced it. When a bug's root cause turns out to be a place where implementation drifted from an already-decided direction, the ADR/principle cross-link graph is what lets you find *which* decision the drifted code was supposed to be honoring, and whether the drift is local to one file or a symptom repeated across every place that same ADR should have governed. See [[id:principle:bugs-are-drift-signals][bugs are drift signals]] for the practice this crosslinking exists to support: treating a bug as a signal that something fell behind an already-decided direction, not just a local defect to patch in isolation.
+
+In practice, add the forward links while writing the ADR itself — list the principles the decision draws on in the ADR's context or decision section, each as a proper link, not a bare mention of the principle's name. Add the backward link at the same time, editing the principle note to include the new ADR in its worked-examples list; do not defer this to a later cleanup pass. See [[id:practice:adr-format][the ADR format]] for where these links sit within an ADR's standard section skeleton, and [[id:template:adr][the ADR template]] for a fill-in-the-blank version with the cross-link fields already present.

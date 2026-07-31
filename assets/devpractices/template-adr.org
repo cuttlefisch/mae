@@ -1,0 +1,52 @@
+:PROPERTIES:
+:ID: template:adr
+:ROLE: atom
+:END:
+#+title: ADR Template
+#+filetags: :adr:template:devpractice:
+
+A copy-paste starting point following the skeleton described in [[id:practice:adr-format][ADR format]]. Replace bracketed placeholders; keep every section even when short — an empty "Alternatives rejected" that just says "none seriously considered" is more honest than omitting the section.
+
+#+begin_example
+# ADR-[NNN]: [Short, decision-stated title]
+
+Status: [Proposed | Accepted | Accepted (design); implemented in phase [X] |
+          Superseded by ADR-[NNN] | Rejected — free-text status prose is fine
+          and often clearer than a single enum word]
+Date: [YYYY-MM-DD]
+Extends: [ADR-NNN, or "none"]
+Feeds: [ADR-NNN / roadmap phase / issue #, or "none yet"]
+Supersedes: [ADR-NNN (state which parts, if partial), or "none"]
+Depends on: [ADR-NNN, or "none"]
+
+## Context
+
+[What problem forced this decision? What constraints (technical, organizational,
+timeline) shaped the options? What is true today that will no longer be true
+once this decision ships? Write for a reader with zero memory of the
+discussion that produced this document.]
+
+## Decision
+
+[One or two declarative sentences. "We will [do X] using [approach Y]."
+Not a list of options — the decision, stated plainly.]
+
+## Consequences
+
+- Positive: [what this unlocks or simplifies]
+- Negative: [what this costs, constrains, or makes harder]
+- Neutral / follow-up: [work this creates elsewhere, migrations required, etc.]
+
+## Alternatives rejected
+
+- [Option A] — rejected because [reason]
+- [Option B] — rejected because [reason]
+
+## Verification
+
+[How will we know, later, whether this decision held up? A test suite, a
+metric threshold, a scheduled re-review date, or a specific condition that
+would trigger revisiting this ADR.]
+#+end_example
+
+Fill every field before merging the record — an ADR with a blank Status or Verification field is a decision nobody can later audit. See [[id:practice:adr-format][ADR format]] for the rationale behind each section, and [[id:practice:adr-node-crosslinking][ADR node cross-linking]] for how to wire the finished record into a knowledge base alongside related decisions. [[id:hub:adr-and-process][ADR and process hub]] links the surrounding practices.

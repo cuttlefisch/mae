@@ -1,0 +1,31 @@
+:PROPERTIES:
+:ID: practice:git-branch-release-strategy
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Trunk-Based Development and Release Tagging
+#+filetags: :vcs:release:devpractice:
+
+Trunk-based development — short-lived feature branches that merge frequently back into a single protected trunk (commonly `main`) — is a sensible default branching strategy for most projects, including ones with AI agents contributing changes. It avoids the two failure modes long-lived branch strategies tend to produce: integration pain (branches that diverge for weeks and merge in one large, hard-to-review batch) and stale context (a branch whose assumptions about trunk are already out of date by the time it merges).
+
+**Short-lived feature branches.** A feature branch should exist for the lifetime of one focused change — ideally hours to a few days, not weeks. Branch, make the change, open the merge request, merge, delete the branch. If a branch is still open after the change it was meant for has grown substantially, that's usually a sign the change itself should have been split into smaller, independently-mergeable pieces rather than the branch being kept open longer.
+
+**Protected-branch policy.** Trunk should reject direct pushes from anyone, including maintainers, enforced by the platform (GitLab protected branches, GitHub branch protection) rather than by convention. The policy should require:
+- Merge only through a reviewed merge request (see [[id:practice:gitlab-mr-workflow][the MR workflow]]).
+- At least one approval before merge, on top of any automated checks.
+- A passing pipeline as a hard precondition (see [[id:practice:gitlab-ci-pipeline-conventions][CI pipeline conventions]]), not an advisory signal.
+
+This applies uniformly to human and AI-driven changes — an agent proposing a change goes through the same protected-branch gate a human contributor does; there is no "trusted automation" bypass of branch protection, because the gate exists precisely to catch mistakes regardless of who made them.
+
+**Tagging and release convention.** Cut releases from trunk at a clean point using semantic version tags (`v1.4.0`, following major.minor.patch with an established meaning for each position — breaking change, additive feature, fix). Tag trunk directly rather than maintaining a separate long-lived release branch, unless the project genuinely needs to patch an old release line in parallel with ongoing trunk development, in which case a short-lived release-maintenance branch cut *from* the tag is preferable to a permanent parallel branch that has to be kept in sync by hand.
+
+```
+git checkout main
+git pull
+git tag -a v1.4.0 -m "Release v1.4.0"
+git push origin v1.4.0
+```
+
+A tag should correspond to a commit that actually passed the full pipeline on trunk — never tag a commit that hasn't gone through the same gate every merge did.
+
+See [[id:practice:gitlab-ci-pipeline-conventions][GitLab CI pipeline conventions]] for the gate this strategy relies on, [[id:practice:glab-cli-usage][glab CLI usage]] for scripting tag and release creation, and [[id:practice:makefile-wraps-vcs-actions][wrapping VCS actions behind Makefile targets]] for making the release command itself a discoverable one-liner.

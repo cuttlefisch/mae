@@ -49,7 +49,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean clean-cache ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual practices-kb install-practices adr-kb install-adr verify-adr-kb-sync install-vscode
+.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean clean-cache ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual practices-kb install-practices adr-kb install-adr devpractices-kb install-devpractices verify-adr-kb-sync install-vscode
 
 # Default target: release build
 all: build
@@ -76,7 +76,7 @@ dev:
 	$(CARGO) build $(FEAT_FLAG)
 
 ## install: build release binary + manual KB + practices KB, install to PREFIX, register desktop entry
-install: build manual-kb practices-kb adr-kb
+install: build manual-kb practices-kb devpractices-kb adr-kb
 	@mkdir -p $(PREFIX)
 	@install -m 755 $(RELEASE_BIN) $(PREFIX)/$(BINARY)
 	@install -m 755 $(RELEASE_SHIM) $(PREFIX)/$(SHIM_BINARY)
@@ -91,6 +91,10 @@ install: build manual-kb practices-kb adr-kb
 	@cp -r assets/mae-practices.cozo $(DATADIR)/mae/mae-practices.cozo
 	@cp assets/mae-practices.cozo.sha256 $(DATADIR)/mae/mae-practices.cozo.sha256
 	@echo "Installed practices KB -> $(DATADIR)/mae/mae-practices.cozo"
+	@rm -rf $(DATADIR)/mae/mae-devpractices.cozo
+	@cp -r assets/mae-devpractices.cozo $(DATADIR)/mae/mae-devpractices.cozo
+	@cp assets/mae-devpractices.cozo.sha256 $(DATADIR)/mae/mae-devpractices.cozo.sha256
+	@echo "Installed DevPractices KB -> $(DATADIR)/mae/mae-devpractices.cozo"
 	@rm -rf $(DATADIR)/mae/mae-adr.cozo
 	@cp -r assets/mae-adr.cozo $(DATADIR)/mae/mae-adr.cozo
 	@cp assets/mae-adr.cozo.sha256 $(DATADIR)/mae/mae-adr.cozo.sha256
@@ -432,6 +436,19 @@ install-practices: practices-kb
 	@cp -r assets/mae-practices.cozo $(DATADIR)/mae/mae-practices.cozo
 	@cp assets/mae-practices.cozo.sha256 $(DATADIR)/mae/mae-practices.cozo.sha256
 	@echo "Installed practices KB -> $(DATADIR)/mae/mae-practices.cozo"
+
+## devpractices-kb: build the pre-built generic DevPractices KB (issue #514, ADR-076)
+devpractices-kb:
+	@mkdir -p assets
+	$(CARGO) run --release --bin build-devpractices-kb -- assets/mae-devpractices.cozo
+
+## install-devpractices: install pre-built DevPractices KB to XDG data dir
+install-devpractices: devpractices-kb
+	@mkdir -p $(DATADIR)/mae
+	@rm -rf $(DATADIR)/mae/mae-devpractices.cozo
+	@cp -r assets/mae-devpractices.cozo $(DATADIR)/mae/mae-devpractices.cozo
+	@cp assets/mae-devpractices.cozo.sha256 $(DATADIR)/mae/mae-devpractices.cozo.sha256
+	@echo "Installed DevPractices KB -> $(DATADIR)/mae/mae-devpractices.cozo"
 
 ## adr-kb: build the pre-built ADR-as-KB-node KB (ADR-059, molecularly-structured decision records)
 adr-kb:
