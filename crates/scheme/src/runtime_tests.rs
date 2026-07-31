@@ -9,6 +9,7 @@
 
 use super::*;
 use mae_core::{parse_key_seq, CommandSource, Editor};
+use mae_kb::KbStore as _;
 
 fn new_runtime() -> SchemeRuntime {
     SchemeRuntime::new().unwrap()
@@ -483,6 +484,129 @@ fn shared_state_kb_store_accessor_exposes_the_injected_store() {
     assert!(
         store.get_node("extra-kernel:a").unwrap().is_some(),
         "the accessor's store should be the SAME real store injected from the editor"
+    );
+}
+
+/// `SharedState::kb_instance_stores()` (#521): `kb_store()` alone only
+/// ever covers the primary KB instance -- an out-of-tree primitive that
+/// needs to search across KB boundaries (like the original, in-tree
+/// `kb-export-subgraph-html` did via `Editor.kb.instances`) needs every
+/// registered store, primary included. Confirms both the primary AND a
+/// federated instance's store are present, not just one or the other.
+#[test]
+fn shared_state_kb_instance_stores_accessor_covers_primary_and_federated() {
+    let mut rt = new_runtime();
+    let mut editor = editor_with_cozo_store();
+    editor
+        .kb_create_node("primary:a", "Primary Node", "", mae_kb::NodeKind::Note)
+        .unwrap();
+
+    let federated_store = mae_kb::CozoKbStore::open_mem().unwrap();
+    federated_store.seed_type_system().unwrap();
+    federated_store
+        .insert_node(&mae_kb::Node::new(
+            "federated:a",
+            "Federated Node",
+            mae_kb::NodeKind::Note,
+            "",
+        ))
+        .unwrap();
+    editor.kb.instance_stores.insert(
+        "fake-federated-uuid".to_string(),
+        std::sync::Arc::new(federated_store),
+    );
+
+    rt.inject_editor_state(&editor);
+    let shared = rt.shared_state();
+    let stores = shared.lock().kb_instance_stores();
+    assert_eq!(stores.len(), 2, "expected primary + one federated store");
+
+    let found_primary = stores
+        .iter()
+        .any(|s| s.get_node("primary:a").unwrap().is_some());
+    let found_federated = stores
+        .iter()
+        .any(|s| s.get_node("federated:a").unwrap().is_some());
+    assert!(
+        found_primary,
+        "expected the primary store's node to be reachable"
+    );
+    assert!(
+        found_federated,
+        "expected the federated store's node to be reachable"
+    );
+}
+
+/// `SharedState::option_value()` (#521): the other narrow accessor an
+/// out-of-tree primitive needs -- reads from the same generic
+/// `option_values` snapshot `(get-option)` itself reads
+/// (`state_sync_inject_kb.rs`), so it works for both a real built-in
+/// option and one an out-of-tree primitive registered itself via
+/// `(define-option! ...)`.
+#[test]
+fn shared_state_option_value_accessor_reads_a_real_injected_option() {
+    let mut rt = new_runtime();
+    let editor = mae_core::Editor::new();
+    rt.inject_editor_state(&editor);
+
+    let shared = rt.shared_state();
+    let value = shared
+        .lock()
+        .option_value("line_numbers")
+        .expect("line_numbers is a real, always-registered built-in option");
+    // Just confirm it's the same value `(get-option "line_numbers")` would
+    // report -- not asserting a specific default, which could legitimately
+    // change independent of this test.
+    let (expected, _) = editor.get_option("line_numbers").unwrap();
+    assert_eq!(value, expected);
+
+    assert!(
+        shared.lock().option_value("no-such-option-xyz").is_none(),
+        "expected None for an unregistered option name, not an empty string"
+    );
+}
+
+/// `SharedState::push_extra_result()`/`drain_extra_results()` (#521): the
+/// generic async-completion channel a `scheme-extra`-registered primitive's
+/// background thread uses to report a result back, polled by that same
+/// primitive's own "poll results" primitive. Pure round-trip test, no
+/// Editor/KB involved -- this channel is deliberately Editor-independent.
+#[test]
+fn shared_state_extra_results_channel_round_trips_and_drains_exactly_once() {
+    let shared = Arc::new(Mutex::new(SharedState::default()));
+
+    assert!(
+        shared.lock().drain_extra_results().is_empty(),
+        "expected nothing pending before anything was pushed"
+    );
+
+    shared.lock().push_extra_result(
+        "kb-export-subgraph-html",
+        Ok("Exported 3 nodes".to_string()),
+    );
+    shared.lock().push_extra_result(
+        "kb-export-subgraph-html",
+        Err("seed node not found".to_string()),
+    );
+
+    let drained = shared.lock().drain_extra_results();
+    assert_eq!(
+        drained,
+        vec![
+            (
+                "kb-export-subgraph-html".to_string(),
+                Ok("Exported 3 nodes".to_string())
+            ),
+            (
+                "kb-export-subgraph-html".to_string(),
+                Err("seed node not found".to_string())
+            ),
+        ]
+    );
+
+    assert!(
+        shared.lock().drain_extra_results().is_empty(),
+        "expected drain to actually empty the queue, not just read it"
     );
 }
 
