@@ -1,0 +1,25 @@
+:PROPERTIES:
+:ID: index
+:KIND: index
+:END:
+#+title: DevPractices — Development Conventions
+#+filetags: :practices:guidance:devpractices:
+
+A generic, vendor-neutral knowledge base of software-development practices —
+architecture decisions, commit/PR conventions, adversarial testing, code
+annotation, build workflow, and note-taking methodology — distilled for use
+on any software project, not just MAE (contrast with the MAE-specific
+practices bundled under =assets/practices/=). It is forked verbatim from the
+independent =dev-practices-kb= project as a one-time snapshot; the two
+diverge independently from here.
+
+Start at [[id:hub:start-here][Start Here — Development Practices]] — the
+corpus's own entry point, which explains its scope and linking conventions
+and indexes every other hub note.
+
+** Quick navigation
+- [[id:hub:adr-and-process][ADR & Process]] -- architecture decision records, commit/PR conventions, tech-debt tracking
+- [[id:hub:ai-collaboration][AI Collaboration]] -- human/AI pairing, agent-harness lessons, structured debugging loops
+- [[id:hub:build-and-vcs-workflow][Build & VCS Workflow]] -- Makefile-as-canonical-interface, GitLab/GitHub workflow conventions
+- [[id:hub:code-quality][Code Quality]] -- design-principles checklist and code-annotation conventions
+- [[id:hub:testing][Testing]] -- adversarial testing, attacker-model tests, testing-pyramid balance

@@ -1,0 +1,20 @@
+:PROPERTIES:
+:ID: practice:molecular-notes-overview
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Molecular Notes Overview
+#+filetags: :molecular-notes:devpractice:
+
+A molecular notes knowledge base is a graph of small, single-purpose notes rather than a handful of long documents. Every note plays exactly one of four roles, and the role is recorded as metadata on the note itself so both a human reader and a retrieval system know what kind of claim, if any, they are looking at.
+
+- **Source** — raw external material held largely as-is: an excerpt from a spec, a quote from a meeting, a citation, a pasted vendor document. A source note asserts nothing on its own; it exists so later notes have something concrete and traceable to point back to.
+- **Atom** — a single piece of established knowledge, restated in the author's own words, at minimum useful granularity: one idea per note. An atom may distill a claim out of a source note, or state a piece of knowledge the author already holds with no source node behind it at all.
+- **Molecule** — a personal synthesis connecting several atoms into a judgment call, a workflow, or an insight that does not exist in any single atom alone. A molecule does not duplicate the atoms' content; it links to them and supplies the connective reasoning between them.
+- **Hub** — a map of content for a topic area: a curated set of links to the atoms, molecules, and sub-hubs that make up that topic, with no independent claims of its own. A hub is pure navigation.
+
+The reason to build this structure instead of one large document is retrieval. An AI agent or a human searching a knowledge base is usually looking for one specific, bounded piece of information — not a whole chapter. A single small atom, correctly scoped, is exactly the unit a search-and-retrieve query wants back: precise, self-contained enough to be useful on its own, and small enough that surrounding unrelated content does not dilute the match. A monolithic document forces a retrieval system to either return far more than was asked for or to chunk the document arbitrarily, breaking claims across chunk boundaries and losing the note's own internal structure. Small notes with explicit roles avoid both failure modes: each is chunked by the author's own judgment about what constitutes one idea, not by a fixed character count.
+
+The four roles relate to each other as a pipeline, not a hierarchy. Raw material becomes a source note. A source is distilled into one or more atoms, each stating one claim in the author's own words. Once enough related atoms exist, a molecule synthesizes them into something more than their sum — a decision, a recommended workflow, a judgment call. Once a topic accumulates enough atoms and molecules to need a map, a hub is created or updated to index them. Not every atom has a source behind it, and not every atom feeds a molecule — many stand alone, linked into the graph but not yet synthesized further. The structure grows organically; it is not required to be complete in any one direction.
+
+See [[id:practice:atoms-vs-molecules-vs-hubs][atoms, molecules, and hubs]] for worked examples distinguishing the three claim-bearing roles, [[id:practice:source-preservation][source preservation]] for how provenance is tracked through the source-to-atom pipeline, [[id:practice:node-linking][node linking]] for the mandatory link convention that makes the graph navigable, and [[id:practice:tagging-conventions][tagging conventions]] for the orthogonal topical axis layered on top of the role and the link graph. [[id:hub:molecular-notes-methodology][The molecular notes methodology hub]] indexes the full set of authoring and maintenance practices for this note system.

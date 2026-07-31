@@ -1,0 +1,23 @@
+:PROPERTIES:
+:ID: practice:test-through-real-mechanism
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Test Through the Real Mechanism, Not a Synthetic Shortcut
+#+filetags: :testing:devpractice:
+
+A test should exercise the real mechanism it claims to verify, not a synthetic shortcut that bypasses it. This is a structural requirement about *how* a test reaches its assertion, independent of whether the test's inputs are realistic — a test can use perfectly realistic data and still be hollow if it never routes through the thing it claims to test.
+
+The concrete anti-pattern shows up wherever behavior depends on a runtime mechanism with its own moving parts: an event loop, a hook or dispatch system, an async scheduler, a message queue with ordering guarantees. If a test manually calls the internal function that the mechanism would normally invoke — skipping the mechanism itself — it is testing that internal function in isolation, not the mechanism. The test will pass even if the mechanism is broken: if the event loop never actually fires the callback, if the dispatch logic routes to the wrong handler, if the scheduler reorders operations it promised to serialize. None of those failures are visible to a test that jumped straight to the handler and called it directly, because the handler in isolation was never wrong — only the machinery that was supposed to reach it was.
+
+This is a distinct failure mode from cherry-picked test inputs (see [[id:practice:adversarial-testing][adversarial testing]]). Input selection and mechanism bypass are orthogonal axes of test quality: a test can have maximally realistic, varied, adversarially-chosen inputs and still be structurally hollow if the path from those inputs to the assertion skips the real mechanism. Both defects produce the same outcome — a green suite that provides false confidence — but they require different fixes. Fixing cherry-picked inputs means choosing better data. Fixing a mechanism bypass means restructuring the test to actually drive the mechanism.
+
+The fix, when behavior is tied to a specific runtime mechanism, is to drive that mechanism directly:
+
+- Spin up the real event loop rather than manually invoking the callback it would have called.
+- Fire the real hook or dispatch path rather than calling the downstream handler function directly.
+- Let the real scheduler run and observe the actual ordering, rather than asserting on a hand-constructed sequence that assumes the scheduler behaves as documented.
+
+This costs more test-setup complexity than the shortcut, and that cost is exactly why the shortcut is tempting — booting a real event loop or driving a real dispatch path is more work than calling one function directly. But the alternative is a test suite that reports a mechanism as verified when it has never actually been exercised, which is worse than no test at all: it occupies the slot where real coverage should be and actively discourages someone from noticing the gap.
+
+This concern sits at the integration layer of the [[id:practice:testing-pyramid][testing pyramid]] — a unit test that bypasses a mechanism to isolate a function is often legitimate at the unit level, but the same shortcut applied where the mechanism's behavior *is* the thing under test stops being a unit test and becomes a false integration test wearing a unit test's cost profile. [[id:hub:testing][testing hub]] indexes the rest of the testing practices.

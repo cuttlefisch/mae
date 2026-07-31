@@ -1,0 +1,17 @@
+:PROPERTIES:
+:ID: principle:no-deferred-bugs
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Don't Silently Defer a Discovered Bug
+#+filetags: :principle:process:devpractice:
+
+When a bug is discovered — whether it's the thing you were looking for or an unrelated defect noticed in passing while working on something else — it must either be fixed immediately or explicitly recorded somewhere durable, with enough detail that someone else (or you, months later) can find it and act on it. What is not acceptable is the third option that happens by default if you don't consciously choose one of the first two: noticing a bug, deciding it's out of scope for right now, and moving on without writing it down anywhere. A bug noticed and not recorded anywhere is, for all practical purposes, a bug that was never found.
+
+The failure mode is almost invisible in the moment because it feels like reasonable prioritization: you're deep in an unrelated task, you spot something that looks wrong nearby, you make a quick judgment call that it's not worth derailing the current work to fix, and you keep going. Nothing about that judgment call is wrong on its own — most of the time, deferring is the correct prioritization decision. What's wrong is when the deferral is silent: no ticket filed, no comment left, no note in a tracked location. The bug doesn't get fixed later, because "later" was never attached to anything that would resurface it — no queue, no reminder, no artifact. It sits, undiscovered by anyone else, until either a user hits it in production and it gets rediscovered the expensive way, or it never gets rediscovered at all and just quietly degrades the system's correctness indefinitely.
+
+The corrective is cheap relative to the cost of losing the finding: the moment you notice a bug you're not going to fix right now, spend the two minutes it takes to file it — a ticket, an issue, an entry in whatever tracking system the project uses — with enough context that the next reader doesn't have to reconstruct what you already know (how to reproduce it, why it matters, what you were doing when you found it, any hypothesis you already have about the cause). This is a small tax paid immediately in exchange for not losing the information entirely. A bug tracked but not yet fixed is a known, visible liability that can be prioritized deliberately; a bug found and forgotten is an unknown liability that nobody can prioritize because nobody knows it exists.
+
+This applies with extra force to anything found while reviewing or working near security-, auth-, or sync-sensitive code — a suspicious-looking edge case in that territory is exactly the kind of thing that's tempting to mentally note and move past, and exactly the kind of thing where silent deferral is most costly if it turns out to be real. Treat any bug discovered near sensitive subsystems as requiring, at minimum, an immediate ticket even if the fix itself has to wait — see [[id:principle:downstream-impact-checklist][the downstream-impact checklist]]'s adversarial-test clause for the standard sensitive-subsystem changes should be held to once the ticket is picked up.
+
+This principle pairs directly with [[id:principle:fix-root-cause][fix the root cause]] — deferring a bug is legitimate, papering over it with an undocumented workaround while telling yourself you'll "really" fix it later is not — and with [[id:practice:tech-debt-tracking][tech-debt tracking]], which is the concrete mechanism most projects use to make a deferred fix visible and durable instead of silently lost.

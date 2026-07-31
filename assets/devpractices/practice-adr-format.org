@@ -1,0 +1,40 @@
+:PROPERTIES:
+:ID: practice:adr-format
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Architecture Decision Record Format
+#+filetags: :adr:devpractice:
+
+An Architecture Decision Record (ADR) captures a significant technical decision at the moment it is made, so future readers understand not just *what* was decided but *why*, what else was considered, and how to tell if the decision is still working. A consistent section skeleton makes ADRs skimmable and diffable across a project's history:
+
+- **Context** — the forces at play: the problem, constraints, prior state, and why a decision is needed now. Written so someone with no memory of the discussion can follow it.
+- **Decision** — the choice made, stated as a direct, declarative sentence ("We will use X"), not a menu of options.
+- **Consequences** — the resulting tradeoffs, both positive and negative. Every real decision has costs; naming them is what separates an ADR from marketing copy.
+- **Alternatives rejected** — the options that were seriously considered and why each lost. This is often the most valuable section for future readers reconsidering the decision, since it pre-answers "why didn't we just do Y?"
+- **Verification** — how to confirm, later, whether the decision held up: a test, a metric, a re-review trigger, or a condition that would invalidate it.
+
+Header metadata fields at the top of the record support cross-referencing between decisions over time:
+
+- **Status** — not a bare enum. Real decisions have nuanced states, and the field should say so in prose: "Accepted (design); implemented in phase C", "Superseded by ADR-014", "Proposed, pending security review". A single word like "Accepted" collapses information a reader needs.
+- **Date** — when the decision was made (not when the document was last edited).
+- **Extends** — links to an earlier ADR this one builds on without replacing.
+- **Feeds** — links to later ADRs or roadmap phases that depend on this decision being in place.
+- **Supersedes** — links to an earlier ADR this one partially or fully replaces. Distinct from Extends: extending keeps the earlier decision intact and adds to it, superseding means the earlier decision (or part of it) no longer holds. Say explicitly which parts, if only some are replaced ("Supersedes ADR-012 (rotation policy only, storage format unchanged)") — a bare "Supersedes ADR-012" leaves a reader guessing how much of the old decision to still trust.
+- **Depends on** — links to another ADR this one assumes is already true, at the same tier rather than a prior layer being built upon. The distinction from Extends matters for readers tracing a decision graph: Extends says "this is a continuation of that," Depends on says "this only makes sense if that is also true" — a subtly different relationship worth keeping separate rather than collapsing into one generic "related" link.
+
+These four relation types are not interchangeable, and mixing them up loses exactly the information cross-referencing exists to preserve — an ADR that says "Extends ADR-012" when it actually replaces half of ADR-012's decision will mislead a future reader who trusts the old decision is still fully intact.
+
+Some projects add a linear "Reading Order" (Previous/Next, grouped under a Part) on top of this
+skeleton, layered over the relation-typed links above. That structure earns its place only when a
+real narrative sequence exists between notes — literary/journal-style notes, or a walkthrough
+genuinely meant to be read start to finish — not as a default extension applied to every ADR set.
+Most ADR sets are a dependency graph, not a story: Extends/Feeds/Supersedes/Depends on already
+say precisely how two decisions relate, and forcing an artificial Previous/Next pair onto ADRs
+that don't have a real linear relationship just restates (and can misstate) what those fields
+already express correctly. Add a reading order deliberately, per project, when the notes actually
+have one — don't copy it from another project's ADRs by default.
+
+For a project with enough decisions that a full-length ADR document per decision becomes unwieldy to browse, a two-tier pattern helps: keep the full prose ADR (all five sections above) as the authoritative long-form record, and separately maintain a condensed, skimmable summary — just the Decision and its consequences in a few sentences, plus a back-reference to the full document ("Full ADR: docs/adr/014-caching-strategy.md") and links to related decisions/concepts. The condensed form is for browsing and cross-linking at a glance; the full form is for actually understanding a decision before revisiting it. This is worth the maintenance overhead of two documents once a project has more than a handful of ADRs — for a small project, the full-length document alone is sufficient and a second condensed tier is premature.
+
+Keeping the skeleton identical across every ADR in a project is more valuable than any single section's content — it lets a reader pattern-match instantly, and it lets tooling (search, indexing, an AI agent scanning for precedent) extract structure without per-document special-casing. See [[id:template:adr][ADR template]] for a fill-in-the-blank version of this skeleton, and [[id:practice:issue-roadmap-crosslink][cross-linking issues and roadmap items]] for how ADRs connect to the work items that implement them. [[id:hub:adr-and-process][ADR and process hub]] indexes the full set of decision-record practices.

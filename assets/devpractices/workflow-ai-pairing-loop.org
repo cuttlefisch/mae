@@ -1,0 +1,17 @@
+:PROPERTIES:
+:ID: workflow:ai-pairing-loop
+:ROLE: atom
+:END:
+#+title: The AI Pairing Loop
+#+filetags: :ai-collaboration:workflow:devpractice:
+
+Effective human-AI pairing on code runs as a tight, repeated loop, not a one-shot request. Each iteration has four stages, and skipping any one of them is where the loop breaks down:
+
+1. **Describe intent.** State the goal in terms of the desired outcome and relevant constraints, not a pre-decided implementation. A specific, scoped description ("fix the race in the retry path so a slow response doesn't cancel a faster concurrent one") produces a much more useful first attempt than either a vague goal or an over-specified line-by-line instruction that leaves the AI no room to apply judgment.
+2. **AI edits.** The AI proposes or makes the change. Good practice keeps the diff scoped to the stated intent — unrelated drive-by changes bundled into the same edit make the next stage harder and should be called out or split off rather than silently accepted.
+3. **Review the diff.** The human reads the actual change before it lands, not just a natural-language summary of the change. A summary can describe what the author intended; only the diff shows what was actually written. This stage is where the human catches scope creep, wrong assumptions, and subtly incorrect logic that reads plausibly in prose but is wrong in code.
+4. **Verify via tests or REPL.** Run the test suite, or exercise the change interactively (a REPL, a running instance, a manual repro of the original symptom) before considering the iteration done. A diff that looks correct on read and a diff that behaves correctly at runtime are different claims; only the second is actually verified.
+
+The results of verification — passing tests, a REPL result, a still-reproducing bug, a new failure — feed directly into the next iteration's intent. This is what makes it a loop rather than a sequence of independent requests: each cycle narrows the gap between intent and implementation using concrete evidence from the last cycle, rather than re-explaining the goal from scratch.
+
+Throughout, the human stays in the loop as a reviewer, not a rubber stamp. Approving a diff without reading it, or accepting a "tests pass" claim without confirming what was actually tested, collapses the loop back into a one-shot request with extra steps — and reintroduces exactly the risk the review and verification stages exist to catch. See [[id:practice:agent-harness-lessons][agent harness lessons]] for failure modes specific to the AI side of this loop, and [[id:workflow:human-ai-debugging-loop][the human-AI debugging loop]] for the debugging-specific variant of this same cycle. [[id:hub:ai-collaboration][AI collaboration hub]] indexes the rest.

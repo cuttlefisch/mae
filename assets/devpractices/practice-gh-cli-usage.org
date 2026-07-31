@@ -1,0 +1,51 @@
+:PROPERTIES:
+:ID: practice:gh-cli-usage
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: gh CLI as the Scriptable GitHub Interface
+#+filetags: :github:cli:devpractice:
+
+`gh`, GitHub's official command-line client, is the scriptable equivalent of the GitHub web UI, filling the same role documented for [[id:practice:glab-cli-usage][glab on GitLab]]: same purpose, same reasons to prefer it, different platform underneath. Prefer it over manual web-UI steps for anything expressible as a command — it produces a reviewable, repeatable invocation instead of a sequence of clicks through forms that shift between platform redesigns.
+
+Common patterns:
+
+```bash
+# Create a PR from the current branch, draft by default
+gh pr create --draft --fill
+
+# View the current branch's open PR, including status checks
+gh pr view
+
+# Check required status checks for the current branch's PR
+gh pr checks
+
+# Merge a PR once approved and checks are green
+gh pr merge 123 --squash
+
+# Create an issue with a title, body, and label
+gh issue create --title "Fix stale cache on reconnect" --body "..." --label bug
+
+# List open issues filtered by label
+gh issue list --label "release:patch"
+
+# List recent Actions workflow runs and their status
+gh run list --workflow=ci.yml
+
+# View the log of a specific workflow run
+gh run view 123456789 --log
+
+# List labels defined on the repository
+gh label list
+
+# View repository metadata (default branch, visibility, etc.)
+gh repo view
+```
+
+**Why a CLI matters specifically for AI-agent workflows.** An agent operating in a terminal can call `gh` exactly the way it calls any other shell tool — same invocation model, same way of reading output, same way of checking an exit code — without needing a bespoke API-wrapper library, an authenticated HTTP client, or a human standing in to perform steps that only exist as web-UI clicks. This collapses an entire category of otherwise-necessary tooling: instead of writing and maintaining a GitHub API client just so an agent can open a PR or check CI status, the agent runs a command it already knows how to run. It also makes agent actions auditable the same way a human's shell history is — the exact `gh` invocation used is visible, not hidden behind an opaque API call.
+
+Output is text — greppable, parseable, and feedable directly into the next step of a script or an agent's reasoning — where a web UI's state exists only as rendered HTML nothing outside a browser can easily interrogate. `--json` flags on most `gh` subcommands (`gh pr view --json state,statusCheckRollup`) turn this into structured data when a script needs to branch on the result rather than just display it.
+
+As with `glab`, this doesn't make the web UI obsolete — reading a long threaded review discussion is often genuinely easier visually. The convention is about *actions*: creating, updating, merging, checking status. Any action performed routinely enough to document should have a known `gh` invocation.
+
+See [[id:practice:github-pr-workflow][GitHub PR workflow]] for what these commands should actually produce (draft convention, description shape, closing keywords), and [[id:practice:makefile-wraps-vcs-actions][Makefile-wrapped VCS actions]] for wrapping a frequently-used `gh` invocation behind a project-specific Makefile target — the same pattern already documented for `glab`, applied to `gh` instead.

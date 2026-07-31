@@ -284,6 +284,7 @@ Source: `shared/kb/src/lib.rs`
 | `federation` | mod |
 | `fuzzy` | mod |
 | `graph_query` | mod |
+| `kb_build` | mod |
 | `migrate` | mod |
 | `org` | mod |
 | `store` | mod |

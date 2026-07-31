@@ -1,0 +1,26 @@
+:PROPERTIES:
+:ID: practice:makefile-doctor-target
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Makefile Doctor Target
+#+filetags: :makefile:build:onboarding:devpractice:
+
+A self-diagnosing environment-check target, conventionally named `doctor`, validates that a local development environment is actually ready before anyone tries to build, test, or lint against it. It checks that required tools are present and at an acceptable version, that required system libraries are available, and that configuration files are in the expected shape — and reports each check individually with a clear pass, fail, or warn signal, kept entirely separate from the build/test/lint targets themselves.
+
+The case for a dedicated target rather than letting the first real build fail is about where the error surfaces. A missing compiler, an unset environment variable, or an out-of-range tool version usually does not fail cleanly at the top of a build — it fails three or four layers down, inside a linker error, a cryptic missing-symbol message, or a stack trace from a build script that assumed a dependency was already installed. A first-time contributor staring at that output has no way to know the real problem is "you don't have `clang++` installed." A `doctor` target front-loads exactly these checks, before any real work starts, so the failure a newcomer sees is `clang++ not found: install with 'sudo apt install g++'`, not a wall of linker output three layers removed from the actual cause. This is the difference between an onboarding experience that takes two minutes and one that takes an afternoon of guessing.
+
+```make
+## doctor: check the local environment is correctly set up for development
+doctor:
+	@echo "Checking development environment..."
+	@command -v cargo >/dev/null 2>&1 && echo "  [ok] cargo found" || echo "  [FAIL] cargo not found — install rustup"
+	@command -v clang++ >/dev/null 2>&1 && echo "  [ok] clang++ found" || echo "  [FAIL] clang++ not found — install with 'sudo apt install g++'"
+	@test -f config.toml && echo "  [ok] config.toml present" || echo "  [warn] config.toml missing — will use defaults"
+```
+
+The output shape matters as much as the checks themselves. A scannable, one-line-per-check list with an explicit pass/fail/warn marker lets a reader find the one broken line in a sea of passing ones at a glance. A `doctor` target that just runs the underlying tools and lets their native output stream by — a `cargo --version` here, a `pkg-config --exists` there, no summarizing wrapper — forces the reader to hunt through unrelated output formats for the one line that matters, which defeats the purpose of having a dedicated diagnostic target at all.
+
+`doctor` is a diagnostic, not a fix. It reports what's wrong; it does not install anything or mutate the environment. That is a distinct and complementary concern, usually a separate `setup` or `install` target that a `doctor` failure message can point a user toward (`clang++ not found — run 'make setup' or install manually`). Conflating the two — having `doctor` silently start installing packages when it finds a gap — removes the "just tell me what's wrong" use case, which is also the one an agent wants when deciding whether an environment is fit to proceed without taking any destructive or side-effecting action itself.
+
+See [[id:practice:makefile-canonical-interface][Makefile as the canonical interface]] for why a `doctor` target belongs in the same discoverable place as build/test/lint rather than as a separate onboarding script, [[id:practice:makefile-self-documentation][Makefile self-documentation]] for making sure `doctor` itself shows up in the generated help catalog rather than being a target only insiders know to run, and [[id:practice:when-to-create-a-new-node][when to create a new node]] for the same judgment call applied one level up — a diagnostic concern distinct enough from build/test/lint, and referenced from enough places (onboarding docs, CI setup, agent instructions), to earn its own target instead of being folded into an existing one.

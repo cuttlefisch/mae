@@ -1,0 +1,19 @@
+:PROPERTIES:
+:ID: principle:downstream-impact-checklist
+:ROLE: molecule
+:KIND: concept
+:END:
+#+title: Pre-Change Downstream Impact Checklist
+#+filetags: :principle:process:devpractice:
+
+Before implementing any non-trivial change, explicitly run through a short, fixed set of questions about what the change could break, rather than relying on intuition or the scope of the ticket to surface every consequence. The checklist is deliberately generic across change types because the categories of downstream risk are the same whether the change is a bug fix, a refactor, or a new feature:
+
+- **Bug risk** — what existing, currently-working behavior could this change alter or break? Which edge cases does the changed code path touch that the change author may not have exercised while testing the happy path?
+- **Performance impact** — does this add work to a hot path? Is the added work O(1), O(n), or worse, and does the input size at that point in the system make the difference material? A change that is fine at today's data volume can become a production incident at next year's.
+- **Type safety and boundary conversions** — anywhere the change crosses a type boundary (widening/narrowing numeric conversions, serialization boundaries, nullable-to-non-nullable transitions), verify explicitly that the conversion is lossless or that the loss is intentional and handled, not assumed away.
+- **Regression coverage across all affected surfaces** — if the change touches logic exposed through multiple surfaces (a UI and an API, multiple platform backends, multiple client types), verify all of them, not just the one the author happens to be looking at. A fix validated on one surface and silently assumed to hold on a sibling surface is a common source of "it worked when I tested it" bugs.
+- **Adversarial test for security-, auth-, sync-, or crypto-adjacent changes** — any change to these subsystems must add or extend a test that exercises the *failure mode*, not just the success path. See [[id:practice:adversarial-testing][adversarial testing]] and [[id:practice:attacker-model-tests][attacker-model tests]] for what "exercising the failure mode" concretely means: a forged signature, a stale credential, a removed permission, a hostile intermediary, out-of-order or concurrent operations that must still converge to a safe state.
+
+Running this checklist is cheap relative to the alternative. The failure mode when it's skipped is familiar to anyone who has shipped a plausible-looking, well-intentioned change that broke something the change's own tests never touched: a refactor that looked purely mechanical silently changed a numeric truncation at a serialization boundary; a feature added to one client surface was never verified against a sibling surface that shared the underlying logic, and it quietly regressed there; a fix to an auth flow was tested only against a legitimate credential and never against a forged or expired one, so the vulnerability it was supposed to close remained open along a path nobody thought to test.
+
+This checklist is a molecule — it does not introduce new judgment on its own so much as it composes checks that are each individually reasoned about elsewhere: performance and type-safety judgment call on general engineering discipline; the security clause routes directly to [[id:principle:no-weakened-tests][no weakened tests]] and to the adversarial-testing notes above; the multi-surface clause is the same reasoning as [[id:principle:single-source-shared-computation][single source for shared computation]] and [[id:principle:cross-platform-parity][cross-platform parity]] applied at verification time rather than implementation time. Treat the checklist as a gate a change passes through immediately before implementation begins and again immediately before it's considered done, not a retrospective exercise performed only if something later goes wrong.

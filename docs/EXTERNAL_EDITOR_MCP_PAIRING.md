@@ -287,7 +287,7 @@ these up expecting them to affect Copilot in any way.
 
 **What still matters, server-side:**
 
-- **`ai_guidance_kb`** — if set (MAE ships a default of `"MaePractices"`; check via
+- **`ai_guidance_kb`** — if set (MAE ships a default of `"DevPractices"`; check via
   `:describe-option ai-guidance-kb`), it's surfaced to *every* connected client's MCP
   `initialize` response `instructions` field — for free, no extra config. **Precisely
   what that field contains** (verified directly against `crates/mae/src/main.rs`, not

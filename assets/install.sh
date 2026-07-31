@@ -10,7 +10,7 @@
 
 set -euo pipefail
 
-VERSION="0.14.84"  # updated by version-bump workflow
+VERSION="0.14.85"  # updated by version-bump workflow
 
 BINARIES="mae mae-mcp-shim mae-daemon"
 SERVICES="mae-daemon"
@@ -49,7 +49,7 @@ for arg in "$@"; do
             echo ""
             echo "Install locations:"
             echo "  PREFIX/bin/                      binaries"
-            echo "  XDG_DATA_HOME/mae/               manual KB, modules"
+            echo "  XDG_DATA_HOME/mae/               manual/DevPractices/MaePractices/ADR KBs, modules"
             echo "  XDG_CONFIG_HOME/mae/              config files (preserved on upgrade/uninstall)"
             echo "  ~/.config/systemd/user/           systemd units (Linux)"
             echo "  ~/Library/LaunchAgents/           launchd agents (macOS)"
@@ -242,6 +242,27 @@ if [ "$ACTION" = "uninstall" ]; then
     else
         skip "manual KB not found"
     fi
+    if [ -d "$DATADIR/mae/mae-devpractices.cozo" ]; then
+        rm -rf "$DATADIR/mae/mae-devpractices.cozo"
+        rm -f "$DATADIR/mae/mae-devpractices.cozo.sha256"
+        ok "removed DevPractices KB"
+    else
+        skip "DevPractices KB not found"
+    fi
+    if [ -d "$DATADIR/mae/mae-practices.cozo" ]; then
+        rm -rf "$DATADIR/mae/mae-practices.cozo"
+        rm -f "$DATADIR/mae/mae-practices.cozo.sha256"
+        ok "removed MaePractices KB"
+    else
+        skip "MaePractices KB not found"
+    fi
+    if [ -d "$DATADIR/mae/mae-adr.cozo" ]; then
+        rm -rf "$DATADIR/mae/mae-adr.cozo"
+        rm -f "$DATADIR/mae/mae-adr.cozo.sha256"
+        ok "removed ADR KB"
+    else
+        skip "ADR KB not found"
+    fi
     if [ -d "$DATADIR/mae/modules" ]; then
         rm -rf "$DATADIR/mae/modules"
         ok "removed modules"
@@ -424,6 +445,81 @@ if [ -d "$SCRIPT_DIR/mae-manual.cozo" ]; then
     fi
 else
     fail "mae-manual.cozo not found in package"
+fi
+
+# ========================================================================
+# 3a. DevPractices KB (generic developer-practices guidance, issue #514,
+#     ADR-076 — the shipped `ai_guidance_kb` default for fresh installs)
+# ========================================================================
+step "Installing DevPractices KB"
+
+if [ -d "$SCRIPT_DIR/mae-devpractices.cozo" ]; then
+    rm -rf "$DATADIR/mae/mae-devpractices.cozo"
+    cp -r "$SCRIPT_DIR/mae-devpractices.cozo" "$DATADIR/mae/mae-devpractices.cozo"
+    verify "$DATADIR/mae/mae-devpractices.cozo" "DevPractices KB -> $DATADIR/mae/"
+
+    if [ -f "$SCRIPT_DIR/mae-devpractices.cozo.sha256" ]; then
+        cp "$SCRIPT_DIR/mae-devpractices.cozo.sha256" "$DATADIR/mae/mae-devpractices.cozo.sha256"
+        ok "SHA-256 checksum stored (validated at runtime)"
+    fi
+
+    if [ "$OS" = "Darwin" ] && command -v xattr >/dev/null 2>&1; then
+        xattr -cr "$DATADIR/mae/mae-devpractices.cozo" 2>/dev/null || true
+        ok "cleared quarantine on DevPractices KB"
+    fi
+else
+    # Unlike the manual KB, this is auto-registered at startup with a
+    # documented silent-no-op-if-missing runtime behavior (guidance_kb_engine.rs)
+    # — a missing package asset is a build/packaging issue worth flagging, but
+    # not fatal to a working install (ai_guidance_kb simply resolves to nothing).
+    warn "mae-devpractices.cozo not found in package — ai_guidance_kb default won't resolve"
+fi
+
+# ========================================================================
+# 3b. MaePractices KB (MAE-contributor guidance, issue #370, ADR-076)
+# ========================================================================
+step "Installing MaePractices KB"
+
+if [ -d "$SCRIPT_DIR/mae-practices.cozo" ]; then
+    rm -rf "$DATADIR/mae/mae-practices.cozo"
+    cp -r "$SCRIPT_DIR/mae-practices.cozo" "$DATADIR/mae/mae-practices.cozo"
+    verify "$DATADIR/mae/mae-practices.cozo" "MaePractices KB -> $DATADIR/mae/"
+
+    if [ -f "$SCRIPT_DIR/mae-practices.cozo.sha256" ]; then
+        cp "$SCRIPT_DIR/mae-practices.cozo.sha256" "$DATADIR/mae/mae-practices.cozo.sha256"
+        ok "SHA-256 checksum stored (validated at runtime)"
+    fi
+
+    if [ "$OS" = "Darwin" ] && command -v xattr >/dev/null 2>&1; then
+        xattr -cr "$DATADIR/mae/mae-practices.cozo" 2>/dev/null || true
+        ok "cleared quarantine on MaePractices KB"
+    fi
+else
+    warn "mae-practices.cozo not found in package — MaePractices guidance won't be available"
+fi
+
+# ========================================================================
+# 3c. ADR KB (MAE's own architecture decisions, ADR-059 — deliberately
+#     opt-in, not auto-registered; bundled so it's available to kb_register)
+# ========================================================================
+step "Installing ADR KB"
+
+if [ -d "$SCRIPT_DIR/mae-adr.cozo" ]; then
+    rm -rf "$DATADIR/mae/mae-adr.cozo"
+    cp -r "$SCRIPT_DIR/mae-adr.cozo" "$DATADIR/mae/mae-adr.cozo"
+    verify "$DATADIR/mae/mae-adr.cozo" "ADR KB -> $DATADIR/mae/"
+
+    if [ -f "$SCRIPT_DIR/mae-adr.cozo.sha256" ]; then
+        cp "$SCRIPT_DIR/mae-adr.cozo.sha256" "$DATADIR/mae/mae-adr.cozo.sha256"
+        ok "SHA-256 checksum stored (validated at runtime)"
+    fi
+
+    if [ "$OS" = "Darwin" ] && command -v xattr >/dev/null 2>&1; then
+        xattr -cr "$DATADIR/mae/mae-adr.cozo" 2>/dev/null || true
+        ok "cleared quarantine on ADR KB"
+    fi
+else
+    warn "mae-adr.cozo not found in package — kb_register it manually if you rebuild it later"
 fi
 
 # ========================================================================
@@ -642,6 +738,26 @@ if [ -d "$DATADIR/mae/mae-manual.cozo" ]; then
     ok "manual KB present"
 else
     fail "manual KB missing"
+fi
+
+# The 3 bundled guidance/reference KBs are warn-not-fail here, consistent
+# with their install-step treatment above and their documented
+# silent-no-op-if-missing runtime behavior (guidance_kb_engine.rs) — unlike
+# the manual KB, a missing one degrades a feature, it doesn't break :help.
+if [ -d "$DATADIR/mae/mae-devpractices.cozo" ]; then
+    ok "DevPractices KB present"
+else
+    warn "DevPractices KB missing"
+fi
+if [ -d "$DATADIR/mae/mae-practices.cozo" ]; then
+    ok "MaePractices KB present"
+else
+    warn "MaePractices KB missing"
+fi
+if [ -d "$DATADIR/mae/mae-adr.cozo" ]; then
+    ok "ADR KB present"
+else
+    warn "ADR KB missing"
 fi
 
 MODULE_COUNT=$(find "$DATADIR/mae/modules" -name "module.toml" 2>/dev/null | wc -l | tr -d ' ')

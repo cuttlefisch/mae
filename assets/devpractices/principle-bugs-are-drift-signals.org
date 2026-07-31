@@ -1,0 +1,17 @@
+:PROPERTIES:
+:ID: principle:bugs-are-drift-signals
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Bugs Are Drift Signals, Not Just Defects
+#+filetags: :principle:process:devpractice:
+
+Before fixing a bug, trace its root cause back to the governing decision that should have prevented it — a design document, an architecture decision record, a previously-agreed convention, or a tracked epic describing how the feature area is supposed to work. A bug is not only a local defect to be patched; it is frequently evidence that an implementation has drifted away from a decision that was already made, and treating it as purely local means the same drift keeps generating similar bugs in the same feature area indefinitely.
+
+The distinction matters practically. Some bugs are genuinely local — a typo, an off-by-one, a straightforward logic error with no larger story behind it — and a local fix is the right and complete response. But a meaningful fraction of bugs, especially in mature codebases, trace back to a place where the implementation fell behind an already-decided design: a decision record specified a behavior that was only partially implemented, a migration was started and never finished, or a convention was agreed on and then quietly not followed in one corner of the codebase because whoever wrote that corner didn't know about — or didn't apply — the decision. Patching only the symptom in these cases leaves the drift itself untouched, so the same category of bug resurfaces later in a different function that has the same unimplemented-decision problem, and each recurrence gets re-diagnosed from scratch by whoever hits it next, at full cost, because nothing recorded that this was a known, recurring class of issue.
+
+The corrective workflow: when you find a bug, before writing the fix, spend a few minutes checking whether a governing design document or decision record exists for the feature area, and whether the bug is explained by a gap between what that document says should happen and what the code actually does. If it is, fix the drift for the whole feature area — every place the same gap exists, not just the specific call site that produced the bug report — or, if the full fix is out of scope for the moment, explicitly scope a bounded down-payment and cross-link it to the owning decision record or tracked issue so the remainder of the drift stays visibly tracked rather than disappearing back into "nobody's queue." The worst outcome is fixing the one instance quietly and leaving the underlying gap completely undocumented, because that guarantees the next person who hits it starts from zero.
+
+If no governing decision applies — the bug isn't drift from a documented decision, it's just a bug — check whether it reveals duplicated logic or an ad hoc workaround elsewhere in the codebase. If so, resolve it by consolidating into a single shared implementation (see [[id:principle:single-source-shared-computation][single source for shared computation]]) rather than adding a third parallel implementation alongside the two that already disagree with each other.
+
+This principle depends on decision records actually existing and being findable — see [[id:practice:adr-format][ADR format]] for how to write them so future bug investigations can find them — and it plays out concretely in [[id:workflow:human-ai-debugging-loop][the human-AI debugging loop]], where an AI agent investigating a bug should be pointed at governing documents as a first step, not just at the failing code.

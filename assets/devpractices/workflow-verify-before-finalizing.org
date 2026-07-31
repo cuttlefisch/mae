@@ -1,0 +1,18 @@
+:PROPERTIES:
+:ID: workflow:verify-before-finalizing
+:ROLE: atom
+:END:
+#+title: Verify Before Finalizing
+#+filetags: :process:verification:devpractice:
+
+Before treating a plan, report, or claim as final, run it through three tiers of verification, in order of increasing cost. Each tier catches a different, common failure mode; skipping a tier does not save time, it just moves the failure downstream to someone who trusts the finalized output.
+
+**Tier 1: re-check internal claims against current source, not memory of earlier research.** When compiling something that draws on research done earlier in the same task, re-read the actual current source — the file, the API response, the config, the ticket — at the point of finalizing, rather than trusting a paraphrase written minutes or hours earlier. Source material changes, memory drifts, and a claim that was true when first observed can go stale by the time it is asserted with confidence in a final document. This tier is cheap and catches the single most common failure: restating something from memory that has since diverged from the thing it describes.
+
+**Tier 2: check claims against official documentation or a recognized best-practice framework.** A claim that sounds right because it matches common convention has not thereby been verified. Before asserting a fact about an external tool, API, protocol, or library, check it against the authoritative source — official docs, a spec, a changelog — rather than resting on general familiarity. General familiarity is exactly what produces confidently wrong claims about version-specific behavior, deprecated features, or a detail that differs from the more common but not-quite-this case.
+
+**Tier 3: for load-bearing or surprising claims, exercise the claim rather than stopping at documentation review.** If a claim is surprising (it contradicts expectation) or load-bearing (a downstream decision depends on it holding), the first two tiers are necessary but not sufficient. Actually run the code, hit the real API, spin up a disposable test instance, or otherwise produce direct empirical evidence that the claim holds in practice. Documentation describes intended behavior; only execution reveals actual behavior, and the two diverge more often than confidence in the docs suggests.
+
+Apply the tiers in order and stop at the tier the claim's stakes justify. Cheap re-verification against source catches drift from memory. Documentation checking catches wrong assumptions about external behavior. Empirical exercise is reserved for claims where being wrong is expensive enough to justify the extra cost. Skipping straight to tier 3 for every trivial claim wastes effort; skipping tier 3 entirely for a claim that is both surprising and load-bearing is how confidently wrong plans ship.
+
+This discipline applies as much to an automated agent finalizing a plan as to a person: reasserting a fact from earlier context without re-checking source is tier-1 drift at machine speed, and is exactly the failure this practice guards against. See [[id:practice:validation-gate][the validation gate]] for where this check sits in a broader review pipeline, [[id:principle:validate-against-prior-art][validating against prior art]] for tier 2 applied to design decisions specifically, and [[id:practice:adversarial-testing][adversarial testing]] for the tier-3 discipline applied to test suites rather than plans.

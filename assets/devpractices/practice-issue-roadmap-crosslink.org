@@ -1,0 +1,19 @@
+:PROPERTIES:
+:ID: practice:issue-roadmap-crosslink
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Issue and Roadmap Cross-Linking
+#+filetags: :issue-tracking:devpractice:
+
+A roadmap that lists phases of work and an issue tracker that lists individual tickets tend to drift apart unless each explicitly points at the other. Reading the roadmap should tell you which issue implements a given phase; reading an issue should tell you which phase and which ADR motivated it. Without both directions, a reader has to reconstruct the mapping by memory or by grepping commit messages, which does not scale past a handful of contributors or survive an AI agent picking up unfamiliar work cold.
+
+Number epics and phases explicitly (Phase 1, Phase 2... or an epic ID scheme) and require, at minimum:
+
+- **Roadmap → issue.** Each phase or milestone in the roadmap that has a corresponding tracked issue links to it by number/ID, not just a description of the work.
+- **Issue → roadmap.** Each issue that implements roadmap work links back to the phase/milestone it belongs to, so someone reading the issue in isolation has the context.
+- **ADR → issue/roadmap.** Where a decision record motivated the work (see [[id:practice:adr-format][ADR format]]), the ADR's "Feeds" field and the issue/roadmap both reference each other.
+
+Not all tracked work needs a full issue. Make the distinction explicit rather than implicit: **roadmap-only** work is small enough, or low-risk enough, that a bullet in the roadmap with a validation gate is sufficient tracking; **issue-tracked** work is large enough, cross-cutting enough, or externally visible enough (a client-facing feature, a security fix, multi-session work) to warrant its own ticket with its own discussion thread and status. Mark which category each item falls into so a reader isn't left guessing why some roadmap bullets have issue numbers and others don't.
+
+Bidirectional linking also makes an epic's true status visible at a glance: an epic with five sub-issues, three closed and two open, tells a very different story than a roadmap phase marked "in progress" with no visible children. See [[id:practice:validation-gate][validation gates]] for how each linked item declares its own independent completion check, and [[id:practice:phased-roadmap-structure][phased roadmap structure]] for how phases and issues fit into the larger roadmap shape.

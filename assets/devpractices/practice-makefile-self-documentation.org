@@ -1,0 +1,36 @@
+:PROPERTIES:
+:ID: practice:makefile-self-documentation
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Self-Documenting Makefile Targets
+#+filetags: :makefile:build:devpractice:
+
+A `Makefile` with dozens of targets is only useful if a new contributor — human or AI agent — can discover what exists without reading every recipe line by line. The fix is a doc-comment convention paired with a generated `help` target, so the catalog of available commands is always derived from the source of truth (the targets themselves) rather than a hand-maintained list that drifts out of sync.
+
+Reserve a double-hash comment (`##`) directly above a target for its public, one-line description. Reserve a single-hash comment (`#`) for internal implementation notes not meant for the catalog — a reminder about a flag, a TODO, a note to a future maintainer. The distinction is significant: tooling greps specifically for `^##`, so anything marked with a single `#` is invisible to the generated help output by design, not by accident.
+
+```make
+## build: compile the project in release mode
+build:
+	cargo build --release
+
+# NOTE: --locked keeps CI reproducible; do not drop without updating Cargo.lock policy
+## test: run the full test suite (locked deps)
+test:
+	cargo test --workspace --locked
+
+## clean: remove build artifacts
+clean:
+	cargo clean
+
+## help: show this list of available targets
+help:
+	@grep -E '^##' Makefile | sed 's/^## /  /' | sort
+```
+
+Running `make help` (or plain `make` with `help` as the default target) then always reflects exactly the targets a contributor is meant to use, with zero duplication of effort — writing the doc comment *is* writing the recipe. When a target is renamed or removed, the catalog updates automatically because there is nothing separate left to update.
+
+This should not be the *only* discovery path. Put a short usage summary — the two or three most common commands (`make build`, `make test`, `make ci`) — as a plain comment block at the very top of the `Makefile`, above any targets. A reader (or an agent skimming the first 15 lines of a file it just opened) gets the essential commands instantly, without needing to know the `make help` convention exists yet. Redundant discovery paths cost a few lines and eliminate an entire class of "how do I even run this" friction.
+
+See [[id:practice:makefile-canonical-interface][Makefile as the canonical interface]] for why the target names matter as the stable contract this documentation describes, and [[id:template:makefile-target][the Makefile target template]] for a fill-in skeleton that bakes this convention in by construction.

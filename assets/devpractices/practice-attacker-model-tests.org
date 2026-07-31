@@ -1,0 +1,19 @@
+:PROPERTIES:
+:ID: practice:attacker-model-tests
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Attacker-Model Tests for Security-Relevant Code
+#+filetags: :testing:security:devpractice:
+
+For code that touches authentication, authorization, cryptography, or multi-party synchronization, the primary test is not "does the correct case work" — it is "does the incorrect case fail." A negative test that must fail is worth more than ten tests that pass, because a passing positive test only shows the feature works under ideal conditions, while a failing negative test proves the boundary actually holds under attack.
+
+Write the test as the attacker, not as the legitimate user. Concretely, for each security-relevant surface, encode the failure mode directly into a test:
+
+- **Wrong key opens nothing.** Decrypting or authenticating with an incorrect, expired, or unrelated key must fail cleanly — not partially succeed, not leak a distinguishing error, not silently fall back to an insecure path.
+- **A tampered signature is rejected.** Flip a bit in a signed payload or its signature and confirm verification fails; confirm the tampered payload is never processed as if it were valid.
+- **Stale or out-of-order state is fenced.** An operation carrying an old epoch, sequence number, or version must be rejected or quarantined, not silently applied and allowed to overwrite newer state.
+- **A removed participant loses access.** After a member or peer is removed or a key is rotated, confirm they cannot read or write data protected by the new state — not just that they *would* need new credentials, but that old credentials concretely fail.
+- **A hostile or compromised intermediary learns nothing it shouldn't.** If a relay, proxy, or hub sits between parties, confirm it only ever observes ciphertext or metadata it is entitled to, never plaintext content.
+
+Each of these is a first-class test, not an afterthought appended to a happy-path suite. Write the attacker's test before or alongside the legitimate-use test, and treat "we don't have a test that tries to break this" as a gap equivalent in severity to a missing feature. See [[id:practice:adversarial-testing][adversarial testing]] for the general discipline this specializes, and [[id:practice:adversarial-review-question][the adversarial review question]] for how to keep surfacing new attacker-model gaps after the initial test suite ships. [[id:hub:testing][testing hub]] indexes the rest of the testing practices.

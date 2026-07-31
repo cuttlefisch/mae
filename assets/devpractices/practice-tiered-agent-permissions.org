@@ -1,0 +1,24 @@
+:PROPERTIES:
+:ID: practice:tiered-agent-permissions
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Tiered Permissions for AI Agents With Tool Access
+#+filetags: :ai-collaboration:security:devpractice:
+
+An AI agent with tool access to a real system — files, shell, network, a running application — needs a graduated permission model, not a single all-or-nothing switch. A binary allow/deny gate forces a false choice: either the agent can do nothing beyond read text back to the user, or it can do anything the underlying tools expose, including destructive operations, on the same footing as read-only inspection. Almost no real workflow actually needs that second option most of the time.
+
+A workable shape defines distinct tiers — for example read-only, write, shell/execute, and privileged/destructive — and tags every tool with the minimum tier it requires. A tool that only reads a file or queries state sits at the lowest tier; a tool that runs arbitrary shell commands or deletes data sits at a much higher one. The tiers form a strict ordering, so granting a tier grants everything below it.
+
+Enforcement has to happen centrally, at the point tools are dispatched, not inside each individual tool's own implementation. Per-tool enforcement is easy to get wrong for reasons that have nothing to do with malice: a new tool gets added under deadline pressure, the author forgets to wire in the permission check that every other tool has, and the gap sits unnoticed until it's exploited or until an incident review finds it. A single dispatch chokepoint that every tool call passes through before execution eliminates that class of gap by construction — there is no tool-specific code path where the check can be silently missing.
+
+Two properties make the enforcement meaningful rather than decorative:
+
+- **The check runs before the tool executes**, not after, and not as a post-hoc audit log entry. A permission system that records what an agent did but doesn't prevent what it shouldn't have done is an audit trail, not a permission system.
+- **There is no per-tool bypass path.** A permission model with even one tool that can skip the central gate — a debug tool, a legacy tool grandfathered in before the gate existed, an internal-only tool assumed to be safe — is not actually a permission model. It's a permission suggestion that happens to be honored by every tool except the one that matters at the wrong moment.
+
+Tiering also has a direct productivity argument, not just a safety one: a read-only agent can be maximally useful for analysis, investigation, and planning with zero risk of unintended mutation, so a large fraction of exploratory work never needs to grant write or shell access at all. Defaulting new sessions, unfamiliar tasks, or unfamiliar models to the lowest tier that gets the job done is not a compromise on capability — it removes an entire class of risk from work that never needed elevated access in the first place, while still leaving explicit escalation available when a task genuinely requires it.
+
+Finally, the ceiling an agent is operating under should be explicit and visible, not inferred. An agent operating at shell tier should know that it is at shell tier, and a human overseeing it should be able to see the current ceiling and change it without archaeology — reading source, or guessing from which tool calls happen to succeed or fail. A permission ceiling that is not surfaced anywhere is functionally undocumented, and an undocumented ceiling erodes the same way undocumented invariants always do: someone changes it without realizing what depended on the old value.
+
+Agent tool access is one instance of the broader concern that any system reachable from more than one caller needs an explicit access model decided up front — see [[id:principle:multi-caller-safety][multi-caller safety]] for the general version of that argument. Before raising an agent's permission ceiling — especially for a new model or provider — validate its tool-calling reliability first; see [[id:practice:model-certification-harness][model certification harness]]. The tiering decision itself is one of the things that should be visible and adjustable within [[id:workflow:ai-pairing-loop][the AI pairing loop]], not a fixed setting nobody revisits. [[id:hub:ai-collaboration][AI collaboration hub]] indexes the rest.

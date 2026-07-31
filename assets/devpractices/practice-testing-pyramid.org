@@ -1,0 +1,17 @@
+:PROPERTIES:
+:ID: practice:testing-pyramid
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Testing Pyramid: Unit, Integration, and End-to-End Balance
+#+filetags: :testing:devpractice:
+
+A healthy test suite is shaped like a pyramid: many fast unit tests at the base, fewer integration tests in the middle, and a small number of expensive end-to-end (E2E) tests at the top. Each layer catches a different class of bug, runs at a different cost, and belongs in a different place in the development loop.
+
+- **Unit tests** exercise a single function or module in isolation, with no I/O, no network, no real filesystem, no real external process. They run in milliseconds, so there should be hundreds or thousands of them, and they should run on every save or every commit without anyone thinking about the cost. Because they are cheap, unit tests are where edge cases, boundary values, and adversarial inputs belong — see [[id:practice:adversarial-testing][adversarial testing]] for the shapes those tests should take.
+- **Integration tests** exercise the seams between modules or components — a real database against real query code, a real parser against real downstream consumers — without going all the way out to a full running system. There should be meaningfully fewer of these than unit tests, because they run slower and are more prone to incidental failure from unrelated changes. They exist to catch the bugs that only appear at a boundary, which unit tests structurally cannot see because they isolate exactly those boundaries away.
+- **End-to-end tests** exercise the real system as a user or external caller would, including the parts unit and integration tests intentionally stub out — real processes, real transport, real startup and shutdown. These are expensive: slow to run, prone to flakiness from timing and environment, and costly to debug when they fail because a failure could originate anywhere in the stack. Keep the E2E count deliberately small, and reserve it for the critical paths that actually matter if broken — the paths a user or downstream integrator depends on daily, not every possible combination.
+
+The pyramid shape is a cost-benefit statement, not a rule about proportions for their own sake: push verification as far down the pyramid as the bug class allows, because a bug caught by a millisecond-scale unit test is orders of magnitude cheaper to diagnose than the same bug caught by a multi-minute E2E run. When a bug does slip through and is only reproducible at the E2E layer, that is itself a signal — write the missing lower-layer test that would have caught it earlier, rather than leaving the gap to only ever be caught by the expensive layer.
+
+Automate every layer in CI rather than relying on manual runs; a test that only a specific developer remembers to run locally is not part of the suite, it is a personal habit. See [[id:practice:adversarial-testing][adversarial testing]] for how to write tests that actually find bugs at any layer, and [[id:practice:validation-gate][validation gate]] for how these layers compose into a release or merge gate. [[id:hub:testing][testing hub]] indexes the rest.

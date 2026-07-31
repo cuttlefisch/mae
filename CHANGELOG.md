@@ -2,11 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.85] - 2026-07-31
+
+### Features
+
+- *(kb)* Bundle a generic DevPractices KB, fix release/install gaps (#514, ADR-076) (#564) ([631a702](https://github.com/cuttlefisch/mae/commit/631a702e2ec84f4432778cfdf2f4d88fd9291022))
+
 ## [0.14.84] - 2026-07-31
 
 ### CI
 
 - *(windows)* Real window launch + SendInput click spike (ADR-066 Phase D, spike 2/2) (#563) ([62f89ce](https://github.com/cuttlefisch/mae/commit/62f89ce78a4a841bd7298a941a52504b58175559))
+
+### Miscellaneous
+
+- Bump version to 0.14.84 ([8e71f85](https://github.com/cuttlefisch/mae/commit/8e71f85c30f2caf18a3f1f1489512f75380e926b))
 
 ## [0.14.83] - 2026-07-31
 

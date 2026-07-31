@@ -1,0 +1,43 @@
+:PROPERTIES:
+:ID: hub:code-quality
+:ROLE: hub
+:KIND: category
+:END:
+#+title: Code Quality
+#+filetags: :hub:devpractice:
+
+Design principles worth checking before and during a change, plus conventions for
+annotating code — including annotations aimed specifically at an AI agent reading or
+editing the code.
+
+* Design principles
+- [[id:principle:concurrency-safety-first][Concurrency Safety First]]
+- [[id:principle:modular-boundaries][Modular Boundaries]]
+- [[id:principle:ai-as-peer-actor][AI as Peer Actor]]
+- [[id:principle:no-hardcoding][No Hardcoding]]
+- [[id:principle:single-source-shared-computation][Single-Source Shared Computation]]
+- [[id:principle:downstream-impact-checklist][Downstream Impact Checklist]]
+- [[id:principle:cross-platform-parity][Cross-Platform Parity]]
+- [[id:principle:bugs-are-drift-signals][Bugs Are Drift Signals]]
+- [[id:principle:no-weakened-tests][No Weakened Tests]]
+- [[id:principle:fix-root-cause][Fix Root Cause]]
+- [[id:principle:no-deferred-bugs][No Deferred Bugs]]
+- [[id:principle:validate-against-prior-art][Validate Against Prior Art]]
+- [[id:principle:tests-as-spec][Tests as Spec]]
+- [[id:principle:explicit-design-stances][Explicit Design Stances]]
+- [[id:principle:rich-agent-context][Rich Agent Context]]
+- [[id:principle:runtime-redefinability][Runtime Redefinability]]
+- [[id:principle:multi-caller-safety][Multi-Caller Safety]]
+- [[id:principle:local-first-design][Local-First Design]]
+
+* Code annotation conventions
+- [[id:practice:flag-comments][Flag Comments]]
+- [[id:practice:caution-annotations][Caution Annotations (AI agent guidance in
+  comments)]]
+- [[id:practice:stability-markers][Stability Markers]]
+
+* Operational tooling
+- [[id:practice:mutating-script-safety][Mutating Script Safety (set -e, Logging,
+  Check-Plan-Confirm-Apply)]]
+
+Back to [[id:hub:start-here][Start Here]].

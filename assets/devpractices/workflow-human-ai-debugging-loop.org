@@ -1,0 +1,15 @@
+:PROPERTIES:
+:ID: workflow:human-ai-debugging-loop
+:ROLE: atom
+:END:
+#+title: The Human-AI Debugging Loop
+#+filetags: :ai-collaboration:debugging:devpractice:
+
+Debugging as a human-AI pair benefits from a deliberate structure rather than an open-ended back-and-forth. A four-stage cycle — symptom, root cause, fix, lessons — keeps the session converging on the actual problem instead of drifting toward whatever change makes the immediate error message go away.
+
+1. **Symptom.** State precisely what is observed: the exact error, the exact reproduction steps, the exact conditions under which it does and does not occur. A vague symptom description ("it's broken sometimes") sends both the human and the AI searching in the wrong place; a precise one ("fails only when two writes race within the same tick, never on a single write") already constrains the search.
+2. **Root cause.** Push past the first plausible explanation to the actual mechanism. AI agents, like humans under time pressure, tend to converge on the first hypothesis that fits the symptom rather than the one that actually explains it — confirm the hypothesis by tracing the mechanism concretely (reading the actual code path, reproducing the failure in isolation) before accepting it, not by pattern-matching the symptom against a plausible-sounding story.
+3. **Fix.** Address the root cause, not the symptom. A fix that makes the specific reproduction case pass without addressing the underlying mechanism will resurface as a different symptom later — see [[id:principle:bugs-are-drift-signals][bugs are drift signals]] for why treating a bug as an isolated defect rather than a signal of a deeper gap tends to produce exactly this pattern.
+4. **Lessons.** Before closing the loop, capture what made the bug possible in the first place — a missing test, an unclear invariant, a design assumption that turned out false — so the same class of bug doesn't recur. This stage is the one most often skipped under time pressure, and skipping it is exactly what causes the same bug shape to reappear in a different location later.
+
+Record the cycle using a consistent skeleton — see [[id:template:post-mortem][post-mortem template]] — so that symptom, root cause, fix, and lessons are each explicit and searchable later, rather than folded together into an undifferentiated narrative that's hard to mine for patterns across multiple incidents. [[id:hub:ai-collaboration][AI collaboration hub]] indexes the rest of the AI-collaboration practices.

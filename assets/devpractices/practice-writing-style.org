@@ -1,0 +1,17 @@
+:PROPERTIES:
+:ID: practice:writing-style
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Writing Style
+#+filetags: :writing-style:devpractice:
+
+Technical writing — documentation, commit messages, PR descriptions, code comments, notes in a knowledge base — reads best in neutral third person, describing the artifact or the decision rather than the author's own actions. The same standard applies whether the artifact is a full document or a single line: see [[id:practice:commit-convention][commit message convention]] for this style applied at commit-message granularity. "The retry logic backs off exponentially to avoid overwhelming a recovering dependency" states the fact directly. "I decided to make the retry logic back off exponentially because I thought it would help" centers the author instead of the system, adds no information, and forces the reader to translate a personal narrative back into the fact they actually wanted.
+
+Skip self-introduction and preamble entirely. A document, a commit message, or a note does not need to announce that it is about to explain something before explaining it. State the fact, the decision, or the instruction in the first sentence. A reader who opened the document already knows what they are looking at; a preamble restating that is pure overhead between the reader and the content they came for.
+
+State organizational facts neutrally rather than as personal or institutional exceptionalism. A project's testing discipline, its architecture, or its process choices should be described as what they are and why they work, not framed as unusually rigorous, best-in-class, or superior to unnamed alternatives. Neutral description is more credible than self-praise, and it ages better — a claim of exceptionalism reads as marketing the moment the practice it describes turns out to be ordinary, or is later revised.
+
+Avoid the specific phrasing patterns that mark writing as generated filler rather than considered content: hedge-everything qualifiers stacked defensively ("it's worth noting that," "it should be mentioned that"), sycophantic framing of routine work, and unsolicited summaries restating what was just written immediately above it. None of these add information a careful reader needs; all of them add length a careful reader has to read past to find the content. See [[id:practice:avoiding-ai-prose-tendencies][avoiding AI prose tendencies]] for the specific catalog of these patterns and where they show up across prose, commit messages, and generated documentation.
+
+Applied consistently, this style produces shorter documents that convey the same information with less reader effort — the goal is not brevity for its own sake, but removing everything between the reader and the fact, decision, or instruction they came to find. A note, a commit message, or a comment that a competent reader can act on without re-reading it twice has succeeded at this regardless of its length.

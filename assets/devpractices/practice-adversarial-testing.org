@@ -1,0 +1,20 @@
+:PROPERTIES:
+:ID: practice:adversarial-testing
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Adversarial Testing Over Confirmation Testing
+#+filetags: :testing:devpractice:
+
+A test exists to falsify the implementation, not to congratulate it. A test suite that only walks the happy path in one fixed order — set up state, perform an action, assert the expected result — proves the code works on *that one path* and says nothing about what happens when the order changes, the input is unusual, or two things happen at once. Treat a fragile linear test as a starting point, not a finished artifact.
+
+Prefer test shapes that actively try to break the code:
+
+- **Property and round-trip tests** — encode then decode and check the original comes back out; serialize then deserialize; apply an operation and its inverse. These catch entire classes of bugs a single fixed example never will, because they check an invariant that must hold for *all* inputs, not one input someone happened to pick.
+- **Order-independence tests** — apply the same set of operations in shuffled order and assert the result converges to the same state. Code that is only ever tested in the order it was written in will silently assume that order is guaranteed, even when nothing in the design promises it.
+- **N-way tests, not just two-way** — for anything involving multiple participants, peers, or writers (merges, sync, concurrent editing, distributed state), test with three or more, not two. Two-way tests miss an entire category of conflict that only appears once a third participant is in the mix.
+- **State-machine coverage** — enumerate the transitions a component can go through, not just one trace through them. A single scripted sequence tests one path through the state graph; the bugs live in the untested edges.
+
+Equally important is *what* values populate these tests. A test built around a cherry-picked "unicorn" input — a magic constant, a suspiciously round number, a single hand-picked identity or key, a value that happens to dodge a known edge case — proves nothing except that the code handles that one value. Use real, varied inputs instead: freshly generated identities or keys rather than a hardcoded fixture, boundary values (empty, maximum, zero, negative, one-past-the-end), and randomized-but-seeded values so failures are reproducible while still exploring a wide input space run over run.
+
+The underlying discipline is the same whether the code under test is a parser, a CRDT merge function, or a permission check: ask "what input or ordering would break this?" before writing the test, then write that test. See [[id:practice:attacker-model-tests][attacker-model tests]] for the security-specific sharpening of this same idea, and [[id:practice:testing-pyramid][testing pyramid]] for how these test shapes distribute across unit, integration, and end-to-end layers. [[id:hub:testing][testing hub]] indexes the rest of the testing practices.

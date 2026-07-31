@@ -1,0 +1,17 @@
+:PROPERTIES:
+:ID: practice:audit-as-invokable-procedure
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Audit as an Invokable Procedure
+#+filetags: :audit:process:devpractice:
+
+A checklist that lives only as prose in a document has to be remembered before it can be used. Someone has to recall that it exists, open the file, and manually work through each item, and under deadline pressure that step is the first one skipped. The fix is to package the checklist as something that can actually be run — a script, an editor command, a slash command, a CLI subcommand — that produces a structured report on demand, rather than something that only exists to be read.
+
+"Invokable" means more than "has a `make` target." A genuinely invokable procedure accepts scoped arguments so it can be run at the size the moment calls for — audit just this directory, just this category of check, just the files touched since the last release — rather than forcing an all-or-nothing run every time. And it returns a structured, parseable report (pass/fail per item, a list of findings with locations, a machine-readable summary), not a wall of prose that a human still has to read end to end to extract the actionable parts. A tool that runs but dumps unstructured text into a terminal has only solved half the problem.
+
+This matters more, not less, once an AI agent is a regular participant in the workflow. A human has to be reminded a checklist exists; an agent has to be told to open a document and interpret it as instructions, which is strictly less reliable than the agent calling a well-defined procedure and parsing a well-defined result. An invokable audit lets an agent trigger the check proactively as part of its own reasoning — before finalizing a plan, before declaring a task done — rather than only when a human happens to think to ask for it. A structured report is also something an agent can act on programmatically (file a follow-up item per finding, block completion until a category passes) in a way that prose guidance cannot support.
+
+This is not free, and it is not always worth doing. Building the invokable wrapper — argument parsing, report structuring, wiring it into whatever surface makes it callable — is real upfront cost that a plain checklist document does not have. It pays for itself once a checklist gets run repeatedly: every release, every PR, every audit cycle. For a checklist that will genuinely be used once, the packaging cost is pure overhead and prose is the right call. The decision of which form a given practice deserves is a specific instance of a broader question — see [[id:practice:guidance-skill-or-code][guidance, skill, or deterministic code]] for the general framework; a repeatedly-run, well-defined checklist like an audit is the concrete case where "package it" wins the tradeoff, because repetition is exactly what amortizes the wrapper's cost and exactly what a human is most likely to skip under pressure.
+
+See [[id:practice:deep-audit-checklist][the deep audit checklist]] for a worked example of the content such a procedure would package — a multi-phase sweep that is exactly the kind of thing worth making callable rather than leaving as a document to remember to open — and [[id:practice:multi-lens-audit-review][multi-lens audit review]] for the complementary practice of rotating stakeholder perspectives, which can itself be exposed as scoped arguments to the same invokable procedure (run just the security lens, just the performance lens) rather than always running every lens at once.

@@ -1,0 +1,23 @@
+:PROPERTIES:
+:ID: practice:gitlab-mr-workflow
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: GitLab Merge Request Workflow Conventions
+#+filetags: :gitlab:vcs:devpractice:
+
+A merge request is a durable artifact — it gets read by reviewers now and by anyone tracing history later — so its shape should be consistent enough to skim in seconds rather than re-derived from scratch every time. Three conventions carry most of the value: a predictable description structure, a draft/ready signal, and an explicit link to the issue the work addresses.
+
+**Description shape.** At minimum, a merge request description should contain:
+
+- **Summary** — what changed and why, in a sentence or two. Not a restatement of the diff (a reviewer can read the diff); the *reason* the change exists.
+- **Test plan** — how the author verified the change: which tests were added or run, what manual check was performed, what edge case was specifically exercised. A merge request with no test plan invites a reviewer to either trust blindly or re-derive the verification themselves.
+- **Related issue** — a reference to the tracked issue or ticket the MR resolves, using the platform's linking syntax so the relationship is machine-navigable, not just prose.
+
+**Draft convention.** Mark a merge request as draft (GitLab's `Draft:` title prefix or the equivalent flag) the moment it's opened, if it is opened before the author considers it review-ready — for early feedback, to trigger CI, or to give visibility into in-progress work. Only remove the draft flag when the change is genuinely ready for a reviewer's full attention. This distinction matters because it changes what a reviewer's time investment should be: a draft invites "am I heading the right direction" feedback, a non-draft invites a full line-by-line review. Conflating the two wastes reviewer effort in both directions — deep review of something that will change shape, or cursory glance at something meant to be merged.
+
+**Approval-rule expectations.** Protected branches (main/trunk, release branches) should require at least one approval before merge is possible, enforced by the platform's approval rules rather than by convention alone — a rule a contributor can bypass under time pressure isn't a rule. See [[id:practice:git-branch-release-strategy][branch and release strategy]] for what "protected" should mean structurally.
+
+**Issue linking.** Use the platform's closing-keyword syntax in the description (e.g., `Closes #123`) when the MR fully resolves an issue, so merging automatically transitions the issue's state. For MRs that only partially address an issue, or address several, use an explicit non-closing reference (`Relates to #123`) instead — auto-closing an issue the MR didn't fully finish is a common, avoidable source of tracking drift.
+
+See [[id:template:pr-description][the PR/MR description template]] for a fill-in version of the summary/test-plan/issue shape, [[id:practice:glab-cli-usage][glab CLI usage]] for creating and managing MRs from the command line, and [[id:practice:gitlab-ci-pipeline-conventions][GitLab CI pipeline conventions]] for how the pipeline gate interacts with merge eligibility.

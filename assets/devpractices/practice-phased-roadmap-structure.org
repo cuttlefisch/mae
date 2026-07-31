@@ -1,0 +1,15 @@
+:PROPERTIES:
+:ID: practice:phased-roadmap-structure
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Phased Roadmap Structure with Orthogonal Milestones
+#+filetags: :roadmap:devpractice:
+
+A roadmap organized purely as a sequence of phases ("Phase 1, then Phase 2, then Phase 3") answers only one question well: what order does work happen in. It answers a different, equally important question badly: what can actually be shipped or demonstrated at any given point. Layering a second, orthogonal grouping — milestones — onto the same phase list answers that second question without duplicating the sequencing axis.
+
+Phases are about *sequencing*: what has to be built before what, driven by technical dependency. Milestones are about *value delivery*: a bundle of work, potentially spanning parts of several phases, that together represents something a stakeholder can see, use, or evaluate. A milestone is not "Phase 2 finished" restated with a different label — it is a cut across the phase structure grouped by what becomes possible once it lands ("basic end-to-end flow works," "external users can authenticate," "the system survives a node failure"). Keeping the two axes distinct means a roadmap reader can ask either "what's technically next" or "what's the next demonstrable thing" and get a direct answer instead of inferring one from the other.
+
+Gate both phases and milestones on **measurable trigger conditions**, not calendar dates. A date-based gate ("Phase 2 ships March 1") creates pressure to declare victory on schedule regardless of actual state, and ages badly the moment reality diverges from the plan — which is the common case. A condition-based gate ("Phase 2 ships when the validation gate for its constituent items all pass") stays true regardless of how long it takes, and gives an honest, checkable answer to "are we there yet" at any point. This is not the same as having no urgency — it means urgency is expressed as scoping and prioritization decisions, not as a fabricated date that quietly becomes a target to hit at the expense of quality.
+
+Every phase and milestone should carry its own [[id:practice:validation-gate][validation gate]] — the condition that makes it real rather than aspirational. See [[id:template:roadmap-phase][the roadmap phase template]] for the fill-in structure, and [[id:practice:issue-roadmap-crosslink][issue/roadmap cross-linking]] for connecting phases and milestones to the issues and ADRs that implement them.

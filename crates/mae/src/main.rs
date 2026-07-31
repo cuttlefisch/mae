@@ -17,6 +17,7 @@ mod collab_bridge;
 mod config;
 mod daemon_supervisor;
 mod dap_bridge;
+mod devpractices_kb;
 mod doctor;
 #[cfg(feature = "gui")]
 mod graph_layout_bridge;
@@ -24,6 +25,7 @@ mod graph_layout_bridge;
 mod gui_app;
 #[cfg(feature = "gui")]
 mod gui_event;
+mod guidance_kb_engine;
 mod headless_loop;
 mod key_handling;
 mod lsp_bridge;

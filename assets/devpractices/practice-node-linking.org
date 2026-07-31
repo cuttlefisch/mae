@@ -1,0 +1,20 @@
+:PROPERTIES:
+:ID: practice:node-linking
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Node Linking
+#+filetags: :molecular-notes:devpractice:
+
+Every cross-reference to another note in this kind of knowledge base MUST use the full internal-ID link form: `[[id:NAMESPACE:node][Display Text]]` — for example `[[id:practice:adr-format][ADR format]]`. Never omit the `id:` scheme and write the target as a bare namespace-prefixed string instead (target written as just ~practice:adr-format~ rather than ~id:practice:adr-format~). This is not a stylistic preference; in at least one real system that ingests notes like these, a link whose target lacks the `id:` prefix and falls outside the tool's own internal namespace whitelist is silently mangled at ingest time and permanently broken, with no error raised anywhere in the pipeline. The note looks correct in a plain-text editor, the link renders as text, and it simply does not resolve — the failure is invisible until a reader or an agent actually tries to follow it, by which point the authoring context that would have caught the typo is long gone. Always write the full `id:`-prefixed form, with no exceptions for "obvious" or "internal-looking" targets.
+
+Practical rules for when and how to link:
+
+- Link a note to every other note it genuinely depends on or elaborates — a claim that assumes a reader already knows something covered elsewhere should link to that note rather than silently assuming the knowledge or re-explaining it inline.
+- Avoid orphan notes: a note with no incoming links is invisible to graph traversal from anywhere else in the KB, and a note with no outgoing links looks like a dead end even if the topic connects naturally to others. Every new note should be linked in from at least one existing note (typically the hub for its topic, or a sibling atom) and should link out to at least one related note.
+- Link bidirectionally when the relationship is genuinely mutual — two atoms that meaningfully inform each other should each carry a link to the other, not just one direction. Do not force bidirectionality where it is not real: a hub linking down to an atom does not obligate the atom to link back up to every hub that references it, only to the ones it is actually about.
+- Use the display text to state what the linked note is, not just its title verbatim — `[[id:practice:adr-format][ADR format]]` reads better inline than repeating a raw ID, and lets the same target be linked with different phrasing depending on the surrounding sentence.
+
+Linking is the structure that replaces folder hierarchy. A flat directory of notes has no natural subfolders because a note frequently belongs to more than one context at once — a practice note about testing might belong equally under a testing topic and under an AI-collaboration topic. Forcing it into one folder means picking a single owning context and losing discoverability from the other. The link graph has no such constraint: the same note is linked in from every context it genuinely belongs to, and a reader or an agent can arrive at it by any of several paths. The directory stays flat by design; the graph, not the filesystem, carries the organizational structure.
+
+See [[id:practice:tagging-conventions][tagging conventions]] for the orthogonal topical axis that complements the link graph, [[id:practice:atoms-vs-molecules-vs-hubs][atoms, molecules, and hubs]] for how linking differs between a molecule (links to synthesize) and a hub (links to index), and [[id:practice:when-to-create-a-new-node][when to create a new node]] for the related question of when a link target should be its own note rather than a section of an existing one.

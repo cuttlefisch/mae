@@ -1,0 +1,49 @@
+:PROPERTIES:
+:ID: practice:gitlab-ci-pipeline-conventions
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: GitLab CI Pipeline Structure and Merge Gating
+#+filetags: :gitlab:ci:devpractice:
+
+A `.gitlab-ci.yml` pipeline is easiest to reason about — for a human debugging a failure and for an AI agent trying to reproduce one — when it follows a small, predictable stage structure and when its pass/fail result is treated as an actual gate, not a suggestion.
+
+**Stage structure.** A conventional ordering is `build → test → lint → deploy`, each stage running only after the previous one succeeds:
+
+```yaml
+stages:
+  - build
+  - test
+  - lint
+  - deploy
+
+build-job:
+  stage: build
+  script:
+    - make build
+
+test-job:
+  stage: test
+  script:
+    - make test
+
+lint-job:
+  stage: lint
+  script:
+    - make lint
+
+deploy-job:
+  stage: deploy
+  script:
+    - make deploy
+  only:
+    - main
+```
+
+Putting `lint` after `test` rather than first is a deliberate choice some projects make — a broken build or failing test is usually more informative to see first, and lint failures are typically cheap to fix once the change is otherwise working — but the specific ordering matters less than having *one* documented ordering the whole team follows, so a contributor reading pipeline output for the first time knows what stage failure implies about the change.
+
+**Merge-request pipelines vs. branch pipelines.** GitLab (and equivalent platforms) can run two different kinds of pipeline for the same commit: a *branch pipeline*, triggered by a push to a branch, and a *merge-request pipeline*, triggered specifically in the context of an open MR and typically run against the merged result of source and target branch. Prefer merge-request pipelines as the gate that actually blocks merge — they catch integration issues a branch-only pipeline (built against the feature branch alone, ignoring what target-branch commits have landed since the branch was cut) would miss. Running both unconditionally on every push doubles CI cost for no benefit; scope jobs with rules so expensive jobs run once, in the pipeline type that matters for the decision being gated.
+
+**Green pipeline as a hard gate.** A passing pipeline should be a structural precondition for merge — enforced by the platform's "pipeline must succeed" merge-request setting — not an advisory signal a reviewer is expected to notice and manually respect. The difference matters under deadline pressure: an advisory-only red pipeline gets overridden "just this once," and just-this-once compounds. Treat any pipeline job someone wants to make non-blocking as a decision serious enough to state explicitly (and usually to reconsider) rather than something that happens by default because nobody configured the gate.
+
+See [[id:practice:git-branch-release-strategy][branch and release strategy]] for how protected-branch policy interacts with this gate, [[id:practice:gitlab-mr-workflow][the MR workflow]] for how pipeline status shows up in review, and [[id:practice:makefile-canonical-interface][the Makefile as canonical interface]] for keeping local `make ci` runs faithful to what this pipeline actually executes.

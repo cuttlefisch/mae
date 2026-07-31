@@ -1,0 +1,28 @@
+:PROPERTIES:
+:ID: practice:stability-markers
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Stability Markers (Module Maturity Signals)
+#+filetags: :code-annotation:ai-guidance:devpractice:
+
+A stability marker is a single, prominent tag placed once per module or package — typically in a header comment or top-of-file docstring — declaring its maturity: `stable` or `experimental` (a project may add finer grades like `deprecated` or `unstable` if two states aren't enough, but two is usually sufficient and easier to keep honest).
+
+Like [[id:practice:caution-annotations][caution annotations]], this is framed as AI agent guidance embedded in code: it tells a reader, human or automated, how much scrutiny a change in this area deserves *before* they start reading the implementation, not after they've already written a patch.
+
+- **stable** — the module's public surface is relied on elsewhere, has settled API/behavior, and any change needs a wider blast-radius check: who calls this, what breaks downstream, does this need a deprecation path rather than a direct edit.
+- **experimental** — the module is still finding its shape. Breaking changes are expected and don't need the same ceremony; an agent or contributor can make bolder edits without triggering a full downstream-impact review.
+
+```
+//! @stability: stable
+//! Public parsing API — treat any signature change as a breaking change.
+```
+
+```
+//! @stability: experimental
+//! Actively evolving; internal callers only, no external compatibility guarantee yet.
+```
+
+The marker is coarse by design — it operates at module or package granularity, not per-function — because its job is to set an *initial prior* fast. A reader (or an AI agent scanning a codebase before proposing a change) should be able to glance at one line and calibrate: "this is load-bearing, slow down" versus "this is still wet paint, move fast." Fine-grained warnings about specific invariants within a module still belong in [[id:practice:caution-annotations][caution annotations]] at the exact guarded location — the two conventions operate at different zoom levels and are meant to be used together, not as substitutes for each other.
+
+Keep the marker current. A module marked `experimental` two years after it became the de facto stable backbone of the system is worse than no marker at all, because it actively misleads scrutiny in the wrong direction — treat updating it as part of the same review that would update any other piece of stale documentation. See [[id:hub:ai-collaboration][AI collaboration hub]] for the broader set of conventions that make a codebase legible to an AI agent working from local context, and [[id:principle:downstream-impact-checklist][downstream-impact checklist]] for the fuller review this marker is meant to trigger for `stable` code.

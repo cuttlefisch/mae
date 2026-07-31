@@ -4,6 +4,14 @@
 //! seed type system, insert nodes, checksum), sourced from `docs/adr/*.md` instead of
 //! hand-curated `.org` content, via `mae_kb::adr_parse`/`mae_kb::adr_kb`.
 //!
+//! **Not** a `kb_build::ingest_org_dir` user (ADR-076 D3): the ADR corpus is `.md`, not
+//! `.org`, requires cross-reference/cycle validation (`validate_corpus`) that has no
+//! equivalent in the org-ingestion loop, and derives node bodies from a raw per-file scan
+//! rather than `org::parse_org_multi_result`. Forcing this into `ingest_org_dir`'s shape
+//! would mean bad-fit special-casing inside a supposedly-generic function — this binary
+//! shares only the generic fresh-store-open + checksum/sidecar plumbing with its siblings
+//! and keeps its own bespoke corpus discovery/validation/node-generation.
+//!
 //! **Always writes to a fresh, standalone output file** (removed and recreated on every
 //! run, same as the sibling build tools) — this build-time tool never attaches to, or
 //! writes into, an already-registered/live KB instance, so it structurally cannot race a
@@ -22,8 +30,8 @@
 
 use mae_kb::adr_kb::generate_corpus_nodes;
 use mae_kb::adr_parse::{body_after_header, discover_adr_corpus, validate_corpus};
+use mae_kb::kb_build;
 use mae_kb::KbStore;
-use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 fn main() {
@@ -31,17 +39,6 @@ fn main() {
         .nth(1)
         .unwrap_or_else(|| "assets/mae-adr.cozo".into());
     let output_path = PathBuf::from(&output);
-
-    if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent).expect("failed to create output directory");
-    }
-    if output_path.exists() {
-        if output_path.is_dir() {
-            std::fs::remove_dir_all(&output_path).expect("failed to remove existing DB directory");
-        } else {
-            std::fs::remove_file(&output_path).expect("failed to remove existing DB file");
-        }
-    }
 
     eprintln!("Building ADR KB...");
 
@@ -107,10 +104,7 @@ fn main() {
     let nodes = generate_corpus_nodes(&corpus, &bodies);
     eprintln!("  Generated {} nodes", nodes.len());
 
-    let store = mae_kb::CozoKbStore::open(&output_path).expect("failed to open CozoDB for ADR KB");
-    store
-        .seed_type_system()
-        .expect("failed to seed type system");
+    let store = kb_build::open_fresh_store(&output_path);
     eprintln!("  Type system seeded");
 
     let mut inserted = 0;
@@ -131,51 +125,14 @@ fn main() {
     store.seed_views().expect("failed to seed views");
     eprintln!("  Views seeded");
 
-    let checksum = compute_db_checksum(&output_path);
-    let sha_path = output_path.with_extension("cozo.sha256");
-    std::fs::write(
-        &sha_path,
-        format!("{checksum}  {}\n", output_path.display()),
-    )
-    .expect("failed to write checksum file");
+    let checksum = kb_build::compute_db_checksum(&output_path);
+    kb_build::write_checksum_sidecar(&output_path, &checksum);
 
     eprintln!("Done.");
     eprintln!("  Output: {}", output_path.display());
     eprintln!("  SHA-256: {checksum}");
-    eprintln!("  Checksum: {}", sha_path.display());
-}
-
-/// Compute a SHA-256 checksum for the CozoDB store (sled: hash every file in sorted order;
-/// single-file backends: hash the file directly) — identical convention to the sibling
-/// build-manual-kb/build-practices-kb tools.
-fn compute_db_checksum(path: &PathBuf) -> String {
-    let mut hasher = Sha256::new();
-    if path.is_dir() {
-        let mut files = Vec::new();
-        collect_files_recursive(path, &mut files);
-        files.sort();
-        for file in &files {
-            let rel = file.strip_prefix(path).unwrap_or(file);
-            hasher.update(rel.to_string_lossy().as_bytes());
-            let data = std::fs::read(file).expect("failed to read DB file for checksum");
-            hasher.update(&data);
-        }
-    } else {
-        let data = std::fs::read(path).expect("failed to read DB file for checksum");
-        hasher.update(&data);
-    }
-    hex::encode(hasher.finalize())
-}
-
-fn collect_files_recursive(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
-    if let Ok(entries) = std::fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                collect_files_recursive(&path, out);
-            } else {
-                out.push(path);
-            }
-        }
-    }
+    eprintln!(
+        "  Checksum: {}",
+        output_path.with_extension("cozo.sha256").display()
+    );
 }

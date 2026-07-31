@@ -34,14 +34,17 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build GUI binary (glibc) + services (musl) + manual KB + daemon
+      - name: Build GUI binary (glibc) + services (musl) + bundled KBs + daemon
         run: |
           cargo build --release --features gui --package mae
           cargo build --release --target x86_64-unknown-linux-musl --package mae-mcp
-          cargo build --release --bin build-manual-kb
+          cargo build --release --bin build-manual-kb --bin build-practices-kb --bin build-devpractices-kb --bin build-adr-kb
           ./target/release/build-manual-kb assets/mae-manual.cozo
-          # Strip sled lock files from manual KB
-          find assets/mae-manual.cozo -name "*.lock" -delete 2>/dev/null || true
+          ./target/release/build-practices-kb assets/mae-practices.cozo
+          ./target/release/build-devpractices-kb assets/mae-devpractices.cozo
+          ./target/release/build-adr-kb assets/mae-adr.cozo
+          # Strip sled lock files from bundled KBs
+          find assets/mae-manual.cozo assets/mae-practices.cozo assets/mae-devpractices.cozo assets/mae-adr.cozo -name "*.lock" -delete 2>/dev/null || true
           cd daemon && cargo build --release --target x86_64-unknown-linux-musl
 
       - name: Prepare artifact
@@ -53,6 +56,12 @@ jobs:
           chmod +x dist/mae-pkg/mae dist/mae-pkg/mae-mcp-shim dist/mae-pkg/mae-daemon
           cp -r assets/mae-manual.cozo dist/mae-pkg/mae-manual.cozo
           cp assets/mae-manual.cozo.sha256 dist/mae-pkg/mae-manual.cozo.sha256
+          cp -r assets/mae-practices.cozo dist/mae-pkg/mae-practices.cozo
+          cp assets/mae-practices.cozo.sha256 dist/mae-pkg/mae-practices.cozo.sha256
+          cp -r assets/mae-devpractices.cozo dist/mae-pkg/mae-devpractices.cozo
+          cp assets/mae-devpractices.cozo.sha256 dist/mae-pkg/mae-devpractices.cozo.sha256
+          cp -r assets/mae-adr.cozo dist/mae-pkg/mae-adr.cozo
+          cp assets/mae-adr.cozo.sha256 dist/mae-pkg/mae-adr.cozo.sha256
           cp -r modules dist/mae-pkg/modules
           cp assets/sample-config.toml dist/mae-pkg/sample-config.toml
           cp assets/daemon-config.toml dist/mae-pkg/daemon-config.toml
@@ -81,13 +90,16 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build GUI binary + manual KB
+      - name: Build GUI binary + bundled KBs
         run: |
           cargo build --release --features gui --package mae
-          cargo build --release --bin build-manual-kb
+          cargo build --release --bin build-manual-kb --bin build-practices-kb --bin build-devpractices-kb --bin build-adr-kb
           ./target/release/build-manual-kb assets/mae-manual.cozo
-          # Strip sled lock files from manual KB
-          find assets/mae-manual.cozo -name "*.lock" -delete 2>/dev/null || true
+          ./target/release/build-practices-kb assets/mae-practices.cozo
+          ./target/release/build-devpractices-kb assets/mae-devpractices.cozo
+          ./target/release/build-adr-kb assets/mae-adr.cozo
+          # Strip sled lock files from bundled KBs
+          find assets/mae-manual.cozo assets/mae-practices.cozo assets/mae-devpractices.cozo assets/mae-adr.cozo -name "*.lock" -delete 2>/dev/null || true
 
       - name: Build AppImage
         run: |
@@ -102,19 +114,28 @@ jobs:
           cp assets/mae.desktop dist/MAE.AppDir/mae.desktop
           cp assets/mae.svg dist/MAE.AppDir/usr/share/icons/hicolor/scalable/apps/mae.svg
           cp assets/mae.svg dist/MAE.AppDir/mae.svg
-          # Bundle manual KB, modules, and the patched JetBrains Mono Nerd Font
-          # (license-clean — see assets/fonts/LICENSES.md) inside AppImage
+          # Bundle manual/practices/devpractices/ADR KBs, modules, and the
+          # patched JetBrains Mono Nerd Font (license-clean — see
+          # assets/fonts/LICENSES.md) inside AppImage
           cp -r assets/mae-manual.cozo dist/MAE.AppDir/usr/share/mae/mae-manual.cozo
+          cp -r assets/mae-practices.cozo dist/MAE.AppDir/usr/share/mae/mae-practices.cozo
+          cp -r assets/mae-devpractices.cozo dist/MAE.AppDir/usr/share/mae/mae-devpractices.cozo
+          cp -r assets/mae-adr.cozo dist/MAE.AppDir/usr/share/mae/mae-adr.cozo
           cp -r modules dist/MAE.AppDir/usr/share/mae/modules
           cp -r assets/fonts dist/MAE.AppDir/usr/share/mae/fonts
           cp assets/sample-config.toml dist/MAE.AppDir/usr/share/mae/sample-config.toml
 
-          # AppRun entry point — sets env vars so bundled assets are found
+          # AppRun entry point — sets env vars so bundled assets are found.
+          # ADR KB has no env-var override (ADR-059: deliberately opt-in, never
+          # auto-located) — it's bundled here purely so a user can
+          # `kb_register` it manually from a running AppImage-launched instance.
           cat > dist/MAE.AppDir/AppRun << 'APPRUN'
           #!/bin/bash
           SELF="$(readlink -f "$0")"
           HERE="${SELF%/*}"
           export MAE_MANUAL_PATH="${HERE}/usr/share/mae/mae-manual.cozo"
+          export MAE_PRACTICES_KB_PATH="${HERE}/usr/share/mae/mae-practices.cozo"
+          export MAE_DEVPRACTICES_KB_PATH="${HERE}/usr/share/mae/mae-devpractices.cozo"
           export MAE_MODULES_PATH="${HERE}/usr/share/mae/modules"
           export MAE_FONT_DIR="${HERE}/usr/share/mae/fonts"
           exec "${HERE}/usr/bin/mae" --gui "$@"
@@ -143,13 +164,16 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Build shim + daemon + manual KB
+      - name: Build shim + daemon + bundled KBs
         run: |
           cargo build --release --package mae-mcp
-          cargo build --release --bin build-manual-kb
+          cargo build --release --bin build-manual-kb --bin build-practices-kb --bin build-devpractices-kb --bin build-adr-kb
           ./target/release/build-manual-kb assets/mae-manual.cozo
+          ./target/release/build-practices-kb assets/mae-practices.cozo
+          ./target/release/build-devpractices-kb assets/mae-devpractices.cozo
+          ./target/release/build-adr-kb assets/mae-adr.cozo
           # Strip sled lock files — quarantine on macOS prevents reopening
-          find assets/mae-manual.cozo -name "*.lock" -delete 2>/dev/null || true
+          find assets/mae-manual.cozo assets/mae-practices.cozo assets/mae-devpractices.cozo assets/mae-adr.cozo -name "*.lock" -delete 2>/dev/null || true
           cd daemon && cargo build --release
 
       - name: Build GUI binary
@@ -168,20 +192,29 @@ jobs:
           cp target/release/mae "$APP/mae-bin"
           chmod +x "$APP/mae-bin"
 
-          # Bundle manual KB, modules, and the patched JetBrains Mono Nerd Font
-          # (license-clean — see assets/fonts/LICENSES.md) inside .app
+          # Bundle manual/practices/devpractices/ADR KBs, modules, and the
+          # patched JetBrains Mono Nerd Font (license-clean — see
+          # assets/fonts/LICENSES.md) inside .app
           cp -r assets/mae-manual.cozo "$RES/mae-manual.cozo"
+          cp -r assets/mae-practices.cozo "$RES/mae-practices.cozo"
+          cp -r assets/mae-devpractices.cozo "$RES/mae-devpractices.cozo"
+          cp -r assets/mae-adr.cozo "$RES/mae-adr.cozo"
           cp -r modules "$RES/modules"
           cp -r assets/fonts "$RES/fonts"
           cp assets/sample-config.toml "$RES/sample-config.toml"
 
-          # Create launcher script that passes --gui + sets asset paths
+          # Create launcher script that passes --gui + sets asset paths.
+          # ADR KB has no env-var override (ADR-059: deliberately opt-in,
+          # never auto-located) — bundled here purely so a user can
+          # `kb_register` it manually from a running .app-launched instance.
           # CFBundleExecutable = "MAE" → macOS runs this script
           cat > "$APP/MAE" << 'LAUNCHER'
           #!/bin/bash
           SELF="$(dirname "$0")"
           RES="$SELF/../Resources"
           export MAE_MANUAL_PATH="$RES/mae-manual.cozo"
+          export MAE_PRACTICES_KB_PATH="$RES/mae-practices.cozo"
+          export MAE_DEVPRACTICES_KB_PATH="$RES/mae-devpractices.cozo"
           export MAE_MODULES_PATH="$RES/modules"
           export MAE_FONT_DIR="$RES/fonts"
           exec "$SELF/mae-bin" --gui "$@"
@@ -251,7 +284,7 @@ jobs:
           # `mae` binary. It launches the GUI on a desktop session and falls
           # back to the terminal UI over SSH / on a tty / headless (or with
           # `-nw`), so a single binary serves both. Plus services, modules,
-          # manual KB, and configs.
+          # bundled KBs, and configs.
           mkdir -p dist/mae-cli-pkg
           cp target/release/mae dist/mae-cli-pkg/mae
           cp target/release/mae-mcp-shim dist/mae-cli-pkg/mae-mcp-shim
@@ -259,6 +292,12 @@ jobs:
           chmod +x dist/mae-cli-pkg/mae dist/mae-cli-pkg/mae-mcp-shim dist/mae-cli-pkg/mae-daemon
           cp -r assets/mae-manual.cozo dist/mae-cli-pkg/mae-manual.cozo
           cp assets/mae-manual.cozo.sha256 dist/mae-cli-pkg/mae-manual.cozo.sha256
+          cp -r assets/mae-practices.cozo dist/mae-cli-pkg/mae-practices.cozo
+          cp assets/mae-practices.cozo.sha256 dist/mae-cli-pkg/mae-practices.cozo.sha256
+          cp -r assets/mae-devpractices.cozo dist/mae-cli-pkg/mae-devpractices.cozo
+          cp assets/mae-devpractices.cozo.sha256 dist/mae-cli-pkg/mae-devpractices.cozo.sha256
+          cp -r assets/mae-adr.cozo dist/mae-cli-pkg/mae-adr.cozo
+          cp assets/mae-adr.cozo.sha256 dist/mae-cli-pkg/mae-adr.cozo.sha256
           cp -r modules dist/mae-cli-pkg/modules
           cp assets/sample-config.toml dist/mae-cli-pkg/sample-config.toml
           cp assets/daemon-config.toml dist/mae-cli-pkg/daemon-config.toml
@@ -281,6 +320,12 @@ jobs:
           # All assets needed by install.sh
           cp -r assets/mae-manual.cozo dist/mae-gui-pkg/mae-manual.cozo
           cp assets/mae-manual.cozo.sha256 dist/mae-gui-pkg/mae-manual.cozo.sha256
+          cp -r assets/mae-practices.cozo dist/mae-gui-pkg/mae-practices.cozo
+          cp assets/mae-practices.cozo.sha256 dist/mae-gui-pkg/mae-practices.cozo.sha256
+          cp -r assets/mae-devpractices.cozo dist/mae-gui-pkg/mae-devpractices.cozo
+          cp assets/mae-devpractices.cozo.sha256 dist/mae-gui-pkg/mae-devpractices.cozo.sha256
+          cp -r assets/mae-adr.cozo dist/mae-gui-pkg/mae-adr.cozo
+          cp assets/mae-adr.cozo.sha256 dist/mae-gui-pkg/mae-adr.cozo.sha256
           cp -r modules dist/mae-gui-pkg/modules
           cp assets/sample-config.toml dist/mae-gui-pkg/sample-config.toml
           cp assets/daemon-config.toml dist/mae-gui-pkg/daemon-config.toml
@@ -374,18 +419,22 @@ jobs:
           | Platform | File | Contents |
           |----------|------|----------|
           | **macOS app** | `MAE-macos-aarch64.zip` | `MAE.app` + `mae-daemon` + `mae-mcp-shim` + installer |
-          | **macOS CLI** | `mae-macos-aarch64.tar.gz` | GUI-capable `mae` (GUI by default; `-nw` for terminal) + all services + modules + manual KB + configs |
-          | **Linux GUI** | `mae-linux-x86_64-gui.AppImage` | Self-contained AppImage (modules + manual KB bundled) |
-          | **Linux** | `mae-linux-x86_64.tar.gz` | `mae` (GUI-enabled) + all services (static musl) + modules + manual KB + systemd units |
+          | **macOS CLI** | `mae-macos-aarch64.tar.gz` | GUI-capable `mae` (GUI by default; `-nw` for terminal) + all services + modules + bundled KBs + configs |
+          | **Linux GUI** | `mae-linux-x86_64-gui.AppImage` | Self-contained AppImage (modules + bundled KBs included) |
+          | **Linux** | `mae-linux-x86_64.tar.gz` | `mae` (GUI-enabled) + all services (static musl) + modules + bundled KBs + systemd units |
 
-          All packages include the built-in help system (860+ KB nodes) and doom-style keybindings.
+          All packages include the built-in help system (860+ KB nodes), doom-style keybindings, and four
+          bundled knowledge bases: the manual/help KB, **DevPractices** (generic developer-guidance KB,
+          used by `ai_guidance_kb` out of the box), **MaePractices** (MAE-contributor guidance, switch to
+          it with `:set-save ai-guidance-kb MaePractices`), and the **ADR KB** (MAE's own architecture
+          decisions — opt-in, `kb_register` it manually if you want to query it). See ADR-076.
 
           ## Installation
 
           **macOS (Homebrew — recommended):**
           ```bash
           brew tap cuttlefisch/mae
-          brew install mae                    # CLI + daemon + modules + manual KB
+          brew install mae                    # CLI + daemon + modules + bundled KBs
           brew install --cask mae-app         # optional: GUI .app bundle
           brew services start mae             # optional: background daemon
           ```
@@ -407,7 +456,9 @@ jobs:
           cd ~/mae && ./install.sh
           ```
 
-          The installer handles everything: binaries to `~/.local/bin/`, modules, manual KB, config scaffolding, `.app` bundle to `~/Applications` (macOS), systemd units (Linux), and launchd agents (macOS).
+          The installer handles everything: binaries to `~/.local/bin/`, modules, bundled KBs, config
+          scaffolding, `.app` bundle to `~/Applications` (macOS), systemd units (Linux), and launchd
+          agents (macOS).
 
           Use `./install.sh /usr/local` for a system-wide install. Use `./install.sh --uninstall` to remove.
 

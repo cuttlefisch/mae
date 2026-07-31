@@ -1,0 +1,21 @@
+:PROPERTIES:
+:ID: practice:adversarial-review-question
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: The Adversarial Review Question
+#+filetags: :testing:review:devpractice:
+
+At the end of every development phase — a feature, a pull request, a milestone — ask one standing question before calling the test suite done: *what did these tests not try to break?* Not "do the tests pass," which is a tautology once they're green, but a deliberate search for the input, ordering, or actor the current suite never considered.
+
+This question works because test suites accrete around whatever the author was thinking about while writing the code. A suite written while implementing the happy path will thoroughly cover the happy path and quietly omit the failure modes the author didn't have in mind at the time — not because they're hard to test, but because they were never imagined. A dedicated review pass, done with fresh eyes and explicitly hunting for gaps rather than confirming existing tests, catches what the original authoring pass structurally could not.
+
+Run the question concretely, not abstractly:
+
+- List every actor or participant the code interacts with. Which of them has *not* been modeled as hostile, buggy, or offline in a test?
+- List every ordering assumption the code makes (this arrives before that, this always succeeds before that runs). Which orderings have never been tested out of sequence?
+- List every boundary value (empty, maximum, zero, duplicate, concurrent). Which of them is untested?
+
+Each gap the question surfaces becomes the next test to write — the review question does not conclude with a list of concerns filed away for later, it concludes with new test code. Treat the review as incomplete until at least one new adversarial test comes out of it, or until the reviewer can articulate concretely why no further gap exists.
+
+This is the per-change instance of a broader habit: [[id:practice:multi-lens-audit-review][multi-lens audit review]] applies the same "what did we not try to break" posture at the scale of a whole project rather than a single phase, cycling through different reviewer perspectives to surface blind spots any single pass would miss. See also [[id:practice:adversarial-testing][adversarial testing]] for the test-writing techniques this question points toward, and [[id:hub:testing][testing hub]] for the surrounding practices.

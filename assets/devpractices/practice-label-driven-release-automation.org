@@ -1,0 +1,45 @@
+:PROPERTIES:
+:ID: practice:label-driven-release-automation
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Label-Driven Release Automation
+#+filetags: :github:release:automation:devpractice:
+
+An automated versioning workflow needs an authoritative signal for what the next version bump should be. Two candidate sources exist: infer it from commit-type prefixes across the branch (`feat` implies minor, `fix` implies patch, `BREAKING CHANGE` implies major — see [[id:practice:commit-convention][the conventional commit format]]), or read it from a PR label a human deliberately applied (`release:major` / `release:minor` / `release:patch` / `release:none`). Prefer the label as the authoritative source, with commit-type inference as a fallback or cross-check, not the reverse.
+
+**Why the label should take precedence.** A commit type is written in the moment, often under the same time pressure that produces every other small carelessness — an author types `fix` out of habit for something that's actually a `feat`, or a squash-merge collapses several differently-typed commits from a branch into a single merge commit, losing the per-commit type information the inference depended on entirely. A release-impact label, by contrast, is applied once, deliberately, at the PR level — a discrete human decision captured as structured metadata rather than reconstructed by parsing free-form text after the fact. Treat it as ground truth; treat commit-type inference as a signal for flagging *disagreement* ("this PR is labeled `release:patch` but contains a commit typed `feat` — check this before merge"), not as the primary source once a label is available.
+
+**The label should be required, not defaulted.** An unlabeled PR should fail a required status check, blocking merge, rather than silently falling back to an assumed value (e.g., defaulting to "patch" when nothing is set). A silent default is a release-classification decision nobody actually made — it just happens to be whatever the tooling's fallback was, and it will eventually be wrong for something that mattered (a breaking change slipping out as a patch release because the label step was skipped). Enforce this with a workflow that checks for exactly one `release:*` label on the PR:
+
+```yaml
+# .github/workflows/require-release-label.yml
+name: Require release label
+on:
+  pull_request:
+    types: [opened, labeled, unlabeled, synchronize]
+
+jobs:
+  check-label:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      - name: Verify exactly one release label is present
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          labels=$(gh pr view "${{ github.event.pull_request.number }}" \
+            --json labels --jq '.labels[].name' | grep '^release:' || true)
+          count=$(echo "$labels" | grep -c . || true)
+          if [ "$count" -ne 1 ]; then
+            echo "Expected exactly one release:* label, found: ${labels:-none}"
+            exit 1
+          fi
+```
+
+Naming this job `check-label` and adding it to the branch's required status checks (see [[id:practice:github-pr-workflow][GitHub PR workflow]]) makes the requirement structural rather than a note in a contributing guide someone has to remember to follow.
+
+**Why `release:none` is a distinct tier, not an absence of a label.** A docs-only change, an internal tooling script, or a CI configuration tweak genuinely has no release impact — it shouldn't be counted as a patch just because "patch" is the smallest available bump. Miscounting these inflates the release cadence with noise (a changelog full of "patch" entries that changed nothing a consumer would notice) and, more importantly, erodes the signal value of an actual patch release. Make `release:none` a first-class label choice, required exactly like the others, rather than treating "no release label needed" as a special case the required-check has to special-case around — a PR that touches only `docs/` should still get labeled, just with the tier that means "the versioning workflow should skip this."
+
+This pattern is platform-agnostic in principle — the same "structured label as authoritative release signal, checked at merge time" idea works identically on GitLab via its own label-and-required-check mechanics — but is described here specifically through GitHub's label plus required-status-check implementation, matching [[id:practice:github-actions-conventions][GitHub Actions workflow conventions]] for how the check itself is wired into CI. See also [[id:practice:pr-template][PR description shape]], which documents the release-impact field a PR description should carry alongside the label so the classification is visible to a reviewer without navigating away from the diff.

@@ -1,0 +1,46 @@
+:PROPERTIES:
+:ID: practice:mutating-script-safety
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: Mutating Script Safety (set -e, Logging, Check-Plan-Confirm-Apply)
+#+filetags: :shell:devpractice:
+
+Any script that can change the state of a real, shared, or hard-to-reverse system — a server, a cloud account, a production database, a piece of infrastructure another team or process depends on — needs more discipline than a script that only reads or only touches disposable local state. Four practices together close most of the gap between "a script that usually works" and one that fails safely and leaves a diagnosable trail when it doesn't.
+
+** Fail fast: `set -euo pipefail`, audited, not assumed
+
+`set -euo pipefail` at the top of a bash script stops execution the moment any unguarded command fails, instead of continuing past it. Without it, a failed mutating command can print a false "success" message and cascade into further commands run against state that was never actually created — the script *looks* like it worked from its own output, right up until whatever depends on that state breaks later, disconnected from the actual point of failure.
+
+This is not something to add and assume is safe. `-e` has real, well-defined exemptions that most scripts already lean on, often without realizing it:
+
+- A command's failure inside an `if`/`while`/`until` condition never triggers `-e`.
+- A command that is not the final one in a `&&` or `||` list is exempt — `cmd1 && cmd2` does not abort on `cmd1` failing, because the `&&` itself is what's being evaluated.
+- A command substitution used as a bare assignment (`X=$(cmd | grep pattern)`) is *not* exempt — if `grep` finds nothing, the substitution fails and, under `-e`, aborts the whole script right there. This is the single most common way retrofitting `-e` onto an existing script breaks it: a `grep`/`find`/similar command whose "nothing found" result was always meant to fall through to an existing `if [[ -z "$X" ]]` check downstream never reaches that check — the script dies one line earlier instead.
+
+Audit every bare command substitution in a script before turning `-e` on, not after. Fix genuinely-expected-to-sometimes-fail commands with an explicit `|| true` (preserving the original "empty on no-match" behavior deliberately, not accidentally), or restructure into an `if`/`while` the exemption already covers. A script with dozens of `grep -c`/`grep -oE`-style extractions can need real, one-by-one attention here — don't wrap the whole thing in `-e` and declare it done without checking.
+
+** Log the full transcript, not just what scrolled past interactively
+
+Redirect a script's combined stdout/stderr through `tee` to a persistent, timestamped log file in addition to the terminal, from the top of the script. A mutating action that fails partway through is exactly the moment a durable record matters most — "what actually happened, in what order, right up to the failure" should be answerable by opening a file, not by scrolling back through a terminal that may already be gone (a CI job, a background run, a session that got closed). Pair this with an `ERR` trap that reports the exact failing line and command before the script exits, so the log's last few lines say *what broke*, not just that something did.
+
+** Check, Plan, Confirm, Apply
+
+For any script whose job is to *change* something (not just report on it), separate the run into four explicit phases, in this order:
+
+1. **Check** — read-only. Gather what already exists, what's missing, what the current state actually is. Safe to run any number of times, including against a system already in the target state.
+2. **Plan** — print exactly what would change, derived from what Check found, in plain language a human can review before anything happens. If nothing would change, say so and exit — no prompt, no mutation, no false sense that a confirmation step protected against a no-op that never needed protecting.
+3. **Confirm** — if there's a real plan, show it and require an explicit, hard-to-fat-finger confirmation (typing a full word like `yes`, not a bare keypress) before proceeding. Anything else aborts with zero changes made.
+4. **Apply** — only reached after explicit confirmation. This is the only phase allowed to mutate anything.
+
+This shape makes a script's blast radius legible before it's incurred, gives a human a real chance to catch a plan that looks wrong, and — combined with fail-fast and logging above — means a partial failure during Apply has both a clear stopping point and a clear record of exactly how far it got.
+
+** A worked example of why this needs real auditing, not a template
+
+A script using `ssh "$HOST" "some read-only command"` throughout, then later prompting for confirmation via `read -p "... Type 'yes' to continue: "`, can silently break the *first* time it's run non-interactively (piped input, a CI job) — not because of anything obviously wrong, but because `ssh` forwards local stdin to the remote command by default. Every prior `ssh` call in the script quietly drains a little more of the piped input meant for the later `read`, which then hits end-of-input and returns nothing useful. The fix (`ssh -n`, which explicitly discards local stdin) is easy — but applying it *everywhere* is itself a trap: a call that deliberately feeds a script to the remote side (`ssh "$HOST" bash -s <<<"$SCRIPT"`) genuinely needs that stdin forwarding, and blanket-adding `-n` there silently starves it of the very thing it's supposed to run, with no error, just wrong output.
+
+The general lesson: a fix that's correct for the common case in a script can be actively wrong for a legitimate exception elsewhere in the same script. Apply a safety convention as a default, not a blanket rule applied without rechecking each call site — and when a script is built from smaller pieces meant to be reused (a shared helper function, a sourced library), document the exception at the exact call site that needs it, not just in the general rule.
+
+** Related
+
+[[id:practice:flag-comments][Flag Comments]] and [[id:principle:no-deferred-bugs][No Deferred Bugs]] cover the general discipline of writing down *why* a piece of code deviates from the obvious pattern, which is exactly what documenting an exception like the `ssh -n` case above is doing. [[id:hub:code-quality][Code quality hub]] indexes the surrounding practices.

@@ -1,0 +1,30 @@
+:PROPERTIES:
+:ID: template:tech-debt-item
+:ROLE: atom
+:END:
+#+title: Tech-Debt Item Template
+#+filetags: :tech-debt:template:devpractice:
+
+Fill-in template for a single tracked debt entry. Copy this shape rather than writing a free-form bullet — the fixed fields are what let a debt list stay scannable and closeable instead of degrading into prose nobody re-reads. See [[id:practice:tech-debt-tracking][tech-debt tracking]] for the rationale behind each field.
+
+- **Title** — a short, specific name for the debt (not "cleanup" — name the actual thing: "synchronous file I/O on the request path", "duplicated retry logic in three call sites").
+- **Discovery source** — how this was found: audit pass name/date, issue number, incident/post-mortem, or "deliberate shortcut taken during phase N, flagged at the time."
+- **Why it's debt** — the shortcut taken and the cost it imposes if left as-is (not just "it's messy" — the concrete consequence: a perf ceiling, a correctness risk, a maintenance tax).
+- **Issue link** — link to the tracked issue doing the work, or "roadmap-only" if it is small enough not to warrant a separate issue. See [[id:practice:issue-roadmap-crosslink][roadmap-only vs issue-tracked]] for how to decide.
+- **Closure evidence** — the specific, checkable condition that marks this resolved: a named test that must pass, a benchmark threshold, a follow-up audit finding it clean, a merged PR reference once it lands.
+- **Status** — Open / In progress / Closed (with closure evidence linked, not just marked done).
+
+Example instantiation:
+
+#+begin_example
+- Title: Unbounded retry loop in outbound sync client
+- Discovery source: deep audit, 2026-Q2 sweep
+- Why it's debt: retries with no backoff cap can spin indefinitely against a
+  degraded peer, consuming a worker thread indefinitely.
+- Issue link: #142
+- Closure evidence: new test asserting retry count is bounded under a
+  simulated permanently-failing peer; merged in the fix PR.
+- Status: Closed (see #142, merged)
+#+end_example
+
+Use this same template for debt surfaced by [[id:practice:deep-audit-checklist][a deep audit]] or by [[id:practice:multi-lens-audit-review][a multi-lens review]] pass — the entry point differs, the entry shape stays constant.

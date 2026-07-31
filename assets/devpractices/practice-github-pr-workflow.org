@@ -1,0 +1,41 @@
+:PROPERTIES:
+:ID: practice:github-pr-workflow
+:ROLE: atom
+:KIND: concept
+:END:
+#+title: GitHub Pull Request Workflow Conventions
+#+filetags: :github:vcs:devpractice:
+
+GitHub's pull request mechanics differ from a generic "code review request" in ways worth using deliberately rather than working around: a first-class draft state, closing keywords that auto-close issues on merge, and branch protection built on named required status checks rather than a single pipeline-must-pass switch. This is the GitHub-specific sibling to [[id:practice:gitlab-mr-workflow][the GitLab MR workflow]] — same underlying concerns (description shape, ready-for-review signaling, issue linkage, merge gating), addressed with GitHub's actual mechanics rather than GitLab's. Treat the two as parallel implementations of the same practice, not as duplicates where one is "the real one."
+
+**PR description template.** A repository should ship a description template so every PR starts from the same shape rather than a blank text box: either a single `.github/pull_request_template.md`, or — when different change types warrant different questions (a bug fix vs. a new feature vs. a release) — a `.github/PULL_REQUEST_TEMPLATE/` directory containing multiple named templates, selectable via a `?template=` query parameter or a picker GitHub shows on PR creation. See [[id:practice:pr-template][PR description shape]] for what the template's sections should contain and [[id:template:pr-description][the fill-in template]] for a literal copy-paste version.
+
+**Draft PRs, not title prefixes.** Open a PR as an actual draft (`gh pr create --draft`, or the "Create draft pull request" option in the web UI) when it isn't yet ready for a reviewer's full attention, rather than relying on a `[WIP]` title-prefix convention. A draft is a real PR state GitHub tracks structurally: it's visually distinguished in listings, it can't be merged until explicitly marked "Ready for review," and required status checks still run against it so CI feedback arrives before review does. A title prefix is just text — nothing stops it from being merged, forgotten, or stripped by an automated tool that touches PR titles.
+
+**Branch protection via required status checks.** GitHub does not gate merges on "the pipeline is green" as a single concept the way a protected-branch-plus-pipeline model does. Instead, a branch protection rule names specific status-check contexts (job names reported by CI) that must report success before the merge button unlocks:
+
+```
+Settings → Branches → Branch protection rule → main
+  [x] Require status checks to pass before merging
+      Required checks: build, test, lint
+  [x] Require branches to be up to date before merging
+  [x] Require pull request reviews before merging (1 approving review)
+  [x] Require review from Code Owners
+```
+
+This means the *names* of jobs in a workflow are part of the contract with branch protection — renaming a required job in `.github/workflows/*.yml` silently breaks the protection rule (it will wait forever for a check that no longer reports under that name) until someone notices and updates the required-checks list to match. Treat a CI job rename as a two-file change: the workflow and the branch protection configuration.
+
+**Review routing via CODEOWNERS.** A `.github/CODEOWNERS` file maps path patterns to required reviewers or teams, so a PR touching a given area automatically requests review from whoever owns it rather than relying on the author to remember to tag the right person:
+
+```
+# .github/CODEOWNERS
+/crates/auth/          @security-team
+/docs/adr/             @architecture-leads
+*.proto                @api-reviewers
+```
+
+Combined with "Require review from Code Owners" in branch protection, this makes ownership routing structural rather than a convention someone has to remember to follow.
+
+**Issue linking via closing keywords.** Use a closing keyword in the PR description or a commit message — `Fixes #123`, `Closes #123`, `Resolves #123` — when the PR fully resolves an issue; GitHub auto-closes the referenced issue the moment the PR merges into the repository's default branch. For a PR that only partially addresses an issue, or addresses several, use a non-closing reference (`Refs #123`, `Part of #123`) instead — the same discipline documented in [[id:practice:commit-convention][the conventional commit format]] for commit bodies, applied at the PR-description level so the linkage survives even if individual commits get squashed.
+
+See [[id:practice:github-actions-conventions][GitHub Actions workflow conventions]] for how the required-status-check names are actually produced, and [[id:practice:gh-cli-usage][gh CLI usage]] for creating and managing these PRs from the command line.
