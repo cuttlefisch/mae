@@ -79,3 +79,16 @@ extra-kernel-crates = ["dep:mae-scheme-extra"]
 [dev-dependencies]
 tempfile = "3.27.0"
 async-trait = "0.1"
+
+# ADR-066 Phase D: `windows-sys` direct FFI for `SendInput`/window-discovery in
+# the Windows GUI input smoke test (`tests/gui_windows_input_spike.rs`). Never
+# a dependency of the shipping binary -- dev-dependencies only, and further
+# gated `cfg(windows)` so non-Windows builds never even resolve it. Version
+# picked to match the family already resolved transitively via winit (see
+# Cargo.lock) rather than introducing a second, independently-versioned copy.
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Input_KeyboardAndMouse",
+] }

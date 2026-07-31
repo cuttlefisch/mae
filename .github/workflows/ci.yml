@@ -454,7 +454,7 @@ jobs:
         run: cat /tmp/mae-daemon-phase-e.log || true
 
   windows-gui-spike:
-    name: ADR-066 Phase D / windows GUI build spike
+    name: ADR-066 Phase D / windows GUI build + input spike
     runs-on: windows-latest
     # First iteration of genuinely new CI infrastructure -- skia-safe/
     # skia-bindings 0.99 (the --features gui dependency) built for
@@ -468,12 +468,16 @@ jobs:
     # few real runs, matching that same precedent -- not a permanent
     # leniency.
     #
-    # Deliberately scoped to BUILD ONLY (no test/clippy) -- this is Phase 1
-    # of ADR-066 Phase D's own planned 2-PR sequence (spike, then full
-    # smoke test): answering "does this dependency even compile here" before
-    # betting further CI engineering (launching a real window, driving
-    # SendInput) on an unproven foundation. See docs/adr/066-windows-client-
-    # support.md's Phase D section.
+    # Spike 1/2 (build-only, answering "does this dependency even compile
+    # here") landed and passed. This adds spike 2/2: launch the real GUI
+    # binary, confirm a real window appears (proves the runner has a real
+    # interactive desktop session, not just claimed per public GH-hosted-
+    # runner docs), and inject a synthetic SendInput click, verified via
+    # GetCursorPos reading back the real OS cursor position -- proving the
+    # injection MECHANISM itself works. Deliberately still NOT the full
+    # smoke test (no MCP-observed editor-state assertion yet, no clippy) --
+    # see crates/mae/tests/gui_windows_input_spike.rs's own doc comment and
+    # docs/adr/066-windows-client-support.md's Phase D section.
     continue-on-error: true
     steps:
       - uses: actions/checkout@v7
@@ -483,6 +487,13 @@ jobs:
           incremental: "false"
       - name: cargo build --workspace --features gui (debug, fast signal)
         run: cargo build --workspace --features gui
+      - name: cargo test -p mae --features gui --test gui_windows_input_spike
+        # 8m, not 5m: the test's own window-wait budget is 120s (see the
+        # test's own doc comment -- a cold Windows CI runner's KB
+        # federation/cozo work genuinely needs that long), plus real margin
+        # for the click/assertion steps after it.
+        timeout-minutes: 8
+        run: cargo test -p mae --features gui --test gui_windows_input_spike
 
   daemon:
     name: daemon / check + test
