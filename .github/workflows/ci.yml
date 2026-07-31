@@ -488,7 +488,11 @@ jobs:
       - name: cargo build --workspace --features gui (debug, fast signal)
         run: cargo build --workspace --features gui
       - name: cargo test -p mae --features gui --test gui_windows_input_spike
-        timeout-minutes: 5
+        # 8m, not 5m: the test's own window-wait budget is 120s (see the
+        # test's own doc comment -- a cold Windows CI runner's KB
+        # federation/cozo work genuinely needs that long), plus real margin
+        # for the click/assertion steps after it.
+        timeout-minutes: 8
         run: cargo test -p mae --features gui --test gui_windows_input_spike
 
   daemon:

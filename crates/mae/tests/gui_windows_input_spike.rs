@@ -130,12 +130,25 @@ fn a_real_window_appears_and_a_synthetic_click_lands() {
     // interactive desktop session capable of hosting a Win32 window, not
     // just claimed per public GH-hosted-runner docs (untested by this repo
     // before this spike).
-    let hwnd = wait_for_window(Duration::from_secs(30));
+    //
+    // 120s, not 30s: this run's own first attempt (with a 30s budget) never
+    // got anywhere near window creation -- the captured MAE_LOG=debug
+    // stderr showed it was still deep in KB federation/cozo Datalog query
+    // evaluation (the built-in practices/manual KBs this binary
+    // auto-registers at startup, CLAUDE.md's own "dev-practices KB
+    // dogfooding") at the moment it was killed, with zero GUI/winit log
+    // lines having appeared at all. A cold Windows CI runner (no OS-level
+    // disk cache, fresh cozo DB files) doing that work is genuinely slower
+    // than 30s allows for, not a hang or a real regression -- matches
+    // `headless_e2e.rs`'s own documented precedent (a cold headless boot
+    // observed using 14.7s of a 15s budget "flaky-under-load, not a real
+    // regression").
+    let hwnd = wait_for_window(Duration::from_secs(120));
     if hwnd.is_null() {
         let stdout = std::fs::read_to_string(&stdout_path).unwrap_or_default();
         let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
         panic!(
-            "no window titled {WINDOW_TITLE:?} appeared within 30s -- either the \
+            "no window titled {WINDOW_TITLE:?} appeared within 120s -- either the \
              runner lacks a real desktop session, or the GUI process failed to \
              start. Captured subprocess output:\n--- stdout ---\n{stdout}\n\
              --- stderr ---\n{stderr}"
