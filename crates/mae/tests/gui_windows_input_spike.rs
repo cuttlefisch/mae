@@ -45,12 +45,16 @@ const WINDOW_TITLE: &str = "MAE \u{2014} Modern AI Editor";
 /// Mirrors `headless_e2e.rs`'s `isolated_env` exactly (same rationale: never
 /// touch the real user's config or a shared path) -- `MAE_SKIP_WIZARD=1` so
 /// a fresh instance opens straight to a scratch buffer instead of blocking
-/// on the first-run setup wizard.
+/// on the first-run setup wizard. `MAE_LOG=debug` (this binary's own
+/// tracing env var, `main.rs`'s `init_logging`, distinct from `RUST_LOG`)
+/// so a window-never-appeared failure's captured stderr has real signal to
+/// show, not just silence.
 fn isolated_env(cmd: &mut Command, xdg_config: &Path, xdg_data: &Path, home: &Path) {
     cmd.env("XDG_CONFIG_HOME", xdg_config)
         .env("XDG_DATA_HOME", xdg_data)
         .env("HOME", home)
-        .env("MAE_SKIP_WIZARD", "1");
+        .env("MAE_SKIP_WIZARD", "1")
+        .env("MAE_LOG", "debug");
 }
 
 fn wide_null(s: &str) -> Vec<u16> {
@@ -102,14 +106,22 @@ fn a_real_window_appears_and_a_synthetic_click_lands() {
     std::fs::create_dir_all(&xdg_config).unwrap();
     std::fs::create_dir_all(&xdg_data).unwrap();
 
+    // Captured to files (not `Stdio::null()`) so a window-never-appeared
+    // failure can print the real subprocess output inline below -- the
+    // actual, previously-unknown root cause, not a guess.
+    let stdout_path = tmp.path().join("mae-gui-stdout.log");
+    let stderr_path = tmp.path().join("mae-gui-stderr.log");
+    let stdout_file = std::fs::File::create(&stdout_path).unwrap();
+    let stderr_file = std::fs::File::create(&stderr_path).unwrap();
+
     let mae = env!("CARGO_BIN_EXE_mae");
     let mut cmd = Command::new(mae);
     // `--gui` forces the GUI backend regardless of display-detection
     // heuristics (`main.rs::gui_display_available`) -- unconditionally
     // `true` on non-unix already, but explicit here removes any doubt.
     cmd.args(["--gui"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+        .stdout(Stdio::from(stdout_file))
+        .stderr(Stdio::from(stderr_file));
     isolated_env(&mut cmd, &xdg_config, &xdg_data, tmp.path());
     let child = cmd.spawn().expect("failed to spawn `mae --gui`");
     let guard = SpikeGuard { child: Some(child) };
@@ -119,13 +131,16 @@ fn a_real_window_appears_and_a_synthetic_click_lands() {
     // just claimed per public GH-hosted-runner docs (untested by this repo
     // before this spike).
     let hwnd = wait_for_window(Duration::from_secs(30));
-    assert!(
-        !hwnd.is_null(),
-        "no window titled {WINDOW_TITLE:?} appeared within 30s -- either the \
-         runner lacks a real desktop session, or the GUI process failed to \
-         start (its stdout/stderr were redirected to null above; rerun with \
-         them inherited locally to diagnose)"
-    );
+    if hwnd.is_null() {
+        let stdout = std::fs::read_to_string(&stdout_path).unwrap_or_default();
+        let stderr = std::fs::read_to_string(&stderr_path).unwrap_or_default();
+        panic!(
+            "no window titled {WINDOW_TITLE:?} appeared within 30s -- either the \
+             runner lacks a real desktop session, or the GUI process failed to \
+             start. Captured subprocess output:\n--- stdout ---\n{stdout}\n\
+             --- stderr ---\n{stderr}"
+        );
+    }
 
     unsafe {
         // Best-effort -- a non-foreground window can still receive
