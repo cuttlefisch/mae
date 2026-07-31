@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.87] - 2026-07-31
+
+### CI
+
+- Skip the slow job matrix on version-bump's own automated commit ([bf35a47](https://github.com/cuttlefisch/mae/commit/bf35a47c5cacca82e084dcd40b2f9a03ac08a6f0))
+
 ## [0.14.86] - 2026-07-31
 
 ### Bug Fixes
@@ -11,6 +17,7 @@ All notable changes to this project will be documented in this file.
 ### Miscellaneous
 
 - Sync Cargo.lock package versions to 0.14.85 ([3a05ded](https://github.com/cuttlefisch/mae/commit/3a05ded377cdf0a412905149aa4f88082de5715c))
+- Bump version to 0.14.86 ([98c301b](https://github.com/cuttlefisch/mae/commit/98c301b9a581638ca6b14f7568a5835f53b58b3c))
 
 ## [0.14.85] - 2026-07-31
 
