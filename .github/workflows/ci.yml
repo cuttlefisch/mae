@@ -37,6 +37,27 @@ jobs:
   # `daemon` job's build artifact IS consumed downstream by `e2e`/
   # `install-test`, which is exactly why `daemon` itself stays unfiltered
   # despite being a plausible-looking candidate).
+  #
+  # `version-bump-only` (added separately from the path filters above) is a
+  # narrower, different kind of gate: an IDENTITY check, not a path filter.
+  # `version-bump.yml` pushes an automated "chore: bump version to X.Y.Z"
+  # commit straight to `main` after every merge, touching only VERSION /
+  # Cargo.toml version lines / CHANGELOG.md / install.sh's version string --
+  # never real code -- and then polls this very "CI" workflow's conclusion
+  # on that commit before it'll tag a release. Before this gate, that commit
+  # re-ran the ENTIRE ~18-job matrix a second time (having already passed as
+  # part of the PR that was just merged), costing 38-42 real measured
+  # minutes for a diff that cannot possibly affect test/build/e2e outcomes.
+  # Scoped to `push` + an exact match on version-bump.yml's own commit
+  # message prefix (nothing else in this repo produces that exact string) --
+  # this is `push`-only and never evaluates for `pull_request`, so unlike
+  # the path filters above it cannot affect any real PR's required-check
+  # set; it only shortens the redundant post-merge re-verification of a
+  # commit whose content this workflow already knows in advance is
+  # metadata-only. See ADR-076's sibling discussion (CI efficiency) / the
+  # commit introducing this gate for the full rationale, including why
+  # `stable / clippy` + `stable / fmt` + a real (but non-test-running) build
+  # stay on as a safety net rather than skipping everything.
   changes:
     name: detect changed paths
     runs-on: ubuntu-latest
@@ -44,6 +65,7 @@ jobs:
       headless: ${{ steps.filter.outputs.headless }}
       containers: ${{ steps.filter.outputs.containers }}
       adr: ${{ steps.filter.outputs.adr }}
+      version-bump-only: ${{ steps.version-bump-only.outputs.result }}
     steps:
       - uses: actions/checkout@v7
       - uses: dorny/paths-filter@v4
@@ -78,10 +100,28 @@ jobs:
               - 'crates/mae/src/bin/verify_adr_kb_sync.rs'
               - '.github/workflows/ci.yml'
               - '.github/actions/**'
+      # Untrusted commit-message content is passed via `env:`, never
+      # interpolated directly into the script body -- avoids the classic
+      # GitHub Actions script-injection footgun (a `${{ }}` expression
+      # substituted straight into `run:` is spliced in BEFORE the shell
+      # parses it), even though this specific commit's message is always
+      # workflow-generated, not user-authored.
+      - name: Detect version-bump-only push
+        id: version-bump-only
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          if [ "$EVENT_NAME" = "push" ] && [[ "$HEAD_COMMIT_MESSAGE" == "chore: bump version to "* ]]; then
+            echo "result=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "result=false" >> "$GITHUB_OUTPUT"
+          fi
 
   check:
     name: stable / ${{ matrix.step }}
     runs-on: ubuntu-latest
+    needs: changes
     strategy:
       fail-fast: false
       matrix:
@@ -124,11 +164,24 @@ jobs:
       # relative to the full `daemon` job (no test/clippy/fmt), and now
       # actually cached (see `workspaces:` above).
       - name: Build mae-daemon (for headless_kb_convergence_e2e)
-        if: matrix.step == 'test'
+        if: matrix.step == 'test' && needs.changes.outputs.version-bump-only != 'true'
         run: cd daemon && cargo build --release --bin mae-daemon
 
+      # Safety net for a version-bump-only push (see the `changes` job's own
+      # comment for the full rationale): the bump commit can't have broken
+      # anything the actual test suite exercises (it never touches code),
+      # but a plain `cargo build` still catches the one thing genuinely
+      # worth re-checking post-merge -- does the merged tree still compile
+      # -- for a fraction of the real nextest run's cost. `--all-targets`
+      # (unlike the real test step's plain `--workspace`) also compiles
+      # test/bench targets without RUNNING them, so this is a strictly
+      # broader compile check than skipping straight to nothing.
+      - name: cargo build (version-bump-only safety net, no test run)
+        if: matrix.step == 'test' && needs.changes.outputs.version-bump-only == 'true'
+        run: cargo build --workspace --release --features gui --all-targets
+
       - name: cargo test
-        if: matrix.step == 'test'
+        if: matrix.step == 'test' && needs.changes.outputs.version-bump-only != 'true'
         timeout-minutes: 30
         # Issue #470: cargo-nextest as the runner (real parallel-process test
         # execution, global scheduling across every test binary in the
@@ -185,15 +238,20 @@ jobs:
       # — never the plain target/release/mae-agent artifact this job stages.
       # Confirmed by reproducing locally: `cargo test --release -p
       # mae-agent-cli` leaves no target/release/mae-agent at all.
+      # All three steps below exist solely to feed the `mae-binary` artifact
+      # `e2e`/`install-test` download downstream -- both of those jobs are
+      # themselves skipped for a version-bump-only push (see the `changes`
+      # job's comment), so producing/uploading an artifact nobody will
+      # consume would be pure waste in that case.
       - name: Build install artifacts (reuse test-compiled binaries)
-        if: matrix.step == 'test'
+        if: matrix.step == 'test' && needs.changes.outputs.version-bump-only != 'true'
         run: |
           cargo build --release --package mae-mcp
           cargo build --release --package mae-agent-cli
           ./target/release/build-manual-kb assets/mae-manual.cozo
 
       - name: Stage editor artifacts
-        if: matrix.step == 'test'
+        if: matrix.step == 'test' && needs.changes.outputs.version-bump-only != 'true'
         run: |
           mkdir -p /tmp/mae-artifacts
           cp target/release/mae /tmp/mae-artifacts/
@@ -203,7 +261,7 @@ jobs:
           cp assets/mae-manual.cozo.sha256 /tmp/mae-artifacts/
 
       - name: Upload editor artifacts
-        if: matrix.step == 'test'
+        if: matrix.step == 'test' && needs.changes.outputs.version-bump-only != 'true'
         uses: actions/upload-artifact@v7
         with:
           name: mae-binary
@@ -213,6 +271,8 @@ jobs:
   windows:
     name: stable / test (windows)
     runs-on: windows-latest
+    needs: changes
+    if: needs.changes.outputs.version-bump-only != 'true'
     # ADR-066 Phase C: the editor workspace's Windows CI leg. Hard-blocking from day
     # one, deliberately NOT `continue-on-error` (unlike mae-vscode's own interim
     # posture for its separate, smaller-scope CI) -- an unenforced leg proves nothing
@@ -303,6 +363,8 @@ jobs:
   windows-remote-e2e:
     name: ADR-066 Phase E / windows remote daemon verification
     runs-on: windows-latest
+    needs: changes
+    if: needs.changes.outputs.version-bump-only != 'true'
     # First iteration of genuinely new CI infrastructure (a Windows-BUILT
     # client reaching a real Linux-BUILT mae-daemon, hosted in WSL2 on the
     # SAME runner since GH Actions has no native way to network two
@@ -456,6 +518,8 @@ jobs:
   windows-gui-spike:
     name: ADR-066 Phase D / windows GUI build + input spike
     runs-on: windows-latest
+    needs: changes
+    if: needs.changes.outputs.version-bump-only != 'true'
     # First iteration of genuinely new CI infrastructure -- skia-safe/
     # skia-bindings 0.99 (the --features gui dependency) built for
     # x86_64-pc-windows-msvc for the very first time. GUI already builds
@@ -498,6 +562,8 @@ jobs:
   daemon:
     name: daemon / check + test
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.version-bump-only != 'true'
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
@@ -543,6 +609,8 @@ jobs:
   msrv:
     name: MSRV / 1.95 build + test
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.version-bump-only != 'true'
     # Keep "1.95" in sync with Cargo.toml's `rust-version = "1.95"` by hand --
     # this is the only leg that actually proves the declared MSRV compiles;
     # every other job uses `stable`, which drifts forward over time and would
@@ -576,6 +644,8 @@ jobs:
   server-client:
     name: Server-Client Integration
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.version-bump-only != 'true'
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
@@ -662,7 +732,7 @@ jobs:
     name: container / smoke + new-user
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.containers == 'true'
+    if: needs.changes.outputs.containers == 'true' && needs.changes.outputs.version-bump-only != 'true'
     steps:
       - uses: actions/checkout@v7
       - name: Build and smoke-test container
@@ -675,7 +745,8 @@ jobs:
   e2e:
     name: e2e / scheme + packages
     runs-on: ubuntu-latest
-    needs: [check, daemon]
+    needs: [check, daemon, changes]
+    if: needs.changes.outputs.version-bump-only != 'true'
     steps:
       - uses: actions/checkout@v7
       # No dtolnay/rust-toolchain here -- this job only runs pre-built
@@ -794,6 +865,8 @@ jobs:
   scheme-runtime:
     name: scheme / R7RS compliance
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.version-bump-only != 'true'
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup-rust
@@ -827,6 +900,8 @@ jobs:
   collab-e2e:
     name: collab / docker e2e
     runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.version-bump-only != 'true'
     steps:
       - uses: actions/checkout@v7
       - name: Run collab E2E
@@ -837,7 +912,7 @@ jobs:
     name: headless / docker e2e
     runs-on: ubuntu-latest
     needs: changes
-    if: needs.changes.outputs.headless == 'true'
+    if: needs.changes.outputs.headless == 'true' && needs.changes.outputs.version-bump-only != 'true'
     steps:
       - uses: actions/checkout@v7
       - name: Run headless MAE service-mode E2E
@@ -847,7 +922,8 @@ jobs:
   install-test:
     name: install / script validation
     runs-on: ubuntu-latest
-    needs: [check, daemon]
+    needs: [check, daemon, changes]
+    if: needs.changes.outputs.version-bump-only != 'true'
     steps:
       - uses: actions/checkout@v7
 
@@ -977,6 +1053,8 @@ jobs:
   macos:
     name: macOS / build + test + install + collab e2e
     runs-on: macos-latest
+    needs: changes
+    if: needs.changes.outputs.version-bump-only != 'true'
     # First-appearance posture, matching windows-remote-e2e/msrv's own
     # established precedent exactly: promote to hard-blocking only once
     # proven stable across a few real runs, not a permanent leniency.
