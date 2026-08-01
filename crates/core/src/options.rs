@@ -973,6 +973,17 @@ impl OptionRegistry {
                      (kb_graph_wedge_corner_radius_fraction), matching the reference 'petal' design \
                      this was ported from, which deliberately uses no drawn gap or border.",
                     OptionKind::Float, "0.0", Some("kb-graph.wedge-gap-radians"), &[]),
+                // --- org export (org_export / :org-export-html) ---
+                opt!("org_export_allow_raw_html_blocks", &["org-export-allow-raw-html-blocks"],
+                    "Whether org_export's HTML output emits `#+begin_export html ... #+end_export` \
+                     blocks raw (trusted, standard org semantics) or HTML-escapes them (safe \
+                     default, off). Only relevant to org_export, which exports the current buffer \
+                     you're presumably editing yourself -- kb_export_subgraph_html never reads \
+                     this option, since that tool's whole purpose is producing a shareable \
+                     artifact from KB content that may not be self-authored (a federated/shared \
+                     KB), where raw HTML passthrough would be a stored-XSS vector. Enable only if \
+                     you deliberately embed raw HTML in your own org files and trust that content.",
+                    OptionKind::Bool, "false", Some("org-export.allow_raw_html_blocks"), &[]),
                 // --- KB subgraph HTML export (kb-export-subgraph-html /
                 // kb_export_subgraph_html) -- bilingual-kb-export/kb/adrs/0005/0006 ---
                 opt!("kb_export_default_depth", &["kb-export-default-depth"],

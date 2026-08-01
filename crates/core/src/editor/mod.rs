@@ -1126,6 +1126,10 @@ pub struct Editor {
     pub data_dir_override: Option<std::path::PathBuf>,
     /// Babel: prompt before executing blocks (default true).
     pub babel_confirm: bool,
+    /// org_export: emit `#+begin_export html` blocks raw instead of
+    /// HTML-escaped (default false — safe). See the option's own
+    /// registration doc in `options.rs` for why this is off by default.
+    pub org_export_allow_raw_html_blocks: bool,
     /// Babel: trusted file patterns that skip confirmation.
     pub babel_trust_paths: Vec<String>,
     /// Babel: execution timeout in seconds (default 30).
@@ -1647,6 +1651,7 @@ impl Editor {
             config_dir_override: None,
             data_dir_override: None,
             babel_confirm: true,
+            org_export_allow_raw_html_blocks: false,
             babel_trust_paths: Vec::new(),
             babel_timeout: 30,
             babel_inherit_shell_env: true,

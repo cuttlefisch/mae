@@ -149,6 +149,9 @@ impl super::Editor {
             "display_region_debounce_ms" => self.display_region_debounce_ms.to_string(),
             "syntax_reparse_debounce_ms" => self.syntax_reparse_debounce_ms.to_string(),
             "babel_confirm" => self.babel_confirm.to_string(),
+            "org_export_allow_raw_html_blocks" => {
+                self.org_export_allow_raw_html_blocks.to_string()
+            }
             "babel_timeout" => self.babel_timeout.to_string(),
             "babel_inherit_shell_env" => self.babel_inherit_shell_env.to_string(),
             "babel_cxx_compiler" => self.babel_cxx_compiler.clone(),
@@ -824,6 +827,9 @@ impl super::Editor {
             // their editor fields (dead config); wire them here so `:set` works.
             "babel_confirm" => {
                 self.babel_confirm = parse_option_bool(value)?;
+            }
+            "org_export_allow_raw_html_blocks" => {
+                self.org_export_allow_raw_html_blocks = parse_option_bool(value)?;
             }
             "babel_timeout" => {
                 let v: u64 = value
@@ -3127,6 +3133,39 @@ mod graph_view_option_tests {
             .set_option("kb_graph_label_declutter_enabled", "true")
             .unwrap();
         assert!(editor.kb_graph_label_declutter_enabled);
+    }
+
+    #[test]
+    fn org_export_allow_raw_html_blocks_option_roundtrips_and_defaults_safe() {
+        let mut editor = Editor::new();
+        // Safe default: off (escaped), not the org-spec default (raw
+        // passthrough) -- this option exists specifically to make the
+        // unsafe behavior opt-in, not opt-out.
+        assert_eq!(
+            editor
+                .get_option("org_export_allow_raw_html_blocks")
+                .unwrap()
+                .0,
+            "false"
+        );
+        assert!(!editor.org_export_allow_raw_html_blocks);
+
+        editor
+            .set_option("org_export_allow_raw_html_blocks", "true")
+            .unwrap();
+        assert!(editor.org_export_allow_raw_html_blocks);
+        assert_eq!(
+            editor
+                .get_option("org_export_allow_raw_html_blocks")
+                .unwrap()
+                .0,
+            "true"
+        );
+
+        editor
+            .set_option("org_export_allow_raw_html_blocks", "false")
+            .unwrap();
+        assert!(!editor.org_export_allow_raw_html_blocks);
     }
 
     #[test]

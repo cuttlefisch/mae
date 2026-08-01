@@ -179,7 +179,16 @@ pub(crate) fn render_element(html: &mut String, element: &OrgElement, opts: &Exp
         OrgElement::Comment(_) => {}
         OrgElement::ExportBlock { format, content } => {
             if format == "html" {
-                html.push_str(content);
+                if opts.allow_raw_html_export_blocks {
+                    html.push_str(content);
+                } else {
+                    // Safe default: `#+begin_export html` is standard org
+                    // syntax for embedding raw HTML, but this org content
+                    // isn't necessarily self-authored/trusted (see
+                    // `ExportOptions::allow_raw_html_export_blocks`'s doc
+                    // comment) -- escape rather than inject it verbatim.
+                    html.push_str(&html_escape(content));
+                }
                 html.push('\n');
             }
         }

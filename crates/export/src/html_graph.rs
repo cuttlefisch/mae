@@ -4885,6 +4885,29 @@ mod tests {
     }
 
     #[test]
+    fn adversarial_begin_export_html_in_a_kb_node_body_is_escaped() {
+        // kb_export_subgraph_html's whole purpose is producing a
+        // shareable artifact from KB content that isn't necessarily
+        // self-authored (a federated/shared KB) -- this path must NEVER
+        // trust a #+begin_export html block the way org_export's opt-in
+        // (ExportOptions::allow_raw_html_export_blocks) can, since
+        // build_export_node/render_node_body_html always uses
+        // ExportOptions::default() with no override.
+        let evil_body = "Normal prose.\n#+begin_export html\n<img src=x onerror=alert(document.cookie)>\n#+end_export\n";
+        let n = simple_node("a", "Title", evil_body, true);
+        assert!(
+            !n.body_en.contains("<img"),
+            "a live <img> tag must never survive kb_export_subgraph_html's render path: {}",
+            n.body_en
+        );
+        assert!(
+            n.body_en.contains("&lt;img src=x onerror=alert(document.cookie)&gt;"),
+            "expected the escaped form to be present: {}",
+            n.body_en
+        );
+    }
+
+    #[test]
     fn adversarial_quotes_in_title_do_not_break_json() {
         let evil_title = r#"Title with "quotes" and \backslash\ and 'ticks'"#;
         let n = simple_node("a", evil_title, "body", false);

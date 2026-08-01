@@ -37,6 +37,21 @@ pub struct ExportOptions {
     pub num: bool,
     pub author_p: bool,
     pub date_p: bool,
+    /// Whether `#+begin_export html ... #+end_export` blocks are emitted
+    /// raw (trusted, standard org semantics) or HTML-escaped (safe
+    /// default). Deliberately NOT parsed from the document's own
+    /// `#+OPTIONS:` line (see `parse_options_line`) -- unlike every other
+    /// field here, this one is security-relevant: a KB node whose content
+    /// isn't necessarily self-authored (a federated/shared KB, or content
+    /// ingested from elsewhere) could otherwise just add its own
+    /// `#+OPTIONS:` line to re-enable raw HTML passthrough for itself.
+    /// Only a caller that already trusts the source (e.g. `org_export`
+    /// exporting the human's own local buffer, gated behind the
+    /// `org_export_allow_raw_html_blocks` editor option, default off)
+    /// should ever set this to `true`. `kb_export_subgraph_html` never
+    /// sets it -- that path is explicitly a shareable, potentially
+    /// multi-author artifact, so it stays hardcoded-safe.
+    pub allow_raw_html_export_blocks: bool,
 }
 
 impl Default for ExportOptions {
@@ -48,6 +63,7 @@ impl Default for ExportOptions {
             num: true,
             author_p: true,
             date_p: true,
+            allow_raw_html_export_blocks: false,
         }
     }
 }
@@ -1405,6 +1421,38 @@ mod tests {
         let html = html::HtmlExporter.export(&OrgMeta::default(), &elements);
         assert!(!html.contains("<script>"), "must be escaped: {html}");
         assert!(html.contains("&lt;script&gt;"), "got: {html}");
+    }
+
+    #[test]
+    fn adversarial_begin_export_html_is_escaped_by_default() {
+        // Real, no-click stored-XSS: standard org semantics pass
+        // `#+begin_export html ... #+end_export` straight through raw,
+        // assuming a trusted single author -- but this parser feeds KB
+        // node content that isn't necessarily self-authored (federated/
+        // shared KBs) into the SAME exporter. Default (no explicit opt-in
+        // via ExportOptions::allow_raw_html_export_blocks) must escape it.
+        let src = "#+begin_export html\n<img src=x onerror=alert(1)>\n#+end_export\n";
+        let (_, elements) = parse_org_document(src);
+        let html = html::HtmlExporter.export(&OrgMeta::default(), &elements);
+        assert!(!html.contains("<img"), "must be escaped by default: {html}");
+        assert!(html.contains("&lt;img src=x onerror=alert(1)&gt;"), "got: {html}");
+    }
+
+    #[test]
+    fn begin_export_html_passes_through_raw_when_explicitly_trusted() {
+        // The opt-in escape hatch: a caller that already trusts its own
+        // source content (e.g. org_export on the human's own local
+        // buffer, gated behind the org_export_allow_raw_html_blocks
+        // editor option) can still get standard org semantics.
+        let src = "#+begin_export html\n<div class=\"custom-badge\">Hi</div>\n#+end_export\n";
+        let (_, elements) = parse_org_document(src);
+        let mut meta = OrgMeta::default();
+        meta.options.allow_raw_html_export_blocks = true;
+        let html = html::HtmlExporter.export(&meta, &elements);
+        assert!(
+            html.contains("<div class=\"custom-badge\">Hi</div>"),
+            "explicit opt-in must pass raw HTML through unescaped: {html}"
+        );
     }
 
     #[test]
