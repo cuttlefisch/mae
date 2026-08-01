@@ -149,9 +149,7 @@ impl super::Editor {
             "display_region_debounce_ms" => self.display_region_debounce_ms.to_string(),
             "syntax_reparse_debounce_ms" => self.syntax_reparse_debounce_ms.to_string(),
             "babel_confirm" => self.babel_confirm.to_string(),
-            "org_export_allow_raw_html_blocks" => {
-                self.org_export_allow_raw_html_blocks.to_string()
-            }
+            "org_export_allow_raw_html_blocks" => self.org_export_allow_raw_html_blocks.to_string(),
             "babel_timeout" => self.babel_timeout.to_string(),
             "babel_inherit_shell_env" => self.babel_inherit_shell_env.to_string(),
             "babel_cxx_compiler" => self.babel_cxx_compiler.clone(),

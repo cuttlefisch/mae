@@ -2534,8 +2534,8 @@ fn kb_export_subgraph_html_from_scheme_with_chord_config_alist_override() {
     let end = written[start..]
         .find("</script>")
         .expect("expected graph-data script tag to close");
-    let payload: serde_json::Value = serde_json::from_str(&written[start..start + end])
-        .expect("graph-data must be valid JSON");
+    let payload: serde_json::Value =
+        serde_json::from_str(&written[start..start + end]).expect("graph-data must be valid JSON");
     assert_eq!(
         payload["chordConfig"]["hoverGrowthFactor"], 2.75,
         "expected the symbol-keyed float override to apply: status={}",

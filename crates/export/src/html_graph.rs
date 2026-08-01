@@ -1793,7 +1793,8 @@ mod tests {
         // opened with its own raw `:PROPERTIES: :ID: ... :hash: ... :END:`
         // drawer dumped as visible prose, because `parse_org_document`
         // (written for org BODY content) has no concept of a drawer.
-        let body = ":PROPERTIES:\n:ID:       note-9c21\n:hash:     deadbeef\n:END:\nReal content here.";
+        let body =
+            ":PROPERTIES:\n:ID:       note-9c21\n:hash:     deadbeef\n:END:\nReal content here.";
         let n = build_export_node(
             "note-9c21",
             "note",
@@ -2298,7 +2299,8 @@ mod tests {
             n.body_en
         );
         assert!(
-            n.body_en.contains("&lt;img src=x onerror=alert(document.cookie)&gt;"),
+            n.body_en
+                .contains("&lt;img src=x onerror=alert(document.cookie)&gt;"),
             "expected the escaped form to be present: {}",
             n.body_en
         );

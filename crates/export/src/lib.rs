@@ -171,7 +171,12 @@ fn indent_of(raw_line: &str) -> usize {
 /// indentation-based nesting (not a separate "compact"/`-`-only nested
 /// syntax some org tooling also accepts), matching how org itself is
 /// normally authored.
-fn parse_list_items(lines: &[&str], i: &mut usize, base_indent: usize, ordered: bool) -> Vec<ListItem> {
+fn parse_list_items(
+    lines: &[&str],
+    i: &mut usize,
+    base_indent: usize,
+    ordered: bool,
+) -> Vec<ListItem> {
     let mut items: Vec<ListItem> = Vec::new();
     while *i < lines.len() {
         let raw = lines[*i];
@@ -1166,7 +1171,11 @@ mod tests {
             panic!("expected a List element, got {:?}", elements[0]);
         };
         assert!(ordered);
-        assert_eq!(items.len(), 2, "the drawer must not be misparsed as a third item");
+        assert_eq!(
+            items.len(),
+            2,
+            "the drawer must not be misparsed as a third item"
+        );
         assert!(
             !items[0].content.contains(":PROPERTIES:") && !items[0].content.contains(":END:"),
             "drawer must not leak into item 1's content: {:?}",
@@ -1189,7 +1198,8 @@ mod tests {
 
     #[test]
     fn unordered_list_item_with_its_own_properties_drawer_does_not_leak_it() {
-        let src = "- First item.\n  :PROPERTIES:\n  :ID: abc123\n  :END:\n  More text.\n- Second item.\n";
+        let src =
+            "- First item.\n  :PROPERTIES:\n  :ID: abc123\n  :END:\n  More text.\n- Second item.\n";
         let (_, elements) = parse_org_document(src);
         let OrgElement::List { items, .. } = &elements[0] else {
             panic!("expected a List element, got {:?}", elements[0]);
@@ -1212,7 +1222,11 @@ mod tests {
             panic!("expected a List element, got {:?}", elements[0]);
         };
         assert!(!ordered);
-        assert_eq!(items.len(), 2, "must be 2 top-level items, not 4 flattened siblings");
+        assert_eq!(
+            items.len(),
+            2,
+            "must be 2 top-level items, not 4 flattened siblings"
+        );
         assert_eq!(items[0].content, "Top item one");
         assert_eq!(items[0].children.len(), 2);
         assert_eq!(items[0].children[0].content, "Nested sub-item A");
@@ -1307,7 +1321,11 @@ mod tests {
         // now also-fixed code path) and the list's own item count/order.
         let src = "1. First.\n2. Second.\n9. Ninth.\n10. Tenth.\n11. Eleventh.\n";
         let (_, elements) = parse_org_document(src);
-        assert_eq!(elements.len(), 1, "all five items must parse as ONE list, not split at item 10");
+        assert_eq!(
+            elements.len(),
+            1,
+            "all five items must parse as ONE list, not split at item 10"
+        );
         let OrgElement::List { ordered, items } = &elements[0] else {
             panic!("expected a List element, got {:?}", elements[0]);
         };
@@ -1654,7 +1672,10 @@ mod tests {
         let (_, elements) = parse_org_document(src);
         let html = html::HtmlExporter.export(&OrgMeta::default(), &elements);
         assert!(!html.contains("<img"), "must be escaped by default: {html}");
-        assert!(html.contains("&lt;img src=x onerror=alert(1)&gt;"), "got: {html}");
+        assert!(
+            html.contains("&lt;img src=x onerror=alert(1)&gt;"),
+            "got: {html}"
+        );
     }
 
     #[test]
@@ -1683,7 +1704,10 @@ mod tests {
         let src = "- Top item\n  - Nested A\n  - Nested B\n- Second top item\n";
         let (_, elements) = parse_org_document(src);
         let html = html::HtmlExporter.export(&OrgMeta::default(), &elements);
-        assert!(html.contains("<li>Top item<ul>\n<li>Nested A</li>"), "{html}");
+        assert!(
+            html.contains("<li>Top item<ul>\n<li>Nested A</li>"),
+            "{html}"
+        );
         assert!(html.contains("<li>Nested B</li>\n</ul>\n</li>"), "{html}");
         assert!(html.contains("<li>Second top item</li>"), "{html}");
     }

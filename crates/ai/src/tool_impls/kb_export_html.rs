@@ -182,9 +182,10 @@ fn resolve_chord_config(
     // `$max`.
     macro_rules! override_u32 {
         ($key:literal, $field:ident, $max:expr) => {
-            let raw = overrides
-                .get($key)
-                .and_then(|v| v.as_u64().or_else(|| v.as_f64().filter(|f| *f >= 0.0).map(|f| f as u64)));
+            let raw = overrides.get($key).and_then(|v| {
+                v.as_u64()
+                    .or_else(|| v.as_f64().filter(|f| *f >= 0.0).map(|f| f as u64))
+            });
             if let Some(v) = raw {
                 cfg.$field = (v as u32).min($max);
             }
@@ -200,7 +201,12 @@ fn resolve_chord_config(
     // comment) -- anything outside it isn't a creative override, it's a
     // geometry break.
     override_f64!("edge_pull_back", edge_pull_back, 0.0, 1.0);
-    override_f64!("wedge_gap_radians", wedge_gap_radians, 0.0, std::f64::consts::PI);
+    override_f64!(
+        "wedge_gap_radians",
+        wedge_gap_radians,
+        0.0,
+        std::f64::consts::PI
+    );
     override_u32!("history_depth_cap", history_depth_cap, 1000);
     // Doc'd range [0, 1] -- a fraction of halfThickness; a corner radius
     // bigger than the wedge's own half-thickness isn't meaningful.
@@ -960,7 +966,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("out.html");
         write_atomically(&out, "<html>content</html>").unwrap();
-        assert_eq!(std::fs::read_to_string(&out).unwrap(), "<html>content</html>");
+        assert_eq!(
+            std::fs::read_to_string(&out).unwrap(),
+            "<html>content</html>"
+        );
         let leftover: Vec<_> = std::fs::read_dir(dir.path())
             .unwrap()
             .filter_map(|e| e.ok())
