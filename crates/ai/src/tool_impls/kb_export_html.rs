@@ -48,6 +48,29 @@ fn resolve_path(editor: &Editor, raw: &str) -> PathBuf {
     }
 }
 
+/// Write `contents` to `path` atomically: write to a temp file in the SAME
+/// directory (so the final `rename` is same-filesystem, never a cross-
+/// filesystem copy that could itself fail partway), then rename over the
+/// destination. A disk-full/killed-process/power-loss mid-write can now
+/// only ever leave the ORIGINAL file untouched or the NEW file fully
+/// written at `path` -- never a partial/corrupt file at the destination,
+/// unlike the previous plain `std::fs::write`. Best-effort cleanup of the
+/// temp file on a write failure (not the rename failure path, where the
+/// temp file IS the recovery artifact) -- a leftover `.tmp-<pid>` file on
+/// that rare failure is a minor cleanup nit, not a correctness issue.
+fn write_atomically(path: &std::path::Path, contents: &str) -> std::io::Result<()> {
+    let file_name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidInput, "path has no file name")
+    })?;
+    let tmp_name = format!("{}.tmp-{}", file_name.to_string_lossy(), std::process::id());
+    let tmp_path = path.with_file_name(tmp_name);
+    if let Err(e) = std::fs::write(&tmp_path, contents) {
+        let _ = std::fs::remove_file(&tmp_path);
+        return Err(e);
+    }
+    std::fs::rename(&tmp_path, path)
+}
+
 /// Find which `KnowledgeBase` (primary, or a registered federated instance)
 /// actually contains `id` — `extract_subgraph` is a method on a single
 /// in-memory `KnowledgeBase` and never crosses instance boundaries (see
@@ -496,7 +519,7 @@ pub fn execute_kb_export_subgraph_html(
             })?;
         }
     }
-    std::fs::write(&out_path, &html).map_err(|e| {
+    write_atomically(&out_path, &html).map_err(|e| {
         format!(
             "kb_export_subgraph_html: couldn't write {}: {e}",
             out_path.display()
@@ -902,6 +925,56 @@ mod tests {
         assert!(html.contains("\"id\":\"root\""));
         assert!(html.contains("\"id\":\"child\""));
         assert!(html.starts_with("<!DOCTYPE html>"));
+    }
+
+    #[test]
+    fn write_atomically_leaves_no_temp_file_behind_on_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.html");
+        write_atomically(&out, "<html>content</html>").unwrap();
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "<html>content</html>");
+        let leftover: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .collect();
+        assert!(
+            leftover.is_empty(),
+            "no .tmp-<pid> file should remain after a successful write: {leftover:?}"
+        );
+    }
+
+    #[test]
+    fn write_atomically_replaces_existing_content_wholesale_not_partially() {
+        // The real property this guards: the destination is never observed
+        // in a partial state. Can't directly simulate a kill-mid-write in
+        // a unit test, but confirm the round-trip replaces old content
+        // completely (same-filesystem rename, not an in-place truncate).
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.html");
+        write_atomically(&out, "first version, quite long content here").unwrap();
+        write_atomically(&out, "v2").unwrap();
+        assert_eq!(std::fs::read_to_string(&out).unwrap(), "v2");
+    }
+
+    #[test]
+    fn kb_export_subgraph_html_write_uses_the_atomic_path_end_to_end() {
+        let editor = editor_with_star_kb(1);
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.html");
+        execute_kb_export_subgraph_html(
+            &editor,
+            &serde_json::json!({"id": "root", "path": out.to_str().unwrap()}),
+            None,
+        )
+        .unwrap();
+        assert!(out.exists());
+        let leftover: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp-"))
+            .collect();
+        assert!(leftover.is_empty(), "{leftover:?}");
     }
 
     #[test]
