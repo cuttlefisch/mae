@@ -2,11 +2,82 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.88] - 2026-08-01
+
+### Bug Fixes
+
+- *(export)* Render mae_kb's internal pipe-style links, strip PROPERTIES drawers ([c350fa6](https://github.com/cuttlefisch/mae/commit/c350fa69826b5f85241e494e14fc3c3c1da35581))
+- *(export)* Decode Unicode scalars, not raw bytes, in inline markup conversion ([6445ede](https://github.com/cuttlefisch/mae/commit/6445ede3bcab5efd7393578bc2a35c576e41459c))
+- *(export)* Selective chord-diagram labels, truncated, viewBox room for them ([0d34bf2](https://github.com/cuttlefisch/mae/commit/0d34bf278bdea47807ba561c7c57f3e59dd0641a))
+- *(export)* Reusability review findings — real hit-target guarantee, no silent truncation ([8120d03](https://github.com/cuttlefisch/mae/commit/8120d0362bba0fc1663c1a0ce729d71d247f745a))
+- *(export)* Graph-pane actually paints with its inverted background ([0278e81](https://github.com/cuttlefisch/mae/commit/0278e81c0ac3782fefe3e6d8bf4e9db5d1e99680))
+- *(export)* Next no longer re-selects the visible anchor, body links navigate, inline code visible ([22f8630](https://github.com/cuttlefisch/mae/commit/22f863053f58f4d365676144bb82e755117e255b))
+- *(export)* Flatten chord widget chrome, center the ring, fix label bias ([e28dfe4](https://github.com/cuttlefisch/mae/commit/e28dfe4d47396587211827f4dac92408327360ed))
+- *(export)* Table markup, real UX for nav/popover, legible chord labels ([2f86552](https://github.com/cuttlefisch/mae/commit/2f86552085555c4777df6e44993f077561a8beeb))
+- *(export)* Re-point kb_export_subgraph_html at bilingual-kb-export ([de14625](https://github.com/cuttlefisch/mae/commit/de14625c39c526de360e0d5eb6ed40c820816933))
+- *(manual)* Convert markdown-flavored syntax to real org syntax ([40ef1ac](https://github.com/cuttlefisch/mae/commit/40ef1ac8c7f653d6303e5c0347d66c7bb9b704e0))
+- *(ai-residency)* Restore kb_export_subgraph_html adversarial test coverage ([918c521](https://github.com/cuttlefisch/mae/commit/918c521e5e2cc11f4bd5670182de0862df5e581a))
+- *(export)* Strip PROPERTIES drawers even when real prose precedes them ([7e0e1dd](https://github.com/cuttlefisch/mae/commit/7e0e1dd94ef64561acfb253aabbbc556294fba3a))
+- *(export)* Don't leak a list item's own PROPERTIES drawer into its content ([f848b3a](https://github.com/cuttlefisch/mae/commit/f848b3ad9a603ca90e12cff2ac8984621903e61f))
+- *(export)* Recognize multi-digit ordered-list markers, skip drawers in paragraphs too ([92f4ac0](https://github.com/cuttlefisch/mae/commit/92f4ac0319ca1a9e38613c78478fff7773c2425b))
+- *(export)* HTML-escape inline code/strikethrough span content (XSS) ([aba69cc](https://github.com/cuttlefisch/mae/commit/aba69cc482655a2fc7f5af37d4b5d1819bd7e4f4))
+- *(export)* HTML-escape #+begin_export html by default (XSS) ([4d7681a](https://github.com/cuttlefisch/mae/commit/4d7681a88217466146b47fd2b26cac7e3c04cb75))
+- *(export)* Recognize any org drawer, not just :PROPERTIES: (content loss) ([4b388da](https://github.com/cuttlefisch/mae/commit/4b388daa2be3b0477ce4098929e9640a00b4ab94))
+- *(ai)* Require Shell tier for kb_export_subgraph_html (mermaid subprocess) ([47e7a75](https://github.com/cuttlefisch/mae/commit/47e7a75d2e56b5064de5c455d5b5fa10daf9fe53))
+- *(ai)* Residency-filter kb_export_subgraph_html's guidance_ids ([ec283b1](https://github.com/cuttlefisch/mae/commit/ec283b1a203d097c8c0e7956f3050c99db575066))
+- *(ai)* Clamp chord_config numeric overrides to sane ranges ([8cff2f7](https://github.com/cuttlefisch/mae/commit/8cff2f706ba6e4c11928c1cd3eda211e32b5d9c1))
+- *(ai)* Write the exported HTML file atomically ([6b4286d](https://github.com/cuttlefisch/mae/commit/6b4286dc5b6ba35de71e9e1e09ffc9dca3d93336))
+
+### CI
+
+- Add node --check gate on graph.js, update architecture-debt tracking ([8faf87f](https://github.com/cuttlefisch/mae/commit/8faf87fc4cf93a5b8ade31880f135da6a9e847e6))
+
+### Documentation
+
+- Tag html_graph.rs as tracked architecture-debt per CLAUDE.md convention ([8e0b158](https://github.com/cuttlefisch/mae/commit/8e0b15824817bcfa750882a23cb9592678ae1606))
+- *(kb-export)* Remove real RoamNotes UUID/paths from the invocation recipes ([fc1c8b3](https://github.com/cuttlefisch/mae/commit/fc1c8b3a29f4b722411bba81842ae11e63cbb48e))
+- *(adr)* Port kb-export-subgraph-html ADRs, resolve dangling citations ([bc16964](https://github.com/cuttlefisch/mae/commit/bc16964cc853eb178990232b254fca88bd5c290b))
+- *(architecture-debt)* Track GruvboxPalette theme-snapshot drift risk ([5edd2c9](https://github.com/cuttlefisch/mae/commit/5edd2c90059726554991467f25b987e36813b98a))
+
+### Features
+
+- *(export)* Add kb_export_subgraph_html standalone graph export ([c208aa8](https://github.com/cuttlefisch/mae/commit/c208aa8bd1175b08d58f85977e626bf8bcebd2dd))
+- *(export)* Chord nav widget, home/outline controls, muted+accent theming ([40654ce](https://github.com/cuttlefisch/mae/commit/40654ce27c09cd6c8db13cd1ea1583b81c1fef87))
+- *(export)* Invert the chord widget's theme relative to the page ([c0c64cb](https://github.com/cuttlefisch/mae/commit/c0c64cbfffcf9564dd440c596a4dc9ea910745ac))
+- *(export)* Sidebar restructure, link theming, prev/next, hover-preview ([69c46ef](https://github.com/cuttlefisch/mae/commit/69c46ef455aff858cb294651f3ca8e6f92572948))
+- *(export)* Bold outline heading, persist theme choice via localStorage ([1ba4c50](https://github.com/cuttlefisch/mae/commit/1ba4c50fc87a5980026f804a3f8be394194ec805))
+- *(scheme)* Add kb-export-subgraph-html primitive + kb-subgraph-export module ([6015002](https://github.com/cuttlefisch/mae/commit/60150026928b6e395f7cafc76893e4d82dba3d96))
+- *(export)* Thread mae_kb::Node.tags through to the exported page's tag filter ([1c75dfb](https://github.com/cuttlefisch/mae/commit/1c75dfbad6de0cdf47e6534ee547347bc9ab39d1))
+- *(export)* Support guidance_ids in kb_export_subgraph_html ([8dc4b26](https://github.com/cuttlefisch/mae/commit/8dc4b26b0bb6452f7054a6820c162dda7ff097a6))
+- *(kb-export)* Surface kb-export-subgraph-html's constants as real kb-export-* options ([5e9fb29](https://github.com/cuttlefisch/mae/commit/5e9fb29cd362694de4f1dfb2f61330313d0e8e70))
+- *(export)* Implement nested org sub-list parsing and rendering ([08256f7](https://github.com/cuttlefisch/mae/commit/08256f772d81797726c393f30a979034b3dd6390))
+- *(kb)* Required_tag hard filter for export + fix kb_agenda federation gap ([6b815bb](https://github.com/cuttlefisch/mae/commit/6b815bbf44480864a734f2a6b1fe55894b194514))
+
+### Miscellaneous
+
+- *(daemon)* Sync Cargo.lock to workspace version 0.14.87 ([940ab25](https://github.com/cuttlefisch/mae/commit/940ab25ce3adf3a3dd931ca79d29994ef016088b))
+- Fix CI — cargo fmt + regenerate stale code map ([a5a7146](https://github.com/cuttlefisch/mae/commit/a5a7146a557afafefe1d4051f6566ab6eaa0fdea))
+
+### Refactor
+
+- *(export)* Extract GRAPH_JS/STATIC_CSS to real asset files ([215d3ba](https://github.com/cuttlefisch/mae/commit/215d3baaec4a9ff5bae23275b30d7d2b710d9434))
+- *(export)* Replace exact-substring config patching with real JSON injection ([d280192](https://github.com/cuttlefisch/mae/commit/d280192c11df0dc37b219431b754796fec53b105))
+
+### Testing
+
+- *(export)* Port the real-browser (Layer 2) behavioral suite for kb-export-subgraph-html ([df32bdf](https://github.com/cuttlefisch/mae/commit/df32bdfb8c7551168b03321fc4fc2a6a35ef6e3c))
+- *(export)* Diversify unicorn-value fixtures in XSS/drawer tests ([76925e6](https://github.com/cuttlefisch/mae/commit/76925e64f6fbdae3352cd1439fc8fd0d7e7f9aed))
+- *(ai)* Cover non-numeric/negative depth and node_cap fallback ([0df0f9f](https://github.com/cuttlefisch/mae/commit/0df0f9f3bfd4a66f10e4be0c03e1021e190ec3df))
+
 ## [0.14.87] - 2026-07-31
 
 ### CI
 
 - Skip the slow job matrix on version-bump's own automated commit ([bf35a47](https://github.com/cuttlefisch/mae/commit/bf35a47c5cacca82e084dcd40b2f9a03ac08a6f0))
+
+### Miscellaneous
+
+- Bump version to 0.14.87 ([598c91c](https://github.com/cuttlefisch/mae/commit/598c91c727943cbe8702c82502ef5451c4cadd9d))
 
 ## [0.14.86] - 2026-07-31
 
