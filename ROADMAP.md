@@ -854,3 +854,16 @@ These are non-negotiable constraints derived from Emacs git history analysis:
 3. **AI is a peer, not a plugin** — same `dispatch_builtin()` for human and AI.
 4. **Module boundaries enable distributed ownership** — 11 crates with clear responsibilities.
 5. **Runtime redefinability is sacred** — Scheme `defadvice`, live REPL, hot reload.
+
+### Pre-v0.15 audit findings (2026-08) — tracked in #592
+
+A capability-tracing audit with adversarial verification produced **89 confirmed findings** from 102
+claims (13 refuted, 29 severity-corrected downward). Twelve were high severity: nine filed individually
+(#569-577), three held privately as a security advisory covering the AI permission model — which
+`SECURITY.md` had described as having "no bypass vectors", a claim now corrected. The remaining 77 are
+batched by subsystem in #578-591.
+
+The audit's own coverage gaps are recorded in #592 rather than implied away: six of twenty capability
+slices were never traced (git, options/config, org-babel/export, shell/terminal, project/pickers,
+help/KB-seed), and the horizontal per-crate pass — AI-slop, dead code, error-convention consistency,
+module boundaries — did not run at all.
