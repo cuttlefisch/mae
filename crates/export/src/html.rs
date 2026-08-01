@@ -118,14 +118,7 @@ pub(crate) fn render_element(html: &mut String, element: &OrgElement, opts: &Exp
             html.push_str("</pre>\n");
         }
         OrgElement::List { ordered, items } => {
-            let tag = if *ordered { "ol" } else { "ul" };
-            html.push_str(&format!("<{}>\n", tag));
-            for item in items {
-                html.push_str("<li>");
-                push_list_item_content(html, &item.content);
-                html.push_str("</li>\n");
-            }
-            html.push_str(&format!("</{}>\n", tag));
+            render_list_items(html, items, *ordered);
         }
         OrgElement::Table { rows, has_header } => {
             // Cell content goes through the same inline-markup converter as
@@ -200,6 +193,24 @@ pub(crate) fn render_element(html: &mut String, element: &OrgElement, opts: &Exp
 /// a disabled `<input type="checkbox">` (disabled since this is a static
 /// export, not the live editor) ahead of the item's own inline-markup-
 /// converted text.
+/// Renders a (possibly nested, see `ListItem::children`) list as real
+/// `<ul>`/`<ol>` markup -- a nested sub-list becomes a nested `<ul>`/`<ol>`
+/// inside its parent's `<li>`, standard HTML list-nesting shape. Recursive
+/// so any depth of real nesting renders correctly, not just one level.
+fn render_list_items(html: &mut String, items: &[crate::ListItem], ordered: bool) {
+    let tag = if ordered { "ol" } else { "ul" };
+    html.push_str(&format!("<{}>\n", tag));
+    for item in items {
+        html.push_str("<li>");
+        push_list_item_content(html, &item.content);
+        if !item.children.is_empty() {
+            render_list_items(html, &item.children, ordered);
+        }
+        html.push_str("</li>\n");
+    }
+    html.push_str(&format!("</{}>\n", tag));
+}
+
 fn push_list_item_content(html: &mut String, content: &str) {
     if let Some((state, rest)) = parse_checkbox_marker(content) {
         let (checked_attr, aria) = match state {

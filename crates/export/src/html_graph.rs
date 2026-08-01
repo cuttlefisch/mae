@@ -79,7 +79,7 @@ use std::process::Command;
 use crate::html::render_element as render_org_element;
 use crate::{
     convert_inline_markup_str, html_escape, parse_org_document, parse_org_link_str, InlineTarget,
-    OrgElement,
+    ListItem, OrgElement,
 };
 
 // ---------------------------------------------------------------------
@@ -499,6 +499,24 @@ fn render_node_body_html(body: &str, palette: &GruvboxPalette) -> String {
 /// in this session's own earlier screenshot as a mangled, concatenated
 /// GitHub URL). Reusing the real parser fixes that for free instead of
 /// teaching a second, separate implementation about link syntax.
+/// Recurses into `ListItem::children` (a nested sub-list) so a hover
+/// preview doesn't silently drop nested-item text -- `plain_text_preview`
+/// flattens everything into one collapsed-whitespace string anyway, so
+/// nesting structure itself isn't meaningful here, only making sure no
+/// content is missing.
+fn push_plain_list_items(
+    items: &[ListItem],
+    push_plain: &impl Fn(&str, &mut String),
+    text: &mut String,
+) {
+    for item in items {
+        push_plain(&item.content, text);
+        if !item.children.is_empty() {
+            push_plain_list_items(&item.children, push_plain, text);
+        }
+    }
+}
+
 pub fn plain_text_preview(body: &str, max_chars: usize) -> String {
     let body = strip_leading_properties_drawer(body);
     let (_, elements) = parse_org_document(&body);
@@ -513,9 +531,7 @@ pub fn plain_text_preview(body: &str, max_chars: usize) -> String {
             OrgElement::Heading { title, .. } => push_plain(title, &mut text),
             OrgElement::Quote(q) => push_plain(q, &mut text),
             OrgElement::List { items, .. } => {
-                for item in items {
-                    push_plain(&item.content, &mut text);
-                }
+                push_plain_list_items(items, &push_plain, &mut text);
             }
             // Previously missing entirely -- a node whose body is a table
             // (e.g. the HCL cheatsheet's function-reference table) got an

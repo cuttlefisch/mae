@@ -75,20 +75,7 @@ fn render_element(md: &mut String, element: &OrgElement) {
             md.push_str("\n```\n\n");
         }
         OrgElement::List { ordered, items } => {
-            for (i, item) in items.iter().enumerate() {
-                if *ordered {
-                    md.push_str(&format!(
-                        "{}. {}\n",
-                        i + 1,
-                        convert_inline_markup_str(&item.content, InlineTarget::Markdown)
-                    ));
-                } else {
-                    md.push_str(&format!(
-                        "- {}\n",
-                        convert_inline_markup_str(&item.content, InlineTarget::Markdown)
-                    ));
-                }
-            }
+            render_list_items_md(md, items, *ordered, 0);
             md.push('\n');
         }
         OrgElement::Table { rows, has_header } => {
@@ -139,6 +126,28 @@ fn render_element(md: &mut String, element: &OrgElement) {
                 md.push_str(content);
                 md.push('\n');
             }
+        }
+    }
+}
+
+/// Renders a (possibly nested, see `ListItem::children`) list as GFM
+/// Markdown -- a nested sub-list is indented 2 spaces per level under its
+/// parent, standard Markdown list-nesting convention. Recursive so any
+/// depth of real nesting renders correctly, not just one level.
+fn render_list_items_md(md: &mut String, items: &[super::ListItem], ordered: bool, depth: usize) {
+    let indent = "  ".repeat(depth);
+    for (i, item) in items.iter().enumerate() {
+        let marker = if ordered {
+            format!("{}.", i + 1)
+        } else {
+            "-".to_string()
+        };
+        md.push_str(&format!(
+            "{indent}{marker} {}\n",
+            convert_inline_markup_str(&item.content, InlineTarget::Markdown)
+        ));
+        if !item.children.is_empty() {
+            render_list_items_md(md, &item.children, ordered, depth + 1);
         }
     }
 }

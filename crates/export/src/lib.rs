@@ -139,6 +139,94 @@ fn strip_ordered_marker(s: &str) -> Option<&str> {
     rest.strip_prefix(". ").or_else(|| rest.strip_prefix(") "))
 }
 
+/// Marker-kind-agnostic: strips a leading `- `/`+ ` (unordered) or ordered
+/// marker (see [`strip_ordered_marker`]) from `line` (already left-trimmed)
+/// if it starts one of the given `ordered`-ness, else `None`.
+fn strip_list_marker(line: &str, ordered: bool) -> Option<&str> {
+    if ordered {
+        strip_ordered_marker(line)
+    } else {
+        line.strip_prefix("- ").or_else(|| line.strip_prefix("+ "))
+    }
+}
+
+/// Leading whitespace width of a raw (not-yet-trimmed) line.
+fn indent_of(raw_line: &str) -> usize {
+    raw_line.len() - raw_line.trim_start().len()
+}
+
+/// Parses a list into a flat `Vec<ListItem>`, recursively populating
+/// `children` for a nested sub-list -- a later line matching a list-item
+/// marker at STRICTLY GREATER indentation than `base_indent` (the parent
+/// level's own marker column) starts a nested list under the last item at
+/// this level; one at the SAME indentation is a sibling; one at LESSER
+/// indentation closes this level back to the caller. `lines[*i]` must
+/// already be confirmed to start a list item of `ordered`-ness at
+/// `base_indent` when this is first called. Shared by both the unordered
+/// and ordered list branches below -- the nesting/indentation logic is
+/// identical, only the marker syntax differs (handled via
+/// [`strip_list_marker`]).
+///
+/// `ListItem::children` existed as a field since this parser's origin but
+/// was never populated -- any indented sub-list silently flattened into
+/// the parent list with no structural signal at all. Scoped to real
+/// indentation-based nesting (not a separate "compact"/`-`-only nested
+/// syntax some org tooling also accepts), matching how org itself is
+/// normally authored.
+fn parse_list_items(lines: &[&str], i: &mut usize, base_indent: usize, ordered: bool) -> Vec<ListItem> {
+    let mut items: Vec<ListItem> = Vec::new();
+    while *i < lines.len() {
+        let raw = lines[*i];
+        let trimmed_line = raw.trim();
+        if trimmed_line.is_empty() {
+            break;
+        }
+        let indent = indent_of(raw);
+        if let Some(rest) = strip_list_marker(trimmed_line, ordered) {
+            match indent.cmp(&base_indent) {
+                std::cmp::Ordering::Less => break,
+                std::cmp::Ordering::Equal => {
+                    items.push(ListItem {
+                        content: rest.to_string(),
+                        children: Vec::new(),
+                    });
+                    *i += 1;
+                }
+                std::cmp::Ordering::Greater => {
+                    if let Some(last) = items.last_mut() {
+                        last.children = parse_list_items(lines, i, indent, ordered);
+                    } else {
+                        // No parent item yet at this level to nest under
+                        // (shouldn't normally happen -- a deeper-indented
+                        // marker appearing before any sibling at this
+                        // level) -- treat defensively as a same-level item
+                        // rather than losing the content or looping.
+                        items.push(ListItem {
+                            content: rest.to_string(),
+                            children: Vec::new(),
+                        });
+                        *i += 1;
+                    }
+                }
+            }
+        } else if is_drawer_open_line(trimmed_line) {
+            *i = skip_drawer(lines, *i);
+        } else if indent < base_indent {
+            // A dedented non-marker line (e.g. a following paragraph) --
+            // closes this level back to the caller.
+            break;
+        } else {
+            // Continuation line for the last item at THIS level.
+            if let Some(last) = items.last_mut() {
+                last.content.push(' ');
+                last.content.push_str(trimmed_line);
+            }
+            *i += 1;
+        }
+    }
+    items
+}
+
 /// True when `s` (already trimmed) is a drawer-open marker line -- org's
 /// generic `:NAME:` alone on its own line, e.g. `:PROPERTIES:`,
 /// `:LOGBOOK:`, or any other drawer name (org itself allows arbitrary
@@ -440,32 +528,8 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
 
         // Lists
         if trimmed.starts_with("- ") || trimmed.starts_with("+ ") {
-            let mut items = Vec::new();
-            while i < lines.len() {
-                let ll = lines[i].trim();
-                if ll.starts_with("- ") || ll.starts_with("+ ") {
-                    items.push(ListItem {
-                        content: ll[2..].to_string(),
-                        children: Vec::new(),
-                    });
-                    i += 1;
-                } else if ll.is_empty() {
-                    break;
-                } else if is_drawer_open_line(ll) {
-                    // A list item's own drawer (:PROPERTIES:, :LOGBOOK:,
-                    // etc.) -- metadata, not continuation text; skip it
-                    // rather than gluing it into the item's rendered
-                    // content.
-                    i = skip_drawer(&lines, i);
-                } else {
-                    // Continuation line
-                    if let Some(last) = items.last_mut() {
-                        last.content.push(' ');
-                        last.content.push_str(ll);
-                    }
-                    i += 1;
-                }
-            }
+            let base_indent = indent_of(line);
+            let items = parse_list_items(&lines, &mut i, base_indent, false);
             elements.push(OrgElement::List {
                 ordered: false,
                 items,
@@ -474,42 +538,17 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
         }
 
         // Ordered lists
-        if trimmed.len() > 2 && trimmed.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-            if let Some(rest) = strip_ordered_marker(trimmed) {
-                let mut items = vec![ListItem {
-                    content: rest.to_string(),
-                    children: Vec::new(),
-                }];
-                i += 1;
-                while i < lines.len() {
-                    let ll = lines[i].trim();
-                    if let Some(item_rest) = strip_ordered_marker(ll) {
-                        items.push(ListItem {
-                            content: item_rest.to_string(),
-                            children: Vec::new(),
-                        });
-                        i += 1;
-                    } else if ll.is_empty() {
-                        break;
-                    } else if is_drawer_open_line(ll) {
-                        // See the unordered-list branch above: a list
-                        // item's own drawer is metadata, not continuation
-                        // text.
-                        i = skip_drawer(&lines, i);
-                    } else {
-                        if let Some(last) = items.last_mut() {
-                            last.content.push(' ');
-                            last.content.push_str(ll);
-                        }
-                        i += 1;
-                    }
-                }
-                elements.push(OrgElement::List {
-                    ordered: true,
-                    items,
-                });
-                continue;
-            }
+        if trimmed.len() > 2
+            && trimmed.chars().next().is_some_and(|c| c.is_ascii_digit())
+            && strip_ordered_marker(trimmed).is_some()
+        {
+            let base_indent = indent_of(line);
+            let items = parse_list_items(&lines, &mut i, base_indent, true);
+            elements.push(OrgElement::List {
+                ordered: true,
+                items,
+            });
+            continue;
         }
 
         // Blank lines
@@ -1164,6 +1203,101 @@ mod tests {
     }
 
     #[test]
+    fn nested_unordered_sub_list_populates_children_not_a_flattened_sibling() {
+        // ListItem::children existed since this parser's origin but was
+        // never populated -- a sub-list indented under a parent item
+        // silently flattened into one long sibling list with no
+        // structural signal a nested list ever existed.
+        let src = "- Top item one\n  - Nested sub-item A\n  - Nested sub-item B\n- Top item two\n";
+        let (_, elements) = parse_org_document(src);
+        let OrgElement::List { ordered, items } = &elements[0] else {
+            panic!("expected a List element, got {:?}", elements[0]);
+        };
+        assert!(!ordered);
+        assert_eq!(items.len(), 2, "must be 2 top-level items, not 4 flattened siblings");
+        assert_eq!(items[0].content, "Top item one");
+        assert_eq!(items[0].children.len(), 2);
+        assert_eq!(items[0].children[0].content, "Nested sub-item A");
+        assert_eq!(items[0].children[1].content, "Nested sub-item B");
+        assert!(items[0].children[0].children.is_empty());
+        assert_eq!(items[1].content, "Top item two");
+        assert!(items[1].children.is_empty());
+    }
+
+    #[test]
+    fn two_levels_of_nesting_both_populate_correctly() {
+        let src = "- A\n  - B\n    - C\n  - D\n- E\n";
+        let (_, elements) = parse_org_document(src);
+        let OrgElement::List { items, .. } = &elements[0] else {
+            panic!("expected a List element, got {:?}", elements[0]);
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].content, "A");
+        assert_eq!(items[1].content, "E");
+        let level2 = &items[0].children;
+        assert_eq!(level2.len(), 2);
+        assert_eq!(level2[0].content, "B");
+        assert_eq!(level2[1].content, "D");
+        assert_eq!(level2[0].children.len(), 1);
+        assert_eq!(level2[0].children[0].content, "C");
+        assert!(level2[1].children.is_empty());
+    }
+
+    #[test]
+    fn nested_ordered_sub_list_populates_children() {
+        let src = "1. Parent\n   1. Child one\n   2. Child two\n2. Second parent\n";
+        let (_, elements) = parse_org_document(src);
+        let OrgElement::List { ordered, items } = &elements[0] else {
+            panic!("expected a List element, got {:?}", elements[0]);
+        };
+        assert!(ordered);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].content, "Parent");
+        assert_eq!(items[0].children.len(), 2);
+        assert_eq!(items[0].children[0].content, "Child one");
+        assert_eq!(items[0].children[1].content, "Child two");
+        assert_eq!(items[1].content, "Second parent");
+    }
+
+    #[test]
+    fn a_nested_sub_item_with_its_own_drawer_does_not_leak_it() {
+        // Composes the drawer-generalization fix with the nesting fix:
+        // both changes touch the same list-parsing loop, so a nested item
+        // carrying its own drawer is the real adversarial case to confirm
+        // neither fix regressed the other.
+        let src = "- Parent item\n  - Nested item.\n    :PROPERTIES:\n    :ID: nested-1\n    :END:\n    Follow-up note.\n";
+        let (_, elements) = parse_org_document(src);
+        let OrgElement::List { items, .. } = &elements[0] else {
+            panic!("expected a List element, got {:?}", elements[0]);
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].children.len(), 1);
+        let nested = &items[0].children[0];
+        assert!(
+            !nested.content.contains(":PROPERTIES:") && !nested.content.contains(":END:"),
+            "drawer must not leak into the nested item's content: {:?}",
+            nested.content
+        );
+        assert_eq!(nested.content, "Nested item. Follow-up note.");
+    }
+
+    #[test]
+    fn flat_non_nested_lists_are_unaffected_by_the_nesting_feature() {
+        // Regression guard: a plain, consistently-indented flat list (the
+        // overwhelmingly common real-world case, and every list fixture in
+        // this file before this feature existed) must produce the exact
+        // same flat structure as before -- zero nesting detected when
+        // every marker sits at identical indentation.
+        let src = "- one\n- two\n- three\n";
+        let (_, elements) = parse_org_document(src);
+        let OrgElement::List { items, .. } = &elements[0] else {
+            panic!("expected a List element, got {:?}", elements[0]);
+        };
+        assert_eq!(items.len(), 3);
+        assert!(items.iter().all(|it| it.children.is_empty()));
+    }
+
+    #[test]
     fn ordered_list_recognizes_multi_digit_item_numbers() {
         // Real, reproducible bug in the onprem-iac KB's Phase 6 checklist
         // (10 items): strip_prefix(|c: char| c.is_ascii_digit()) strips only
@@ -1540,6 +1674,20 @@ mod tests {
             html.contains("<div class=\"custom-badge\">Hi</div>"),
             "explicit opt-in must pass raw HTML through unescaped: {html}"
         );
+    }
+
+    #[test]
+    fn nested_list_renders_as_real_nested_html_markup() {
+        // Parsing alone (ListItem::children populated) isn't the whole
+        // fix -- the renderer has to actually emit it as a nested
+        // <ul>/<ol>, or a nested sub-list would parse correctly and then
+        // silently vanish from the rendered output.
+        let src = "- Top item\n  - Nested A\n  - Nested B\n- Second top item\n";
+        let (_, elements) = parse_org_document(src);
+        let html = html::HtmlExporter.export(&OrgMeta::default(), &elements);
+        assert!(html.contains("<li>Top item<ul>\n<li>Nested A</li>"), "{html}");
+        assert!(html.contains("<li>Nested B</li>\n</ul>\n</li>"), "{html}");
+        assert!(html.contains("<li>Second top item</li>"), "{html}");
     }
 
     #[test]
