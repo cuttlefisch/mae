@@ -23,7 +23,7 @@ members = [
     "shared/sync",
     "shared/mcp",
 ]
-exclude = ["tools/code-map", "daemon"]
+exclude = ["tools/code-map", "tools/audit-metrics", "daemon"]
 resolver = "2"
 
 [workspace.package]
