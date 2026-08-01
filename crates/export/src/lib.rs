@@ -102,6 +102,29 @@ pub trait Exporter {
     fn export(&self, meta: &OrgMeta, elements: &[OrgElement]) -> String;
 }
 
+/// Advance past a `:PROPERTIES:` ... `:END:` drawer starting at `lines[i]`
+/// (caller has already confirmed `lines[i].trim()` is `:properties:`,
+/// case-insensitive) and return the index of the first line after it.
+/// Shared by the top-level element scanner and both list-item continuation
+/// loops below -- a KB whose individual list items each carry their own
+/// `:PROPERTIES: :ID: ... :END:` drawer (this project's convention for
+/// giving stepwise roadmap/checklist items their own stable id, real and
+/// reproducible in the onprem-iac KB) otherwise leaks the drawer verbatim
+/// into a list item's rendered text: only the top-level scanner recognized
+/// `:PROPERTIES:` as a drawer to skip, and it never got a chance to since
+/// the list branches below consumed the same lines first as unconditional
+/// "continuation text" before this function existed.
+fn skip_properties_drawer(lines: &[&str], mut i: usize) -> usize {
+    i += 1;
+    while i < lines.len() {
+        if lines[i].trim().eq_ignore_ascii_case(":end:") {
+            return i + 1;
+        }
+        i += 1;
+    }
+    i
+}
+
 /// Parse an org-mode document into metadata and a flat list of elements.
 pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
     let mut meta = OrgMeta::default();
@@ -164,14 +187,7 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
         // checks above; org drawer markers are conventionally uppercase
         // but nothing in the spec requires it.
         if trimmed.eq_ignore_ascii_case(":properties:") {
-            i += 1;
-            while i < lines.len() {
-                if lines[i].trim().eq_ignore_ascii_case(":end:") {
-                    i += 1;
-                    break;
-                }
-                i += 1;
-            }
+            i = skip_properties_drawer(&lines, i);
             continue;
         }
 
@@ -372,6 +388,11 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
                     i += 1;
                 } else if ll.is_empty() {
                     break;
+                } else if ll.eq_ignore_ascii_case(":properties:") {
+                    // A list item's own properties drawer (:ID:, etc.) --
+                    // metadata, not continuation text; skip it rather than
+                    // gluing it into the item's rendered content.
+                    i = skip_properties_drawer(&lines, i);
                 } else {
                     // Continuation line
                     if let Some(last) = items.last_mut() {
@@ -412,6 +433,11 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
                         i += 1;
                     } else if ll.is_empty() {
                         break;
+                    } else if ll.eq_ignore_ascii_case(":properties:") {
+                        // See the unordered-list branch above: a list
+                        // item's own properties drawer is metadata, not
+                        // continuation text.
+                        i = skip_properties_drawer(&lines, i);
                     } else {
                         if let Some(last) = items.last_mut() {
                             last.content.push(' ');
@@ -1014,6 +1040,57 @@ mod tests {
             assert!(!ordered);
             assert_eq!(items.len(), 3);
         }
+    }
+
+    #[test]
+    fn ordered_list_item_with_its_own_properties_drawer_does_not_leak_it() {
+        // Real, reproducible leak from the onprem-iac KB: this project gives
+        // individual roadmap/checklist steps their own stable :ID:, so each
+        // numbered item can carry its own :PROPERTIES: drawer, not just the
+        // document as a whole. The top-level scanner already stripped a
+        // drawer that starts a document/paragraph, but once the parser
+        // enters the ordered-list continuation-line loop it used to glue
+        // every non-blank line (including a nested drawer's :PROPERTIES:/
+        // :ID:/:END: lines) into the item's own rendered content verbatim.
+        let src = "1. Document a runbook covering rollback steps if the\n   upgrade fails partway.\n   :PROPERTIES:\n   :ID: db87b07f-2f87-4f0d-b1dc-4f398313bf73\n   :END:\n   Validated by: cross-checked against the runbook.\n2. Establish an on-call rotation.\n";
+        let (_, elements) = parse_org_document(src);
+        assert_eq!(elements.len(), 1);
+        let OrgElement::List { ordered, items } = &elements[0] else {
+            panic!("expected a List element, got {:?}", elements[0]);
+        };
+        assert!(ordered);
+        assert_eq!(items.len(), 2, "the drawer must not be misparsed as a third item");
+        assert!(
+            !items[0].content.contains(":PROPERTIES:") && !items[0].content.contains(":END:"),
+            "drawer must not leak into item 1's content: {:?}",
+            items[0].content
+        );
+        assert!(
+            items[0].content.contains("upgrade fails partway."),
+            "real prose around the drawer must survive: {:?}",
+            items[0].content
+        );
+        assert!(
+            items[0]
+                .content
+                .contains("Validated by: cross-checked against the runbook."),
+            "content after the drawer must survive: {:?}",
+            items[0].content
+        );
+        assert_eq!(items[1].content, "Establish an on-call rotation.");
+    }
+
+    #[test]
+    fn unordered_list_item_with_its_own_properties_drawer_does_not_leak_it() {
+        let src = "- First item.\n  :PROPERTIES:\n  :ID: abc123\n  :END:\n  More text.\n- Second item.\n";
+        let (_, elements) = parse_org_document(src);
+        let OrgElement::List { items, .. } = &elements[0] else {
+            panic!("expected a List element, got {:?}", elements[0]);
+        };
+        assert_eq!(items.len(), 2);
+        assert!(!items[0].content.contains(":PROPERTIES:"));
+        assert_eq!(items[0].content, "First item. More text.");
+        assert_eq!(items[1].content, "Second item.");
     }
 
     #[test]
