@@ -985,7 +985,7 @@ impl OptionRegistry {
                      you deliberately embed raw HTML in your own org files and trust that content.",
                     OptionKind::Bool, "false", Some("org-export.allow_raw_html_blocks"), &[]),
                 // --- KB subgraph HTML export (kb-export-subgraph-html /
-                // kb_export_subgraph_html) -- bilingual-kb-export/kb/adrs/0005/0006 ---
+                // kb_export_subgraph_html) -- ADR-081 ---
                 opt!("kb_export_default_depth", &["kb-export-default-depth"],
                     "Default BFS hop radius for kb-export-subgraph-html/kb_export_subgraph_html \
                      when a call doesn't specify `depth` explicitly.",

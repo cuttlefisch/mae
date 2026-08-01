@@ -224,7 +224,7 @@ fn main() {
         })
         .collect();
 
-    // kb/adrs/0004: a guidance/colophon node, deliberately with no
+    // ADR-079: a guidance/colophon node, deliberately with no
     // translation and no edge to the rest of the ring -- exercises the
     // colophon click-to-open path, the guidance-note in the detail panel,
     // AND the ADR-0003 fallback notice all firing together on the same

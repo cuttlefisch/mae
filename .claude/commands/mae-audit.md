@@ -134,9 +134,9 @@ discoverable (per this file's own cross-reference discipline above) instead of s
   whole-KB-subgraph -> self-contained interactive HTML export (chord-diagram nav widget, bilingual
   EN/ES overlay, theming): Rust HTML assembly plus this module's own extensive test suite
   (adversarial script-injection escaping, wedge geometry, per-field `ChordDiagramConfig` override
-  tests). It was folded back in-tree from a standalone sibling project (`bilingual-kb-export`) as
-  part of this integration (see that file's own `@ai-caution` marker); a pre-merge architecture
-  review found the two large embedded JS/CSS string constants (`GRAPH_JS`, `STATIC_CSS`) originally
+  tests). It ships as a real in-tree module (see ADR-077 and that file's own `@ai-caution`
+  marker); a pre-merge architecture review found the two large embedded JS/CSS string constants
+  (`GRAPH_JS`, `STATIC_CSS`) originally
   made up over 40% of this file's line count, were un-lintable as Rust string literals, and had
   already let a real bug ship (a regex literal corrupted by the inline-script escaper, caught only
   by manually running `node --check`). Split into real `crates/export/assets/graph.js`/`graph.css`

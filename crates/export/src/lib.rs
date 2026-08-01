@@ -9,12 +9,10 @@ pub mod markdown;
 pub mod markdown_parser;
 pub mod org_writer;
 
-// `html_graph` (the KB-subgraph -> bilingual interactive HTML export) is
-// back in-tree here (previously extracted to the standalone
-// `bilingual-kb-export` sibling project; see that project's
-// `kb/adrs/0001-extract-into-standalone-project.org` for the original
-// extraction rationale) so this feature ships as a normal, self-contained
-// upstream module with no path-dependency on a sibling checkout.
+// `html_graph` (the KB-subgraph -> bilingual interactive HTML export) ships
+// as a normal, self-contained upstream module with no path-dependency on a
+// sibling checkout (see ADR-077 for why this is a real Rust module rather
+// than a Scheme reimplementation).
 
 /// Document-level metadata extracted from org keywords.
 #[derive(Debug, Clone, Default)]

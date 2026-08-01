@@ -9,7 +9,7 @@ license.workspace = true
 mae-core = { path = "../core" }
 mae-kb = { path = "../../shared/kb", features = ["storage-sled", "crdt"] }
 mae-sync = { path = "../../shared/sync" }
-# For (kb-export-subgraph-html ...) (kb/adrs/0002 in bilingual-kb-export --
+# For (kb-export-subgraph-html ...) (ADR-077 --
 # following the kb-graph-view-* precedent: the real logic stays in
 # mae-ai/mae-export, this crate only wires a Scheme-callable primitive onto
 # it). mae-ai does not depend on mae-scheme anywhere in its own tree, so

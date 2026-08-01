@@ -990,7 +990,7 @@ pub struct Editor {
     pub kb_graph_wedge_gap_radians: f32,
 
     // --- KB subgraph HTML export (kb-export-subgraph-html /
-    // kb_export_subgraph_html) -- bilingual-kb-export/kb/adrs/0005/0006 ---
+    // kb_export_subgraph_html) -- ADR-081 ---
     /// Default BFS hop radius when `depth` isn't given to
     /// `kb-export-subgraph-html`. Mirrors `kb_export_default_depth`.
     pub kb_export_default_depth: usize,

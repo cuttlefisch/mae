@@ -11,9 +11,7 @@
 //! tool) provably drive identical code paths, not two implementations that
 //! can drift apart.
 //!
-//! See `kb/adrs/0002-mae-module-not-scheme-reimplementation.org` in the
-//! (briefly standalone, now folded back in-tree) bilingual-kb-export
-//! design history for why the actual export logic stays compiled Rust
+//! See ADR-077 for why the actual export logic stays compiled Rust
 //! (`crates/export/src/html_graph.rs`) and only this thin wiring is Scheme.
 
 use std::sync::Arc;

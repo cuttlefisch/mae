@@ -65,9 +65,8 @@ used before these options existed:
 (set-option! "kb-export-wedge-gap-radians" "0.03")
 ```
 
-See `kb/adrs/0005-chord-diagram-config-surface.org` (in `bilingual-kb-export`) for the full list
-and rationale, or `(get-option "kb-export-hover-growth-factor")` / `command_list`/`M-x set` in a
-running editor to discover the rest by their `kb-export-*` prefix.
+See ADR-081 for the full list and rationale, or `(get-option "kb-export-hover-growth-factor")` /
+`command_list`/`M-x set` in a running editor to discover the rest by their `kb-export-*` prefix.
 
 ## Reaching NODE-CAP / GUIDANCE-IDS / CHORD-CONFIG directly (positions 5-7)
 

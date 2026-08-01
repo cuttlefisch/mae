@@ -387,7 +387,7 @@ body {
   margin-bottom: 0.75rem;
   font-size: 0.85rem;
 }
-/* kb/adrs/0003: deliberately quieter than .anchor-note (muted fg3 text,
+/* ADR-078: deliberately quieter than .anchor-note (muted fg3 text,
    thinner accent-colored border, italic) -- this is informational, not a
    warning, and should read as "here's a heads-up," not compete for
    attention with the anchor-note's own visual weight. */
@@ -400,7 +400,7 @@ body {
   font-style: italic;
   color: var(--fg3);
 }
-/* kb/adrs/0004: a footer, not a sidebar/#main-content section -- always
+/* ADR-079: a footer, not a sidebar/#main-content section -- always
    full page width, visually separate from both the curated topic content
    and the graph/outline nav chrome, so a reader can tell at a glance that
    these links are meta-content about the guide, not part of its subject

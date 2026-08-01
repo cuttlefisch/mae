@@ -681,7 +681,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .prop(
             "guidance_ids",
             "array",
-            "Optional array of node ids always included regardless of BFS reachability, rendered in a distinct colophon section (kb/adrs/0004 in bilingual-kb-export) — e.g. a writing-style standard or translation-provenance disclosure",
+            "Optional array of node ids always included regardless of BFS reachability, rendered in a distinct colophon section (see ADR-079) — e.g. a writing-style standard or translation-provenance disclosure",
         )
         .prop(
             "chord_config",

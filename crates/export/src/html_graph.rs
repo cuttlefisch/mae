@@ -3,8 +3,8 @@
 //! @ai-caution: [architecture-debt] ~3,700 lines, still over the 800-line
 //! source ceiling — tracked in `.claude/commands/mae-audit.md`'s "Known
 //! exceptions" list and `ROADMAP.md`'s "Architecture Debt" section. Folded
-//! back in-tree from a standalone sibling project (`bilingual-kb-export`)
-//! during the `feat/subgraph-html-export` integration. The two large
+//! shipped as a real in-tree module (see ADR-077) rather than a Scheme
+//! reimplementation. The two large
 //! embedded string constants (`GRAPH_JS`, `STATIC_CSS`) that originally made
 //! up over 40% of this file's line count have been extracted to real,
 //! lintable `assets/graph.js`/`assets/graph.css` files (loaded via
@@ -581,7 +581,7 @@ pub struct GraphExportNode {
     /// drives the page's distinct styling and the Previous/Next
     /// reading-order walk. See module docs.
     pub is_anchor: bool,
-    /// A "guidance node" (kb/adrs/0004-guidance-nodes-colophon.org) —
+    /// A "guidance node" (ADR-079) —
     /// editorial/meta content (writing-style, review, accuracy standards)
     /// the exported guide was written against, not part of its subject
     /// matter. Always rendered in a distinct "About this guide" colophon
@@ -778,7 +778,7 @@ fn extract_first_link_id(text: &str) -> Option<String> {
     Some(target.strip_prefix("id:").unwrap_or(target).to_string())
 }
 
-/// Build a "guidance node" (kb/adrs/0004-guidance-nodes-colophon.org) — an
+/// Build a "guidance node" (ADR-079) — an
 /// editorial/meta note (writing-style guide, review standards, accuracy
 /// discipline) an exported guide was written against, always included and
 /// rendered in a distinct colophon section regardless of BFS reachability
@@ -824,7 +824,7 @@ pub fn build_guidance_node(
 /// [`export_with_config`] to byte-identical output (see the
 /// `default_chord_config_produces_identical_output_to_export` test) --
 /// callers who never touch this type see no behavior change. See
-/// `kb/adrs/0005-chord-diagram-config.org` for the surface-level design
+/// `ADR-081` for the surface-level design
 /// rationale.
 ///
 /// [`export`]: HtmlGraphExporter::export
@@ -1097,7 +1097,7 @@ impl HtmlGraphExporter {
     }
 }
 
-/// Renders the "About this guide" colophon (kb/adrs/0004-guidance-nodes-
+/// Renders the "About this guide" colophon (ADR-079-guidance-nodes-
 /// colophon.org) — a static, always-visible list of every `is_guidance`
 /// node's title, each a button GRAPH_JS wires to `selectNode` (the SAME
 /// click-to-open path chord nodes and in-body links already use, so
@@ -1325,12 +1325,11 @@ mod tests {
         assert_ne!(n.body_es, n.body_en);
     }
 
-    // --- kb/adrs/0003: untranslated-node fallback gets an explicit UI signal ---
+    // --- ADR-078: untranslated-node fallback gets an explicit UI signal ---
 
     #[test]
     fn fallback_notice_logic_is_present_and_per_field() {
-        // Regression guard for the bug that triggered this project's
-        // extraction (kb/adrs/0001, kb/adrs/0003): toggling the language on
+        // Regression guard for the original bug (see ADR-078): toggling the language on
         // a node with no real Spanish translation previously flipped
         // currentLang and the toggle button's own label with zero visible
         // change to the content, which read as "the switch is broken."
@@ -1356,7 +1355,7 @@ mod tests {
 
     #[test]
     fn empty_string_translation_is_treated_as_a_real_translation_not_a_fallback() {
-        // Adversarial edge case per kb/adrs/0003's "per-field, not just
+        // Adversarial edge case per ADR-078's "per-field, not just
         // per-node" fix: a NodeTranslation with title_es/body_es explicitly
         // present but set to "" is a different case from no translation at
         // all (where they're absent and mirror EN). An empty string is not
@@ -2034,8 +2033,8 @@ mod tests {
 
     #[test]
     fn home_button_resets_walk_index_not_just_the_selection() {
-        // Found by this project's own Layer 2 browser suite (kb/adrs/0001)
-        // -- exactly the class of bug string-assertion tests structurally
+        // Found by this project's own Layer 2 browser suite -- exactly the
+        // class of bug string-assertion tests structurally
         // can't catch on their own, though the fix is verifiable here once
         // known. Home previously only called selectNode(anchorId), never
         // touching walkIndex: after walking forward via Next to some
@@ -2478,7 +2477,7 @@ mod tests {
         assert!(!read_back.contains("<script src=\"https"));
     }
 
-    // --- kb/adrs/0004: guidance nodes / colophon ---
+    // --- ADR-079: guidance nodes / colophon ---
 
     #[test]
     fn build_guidance_node_sets_the_flag_and_no_seed_or_anchor_status() {
@@ -2660,7 +2659,7 @@ mod tests {
     fn history_panel_js_implements_forward_truncation_and_depth_cap() {
         // Source-text presence checks (this file's existing convention for
         // asserting on GRAPH_JS behavior, e.g. the topicNodes-filtering
-        // check for kb/adrs/0004) -- the actual runtime behavior is covered
+        // check for ADR-079) -- the actual runtime behavior is covered
         // by the Layer 2 browser suite.
         let nodes = vec![simple_node("a", "A", "body", true)];
         let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");

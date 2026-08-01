@@ -522,8 +522,8 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   stale in the other direction (some of its worst-offender examples were among the files just
   resolved). Needs a fresh full-codebase re-audit before a dedicated splitting pass, not ad-hoc fixes.
 - [ ] **`crates/export/src/html_graph.rs` size** (added integrating `feat/subgraph-html-export`,
-  2026-08): ~3,700 lines, folded back in-tree from the standalone `bilingual-kb-export` sibling
-  project. The two large embedded string constants (`GRAPH_JS`, `STATIC_CSS`) that originally made
+  2026-08): ~3,700 lines, shipped as a real in-tree module (see ADR-077). The two large embedded
+  string constants (`GRAPH_JS`, `STATIC_CSS`) that originally made
   up over 40% of the line count are now real `crates/export/assets/graph.js`/`graph.css` files
   (loaded via `include_str!`, split during a pre-merge review — this already caught a real bug a
   `node --check` CI gate now guards against, see `.github/workflows/ci.yml`'s `export-js-check`

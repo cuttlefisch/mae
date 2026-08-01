@@ -2377,7 +2377,7 @@ fn kb_register_from_scheme_imports_a_real_org_directory() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// `(kb-export-subgraph-html ...)` (kb/adrs/0002 in bilingual-kb-export) —
+// `(kb-export-subgraph-html ...)` (ADR-077) —
 // same queue-then-drain shape as the `kb-graph-view-*` family above, except
 // the drain calls `mae_ai::execute_kb_export_subgraph_html(editor, &args)`
 // directly rather than an `Editor::kb_graph_view_*` method (see
@@ -2432,7 +2432,7 @@ fn kb_export_subgraph_html_from_scheme_reports_a_missing_seed_id_via_status() {
 }
 
 // Positions 5 (NODE-CAP), 6 (GUIDANCE-IDS), 7 (CHORD-CONFIG) --
-// bilingual-kb-export/kb/adrs/0005/0006. Reaching a later positional arg
+// ADR-081. Reaching a later positional arg
 // means supplying REAL values for every earlier one too (arg_string
 // doesn't accept `#f`/`'()` as a "skip this slot" placeholder) -- a real,
 // already-existing friction of this primitive's plain positional-arg
@@ -2521,13 +2521,28 @@ fn kb_export_subgraph_html_from_scheme_with_chord_config_alist_override() {
             editor.status_msg
         )
     });
-    assert!(
-        written.contains("var HOVER_GROWTH_FACTOR = 2.75;"),
+    // The resolved ChordDiagramConfig flows through the `#graph-data` JSON
+    // payload's `chordConfig` object (real data injection into graph.js at
+    // load time, not exact-substring text patching against its source) --
+    // see ADR-081. The meaningful oracle is "the payload carries the
+    // resolved value," not "the JS source text changed."
+    let start_marker = "<script id=\"graph-data\" type=\"application/json\">";
+    let start = written
+        .find(start_marker)
+        .expect("expected a graph-data script tag")
+        + start_marker.len();
+    let end = written[start..]
+        .find("</script>")
+        .expect("expected graph-data script tag to close");
+    let payload: serde_json::Value = serde_json::from_str(&written[start..start + end])
+        .expect("graph-data must be valid JSON");
+    assert_eq!(
+        payload["chordConfig"]["hoverGrowthFactor"], 2.75,
         "expected the symbol-keyed float override to apply: status={}",
         editor.status_msg
     );
-    assert!(
-        written.contains("var HISTORY_DEPTH_CAP = 15;"),
+    assert_eq!(
+        payload["chordConfig"]["historyDepthCap"], 15,
         "expected the string-keyed integer override to apply: status={}",
         editor.status_msg
     );

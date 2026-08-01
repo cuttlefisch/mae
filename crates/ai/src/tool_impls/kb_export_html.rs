@@ -105,8 +105,8 @@ fn find_node<'a>(editor: &'a Editor, id: &str) -> Option<&'a mae_kb::Node> {
 }
 
 /// Resolves this call's `mae_export::html_graph::ChordDiagramConfig`:
-/// the `kb_export_*` Editor options (set-option!-able, see
-/// bilingual-kb-export/kb/adrs/0005) are the base -- each already defaults to
+/// the `kb_export_*` Editor options (set-option!-able, see ADR-081) are the
+/// base -- each already defaults to
 /// the hardcoded literal `ChordDiagramConfig::default()` would use, so there's
 /// no separate "fall back to Default" step -- and any key present in the
 /// optional `chord_config` JSON object overrides that ONE field for this call
@@ -228,7 +228,7 @@ fn resolve_chord_config(
 /// {title_es, body_es}}` JSON overlay — see `mae_export::html_graph` module
 /// docs), `title` (optional, page `<title>`/`<h1>`, default derived from
 /// the seed node's own title), `guidance_ids` (optional array of node ids —
-/// kb/adrs/0004 in bilingual-kb-export: editorial/meta content, e.g. a
+/// ADR-079: editorial/meta content, e.g. a
 /// writing-style standard or a translation-provenance disclosure, always
 /// included regardless of BFS depth/reachability from `id` and rendered in
 /// a distinct "About this guide" colophon section; looked up independently
@@ -249,7 +249,7 @@ fn resolve_chord_config(
 /// its `kb_export_*` Editor option (persistently `set-option!`-able, e.g.
 /// `(set-option! "kb-export-hover-growth-factor" "2.5")` in init.scm), which
 /// itself defaults to `ChordDiagramConfig::default()`'s hardcoded value --
-/// see `resolve_chord_config` and bilingual-kb-export/kb/adrs/0005.
+/// see `resolve_chord_config` and ADR-081.
 ///
 /// Fails with a clear, specific error (never a panic/generic error) when:
 /// the seed id doesn't exist anywhere in the KB; an explicitly-given
@@ -290,7 +290,7 @@ pub fn execute_kb_export_subgraph_html(
     // narrow shape.
     // Default and ceiling both come from Editor state (kb_export_default_depth/
     // kb_export_max_depth, set-option!-able as kb-export-default-depth/
-    // kb-export-max-depth -- see bilingual-kb-export/kb/adrs/0005) rather than
+    // kb-export-max-depth -- see ADR-081) rather than
     // fixed literals, so a caller who needs a different default doesn't have
     // to remember to pass `depth` on every single call.
     let depth = args
@@ -413,7 +413,7 @@ pub fn execute_kb_export_subgraph_html(
         })
         .collect();
 
-    // kb/adrs/0004 (bilingual-kb-export): "guidance nodes" -- editorial/meta
+    // ADR-079: "guidance nodes" -- editorial/meta
     // content (writing-style standards, translation-provenance disclosures,
     // etc.) always included regardless of BFS depth/reachability, rendered
     // in a distinct colophon section. Looked up independently of the seed

@@ -14,7 +14,7 @@
 
   var nodesById = {};
   nodes.forEach(function (n, i) { n._idx = i; nodesById[n.id] = n; });
-  // kb/adrs/0004: guidance/colophon nodes are real entries in `nodes` (so
+  // ADR-079: guidance/colophon nodes are real entries in `nodes` (so
   // nodesById/selectNode/renderDetail all resolve them like any other node
   // when opened from the colophon), but never part of the interactive
   // chord graph or the reading-order walk -- topicNodes is what those two
@@ -215,7 +215,7 @@
   edges.forEach(function (e) {
     var s = nodesById[e.source], t = nodesById[e.target];
     if (!s || !t) { return; }
-    // kb/adrs/0004: a guidance node has no real chord position (x=0, y=0,
+    // ADR-079: a guidance node has no real chord position (x=0, y=0,
     // never drawn as a <g class="node"> below) -- an edge touching one
     // would otherwise draw a visually broken arc toward the coordinate
     // origin. Guidance nodes aren't expected to have topic-graph edges in
@@ -372,7 +372,7 @@
   // transform (see the .node path doc comment in STATIC_CSS for why).
   var wedgeGeomById = {};
   nodes.forEach(function (n) {
-    // kb/adrs/0004: guidance nodes never get a chord-graph <g> -- but
+    // ADR-079: guidance nodes never get a chord-graph <g> -- but
     // nodeGroups still gets a placeholder pushed for them (null, not
     // skipped) so it stays index-aligned with `nodes`/`n._idx`: groupFor(id)
     // below looks up nodeGroups[nodesById[id]._idx], and every call site
@@ -950,7 +950,7 @@
           "Starting point of this exported subgraph."
         ));
       }
-      // kb/adrs/0004: a reader can also open a guidance/colophon node
+      // ADR-079: a reader can also open a guidance/colophon node
       // directly (colophon button, or an ordinary in-body link to one) --
       // this note orients them the same way anchor-note does for the
       // anchor, since nothing else on this screen says "you left the
@@ -961,7 +961,7 @@
           "Guidance note — a standard this guide was written against, not part of its topic content."
         ));
       }
-      // kb/adrs/0003-untranslated-node-fallback-signal.org: the language
+      // ADR-078: the language
       // toggle is a real, working GLOBAL preference -- it must keep
       // applying even on a node with no Spanish translation, so it's
       // never disabled per-node. But title_es/body_es mirroring title_en/
@@ -1200,7 +1200,7 @@
   // alphabetical tiebreak for any node that isn't part of one. Chain-linked
   // nodes come first, in chain order; everything else is appended after. ---
   function computeReadingOrder() {
-    // kb/adrs/0004: guidance/colophon nodes never enter the Previous/Next
+    // ADR-079: guidance/colophon nodes never enter the Previous/Next
     // walk -- topicNodes, not nodes, both seeds `dist` (so a guidance node
     // is never a possible destination) and produces the final order.
     var topicIds = {};
@@ -1396,7 +1396,7 @@
   // separate list. OR semantics across active tags (the standard choice
   // for one flat facet -- AND would too easily produce an empty result on
   // sparse tag combinations). Guidance nodes are already excluded from
-  // topicNodes (kb/adrs/0004), so they're never part of this either. ---
+  // topicNodes (ADR-079), so they're never part of this either. ---
   var allTags = [];
   (function () {
     var seen = {};
@@ -1607,7 +1607,7 @@
   // no-op if it's already that value).
   updateSidebarToggleLabel(sidebarIsOpen());
 
-  // --- Colophon (kb/adrs/0004): each button opens its guidance node via
+  // --- Colophon (ADR-079): each button opens its guidance node via
   // the SAME selectNode() real navigation (chord nodes, in-body links, and
   // Home/Previous/Next all already funnel through it) -- language toggle,
   // ADR-0003's translation-fallback notice, mermaid, Back/Forward history,
