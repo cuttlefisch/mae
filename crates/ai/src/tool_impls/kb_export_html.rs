@@ -124,10 +124,25 @@ fn resolve_chord_config(
     let Some(overrides) = args.get("chord_config").and_then(|v| v.as_object()) else {
         return cfg;
     };
+    // Clamped, not just parsed -- unlike `depth`/`node_cap` above (each
+    // backed by a real Editor option ceiling), these chord_config fields
+    // used to accept ANY f64/u32 unvalidated. A wildly out-of-range value
+    // (e.g. `edge_pull_back: 1e300`) flowed straight into generated JS
+    // with zero server-side sanity check, producing garbage SVG geometry
+    // client-side with no error signal. (NaN/Infinity are NOT a real input
+    // vector here and deliberately not special-cased: `serde_json::Value`
+    // cannot represent a non-finite f64 at all -- `Number::from_f64`
+    // rejects it at construction, both in the JSON-RPC wire format and the
+    // Scheme-primitive-to-JSON bridge, so `v.as_f64()` below can never
+    // observe one; a `.is_finite()` guard here would be dead code testing
+    // a scenario the type system already makes impossible.) `.clamp(min,
+    // max)` bounds anything finite but absurd -- bounds are generous, not
+    // tuned defaults, existing to prevent garbage geometry/hangs, not to
+    // second-guess a legitimate creative override.
     macro_rules! override_f64 {
-        ($key:literal, $field:ident) => {
+        ($key:literal, $field:ident, $min:expr, $max:expr) => {
             if let Some(v) = overrides.get($key).and_then(|v| v.as_f64()) {
-                cfg.$field = v;
+                cfg.$field = v.clamp($min, $max);
             }
         };
     }
@@ -137,28 +152,43 @@ fn resolve_chord_config(
     // crates/scheme/src/runtime/kb_export.rs) converts every value through
     // `Value::as_float()`, so a caller writing `("history-depth-cap" . 8)`
     // arrives here as a JSON float, not a JSON integer. Fall back to
-    // `.as_f64()` so both representations work.
+    // `.as_f64()` so both representations work; a real, legitimately
+    // finite NEGATIVE float (e.g. `-5.0`) is rejected outright via the
+    // `>= 0.0` filter (kept at the pre-override value) rather than
+    // silently reinterpreted as 0 via a saturating cast, then clamped to
+    // `$max`.
     macro_rules! override_u32 {
-        ($key:literal, $field:ident) => {
-            if let Some(v) = overrides
+        ($key:literal, $field:ident, $max:expr) => {
+            let raw = overrides
                 .get($key)
-                .and_then(|v| v.as_u64().or_else(|| v.as_f64().map(|f| f as u64)))
-            {
-                cfg.$field = v as u32;
+                .and_then(|v| v.as_u64().or_else(|| v.as_f64().filter(|f| *f >= 0.0).map(|f| f as u64)));
+            if let Some(v) = raw {
+                cfg.$field = (v as u32).min($max);
             }
         };
     }
-    override_f64!("hover_growth_factor", hover_growth_factor);
-    override_f64!("stroke_buffer_px", stroke_buffer_px);
-    override_f64!("cosmetic_cushion_px", cosmetic_cushion_px);
-    override_f64!("min_onscreen_radius_px", min_onscreen_radius_px);
-    override_f64!("initial_pad_px", initial_pad_px);
-    override_f64!("edge_pull_back", edge_pull_back);
-    override_f64!("wedge_gap_radians", wedge_gap_radians);
-    override_u32!("history_depth_cap", history_depth_cap);
-    override_f64!("wedge_corner_radius_fraction", wedge_corner_radius_fraction);
-    override_u32!("search_debounce_ms", search_debounce_ms);
-    override_u32!("ui_transition_ms", ui_transition_ms);
+    override_f64!("hover_growth_factor", hover_growth_factor, 0.0, 20.0);
+    override_f64!("stroke_buffer_px", stroke_buffer_px, 0.0, 500.0);
+    override_f64!("cosmetic_cushion_px", cosmetic_cushion_px, 0.0, 500.0);
+    override_f64!("min_onscreen_radius_px", min_onscreen_radius_px, 0.0, 500.0);
+    override_f64!("initial_pad_px", initial_pad_px, 0.0, 2000.0);
+    // Doc'd, meaningful range is exactly [0, 1] -- "0 = straight line, 1 =
+    // fully at center" (ChordDiagramConfig::edge_pull_back's own doc
+    // comment) -- anything outside it isn't a creative override, it's a
+    // geometry break.
+    override_f64!("edge_pull_back", edge_pull_back, 0.0, 1.0);
+    override_f64!("wedge_gap_radians", wedge_gap_radians, 0.0, std::f64::consts::PI);
+    override_u32!("history_depth_cap", history_depth_cap, 1000);
+    // Doc'd range [0, 1] -- a fraction of halfThickness; a corner radius
+    // bigger than the wedge's own half-thickness isn't meaningful.
+    override_f64!(
+        "wedge_corner_radius_fraction",
+        wedge_corner_radius_fraction,
+        0.0,
+        1.0
+    );
+    override_u32!("search_debounce_ms", search_debounce_ms, 60_000);
+    override_u32!("ui_transition_ms", ui_transition_ms, 60_000);
     cfg
 }
 
@@ -746,6 +776,67 @@ mod tests {
         .unwrap();
         let html = std::fs::read_to_string(&out).unwrap();
         assert_eq!(chord_config_from_html(&html)["historyDepthCap"], 15);
+    }
+
+    #[test]
+    fn chord_config_rejects_a_negative_override_for_a_u32_field_instead_of_wrapping_to_zero() {
+        // Adversarial case override_u32!'s `>= 0.0` filter exists for: a
+        // legitimately finite, negative JSON number (unlike NaN/Infinity,
+        // which serde_json::Value structurally cannot represent at all --
+        // see resolve_chord_config's own doc comment) is real input a
+        // caller can actually send. Without the filter, `(-5.0_f64) as
+        // u64` would saturate to 0 under Rust's float-to-int cast rules --
+        // silently reinterpreting "-5" as "0" is a worse failure mode than
+        // rejecting it outright and keeping the prior/default value.
+        let editor = editor_with_star_kb(1);
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.html");
+        execute_kb_export_subgraph_html(
+            &editor,
+            &serde_json::json!({
+                "id": "root",
+                "path": out.to_str().unwrap(),
+                "chord_config": {"history_depth_cap": -5.0},
+            }),
+            None,
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(&out).unwrap();
+        let cfg = chord_config_from_html(&html);
+        assert_eq!(
+            cfg["historyDepthCap"], 8,
+            "a negative override must be rejected (kept at the hardcoded default 8), \
+             not silently reinterpreted as 0: {cfg}"
+        );
+    }
+
+    #[test]
+    fn chord_config_clamps_out_of_range_overrides_instead_of_producing_garbage_geometry() {
+        let editor = editor_with_star_kb(1);
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.html");
+        execute_kb_export_subgraph_html(
+            &editor,
+            &serde_json::json!({
+                "id": "root",
+                "path": out.to_str().unwrap(),
+                "chord_config": {
+                    // Doc'd meaningful range is [0, 1] -- "0 = straight
+                    // line, 1 = fully at center". 1e300 isn't a creative
+                    // override, it's a geometry break.
+                    "edge_pull_back": 1e300,
+                    "wedge_corner_radius_fraction": -50.0,
+                    "search_debounce_ms": 999_999_999.0,
+                },
+            }),
+            None,
+        )
+        .unwrap();
+        let html = std::fs::read_to_string(&out).unwrap();
+        let cfg = chord_config_from_html(&html);
+        assert_eq!(cfg["edgePullBack"], 1.0, "{cfg}");
+        assert_eq!(cfg["wedgeCornerRadiusFraction"], 0.0, "{cfg}");
+        assert_eq!(cfg["searchDebounceMs"], 60_000, "{cfg}");
     }
 
     #[test]
