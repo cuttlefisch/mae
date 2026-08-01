@@ -711,6 +711,34 @@ mod tests {
         assert!(msg2.contains("Exported 12 nodes"), "{msg2}");
     }
 
+    #[test]
+    fn non_numeric_and_negative_depth_and_node_cap_fall_back_to_editor_defaults() {
+        // Adversarial: `depth` is a JSON string and `node_cap` is a negative
+        // number -- neither is a valid non-negative JSON integer, so
+        // `serde_json::Value::as_u64()` returns `None` for both (confirmed:
+        // it never coerces a string or a negative number). The `.and_then`
+        // chain must fall through cleanly to the Editor option defaults
+        // (depth=2, node_cap=60), not panic and not silently misinterpret
+        // either value (e.g. as 0, which would truncate the export to
+        // nothing).
+        let editor = editor_with_star_kb(3);
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.html");
+        let msg = execute_kb_export_subgraph_html(
+            &editor,
+            &serde_json::json!({
+                "id": "root",
+                "path": out.to_str().unwrap(),
+                "depth": "many",
+                "node_cap": -5,
+            }),
+            None,
+        )
+        .unwrap();
+        assert!(msg.contains("Exported 4 nodes"), "{msg}");
+        assert!(!msg.contains("hidden"), "{msg}");
+    }
+
     /// The exported page's `ChordDiagramConfig` values flow through the
     /// `#graph-data` JSON payload's `chordConfig` object (real data
     /// injection into `graph.js`, not exact-substring text patching
