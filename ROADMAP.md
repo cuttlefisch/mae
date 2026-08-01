@@ -530,6 +530,13 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   job). What remains is Rust assembly logic plus this module's own extensive test suite, not a
   further asset-embedding seam. See the file's own `@ai-caution: [architecture-debt]` marker and
   `.claude/commands/mae-audit.md`'s "Known exceptions" entry.
+- [ ] **`GruvboxPalette` (`crates/export/src/html_graph.rs`) is a hand-copied theme snapshot with no
+  drift check** (found during the pre-merge review integrating `feat/subgraph-html-export`, 2026-08):
+  a byte-for-byte hardcoded copy of `crates/core/src/themes/gruvbox-{dark,light}.toml`'s resolved
+  palette + `ui.graph.*` role mapping, needed so the exported HTML page stays self-contained/offline
+  with zero runtime dependency on the editor's theme system. Nothing catches the two drifting apart
+  if either TOML file changes. Tracked: issue #568. See the struct's own `@ai-caution:
+  [architecture-debt]` marker.
 - [ ] **6 more files newly over ceiling, tracked but not split** (found during round-5 tech-debt pass,
   2026-07): `crates/core/src/editor/graph_view_ops.rs` (4,464 lines) + `crates/core/src/graph_view.rs`
   (2,848) — the native KB graph view feature, post-dates the splitting pass above entirely;

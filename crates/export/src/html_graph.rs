@@ -133,6 +133,11 @@ pub fn load_translations(path: &Path) -> Result<TranslationMap, String> {
 /// resolve to today — NOT hand-picked gruvbox lookalikes. If either theme
 /// file's palette or `ui.graph.*` mapping changes, update the matching
 /// `dark()`/`light()` constructor below to match.
+///
+/// @ai-caution: [architecture-debt] hand-copied theme snapshot, no automated
+/// drift check against the source TOML files — see
+/// https://github.com/cuttlefisch/mae/issues/568 and ROADMAP.md's
+/// "Architecture Debt" section.
 #[derive(Debug, Clone, Copy)]
 pub struct GruvboxPalette {
     pub name: &'static str,
