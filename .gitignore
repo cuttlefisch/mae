@@ -51,3 +51,4 @@ tools/*/Cargo.lock
 # committed one: per-file line counts change on nearly every commit, so
 # committing it would churn every PR. docs/AUDIT_BASELINE.json IS committed.
 docs/AUDIT_METRICS.json
+.audit-wip/
