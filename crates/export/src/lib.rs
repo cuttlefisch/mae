@@ -102,6 +102,27 @@ pub trait Exporter {
     fn export(&self, meta: &OrgMeta, elements: &[OrgElement]) -> String;
 }
 
+/// Strip a leading ordered-list marker (`"1. "`, `"2) "`, ... including
+/// multi-digit item numbers like `"10. "`) and return the remainder, or
+/// `None` if `s` doesn't start with one. `str::strip_prefix` given a
+/// `FnMut(char) -> bool` predicate only strips a single matching
+/// character, not a run -- a naive `strip_prefix(|c| c.is_ascii_digit())`
+/// strips just the `1` off `"10. Document..."`, leaving `"0. Document..."`,
+/// which then fails the `". "`/`") "` check entirely. Any org list with 10+
+/// items hit this: item 10 wasn't recognized as a list item at all and
+/// fell through to plain-paragraph parsing instead, which (before the
+/// paragraph-loop fix alongside this one) also had no properties-drawer
+/// awareness -- a real, reproducible break in the onprem-iac KB's Phase 6
+/// checklist (item 10 of 10).
+fn strip_ordered_marker(s: &str) -> Option<&str> {
+    let digit_len = s.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digit_len == 0 {
+        return None;
+    }
+    let rest = &s[digit_len..];
+    rest.strip_prefix(". ").or_else(|| rest.strip_prefix(") "))
+}
+
 /// Advance past a `:PROPERTIES:` ... `:END:` drawer starting at `lines[i]`
 /// (caller has already confirmed `lines[i].trim()` is `:properties:`,
 /// case-insensitive) and return the index of the first line after it.
@@ -411,10 +432,7 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
 
         // Ordered lists
         if trimmed.len() > 2 && trimmed.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-            if let Some(rest) = trimmed
-                .strip_prefix(|c: char| c.is_ascii_digit())
-                .and_then(|s| s.strip_prefix(". ").or(s.strip_prefix(") ")))
-            {
+            if let Some(rest) = strip_ordered_marker(trimmed) {
                 let mut items = vec![ListItem {
                     content: rest.to_string(),
                     children: Vec::new(),
@@ -422,10 +440,7 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
                 i += 1;
                 while i < lines.len() {
                     let ll = lines[i].trim();
-                    if let Some(item_rest) = ll
-                        .strip_prefix(|c: char| c.is_ascii_digit())
-                        .and_then(|s| s.strip_prefix(". ").or(s.strip_prefix(") ")))
-                    {
+                    if let Some(item_rest) = strip_ordered_marker(ll) {
                         items.push(ListItem {
                             content: item_rest.to_string(),
                             children: Vec::new(),
@@ -474,6 +489,15 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
                 || pl.starts_with("-----")
             {
                 break;
+            }
+            if pl.eq_ignore_ascii_case(":properties:") {
+                // A drawer embedded mid-paragraph (e.g. an org list item
+                // whose own :ID: drawer fell through to plain-paragraph
+                // parsing) is metadata, not prose -- skip it rather than
+                // appending it verbatim. See skip_properties_drawer's doc
+                // comment for the real KB pattern this handles.
+                i = skip_properties_drawer(&lines, i);
+                continue;
             }
             para_lines.push(lines[i].to_string());
             i += 1;
@@ -1091,6 +1115,47 @@ mod tests {
         assert!(!items[0].content.contains(":PROPERTIES:"));
         assert_eq!(items[0].content, "First item. More text.");
         assert_eq!(items[1].content, "Second item.");
+    }
+
+    #[test]
+    fn ordered_list_recognizes_multi_digit_item_numbers() {
+        // Real, reproducible bug in the onprem-iac KB's Phase 6 checklist
+        // (10 items): strip_prefix(|c: char| c.is_ascii_digit()) strips only
+        // ONE leading digit, not a run -- "10. Document..." became
+        // "0. Document..." after stripping just the "1", which then failed
+        // the ". "/") " check entirely. Item 10 fell through to plain-
+        // paragraph parsing instead of being recognized as list item 10,
+        // breaking both its own :PROPERTIES: drawer stripping (a different,
+        // now also-fixed code path) and the list's own item count/order.
+        let src = "1. First.\n2. Second.\n9. Ninth.\n10. Tenth.\n11. Eleventh.\n";
+        let (_, elements) = parse_org_document(src);
+        assert_eq!(elements.len(), 1, "all five items must parse as ONE list, not split at item 10");
+        let OrgElement::List { ordered, items } = &elements[0] else {
+            panic!("expected a List element, got {:?}", elements[0]);
+        };
+        assert!(ordered);
+        assert_eq!(items.len(), 5);
+        assert_eq!(items[3].content, "Tenth.");
+        assert_eq!(items[4].content, "Eleventh.");
+    }
+
+    #[test]
+    fn a_plain_paragraphs_embedded_properties_drawer_is_not_leaked() {
+        // The third of three accumulation sites that all needed the same
+        // fix: the top-level scanner (pre-existing, #528), both list
+        // continuation loops (fixed above), and this generic paragraph
+        // fallback -- exercised for real when a multi-digit ordered-list
+        // item (see the test above) fell through to paragraph parsing
+        // before that bug was fixed, but also reachable directly by any
+        // plain paragraph carrying its own drawer.
+        let src = "Some prose.\n:PROPERTIES:\n:ID: xyz\n:END:\nMore prose after the drawer.\n";
+        let (_, elements) = parse_org_document(src);
+        let OrgElement::Paragraph(text) = &elements[0] else {
+            panic!("expected a Paragraph element, got {:?}", elements[0]);
+        };
+        assert!(!text.contains(":PROPERTIES:") && !text.contains(":END:"));
+        assert!(text.contains("Some prose."));
+        assert!(text.contains("More prose after the drawer."));
     }
 
     #[test]
