@@ -689,7 +689,14 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "Optional per-call overrides for the exported page's chord-diagram layout/timing constants (mae_export::html_graph::ChordDiagramConfig). Accepted numeric keys: hover_growth_factor, stroke_buffer_px, cosmetic_cushion_px, min_onscreen_radius_px, initial_pad_px, edge_pull_back, wedge_gap_radians, history_depth_cap, wedge_corner_radius_fraction, search_debounce_ms, ui_transition_ms. Any key omitted falls back to its kb_export_* editor option (set-option!-able, e.g. `(set-option! \"kb-export-hover-growth-factor\" \"2.5\")`), which itself defaults to the same hardcoded values this tool always used before this option existed.",
         )
         .required(["id", "path"])
-        .permission(PermissionTier::Write)
+        // Shell, not Write: node bodies containing `#+begin_src mermaid`
+        // trigger try_render_mermaid_svg, which shells out to
+        // `npx @mermaid-js/mermaid-cli` -- real subprocess execution and
+        // potential network access (npx fetches the package if not
+        // cached), the same class of operation babel_execute/babel_tangle/
+        // org_export already gate behind Shell. Found by a security
+        // review before merging PR #567.
+        .permission(PermissionTier::Shell)
         .build(),
         // --- Org tools ---
         ToolDefBuilder::new("org_cycle", "Toggle visibility (folding) of the Org heading at the cursor.")

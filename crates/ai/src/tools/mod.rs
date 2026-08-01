@@ -363,6 +363,25 @@ mod tests {
     }
 
     #[test]
+    fn kb_export_subgraph_html_requires_shell_tier() {
+        // It shells out to `npx @mermaid-js/mermaid-cli` for #+begin_src
+        // mermaid blocks (real subprocess execution + potential network
+        // access) -- must be gated at the same tier as babel_execute/
+        // babel_tangle/org_export, not the weaker Write tier. Regression
+        // guard found by a security review before merging PR #567.
+        let tools = ai_specific_tools(&OptionRegistry::new());
+        let tool = tools
+            .iter()
+            .find(|t| t.name == "kb_export_subgraph_html")
+            .expect("kb_export_subgraph_html must be registered");
+        assert_eq!(
+            tool.permission,
+            Some(crate::types::PermissionTier::Shell),
+            "kb_export_subgraph_html shells out for mermaid rendering and must require Shell tier"
+        );
+    }
+
+    #[test]
     fn all_tool_names_are_alphanumeric_underscore() {
         let tools = ai_specific_tools(&OptionRegistry::new());
         for tool in &tools {
