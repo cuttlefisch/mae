@@ -260,7 +260,14 @@ pub fn handle_command_mode(
                         if let Some(depth) = depth {
                             args["depth"] = serde_json::json!(depth);
                         }
-                        match mae_ai::execute_kb_export_subgraph_html(editor, &args) {
+                        // `requester_provider: None` -- this colon-command
+                        // path doesn't parse `guidance_ids` from its
+                        // arguments at all (only id/path/depth above), so
+                        // the residency post-filter this threads into is a
+                        // no-op here either way; `None` matches the safe
+                        // conservative default used at every other
+                        // non-MCP-tool-call call site of this function.
+                        match mae_ai::execute_kb_export_subgraph_html(editor, &args, None) {
                             Ok(msg) => editor.set_status(format!("[KB] {msg}")),
                             Err(e) => editor.set_status(format!("[KB] Export failed: {e}")),
                         }

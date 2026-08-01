@@ -204,9 +204,20 @@ fn resolve_chord_config(
 /// shape (an OMITTED `translations` arg is never an error — ES fields
 /// mirror EN and the page hides the toggle, see module docs); or the output
 /// path can't be written. `translations` omitted entirely is always fine.
+///
+/// `requester_provider` -- the caller's AI provider, when known -- lets this
+/// tool post-filter its own `guidance_ids` results for the AI-residency
+/// gate (ADR-048): each guidance id resolves independently of the seed,
+/// possibly into a DIFFERENT KB instance than the one the seed's own
+/// dispatch-time residency check covers, so a denied id is silently
+/// omitted from the export (never included) and explicitly reported in the
+/// returned status string, matching `missing_guidance_ids`' own
+/// never-silent convention. Same shape as `execute_kb_links_from`'s
+/// existing per-target residency post-filter.
 pub fn execute_kb_export_subgraph_html(
     editor: &Editor,
     args: &serde_json::Value,
+    requester_provider: Option<&str>,
 ) -> Result<String, String> {
     let id = args
         .get("id")
@@ -357,24 +368,59 @@ pub fn execute_kb_export_subgraph_html(
     // id that doesn't resolve anywhere is reported in the status string
     // (never silently dropped, matching `node_cap`'s own truncation
     // reporting below) rather than failing the whole export over one bad id.
+    //
+    // AI-residency: unlike the seed `id` (gated at dispatch time by
+    // `classify_kb_tool`'s SingleTarget shape, `crates/mae/src/
+    // ai_residency.rs`), each `guidance_ids` entry independently resolves
+    // across EVERY registered store with no upstream check -- this was a
+    // real, documented gap (an agent that knows/guesses an id in a
+    // residency-restricted KB could pull its full content into the
+    // colophon via a permitted seed elsewhere). Post-filter the resolved
+    // set here, the same `filter_residency_exempt`/`links_backend`
+    // machinery `kb_links_from`/`kb_links_to` already use for their own
+    // per-target residency check (CLAUDE.md #8 -- reuse, don't
+    // reimplement), and report anything denied explicitly rather than
+    // silently omitting it.
     let mut missing_guidance_ids: Vec<String> = Vec::new();
+    let mut denied_guidance_ids: Vec<String> = Vec::new();
     if let Some(guidance_ids) = args.get("guidance_ids").and_then(|v| v.as_array()) {
+        let backend = super::kb::links_backend(editor);
+        let mut resolved: Vec<(String, Option<String>, mae_kb::Node)> = Vec::new();
         for gid in guidance_ids.iter().filter_map(|v| v.as_str()) {
             match find_node(editor, gid) {
                 Some(n) => {
-                    let mut guidance_node = mae_export::html_graph::build_guidance_node(
-                        n.id.clone(),
-                        n.kind.as_str().to_string(),
-                        &n.title,
-                        &n.body,
-                        translations.get(&n.id),
-                        &palette,
-                    );
-                    guidance_node.tags = n.tags.clone();
-                    export_nodes.push(guidance_node);
+                    let (instance, _) = backend.describe_for_filter(gid);
+                    resolved.push((gid.to_string(), instance, n.clone()));
                 }
                 None => missing_guidance_ids.push(gid.to_string()),
             }
+        }
+        let attempted_ids: Vec<String> = resolved.iter().map(|(gid, _, _)| gid.clone()).collect();
+        let allowed = mae_core::ai_residency::filter_residency_exempt_by(
+            editor,
+            requester_provider,
+            resolved,
+            |(_, instance, _)| instance.as_deref(),
+            |(_, _, node)| mae_core::ai_residency::is_residency_exempt(node),
+        );
+        let allowed_ids: std::collections::HashSet<&str> =
+            allowed.iter().map(|(gid, _, _)| gid.as_str()).collect();
+        denied_guidance_ids.extend(
+            attempted_ids
+                .into_iter()
+                .filter(|gid| !allowed_ids.contains(gid.as_str())),
+        );
+        for (gid, _, n) in &allowed {
+            let mut guidance_node = mae_export::html_graph::build_guidance_node(
+                gid.clone(),
+                n.kind.as_str().to_string(),
+                &n.title,
+                &n.body,
+                translations.get(gid),
+                &palette,
+            );
+            guidance_node.tags = n.tags.clone();
+            export_nodes.push(guidance_node);
         }
     }
     let export_edges: Vec<mae_export::html_graph::GraphExportEdge> = result
@@ -428,7 +474,7 @@ pub fn execute_kb_export_subgraph_html(
     })?;
 
     Ok(format!(
-        "Exported {} node{} ({} edges) rooted at '{id}' to {} ({} bytes){}{}{}",
+        "Exported {} node{} ({} edges) rooted at '{id}' to {} ({} bytes){}{}{}{}",
         export_nodes.len(),
         if export_nodes.len() == 1 { "" } else { "s" },
         export_edges.len(),
@@ -459,6 +505,15 @@ pub fn execute_kb_export_subgraph_html(
                 ", {} guidance id(s) not found and skipped: {}",
                 missing_guidance_ids.len(),
                 missing_guidance_ids.join(", ")
+            )
+        },
+        if denied_guidance_ids.is_empty() {
+            String::new()
+        } else {
+            format!(
+                ", {} guidance id(s) omitted (residency-restricted): {}",
+                denied_guidance_ids.len(),
+                denied_guidance_ids.join(", ")
             )
         }
     ))
@@ -538,6 +593,7 @@ mod tests {
                 "path": out.to_str().unwrap(),
                 "node_cap": 5,
             }),
+            None,
         )
         .unwrap();
         // 5 nodes fit (root + 4 spokes out of 20 reachable) -> 16 hidden.
@@ -555,6 +611,7 @@ mod tests {
         let msg = execute_kb_export_subgraph_html(
             &editor,
             &serde_json::json!({"id": "root", "path": out.to_str().unwrap(), "node_cap": 10}),
+            None,
         )
         .unwrap();
         assert!(msg.contains("Exported 4 nodes"), "{msg}");
@@ -564,6 +621,7 @@ mod tests {
         let msg2 = execute_kb_export_subgraph_html(
             &editor,
             &serde_json::json!({"id": "root", "path": out2.to_str().unwrap()}),
+            None,
         )
         .unwrap();
         assert!(msg2.contains("Exported 4 nodes"), "{msg2}");
@@ -583,6 +641,7 @@ mod tests {
         let msg = execute_kb_export_subgraph_html(
             &editor,
             &serde_json::json!({"id": "root", "path": out.to_str().unwrap()}),
+            None,
         )
         .unwrap();
         assert!(msg.contains("Exported 8 nodes"), "{msg}");
@@ -593,6 +652,7 @@ mod tests {
         let msg2 = execute_kb_export_subgraph_html(
             &editor,
             &serde_json::json!({"id": "root", "path": out2.to_str().unwrap(), "node_cap": 999}),
+            None,
         )
         .unwrap();
         assert!(msg2.contains("Exported 12 nodes"), "{msg2}");
@@ -610,6 +670,7 @@ mod tests {
         execute_kb_export_subgraph_html(
             &editor,
             &serde_json::json!({"id": "root", "path": out1.to_str().unwrap()}),
+            None,
         )
         .unwrap();
         let html1 = std::fs::read_to_string(&out1).unwrap();
@@ -622,6 +683,7 @@ mod tests {
         execute_kb_export_subgraph_html(
             &editor,
             &serde_json::json!({"id": "root", "path": out2.to_str().unwrap()}),
+            None,
         )
         .unwrap();
         let html2 = std::fs::read_to_string(&out2).unwrap();
@@ -636,6 +698,7 @@ mod tests {
                 "path": out3.to_str().unwrap(),
                 "chord_config": {"hover_growth_factor": 3.5},
             }),
+            None,
         )
         .unwrap();
         let html3 = std::fs::read_to_string(&out3).unwrap();
@@ -659,6 +722,7 @@ mod tests {
                 "path": out.to_str().unwrap(),
                 "chord_config": {"history_depth_cap": 15.0},
             }),
+            None,
         )
         .unwrap();
         let html = std::fs::read_to_string(&out).unwrap();
@@ -673,6 +737,7 @@ mod tests {
         let result = execute_kb_export_subgraph_html(
             &editor,
             &serde_json::json!({"id": "does-not-exist", "path": out.to_str().unwrap()}),
+            None,
         );
         let err = result.unwrap_err();
         assert!(err.contains("does-not-exist"), "{err}");
@@ -692,6 +757,7 @@ mod tests {
                 "path": out.to_str().unwrap(),
                 "translations": dir.path().join("nope.json").to_str().unwrap(),
             }),
+            None,
         );
         let err = result.unwrap_err();
         assert!(err.contains("translations file"), "{err}");
@@ -705,6 +771,7 @@ mod tests {
         let result = execute_kb_export_subgraph_html(
             &editor,
             &serde_json::json!({"id": "root", "path": out.to_str().unwrap()}),
+            None,
         );
         assert!(result.is_ok(), "{result:?}");
         assert!(out.exists());
@@ -718,6 +785,7 @@ mod tests {
         let result = execute_kb_export_subgraph_html(
             &editor,
             &serde_json::json!({"id": "root", "path": out.to_str().unwrap(), "depth": 1}),
+            None,
         );
         assert!(result.is_ok(), "{result:?}");
         let html = std::fs::read_to_string(&out).unwrap();
@@ -734,6 +802,7 @@ mod tests {
         let result = execute_kb_export_subgraph_html(
             &editor,
             &serde_json::json!({"id": "nope", "path": out.to_str().unwrap()}),
+            None,
         );
         assert!(result.is_err());
         assert!(!out.exists());
@@ -801,6 +870,7 @@ mod tests {
         let result = execute_kb_export_subgraph_html(
             &editor,
             &serde_json::json!({"id": "root", "path": out.to_str().unwrap(), "depth": 2}),
+            None,
         );
         assert!(result.is_ok(), "{result:?}");
         let html = std::fs::read_to_string(&out).unwrap();
@@ -853,6 +923,7 @@ mod tests {
                 "depth": 1,
                 "guidance_ids": ["style-guide"],
             }),
+            None,
         )
         .unwrap();
         assert!(!msg.contains("not found"), "{msg}");
@@ -876,6 +947,7 @@ mod tests {
                 "path": out.to_str().unwrap(),
                 "guidance_ids": ["does-not-exist"],
             }),
+            None,
         )
         .unwrap();
         assert!(
@@ -885,5 +957,77 @@ mod tests {
         // The rest of the export still succeeded -- one bad guidance id
         // doesn't fail the whole export.
         assert!(msg.contains("Exported 2 nodes"), "{msg}");
+    }
+
+    #[test]
+    fn a_guidance_id_in_a_residency_restricted_kb_is_omitted_and_reported() {
+        // Real, previously-documented gap: guidance_ids resolve
+        // independently of the seed, with no residency check at all --
+        // an agent that knows/guesses an id living in a residency-
+        // restricted KB could pull its full content into the colophon
+        // via a permitted seed elsewhere. This is the adversarial case
+        // that must fail: the restricted node must never end up in the
+        // exported HTML, and the omission must be reported, not silent.
+        let mut editor = editor_with_linked_notes();
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "secret-guidance",
+            "Confidential Guidance",
+            mae_kb::NodeKind::Note,
+            "Sensitive content that must not leak into a shared export.",
+        ));
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.html");
+        let msg = execute_kb_export_subgraph_html(
+            &editor,
+            &serde_json::json!({
+                "id": "root",
+                "path": out.to_str().unwrap(),
+                "guidance_ids": ["secret-guidance"],
+            }),
+            Some("claude"),
+        )
+        .unwrap();
+        assert!(
+            msg.contains("1 guidance id(s) omitted (residency-restricted): secret-guidance"),
+            "{msg}"
+        );
+        assert!(
+            !msg.contains("not found"),
+            "a residency denial must be reported distinctly from a missing id: {msg}"
+        );
+        let html = std::fs::read_to_string(&out).unwrap();
+        assert!(
+            !html.contains("Confidential Guidance")
+                && !html.contains("Sensitive content that must not leak"),
+            "the restricted node's title/body must never reach the exported HTML: {html}"
+        );
+    }
+
+    #[test]
+    fn a_guidance_id_in_a_residency_restricted_kb_is_allowed_from_a_local_provider() {
+        let mut editor = editor_with_linked_notes();
+        editor.kb.primary.insert(mae_kb::Node::new(
+            "internal-guidance",
+            "Internal Guidance",
+            mae_kb::NodeKind::Note,
+            "Local-only content.",
+        ));
+        editor.kb.registry.primary_ai_residency = mae_kb::federation::AiResidency::LocalModelsOnly;
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.html");
+        let msg = execute_kb_export_subgraph_html(
+            &editor,
+            &serde_json::json!({
+                "id": "root",
+                "path": out.to_str().unwrap(),
+                "guidance_ids": ["internal-guidance"],
+            }),
+            Some("ollama"),
+        )
+        .unwrap();
+        assert!(!msg.contains("omitted"), "{msg}");
+        let html = std::fs::read_to_string(&out).unwrap();
+        assert!(html.contains("Internal Guidance"), "{html}");
     }
 }

@@ -173,7 +173,11 @@ pub fn execute_kb_list(editor: &Editor, args: &serde_json::Value) -> Result<Stri
 /// `.source`/`.instance` to thread through without a new per-id lookup —
 /// cheap in practice since these are typically small, bounded result sets
 /// (see #366's own scoping discussion).
-enum LinksBackend<'a> {
+// pub(crate): reused by `kb_export_html::execute_kb_export_subgraph_html`
+// for its own `guidance_ids` residency post-filter (same "which instance
+// does this id resolve into" question, same backend selection) rather
+// than duplicating primary/instances/query-layer resolution a second time.
+pub(crate) enum LinksBackend<'a> {
     Query(mae_kb::graph_query::QueryLayerBackend<'a>),
     InMemory(mae_kb::graph_query::InMemoryFederatedBackend<'a>),
 }
@@ -183,7 +187,7 @@ impl LinksBackend<'_> {
     /// resolve at all — a dangling link target carries no content to
     /// protect, so it's always kept (mirrors `execute_kb_graph`'s treatment
     /// of missing/dangling BFS nodes).
-    fn describe_for_filter(&self, id: &str) -> (Option<String>, bool) {
+    pub(crate) fn describe_for_filter(&self, id: &str) -> (Option<String>, bool) {
         use mae_kb::graph_query::GraphNeighbors;
         let described = match self {
             LinksBackend::Query(b) => b.describe(id),
@@ -196,7 +200,7 @@ impl LinksBackend<'_> {
     }
 }
 
-fn links_backend(editor: &Editor) -> LinksBackend<'_> {
+pub(crate) fn links_backend(editor: &Editor) -> LinksBackend<'_> {
     if let Some(q) = editor.kb.query_layer() {
         LinksBackend::Query(mae_kb::graph_query::QueryLayerBackend(q))
     } else {

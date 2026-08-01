@@ -235,14 +235,19 @@ fn classify_kb_tool(tool_name: &str) -> Option<ToolResidencyShape> {
         // subgraph, with no cross-instance leak possible for a
         // post-filter to catch. Unlike kb_graph/kb_neighborhood (federated
         // BFS, genuinely can cross instances -- SingleTargetFilterable).
-        // NOT yet residency-filtered: the tool's optional `guidance_ids`
-        // argument (crates/ai/src/tool_impls/kb_export_html.rs) independently
-        // resolves EACH id across every registered store, and a guidance id
-        // landing in a DIFFERENT, restricted KB than the seed isn't
-        // re-checked -- a real, narrow, deliberately scoped-out gap
-        // (guidance_ids is a rare, opt-in feature) rather than an oversight;
-        // tighten with a SingleTargetFilterable-style post-filter on
-        // guidance_ids specifically if this becomes a real concern.
+        // The tool's optional `guidance_ids` argument independently resolves
+        // EACH id across every registered store (may land in a DIFFERENT KB
+        // than the seed) -- this used to be an unfiltered gap here, since
+        // this SingleTarget shape only ever gates on the anchor `id`.
+        // `execute_kb_export_subgraph_html` (crates/ai/src/tool_impls/
+        // kb_export_html.rs) now closes it itself: a
+        // SingleTargetFilterable-style post-filter (`mae_core::ai_residency::
+        // filter_residency_exempt_by`, the same primitive `kb_links_from`'s
+        // own per-target check already uses) drops any guidance id whose
+        // owning KB is residency-restricted and the requester isn't a local
+        // provider, and reports what was omitted in the tool's own returned
+        // status string -- never silently. This gate still only needs to
+        // cover the seed/anchor `id`.
         "kb_export_subgraph_html" => SingleTarget,
 
         // --- SingleTargetFilterable: same anchor-id gate check as

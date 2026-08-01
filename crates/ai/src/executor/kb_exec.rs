@@ -93,7 +93,9 @@ pub(super) fn dispatch(
         "kb_set_role" => execute_kb_set_role(editor, &call.arguments),
         "kb_reimport" => execute_kb_reimport(editor, &call.arguments),
         "kb_export_guidance" => execute_kb_export_guidance(editor, &call.arguments),
-        "kb_export_subgraph_html" => execute_kb_export_subgraph_html(editor, &call.arguments),
+        "kb_export_subgraph_html" => {
+            execute_kb_export_subgraph_html(editor, &call.arguments, requester_provider)
+        }
         "kb_search_context" => {
             execute_kb_search_context(editor, &call.arguments, requester_provider)
         }

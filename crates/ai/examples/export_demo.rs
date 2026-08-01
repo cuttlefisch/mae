@@ -39,7 +39,7 @@ fn main() {
         "title": "Export Demo (synthetic fixture)",
     });
 
-    match mae_ai::execute_kb_export_subgraph_html(&editor, &args) {
+    match mae_ai::execute_kb_export_subgraph_html(&editor, &args, None) {
         Ok(msg) => eprintln!("OK: {msg}"),
         Err(e) => {
             eprintln!("ERROR: {e}");
