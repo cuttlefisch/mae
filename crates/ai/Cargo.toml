@@ -17,6 +17,15 @@ mae-core = { path = "../core" }
 mae-kb = { path = "../../shared/kb", features = ["storage-sled", "crdt", "remote-hub"] }
 mae-shell = { path = "../shell" }
 mae-sync = { path = "../../shared/sync" }
+# For kb_export_subgraph_html (#kb-export-html): mae-canvas bakes the
+# chord-ring layout positions; the standalone HTML page itself is rendered
+# by mae-export::html_graph (see ADR-077 for why this ships as a real
+# in-tree module rather than a Scheme reimplementation or a sibling
+# checkout dependency). Direct dependency here (not just the transitive
+# mae-core -> mae-export edge) since this crate calls mae_export::html_graph
+# types directly.
+mae-canvas = { path = "../canvas" }
+mae-export = { path = "../export" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # "blocking" is for ADR-061 Phase E's synchronous enrich-now tool only

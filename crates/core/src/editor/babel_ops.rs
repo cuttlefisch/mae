@@ -419,7 +419,8 @@ impl Editor {
         let source = self.buffers[buf_idx].rope().to_string();
         let cursor_line = self.ai_cursor_row();
 
-        let (meta, elements) = export::parse_org_document(&source);
+        let (mut meta, elements) = export::parse_org_document(&source);
+        meta.options.allow_raw_html_export_blocks = self.org_export_allow_raw_html_blocks;
 
         // Find the heading at or before cursor
         let mut heading_idx = None;
@@ -465,7 +466,8 @@ impl Editor {
     fn org_export_to(&mut self, format: &str) -> String {
         let buf_idx = self.ai_active_buffer_idx();
         let source = self.buffers[buf_idx].rope().to_string();
-        let (meta, elements) = export::parse_org_document(&source);
+        let (mut meta, elements) = export::parse_org_document(&source);
+        meta.options.allow_raw_html_export_blocks = self.org_export_allow_raw_html_blocks;
 
         // Apply tag filtering
         let filtered = if !meta.select_tags.is_empty() || !meta.exclude_tags.is_empty() {

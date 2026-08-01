@@ -360,6 +360,24 @@ impl SchemeRuntime {
             }
         }
 
+        // Apply `(kb-export-subgraph-html ...)` requests — the SAME
+        // `mae_ai::execute_kb_export_subgraph_html` function the
+        // `kb_export_subgraph_html` MCP tool and `:kb-export-html`
+        // colon-command call, per CLAUDE.md principle #3 (AI/human parity).
+        for args in state.pending_kb_export_requests.drain(..) {
+            // `requester_provider: None` -- this Scheme-eval bridge has no
+            // AI-provider tracking (unlike the MCP tool call path, which
+            // threads the real requester through). `None` is the safe
+            // default: `filter_residency_exempt_by` only skips its
+            // guidance_ids residency filter for a CONFIRMED local
+            // provider, so an unknown caller here still gets filtered,
+            // never bypassed.
+            match mae_ai::execute_kb_export_subgraph_html(editor, &args, None) {
+                Ok(msg) => editor.set_status(msg),
+                Err(e) => editor.set_status(format!("kb-export-subgraph-html error: {e}")),
+            }
+        }
+
         // Apply typed link additions from (kb-add-link! SRC DST REL_TYPE)
         if let Some(ref store) = editor.kb.store {
             for (src, dst, rel_type) in state.pending_kb_links.drain(..) {

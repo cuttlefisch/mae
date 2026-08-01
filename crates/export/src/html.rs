@@ -63,7 +63,12 @@ impl Exporter for HtmlExporter {
     }
 }
 
-fn render_element(html: &mut String, element: &OrgElement, opts: &ExportOptions) {
+/// Render a single parsed org element as HTML, appending to `html`.
+///
+/// `pub(crate)`: also used by `html_graph.rs`'s node-body-to-HTML rendering
+/// (`render_node_body_html`, which imports this as `render_org_element`),
+/// not just this module's own `HtmlExporter`.
+pub(crate) fn render_element(html: &mut String, element: &OrgElement, opts: &ExportOptions) {
     match element {
         OrgElement::Heading {
             level, title, tags, ..
@@ -113,28 +118,31 @@ fn render_element(html: &mut String, element: &OrgElement, opts: &ExportOptions)
             html.push_str("</pre>\n");
         }
         OrgElement::List { ordered, items } => {
-            let tag = if *ordered { "ol" } else { "ul" };
-            html.push_str(&format!("<{}>\n", tag));
-            for item in items {
-                html.push_str("<li>");
-                push_list_item_content(html, &item.content);
-                html.push_str("</li>\n");
-            }
-            html.push_str(&format!("</{}>\n", tag));
+            render_list_items(html, items, *ordered);
         }
         OrgElement::Table { rows, has_header } => {
+            // Cell content goes through the same inline-markup converter as
+            // every other block (List, Quote, ...) below -- it previously
+            // went through html_escape() alone, so =code=, *bold*, and
+            // [[id:...][links]] inside a table cell rendered as literal,
+            // unconverted org markup instead of real HTML. Every table in
+            // the KB was affected, not just one note's.
             html.push_str("<table>\n");
             for (i, row) in rows.iter().enumerate() {
                 if i == 0 && *has_header {
                     html.push_str("<thead>\n<tr>");
                     for cell in row {
-                        html.push_str(&format!("<th>{}</th>", html_escape(cell)));
+                        html.push_str("<th>");
+                        html.push_str(&convert_inline_markup_str(cell, InlineTarget::Html));
+                        html.push_str("</th>");
                     }
                     html.push_str("</tr>\n</thead>\n<tbody>\n");
                 } else {
                     html.push_str("<tr>");
                     for cell in row {
-                        html.push_str(&format!("<td>{}</td>", html_escape(cell)));
+                        html.push_str("<td>");
+                        html.push_str(&convert_inline_markup_str(cell, InlineTarget::Html));
+                        html.push_str("</td>");
                     }
                     html.push_str("</tr>\n");
                 }
@@ -164,7 +172,16 @@ fn render_element(html: &mut String, element: &OrgElement, opts: &ExportOptions)
         OrgElement::Comment(_) => {}
         OrgElement::ExportBlock { format, content } => {
             if format == "html" {
-                html.push_str(content);
+                if opts.allow_raw_html_export_blocks {
+                    html.push_str(content);
+                } else {
+                    // Safe default: `#+begin_export html` is standard org
+                    // syntax for embedding raw HTML, but this org content
+                    // isn't necessarily self-authored/trusted (see
+                    // `ExportOptions::allow_raw_html_export_blocks`'s doc
+                    // comment) -- escape rather than inject it verbatim.
+                    html.push_str(&html_escape(content));
+                }
                 html.push('\n');
             }
         }
@@ -176,6 +193,24 @@ fn render_element(html: &mut String, element: &OrgElement, opts: &ExportOptions)
 /// a disabled `<input type="checkbox">` (disabled since this is a static
 /// export, not the live editor) ahead of the item's own inline-markup-
 /// converted text.
+/// Renders a (possibly nested, see `ListItem::children`) list as real
+/// `<ul>`/`<ol>` markup -- a nested sub-list becomes a nested `<ul>`/`<ol>`
+/// inside its parent's `<li>`, standard HTML list-nesting shape. Recursive
+/// so any depth of real nesting renders correctly, not just one level.
+fn render_list_items(html: &mut String, items: &[crate::ListItem], ordered: bool) {
+    let tag = if ordered { "ol" } else { "ul" };
+    html.push_str(&format!("<{}>\n", tag));
+    for item in items {
+        html.push_str("<li>");
+        push_list_item_content(html, &item.content);
+        if !item.children.is_empty() {
+            render_list_items(html, &item.children, ordered);
+        }
+        html.push_str("</li>\n");
+    }
+    html.push_str(&format!("</{}>\n", tag));
+}
+
 fn push_list_item_content(html: &mut String, content: &str) {
     if let Some((state, rest)) = parse_checkbox_marker(content) {
         let (checked_attr, aria) = match state {
@@ -297,6 +332,42 @@ mod tests {
         let html = exporter.export(&meta, &elements);
         assert!(html.contains("<th>Name</th>"));
         assert!(html.contains("<td>Alice</td>"));
+    }
+
+    #[test]
+    fn export_table_cell_markup_is_converted_not_left_as_raw_org_syntax() {
+        // Regression: table cells went through html_escape() alone, never
+        // convert_inline_markup_str() -- every other block (List, Quote,
+        // Paragraph) already routes cell-equivalent content through it.
+        // A real cheatsheet table with function names like `=length(x)=`
+        // rendered the literal "=length(x)=" text instead of a <code> span,
+        // and an id: link in a cell rendered as literal bracket syntax
+        // instead of a real <a>.
+        let meta = OrgMeta::default();
+        let elements = vec![OrgElement::Table {
+            rows: vec![
+                vec!["Function".to_string(), "Does".to_string()],
+                vec![
+                    "=length(x)=".to_string(),
+                    "See [[id:abc123][the docs]]".to_string(),
+                ],
+            ],
+            has_header: true,
+        }];
+        let exporter = HtmlExporter;
+        let html = exporter.export(&meta, &elements);
+        assert!(
+            html.contains("<code>length(x)</code>"),
+            "expected =verbatim= markup in a cell to render as <code>, got: {html}"
+        );
+        assert!(
+            html.contains("<a href=\"#abc123\">the docs</a>"),
+            "expected an id: link in a cell to render as a real <a>, got: {html}"
+        );
+        assert!(
+            !html.contains("=length(x)="),
+            "raw org verbatim syntax should not survive unconverted in a cell"
+        );
     }
 
     #[test]

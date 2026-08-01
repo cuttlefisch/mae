@@ -660,6 +660,49 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .required(["query"])
         .permission(PermissionTier::ReadOnly)
         .build(),
+        ToolDefBuilder::new(
+            "kb_export_subgraph_html",
+            "Export a KB subgraph (a seed/anchor node plus its neighborhood) to ONE self-contained, standalone HTML file — no external network requests, works fully offline in a browser. BFS from `id` out to `depth` hops (default/ceiling configurable via kb_export_default_depth/kb_export_max_depth editor options, factory defaults 2/4) capped at `node_cap` reachable nodes (default/ceiling configurable via kb_export_default_node_cap/kb_export_max_node_cap, factory defaults 60/200 — the returned status says explicitly if any were hidden by this cap, never a silent truncation), laid out as a compact chord ring (nodes on a circle, edges as interior arcs) in a sidebar nav widget alongside a collapsible per-node outline; the main content area shows the selected node's full rendered body. Optional `required_tag` hard-filters the exported node set to only nodes carrying that exact tag (plus the seed itself, regardless of its own tags) — BFS still traverses through untagged nodes to reach tagged ones beyond them, but only tagged nodes are included in the output; the returned status reports how many reachable nodes this excluded, same never-silent-truncation convention as `node_cap` (see ADR-082). The chord diagram's layout/timing constants (hover-growth amount, wedge rounding, animation speed, etc.) are also configurable, persistently via the kb_export_* editor options or per-call via `chord_config` — see that parameter's own description; every option's factory default reproduces this tool's original hardcoded behavior exactly. The anchor node gets distinct styling, a persistent Home button, and a Previous/Next reading-order walk (follows an authored `* Reading Order` Previous/Next chain in a node's body when present, falling back to BFS-distance order otherwise). A header search box does fuzzy jump-to-node, and a tag-filter picker dims non-matching chord nodes. Click a node (in the chord ring, the outline, or an in-body link) to view it; hovering a chord node OR an in-body link shows a title+excerpt preview popover. Optional `translations` JSON overlay ({id: {title_es, body_es}}) adds an instant EN/ES toggle — omit it and the page just shows EN with the toggle hidden. Optional `guidance_ids` always includes those specific nodes (regardless of BFS reachability) in a distinct \"About this guide\" colophon section — e.g. a writing-style standard or a translation-provenance disclosure. `#+begin_src mermaid` blocks in node bodies are pre-rendered to inline SVG, themed to match the page. Fails with a clear error if `id` doesn't resolve anywhere in the KB, or if `translations` is given but unreadable/malformed.",
+        )
+        .prop("id", "string", "Seed/anchor node id to center the export on")
+        .prop("path", "string", "Output HTML file path (absolute, or relative to the project root)")
+        .prop("depth", "integer", "BFS hop radius from the seed (default/ceiling from kb_export_default_depth/kb_export_max_depth, factory defaults 2/4)")
+        .prop(
+            "node_cap",
+            "integer",
+            "Safety net on the reachable-set size (default/ceiling from kb_export_default_node_cap/kb_export_max_node_cap, factory defaults 60/200) — past the ceiling the chord ring's per-node hit target shrinks to fit the fixed-size widget",
+        )
+        .prop(
+            "required_tag",
+            "string",
+            "Optional hard filter: only nodes carrying this exact tag (plus the seed, regardless of its own tags) are included in the export, independent of node_cap — see ADR-082",
+        )
+        .prop(
+            "translations",
+            "string",
+            "Optional path to a {id: {title_es, body_es}} JSON file adding an EN/ES toggle to the export",
+        )
+        .prop("title", "string", "Optional page title (default: derived from the seed node's own title)")
+        .prop(
+            "guidance_ids",
+            "array",
+            "Optional array of node ids always included regardless of BFS reachability, rendered in a distinct colophon section (see ADR-079) — e.g. a writing-style standard or translation-provenance disclosure",
+        )
+        .prop(
+            "chord_config",
+            "object",
+            "Optional per-call overrides for the exported page's chord-diagram layout/timing constants (mae_export::html_graph::ChordDiagramConfig). Accepted numeric keys: hover_growth_factor, stroke_buffer_px, cosmetic_cushion_px, min_onscreen_radius_px, initial_pad_px, edge_pull_back, wedge_gap_radians, history_depth_cap, wedge_corner_radius_fraction, search_debounce_ms, ui_transition_ms. Any key omitted falls back to its kb_export_* editor option (set-option!-able, e.g. `(set-option! \"kb-export-hover-growth-factor\" \"2.5\")`), which itself defaults to the same hardcoded values this tool always used before this option existed.",
+        )
+        .required(["id", "path"])
+        // Shell, not Write: node bodies containing `#+begin_src mermaid`
+        // trigger try_render_mermaid_svg, which shells out to
+        // `npx @mermaid-js/mermaid-cli` -- real subprocess execution and
+        // potential network access (npx fetches the package if not
+        // cached), the same class of operation babel_execute/babel_tangle/
+        // org_export already gate behind Shell. Found by a security
+        // review before merging PR #567.
+        .permission(PermissionTier::Shell)
+        .build(),
         // --- Org tools ---
         ToolDefBuilder::new("org_cycle", "Toggle visibility (folding) of the Org heading at the cursor.")
             .permission(PermissionTier::Write)

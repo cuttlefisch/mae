@@ -521,6 +521,22 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   yet individually tracked, and the summary predates the splitting pass above so it may itself be
   stale in the other direction (some of its worst-offender examples were among the files just
   resolved). Needs a fresh full-codebase re-audit before a dedicated splitting pass, not ad-hoc fixes.
+- [ ] **`crates/export/src/html_graph.rs` size** (added integrating `feat/subgraph-html-export`,
+  2026-08): ~3,700 lines, shipped as a real in-tree module (see ADR-077). The two large embedded
+  string constants (`GRAPH_JS`, `STATIC_CSS`) that originally made
+  up over 40% of the line count are now real `crates/export/assets/graph.js`/`graph.css` files
+  (loaded via `include_str!`, split during a pre-merge review — this already caught a real bug a
+  `node --check` CI gate now guards against, see `.github/workflows/ci.yml`'s `export-js-check`
+  job). What remains is Rust assembly logic plus this module's own extensive test suite, not a
+  further asset-embedding seam. See the file's own `@ai-caution: [architecture-debt]` marker and
+  `.claude/commands/mae-audit.md`'s "Known exceptions" entry.
+- [ ] **`GruvboxPalette` (`crates/export/src/html_graph.rs`) is a hand-copied theme snapshot with no
+  drift check** (found during the pre-merge review integrating `feat/subgraph-html-export`, 2026-08):
+  a byte-for-byte hardcoded copy of `crates/core/src/themes/gruvbox-{dark,light}.toml`'s resolved
+  palette + `ui.graph.*` role mapping, needed so the exported HTML page stays self-contained/offline
+  with zero runtime dependency on the editor's theme system. Nothing catches the two drifting apart
+  if either TOML file changes. Tracked: issue #568. See the struct's own `@ai-caution:
+  [architecture-debt]` marker.
 - [ ] **6 more files newly over ceiling, tracked but not split** (found during round-5 tech-debt pass,
   2026-07): `crates/core/src/editor/graph_view_ops.rs` (4,464 lines) + `crates/core/src/graph_view.rs`
   (2,848) — the native KB graph view feature, post-dates the splitting pass above entirely;

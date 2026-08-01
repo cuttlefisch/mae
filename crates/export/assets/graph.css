@@ -1,0 +1,885 @@
+* { box-sizing: border-box; }
+html, body { margin: 0; padding: 0; height: 100%; }
+body {
+  background: var(--bg0);
+  color: var(--fg1);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  display: flex;
+  flex-direction: column;
+  transition: background-color var(--ui-transition-ms, 200ms) ease, color var(--ui-transition-ms, 200ms) ease;
+}
+#page-header {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  padding: 0.75rem 1.25rem;
+  background: var(--bg1);
+  border-bottom: 1px solid var(--bg3);
+  transition: background-color var(--ui-transition-ms, 200ms) ease, border-color var(--ui-transition-ms, 200ms) ease;
+}
+#page-title { margin: 0; font-size: 1.25rem; }
+/* Pushes the Home/Prev/Next/Theme/Lang group to the row's far end,
+   matching #page-header's prior space-between look, while the new search
+   + tag-filter groups sit naturally between the title and it (dataviz
+   skill: "filters sit in a single left-aligned row above the content they
+   scope" -- here that's this same header row, not a second one, per this
+   feature's own scoping decision). flex-wrap above lets the whole row
+   break onto a second line on a narrow viewport instead of overflowing. */
+.controls { margin-left: auto; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+/* #tag-picker-toggle lives in .tag-filter-group, NOT .controls (it sits
+   between the search box and .controls in the header, see the markup
+   above) -- a real reported bug: `.controls button` alone left it as a
+   completely unstyled native <button>, an OS-default gray box clashing
+   with every themed control around it, in both light and dark mode.
+   Shares this exact rule rather than duplicating it, so the two families
+   of header buttons can never visually drift apart again. */
+.controls button, #tag-picker-toggle {
+  background: var(--bg2);
+  color: var(--fg1);
+  border: 1px solid var(--bg3);
+  border-radius: 4px;
+  padding: 0.4rem 0.8rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  /* >=24px hit target on every control, not just graph nodes. */
+  min-height: 24px;
+  transition: background-color 180ms ease, color 180ms ease, transform 180ms ease;
+}
+.controls button:hover, #tag-picker-toggle:hover { background: var(--bg3); }
+.controls button:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: var(--bg2);
+}
+.controls button#home-button { background: var(--accent); color: var(--bg0); border-color: var(--accent); }
+.controls button#home-button:hover { transform: translateY(-1px); }
+
+/* --- Header search: fuzzy jump-to-node, a dropdown of results below the
+   input (same floating-panel treatment as .popover -- border + shadow, no
+   pointer-events:none here since these rows ARE the interactive target). */
+.search-group { position: relative; }
+#node-search {
+  background: var(--bg2);
+  color: var(--fg1);
+  border: 1px solid var(--bg3);
+  border-radius: 4px;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.9rem;
+  min-height: 24px;
+  width: 14rem;
+  max-width: 40vw;
+}
+#node-search:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.search-results {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  min-width: 100%;
+  max-width: 24rem;
+  background: var(--bg1);
+  border: 1px solid var(--bg3);
+  border-radius: 6px;
+  padding: 0.25rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 20;
+}
+.search-results button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--fg1);
+  padding: 0.35rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  min-height: 24px;
+}
+.search-results button:hover, .search-results button.active { background: var(--bg2); }
+
+/* --- Header tag filter: a picker dropdown (all tags, toggleable) plus
+   removable chips for whichever are active. Filtering itself is applied to
+   the chord ring (see .node.filtered-out / .edge.filtered-out below), not
+   to any list here -- the graph IS the filtered view. */
+/* [hidden] overrides here are load-bearing, not decoration: both rules
+   below set `display` explicitly (flex, for their internal layout), which
+   has the SAME CSS specificity as the browser's built-in
+   `[hidden] { display: none }` UA-stylesheet rule -- author CSS appearing
+   later in the cascade wins a specificity tie, so without this override
+   these elements stayed visibly `display: flex` regardless of the
+   `hidden` attribute/property GRAPH_JS sets on them. Confirmed as a real
+   bug by the Layer 2 suite: an always-flex #tag-picker sat on top of
+   (and ate clicks intended for) #next-button/#prev-button underneath it
+   in the header. */
+.tag-filter-group[hidden], .tag-picker[hidden] { display: none; }
+.tag-filter-group { position: relative; display: flex; align-items: center; gap: 0.4rem; }
+.tag-picker {
+  position: absolute;
+  top: calc(100% + 0.25rem);
+  left: 0;
+  min-width: 12rem;
+  max-width: 20rem;
+  background: var(--bg1);
+  border: 1px solid var(--bg3);
+  border-radius: 6px;
+  padding: 0.4rem;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 20;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.tag-picker button, .active-tag-chips button {
+  background: var(--bg2);
+  color: var(--fg1);
+  border: 1px solid var(--bg3);
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  min-height: 24px;
+}
+.tag-picker button:hover { background: var(--bg3); }
+.tag-picker button.active { background: var(--accent); color: var(--bg0); border-color: var(--accent); }
+.active-tag-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+.active-tag-chips button { color: var(--link); }
+.active-tag-chips button:hover { background: var(--bg3); }
+/* The node's rendered content is the primary reading surface -- #main-content
+   is the dominant flex child; the chord diagram + outline are demoted to a
+   narrow, fixed-width #sidebar (not a flex ratio -- a compact nav widget
+   doesn't benefit from stretching wider on a wide viewport), stacked chord-
+   above-outline rather than side by side. See the html_graph module doc
+   comment for why this replaced an earlier layout where the graph took ~2/3
+   of the page width and the outline was easy to lose below a long body. */
+#app-main {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+#main-content {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  padding: 1.5rem 2rem;
+}
+#sidebar {
+  flex: 0 0 300px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  /* min-height: 0 overrides the flex default (min-height: auto), which
+     otherwise lets #sidebar's children push it taller than the cross-axis
+     height align-items: stretch actually gives it -- confirmed necessary
+     by the Layer 2 suite: without this, #graph-pane's own content-driven
+     height (itself content-forced past its nominal 280px, a pre-existing
+     characteristic this fix works around rather than chasing further) plus
+     #history-panel's real min-height could push #sidebar's rendered
+     content past #app-main's own bottom edge, with nothing to contain it
+     -- it simply overflowed underneath (and unclickable behind) the
+     #colophon footer that follows in paint order. overflow-y: auto makes
+     #sidebar itself the containing scrollport of last resort if its
+     children's combined minimums ever do exceed the space available,
+     rather than leaving that spillover uncontained. */
+  min-height: 0;
+  overflow-y: auto;
+  border-left: 1px solid var(--bg3);
+}
+/* #sidebar-toggle (in #page-header/.controls) drives BOTH the desktop
+   collapse and the mobile drawer through one shared `data-sidebar`
+   attribute on <html> (never a class -- "toggled" would mean opposite
+   things per breakpoint: hide on desktop, show on mobile). Each breakpoint
+   below only overrides its own non-default value, so a first-time visitor
+   with nothing in localStorage renders correctly with zero JS. */
+@media (max-width: 767px) {
+  #sidebar { display: none; }
+  html[data-sidebar="open"] #sidebar {
+    /* flex/flex-direction/overflow-y/border-left above still apply --
+       this only lifts it out of flow into a right-edge drawer. A FULL-
+       viewport (inset:0) sidebar was tried first and rejected: it would
+       sit at a higher z-index than #sidebar-backdrop and entirely cover
+       it, leaving no exposed area for "tap outside to close" to ever
+       actually hit -- min(85vw, 320px) always leaves real backdrop
+       showing, even on the narrowest phone widths.
+
+       top: var(--header-h) (JS-synced to #page-header's real rendered
+       height, incl. its own flex-wrap onto a second row on narrow
+       viewports -- see the ResizeObserver in GRAPH_JS) was also chosen
+       after a real, caught bug: `top: 0` + z-index-boosting #page-header
+       above the drawer to keep it clickable instead ALSO put the
+       header's own hit-test region on top of the drawer's top strip,
+       silently swallowing clicks on #graph-fullscreen-toggle (it lives
+       near #graph-pane's own top edge). Starting the drawer below the
+       header sidesteps the stacking conflict entirely -- no z-index
+       tug-of-war needed between the header and the drawer at all. */
+    display: flex;
+    position: fixed;
+    top: var(--header-h, 3.5rem);
+    right: 0;
+    bottom: 0;
+    width: min(85vw, 320px);
+    z-index: 900;
+    background: var(--bg0);
+    animation: sidebar-drawer-in 220ms ease;
+  }
+  #sidebar-backdrop { display: none; }
+  html[data-sidebar="open"] #sidebar-backdrop {
+    display: block;
+    position: fixed;
+    top: var(--header-h, 3.5rem);
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 899;
+    background: rgba(0, 0, 0, 0.5);
+  }
+  /* Exit animation only: JS keeps data-sidebar="open" (so the fixed
+     positioning above still applies) while this plays, then flips it to
+     "closed" on animationend -- same two-phase approach as #graph-pane's
+     fullscreen-anim-out below. Scoped to this breakpoint only: desktop's
+     collapse (@media min-width:768px below) has no animation, it's an
+     instant display:none. Placed after the "open" rule above so equal-
+     specificity source order lets this win while data-sidebar is still
+     "open". */
+  html[data-sidebar-anim="out"] #sidebar { animation: sidebar-drawer-out var(--ui-transition-ms, 200ms) ease; }
+}
+@media (min-width: 768px) {
+  html[data-sidebar="closed"] #sidebar { display: none; }
+}
+@keyframes sidebar-drawer-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+@keyframes sidebar-drawer-out {
+  from { transform: translateX(0); }
+  to { transform: translateX(100%); }
+}
+#graph-pane {
+  flex: 0 0 280px;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  min-width: 0;
+  /* A hairline divider (one shade off the page surface, same treatment as
+     a chart's own recessive gridlines) separates the chord widget from the
+     outline below it -- no color inversion, no card border-radius/shadow.
+     An earlier version rendered this panel in the *opposite* gruvbox mode
+     with a rounded, drop-shadowed "card" look, on the theory that visual
+     contrast would read as a deliberate focal point; in practice it read
+     as a boxed-in prototype widget instead of an integrated part of the
+     page. The widget now shares the sidebar's own surface color -- the
+     dataviz anti-pattern list's guidance against "thick blocks, heavy
+     chrome, no breathing room" applies here as much as it would to any
+     other chart container. */
+  border-bottom: 1px solid var(--bg3);
+  background: var(--bg0);
+  color: var(--fg1);
+  transition: background-color var(--ui-transition-ms, 200ms) ease, color var(--ui-transition-ms, 200ms) ease;
+}
+#graph-svg { width: 100%; flex: 1; min-height: 0; display: block; }
+#graph-fullscreen-toggle {
+  position: absolute;
+  top: 0.4rem;
+  right: 0.4rem;
+  z-index: 2;
+  width: 28px;
+  height: 28px;
+  min-height: 24px;
+  padding: 0;
+  border: 1px solid var(--bg3);
+  border-radius: 4px;
+  background: var(--bg1);
+  color: var(--fg2);
+  font-size: 0.95rem;
+  line-height: 1;
+  cursor: pointer;
+  transition: background-color var(--ui-transition-ms, 200ms) ease, color var(--ui-transition-ms, 200ms) ease;
+}
+#graph-fullscreen-toggle:hover { background: var(--bg2); color: var(--fg1); }
+/* See the fullscreen JS block (GRAPH_JS) for why this is a `position:
+   fixed` overlay rather than the native Fullscreen API, and why enter/
+   exit are @keyframes animations rather than transitions. `flex: 1 1
+   auto` lets the pane actually fill the fixed box (its normal `flex: 0 0
+   280px` is a SIDEBAR-width constraint that would otherwise cap it). */
+#graph-pane.fullscreen {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  flex: 1 1 auto;
+  border-bottom: none;
+}
+@keyframes graph-fullscreen-in {
+  from { opacity: 0; transform: scale(0.96); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes graph-fullscreen-out {
+  from { opacity: 1; transform: scale(1); }
+  to { opacity: 0; transform: scale(0.96); }
+}
+#graph-pane.fullscreen-anim-in { animation: graph-fullscreen-in 220ms ease; }
+#graph-pane.fullscreen-anim-out { animation: graph-fullscreen-out var(--ui-transition-ms, 200ms) ease; }
+/* Shows the hovered node's title, falling back to the selected node's
+   title when nothing is hovered (see updateCaption() in GRAPH_JS) -- a
+   real, legible body-text size instead of the cramped 11px in-SVG label
+   this replaced. Sits at the TOP of the graph viewport, not below the
+   diagram: the hover popover is cursor-positioned and can land near the
+   bottom of the ring, which would cover a caption placed underneath it --
+   putting the caption above the ring keeps it clear of anywhere the
+   popover can actually appear. min-height holds its layout slot even
+   when briefly empty (before the very first hover/selection) so the ring
+   below it doesn't shift. text-overflow handles a long title without
+   wrapping to a second line and shrinking the ring to make room. */
+#graph-caption {
+  flex: 0 0 auto;
+  min-height: 1.4em;
+  padding: 0.4rem 0.75rem;
+  text-align: center;
+  font-size: 0.85rem;
+  color: var(--fg1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#main-content .hint { color: var(--fg3); font-style: italic; }
+#main-content h2 { margin-top: 0; }
+/* 70ch is the standard reading-measure heuristic (60-80 chars/line); only
+   engages once #main-content's content box exceeds it, so mobile/narrow
+   renders are unaffected without a media query. Capped here (the actual
+   note-text box) rather than on #main-content itself, which stays the
+   untouched flex/scroll container (overflow-y: auto, and the JS scrollTop
+   reset at navigation time both key off #main-content unchanged). */
+#detail-panel-content {
+  transition: opacity 180ms ease;
+  opacity: 1;
+  max-width: 70ch;
+  margin-left: auto;
+  margin-right: auto;
+}
+#detail-panel-content.fading { opacity: 0; }
+#main-content .kind-badge {
+  display: inline-block;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--bg0);
+  background: var(--fg3);
+  border-radius: 3px;
+  padding: 0.1rem 0.4rem;
+  margin-bottom: 0.5rem;
+}
+/* "Part ::" breadcrumb -- a small, muted structural label ("where am I in
+   the guide"), not a call to action and not a link (see renderDetail's own
+   comment on why it's plain text). Deliberately quieter than kind-badge
+   (no background/box), sitting just above the title it's providing
+   context for. */
+#main-content .node-part-breadcrumb {
+  font-size: 0.75rem;
+  color: var(--fg3);
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  margin-bottom: 0.2rem;
+}
+#main-content .anchor-note {
+  background: var(--bg1);
+  border-left: 3px solid var(--node-anchor);
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+}
+/* ADR-078: deliberately quieter than .anchor-note (muted fg3 text,
+   thinner accent-colored border, italic) -- this is informational, not a
+   warning, and should read as "here's a heads-up," not compete for
+   attention with the anchor-note's own visual weight. */
+#main-content .translation-fallback-note {
+  background: var(--bg1);
+  border-left: 2px solid var(--link);
+  padding: 0.35rem 0.6rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.8rem;
+  font-style: italic;
+  color: var(--fg3);
+}
+/* ADR-079: a footer, not a sidebar/#main-content section -- always
+   full page width, visually separate from both the curated topic content
+   and the graph/outline nav chrome, so a reader can tell at a glance that
+   these links are meta-content about the guide, not part of its subject
+   matter (the ADR's own wording). Deliberately muted (fg3 text, thin
+   top border only, no card/shadow) -- a colophon reads as a reference
+   footnote, not a call to action. */
+#colophon {
+  flex: 0 0 auto;
+  padding: 1rem 1.5rem;
+  border-top: 1px solid var(--bg3);
+  background: var(--bg1);
+  color: var(--fg3);
+  font-size: 0.85rem;
+  transition: background-color var(--ui-transition-ms, 200ms) ease, border-color var(--ui-transition-ms, 200ms) ease, color var(--ui-transition-ms, 200ms) ease;
+}
+#colophon h2 { margin: 0 0 0.25rem; font-size: 0.95rem; color: var(--fg2); }
+#colophon .colophon-intro { margin: 0 0 0.5rem; font-style: italic; }
+#colophon .colophon-list { list-style: none; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 0.5rem; }
+#colophon .colophon-link {
+  background: none;
+  border: 1px solid var(--bg3);
+  color: var(--link);
+  border-radius: 4px;
+  padding: 0.3rem 0.6rem;
+  cursor: pointer;
+  font-size: 0.85rem;
+  min-height: 24px;
+}
+#colophon .colophon-link:hover { background: var(--bg2); }
+#main-content .guidance-note {
+  background: var(--bg1);
+  border-left: 3px solid var(--link);
+  padding: 0.4rem 0.6rem;
+  margin-bottom: 0.75rem;
+  font-size: 0.85rem;
+  font-style: italic;
+}
+#main-content .link-list { list-style: none; padding: 0; margin: 0.5rem 0; }
+#main-content .link-list li { margin-bottom: 0.3rem; }
+#main-content .link-jump {
+  background: none;
+  border: 1px solid var(--bg3);
+  color: var(--fg1);
+  border-radius: 4px;
+  padding: 0.25rem 0.5rem;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+}
+#main-content .link-jump:hover { background: var(--bg1); }
+#main-content .external-link {
+  color: var(--fg4);
+  font-size: 0.85rem;
+}
+#main-content pre { background: var(--bg1); padding: 0.75rem; border-radius: 4px; overflow-x: auto; }
+/* #+begin_example blocks (command transcripts/sample output) get a
+   left-border treatment distinct from source-code <pre> blocks, matching
+   how blockquote already reads as "quoted material" rather than "code" --
+   .example is deliberately NOT a src-block language, so it never gets a
+   language-* class or syntax highlighting. */
+#main-content pre.example { border-left: 3px solid var(--fg4); }
+#main-content pre.results { border-left: 3px solid var(--link); }
+#main-content li input[type="checkbox"] { margin-right: 0.4em; vertical-align: middle; }
+/* Real "- term :: definition" description lists (html.rs's render_list)
+   -- a <dl>/<dt>/<dd> structure instead of a flat <li> with the literal
+   " :: " still visible, and real nested <ul>/<ol>/<dl> for any list
+   item's children (an indented sub-list previously flattened into
+   siblings of its own parent, discarding the nesting entirely -- see
+   parse_list_items's own doc comment in crates/export/src/lib.rs). */
+#main-content dl { margin: 1rem 0; }
+#main-content dt { font-weight: bold; color: var(--fg1); }
+#main-content dd { margin: 0 0 0.75rem 1.5rem; }
+#main-content ul ul, #main-content ol ol, #main-content ul ol, #main-content ol ul,
+#main-content dl dl, #main-content dl ul, #main-content dl ol { margin-top: 0.3rem; }
+/* Syntax-highlighting token classes -- applied client-side by
+   `highlightCodeBlocks()` (GRAPH_JS) over each src/example block's own
+   text after it lands in the DOM. Deliberately reuses only the theme
+   colors already validated for both light/dark surfaces (--accent,
+   --link, --fg2, --fg4) rather than introducing new unvalidated hues, so
+   this needs no separate colorblind/contrast pass. */
+#main-content .tok-kw { color: var(--accent); font-weight: 600; }
+#main-content .tok-str { color: var(--link); }
+#main-content .tok-com { color: var(--fg4); font-style: italic; }
+#main-content .tok-num { color: var(--fg2); }
+#main-content .tok-interp { color: var(--accent); }
+#main-content .tok-prompt { color: var(--fg4); font-weight: 700; }
+/* Inline code (=x=/~x~ spans) previously had only a monospace font, with
+   nothing to set it apart from surrounding prose -- a background pill
+   (matching how most rendered-markdown/org viewers treat inline code)
+   fixes that. Block code (inside <pre>) already has its own background
+   from the rule above, so the second rule below cancels the pill there to
+   avoid a visibly doubled/nested box. */
+#main-content code {
+  font-family: "JetBrains Mono", "Fira Code", monospace;
+  background: var(--bg2);
+  padding: 0.1rem 0.35rem;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+#main-content pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+  font-size: 1em;
+}
+#main-content blockquote { border-left: 3px solid var(--bg3); margin-left: 0; padding-left: 0.75rem; color: var(--fg3); }
+/* Prose links (in-body `<a>` from the org-link converter) previously had no
+   rule at all and fell through to the browser's default blue/purple, which
+   clashes with the theme. `--link` is deliberately a different hue from
+   `--accent` (orange already means "current node/edge" elsewhere on the
+   page) -- see `GruvboxPalette::link`'s doc comment for the validated
+   contrast numbers. Underline at reduced opacity rather than the browser
+   default full-strength double rule, so it reads as a link without
+   competing with the accent-orange selected state used elsewhere. */
+#main-content a,
+.popover a {
+  color: var(--link);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--link) 50%, transparent);
+}
+#main-content a:hover,
+.popover a:hover {
+  text-decoration-color: var(--link);
+}
+#main-content a:visited,
+.popover a:visited {
+  color: var(--link);
+  opacity: 0.85;
+}
+.mermaid-diagram { margin: 0.75rem 0; }
+.mermaid-diagram svg { max-width: 100%; height: auto; }
+.mermaid-fallback-warning { color: var(--node-command); font-size: 0.85rem; }
+
+.popover {
+  position: fixed;
+  max-width: 320px;
+  background: var(--bg1);
+  border: 1px solid var(--bg3);
+  border-radius: 6px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.85rem;
+  pointer-events: none;
+  z-index: 10;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.popover .popover-title { font-weight: bold; margin-bottom: 0.25rem; }
+.popover .popover-body { color: var(--fg3); }
+
+/* --- Chord nav widget: a small, muted-by-default view where exactly ONE
+   accent color (--accent, validated for simultaneous-discrimination
+   contrast — see GruvboxPalette::accent's doc comment) marks the current
+   node + its incident edges. Per-kind hues (still used for the kind badge
+   text in the detail panel) are deliberately NOT used for fill here — 14
+   simultaneously-visible hues failed a real categorical-palette check,
+   one accent against a muted field doesn't need to pass that check at
+   all. `transform`/`filter`/`fill`/`stroke` all transition over
+   150-250ms so navigation and hover read as motion, not a snap. */
+/* Each node is an annular-sector <path> (a wedge of the ring), not a
+   <circle> — kb/adrs/00XX (arc-slice redesign). Growth (hover/neighbor)
+   is NOT done via CSS `transform: scale(...)`: an earlier version tried
+   that (transform-origin pinned to the ring's own center via an SVG
+   presentation attribute + `transform-box: view-box`) and it was
+   confirmed broken empirically across BOTH engines this session's own
+   Layer 2 harness targets — Firefox ignored `transform-box: view-box`
+   for `getBoundingClientRect()` purposes entirely (zero measurable
+   growth), and Chromium applied the transform but skewed the wedge's
+   midpoint sideways rather than growing it radially outward, because a
+   wedge's own local bounding box (still involved in some engines'
+   resolution of transform-origin regardless of transform-box) isn't
+   centered the way a circle's is. Instead, growth is real GEOMETRY: JS
+   recomputes and re-sets the path's own `d` attribute on hover/neighbor/
+   selection changes (see `refreshWedgeGrowth` in GRAPH_JS), and `d` is
+   itself a transitionable CSS property in both target engines — `M`/`A`/
+   `L`/`A`/`Z` structure never changes between the idle and grown shapes,
+   only the outer-arc radius, which is what makes the transition interpolate
+   smoothly instead of snapping. */
+.node path {
+  /* The theme's own primary foreground/text color (the same tone
+     #main-content's body copy uses), not a separate muted gray -- a
+     deliberate switch away from an earlier flat --fg4 fill the user
+     called out as looking flat/uninteresting. Fully opaque (an earlier
+     degree-driven fill-opacity ramp was tried and explicitly reverted per
+     user request -- "reset...to just be opaque"). No stroke at all (user
+     request): wedge-to-wedge separation comes from the rounded corners
+     alone (GRAPH_JS arcPath's cornerRadius, a "petal" look, also a user
+     request), not a drawn border or an angular gap -- state changes
+     (below) are background-color changes, never border changes. */
+  fill: var(--fg1);
+  /* Kept at its own fixed 130ms, deliberately OUTSIDE the shared
+     ui_transition_ms bucket (not a "200ms" literal) -- `d`-attribute path
+     interpolation is real CPU work every frame, not a GPU-composited
+     transform, so it reads as noticeably more sluggish than the rest of
+     the page's 200ms UI chrome transitions at the same nominal duration;
+     user-reported as "much slower" feeling and confirmed too slow at
+     200ms, tightened here rather than folded into the shared knob so
+     ui_transition_ms tuning elsewhere never re-introduces the sluggishness. */
+  transition: d 130ms ease, filter 130ms ease, fill 130ms ease;
+}
+/* Node titles previously rendered as in-SVG <text> next to each circle --
+   at an 11px font in a ~280px-wide widget, with only the anchor/selected/
+   hovered node's label ever showing (see the removed comment this rule
+   used to carry, on labeling density). Two real problems with that,
+   reported directly: the text was too small to comfortably read, and
+   reserving in-SVG room for it (even after fixing the reservation to be
+   symmetric) ate a large fraction of the widget's small on-screen size as
+   dead padding. Node titles now show in #graph-caption below the diagram
+   instead, at a real body-text size -- see the caption rule and
+   updateCaption() in GRAPH_JS. */
+.node { cursor: pointer; }
+/* Hover LIFTS (grows outward + drop-shadow), it does not recolor —
+   recoloring is reserved entirely for `.selected` (the current node).
+   This also means hover and selected no longer compete for the same
+   visual channel, so both can be simultaneously true and simultaneously
+   visible (a grown, accent-colored current node under the cursor) with
+   no priority rule needed between them for color -- only `.selected`
+   ever changes fill. The actual growth itself is applied via `d`
+   (refreshWedgeGrowth, GRAPH_JS), not here -- this rule only owns the
+   drop-shadow, a pure filter effect with no geometry dependency. */
+.node.hovered path {
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.45));
+}
+.node.selected path {
+  fill: var(--accent);
+}
+.node.selected text { fill: var(--fg1); font-weight: bold; }
+/* Directly-linked neighbor nodes of the current selection: a real,
+   standing highlight for as long as the selection lasts (not transient
+   like .hovered) -- a background-color change (user request: this used
+   to be a colored stroke/border, which read as visual clutter rather
+   than a clear signal once most of the ring shares the same idle fill).
+   `--link` distinct from `--accent` (.selected's own color) so "this is
+   the current node" and "this is connected to it" never look identical.
+   Growth (via `d`, refreshWedgeGrowth) actually grows the real
+   hit-tested area, not just the visual, the same mechanism .hovered
+   already relies on -- confirmed a real reported gap: the OTHER endpoint
+   of an already-highlighted incident edge looked identical to every
+   unrelated node otherwise. Yields to .hovered's own larger growth
+   factor when both are true at once (see refreshWedgeGrowth's
+   precedence), so hover stays the most immediate feedback state. */
+.node.neighbor path { fill: var(--link); }
+/* Visited-node marker: an inner ~2/5-thickness band of the wedge itself
+   (GRAPH_JS draw loop -- same angular span as the outer wedge, sharing
+   its arcPath geometry helper, with a corner radius scaled down to the
+   band's own thinner thickness), shown via opacity alone -- deliberately
+   NOT a fill/stroke/geometry change on the OUTER wedge (`.node path`
+   directly), so it never competes with hover/neighbor/selected, which
+   already own those channels there. The current node never gets
+   `.visited` at all (GRAPH_JS's classList.toggle, `tn.id !== id`) --
+   selected styling already conveys "you are here" on its own, so no CSS
+   override is needed here.
+
+   --bg2 (not a darker foreground shade) after actually computing WCAG
+   contrast for every --fg/--bg step against the wedge's own default
+   --fg1 fill in both themes: the darker-foreground family fails the
+   1.4.11 non-text 3:1 floor outright (best of that family, --fg4, is
+   only 2.03:1 dark / 2.38:1 light) -- foreground steps are ALL close
+   neighbors of --fg1 by construction (muted variants of the same ink),
+   so none of them separate from it enough to read as a real different
+   color, only a slightly duller one. --bg2 clears 3:1 comfortably in
+   both themes (6.43:1 dark `#504945` on `#ebdbb2`, 6.76:1 light
+   `#d5c4a1` on `#3c3836`) without going as stark as --bg1's
+   near-page-background 8.45:1 (which would read as a literal cutout to
+   the page behind rather than a deliberate inset color). Also the best
+   all-around candidate against the ONE other fill a visited node can
+   carry (`.neighbor`'s --link): 3.28:1 dark (clears 3:1), 2.47:1 light
+   (short of 3:1, but the closest of any candidate tested, and a
+   neighbor+visited node already carries a second signal via --link
+   itself, so this compound case isn't the marker's only channel).
+
+   Both rules below are qualified as `.node path.visited-inner-arc`,
+   NOT the bare `.visited-inner-arc` class -- a real bug caught before
+   shipping: `.node path` (specificity 0,1,1) and `.node.selected path` /
+   `.node.neighbor path` (0,2,1) are ALL more specific than a bare single-
+   class selector (0,1,0), so the generic wedge rules would silently win
+   the cascade and either flatten the `transition` property (dropping the
+   `opacity` transition `.node path`'s own d/filter/fill list doesn't
+   include, so the marker would snap instead of fade) or, worse, override
+   `fill` back to --fg1/--accent/--link on a neighbor+visited node,
+   defeating the color choice above entirely. `.node path.visited-inner-
+   arc` (0,2,1) and `.node.visited path.visited-inner-arc` (0,3,1) beat
+   every one of those unconditionally, by specificity alone -- not by
+   relying on this block's position in the source order, which a later
+   edit could silently invalidate. */
+.node path.visited-inner-arc { opacity: 0; transition: opacity var(--ui-transition-ms, 200ms) ease; }
+.node.visited path.visited-inner-arc { fill: var(--bg2); opacity: 1; }
+/* Keyboard-focus ring: :focus-visible, not plain :focus -- a mouse click
+   already shows selection via .selected's own fill/stroke recolor, so a
+   focus ring on every click would be redundant visual noise. This only
+   shows for real keyboard navigation (Tab landing on the roving tabindex
+   stop, or Arrow-key movement), which is exactly when a visible focus
+   indicator is actually needed. */
+.node:focus-visible path { outline: 2px solid var(--link); outline-offset: 2px; }
+.node:focus { outline: none; }
+
+.edge {
+  stroke: var(--gray);
+  stroke-width: 1.25;
+  opacity: 0.35;
+  fill: none;
+  transition: stroke var(--ui-transition-ms, 200ms) ease, opacity var(--ui-transition-ms, 200ms) ease, stroke-width var(--ui-transition-ms, 200ms) ease;
+}
+.edge.incident {
+  stroke: var(--accent);
+  opacity: 0.9;
+  stroke-width: 2;
+  cursor: pointer;
+}
+/* Tag filter: dims (never removes/hides) non-matching marks, same
+   transition timing as hover/select above, so toggling a filter reads as
+   the same kind of motion as the rest of this widget's interactions. The
+   graph itself IS the filtered view -- not a separate list. */
+.node.filtered-out path { opacity: 0.15; }
+.edge.filtered-out { opacity: 0.08; }
+
+#outline-panel {
+  flex: 1;
+  padding: 0.5rem 1.25rem;
+  min-height: 0;
+  overflow-y: auto;
+}
+#outline-panel.collapsed .outline-list { display: none; }
+/* Explicit font-weight (not the <h3> user-agent default -- don't rely on
+   that holding) plus fg2 (not the more muted fg3 used for de-emphasized
+   meta text elsewhere) so this reads clearly as a real section heading
+   for the sidebar's contents, not another line of quiet chrome. */
+#outline-panel h3 {
+  margin: 0.25rem 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg2);
+  cursor: pointer;
+  user-select: none;
+}
+.outline-list { list-style: none; padding: 0; margin: 0.25rem 0; }
+.outline-list li { margin-bottom: 0.15rem; }
+.outline-list button {
+  background: none;
+  border: none;
+  color: var(--fg2);
+  cursor: pointer;
+  text-align: left;
+  padding: 0.15rem 0;
+  font-size: 0.85rem;
+}
+.outline-list button:hover { color: var(--accent); }
+
+/* Pinned to the bottom of #sidebar (last flex child) and grows upward as
+   visited entries accumulate, up to max-height -- flex-shrink: 1 and
+   min-height: 0 (overriding the flex default of min-height: auto, which
+   would otherwise force this panel to its content's natural minimum height
+   regardless of how little room #sidebar actually has) let the WHOLE panel
+   give ground when space is genuinely tight, deferring to #outline-panel
+   the same way #outline-panel already yields to #graph-pane above it.
+   #history-panel is itself a flex column so that giving ground doesn't mean
+   the panel vanishes: the heading + Back/Forward controls below are
+   flex: 0 0 auto (fixed, always shown/clickable at their natural size) and
+   ONLY .history-list (flex: 1; min-height: 0; its own overflow-y: auto)
+   is the part that shrinks toward zero and scrolls internally when space
+   is short -- confirmed necessary by the Layer 2 suite: an earlier version
+   let the whole panel (controls included) overflow past #sidebar's own
+   bottom edge in a modest-height viewport, rendering underneath -- and
+   therefore unclickable behind -- the #colophon footer that follows it in
+   paint order; giving the whole panel flex-shrink without protecting the
+   controls' own minimum size just moved the same problem from "overflows
+   and gets covered" to "shrinks itself down to an unusably short sliver."
+   #outline-panel (flex: 1; min-height: 0 already) keeps expanding downward
+   to fill whatever's left above this panel, exactly as before.
+
+   margin-top: auto is what actually pins this panel to #sidebar's bottom
+   edge -- NOT #outline-panel's flex: 1 alone, which only pushes this panel
+   down as a side effect of consuming all free space itself. renderOutline
+   (GRAPH_JS) sets `outlinePanel.hidden = true` on any node with zero
+   headings (a real, common case -- e.g. a body that's just a src/example
+   block with no heading), which removes it from #sidebar's flex layout
+   entirely: with no visible sibling left claiming a flex-grow share, this
+   panel would otherwise flow immediately below #graph-pane instead of
+   staying at the bottom, since flex-grow: 0 doesn't move it there on its
+   own. An auto margin on a flex item absorbs whatever positive free space
+   the main axis has left AFTER flex-grow/shrink resolve -- when
+   #outline-panel is visible its flex: 1 already claims that free space
+   (this margin then resolves to 0, so nothing changes from before), but
+   when it's hidden this margin claims it instead, keeping this panel
+   pinned to the bottom either way.
+
+   min-height here is a REAL floor (not 0): confirmed necessary by the
+   Layer 2 suite in Firefox specifically -- protecting the controls' own
+   flex-shrink: 0 only governs space WITHIN #history-panel; with
+   min-height: 0 at this outer level, #sidebar's own flex allocation still
+   shrank the whole panel down to ~17px (room for nothing), and since this
+   panel itself has no overflow clipping of its own (only .history-list
+   does), the heading/controls/list simply rendered past the panel's own
+   tiny box in normal document flow -- past #sidebar's bottom edge, and
+   therefore underneath (and unclickable behind) #colophon. ~90px covers
+   the heading + Back/Forward controls' real rendered height with a small
+   margin; only .history-list gives up its own space below that floor. */
+#history-panel {
+  flex: 0 1 auto;
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 90px;
+  max-height: 40vh;
+  padding: 0.5rem 1.25rem;
+  border-top: 1px solid var(--bg3);
+}
+.history-controls {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 0.4rem;
+  margin: 0.25rem 0 0.5rem;
+}
+.history-controls button {
+  flex: 1;
+  background: var(--bg2);
+  color: var(--fg1);
+  border: 1px solid var(--bg3);
+  border-radius: 4px;
+  padding: 0.3rem 0.4rem;
+  cursor: pointer;
+  font-size: 0.8rem;
+  min-height: 24px;
+}
+.history-controls button:hover:not(:disabled) { background: var(--bg3); }
+.history-controls button:disabled { opacity: 0.4; cursor: default; }
+#history-panel h3 {
+  flex: 0 0 auto;
+  margin: 0.25rem 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg2);
+}
+.history-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  list-style: none;
+  padding: 0;
+  margin: 0.25rem 0;
+}
+.history-list li { margin-bottom: 0.15rem; }
+/* kb: no silent truncation -- the "N earlier" row when the depth cap has
+   evicted entries, and the Back/Forward markers, are informational only
+   (muted fg3), the same "heads-up, not a warning" tone as
+   .translation-fallback-note. */
+.history-list .history-truncated {
+  color: var(--fg3);
+  font-size: 0.8rem;
+  font-style: italic;
+  padding: 0.15rem 0;
+}
+.history-list button {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--link);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.85rem;
+  min-height: 24px;
+}
+.history-list button:hover { background: var(--bg2); }
+/* The current node: not a button (already on screen, nothing to click to
+   get here), accent-bordered like .anchor-note's existing treatment. */
+.history-list .history-current {
+  border-left: 3px solid var(--node-anchor);
+  padding: 0.2rem 0.4rem;
+  font-size: 0.85rem;
+  color: var(--fg1);
+  font-weight: 600;
+}
+.history-list .history-marker {
+  color: var(--fg3);
+  font-size: 0.75rem;
+  font-style: italic;
+  margin-left: 0.4rem;
+}

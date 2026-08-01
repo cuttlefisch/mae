@@ -47,23 +47,23 @@
 //!
 //! ## Seed-content exemption (#358)
 //!
-//! `SingleTarget`, `PrimaryOnlyFilterable`, and `ScopedFederatedScanFilterable`
+//! `SingleTarget` and `ScopedFederatedScanFilterable`
 //! tools exempt MAE's own seeded/built-in content (`Node::source ==
 //! Some(NodeSource::Seed)`, stamped once at startup, identical on every
 //! install, never sensitive) from `LocalModelsOnly` gating even when it lives
 //! in a restricted KB — restricting `primary` to protect a user's own notes
 //! must not also lock an AI agent out of MAE's own built-in help system. The
-//! filter primitives (`is_residency_exempt`, `filter_residency_exempt`,
-//! `filter_residency_exempt_primary`) live in `mae_core::ai_residency`
-//! rather than here — a Rust crate-graph constraint (the `mae` package has
-//! no `[lib]` target, so nothing in `mae-ai`'s tool implementations can
-//! reach this file), not a conceptual split. `SingleTarget` applies the
-//! exemption directly in `resolve_restricted_label` (the node is already
-//! resolved there); the two `*Filterable` shapes allow the call through
-//! unconditionally and rely on the tool implementation
-//! (`execute_kb_agenda`/`execute_kb_search`/`execute_kb_search_context` in
-//! `crates/ai/src/tool_impls/kb.rs`) to post-filter its own materialized
-//! results — see each shape's doc comment.
+//! filter primitives (`is_residency_exempt`, `filter_residency_exempt`) live
+//! in `mae_core::ai_residency` rather than here — a Rust crate-graph
+//! constraint (the `mae` package has no `[lib]` target, so nothing in
+//! `mae-ai`'s tool implementations can reach this file), not a conceptual
+//! split. `SingleTarget` applies the exemption directly in
+//! `resolve_restricted_label` (the node is already resolved there);
+//! `ScopedFederatedScanFilterable` allows the call through unconditionally
+//! and relies on the tool implementation (`execute_kb_agenda`/
+//! `execute_kb_search`/`execute_kb_search_context`/`execute_kb_vector_search`
+//! in `crates/ai/src/tool_impls/kb.rs`) to post-filter its own materialized
+//! results — see the shape's doc comment.
 //!
 //! Three tool shapes stay structurally unable to apply this exemption, and
 //! stay hard-denied on purpose, not as an unfinished TODO:
@@ -161,28 +161,29 @@ enum ToolResidencyShape {
     /// Only ever touches the primary store (`editor.kb.store`), never a
     /// federated instance, AND its result shape has no per-node identity to
     /// filter (arbitrary Datalog / a stored view's raw query) — checked
-    /// against `primary_ai_residency` only, hard-denied outright. Distinct
-    /// from [`Self::PrimaryOnlyFilterable`] below.
+    /// against `primary_ai_residency` only, hard-denied outright.
     PrimaryOnly,
-    /// Only ever touches the primary store, but its results ARE real
-    /// `Node`s the tool impl can post-filter — the gate allows the call
-    /// through; `execute_kb_agenda` calls
-    /// `mae_core::ai_residency::filter_residency_exempt_primary` on its own
-    /// materialized results (#358).
-    PrimaryOnlyFilterable,
     /// Scans across multiple KB instances via a `scope` argument (or falls
     /// back to the `kb_search_scope` option) that names exactly which KB(s)
     /// participate — scope is resolved FIRST, then residency is checked only
     /// for KBs within that resolved scope (the #351 fix; see
     /// `any_restricted_kb_label_in_scope`), rather than every registered KB.
     /// Its results ARE real `(Option<String>, Node)` pairs — the gate allows
-    /// the call through; `kb_search`/`kb_search_context`/`kb_vector_search`
-    /// call `mae_core::ai_residency::filter_residency_exempt` on their own
-    /// materialized results (#358; `kb_vector_search` joined this shape in
-    /// ADR-061 Phase F1 once un-stubbing it gave it real results to filter —
-    /// previously a separate, now-removed `ScopedFederatedScan` shape
-    /// existed for its old no-real-results-to-filter stub behavior, hard-
-    /// denying outright instead of post-filtering).
+    /// the call through; `kb_search`/`kb_search_context`/`kb_vector_search`/
+    /// `kb_agenda` call `mae_core::ai_residency::filter_residency_exempt` on
+    /// their own materialized results (#358; `kb_vector_search` joined this
+    /// shape in ADR-061 Phase F1 once un-stubbing it gave it real results to
+    /// filter — previously a separate, now-removed `ScopedFederatedScan`
+    /// shape existed for its old no-real-results-to-filter stub behavior,
+    /// hard-denying outright instead of post-filtering. `kb_agenda` joined
+    /// in the same integration pass that ported `kb-export-subgraph-html`
+    /// upstream — see ADR-083 — once its own federation gap was fixed: it
+    /// previously only ever queried `editor.kb.store` (primary), so its
+    /// `PrimaryOnlyFilterable` classification was accurate at the time but
+    /// became stale drift the moment it started scanning federated
+    /// instances too; removed rather than kept as a now-empty variant
+    /// (principle #15 — see `unclassified_kb_prefixed_tool_denied_conservatively`
+    /// and this module's own dead-code discipline elsewhere in this file).
     ScopedFederatedScanFilterable,
     /// Scans across multiple KB instances with no way to exclude one —
     /// denied outright whenever ANY registered KB (or primary) is
@@ -224,6 +225,32 @@ fn classify_kb_tool(tool_name: &str) -> Option<ToolResidencyShape> {
         | "kb_history" | "kb_preview_show" | "kb_create" | "kb_set_role" | "kb_reimport"
         | "help_open" => SingleTarget,
 
+        // --- SingleTarget (not Filterable): kb_export_subgraph_html's BFS
+        // walk (mae_kb::KnowledgeBase::extract_subgraph) runs against ONE
+        // already-resolved KnowledgeBase (primary, or exactly one federated
+        // instance) and structurally never crosses into a different
+        // instance -- it only ever follows edges within `self.nodes`. So
+        // every node the export can possibly include is guaranteed to live
+        // in the SAME KB `id` resolves to; gating on `id` alone (the
+        // anchor-id check below) already covers the entire exported
+        // subgraph, with no cross-instance leak possible for a
+        // post-filter to catch. Unlike kb_graph/kb_neighborhood (federated
+        // BFS, genuinely can cross instances -- SingleTargetFilterable).
+        // The tool's optional `guidance_ids` argument independently resolves
+        // EACH id across every registered store (may land in a DIFFERENT KB
+        // than the seed) -- this used to be an unfiltered gap here, since
+        // this SingleTarget shape only ever gates on the anchor `id`.
+        // `execute_kb_export_subgraph_html` (crates/ai/src/tool_impls/
+        // kb_export_html.rs) now closes it itself: a
+        // SingleTargetFilterable-style post-filter (`mae_core::ai_residency::
+        // filter_residency_exempt_by`, the same primitive `kb_links_from`'s
+        // own per-target check already uses) drops any guidance id whose
+        // owning KB is residency-restricted and the requester isn't a local
+        // provider, and reports what was omitted in the tool's own returned
+        // status string -- never silently. This gate still only needs to
+        // cover the seed/anchor `id`.
+        "kb_export_subgraph_html" => SingleTarget,
+
         // --- SingleTargetFilterable: same anchor-id gate check as
         // SingleTarget, PLUS the tool impl post-filters its own multi-node
         // traversal results (#361 -- see the shape's doc comment). #366
@@ -253,12 +280,8 @@ fn classify_kb_tool(tool_name: &str) -> Option<ToolResidencyShape> {
         // call the tool and see its (node-id-bearing) output at all. ---
         "kb_enrich" => PrimaryOnly,
 
-        // --- PrimaryOnlyFilterable: implementation only ever reads
-        // editor.kb.store, and returns real Node results the tool impl
-        // post-filters for the seed exemption (#358) ---
-        "kb_agenda" => PrimaryOnlyFilterable,
-
-        // --- ScopedFederatedScanFilterable: same scope-narrowing as above,
+        // --- ScopedFederatedScanFilterable: scans across multiple KB
+        // instances via an explicit `scope` argument (or a default option),
         // AND the tool impl post-filters its real (Option<String>, Node)
         // results for the seed exemption (#358). kb_vector_search joined
         // this shape in ADR-061 Phase F1/F2: un-stubbing it gave it real
@@ -266,8 +289,16 @@ fn classify_kb_tool(tool_name: &str) -> Option<ToolResidencyShape> {
         // ai_residency::filter_residency_exempt call in
         // execute_kb_vector_search), the same shape kb_search/
         // kb_search_context already have -- it is no longer the
-        // no-real-results-yet ScopedFederatedScan case. ---
-        "kb_search" | "kb_search_context" | "kb_vector_search" => ScopedFederatedScanFilterable,
+        // no-real-results-yet ScopedFederatedScan case. kb_agenda joined
+        // here (ADR-083) once its `execute_kb_agenda` implementation was
+        // fixed to actually scan `editor.kb.registry.instances` matching
+        // `scope` (mirroring `execute_kb_health`'s per-instance loop)
+        // instead of only ever reading `editor.kb.store` (primary) --
+        // previously classified `PrimaryOnlyFilterable`, now removed as a
+        // shape with zero real tools in it (principle #15). ---
+        "kb_agenda" | "kb_search" | "kb_search_context" | "kb_vector_search" => {
+            ScopedFederatedScanFilterable
+        }
 
         // --- UnscopedFederatedContent: genuinely scans multiple instances,
         // no scope argument to narrow it. kb_list stays here (its CozoDB
@@ -488,19 +519,15 @@ pub fn check_kb_residency(
             ResidencyDecision::Allow
         }
 
-        // The gate allows the call through unconditionally; the tool impl
-        // (execute_kb_agenda) post-filters its own materialized Node
-        // results via mae_core::ai_residency::filter_residency_exempt_primary,
-        // dropping non-seed-exempt hits from a restricted primary (#358).
-        ToolResidencyShape::PrimaryOnlyFilterable => ResidencyDecision::Allow,
-
         // The gate allows the call through unconditionally; execute_kb_search/
-        // execute_kb_search_context/execute_kb_vector_search post-filter
+        // execute_kb_search_context/execute_kb_vector_search/execute_kb_agenda post-filter
         // their own materialized (Option<String>, Node) results via
         // mae_core::ai_residency::filter_residency_exempt (#358). Scope
-        // narrowing (the #351 fix) happens naturally inside
-        // kb_federated_search_scoped(query, scope) itself, not as a
-        // separate gate-level pre-check.
+        // narrowing (the #351 fix) happens naturally inside each tool's own
+        // scope-resolution step (kb_federated_search_scoped(query, scope)
+        // for kb_search/kb_search_context/kb_vector_search, an equivalent
+        // per-instance registry loop for kb_agenda), not as a separate
+        // gate-level pre-check.
         ToolResidencyShape::ScopedFederatedScanFilterable => ResidencyDecision::Allow,
 
         ToolResidencyShape::UnscopedFederatedContent => {
@@ -733,15 +760,21 @@ mod tests {
 
     #[test]
     fn federated_scan_filterable_tool_gate_allows_defers_to_tool_filter() {
-        // kb_search/kb_search_context/kb_vector_search are all
+        // kb_search/kb_search_context/kb_vector_search/kb_agenda are all
         // ScopedFederatedScanFilterable (#358, and kb_vector_search joined
-        // them in ADR-061 Phase F1 once it got real results to filter) --
-        // the gate no longer denies the whole call when a KB in scope is
-        // restricted; each tool impl post-filters its own materialized
-        // results instead (see crates/ai/src/tool_impls/kb.rs's behavioral
-        // tests for the actual filtering coverage).
+        // them in ADR-061 Phase F1 once it got real results to filter;
+        // kb_agenda joined in ADR-083 once its own federation gap was
+        // fixed) -- the gate no longer denies the whole call when a KB in
+        // scope is restricted; each tool impl post-filters its own
+        // materialized results instead (see crates/ai/src/tool_impls/kb.rs's
+        // behavioral tests for the actual filtering coverage).
         let editor = editor_with_restricted_primary();
-        for tool in ["kb_search", "kb_search_context", "kb_vector_search"] {
+        for tool in [
+            "kb_search",
+            "kb_search_context",
+            "kb_vector_search",
+            "kb_agenda",
+        ] {
             let decision =
                 check_kb_residency(&editor, tool, &serde_json::json!({}), Some("claude"));
             assert_eq!(decision, ResidencyDecision::Allow, "tool: {tool}");
@@ -863,12 +896,16 @@ mod tests {
     // restricted KB genuinely IS in scope -- which is more precise than the old
     // all-or-nothing gate-level deny, not a regression.
 
-    // --- New: kb_agenda's inverse bug (PrimaryOnly, not UnscopedFederatedContent) ---
+    // --- New: kb_agenda gate-level coverage (ScopedFederatedScanFilterable, ADR-083) ---
 
     #[test]
     fn kb_agenda_unrelated_restricted_instance_does_not_block() {
-        // kb_agenda only ever reads editor.kb.store (primary) -- an
-        // unrelated restricted federated instance must not block it.
+        // At the GATE level, ScopedFederatedScanFilterable allows the call
+        // through unconditionally regardless of what's registered -- scope
+        // narrowing now happens inside execute_kb_agenda's own per-instance
+        // registry loop (mirroring execute_kb_health's), not here. An
+        // unrelated restricted federated instance existing at all must
+        // never block the call outright.
         let mut editor = Editor::new(); // open primary
         editor
             .kb
@@ -883,10 +920,11 @@ mod tests {
 
     #[test]
     fn kb_agenda_gate_allows_when_primary_restricted_defers_to_tool_filter() {
-        // kb_agenda is now PrimaryOnlyFilterable (#358) -- the gate no
-        // longer denies the whole call when primary is restricted;
-        // execute_kb_agenda post-filters its own materialized Node results
-        // instead (see crates/ai/src/tool_impls/kb.rs's behavioral tests).
+        // kb_agenda is ScopedFederatedScanFilterable (ADR-083) -- the gate
+        // no longer denies the whole call when primary is restricted;
+        // execute_kb_agenda post-filters its own materialized
+        // (Option<String>, Node) results instead (see
+        // crates/ai/src/tool_impls/kb.rs's behavioral tests).
         let editor = editor_with_restricted_primary();
         let decision =
             check_kb_residency(&editor, "kb_agenda", &serde_json::json!({}), Some("claude"));
@@ -1227,6 +1265,65 @@ mod tests {
             Some("claude"),
         );
         assert!(matches!(decision, ResidencyDecision::Deny(_)));
+    }
+
+    // --- kb_export_subgraph_html ---
+
+    #[test]
+    fn kb_export_subgraph_html_seed_content_allowed_when_primary_restricted() {
+        let editor = editor_with_restricted_primary();
+        let decision = check_kb_residency(
+            &editor,
+            "kb_export_subgraph_html",
+            &serde_json::json!({"id": "index", "path": "/tmp/out.html"}),
+            Some("claude"),
+        );
+        assert_eq!(decision, ResidencyDecision::Allow);
+    }
+
+    #[test]
+    fn kb_export_subgraph_html_denied_for_a_non_seed_node_in_a_restricted_kb() {
+        // The adversarial case this gate exists for: a real, user-authored
+        // node in a residency-restricted KB must not be exportable by a
+        // non-local provider just because the tool also happens to take a
+        // "path" argument -- same gate, same seed-exemption boundary as
+        // plain kb_get.
+        let mut editor = editor_with_restricted_primary();
+        editor
+            .kb_create_node(
+                "user:private-note",
+                "Private",
+                "body",
+                mae_kb::NodeKind::Note,
+            )
+            .unwrap();
+        let decision = check_kb_residency(
+            &editor,
+            "kb_export_subgraph_html",
+            &serde_json::json!({"id": "user:private-note", "path": "/tmp/out.html"}),
+            Some("claude"),
+        );
+        assert!(matches!(decision, ResidencyDecision::Deny(_)));
+    }
+
+    #[test]
+    fn kb_export_subgraph_html_allowed_from_a_local_provider_regardless() {
+        let mut editor = editor_with_restricted_primary();
+        editor
+            .kb_create_node(
+                "user:private-note",
+                "Private",
+                "body",
+                mae_kb::NodeKind::Note,
+            )
+            .unwrap();
+        let decision = check_kb_residency(
+            &editor,
+            "kb_export_subgraph_html",
+            &serde_json::json!({"id": "user:private-note", "path": "/tmp/out.html"}),
+            Some("ollama"),
+        );
+        assert_eq!(decision, ResidencyDecision::Allow);
     }
 
     // --- New: NonContent view-state tools stay ungated ---

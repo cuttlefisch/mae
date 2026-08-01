@@ -35,7 +35,9 @@
     "mae-ai": {
       "path": "crates/ai/src/lib.rs",
       "dependencies": [
+        "mae-canvas",
         "mae-core",
+        "mae-export",
         "mae-kb",
         "mae-shell",
         "mae-sync"
@@ -536,6 +538,10 @@
           "kind": "mod"
         },
         {
+          "name": "html_graph",
+          "kind": "mod"
+        },
+        {
           "name": "markdown",
           "kind": "mod"
         },
@@ -1007,6 +1013,7 @@
     "mae-scheme": {
       "path": "crates/scheme/src/lib.rs",
       "dependencies": [
+        "mae-ai",
         "mae-core",
         "mae-kb",
         "mae-sync"
@@ -3045,6 +3052,10 @@
     {
       "name": "kb-export-guidance",
       "doc": "Export guidance-KB context to AGENTS.md or a custom path (ADR-050 Phase H)"
+    },
+    {
+      "name": "kb-export-html",
+      "doc": "Export a KB subgraph (seed node + neighborhood) to one self-contained HTML file"
     },
     {
       "name": "kb-narrow",

@@ -74,17 +74,7 @@ fn render_element(out: &mut String, element: &OrgElement) {
             out.push('\n');
         }
         OrgElement::List { ordered, items } => {
-            for (i, item) in items.iter().enumerate() {
-                if *ordered {
-                    out.push_str(&format!(
-                        "{}. {}\n",
-                        i + 1,
-                        convert_md_inline_to_org(&item.content)
-                    ));
-                } else {
-                    out.push_str(&format!("- {}\n", convert_md_inline_to_org(&item.content)));
-                }
-            }
+            render_list_items_org(out, items, *ordered, 0);
             out.push('\n');
         }
         OrgElement::Table { rows, has_header } => {
@@ -135,6 +125,31 @@ fn render_element(out: &mut String, element: &OrgElement) {
             out.push_str(&format!("#+begin_export {}\n", format));
             out.push_str(content);
             out.push_str("\n#+end_export\n\n");
+        }
+    }
+}
+
+/// Renders a (possibly nested, see `ListItem::children`) list as org-mode
+/// source -- a nested sub-list is indented 2 spaces per level under its
+/// parent, standard org list-nesting convention. Recursive so any depth of
+/// real nesting renders correctly, not just one level.
+fn render_list_items_org(out: &mut String, items: &[super::ListItem], ordered: bool, depth: usize) {
+    let indent = "  ".repeat(depth);
+    for (i, item) in items.iter().enumerate() {
+        if ordered {
+            out.push_str(&format!(
+                "{indent}{}. {}\n",
+                i + 1,
+                convert_md_inline_to_org(&item.content)
+            ));
+        } else {
+            out.push_str(&format!(
+                "{indent}- {}\n",
+                convert_md_inline_to_org(&item.content)
+            ));
+        }
+        if !item.children.is_empty() {
+            render_list_items_org(out, &item.children, ordered, depth + 1);
         }
     }
 }

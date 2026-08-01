@@ -1,0 +1,12 @@
+{
+  "name": "mae-export-html-graph-browser-tests",
+  "private": true,
+  "description": "Layer 2 (real-browser, no mocks) behavioral test suite for kb-export-subgraph-html's chord-diagram export -- catches the class of bug source-text-only Rust assertions structurally can't (a real regex literal corrupted by the inline-script escaper was only caught this way, by manually running node --check, before this suite existed). Run against both Chromium and Firefox.",
+  "scripts": {
+    "test": "node --test behavior.test.js",
+    "pretest": "cargo run --manifest-path ../../../../Cargo.toml --example fixture_export -p mae-export -- fixture.html && cargo run --manifest-path ../../../../Cargo.toml --example fixture_export -p mae-export -- fixture-custom-config.html 3.0"
+  },
+  "dependencies": {
+    "puppeteer-core": "^25.4.0"
+  }
+}

