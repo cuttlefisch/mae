@@ -454,7 +454,14 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
 
 ### Architecture Debt (v0.9.1+)
 
-- [x] **Editor struct field extraction**: ~69 fields after 6 extractions — `CollabState` (18), `ShellIntents` (12), `ViState` (41), `AiState` (34), `KbContext` (21), `DapContext` (2). Remaining candidate: `LspContext` (7 fields).
+- [ ] **Editor struct field extraction** (**reopened 2026-08** — was marked complete at "~69 fields",
+  which was never accurate and is now badly wrong): the six extractions did happen and still stand
+  (`CollabState`, `ShellIntents`, `ViState`, `AiState`, `KbContext`, `DapContext` all exist), and they
+  cut `Editor` from a 2026-05 peak of 293 fields to 151. But it has accreted back to **255** — 17× the
+  15-field ceiling — because nothing measured it after the pass closed. Verified *not* a merge
+  regression: the sub-structs are intact on `main` and the growth is monotonic across history.
+  `SharedState` (97 fields) and `GuiApp` (43) are the same shape of problem. Remaining candidate from
+  the original pass: `LspContext`. Field counts now come from `make audit-metrics`, not from this line.
 - [x] **dispatch/ui.rs split**: Split into dispatch/config.rs, dispatch/terminal.rs, dispatch/project.rs, dispatch/help.rs, dispatch/kb.rs. *(0829dd5)*
 - [ ] **Custom theme filesystem loading** **→ #84**: Only bundled themes work. No user theme search path (~/.config/mae/themes/). Emacs, Vim, Helix all support this.
 - [ ] **Binding ownership audit**: Every kernel-dispatched command should have a kernel default binding. Module bindings are for module-specific commands or user-facing overrides only.
@@ -514,13 +521,18 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   Also resolved earlier in this same effort: the remote-cursor render duplication (principle #8) and
   the git_status/notifications_view/kb_sharing hand-mirrored view pattern (via
   `render_common::collab_cursor` / `foldable_view`).
-- [ ] **File-size ceiling enforcement audit — the ~60-file 2026-07 backlog** (found via `/mae-audit`,
-  2026-07; still open): beyond the 7 originally-tracked exceptions closed above, the full-codebase
-  audit found roughly **60 additional files** across `crates/core`, `crates/ai`, `crates/mae`,
-  `crates/lsp`, `crates/dap`, `shared/sync`, `shared/mcp`, and `daemon` exceeding the ceilings — not
-  yet individually tracked, and the summary predates the splitting pass above so it may itself be
-  stale in the other direction (some of its worst-offender examples were among the files just
-  resolved). Needs a fresh full-codebase re-audit before a dedicated splitting pass, not ad-hoc fixes.
+- [ ] **File-size ceiling backlog — now measured and ratcheted, not estimated** (2026-07 estimate
+  superseded 2026-08): this entry used to say "roughly 60 additional files" over ceiling, untracked.
+  A mechanical count found **138** — more than twice the estimate, and the entry's own hedge (that it
+  might be stale "in the other direction") was wrong about the direction. All 138 are now recorded in
+  `docs/AUDIT_BASELINE.json` and held by `make audit-metrics-check`, so the backlog can no longer grow
+  silently: a new over-ceiling file fails CI, and an accepted one that grows past 10% fails too.
+  What remains open is *paying it down*, which is design work per file, not an ad-hoc sweep.
+  Beyond file size, the same pass surfaced ceiling breaches nothing had ever reported: **257 functions
+  over 80 lines** (worst: `set_option()` at 1,327 and `execute_command()` at 1,219), **93 files nested
+  deeper than 4**, **19 structs over 15 fields**, and **13 match blocks over 30 arms** (worst:
+  `set_option()`'s 229-arm match, 7.6× the ceiling). Those are reported by `make audit-metrics` but
+  deliberately not gated yet — failing all of them at once would be a wall, not a ratchet.
 - [ ] **`crates/export/src/html_graph.rs` size** (added integrating `feat/subgraph-html-export`,
   2026-08): ~3,700 lines, shipped as a real in-tree module (see ADR-077). The two large embedded
   string constants (`GRAPH_JS`, `STATIC_CSS`) that originally made
@@ -529,7 +541,7 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   `node --check` CI gate now guards against, see `.github/workflows/ci.yml`'s `export-js-check`
   job). What remains is Rust assembly logic plus this module's own extensive test suite, not a
   further asset-embedding seam. See the file's own `@ai-caution: [architecture-debt]` marker and
-  `.claude/commands/mae-audit.md`'s "Known exceptions" entry.
+  `docs/AUDIT_BASELINE.json`, the machine-checked accepted-exceptions set.
 - [ ] **`GruvboxPalette` (`crates/export/src/html_graph.rs`) is a hand-copied theme snapshot with no
   drift check** (found during the pre-merge review integrating `feat/subgraph-html-export`, 2026-08):
   a byte-for-byte hardcoded copy of `crates/core/src/themes/gruvbox-{dark,light}.toml`'s resolved
@@ -538,13 +550,15 @@ All MAE-specific functionality lives in `(mae ...)` libraries:
   if either TOML file changes. Tracked: issue #568. See the struct's own `@ai-caution:
   [architecture-debt]` marker.
 - [ ] **6 more files newly over ceiling, tracked but not split** (found during round-5 tech-debt pass,
-  2026-07): `crates/core/src/editor/graph_view_ops.rs` (4,464 lines) + `crates/core/src/graph_view.rs`
-  (2,848) — the native KB graph view feature, post-dates the splitting pass above entirely;
-  `crates/core/src/buffer.rs` (3,648) — CRDT-offset *drift* was fixed here in an earlier pass but
-  *size* never addressed; `shared/sync/src/membership.rs` (3,455) — signed-membership derivation,
-  growing with the P2P mesh initiative; `crates/core/src/window.rs` (3,437); `shared/kb/src/lib.rs`
-  (3,577). All 6 added to `.claude/commands/mae-audit.md`'s "Known exceptions" list with
-  `@ai-caution: [architecture-debt]` file-header markers — not split this pass, design work.
+  2026-07): `crates/core/src/editor/graph_view_ops.rs` + `crates/core/src/graph_view.rs` — the native
+  KB graph view feature, post-dates the splitting pass above entirely; `crates/core/src/buffer.rs` —
+  CRDT-offset *drift* was fixed here in an earlier pass but *size* never addressed;
+  `shared/sync/src/membership.rs` — signed-membership derivation, growing with the P2P mesh
+  initiative; `crates/core/src/window.rs`; `shared/kb/src/lib.rs`. All 6 carry `@ai-caution:
+  [architecture-debt]` file-header markers and sit in `docs/AUDIT_BASELINE.json` — not split, design
+  work. **Line counts deliberately omitted**: when this entry carried them (2026-07) they were stale
+  within two weeks — `graph_view_ops.rs` alone reached 8,749 against a recorded 4,464 (+96%) before
+  anyone noticed. `make audit-metrics` reports the current figures; CI fails if any of them grows.
 - [x] **Scheme API KB-doc coverage gap** (found via `/mae-audit`, 2026-07; closed 2026-07): the
   original "186 vs 18" figure was stale — the audit's grep only found the 18-entry *variables*
   table, missing that `crates/core/src/kb_seed/scheme_api.rs`'s `SCHEME_API_FUNCTIONS` table already

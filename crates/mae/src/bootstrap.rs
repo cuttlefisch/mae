@@ -4,7 +4,7 @@
 //! split (2026-07) added `apply_app_config`/`init_kb_federation`/
 //! `init_daemon_connection`/`resolve_collab_user_name`, bringing it to
 //! ~3,062 — not split further this pass, needs its own dedicated look.
-//! Tracked in .claude/commands/mae-audit.md's "Known exceptions" and
+//! Tracked in `docs/AUDIT_BASELINE.json` (machine-checked) and
 //! ROADMAP.md's "Architecture Debt" section.
 
 use std::collections::HashMap;

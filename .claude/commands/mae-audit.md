@@ -5,9 +5,15 @@ argument-hint: "[crate | file | full]   (default: files changed since last commi
 
 # /mae-audit — MAE Code Audit & Structural Health Check
 
-A source-level audit encoding MAE's architecture constraints (CLAUDE.md), design principles, file-size
-ceilings, AI-slop detection, DRY/reuse + design-principle analysis, documentation/onboarding review, and a
-metadata/coverage pass. Two workspaces (editor + daemon), 20 crates (17 editor + 3 shared), ~95k lines.
+A source-level audit encoding MAE's architecture constraints (CLAUDE.md), design principles, AI-slop
+detection, DRY/reuse + design-principle analysis, documentation/onboarding review, and a metadata/coverage
+pass. Two workspaces (editor + daemon), 23 crates (19 editor + 3 shared + daemon), ~395k lines across ~700
+files (~222k code / ~173k test).
+
+> **Structural metrics are no longer computed here.** File sizes, function lengths, match-arm counts,
+> struct field counts, nesting depth, test density, and the `@ai-caution`/`@stability` cross-reference are
+> produced mechanically by `tools/audit-metrics` and gated in CI. This prompt covers only what needs
+> *judgment*. See "Structural Metrics" below.
 
 ## Scope Control
 
@@ -18,6 +24,13 @@ Interpret `$ARGUMENTS`:
 - **`full`:** Full codebase structural audit (expensive — use sparingly)
 - **`<file>`:** Single-file audit
 
+**`full` does not fit in one context.** ~395k lines across ~700 files is far beyond what a single agent
+can read carefully; attempting it produces confident-sounding generalities. For `full`, fan out — one
+agent per crate for Phases 1–4 and 7, plus separate cross-cutting agents for Phase 5 (DRY/reuse, which is
+invisible per-crate by construction) and Phase 6 (docs). Then verify findings adversarially before
+reporting: a reviewer that never tries to refute its own claims files plausible-but-wrong ones
+(CLAUDE.md #14). Prefer `<crate>` scope for routine use.
+
 ## Repository Layout
 
 Two workspaces + shared crates (ADR-014):
@@ -26,13 +39,18 @@ Two workspaces + shared crates (ADR-014):
 mae/                              (repo root)
 ├── Cargo.toml                    (editor workspace — cozo+sled, rusqlite OK)
 ├── Cargo.lock                    (editor lock)
-├── crates/                       (editor-only crates — 17 crates)
+├── crates/                       (editor-only crates — 19 crates)
 │   ├── core/  scheme/  ai/  mae/  renderer/  gui/  lsp/  dap/
 │   ├── shell/  babel/  export/  canvas/  snippets/  format/
 │   ├── make/  lookup/  spell/    (state-server was merged into daemon, v0.13.2)
+│   ├── agent-cli/                (mae-agent binary, ADR-046)
+│   └── scheme-extra/             (out-of-tree kernel-primitive slot, #521; no-op by default)
 ├── daemon/                       (daemon workspace — cozo+sqlite, separate Cargo.lock)
 │   ├── Cargo.toml + Cargo.lock
-│   └── src/ (main.rs, collab_handler.rs, scheduler.rs, hygiene.rs, config.rs, storage.rs, doc_store.rs)
+│   └── src/ (22 top-level modules + 2 subdirs — main, handler, collab_handler/, scheduler,
+│             hygiene, config, storage, doc_store, oauth, p2p, dialer, tenant, kb_query,
+│             enrichment, projector, checkpoint, artifact_store, lease_fence, conn_limit,
+│             lazy_fetch_client, ticket, …)
 └── shared/                       (shared crates — editor workspace members, also used by daemon)
     ├── kb/    (mae-kb: CozoDB store, org parser, federation, query layer, LRU cache)
     ├── sync/  (mae-sync: yrs CRDT, ropey bridge)
@@ -56,105 +74,36 @@ Build commands:
 | Struct fields | 15 fields | Extract sub-structs or builder pattern |
 | Nesting depth | 4 levels | Early return, extract function |
 
-**Known exceptions** (tracked as architectural debt, not audit failures — re-measure each run with `wc -l`).
-Each of these also carries an in-code `@ai-caution: [architecture-debt]` marker (see CLAUDE.md's
-"Debt/Invariant Tagging" section) cross-linking back here and to `ROADMAP.md`'s "Architecture Debt"
-section — when you add a new exception, add the marker + both cross-references, not just this list.
-**2026-07 update**: a dedicated splitting pass closed out most of the list below — `shared/kb/src/cozo_store.rs`
-and `shared/sync/src/kb.rs` are now fully resolved (every resulting file under ceiling) and dropped
-from this list entirely; the rest were substantially reduced but their residual/dispatcher file is
-still over the source ceiling, so they stay listed with updated numbers:
-- `crates/mae/src/main.rs` — 951 lines (was 3,329). CLI dispatch moved to `cli.rs`, `GuiApp` +
-  its `ApplicationHandler` impl moved to `gui_app.rs`, config-application/KB-federation-init/
-  daemon-connect moved to `bootstrap.rs`. Residual is genuinely sequential entry-point glue
-  (panic/logging setup, editor construction, Scheme init, final channel-wiring handoff) with no
-  further obvious seam — still ~18% over the 800-line ceiling, accepted as-is rather than forced.
-- `crates/mae/src/bootstrap.rs` (NEW, surfaced by the `main.rs` split above) — 3,068 lines (2026-07:
-  3,062, growing further; was already 2,397 before the original split, pre-existing untracked debt).
-  Holds app bootstrapping: config application, KB federation init, daemon connect, collab user-name
-  resolution. Not split further this pass — needs its own dedicated look.
-- `crates/mae/src/gui_app.rs` (NEW, surfaced by the `main.rs` split above) — 1,662 lines (2026-07:
-  1,270 lines, +392/+31% since — drifting fast). `GuiApp` struct + `ApplicationHandler` impl
-  (`window_event`'s 3 largest arms were already extracted to private methods during the move). All
-  state lives in `self` fields — a real candidate for a future per-arm/per-phase split, not
-  attempted this pass.
-- `crates/mae/src/collab_bridge/mod.rs` (was flat `collab_bridge.rs`) — 5,302 lines (was 6,546).
-  `handle_collab_event` (28-arm match) and `drain_collab_intents` (~10 drain sections) split into
-  sibling `events_kb.rs`/`events_connection.rs`/`events_doc.rs` (all under 800). The remaining debt
-  is narrower and more precise now: `run_collab_task` (1,695 lines) is a `tokio::select!` loop with
-  ~19 raw locals threaded across 29 `CollabCommand` match arms and no state struct to group them —
-  see its own in-code `@ai-caution` marker for why it's deliberately NOT split mechanically.
-  `handle_response`/`handle_disconnected_cmd` also remain unmoved (reasonably sized on their own).
-- `crates/core/src/editor/mod.rs` — 1,626 lines (2026-07: 1,382 lines, +244/+18% since — drifting
-  fast). A dozen orphaned value-structs moved
-  into the sibling files that already imported them (`lsp_state.rs`, `git_ops.rs`, `ai_state.rs`);
-  ~90 `impl Editor` methods regrouped into `window_ops.rs`/`render_ops.rs`/`session_ops.rs`/
-  `conversation_ops.rs` (new) plus extended `keymaps.rs`/`option_ops.rs`/`project_ops.rs`. Residual
-  is the `Editor` struct definition itself (~410 lines, separately tracked as field-count debt, see
-  its own `@ai-caution: [dispatch]` marker) plus constructors and small lifecycle methods.
-- `crates/scheme/src/runtime.rs` — Scheme VM runtime; `SchemeRuntime::new()`'s ~186 `register_fn` calls and
-  `inject_editor_state`/`apply_to_editor` were split into `crates/scheme/src/runtime/*.rs` submodules by
-  category (keybindings/editor-ops/kb-primitives/kb-queries/io-packages/misc-primitives/test-primitives/
-  state-sync). The residual `runtime.rs` (SharedState, SchemeRuntime's core methods) is 990 lines (2026-07:
-  ~950); its `#[cfg(test)] mod tests` was extracted to a sibling `runtime_tests.rs` — now **2,059 lines**
-  (2026-07: ~1,526, +533/+35% since — now ~4x the 500-line test-file ceiling, the worst-drifted file in
-  this list, a strong candidate for its own splitting pass) — both still over ceiling but no longer
-  sprawling
-- `crates/scheme/tests/r7rs_compliance.rs` — R7RS spec compliance tests (large by nature)
-- `daemon/src/collab_handler/mod.rs` (was flat `collab_handler.rs`) — 1,936 lines (was 3,821).
-  `handle_doc_request_inner`'s 31-arm match split into sibling `sync_methods.rs`/`docs_methods.rs`/
-  `kb_membership.rs`/`kb_content.rs`/`kb_governance.rs` (all under 800; `kb_content.rs` lands 2 lines
-  over) — it's now a thin ~340-line dispatcher. The residual is ~30 individually-reasonable
-  auth/session/access-control functions (`run_session`, `verify_content_op`, `kb_access`,
-  `verify_member_self_service_update`, etc.) that collectively still exceed the file ceiling — a
-  candidate for a further domain-grouping split, not attempted this pass.
+**Ceilings are enforced mechanically, not audited by hand.** `tools/audit-metrics` measures every file
+against this table and CI ratchets the result against `docs/AUDIT_BASELINE.json`. Do NOT re-derive these
+numbers with `wc -l`, and do NOT maintain an exceptions list in this file — that list existed here until
+2026-08 and had drifted badly (14 of 15 tracked sizes stale, one file +96% past its documented figure, the
+untracked backlog ~2x what was claimed). A moving number cannot live in prose.
 
-Both `collab_bridge_tests.rs` and `collab_handler_tests.rs` (and `crates/core/src/editor/kb_ops/kb_ops_tests.rs`)
-were split into `tests/` submodule directories in the same pass — all resulting test files are under
-the 500-line ceiling; see git history for the exact per-feature breakdown.
+## Structural Metrics
 
-**2026-07 (round 5) additions** — confirmed over ceiling, not previously tracked here (all post-date
-the 2026-07 splitting pass above — the KB graph view feature and ongoing membership/window work):
-- `crates/core/src/editor/graph_view_ops.rs` — 4,464 lines. KB graph view Scheme/MCP-facing ops
-  (navigation, zoom/pin, click handling). Candidate split: layout-drive / navigation / physics /
-  overlay concerns.
-- `crates/core/src/graph_view.rs` — 2,848 lines. `GraphView` core (scene graph, viewport, flattening).
-- `crates/core/src/buffer.rs` — 3,648 lines. Rounds 1-4 (branch `fix/backlog-review-root-cause-patterns`)
-  fixed a CRDT-offset *drift* bug here but never addressed *size* — still ~4.6x the 800-line ceiling.
-- `shared/sync/src/membership.rs` — 3,455 lines. Signed-membership derivation (ADR-026); growing with
-  the P2P mesh initiative's ongoing work.
-- `crates/core/src/window.rs` — 3,437 lines.
-- `shared/kb/src/lib.rs` — 3,577 lines.
+Run this first; it is the input to several phases below:
 
-None split this pass — that's design work, appropriately deferred; this entry exists so the debt is
-discoverable (per this file's own cross-reference discipline above) instead of silently untracked.
+```
+make audit-metrics        # writes docs/AUDIT_METRICS.json (gitignored, local artifact)
+make audit-metrics-check  # what CI runs: fails on NEW or growing ceiling violations
+```
 
-**Added integrating `feat/subgraph-html-export`** (kb-export-subgraph-html primitive):
-- `crates/export/src/html_graph.rs` — ~3,700 lines (down from ~6,205 — see below). The
-  whole-KB-subgraph -> self-contained interactive HTML export (chord-diagram nav widget, bilingual
-  EN/ES overlay, theming): Rust HTML assembly plus this module's own extensive test suite
-  (adversarial script-injection escaping, wedge geometry, per-field `ChordDiagramConfig` override
-  tests). It ships as a real in-tree module (see ADR-077 and that file's own `@ai-caution`
-  marker); a pre-merge architecture review found the two large embedded JS/CSS string constants
-  (`GRAPH_JS`, `STATIC_CSS`) originally
-  made up over 40% of this file's line count, were un-lintable as Rust string literals, and had
-  already let a real bug ship (a regex literal corrupted by the inline-script escaper, caught only
-  by manually running `node --check`). Split into real `crates/export/assets/graph.js`/`graph.css`
-  files loaded via `include_str!`, with a `node --check` CI gate (`.github/workflows/ci.yml`'s
-  `export-js-check` job) and a real-browser (Layer 2, puppeteer-core) test suite
-  (`crates/export/tests/browser/`) added alongside. What remains is Rust assembly logic and the
-  test suite itself — no further asset-embedding seam to split.
+`docs/AUDIT_METRICS.json` carries, per file: `lines`, `code_lines`/`test_lines`, `is_test_file`,
+`max_fn_lines` + `max_fn_name`, `max_match_arms`, `max_struct_fields` + `max_struct_name`, `max_nesting`,
+`use_count`, `pub_items`, `test_count`, and `parse_failed`. It also carries the `markers` block:
+every `@ai-caution` (with `[category]`) and `@stability` marker, plus `orphaned_debt_markers`,
+`untracked_in_code`, `uncategorised`, and `missing_stability`.
 
-Flag these if they've grown since last audit, but don't remediate without explicit request.
+The ratchet in `docs/AUDIT_BASELINE.json` records accepted debt at the size it was accepted. A NEW
+over-ceiling file fails CI; an accepted file that grows past 10% fails; an accepted file that shrinks never
+fails. `make audit-metrics-bless` re-accepts the current set — use it ONLY when deliberately taking on debt,
+and pair it with an `@ai-caution: [architecture-debt]` marker plus a `ROADMAP.md` cross-link.
 
-**2026-07 full-codebase audit** found ~60 additional files over these ceilings beyond the list
-above (not yet individually tracked here) — see `ROADMAP.md`'s "Architecture Debt" section for the
-summary; that list still needs a full re-audit/refresh (it predates the splitting pass described
-above, so it may now also be stale in the other direction — double-check before trusting it). That
-same audit pass also resolved two Phase-5 DRY findings (remote-cursor render duplication, the
-git_status/notifications_view/kb_sharing hand-mirrored view pattern) via `render_common::collab_cursor`
-and `crates/core/src/foldable_view.rs`.
-
+**What to do with the metrics in an audit:** don't restate them. Read them, then spend your judgment on
+*why* a file is over ceiling and *what seam* would split it — especially the ones where inline tests
+dominate (`test_lines / lines > 0.5`), where the remedy is extracting the test module to a sibling file
+rather than splitting the logic.
 ## Test Organization (Rust convention — do NOT "fix" co-located tests)
 
 Co-located unit tests are **idiomatic Rust**, not a smell. Apply these rules:
@@ -200,22 +149,21 @@ Co-located unit tests are **idiomatic Rust**, not a smell. Apply these rules:
 
 ## Phased Process
 
-### Phase 1: Structural Scan
+### Phase 1: Structural Interpretation (metrics are given, not gathered)
 
-```
-For each file in scope:
-  - Line count vs ceiling
-  - Function count and max function length
-  - Match arm count in largest match block
-  - Struct field count
-  - Import complexity (>15 use statements = smell)
-  - pub fn / pub struct / pub enum count (API surface check)
-```
+Run `make audit-metrics` and read `docs/AUDIT_METRICS.json`. Do not recount anything it already reports.
+Your job is the part a tool cannot do:
 
-Report files exceeding any ceiling. Prioritize by severity. Also:
-- Grep `crates/*/src/lib.rs` for `@stability:` markers — report crates missing one.
-- Flag any files >1500 lines in `crates/core/src/editor/`.
-- Cross-reference crate count against `Cargo.toml` workspace members.
+- For each file over ceiling **in scope**: name the seam that would split it, or state why there isn't one.
+  A 6,000-line file that is 70% inline tests needs test-module extraction, not a logic split — check
+  `test_lines / lines` before proposing anything.
+- For the worst `max_fn_lines` / `max_match_arms` offenders: is this a dispatcher that genuinely wants a
+  table, or a function that accreted? A 200+ arm match on option names is a different problem from a
+  100-line match on an enum with 100 variants.
+- For structs over the field ceiling: which fields cluster into a sub-struct, and does anything already
+  exist to hold them?
+- Read the `markers` block: every entry in `orphaned_debt_markers`, `untracked_in_code`, `uncategorised`,
+  and `missing_stability` is a real cross-reference defect to report.
 
 **For daemon workspace:** also check handler dispatch method count vs test coverage; scheduler task intervals
 match config defaults; hygiene check categories match `shared/kb/src/hygiene.rs` constants.
@@ -354,7 +302,8 @@ A fast, mostly-grep checklist. Report `[OK]` / `[WARN]` / `[ERROR]` per item.
 ### Ceiling Violations
 | File | Lines | Ceiling | Status |
 |------|-------|---------|--------|
-(Known exceptions marked "tracked", new violations "NEW")
+(Taken from `docs/AUDIT_METRICS.json` — do not recount. Baselined debt is "tracked",
+anything `make audit-metrics-check` flags is "NEW" or "GREW".)
 
 ### AI Slop Found
 - [ ] <file>:<line> — <smell type>: <description>
@@ -387,7 +336,9 @@ A fast, mostly-grep checklist. Report `[OK]` / `[WARN]` / `[ERROR]` per item.
 ## Execution Notes
 
 - Use `cargo clippy --workspace -- -D warnings` (editor) and `cd daemon && cargo clippy --all-targets -- -D warnings` (daemon)
-- Use `wc -l` for line counts, `grep -c "pub fn"` for API surface
+- **Do not use `wc -l` / `grep -c "pub fn"` for structural metrics** — run `make audit-metrics` and read
+  `docs/AUDIT_METRICS.json`. Hand-counting is what let the old numbers drift; recounting them by hand in an
+  audit reintroduces exactly that failure mode.
 - Use parallel agents for multi-crate audits (one agent per crate); Phases 5–6 (DRY/reuse + docs) benefit
   from a cross-cutting agent that looks ACROSS crates for duplication, not per-crate
 - Don't create busywork: if the code is clean, say so and stop

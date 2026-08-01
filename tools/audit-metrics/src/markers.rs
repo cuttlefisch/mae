@@ -2,11 +2,11 @@
 //!
 //! CLAUDE.md's "Debt/Invariant Tagging" section defines a discipline: an
 //! `@ai-caution: [architecture-debt]` marker in code must be cross-linked from
-//! `ROADMAP.md`'s "Architecture Debt" section and `.claude/commands/mae-audit.md`'s
-//! "Known exceptions" list, so a reader landing in any one of the three finds the
-//! others. That discipline was being maintained by hand and had holes — an
-//! orphaned marker, one pointing at an already-closed issue, two missing their
-//! `[category]` tag. This module makes the check mechanical.
+//! `ROADMAP.md`'s "Architecture Debt" section and — for size-ceiling debt —
+//! from `docs/AUDIT_BASELINE.json`, so a reader landing in any one of the three
+//! finds the others. That discipline was maintained by hand and had holes: an
+//! orphaned marker, one pointing at an already-closed issue, and two missing
+//! their `[category]` tag. This module makes the check mechanical.
 
 use serde::{Deserialize, Serialize};
 
@@ -31,7 +31,7 @@ pub struct MarkerReport {
     pub cautions: Vec<Caution>,
     pub stability: Vec<StabilityMarker>,
     /// `@ai-caution: [architecture-debt]` markers whose file is referenced by
-    /// neither ROADMAP.md nor mae-audit.md.
+    /// none of ROADMAP.md, mae-audit.md, or the accepted-exceptions baseline.
     pub orphaned_debt_markers: Vec<String>,
     /// Files listed as tracked exceptions in mae-audit.md that carry no
     /// in-code marker — the reverse orphan.
@@ -114,10 +114,20 @@ fn is_crate_root(path: &str) -> bool {
         && !path.starts_with("tools/")
 }
 
-/// Cross-check `[architecture-debt]` markers against the two tracking docs.
-/// `roadmap` and `audit_doc` are the raw texts of `ROADMAP.md` and
-/// `.claude/commands/mae-audit.md`.
-pub fn cross_reference(report: &mut MarkerReport, roadmap: &str, audit_doc: &str) {
+/// Cross-check `[architecture-debt]` markers against the tracking surfaces.
+///
+/// A marker counts as tracked if it is cited by `ROADMAP.md`, by
+/// `.claude/commands/mae-audit.md`, **or** if the file is in
+/// `docs/AUDIT_BASELINE.json` (`baselined`). The baseline is the machine-checked
+/// third leg of CLAUDE.md's cross-reference discipline — requiring prose to
+/// restate what the baseline already holds is exactly the duplication that let
+/// the old numbers drift.
+pub fn cross_reference(
+    report: &mut MarkerReport,
+    roadmap: &str,
+    audit_doc: &str,
+    baselined: &[String],
+) {
     let debt_files: Vec<String> = report
         .cautions
         .iter()
@@ -130,7 +140,11 @@ pub fn cross_reference(report: &mut MarkerReport, roadmap: &str, audit_doc: &str
         // Accept either — this check is about discoverability, not formatting.
         let base = path.rsplit('/').next().unwrap_or(path);
         let cited = |doc: &str| doc.contains(path.as_str()) || doc.contains(base);
-        if !cited(roadmap) && !cited(audit_doc) && !report.orphaned_debt_markers.contains(path) {
+        if !cited(roadmap)
+            && !cited(audit_doc)
+            && !baselined.contains(path)
+            && !report.orphaned_debt_markers.contains(path)
+        {
             report.orphaned_debt_markers.push(path.clone());
         }
     }
@@ -210,7 +224,7 @@ mod tests {
     #[test]
     fn a_debt_marker_cited_by_neither_doc_is_orphaned() {
         let mut r = scan(&files());
-        cross_reference(&mut r, "no mention", "no mention");
+        cross_reference(&mut r, "no mention", "no mention", &[]);
         assert_eq!(r.orphaned_debt_markers, vec!["crates/core/src/big.rs"]);
     }
 
@@ -220,7 +234,7 @@ mod tests {
         // and the check is about discoverability, not citation style.
         for (roadmap, audit) in [("see big.rs", "none"), ("none", "`crates/core/src/big.rs`")] {
             let mut r = scan(&files());
-            cross_reference(&mut r, roadmap, audit);
+            cross_reference(&mut r, roadmap, audit, &[]);
             assert!(
                 r.orphaned_debt_markers.is_empty(),
                 "roadmap={roadmap:?} audit={audit:?} -> {:?}",
@@ -230,9 +244,18 @@ mod tests {
     }
 
     #[test]
+    fn a_debt_marker_present_in_the_baseline_is_tracked() {
+        // The baseline is the machine-checked third leg -- prose need not
+        // restate what it already holds.
+        let mut r = scan(&files());
+        cross_reference(&mut r, "", "", &["crates/core/src/big.rs".to_string()]);
+        assert!(r.orphaned_debt_markers.is_empty(), "{:?}", r.orphaned_debt_markers);
+    }
+
+    #[test]
     fn audit_doc_entry_with_no_in_code_marker_is_reported() {
         let mut r = scan(&files());
-        cross_reference(&mut r, "", "- `crates/core/src/ghost.rs` — 900 lines\n");
+        cross_reference(&mut r, "", "- `crates/core/src/ghost.rs` — 900 lines\n", &[]);
         assert!(r.untracked_in_code.contains(&"crates/core/src/ghost.rs".to_string()));
     }
 

@@ -7,7 +7,7 @@
 //! the `Editor` struct definition itself (see the separate `[dispatch]`
 //! marker below on its field count) plus constructors/small lifecycle
 //! methods, with no further obvious seam. Tracked in
-//! .claude/commands/mae-audit.md's "Known exceptions" and ROADMAP.md's
+//! `docs/AUDIT_BASELINE.json` (machine-checked) and ROADMAP.md's
 //! "Architecture Debt" section.
 
 mod agenda_ops;
@@ -697,7 +697,7 @@ pub struct SchemeStats {
 // struct is also independently tracked as a source-line exception (see the
 // file-header marker above); the field count is the SAME debt, a second
 // dimension of it, not a separate issue. Tracked in
-// .claude/commands/mae-audit.md's "Known exceptions" and ROADMAP.md's
+// `docs/AUDIT_BASELINE.json` (machine-checked) and ROADMAP.md's
 // "Architecture Debt" section.
 /// Top-level editor state.
 ///

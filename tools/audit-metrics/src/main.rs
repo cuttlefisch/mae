@@ -96,7 +96,8 @@ fn main() -> ExitCode {
     let mut marker_report = markers::scan(&files);
     let roadmap = read_or_empty(&root, "ROADMAP.md");
     let audit_doc = read_or_empty(&root, ".claude/commands/mae-audit.md");
-    markers::cross_reference(&mut marker_report, &roadmap, &audit_doc);
+    let baselined: Vec<String> = load_baseline(&root).accepted.keys().cloned().collect();
+    markers::cross_reference(&mut marker_report, &roadmap, &audit_doc, &baselined);
 
     let json = match render_json(&metrics, &marker_report) {
         Ok(j) => j,
