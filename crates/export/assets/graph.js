@@ -5,6 +5,12 @@
   var edges = data.edges;
   var anchorId = data.anchorId;
   var hasTranslations = data.hasTranslations;
+  // Real data injection from Rust's ChordDiagramConfig, not exact-substring
+  // text patching -- defaults here match ChordDiagramConfig::default()
+  // exactly, so this file stays independently valid/correct JS (and
+  // `node --check`-able) even when loaded standalone with no chordConfig
+  // in the payload (e.g. a hand-built fixture in a test).
+  var chordConfig = data.chordConfig || {};
 
   var nodesById = {};
   nodes.forEach(function (n, i) { n._idx = i; nodesById[n.id] = n; });
@@ -75,7 +81,7 @@
   var visitStack = [anchorId];
   var visitPos = 0;
   var visitDropped = 0; // oldest entries HISTORY_DEPTH_CAP has evicted -- rendered as "N earlier", never silently
-  var HISTORY_DEPTH_CAP = 8;
+  var HISTORY_DEPTH_CAP = chordConfig.historyDepthCap ?? 8;
   // Every node ever selected, for the ring's visited-node marker (below,
   // applySelection). Deliberately NOT derived from visitStack at render
   // time: visitStack is capped (HISTORY_DEPTH_CAP) and evicts its oldest
@@ -114,7 +120,7 @@
   // not by the viewBox we're about to compute -- safe to read before the
   // viewBox is set.
   var renderedWidth = svg.getBoundingClientRect().width || 300;
-  var minOnscreenRadiusPx = 12;
+  var minOnscreenRadiusPx = chordConfig.minOnscreenRadiusPx ?? 12;
 
   // A wedge's OUTER arc corners sit at its own angle +/- a half-span (see
   // the draw loop below), NOT directly outward from the node's own (x, y).
@@ -140,13 +146,13 @@
   // minWorldRadius * HOVER_GROWTH_FACTOR, not just minWorldRadius. Must
   // match refreshWedgeGrowth's formula exactly or the two drift out of
   // sync (a real bug found this session).
-  var HOVER_GROWTH_FACTOR = 1.6;
-  var strokeBuffer = 2;
+  var HOVER_GROWTH_FACTOR = chordConfig.hoverGrowthFactor ?? 1.6;
+  var strokeBuffer = chordConfig.strokeBufferPx ?? 2;
   // Extra flat cushion beyond the strict correctness minimum, purely for
   // visual breathing room around the ring (user-requested) -- doesn't
   // affect centering, since pad is always applied symmetrically (see
   // centerX/centerY above, and viewBoxW below).
-  var cosmeticCushion = 16;
+  var cosmeticCushion = chordConfig.cosmeticCushionPx ?? 16;
 
   // pad and minWorldRadius are circularly defined (pad affects viewBoxW,
   // which affects worldToScreenScale, which affects minWorldRadius, which
@@ -154,7 +160,7 @@
   // scale is second-order once `w`/`h` dominate viewBoxW, true except at
   // very low node counts where minWorldRadius is tiny anyway. Not a
   // precision-critical fit, just a nav widget.
-  var pad = 40;
+  var pad = chordConfig.initialPadPx ?? 40;
   for (var fitPass = 0; fitPass < 2; fitPass++) {
     var viewBoxWGuess = w + pad * 2;
     var scaleGuess = renderedWidth / viewBoxWGuess;
@@ -216,7 +222,7 @@
     // practice (they're pulled in as always-included meta content, not via
     // normal traversal), but this stays a real filter, not an assumption.
     if (s.is_guidance || t.is_guidance) { return; }
-    var pullBack = 0.55; // 0 = straight line, 1 = fully at center
+    var pullBack = chordConfig.edgePullBack ?? 0.55; // 0 = straight line, 1 = fully at center
     var cx = s.x + (t.x - s.x) / 2 + (centerX - (s.x + t.x) / 2) * pullBack;
     var cy = s.y + (t.y - s.y) / 2 + (centerY - (s.y + t.y) / 2) * pullBack;
     // Land the vertex on each node's wedge INNER edge, not its raw (x, y)
@@ -262,7 +268,7 @@
   // are what visually separate one wedge from the next, the same way
   // adjacent flower petals read as distinct without a drawn gap between
   // them.
-  var wedgeGapRadians = 0;
+  var wedgeGapRadians = chordConfig.wedgeGapRadians ?? 0;
 
   function polarPoint(cx, cy, r, a) {
     return [cx + r * Math.cos(a), cy + r * Math.sin(a)];
@@ -410,7 +416,7 @@
     // (refreshWedgeGrowth reuses this same value from wedgeGeomById
     // rather than rescaling it live) so the rounding doesn't visibly
     // change shape mid-transition, only the outer radius does.
-    var cornerRadius = halfThickness * 0.6;
+    var cornerRadius = halfThickness * (chordConfig.wedgeCornerRadiusFraction ?? 0.6);
     wedgeGeomById[n.id] = {
       nodeRadius: nodeRadius,
       halfThickness: halfThickness,
@@ -1382,7 +1388,7 @@
   // hiding synchronously on blur would remove the button from the DOM
   // before that click registers.
   nodeSearch.addEventListener("blur", function () {
-    window.setTimeout(function () { searchResults.hidden = true; }, 150);
+    window.setTimeout(function () { searchResults.hidden = true; }, chordConfig.searchDebounceMs ?? 150);
   });
 
   // --- Header tag filter: dims (never removes) non-matching nodes/edges

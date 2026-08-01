@@ -876,85 +876,23 @@ impl Default for ChordDiagramConfig {
     }
 }
 
-/// Applies `cfg` to `GRAPH_JS` via exact-substring replacement against
-/// verified anchor literals -- GRAPH_JS is deliberately a plain raw string,
-/// not `format!`-templated (see its own doc comment: with ~5000 lines of
-/// JS full of `{`/`}`, escaping every literal brace for `format!` would be
-/// invasive and bug-prone). Returns the const unchanged (zero allocation)
-/// when `cfg` is the default, since a default-valued config always
-/// formats back to the exact original literal text.
-fn render_graph_js(cfg: &ChordDiagramConfig) -> std::borrow::Cow<'static, str> {
-    if *cfg == ChordDiagramConfig::default() {
-        return std::borrow::Cow::Borrowed(GRAPH_JS);
-    }
-    let mut js = GRAPH_JS.to_string();
-    js = js.replacen(
-        "var HOVER_GROWTH_FACTOR = 1.6;",
-        &format!("var HOVER_GROWTH_FACTOR = {};", cfg.hover_growth_factor),
-        1,
-    );
-    js = js.replacen(
-        "var strokeBuffer = 2;",
-        &format!("var strokeBuffer = {};", cfg.stroke_buffer_px),
-        1,
-    );
-    js = js.replacen(
-        "var cosmeticCushion = 16;",
-        &format!("var cosmeticCushion = {};", cfg.cosmetic_cushion_px),
-        1,
-    );
-    js = js.replacen(
-        "var minOnscreenRadiusPx = 12;",
-        &format!("var minOnscreenRadiusPx = {};", cfg.min_onscreen_radius_px),
-        1,
-    );
-    js = js.replacen(
-        "var pad = 40;",
-        &format!("var pad = {};", cfg.initial_pad_px),
-        1,
-    );
-    js = js.replacen(
-        "var pullBack = 0.55;",
-        &format!("var pullBack = {};", cfg.edge_pull_back),
-        1,
-    );
-    js = js.replacen(
-        "var wedgeGapRadians = 0;",
-        &format!("var wedgeGapRadians = {};", cfg.wedge_gap_radians),
-        1,
-    );
-    js = js.replacen(
-        "var HISTORY_DEPTH_CAP = 8;",
-        &format!("var HISTORY_DEPTH_CAP = {};", cfg.history_depth_cap),
-        1,
-    );
-    js = js.replacen(
-        "var cornerRadius = halfThickness * 0.6;",
-        &format!(
-            "var cornerRadius = halfThickness * {};",
-            cfg.wedge_corner_radius_fraction
-        ),
-        1,
-    );
-    js = js.replacen(
-        "window.setTimeout(function () { searchResults.hidden = true; }, 150);",
-        &format!(
-            "window.setTimeout(function () {{ searchResults.hidden = true; }}, {});",
-            cfg.search_debounce_ms
-        ),
-        1,
-    );
-    std::borrow::Cow::Owned(js)
-}
-
-/// Applies `cfg.ui_transition_ms` to `STATIC_CSS` -- same exact-substring
-/// approach and same default fast path as [`render_graph_js`], scoped to
-/// just the one field STATIC_CSS actually exposes.
-fn render_static_css(cfg: &ChordDiagramConfig) -> std::borrow::Cow<'static, str> {
-    if cfg.ui_transition_ms == ChordDiagramConfig::default().ui_transition_ms {
-        return std::borrow::Cow::Borrowed(STATIC_CSS);
-    }
-    std::borrow::Cow::Owned(STATIC_CSS.replace("200ms", &format!("{}ms", cfg.ui_transition_ms)))
+/// `GRAPH_JS` is emitted verbatim -- every `ChordDiagramConfig` field it
+/// reads flows through the `#graph-data` JSON payload's `chordConfig`
+/// object instead (see `HtmlGraphExporter::export_with_config`), not
+/// exact-substring text patching. `GRAPH_JS` reads `data.chordConfig` once
+/// at load with hardcoded defaults (matching `ChordDiagramConfig::
+/// default()` exactly) as its own fallback, so it stays independently
+/// valid, `node --check`-able JS even without that payload.
+///
+/// `STATIC_CSS`'s one tunable (`ui_transition_ms`) is a real CSS custom
+/// property (`--ui-transition-ms`, with a `200ms` fallback baked into
+/// every `var(--ui-transition-ms, 200ms)` use in the stylesheet itself --
+/// see graph.css) rather than text-patched -- [`render_transition_var_css`]
+/// emits the one small `:root{...}` rule (already inside the page's single
+/// `<style>` block, see its call site) that sets it to the real configured
+/// value.
+fn render_transition_var_css(cfg: &ChordDiagramConfig) -> String {
+    format!(":root{{--ui-transition-ms:{}ms;}}\n", cfg.ui_transition_ms)
 }
 
 /// Exports a positioned KB subgraph to one self-contained HTML page.
@@ -1019,6 +957,25 @@ impl HtmlGraphExporter {
             "hasTranslations": has_translations,
             "nodes": nodes,
             "edges": edges,
+            // Real data injection, not the old exact-substring `.replacen()`
+            // patching against literal JS text (which silently no-op'd --
+            // dead option, no error signal -- the moment GRAPH_JS's literal
+            // text ever reformatted). `graph.js` reads this object once at
+            // load, with hardcoded defaults matching `ChordDiagramConfig::
+            // default()` as its own fallback, so it stays independently
+            // valid JS (and `node --check`-able) even without this payload.
+            "chordConfig": {
+                "hoverGrowthFactor": config.hover_growth_factor,
+                "strokeBufferPx": config.stroke_buffer_px,
+                "cosmeticCushionPx": config.cosmetic_cushion_px,
+                "minOnscreenRadiusPx": config.min_onscreen_radius_px,
+                "initialPadPx": config.initial_pad_px,
+                "edgePullBack": config.edge_pull_back,
+                "wedgeGapRadians": config.wedge_gap_radians,
+                "historyDepthCap": config.history_depth_cap,
+                "wedgeCornerRadiusFraction": config.wedge_corner_radius_fraction,
+                "searchDebounceMs": config.search_debounce_ms,
+            },
         });
         let payload_json = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
 
@@ -1029,7 +986,8 @@ impl HtmlGraphExporter {
         html.push_str(&html_escape(page_title));
         html.push_str("</title>\n<style>\n");
         html.push_str(&render_css_variables(&dark, &light));
-        html.push_str(&render_static_css(config));
+        html.push_str(&render_transition_var_css(config));
+        html.push_str(STATIC_CSS);
         html.push_str("</style>\n</head>\n<body>\n");
 
         html.push_str("<header id=\"page-header\">\n<h1 id=\"page-title\">");
@@ -1115,7 +1073,7 @@ impl HtmlGraphExporter {
         html.push_str("</script>\n");
 
         html.push_str("<script>\n");
-        html.push_str(&escape_for_inline_script(&render_graph_js(config)));
+        html.push_str(&escape_for_inline_script(GRAPH_JS));
         html.push_str("\n</script>\n");
 
         html.push_str("</body>\n</html>\n");
@@ -3123,7 +3081,9 @@ More prose, no reading order here.\n";
             "expected arcPath to accept independent outer/inner corner-radius parameters: {html}"
         );
         assert!(
-            html.contains("var cornerRadius = halfThickness * 0.6;"),
+            html.contains(
+                "var cornerRadius = halfThickness * (chordConfig.wedgeCornerRadiusFraction ?? 0.6);"
+            ),
             "expected a real, thickness-proportional corner radius, not a flat magic constant: {html}"
         );
         assert!(
@@ -3135,9 +3095,10 @@ More prose, no reading order here.\n";
             "expected refreshWedgeGrowth to reuse the SAME stored corner radius, not recompute a \
              different one (which would break the `d` transition's command-structure match): {html}"
         );
-        assert!(
-            html.contains("var wedgeGapRadians = 0;"),
-            "expected zero angular gap between adjacent wedge slots: {html}"
+        assert_eq!(
+            chord_config_json(&html)["wedgeGapRadians"],
+            0.0,
+            "expected zero angular gap between adjacent wedge slots at the default config: {html}"
         );
     }
 
@@ -3266,6 +3227,25 @@ More prose, no reading order here.\n";
         );
     }
 
+    /// The 9 JS-side `ChordDiagramConfig` fields now flow through the
+    /// `#graph-data` JSON payload's `chordConfig` object (real data
+    /// injection), not exact-substring text patching against GRAPH_JS's
+    /// source -- so the meaningful oracle is "the payload carries the
+    /// overridden value," not "the JS source text changed."
+    fn chord_config_json(html: &str) -> serde_json::Value {
+        let start_marker = "<script id=\"graph-data\" type=\"application/json\">";
+        let start = html
+            .find(start_marker)
+            .expect("expected a graph-data script tag")
+            + start_marker.len();
+        let end = html[start..]
+            .find("</script>")
+            .expect("expected graph-data script tag to close");
+        let payload: serde_json::Value =
+            serde_json::from_str(&html[start..start + end]).expect("graph-data must be valid JSON");
+        payload["chordConfig"].clone()
+    }
+
     #[test]
     fn hover_growth_factor_override_changes_generated_js() {
         let nodes = vec![simple_node("a", "A", "body", true)];
@@ -3274,14 +3254,7 @@ More prose, no reading order here.\n";
             ..ChordDiagramConfig::default()
         };
         let html = HtmlGraphExporter.export_with_config(&nodes, &[], "a", "T", &cfg);
-        assert!(
-            html.contains("var HOVER_GROWTH_FACTOR = 2.25;"),
-            "expected the overridden value in the generated JS: {html}"
-        );
-        assert!(
-            !html.contains("var HOVER_GROWTH_FACTOR = 1.6;"),
-            "must not still contain the hardcoded default: {html}"
-        );
+        assert_eq!(chord_config_json(&html)["hoverGrowthFactor"], 2.25);
     }
 
     #[test]
@@ -3292,11 +3265,7 @@ More prose, no reading order here.\n";
             ..ChordDiagramConfig::default()
         };
         let html = HtmlGraphExporter.export_with_config(&nodes, &[], "a", "T", &cfg);
-        assert!(
-            html.contains("var strokeBuffer = 5;"),
-            "expected the overridden value in the generated JS: {html}"
-        );
-        assert!(!html.contains("var strokeBuffer = 2;"), "{html}");
+        assert_eq!(chord_config_json(&html)["strokeBufferPx"], 5.0);
     }
 
     #[test]
@@ -3307,11 +3276,7 @@ More prose, no reading order here.\n";
             ..ChordDiagramConfig::default()
         };
         let html = HtmlGraphExporter.export_with_config(&nodes, &[], "a", "T", &cfg);
-        assert!(
-            html.contains("var cosmeticCushion = 40;"),
-            "expected the overridden value in the generated JS: {html}"
-        );
-        assert!(!html.contains("var cosmeticCushion = 16;"), "{html}");
+        assert_eq!(chord_config_json(&html)["cosmeticCushionPx"], 40.0);
     }
 
     #[test]
@@ -3322,11 +3287,7 @@ More prose, no reading order here.\n";
             ..ChordDiagramConfig::default()
         };
         let html = HtmlGraphExporter.export_with_config(&nodes, &[], "a", "T", &cfg);
-        assert!(
-            html.contains("var minOnscreenRadiusPx = 20;"),
-            "expected the overridden value in the generated JS: {html}"
-        );
-        assert!(!html.contains("var minOnscreenRadiusPx = 12;"), "{html}");
+        assert_eq!(chord_config_json(&html)["minOnscreenRadiusPx"], 20.0);
     }
 
     #[test]
@@ -3337,11 +3298,7 @@ More prose, no reading order here.\n";
             ..ChordDiagramConfig::default()
         };
         let html = HtmlGraphExporter.export_with_config(&nodes, &[], "a", "T", &cfg);
-        assert!(
-            html.contains("var pad = 80;"),
-            "expected the overridden value in the generated JS: {html}"
-        );
-        assert!(!html.contains("var pad = 40;"), "{html}");
+        assert_eq!(chord_config_json(&html)["initialPadPx"], 80.0);
     }
 
     #[test]
@@ -3352,11 +3309,22 @@ More prose, no reading order here.\n";
             ..ChordDiagramConfig::default()
         };
         let html = HtmlGraphExporter.export_with_config(&nodes, &[], "a", "T", &cfg);
-        assert!(
-            html.contains("var pullBack = 0.1;"),
-            "expected the overridden value in the generated JS: {html}"
-        );
-        assert!(!html.contains("var pullBack = 0.55;"), "{html}");
+        assert_eq!(chord_config_json(&html)["edgePullBack"], 0.1);
+    }
+
+    #[test]
+    fn edge_pull_back_of_exactly_zero_is_not_mistaken_for_unset() {
+        // Adversarial: 0.0 is a real, documented, non-default value for
+        // this field ("0 = straight line") -- a naive `value || default`
+        // fallback in the JS reader would incorrectly treat it as "not
+        // provided" and silently substitute the 0.55 default instead.
+        let nodes = vec![simple_node("a", "A", "body", true)];
+        let cfg = ChordDiagramConfig {
+            edge_pull_back: 0.0,
+            ..ChordDiagramConfig::default()
+        };
+        let html = HtmlGraphExporter.export_with_config(&nodes, &[], "a", "T", &cfg);
+        assert_eq!(chord_config_json(&html)["edgePullBack"], 0.0);
     }
 
     #[test]
@@ -3367,11 +3335,7 @@ More prose, no reading order here.\n";
             ..ChordDiagramConfig::default()
         };
         let html = HtmlGraphExporter.export_with_config(&nodes, &[], "a", "T", &cfg);
-        assert!(
-            html.contains("var wedgeGapRadians = 0.05;"),
-            "expected the overridden value in the generated JS: {html}"
-        );
-        assert!(!html.contains("var wedgeGapRadians = 0;"), "{html}");
+        assert_eq!(chord_config_json(&html)["wedgeGapRadians"], 0.05);
     }
 
     #[test]
@@ -3382,11 +3346,7 @@ More prose, no reading order here.\n";
             ..ChordDiagramConfig::default()
         };
         let html = HtmlGraphExporter.export_with_config(&nodes, &[], "a", "T", &cfg);
-        assert!(
-            html.contains("var HISTORY_DEPTH_CAP = 15;"),
-            "expected the overridden value in the generated JS: {html}"
-        );
-        assert!(!html.contains("var HISTORY_DEPTH_CAP = 8;"), "{html}");
+        assert_eq!(chord_config_json(&html)["historyDepthCap"], 15);
     }
 
     #[test]
@@ -3397,14 +3357,7 @@ More prose, no reading order here.\n";
             ..ChordDiagramConfig::default()
         };
         let html = HtmlGraphExporter.export_with_config(&nodes, &[], "a", "T", &cfg);
-        assert!(
-            html.contains("var cornerRadius = halfThickness * 0.3;"),
-            "expected the overridden value in the generated JS: {html}"
-        );
-        assert!(
-            !html.contains("var cornerRadius = halfThickness * 0.6;"),
-            "{html}"
-        );
+        assert_eq!(chord_config_json(&html)["wedgeCornerRadiusFraction"], 0.3);
     }
 
     #[test]
@@ -3415,18 +3368,17 @@ More prose, no reading order here.\n";
             ..ChordDiagramConfig::default()
         };
         let html = HtmlGraphExporter.export_with_config(&nodes, &[], "a", "T", &cfg);
-        assert!(
-            html.contains("searchResults.hidden = true; }, 400);"),
-            "expected the overridden value in the generated JS: {html}"
-        );
-        assert!(
-            !html.contains("searchResults.hidden = true; }, 150);"),
-            "{html}"
-        );
+        assert_eq!(chord_config_json(&html)["searchDebounceMs"], 400);
     }
 
     #[test]
     fn ui_transition_ms_override_does_not_touch_180ms_or_220ms_rules() {
+        // ui_transition_ms is real CSS-custom-property injection now
+        // (:root{--ui-transition-ms:...}), not exact-substring text
+        // patching against STATIC_CSS -- the stylesheet's own rules
+        // always read `var(--ui-transition-ms, 200ms)` verbatim
+        // regardless of config; only the :root value that variable
+        // resolves to changes.
         let nodes = vec![simple_node("a", "A", "body", true)];
         let cfg = ChordDiagramConfig {
             ui_transition_ms: 350,
@@ -3434,8 +3386,13 @@ More prose, no reading order here.\n";
         };
         let html = HtmlGraphExporter.export_with_config(&nodes, &[], "a", "T", &cfg);
         assert!(
-            html.contains("350ms"),
-            "expected the overridden duration to appear: {html}"
+            html.contains(":root{--ui-transition-ms:350ms;}"),
+            "expected the overridden duration injected as a CSS custom property: {html}"
+        );
+        assert!(
+            html.contains("transition: background-color var(--ui-transition-ms, 200ms) ease, color var(--ui-transition-ms, 200ms) ease;"),
+            "the real STATIC_CSS rule must reference the custom property (with its own \
+             200ms fallback), never a literal duration: {html}"
         );
         assert!(
             html.contains("180ms"),
@@ -3445,18 +3402,18 @@ More prose, no reading order here.\n";
             html.contains("220ms"),
             "the 220ms fullscreen-enter asymmetry must stay fixed, not scale with this config: {html}"
         );
-        // A blanket `!html.contains("200ms")` would false-positive on
-        // GRAPH_JS's own prose comments describing this convention (e.g.
-        // "this file's small-motion convention (200ms ease)") -- those
-        // aren't real CSS values, so check a known, real STATIC_CSS rule
-        // instead of the whole page.
+    }
+
+    #[test]
+    fn ui_transition_ms_default_still_resolves_to_200ms() {
+        // Companion to the override test above: confirm the *unconfigured*
+        // default path also injects the custom property (not skipped),
+        // and every affected rule's var() fallback matches it exactly.
+        let nodes = vec![simple_node("a", "A", "body", true)];
+        let html = HtmlGraphExporter.export(&nodes, &[], "a", "T");
         assert!(
-            !html.contains("transition: background-color 200ms ease, color 200ms ease;"),
-            "expected this real STATIC_CSS rule's 200ms to have been replaced: {html}"
-        );
-        assert!(
-            html.contains("transition: background-color 350ms ease, color 350ms ease;"),
-            "expected the overridden duration in a real STATIC_CSS rule: {html}"
+            html.contains(":root{--ui-transition-ms:200ms;}"),
+            "expected the default duration injected as a CSS custom property: {html}"
         );
     }
 

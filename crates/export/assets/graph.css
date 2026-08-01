@@ -6,7 +6,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   display: flex;
   flex-direction: column;
-  transition: background-color 200ms ease, color 200ms ease;
+  transition: background-color var(--ui-transition-ms, 200ms) ease, color var(--ui-transition-ms, 200ms) ease;
 }
 #page-header {
   display: flex;
@@ -16,7 +16,7 @@ body {
   padding: 0.75rem 1.25rem;
   background: var(--bg1);
   border-bottom: 1px solid var(--bg3);
-  transition: background-color 200ms ease, border-color 200ms ease;
+  transition: background-color var(--ui-transition-ms, 200ms) ease, border-color var(--ui-transition-ms, 200ms) ease;
 }
 #page-title { margin: 0; font-size: 1.25rem; }
 /* Pushes the Home/Prev/Next/Theme/Lang group to the row's far end,
@@ -242,7 +242,7 @@ body {
      instant display:none. Placed after the "open" rule above so equal-
      specificity source order lets this win while data-sidebar is still
      "open". */
-  html[data-sidebar-anim="out"] #sidebar { animation: sidebar-drawer-out 200ms ease; }
+  html[data-sidebar-anim="out"] #sidebar { animation: sidebar-drawer-out var(--ui-transition-ms, 200ms) ease; }
 }
 @media (min-width: 768px) {
   html[data-sidebar="closed"] #sidebar { display: none; }
@@ -275,7 +275,7 @@ body {
   border-bottom: 1px solid var(--bg3);
   background: var(--bg0);
   color: var(--fg1);
-  transition: background-color 200ms ease, color 200ms ease;
+  transition: background-color var(--ui-transition-ms, 200ms) ease, color var(--ui-transition-ms, 200ms) ease;
 }
 #graph-svg { width: 100%; flex: 1; min-height: 0; display: block; }
 #graph-fullscreen-toggle {
@@ -294,7 +294,7 @@ body {
   font-size: 0.95rem;
   line-height: 1;
   cursor: pointer;
-  transition: background-color 200ms ease, color 200ms ease;
+  transition: background-color var(--ui-transition-ms, 200ms) ease, color var(--ui-transition-ms, 200ms) ease;
 }
 #graph-fullscreen-toggle:hover { background: var(--bg2); color: var(--fg1); }
 /* See the fullscreen JS block (GRAPH_JS) for why this is a `position:
@@ -318,7 +318,7 @@ body {
   to { opacity: 0; transform: scale(0.96); }
 }
 #graph-pane.fullscreen-anim-in { animation: graph-fullscreen-in 220ms ease; }
-#graph-pane.fullscreen-anim-out { animation: graph-fullscreen-out 200ms ease; }
+#graph-pane.fullscreen-anim-out { animation: graph-fullscreen-out var(--ui-transition-ms, 200ms) ease; }
 /* Shows the hovered node's title, falling back to the selected node's
    title when nothing is hovered (see updateCaption() in GRAPH_JS) -- a
    real, legible body-text size instead of the cramped 11px in-SVG label
@@ -414,7 +414,7 @@ body {
   background: var(--bg1);
   color: var(--fg3);
   font-size: 0.85rem;
-  transition: background-color 200ms ease, border-color 200ms ease, color 200ms ease;
+  transition: background-color var(--ui-transition-ms, 200ms) ease, border-color var(--ui-transition-ms, 200ms) ease, color var(--ui-transition-ms, 200ms) ease;
 }
 #colophon h2 { margin: 0 0 0.25rem; font-size: 0.95rem; color: var(--fg2); }
 #colophon .colophon-intro { margin: 0 0 0.5rem; font-style: italic; }
@@ -684,7 +684,7 @@ body {
    every one of those unconditionally, by specificity alone -- not by
    relying on this block's position in the source order, which a later
    edit could silently invalidate. */
-.node path.visited-inner-arc { opacity: 0; transition: opacity 200ms ease; }
+.node path.visited-inner-arc { opacity: 0; transition: opacity var(--ui-transition-ms, 200ms) ease; }
 .node.visited path.visited-inner-arc { fill: var(--bg2); opacity: 1; }
 /* Keyboard-focus ring: :focus-visible, not plain :focus -- a mouse click
    already shows selection via .selected's own fill/stroke recolor, so a
@@ -700,7 +700,7 @@ body {
   stroke-width: 1.25;
   opacity: 0.35;
   fill: none;
-  transition: stroke 200ms ease, opacity 200ms ease, stroke-width 200ms ease;
+  transition: stroke var(--ui-transition-ms, 200ms) ease, opacity var(--ui-transition-ms, 200ms) ease, stroke-width var(--ui-transition-ms, 200ms) ease;
 }
 .edge.incident {
   stroke: var(--accent);

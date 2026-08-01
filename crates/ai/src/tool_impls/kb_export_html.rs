@@ -658,6 +658,25 @@ mod tests {
         assert!(msg2.contains("Exported 12 nodes"), "{msg2}");
     }
 
+    /// The exported page's `ChordDiagramConfig` values flow through the
+    /// `#graph-data` JSON payload's `chordConfig` object (real data
+    /// injection into `graph.js`, not exact-substring text patching
+    /// against its source) -- so the meaningful oracle is "the payload
+    /// carries the resolved value," not "the JS source text changed."
+    fn chord_config_from_html(html: &str) -> serde_json::Value {
+        let start_marker = "<script id=\"graph-data\" type=\"application/json\">";
+        let start = html
+            .find(start_marker)
+            .expect("expected a graph-data script tag")
+            + start_marker.len();
+        let end = html[start..]
+            .find("</script>")
+            .expect("expected graph-data script tag to close");
+        let payload: serde_json::Value =
+            serde_json::from_str(&html[start..start + end]).expect("graph-data must be valid JSON");
+        payload["chordConfig"].clone()
+    }
+
     #[test]
     fn chord_config_precedence_json_arg_beats_editor_option_beats_hardcoded_default() {
         let mut editor = editor_with_star_kb(1);
@@ -674,7 +693,7 @@ mod tests {
         )
         .unwrap();
         let html1 = std::fs::read_to_string(&out1).unwrap();
-        assert!(html1.contains("var HOVER_GROWTH_FACTOR = 1.6;"), "{html1}");
+        assert_eq!(chord_config_from_html(&html1)["hoverGrowthFactor"], 1.6);
 
         // The kb_export_hover_growth_factor Editor option, with no
         // `chord_config` override -> the option's value is used.
@@ -687,7 +706,7 @@ mod tests {
         )
         .unwrap();
         let html2 = std::fs::read_to_string(&out2).unwrap();
-        assert!(html2.contains("var HOVER_GROWTH_FACTOR = 2.2;"), "{html2}");
+        assert_eq!(chord_config_from_html(&html2)["hoverGrowthFactor"], 2.2);
 
         // A per-call `chord_config` override wins over the Editor option.
         let out3 = dir.path().join("out3.html");
@@ -702,7 +721,7 @@ mod tests {
         )
         .unwrap();
         let html3 = std::fs::read_to_string(&out3).unwrap();
-        assert!(html3.contains("var HOVER_GROWTH_FACTOR = 3.5;"), "{html3}");
+        assert_eq!(chord_config_from_html(&html3)["hoverGrowthFactor"], 3.5);
     }
 
     #[test]
@@ -726,7 +745,7 @@ mod tests {
         )
         .unwrap();
         let html = std::fs::read_to_string(&out).unwrap();
-        assert!(html.contains("var HISTORY_DEPTH_CAP = 15;"), "{html}");
+        assert_eq!(chord_config_from_html(&html)["historyDepthCap"], 15);
     }
 
     #[test]
