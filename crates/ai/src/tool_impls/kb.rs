@@ -1980,13 +1980,30 @@ pub fn execute_kb_raw_query(editor: &Editor, args: &serde_json::Value) -> Result
 // --- v0.12.0 graph KB tools ---
 
 /// `requester_provider` -- the caller's AI provider, when known -- lets this
-/// PrimaryOnlyFilterable tool (ADR-048/#358) post-filter its own
-/// materialized `Node` results for the AI-residency seed-content exemption,
-/// since the gate (`crates/mae/src/ai_residency.rs`) allows the call
-/// through unconditionally for this shape rather than pre-denying it. Seed
-/// nodes never set `todo_state`/`priority`, but DO carry tags and never set
+/// ScopedFederatedScanFilterable tool (ADR-048/#358, ADR-083) post-filter
+/// its own materialized `(Option<String>, Node)` results for the
+/// AI-residency seed-content exemption, since the gate
+/// (`crates/mae/src/ai_residency.rs`) allows the call through
+/// unconditionally for this shape rather than pre-denying it. Seed nodes
+/// never set `todo_state`/`priority`, but DO carry tags and never set
 /// `role`, so `tag`/`missing_role`/`orphan`/`dead_end`/`weakly_linked`/
 /// `custom` filters can all surface real seed content today.
+///
+/// Scans the primary KB (via `editor.kb.store`, falling back to
+/// `editor.kb.primary.agenda_query_in_memory` if no durable store is
+/// configured) PLUS every federated instance `scope` includes — mirroring
+/// `execute_kb_health`'s registry-iteration pattern (ADR-083). Previously
+/// this only ever touched `editor.kb.store`, so a `scope` naming (or
+/// defaulting to "all", which includes) a federated instance silently
+/// never saw that instance's nodes under ANY filter, regardless of whether
+/// the filter value itself was correct — not a tag-matching bug, a missing
+/// query entirely. Each federated instance queries via its own
+/// `CozoKbStore` handle (`editor.kb.instance_stores`) when one is open, or
+/// falls back to `KnowledgeBase::agenda_query_in_memory` for a purely
+/// in-memory-imported instance — `Stale`/`Custom` have no in-memory
+/// equivalent (see that method's doc comment), so an instance without a
+/// durable store is skipped for just those two filter types, reported in
+/// `skipped_instances` rather than silently.
 pub fn execute_kb_agenda(
     editor: &Editor,
     args: &serde_json::Value,
@@ -2035,24 +2052,77 @@ pub fn execute_kb_agenda(
         _ => return Err(format!("Unknown filter type: {filter_type}")),
     };
 
-    let store = editor
+    // Same include_local / per-instance-scope-filter shape execute_kb_health
+    // already establishes (ADR-083 mirrors it exactly rather than inventing
+    // a second scope-resolution convention).
+    let primary_name = editor
         .kb
-        .store
-        .as_ref()
-        .ok_or_else(|| "No KB store configured".to_string())?;
-    let mut nodes = store.agenda_query(&filter).map_err(|e| e.to_string())?;
-    if scope != mae_kb::KbScope::All {
-        nodes.retain(|n| editor.kb.node_matches_scope(&n.id, &scope));
-    }
-    let nodes =
-        mae_core::ai_residency::filter_residency_exempt_primary(editor, requester_provider, nodes);
-    let out: Vec<serde_json::Value> = nodes
+        .registry
+        .instances
         .iter()
-        .map(|n| {
+        .find(|i| i.primary)
+        .map(|i| i.name.as_str());
+    let include_local = match &scope {
+        mae_kb::KbScope::All | mae_kb::KbScope::LocalOnly => true,
+        mae_kb::KbScope::RemoteOnly => false,
+        mae_kb::KbScope::Named(n) => primary_name == Some(n.as_str()),
+        mae_kb::KbScope::Project(_) => false,
+    };
+
+    let mut results: Vec<(Option<String>, mae_kb::Node)> = Vec::new();
+    let mut skipped_instances: Vec<String> = Vec::new();
+
+    if include_local {
+        match editor.kb.store.as_ref() {
+            Some(store) => {
+                let nodes = store.agenda_query(&filter).map_err(|e| e.to_string())?;
+                results.extend(nodes.into_iter().map(|n| (None, n)));
+            }
+            None => match editor.kb.primary.agenda_query_in_memory(&filter) {
+                Ok(nodes) => results.extend(nodes.into_iter().map(|n| (None, n))),
+                Err(e) => skipped_instances.push(format!("primary: {e}")),
+            },
+        }
+    }
+
+    for inst in editor
+        .kb
+        .registry
+        .instances
+        .iter()
+        .filter(|inst| match &scope {
+            mae_kb::KbScope::All | mae_kb::KbScope::RemoteOnly => !inst.primary,
+            mae_kb::KbScope::LocalOnly => false,
+            mae_kb::KbScope::Named(n) => &inst.name == n,
+            mae_kb::KbScope::Project(root) => inst.matches_project_root(root),
+        })
+    {
+        if let Some(store) = editor.kb.instance_stores.get(&inst.uuid) {
+            let nodes = store.agenda_query(&filter).map_err(|e| e.to_string())?;
+            results.extend(nodes.into_iter().map(|n| (Some(inst.name.clone()), n)));
+        } else if let Some(kb) = editor.kb.instances.get(&inst.uuid) {
+            match kb.agenda_query_in_memory(&filter) {
+                Ok(nodes) => {
+                    results.extend(nodes.into_iter().map(|n| (Some(inst.name.clone()), n)))
+                }
+                Err(e) => skipped_instances.push(format!("{}: {e}", inst.name)),
+            }
+        }
+        // Registered but not loaded at all: no content to contribute,
+        // same as execute_kb_health's "not loaded" case -- nothing to skip
+        // a FILTER for, so not added to skipped_instances.
+    }
+
+    let results =
+        mae_core::ai_residency::filter_residency_exempt(editor, requester_provider, results);
+    let out: Vec<serde_json::Value> = results
+        .iter()
+        .map(|(instance, n)| {
             serde_json::json!({
                 "id": n.id,
                 "title": n.title,
                 "kind": format!("{:?}", n.kind),
+                "instance": instance,
                 "todo_state": n.todo_state,
                 "priority": n.priority.map(|c| c.to_string()),
                 "tags": n.tags,
@@ -2064,6 +2134,7 @@ pub fn execute_kb_agenda(
         "scope": scope.as_token(),
         "count": out.len(),
         "nodes": out,
+        "skipped_instances": skipped_instances,
     }))
     .map_err(|e| e.to_string())
 }
@@ -4545,11 +4616,11 @@ mod tests {
     // --- New: AI-residency seed-content exemption post-filter (#358) ---
     //
     // These exercise execute_kb_search/execute_kb_search_context/execute_kb_agenda's
-    // own post-filter directly (mae_core::ai_residency::filter_residency_exempt(_primary)),
+    // own post-filter directly (mae_core::ai_residency::filter_residency_exempt),
     // complementing crates/mae/src/ai_residency.rs's gate-level tests, which only
-    // cover the SingleTarget shape's exemption (the gate now allows these three
-    // ScopedFederatedScanFilterable/PrimaryOnlyFilterable tools through
-    // unconditionally -- enforcement lives here).
+    // cover the SingleTarget shape's exemption (the gate now allows these
+    // ScopedFederatedScanFilterable tools through unconditionally --
+    // enforcement lives here).
 
     fn seed_node_with(id: &str, body: &str) -> mae_core::KbNode {
         mae_core::KbNode::new(id, "Seeded Node", mae_core::KbNodeKind::Concept, body)
@@ -4865,6 +4936,144 @@ mod tests {
         assert!(
             !nodes_b.iter().any(|n| n["id"] == "user:scope-orphan-a"),
             "scope=ScopeInstanceB must NOT leak instance A's orphan node: {nodes_b:?}"
+        );
+    }
+
+    /// The real-world bug this fix (ADR-083) closes: a purely in-memory-
+    /// imported federated instance (no `CozoKbStore` handle at all -- the
+    /// common shape for an org-roam directory registered via `kb_register`
+    /// that was never explicitly promoted/reimported into a durable store,
+    /// e.g. a RoamNotes-style personal KB) has a real, correctly-tagged
+    /// node. Before this fix, `execute_kb_agenda` only ever queried
+    /// `editor.kb.store` (the PRIMARY's own store) -- this node was
+    /// structurally unreachable under ANY filter, not because of a tag-
+    /// matching bug, but because the instance was never queried at all.
+    #[test]
+    fn kb_agenda_finds_a_tagged_node_in_a_purely_in_memory_federated_instance() {
+        let mut editor = Editor::new(); // no editor.kb.store at all
+        let mut kb = mae_core::KnowledgeBase::new();
+        kb.insert(
+            non_seed_node_with("roam:terraform-onboarding-hub", "onboarding walkthrough")
+                .with_tags(["terraform", "terraform-onboarding"]),
+        );
+        kb.insert(non_seed_node_with("roam:unrelated", "some other note").with_tags(["terraform"]));
+        editor.kb.instances.insert("uuid-roam".to_string(), kb);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-roam".into(),
+                name: "RoamNotes".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
+            });
+
+        // Default scope (no `scope` arg -> falls back to editor.kb.search_scope,
+        // "all" by default) must now actually reach the federated instance.
+        let result = execute_kb_agenda(
+            &editor,
+            &serde_json::json!({"filter": "tag", "value": "terraform-onboarding"}),
+            None,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let nodes = value["nodes"].as_array().unwrap();
+        assert!(
+            nodes
+                .iter()
+                .any(|n| n["id"] == "roam:terraform-onboarding-hub"),
+            "the tagged node in a purely in-memory federated instance must now be found: {nodes:?}"
+        );
+        assert!(
+            !nodes.iter().any(|n| n["id"] == "roam:unrelated"),
+            "an untagged node in the same instance must still be excluded: {nodes:?}"
+        );
+        assert_eq!(
+            nodes[0]["instance"], "RoamNotes",
+            "the result must be labeled with which instance it came from: {nodes:?}"
+        );
+        assert!(
+            value["skipped_instances"].as_array().unwrap().is_empty(),
+            "Tag has a real in-memory equivalent -- nothing should be skipped: {value:?}"
+        );
+
+        // Adversarial/negative case: scope=local must NOT leak the
+        // federated instance's node -- proper scoping still holds even
+        // though the instance is now genuinely reachable under scope=all.
+        let local_result = execute_kb_agenda(
+            &editor,
+            &serde_json::json!({"filter": "tag", "value": "terraform-onboarding", "scope": "local"}),
+            None,
+        )
+        .unwrap();
+        let local_value: serde_json::Value = serde_json::from_str(&local_result).unwrap();
+        assert_eq!(
+            local_value["nodes"].as_array().unwrap().len(),
+            0,
+            "scope=local must not reach any federated instance: {local_value:?}"
+        );
+    }
+
+    /// `Stale`/`Custom` have no in-memory equivalent (see
+    /// `KnowledgeBase::agenda_query_in_memory`'s doc comment) -- a purely
+    /// in-memory federated instance queried under one of those two filters
+    /// must be reported in `skipped_instances`, not silently omitted from
+    /// the response with no signal at all.
+    #[test]
+    fn kb_agenda_stale_filter_reports_an_in_memory_only_instance_as_skipped() {
+        let mut editor = Editor::new();
+        let mut kb = mae_core::KnowledgeBase::new();
+        kb.insert(non_seed_node_with("roam:some-node", "content"));
+        editor.kb.instances.insert("uuid-roam-2".to_string(), kb);
+        editor
+            .kb
+            .registry
+            .instances
+            .push(mae_kb::federation::KbInstance {
+                uuid: "uuid-roam-2".into(),
+                name: "RoamNotes2".into(),
+                org_dir: std::path::PathBuf::new(),
+                db_path: std::path::PathBuf::new(),
+                primary: false,
+                enabled: true,
+                last_import: None,
+                collab_id: None,
+                shared: false,
+                remote_peers: Vec::new(),
+                last_sync: None,
+                ai_residency: mae_kb::federation::AiResidency::default(),
+                project_root: None,
+                kind: mae_kb::federation::KbInstanceKind::default(),
+                priority: 0,
+                remote_hub: None,
+            });
+
+        let result = execute_kb_agenda(
+            &editor,
+            &serde_json::json!({"filter": "stale", "value": "30", "scope": "RoamNotes2"}),
+            None,
+        )
+        .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&result).unwrap();
+        assert_eq!(value["nodes"].as_array().unwrap().len(), 0);
+        let skipped = value["skipped_instances"].as_array().unwrap();
+        assert_eq!(skipped.len(), 1, "{value:?}");
+        assert!(
+            skipped[0].as_str().unwrap().starts_with("RoamNotes2:"),
+            "{value:?}"
         );
     }
 

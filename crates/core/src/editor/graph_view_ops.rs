@@ -684,6 +684,8 @@ impl Editor {
             // caller confirmed safe to opt out of cloning those heavy
             // fields for every node in the (pre-cap) reachable set.
             include_body: false,
+            // The native KB graph view has no tag-scoped viewing mode today.
+            required_tag: None,
         };
         let owner = self.kb_owner_of_scoped(&center);
         let empty_result = || mae_kb::SubgraphResult {
@@ -691,6 +693,7 @@ impl Editor {
             links: Vec::new(),
             boundary_links: Vec::new(),
             hidden_node_count: 0,
+            tag_filtered_count: 0,
         };
         // Computed BEFORE `result` (moved up from its original position
         // right after `result`) so the full-corpus branch below can read it
@@ -911,6 +914,7 @@ impl Editor {
                         include_backlinks: self.kb_graph_include_backlinks,
                         node_cap: Some(self.kb_graph_node_count_cap),
                         include_body: false,
+                        required_tag: None,
                     };
                     // #479: computed independently of `starters.is_empty()`
                     // (a candidate from `GraphMultiKbScope::All` walks

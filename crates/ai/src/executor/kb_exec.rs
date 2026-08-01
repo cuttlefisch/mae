@@ -24,8 +24,8 @@ use crate::types::ToolCall;
 /// Records visited IDs for kb_get/links_from/links_to to detect manual
 /// graph traversal loops and steer the AI toward kb_graph.
 /// `requester_provider` -- the caller's AI provider, when known -- is
-/// threaded to the ScopedFederatedScanFilterable/PrimaryOnlyFilterable/
-/// SingleTargetFilterable/UnscopedFederatedContentFilterable tools
+/// threaded to the ScopedFederatedScanFilterable/SingleTargetFilterable/
+/// UnscopedFederatedContentFilterable tools
 /// (kb_search, kb_search_context, kb_agenda, kb_related, kb_graph,
 /// kb_health, kb_neighborhood, and — #366 — kb_links_from, kb_links_to,
 /// kb_shortest_path) so they can post-filter their own results for the

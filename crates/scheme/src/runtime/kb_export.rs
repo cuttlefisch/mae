@@ -44,7 +44,7 @@ fn value_as_id_str(v: &Value, fn_name: &str) -> Result<String, LispError> {
 /// Register the KB subgraph HTML export primitive.
 pub(super) fn register_kb_export_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>) {
     // (kb-export-subgraph-html ID PATH [DEPTH] [TRANSLATIONS] [TITLE] [NODE-CAP]
-    //   [GUIDANCE-IDS] [CHORD-CONFIG])
+    //   [GUIDANCE-IDS] [CHORD-CONFIG] [REQUIRED-TAG])
     let s = shared.clone();
     vm.register_fn(
         "kb-export-subgraph-html",
@@ -64,7 +64,9 @@ pub(super) fn register_kb_export_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState
          accepted keys match `chord_config`'s JSON keys on the kb_export_subgraph_html MCP tool. \
          Any field a call doesn't set falls back to its kb-export-* option (persistently \
          set-option!-able), which itself falls back to the tool's original hardcoded default. \
-         Queues the request; applied on the next editor tick, with the result (success message, \
+         Optional REQUIRED-TAG: hard-filters the exported node set to only nodes carrying this \
+         exact tag (plus the seed itself, regardless of its own tags), independent of NODE-CAP — \
+         see ADR-082. Queues the request; applied on the next editor tick, with the result (success message, \
          or error) shown via the status line — the same underlying export the \
          kb_export_subgraph_html MCP tool and :kb-export-html colon-command use.",
         Arity::Variadic(2),
@@ -126,6 +128,10 @@ pub(super) fn register_kb_export_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState
                     chord_config.insert(key_str, serde_json::json!(val_num));
                 }
                 json_args["chord_config"] = serde_json::Value::Object(chord_config);
+            }
+            if args.len() > 8 {
+                let required_tag = value_as_id_str(&args[8], "kb-export-subgraph-html")?;
+                json_args["required_tag"] = serde_json::json!(required_tag);
             }
             s.lock().pending_kb_export_requests.push(json_args);
             Ok(Value::Void)

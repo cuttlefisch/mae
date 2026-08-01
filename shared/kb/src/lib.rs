@@ -196,6 +196,21 @@ pub struct SubgraphSpec {
     /// pre-existing caller's behavior exactly); set `false` only when the
     /// caller is confirmed to need metadata alone.
     pub include_body: bool,
+    /// Hard filter, independent of `node_cap`: when `Some(tag)`, the BFS
+    /// walk still traverses through EVERY reachable node up to `max_depth`
+    /// (an untagged node stays a valid stepping stone to a tagged node
+    /// beyond it — the tag restricts the RESULT, not the traversal), but
+    /// only nodes whose `Node::tags` contains `tag` (plus every
+    /// `starter_nodes` id, regardless of its own tags — the seed always
+    /// anchors the export even if untagged) survive into the final
+    /// `included` set. Reuses `KnowledgeBase::nodes_by_tag`'s exact-match
+    /// convention, not Cozo's `AgendaFilter::Tag` substring convention --
+    /// this operates purely on the in-memory graph, never Datalog (see
+    /// ADR-082). Excluded reachable nodes are demoted to boundary-link
+    /// stubs exactly like a depth/`node_cap` cutoff already handles them --
+    /// no new link-classification path needed. `None` = no filter
+    /// (preserves every pre-existing caller's behavior exactly).
+    pub required_tag: Option<String>,
 }
 
 /// A typed link within a `SubgraphResult` — carries the ADR-030
@@ -258,6 +273,13 @@ pub struct SubgraphResult {
     /// How many nodes the BFS walk would have included beyond
     /// `SubgraphSpec::node_cap`. `0` when the cap wasn't set or wasn't hit.
     pub hidden_node_count: usize,
+    /// How many BFS-reachable nodes were excluded because they didn't
+    /// carry `SubgraphSpec::required_tag` (and weren't a starter node).
+    /// `0` when `required_tag` is unset. Reported separately from
+    /// `hidden_node_count` — the two cutoffs are independent (see
+    /// `SubgraphSpec::required_tag`'s doc comment) and a caller should never
+    /// conflate "excluded by tag" with "excluded by node_cap."
+    pub tag_filtered_count: usize,
 }
 
 /// Provenance of a node — how it was created.
@@ -1377,6 +1399,34 @@ impl KnowledgeBase {
             depth += 1;
         }
 
+        // Hard tag filter, applied AFTER the full BFS walk but BEFORE
+        // node_cap truncation — so node_cap counts the tag-filtered
+        // candidate set, not raw traversal size, and an excluded untagged
+        // node gets the exact same boundary-link-stub demotion node_cap's
+        // own cutoff already produces below (no new link-classification
+        // code needed).
+        let tag_filtered_count = match &spec.required_tag {
+            Some(tag) => {
+                let starters: HashSet<&str> =
+                    spec.starter_nodes.iter().map(String::as_str).collect();
+                let kept: HashSet<String> = included
+                    .iter()
+                    .filter(|id| {
+                        starters.contains(id.as_str())
+                            || self
+                                .nodes
+                                .get(id.as_str())
+                                .is_some_and(|n| n.tags.iter().any(|t| t == tag))
+                    })
+                    .cloned()
+                    .collect();
+                let excluded = included.len() - kept.len();
+                included = kept;
+                excluded
+            }
+            None => 0,
+        };
+
         // Node-count safety cap (independent of depth/backlinks): keep
         // starter nodes plus the highest-degree remaining nodes, demoting
         // everything past the cap to a boundary link — same treatment a
@@ -1417,6 +1467,7 @@ impl KnowledgeBase {
             links: internal_links,
             boundary_links,
             hidden_node_count,
+            tag_filtered_count,
         }
     }
 
@@ -1575,6 +1626,10 @@ impl KnowledgeBase {
             links: internal_links,
             boundary_links,
             hidden_node_count,
+            // extract_full_corpus has no seed/BFS and no notion of a
+            // required tag -- always 0, matching SubgraphSpec::required_tag
+            // being unset for this call shape.
+            tag_filtered_count: 0,
         }
     }
 
@@ -2143,6 +2198,111 @@ impl KnowledgeBase {
             .collect();
         out.sort_by(|a, b| a.id.cmp(&b.id));
         out
+    }
+
+    /// In-memory equivalent of `CozoKbStore::agenda_query` (`shared/kb/src/
+    /// cozo_store/agenda.rs`) — for a federated instance imported straight
+    /// from an org directory with no durable Cozo-backed store at all (a
+    /// real, common shape: `editor.kb.instance_stores` only ever gets an
+    /// entry when opening/creating that store succeeded, see
+    /// `Editor::kb_reimport`), `store.agenda_query` is categorically
+    /// unavailable — this operates directly on `self.nodes`/`self.links_in`
+    /// instead (see ADR-083). Semantics are matched field-for-field against
+    /// the Cozo query text, NOT `nodes_by_tag`/`nodes_by_priority`'s
+    /// exact-match secondary-index convention, so a caller sees IDENTICAL
+    /// results whether a given instance happens to be Cozo-backed or
+    /// pure-in-memory: `Tag` is a substring match against the JSON-encoded
+    /// tags array (mirrors `str_includes(tags_json, tag)`), `Priority` is
+    /// `<=` (mirrors `priority <= min_pri` — 'A' is the most urgent, so this
+    /// returns "at least as urgent as"), and every arm skips a node with an
+    /// empty title (mirrors the Cozo query's own `title != ''` guard).
+    /// `Stale`/`Custom` have no faithful in-memory equivalent (no per-node
+    /// last-modified timestamp is tracked in-memory at all — `StaleNode`/
+    /// `detect_stale_nodes` is a DIFFERENT concept, "source file deleted
+    /// from disk", not "not modified in N days"; `Custom` is arbitrary
+    /// Datalog with no in-memory query engine to run it against) — both
+    /// return `Err` rather than a silently-wrong or silently-empty result.
+    pub fn agenda_query_in_memory(&self, filter: &AgendaFilter) -> Result<Vec<Node>, String> {
+        let has_title = |n: &&Node| !n.title.is_empty();
+        let matches: Vec<&Node> = match filter {
+            AgendaFilter::Todo(None) => self
+                .nodes
+                .values()
+                .filter(|n| n.todo_state.is_some())
+                .filter(has_title)
+                .collect(),
+            AgendaFilter::Todo(Some(state)) => self
+                .nodes
+                .values()
+                .filter(|n| n.todo_state.as_deref() == Some(state.as_str()))
+                .filter(has_title)
+                .collect(),
+            AgendaFilter::Priority(min_pri) => self
+                .nodes
+                .values()
+                .filter(|n| n.priority.is_some_and(|p| p <= *min_pri))
+                .filter(has_title)
+                .collect(),
+            AgendaFilter::Tag(tag) => self
+                .nodes
+                .values()
+                .filter(|n| {
+                    serde_json::to_string(&n.tags)
+                        .is_ok_and(|tags_json| tags_json.contains(tag.as_str()))
+                })
+                .filter(has_title)
+                .collect(),
+            AgendaFilter::Stale(_) => {
+                return Err(
+                    "Stale has no in-memory equivalent (no per-node last-modified timestamp \
+                     is tracked without a Cozo-backed store)"
+                        .to_string(),
+                )
+            }
+            AgendaFilter::Orphan => self
+                .nodes
+                .iter()
+                .filter(|(_, n)| n.kind != NodeKind::Index)
+                .filter(|(id, n)| {
+                    let has_outgoing = !n.links().is_empty();
+                    let has_incoming = self
+                        .links_in
+                        .get(id.as_str())
+                        .is_some_and(|v| !v.is_empty());
+                    !has_outgoing && !has_incoming
+                })
+                .map(|(_, n)| n)
+                .filter(has_title)
+                .collect(),
+            AgendaFilter::DeadEnd => self
+                .nodes
+                .values()
+                .filter(|n| n.links().is_empty())
+                .filter(has_title)
+                .collect(),
+            AgendaFilter::MissingRole => self
+                .nodes
+                .values()
+                .filter(|n| !n.properties.contains_key("role"))
+                .filter(has_title)
+                .collect(),
+            AgendaFilter::WeaklyLinked(n) => self
+                .nodes
+                .values()
+                .filter(|node| (node.links().len() as u32) < *n)
+                .filter(has_title)
+                .collect(),
+            AgendaFilter::Custom(_) => {
+                return Err(
+                    "Custom (raw Datalog) has no in-memory equivalent -- requires a \
+                     Cozo-backed store"
+                        .to_string(),
+                )
+            }
+        };
+        let mut out: Vec<Node> = matches.into_iter().cloned().collect();
+        out.sort_by(|a, b| a.id.cmp(&b.id));
+        Ok(out)
     }
 
     /// Compute a health report: orphan nodes, broken links, namespace counts.
@@ -4148,6 +4308,7 @@ mod tests {
             include_backlinks,
             node_cap: None,
             include_body: true,
+            required_tag: None,
         }
     }
 
@@ -4270,6 +4431,162 @@ mod tests {
         let result = kb.extract_subgraph(&s);
         assert_eq!(result.nodes.len(), 2);
         assert_eq!(result.hidden_node_count, 0);
+    }
+
+    #[test]
+    fn extract_subgraph_required_tag_keeps_only_tagged_nodes_plus_seed() {
+        // Real-world shape (the terraform-onboarding bug this filter was
+        // built for): an untagged seed links to one node carrying the
+        // required tag and one that doesn't -- only the tagged node (plus
+        // the seed itself, regardless of its own tags) should survive.
+        let kb = kb_with(vec![
+            Node::new(
+                "zero-to-running",
+                "Zero to Running",
+                NodeKind::Note,
+                "[[onboarded]] [[unrelated]]",
+            ),
+            Node::new("onboarded", "Onboarded", NodeKind::Note, "")
+                .with_tags(["terraform", "terraform-onboarding"]),
+            Node::new("unrelated", "Unrelated", NodeKind::Note, "").with_tags(["terraform"]),
+        ]);
+        let mut s = spec("zero-to-running", 1, false);
+        s.required_tag = Some("terraform-onboarding".to_string());
+        let result = kb.extract_subgraph(&s);
+
+        let ids: Vec<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(
+            ids.contains(&"zero-to-running"),
+            "seed always survives regardless of its own tags: {ids:?}"
+        );
+        assert!(
+            ids.contains(&"onboarded"),
+            "tagged node must survive: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"unrelated"),
+            "untagged node must be excluded: {ids:?}"
+        );
+        assert_eq!(result.tag_filtered_count, 1);
+    }
+
+    #[test]
+    fn extract_subgraph_required_tag_traverses_through_untagged_intermediate() {
+        // The tag restricts the RESULT, not the BFS traversal: an untagged
+        // node one hop out must still be walked THROUGH so a tagged node
+        // two hops out stays reachable, even though the untagged
+        // intermediate itself is excluded from the final output.
+        let kb = kb_with(vec![
+            Node::new("seed", "Seed", NodeKind::Note, "[[stepping-stone]]"),
+            Node::new(
+                "stepping-stone",
+                "Stepping Stone",
+                NodeKind::Note,
+                "[[deep-tagged]]",
+            ),
+            Node::new("deep-tagged", "Deep Tagged", NodeKind::Note, "").with_tags(["onboarding"]),
+        ]);
+        let mut s = spec("seed", 2, false);
+        s.required_tag = Some("onboarding".to_string());
+        let result = kb.extract_subgraph(&s);
+
+        let ids: Vec<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert!(
+            ids.contains(&"deep-tagged"),
+            "a tagged node beyond an untagged stepping stone must still be reached: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"stepping-stone"),
+            "the untagged intermediate must not itself appear in the result: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn extract_subgraph_required_tag_excludes_node_as_a_boundary_link_not_a_silent_drop() {
+        let kb = kb_with(vec![
+            Node::new("seed", "Seed", NodeKind::Note, "[[tagged]] [[untagged]]"),
+            Node::new("tagged", "Tagged", NodeKind::Note, "").with_tags(["keep"]),
+            Node::new("untagged", "Untagged", NodeKind::Note, ""),
+        ]);
+        let mut s = spec("seed", 1, false);
+        s.required_tag = Some("keep".to_string());
+        let result = kb.extract_subgraph(&s);
+
+        assert_eq!(result.tag_filtered_count, 1);
+        assert_eq!(
+            result.boundary_links.len(),
+            1,
+            "the excluded node's link must be demoted to a boundary link, not dropped"
+        );
+        assert_eq!(result.boundary_links[0].target, "untagged");
+    }
+
+    #[test]
+    fn extract_subgraph_required_tag_and_node_cap_compose_independently() {
+        // node_cap must count the TAG-FILTERED candidate set, not raw
+        // traversal size -- three tagged nodes reachable, capped to 2
+        // (seed + 1), so tag_filtered_count and hidden_node_count are both
+        // nonzero and independent of each other.
+        let kb = kb_with(vec![
+            Node::new(
+                "seed",
+                "Seed",
+                NodeKind::Note,
+                "[[t1]] [[t2]] [[t3]] [[plain]]",
+            ),
+            Node::new("t1", "T1", NodeKind::Note, "").with_tags(["keep"]),
+            Node::new("t2", "T2", NodeKind::Note, "").with_tags(["keep"]),
+            Node::new("t3", "T3", NodeKind::Note, "").with_tags(["keep"]),
+            Node::new("plain", "Plain", NodeKind::Note, ""),
+        ]);
+        let mut s = spec("seed", 1, false);
+        s.required_tag = Some("keep".to_string());
+        s.node_cap = Some(2);
+        let result = kb.extract_subgraph(&s);
+
+        assert_eq!(result.nodes.len(), 2, "capped to exactly node_cap nodes");
+        assert!(result.nodes.iter().any(|n| n.id == "seed"));
+        assert_eq!(
+            result.tag_filtered_count, 1,
+            "exactly the untagged 'plain' node was excluded by the tag filter"
+        );
+        assert_eq!(
+            result.hidden_node_count, 2,
+            "of the seed + 3 tagged candidates, node_cap=2 hides 2 more beyond the seed"
+        );
+    }
+
+    #[test]
+    fn extract_subgraph_required_tag_matching_nothing_returns_only_the_seed() {
+        // Adversarial: a tag that matches no reachable node must not panic
+        // or return an empty result -- the seed always survives.
+        let kb = kb_with(vec![
+            Node::new("seed", "Seed", NodeKind::Note, "[[a]] [[b]]"),
+            Node::new("a", "A", NodeKind::Note, "").with_tags(["other"]),
+            Node::new("b", "B", NodeKind::Note, ""),
+        ]);
+        let mut s = spec("seed", 1, false);
+        s.required_tag = Some("nonexistent-tag".to_string());
+        let result = kb.extract_subgraph(&s);
+
+        let ids: Vec<&str> = result.nodes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, vec!["seed"]);
+        assert_eq!(result.tag_filtered_count, 2);
+    }
+
+    #[test]
+    fn extract_subgraph_required_tag_none_is_a_true_no_op() {
+        // Regression guard: every pre-existing caller passes required_tag:
+        // None and must see byte-identical behavior to before this field
+        // existed.
+        let kb = kb_with(vec![
+            Node::new("a", "A", NodeKind::Note, "see [[b]] and [[c]]"),
+            Node::new("b", "B", NodeKind::Note, ""),
+            Node::new("c", "C", NodeKind::Note, ""),
+        ]);
+        let result = kb.extract_subgraph(&spec("a", 1, false));
+        assert_eq!(result.nodes.len(), 3);
+        assert_eq!(result.tag_filtered_count, 0);
     }
 
     #[test]
@@ -4669,5 +4986,160 @@ mod tests {
         let kb = kb_with(vec![Node::new("a", "A", NodeKind::Note, "")]);
         let dist = kb.hop_distances_from("does-not-exist");
         assert!(dist.is_empty());
+    }
+
+    // --- agenda_query_in_memory (ADR-083) ---
+
+    fn agenda_kb() -> KnowledgeBase {
+        kb_with(vec![
+            Node::new("todo-a", "Todo A", NodeKind::Note, "").with_todo_state("TODO"),
+            Node::new("done-b", "Done B", NodeKind::Note, "").with_todo_state("DONE"),
+            Node::new("plain-c", "Plain C", NodeKind::Note, ""),
+            Node::new("pri-hi", "Pri Hi", NodeKind::Note, "").with_priority('A'),
+            Node::new("pri-mid", "Pri Mid", NodeKind::Note, "").with_priority('B'),
+            Node::new("pri-lo", "Pri Lo", NodeKind::Note, "").with_priority('C'),
+            Node::new("orphan-d", "Orphan D", NodeKind::Note, ""),
+            Node::new("linked-e", "Linked E", NodeKind::Note, "see [[linked-f]]"),
+            Node::new("linked-f", "Linked F", NodeKind::Note, ""),
+            Node::new("has-role", "Has Role", NodeKind::Note, "").with_properties(
+                [("role".to_string(), "atom".to_string())]
+                    .into_iter()
+                    .collect(),
+            ),
+            Node::new("no-role", "No Role", NodeKind::Note, ""),
+        ])
+    }
+
+    #[test]
+    fn agenda_query_in_memory_todo_none_matches_any_set_state() {
+        let kb = agenda_kb();
+        let out = kb
+            .agenda_query_in_memory(&AgendaFilter::Todo(None))
+            .unwrap();
+        let ids: Vec<&str> = out.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains(&"todo-a") && ids.contains(&"done-b"));
+        assert!(!ids.contains(&"plain-c"));
+    }
+
+    #[test]
+    fn agenda_query_in_memory_todo_some_is_an_exact_match() {
+        let kb = agenda_kb();
+        let out = kb
+            .agenda_query_in_memory(&AgendaFilter::Todo(Some("DONE".to_string())))
+            .unwrap();
+        let ids: Vec<&str> = out.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, vec!["done-b"]);
+    }
+
+    #[test]
+    fn agenda_query_in_memory_priority_is_less_than_or_equal_mirroring_cozo() {
+        // Cozo's own query is `priority <= min_pri` -- 'A' is the most
+        // urgent, so requesting 'B' must return both 'A' and 'B', not just
+        // an exact 'B' match (the in-memory nodes_by_priority index's own
+        // convention, deliberately NOT reused here for this reason).
+        let kb = agenda_kb();
+        let out = kb
+            .agenda_query_in_memory(&AgendaFilter::Priority('B'))
+            .unwrap();
+        let ids: Vec<&str> = out.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains(&"pri-hi") && ids.contains(&"pri-mid"));
+        assert!(!ids.contains(&"pri-lo"));
+    }
+
+    #[test]
+    fn agenda_query_in_memory_orphan_requires_no_incoming_and_no_outgoing() {
+        let kb = agenda_kb();
+        let out = kb.agenda_query_in_memory(&AgendaFilter::Orphan).unwrap();
+        let ids: Vec<&str> = out.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains(&"orphan-d"));
+        assert!(
+            !ids.contains(&"linked-e") && !ids.contains(&"linked-f"),
+            "a node with an outgoing or incoming link is not an orphan: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn agenda_query_in_memory_dead_end_only_checks_outgoing() {
+        let kb = agenda_kb();
+        let out = kb.agenda_query_in_memory(&AgendaFilter::DeadEnd).unwrap();
+        let ids: Vec<&str> = out.iter().map(|n| n.id.as_str()).collect();
+        assert!(
+            ids.contains(&"linked-f"),
+            "linked-f has an incoming link but no outgoing one -- still a dead end: {ids:?}"
+        );
+        assert!(
+            !ids.contains(&"linked-e"),
+            "linked-e has an outgoing link: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn agenda_query_in_memory_missing_role_checks_the_role_property() {
+        let kb = agenda_kb();
+        let out = kb
+            .agenda_query_in_memory(&AgendaFilter::MissingRole)
+            .unwrap();
+        let ids: Vec<&str> = out.iter().map(|n| n.id.as_str()).collect();
+        assert!(ids.contains(&"no-role"));
+        assert!(!ids.contains(&"has-role"));
+    }
+
+    #[test]
+    fn agenda_query_in_memory_weakly_linked_counts_outgoing_only() {
+        let kb = agenda_kb();
+        // linked-e has 1 outgoing link; everything else in this fixture has 0.
+        let out = kb
+            .agenda_query_in_memory(&AgendaFilter::WeaklyLinked(1))
+            .unwrap();
+        let ids: Vec<&str> = out.iter().map(|n| n.id.as_str()).collect();
+        assert!(!ids.contains(&"linked-e"), "1 is not < 1: {ids:?}");
+        assert!(
+            ids.contains(&"linked-f"),
+            "0 outgoing links is < 1: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn agenda_query_in_memory_tag_is_a_substring_match_mirroring_cozo() {
+        // Deliberately the OPPOSITE convention from nodes_by_tag's exact
+        // match -- kb_agenda's established behavior against a Cozo-backed
+        // KB is str_includes(tags_json, tag), and this must stay identical
+        // regardless of which backend a given federated instance happens
+        // to have, or the SAME kb_agenda call would silently behave
+        // differently depending on internal storage details the caller
+        // has no visibility into.
+        let kb = kb_with(vec![
+            Node::new("a", "A", NodeKind::Note, "").with_tags(["terraform-onboarding"]),
+            Node::new("b", "B", NodeKind::Note, "").with_tags(["onboarding"]),
+        ]);
+        let out = kb
+            .agenda_query_in_memory(&AgendaFilter::Tag("onboarding".to_string()))
+            .unwrap();
+        let ids: Vec<&str> = out.iter().map(|n| n.id.as_str()).collect();
+        assert!(
+            ids.contains(&"a") && ids.contains(&"b"),
+            "substring match must find 'onboarding' inside 'terraform-onboarding' too: {ids:?}"
+        );
+    }
+
+    #[test]
+    fn agenda_query_in_memory_stale_and_custom_return_a_clear_error() {
+        let kb = agenda_kb();
+        assert!(kb.agenda_query_in_memory(&AgendaFilter::Stale(30)).is_err());
+        assert!(kb
+            .agenda_query_in_memory(&AgendaFilter::Custom("?[id] := *nodes{id}".to_string()))
+            .is_err());
+    }
+
+    #[test]
+    fn agenda_query_in_memory_excludes_a_node_with_an_empty_title() {
+        // Mirrors every Cozo agenda query's own `title != ''` guard.
+        let kb = kb_with(vec![
+            Node::new("blank", "", NodeKind::Note, "").with_todo_state("TODO")
+        ]);
+        let out = kb
+            .agenda_query_in_memory(&AgendaFilter::Todo(None))
+            .unwrap();
+        assert!(out.is_empty(), "{out:?}");
     }
 }

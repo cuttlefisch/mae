@@ -320,12 +320,23 @@ pub fn execute_kb_export_subgraph_html(
 
     let kb = locate_seed_kb(editor, id)?;
 
+    // Hard filter, independent of depth/node_cap: when set, only nodes
+    // carrying this exact tag (plus the seed itself, regardless of its own
+    // tags) survive into the export -- see ADR-082. Unlike depth/node_cap,
+    // there is no Editor-option default; omitting it means "no filter,"
+    // matching every pre-existing call's behavior exactly.
+    let required_tag = args
+        .get("required_tag")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+
     let spec = mae_kb::SubgraphSpec {
         starter_nodes: vec![id.to_string()],
         max_depth: depth,
         include_backlinks: true,
         node_cap: Some(node_cap),
         include_body: true,
+        required_tag,
     };
     let result = kb.extract_subgraph(&spec);
     if result.nodes.is_empty() {
@@ -533,7 +544,7 @@ pub fn execute_kb_export_subgraph_html(
     })?;
 
     Ok(format!(
-        "Exported {} node{} ({} edges) rooted at '{id}' to {} ({} bytes){}{}{}{}",
+        "Exported {} node{} ({} edges) rooted at '{id}' to {} ({} bytes){}{}{}{}{}",
         export_nodes.len(),
         if export_nodes.len() == 1 { "" } else { "s" },
         export_edges.len(),
@@ -553,6 +564,17 @@ pub fn execute_kb_export_subgraph_html(
             format!(
                 ", {} more node(s) hidden by node_cap",
                 result.hidden_node_count
+            )
+        } else {
+            String::new()
+        },
+        // Same never-silent-truncation rule for the tag filter -- reported
+        // separately from node_cap since the two cutoffs are independent
+        // (see SubgraphSpec::required_tag's doc comment).
+        if result.tag_filtered_count > 0 {
+            format!(
+                ", {} more node(s) excluded by required_tag",
+                result.tag_filtered_count
             )
         } else {
             String::new()
@@ -743,6 +765,61 @@ mod tests {
         .unwrap();
         assert!(msg.contains("Exported 4 nodes"), "{msg}");
         assert!(!msg.contains("hidden"), "{msg}");
+    }
+
+    #[test]
+    fn required_tag_hard_filters_the_export_and_reports_the_exclusion() {
+        // Real-world regression guard: this tool's own BFS+depth heuristic
+        // can accidentally pick up an unrelated reference hub instead of a
+        // curated onboarding walkthrough. `required_tag` makes correctness
+        // independent of which seed/depth a caller happens to pick.
+        let mut editor = editor_with_star_kb(3);
+        editor.kb.primary.get_mut("root").unwrap().tags = vec!["onboarding".to_string()];
+        editor.kb.primary.get_mut("spoke0").unwrap().tags = vec!["onboarding".to_string()];
+        // spoke1/spoke2 stay untagged.
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.html");
+        let msg = execute_kb_export_subgraph_html(
+            &editor,
+            &serde_json::json!({
+                "id": "root",
+                "path": out.to_str().unwrap(),
+                "required_tag": "onboarding",
+            }),
+            None,
+        )
+        .unwrap();
+        assert!(msg.contains("Exported 2 nodes"), "{msg}");
+        assert!(
+            msg.contains("2 more node(s) excluded by required_tag"),
+            "{msg}"
+        );
+
+        // The authoritative signal is the `#graph-data` JSON node set, not
+        // a raw substring check on the page -- `root`'s own prose body
+        // legitimately contains `[[spoke1][Spoke 1]]` link markup, which
+        // renders as an inline link regardless of chord-graph inclusion,
+        // so a naive "the excluded title never appears anywhere" check
+        // would be a false positive on this fixture's own linking style.
+        let written = std::fs::read_to_string(&out).unwrap();
+        let start_marker = "<script id=\"graph-data\" type=\"application/json\">";
+        let start = written.find(start_marker).unwrap() + start_marker.len();
+        let end = written[start..].find("</script>").unwrap();
+        let payload: serde_json::Value =
+            serde_json::from_str(&written[start..start + end]).unwrap();
+        let node_ids: Vec<&str> = payload["nodes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            node_ids.iter().collect::<std::collections::HashSet<_>>(),
+            ["root", "spoke0"]
+                .iter()
+                .collect::<std::collections::HashSet<_>>(),
+            "only the seed and the tagged spoke should be real exported nodes: {node_ids:?}"
+        );
     }
 
     /// The exported page's `ChordDiagramConfig` values flow through the

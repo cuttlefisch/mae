@@ -83,10 +83,8 @@ pub fn filter_residency_exempt_by<T>(
 
 /// Drops any `(instance, node)` hit that both (a) comes from a KB currently
 /// `LocalModelsOnly`, and (b) isn't itself [`is_residency_exempt`]. Used
-/// directly by `kb_search`/`kb_search_context`'s federated hits;
-/// [`filter_residency_exempt_primary`] is a thin adapter over this same
-/// primitive for `kb_agenda`'s plain `Vec<Node>` shape (always primary) —
-/// not a second implementation.
+/// directly by `kb_search`/`kb_search_context`/`kb_agenda`'s federated hits
+/// (`instance: None` means the primary KB — see each call site).
 pub fn filter_residency_exempt(
     editor: &Editor,
     requester_provider: Option<&str>,
@@ -99,24 +97,6 @@ pub fn filter_residency_exempt(
         |(instance_name, _)| instance_name.as_deref(),
         |(_, node)| is_residency_exempt(node),
     )
-}
-
-/// Adapter over [`filter_residency_exempt`] for `kb_agenda`'s plain
-/// `Vec<Node>` (always the primary KB — `kb_agenda` is
-/// `PrimaryOnlyFilterable`, never federated).
-pub fn filter_residency_exempt_primary(
-    editor: &Editor,
-    requester_provider: Option<&str>,
-    nodes: Vec<mae_kb::Node>,
-) -> Vec<mae_kb::Node> {
-    filter_residency_exempt(
-        editor,
-        requester_provider,
-        nodes.into_iter().map(|n| (None, n)).collect(),
-    )
-    .into_iter()
-    .map(|(_, n)| n)
-    .collect()
 }
 
 #[cfg(test)]
@@ -241,18 +221,5 @@ mod tests {
             vec!["primary:a"],
             "the open primary's hit must survive; the restricted instance's non-seed hit must not"
         );
-    }
-
-    #[test]
-    fn filter_residency_exempt_primary_adapter_matches_core_semantics() {
-        let mut editor = Editor::new();
-        editor.kb.registry.primary_ai_residency = AiResidency::LocalModelsOnly;
-        let nodes = vec![
-            seed_node("seed:a"),
-            node_with_source("user:b", Some(mae_kb::NodeSource::UserOrg)),
-        ];
-        let filtered = filter_residency_exempt_primary(&editor, Some("claude"), nodes);
-        let ids: Vec<&str> = filtered.iter().map(|n| n.id.as_str()).collect();
-        assert_eq!(ids, vec!["seed:a"]);
     }
 }
