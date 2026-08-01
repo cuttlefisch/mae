@@ -1793,15 +1793,15 @@ mod tests {
         // opened with its own raw `:PROPERTIES: :ID: ... :hash: ... :END:`
         // drawer dumped as visible prose, because `parse_org_document`
         // (written for org BODY content) has no concept of a drawer.
-        let body = ":PROPERTIES:\n:ID:       a\n:hash:     deadbeef\n:END:\nReal content here.";
+        let body = ":PROPERTIES:\n:ID:       note-9c21\n:hash:     deadbeef\n:END:\nReal content here.";
         let n = build_export_node(
-            "a",
+            "note-9c21",
             "note",
             0.0,
             0.0,
             true,
             true,
-            "A",
+            "Weekly Status Update",
             body,
             None,
             &palette(),
@@ -2250,8 +2250,8 @@ mod tests {
     fn adversarial_title_and_body_cannot_break_out_of_script_or_style_tags() {
         let evil_title = "Bad\"</script><style>body{display:none}</style><script>alert(1)";
         let evil_body = "See </script> and <style>*{color:red}</style> and \"quotes\" and 'ticks'.";
-        let n = simple_node("a", evil_title, evil_body, true);
-        let html = HtmlGraphExporter.export(&[n], &[], "a", "Adversarial Test");
+        let n = simple_node("node-7f3a", evil_title, evil_body, true);
+        let html = HtmlGraphExporter.export(&[n], &[], "node-7f3a", "Adversarial Test");
 
         // The meaningful invariant isn't "no literal '<script' substring
         // anywhere" — an adversarial title's raw text legitimately ends up
@@ -2291,7 +2291,7 @@ mod tests {
         // build_export_node/render_node_body_html always uses
         // ExportOptions::default() with no override.
         let evil_body = "Normal prose.\n#+begin_export html\n<img src=x onerror=alert(document.cookie)>\n#+end_export\n";
-        let n = simple_node("a", "Title", evil_body, true);
+        let n = simple_node("meeting-notes-2026-03", "Q1 Retro", evil_body, true);
         assert!(
             !n.body_en.contains("<img"),
             "a live <img> tag must never survive kb_export_subgraph_html's render path: {}",
@@ -2307,8 +2307,8 @@ mod tests {
     #[test]
     fn adversarial_quotes_in_title_do_not_break_json() {
         let evil_title = r#"Title with "quotes" and \backslash\ and 'ticks'"#;
-        let n = simple_node("a", evil_title, "body", false);
-        let html = HtmlGraphExporter.export(&[n], &[], "a", "T");
+        let n = simple_node("proj:onprem-iac", evil_title, "body", false);
+        let html = HtmlGraphExporter.export(&[n], &[], "proj:onprem-iac", "T");
         // Extract the JSON payload and confirm it round-trips.
         let start = html
             .find("<script id=\"graph-data\" type=\"application/json\">")
