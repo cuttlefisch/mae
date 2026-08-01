@@ -139,19 +139,43 @@ fn strip_ordered_marker(s: &str) -> Option<&str> {
     rest.strip_prefix(". ").or_else(|| rest.strip_prefix(") "))
 }
 
-/// Advance past a `:PROPERTIES:` ... `:END:` drawer starting at `lines[i]`
-/// (caller has already confirmed `lines[i].trim()` is `:properties:`,
-/// case-insensitive) and return the index of the first line after it.
-/// Shared by the top-level element scanner and both list-item continuation
-/// loops below -- a KB whose individual list items each carry their own
-/// `:PROPERTIES: :ID: ... :END:` drawer (this project's convention for
+/// True when `s` (already trimmed) is a drawer-open marker line -- org's
+/// generic `:NAME:` alone on its own line, e.g. `:PROPERTIES:`,
+/// `:LOGBOOK:`, or any other drawer name (org itself allows arbitrary
+/// drawer names, not just the two built-in ones). Originally this parser
+/// only recognized the literal `:properties:` -- real KB content routinely
+/// carries a `:LOGBOOK:` drawer too (Emacs auto-inserts one on every
+/// TODO-state change / clock entry when `org-log-into-drawer` is set,
+/// extremely common in real org files), and an unrecognized drawer here
+/// doesn't just leak metadata like a missed PROPERTIES drawer would -- it
+/// gets misparsed as list/paragraph content, corrupting or losing real
+/// prose that follows it. Excludes `:END:` itself (a close marker, not an
+/// open one) so a stray/dangling `:END:` is never mistaken for the start
+/// of a new drawer literally named "END".
+fn is_drawer_open_line(s: &str) -> bool {
+    let Some(name) = s.strip_prefix(':').and_then(|rest| rest.strip_suffix(':')) else {
+        return false;
+    };
+    !name.is_empty()
+        && !name.eq_ignore_ascii_case("end")
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+}
+
+/// Advance past a drawer (`:PROPERTIES:`, `:LOGBOOK:`, or any other
+/// `:NAME:` ... `:END:` block) starting at `lines[i]` (caller has already
+/// confirmed `is_drawer_open_line(lines[i].trim())`) and return the index
+/// of the first line after it. Shared by the top-level element scanner and
+/// both list-item continuation loops below -- a KB whose individual list
+/// items each carry their own drawer (this project's convention for
 /// giving stepwise roadmap/checklist items their own stable id, real and
 /// reproducible in the onprem-iac KB) otherwise leaks the drawer verbatim
 /// into a list item's rendered text: only the top-level scanner recognized
-/// `:PROPERTIES:` as a drawer to skip, and it never got a chance to since
-/// the list branches below consumed the same lines first as unconditional
-/// "continuation text" before this function existed.
-fn skip_properties_drawer(lines: &[&str], mut i: usize) -> usize {
+/// a drawer to skip, and it never got a chance to since the list branches
+/// below consumed the same lines first as unconditional "continuation
+/// text" before this function existed.
+fn skip_drawer(lines: &[&str], mut i: usize) -> usize {
     i += 1;
     while i < lines.len() {
         if lines[i].trim().eq_ignore_ascii_case(":end:") {
@@ -216,15 +240,17 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
             continue;
         }
 
-        // PROPERTIES drawers (`:PROPERTIES:` ... `:END:`, e.g. `:ID:`,
-        // `:KIND:`). Org property drawers are metadata, not renderable
-        // content -- without this branch they fall through to the generic
-        // paragraph collector below and leak into the rendered output
-        // verbatim. Matched case-insensitively like the other keyword
+        // Drawers (`:PROPERTIES:`/`:LOGBOOK:`/any `:NAME:` ... `:END:`
+        // block, e.g. `:ID:`, `:KIND:`). Org drawers are metadata, not
+        // renderable content -- without this branch they fall through to
+        // the generic paragraph collector below and leak into the
+        // rendered output verbatim (or, worse, swallow real prose that
+        // follows them into the wrong element -- see `is_drawer_open_line`'s
+        // doc comment). Matched case-insensitively like the other keyword
         // checks above; org drawer markers are conventionally uppercase
         // but nothing in the spec requires it.
-        if trimmed.eq_ignore_ascii_case(":properties:") {
-            i = skip_properties_drawer(&lines, i);
+        if is_drawer_open_line(trimmed) {
+            i = skip_drawer(&lines, i);
             continue;
         }
 
@@ -425,11 +451,12 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
                     i += 1;
                 } else if ll.is_empty() {
                     break;
-                } else if ll.eq_ignore_ascii_case(":properties:") {
-                    // A list item's own properties drawer (:ID:, etc.) --
-                    // metadata, not continuation text; skip it rather than
-                    // gluing it into the item's rendered content.
-                    i = skip_properties_drawer(&lines, i);
+                } else if is_drawer_open_line(ll) {
+                    // A list item's own drawer (:PROPERTIES:, :LOGBOOK:,
+                    // etc.) -- metadata, not continuation text; skip it
+                    // rather than gluing it into the item's rendered
+                    // content.
+                    i = skip_drawer(&lines, i);
                 } else {
                     // Continuation line
                     if let Some(last) = items.last_mut() {
@@ -464,11 +491,11 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
                         i += 1;
                     } else if ll.is_empty() {
                         break;
-                    } else if ll.eq_ignore_ascii_case(":properties:") {
+                    } else if is_drawer_open_line(ll) {
                         // See the unordered-list branch above: a list
-                        // item's own properties drawer is metadata, not
-                        // continuation text.
-                        i = skip_properties_drawer(&lines, i);
+                        // item's own drawer is metadata, not continuation
+                        // text.
+                        i = skip_drawer(&lines, i);
                     } else {
                         if let Some(last) = items.last_mut() {
                             last.content.push(' ');
@@ -506,13 +533,14 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
             {
                 break;
             }
-            if pl.eq_ignore_ascii_case(":properties:") {
+            if is_drawer_open_line(pl) {
                 // A drawer embedded mid-paragraph (e.g. an org list item
-                // whose own :ID: drawer fell through to plain-paragraph
-                // parsing) is metadata, not prose -- skip it rather than
-                // appending it verbatim. See skip_properties_drawer's doc
-                // comment for the real KB pattern this handles.
-                i = skip_properties_drawer(&lines, i);
+                // whose own drawer fell through to plain-paragraph
+                // parsing, or a heading's :LOGBOOK: drawer) is metadata,
+                // not prose -- skip it rather than appending it verbatim.
+                // See skip_drawer's doc comment for the real KB pattern
+                // this handles.
+                i = skip_drawer(&lines, i);
                 continue;
             }
             para_lines.push(lines[i].to_string());
@@ -1374,6 +1402,65 @@ mod tests {
         assert_eq!(elements.len(), 2, "got {elements:?}");
         assert!(matches!(&elements[0], OrgElement::Heading { .. }));
         assert!(matches!(&elements[1], OrgElement::Paragraph(p) if p == "Body under heading."));
+    }
+
+    #[test]
+    fn a_heading_with_both_properties_and_logbook_drawers_leaks_neither() {
+        // Real, reproducible content-loss bug (worse than a metadata
+        // leak): Emacs auto-inserts a :LOGBOOK: drawer on every TODO-state
+        // change / clock entry when org-log-into-drawer is set -- an
+        // extremely common real-KB shape this parser had zero awareness
+        // of before generalizing is_drawer_open_line beyond the literal
+        // ":properties:" token. The old behavior didn't just leak the
+        // drawer's own :END:/CLOCK: lines as visible text -- it also
+        // swallowed real body prose that followed into the wrong element.
+        let src = "* Heading\n:PROPERTIES:\n:ID: h1\n:END:\n:LOGBOOK:\n- State \"DONE\" from \"TODO\" [2024-01-01 Mon 10:00]\nCLOCK: [2024-01-01 Mon 09:00]--[2024-01-01 Mon 10:00] =>  1:00\n:END:\nBody text after logbook.\n";
+        let (_, elements) = parse_org_document(src);
+        assert_eq!(elements.len(), 2, "got {elements:?}");
+        assert!(matches!(&elements[0], OrgElement::Heading { .. }));
+        assert!(
+            matches!(&elements[1], OrgElement::Paragraph(p) if p == "Body text after logbook."),
+            "real body prose after both drawers must survive intact, not be swallowed \
+             into a bogus list item or mangled: {:?}",
+            elements[1]
+        );
+    }
+
+    #[test]
+    fn a_logbook_drawer_inside_a_list_item_does_not_leak() {
+        // Same bug, list-item variant (the shape this project's own
+        // roadmap-checklist convention actually hits, per the earlier
+        // PROPERTIES-in-a-list-item fix).
+        let src = "1. Do the thing.\n   :LOGBOOK:\n   CLOCK: [2024-01-01 Mon 09:00]--[2024-01-01 Mon 10:00] =>  1:00\n   :END:\n   Follow-up note.\n";
+        let (_, elements) = parse_org_document(src);
+        let OrgElement::List { items, .. } = &elements[0] else {
+            panic!("expected a List element, got {:?}", elements[0]);
+        };
+        assert_eq!(items.len(), 1);
+        assert!(
+            !items[0].content.contains(":LOGBOOK:") && !items[0].content.contains(":END:"),
+            "drawer must not leak into the item's content: {:?}",
+            items[0].content
+        );
+        assert_eq!(items[0].content, "Do the thing. Follow-up note.");
+    }
+
+    #[test]
+    fn is_drawer_open_line_rejects_a_bare_end_marker_and_midsentence_colons() {
+        // Adversarial guards on the generalized drawer-open detection:
+        // ":END:" alone must never be treated as opening a new drawer
+        // literally named "END" (which would send skip_drawer hunting
+        // for a SECOND, non-existent ":END:" and swallow the rest of the
+        // document), and a line containing a colon-wrapped word that
+        // ISN'T alone on its own line (e.g. a tag-like ":word:" embedded
+        // in prose) must not match either.
+        assert!(!is_drawer_open_line(":END:"));
+        assert!(!is_drawer_open_line(":end:"));
+        assert!(!is_drawer_open_line("prose with a :tag: in it"));
+        assert!(!is_drawer_open_line(""));
+        assert!(is_drawer_open_line(":PROPERTIES:"));
+        assert!(is_drawer_open_line(":LOGBOOK:"));
+        assert!(is_drawer_open_line(":my-custom-drawer:"));
     }
 
     #[test]
