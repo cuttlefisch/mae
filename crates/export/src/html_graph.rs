@@ -401,18 +401,28 @@ fn mermaid_fallback_html(source: &str, reason: &str) -> String {
 /// renderer — see `render_org_element`'s doc comment), and `#+begin_src
 /// mermaid` blocks are pre-rendered to inline SVG (or a safe raw-source
 /// fallback) instead of being dumped as a generic `<pre><code>` block.
-/// `mae_kb::Node::body` retains a leading `:PROPERTIES:...:END:` drawer
-/// verbatim (properties are metadata, but the generic org parser this
-/// module reuses — `parse_org_document`, written for exporting genuine
-/// org-file body content — has no concept of a drawer and treats it as
-/// an ordinary paragraph). Left unstripped, every exported node's body
-/// literally opens with its own raw `:ID:`/`:hash:` lines rendered as
-/// visible prose. Strips only a *leading* drawer (bounded to the first
-/// ~500 chars so a `:PROPERTIES:`-looking string deep in real prose is
-/// never mistaken for one) — mirrors the same bounded-prefix convention
+/// `mae_kb::Node::body` retains a `:PROPERTIES:...:END:` drawer verbatim
+/// (properties are metadata, but the generic org parser this module reuses
+/// — `parse_org_document`, written for exporting genuine org-file body
+/// content — has no concept of a drawer and treats it as an ordinary
+/// paragraph). Left unstripped, an exported node's body renders its own
+/// raw `:ID:`/`:hash:` lines as visible prose. Bounded to the first ~500
+/// chars so a `:PROPERTIES:`-looking string deep in real prose is never
+/// mistaken for one — mirrors the same bounded-prefix convention
 /// `shared/kb/src/activity.rs::body_hash` already uses for the same
 /// drawer shape.
-fn strip_leading_properties_drawer(body: &str) -> &str {
+///
+/// Splices the drawer OUT rather than requiring it to be the very first
+/// thing in the body: a real KB node (a roadmap checklist item, tagged
+/// `roadmap`/`phase`) reproduced a leak where its own first line of prose
+/// ("upgrade fails partway.") precedes the drawer -- org only auto-hides
+/// a `:PROPERTIES:` drawer when it immediately follows a headline; one
+/// attached to a plain list item (this KB's roadmap-step convention,
+/// documented in `org-kb-to-pdf`'s own gotcha list for the same drawer
+/// shape) keeps whatever text came before it in the same body string. A
+/// stricter "must be leading" check silently let that content through as
+/// visible `:ID:`/`:END:` prose instead of being treated as metadata.
+fn strip_leading_properties_drawer(body: &str) -> std::borrow::Cow<'_, str> {
     // `body.len().min(500)` alone is a byte OFFSET, not a char boundary --
     // a real, reproducible panic ("byte index N is not a char boundary")
     // when a multi-byte UTF-8 character (an em dash, `—`, 3 bytes) straddles
@@ -425,19 +435,29 @@ fn strip_leading_properties_drawer(body: &str) -> &str {
     }
     let head = &body[..boundary];
     if let Some(props_start) = head.find(":PROPERTIES:") {
-        if head[..props_start].trim().is_empty() {
+        // Real org drawer syntax requires the `:PROPERTIES:` marker to sit
+        // alone on its own line (whitespace-only before it, back to the
+        // start of that line) -- otherwise this would also match a body
+        // that merely mentions ":PROPERTIES:" mid-sentence while discussing
+        // org-mode syntax, which is real prose, not metadata to hide.
+        let line_start = head[..props_start].rfind('\n').map_or(0, |i| i + 1);
+        if head[line_start..props_start].trim().is_empty() {
             if let Some(end_rel) = head[props_start..].find(":END:") {
                 let end = props_start + end_rel + ":END:".len();
-                return body[end..].trim_start_matches(['\n', '\r']);
+                let tail = body[end..].trim_start_matches(['\n', '\r']);
+                let mut spliced = String::with_capacity(props_start + tail.len());
+                spliced.push_str(&body[..props_start]);
+                spliced.push_str(tail);
+                return std::borrow::Cow::Owned(spliced);
             }
         }
     }
-    body
+    std::borrow::Cow::Borrowed(body)
 }
 
 fn render_node_body_html(body: &str, palette: &GruvboxPalette) -> String {
     let body = strip_leading_properties_drawer(body);
-    let (meta, elements) = parse_org_document(body);
+    let (meta, elements) = parse_org_document(&body);
     let mut html = String::with_capacity(body.len() * 2);
     for element in &elements {
         if let OrgElement::SrcBlock {
@@ -474,7 +494,7 @@ fn render_node_body_html(body: &str, palette: &GruvboxPalette) -> String {
 /// teaching a second, separate implementation about link syntax.
 pub fn plain_text_preview(body: &str, max_chars: usize) -> String {
     let body = strip_leading_properties_drawer(body);
-    let (_, elements) = parse_org_document(body);
+    let (_, elements) = parse_org_document(&body);
     let mut text = String::new();
     let push_plain = |s: &str, text: &mut String| {
         text.push_str(&convert_inline_markup_str(s, InlineTarget::PlainText));
@@ -4135,6 +4155,43 @@ mod tests {
             result.contains('—'),
             "expected the multi-byte character to survive intact: {result}"
         );
+    }
+
+    #[test]
+    fn strip_leading_properties_drawer_strips_a_drawer_preceded_by_real_prose() {
+        // Real, reproducible leak from a genuine onprem-iac KB roadmap-step
+        // node (tagged roadmap/phase): a plain LIST ITEM's own properties
+        // drawer, which org only auto-hides when it immediately follows a
+        // HEADLINE (see org-kb-to-pdf's identical gotcha for the LaTeX
+        // pipeline) -- so the ingested body kept the item's own leading
+        // prose line before the drawer, and the old "must be leading"
+        // check let the whole :PROPERTIES:/:ID:/:END: block through as
+        // visible text in the exported HTML.
+        let body = "upgrade fails partway.\n:PROPERTIES:\n:ID: db87b07f-2f87-4f0d-b1dc-4f398313bf73\n:END:\nValidated by: cross-checked against the runbook.";
+        let result = strip_leading_properties_drawer(body);
+        assert!(
+            !result.contains(":PROPERTIES:") && !result.contains(":END:"),
+            "drawer must be stripped even when real prose precedes it: {result}"
+        );
+        assert!(
+            result.contains("upgrade fails partway."),
+            "the list item's own leading prose must survive, not just the drawer's removal: {result}"
+        );
+        assert!(
+            result.contains("Validated by: cross-checked against the runbook."),
+            "content after the drawer must survive: {result}"
+        );
+    }
+
+    #[test]
+    fn strip_leading_properties_drawer_leaves_a_midsentence_mention_alone() {
+        // Adversarial guard on the fix above: ":PROPERTIES:" appearing
+        // mid-line (not alone on its own line, per real org drawer syntax)
+        // is prose ABOUT drawers, not an actual drawer -- must not be
+        // mistaken for one and spliced out.
+        let body = "This note explains what a :PROPERTIES: drawer is and how :END: closes it.";
+        let result = strip_leading_properties_drawer(body);
+        assert_eq!(result, body, "mid-sentence mention must be left untouched");
     }
 
     // --- HtmlGraphExporter::export: serialization / structure ---
