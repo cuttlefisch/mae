@@ -130,19 +130,20 @@ None split this pass — that's design work, appropriately deferred; this entry 
 discoverable (per this file's own cross-reference discipline above) instead of silently untracked.
 
 **Added integrating `feat/subgraph-html-export`** (kb-export-subgraph-html primitive):
-- `crates/export/src/html_graph.rs` — ~6,205 lines. The whole-KB-subgraph -> self-contained
-  interactive HTML export (chord-diagram nav widget, bilingual EN/ES overlay, theming): Rust HTML
-  assembly + one large embedded JS interaction layer (`GRAPH_JS`) + one large embedded CSS constant
-  (`STATIC_CSS`) as string literals, plus this module's own extensive test suite (adversarial
-  script-injection escaping, wedge geometry, per-field `ChordDiagramConfig` override tests). Not
-  split this pass — it was folded back in-tree from a standalone sibling project
-  (`bilingual-kb-export`) as part of this integration (see that file's own `@ai-caution` marker),
-  and the JS/CSS constants in particular don't have an obvious seam (splitting the Rust assembly
-  code from the string constants would separate logic from the literal text it string-replaces
-  against, which is more likely to introduce drift than reduce it). A future pass could split the
-  constants into sibling `.js`/`.css` asset files loaded via `include_str!` (dropping their line
-  count from this file's own total) without touching the assembly logic — not attempted here since
-  it's out of scope for a merge-conflict-resolution pass.
+- `crates/export/src/html_graph.rs` — ~3,700 lines (down from ~6,205 — see below). The
+  whole-KB-subgraph -> self-contained interactive HTML export (chord-diagram nav widget, bilingual
+  EN/ES overlay, theming): Rust HTML assembly plus this module's own extensive test suite
+  (adversarial script-injection escaping, wedge geometry, per-field `ChordDiagramConfig` override
+  tests). It was folded back in-tree from a standalone sibling project (`bilingual-kb-export`) as
+  part of this integration (see that file's own `@ai-caution` marker); a pre-merge architecture
+  review found the two large embedded JS/CSS string constants (`GRAPH_JS`, `STATIC_CSS`) originally
+  made up over 40% of this file's line count, were un-lintable as Rust string literals, and had
+  already let a real bug ship (a regex literal corrupted by the inline-script escaper, caught only
+  by manually running `node --check`). Split into real `crates/export/assets/graph.js`/`graph.css`
+  files loaded via `include_str!`, with a `node --check` CI gate (`.github/workflows/ci.yml`'s
+  `export-js-check` job) and a real-browser (Layer 2, puppeteer-core) test suite
+  (`crates/export/tests/browser/`) added alongside. What remains is Rust assembly logic and the
+  test suite itself — no further asset-embedding seam to split.
 
 Flag these if they've grown since last audit, but don't remediate without explicit request.
 

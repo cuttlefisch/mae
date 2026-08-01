@@ -65,6 +65,7 @@ jobs:
       headless: ${{ steps.filter.outputs.headless }}
       containers: ${{ steps.filter.outputs.containers }}
       adr: ${{ steps.filter.outputs.adr }}
+      export-js: ${{ steps.filter.outputs.export-js }}
       version-bump-only: ${{ steps.version-bump-only.outputs.result }}
     steps:
       - uses: actions/checkout@v7
@@ -100,6 +101,9 @@ jobs:
               - 'crates/mae/src/bin/verify_adr_kb_sync.rs'
               - '.github/workflows/ci.yml'
               - '.github/actions/**'
+            export-js:
+              - 'crates/export/assets/graph.js'
+              - '.github/workflows/ci.yml'
       # Untrusted commit-message content is passed via `env:`, never
       # interpolated directly into the script body -- avoids the classic
       # GitHub Actions script-injection footgun (a `${{ }}` expression
@@ -605,6 +609,24 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
+
+  export-js-check:
+    name: kb-export-subgraph-html graph.js syntax check
+    runs-on: ubuntu-latest
+    needs: changes
+    if: needs.changes.outputs.export-js == 'true'
+    # crates/export/assets/graph.js is a real, checked-in JS file (extracted
+    # from an inline Rust string literal specifically to make this possible --
+    # see html_graph.rs's own doc comment): a real regex-literal-corruption
+    # bug in it once shipped unnoticed, caught only by manually running
+    # `node --check`, before there was any automated gate at all. This is
+    # that gate, made permanent -- a cheap syntax-only fast-fail, distinct
+    # from (and much faster than) the full real-browser behavioral suite in
+    # crates/export/tests/browser/ (not wired into CI yet -- see that
+    # directory's README).
+    steps:
+      - uses: actions/checkout@v7
+      - run: node --check crates/export/assets/graph.js
 
   msrv:
     name: MSRV / 1.95 build + test
