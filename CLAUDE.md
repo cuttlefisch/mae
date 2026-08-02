@@ -608,7 +608,7 @@ These APIs are intended to remain stable through v1.0:
 
 - **Scheme API:** 190+ registered functions + ~18 variables (see `:help concept:scheme-api`)
 - **Hooks:** 26 hook points (see `:help concept:hooks`)
-- **MCP tools:** 700+ tools, categorized (core/lsp/dap/kb/shell/ai/commands/git/web/visual/debug/collab)
+- **MCP tools:** 700+ tools, categorized (core/lsp/dap/kb/execution/shell/ai/commands/git/web/visual/debug/collab)
   — most are 1:1 command mirrors; see `docs/MODEL_SUPPORT.md` for the exam methodology
   this scale is validated against
 - **Config options:** 175+ registered, persistable via `:set-save`

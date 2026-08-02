@@ -359,7 +359,7 @@ LSP/DAP at all — use the tool-category allowlist instead:
   `mcp_tool_category_allowlist = "knowledge"` in `init.scm`/`config.toml`
   (`:set-save mcp_tool_category_allowlist knowledge`), or the equivalent
   `mcp.tool_category_allowlist` TOML key. Comma-separated; valid categories are
-  `knowledge, lsp, dap, shell, commands, git, web, ai, visual, debug, mcp` (same taxonomy
+  `knowledge, execution, lsp, dap, shell, commands, git, web, ai, visual, debug, mcp` (same taxonomy
   `request_tools` already uses).
 - **Per-session (a connecting client declares its own, narrower restriction):**
   `initialize`'s `toolCategoryAllowlist` param, or `mae-mcp-shim`'s

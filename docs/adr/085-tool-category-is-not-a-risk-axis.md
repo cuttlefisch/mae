@@ -61,9 +61,39 @@ above it.
 **Split the taxonomy so that a category name does not silently span blast radii, and enforce that
 property with a test rather than with care.**
 
-1. `babel_execute` and `babel_tangle` move out of `Knowledge` into an execution-flavoured category. A
+1. `babel_execute` and `babel_tangle` move out of `Knowledge` into a new `Execution` category. A
    session scoped to `knowledge` no longer sees them at all — the fix is that they are not offered, not
    that they are offered and then refused.
+
+   **Implementation note (2026-08-03).** The invariant in Decision 2 was written first and run against
+   the live registry before any tool was moved. It found **nine** violations, not the two the audit
+   had identified by reading code:
+
+   | Tool | Tier | Why it is not read-flavoured |
+   |---|---|---|
+   | `babel_execute` | Shell | runs org source blocks in twelve languages |
+   | `babel_tangle` | Shell | writes blocks to arbitrary paths |
+   | `org_export` | Shell | shells out for rendering |
+   | `kb_enrich` | Shell | network calls to embedding providers |
+   | `kb_register` | Shell | filesystem discovery of a KB instance |
+   | `kb_reimport` | Shell | filesystem rebuild of a KB instance |
+   | `kb_raw_query` | **Privileged** | arbitrary Datalog against the KB |
+   | `kb_export_subgraph_html` | Shell | shells out to `npx` for mermaid |
+   | `web_fetch` | Shell | real network fetch, in `Web` |
+
+   The first eight moved to `Execution`. `web_fetch` did not: the fault there was the *category's*
+   classification, not the tool's — `Web` had been marked read-flavoured on the assumption that
+   "web" implies looking. It does not, any more than "git" does, and that assumption was the same
+   subject-vs-blast-radius conflation this ADR exists to correct, committed while writing it. `Web`
+   is now non-read-flavoured, which is why `web_fetch` needed no relocation.
+
+   The `kb_`/`org_` outliers are named explicitly rather than splitting those prefixes wholesale,
+   because ~55 of ~60 `kb_` tools and three of four `org_` tools are genuinely ReadOnly or Write.
+   That mirrors the exact-name carve-outs already present for `shell_exec` and `ai_permissions`
+   rather than departing from D5's mechanical-prefix design. `babel_` moved wholesale, as D5
+   requires, because every `babel_` tool is Shell tier.
+
+   No allowlist or exception was added to make the invariant pass.
 
 2. **Read-flavoured categories may not contain tools above the write tier.** This is the invariant that
    generalises the fix. It is enforced by a test iterating every registered tool and asserting that any
@@ -112,11 +142,15 @@ comparable system does.
 
 **Negative / Risks**
 
-- A session that legitimately wanted babel execution under a category allowlist must now name the new
-  category explicitly. That is the intended behaviour change, but it is a behaviour change: any existing
-  configuration relying on `knowledge` to reach babel will stop reaching it. Given the feature's age and
-  that reaching shell via `knowledge` was never intended, this is a fix rather than a regression — but it
-  belongs in release notes.
+- A session that legitimately wanted any of the eight relocated tools under a category allowlist must
+  now name `execution` explicitly. That is the intended behaviour change, but it is a behaviour change:
+  any existing configuration relying on `knowledge` to reach `babel_*`, `org_export`, `kb_enrich`,
+  `kb_register`, `kb_reimport`, `kb_raw_query`, or `kb_export_subgraph_html` will stop reaching them.
+  Given that reaching shell via `knowledge` was never intended, this is a fix rather than a regression —
+  but it belongs in release notes, and the list is longer than the two tools the audit found.
+- Reclassifying `Web` as non-read-flavoured changes **no** runtime behaviour: `is_read_flavoured` is
+  consulted only by the invariant test, and `web_fetch` stays in `Web`. A session allowlisting `web`
+  grants exactly what it granted before.
 - "Read-flavoured" is a judgement encoded as a list of categories. The test makes the judgement explicit
   and reviewable rather than implicit, but it is still a list someone must maintain when adding a
   category.

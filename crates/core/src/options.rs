@@ -541,9 +541,9 @@ impl OptionRegistry {
                      unfiltered, e.g. for a deployment already tuned around the full flat list.",
                     OptionKind::Bool, "true", Some("mcp.tools_tiered_by_default"), &[]),
                 opt!("mcp_tool_category_allowlist", &["mcp-tool-category-allowlist"],
-                    "Comma-separated ToolCategory names (knowledge, lsp, dap, shell, commands, \
-                     git, web, ai, visual, debug, mcp — same taxonomy as request_tools) that \
-                     this MAE instance restricts MCP tool DISPATCH to, not just advertisement \
+                    "Comma-separated ToolCategory names (knowledge, execution, lsp, dap, shell, \
+                     commands, git, web, ai, visual, debug, mcp — same taxonomy as request_tools) \
+                     that this MAE instance restricts MCP tool DISPATCH to, not just advertisement \
                      (ADR-056). Empty (default) = unrestricted. Composes with (never overrides) \
                      any per-session declaration a client makes at initialize (permissionCeiling's \
                      toolCategoryAllowlist analogue) — the effective policy is always the \
