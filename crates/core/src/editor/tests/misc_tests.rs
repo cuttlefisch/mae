@@ -133,7 +133,9 @@ fn test_open_file_non_conv_preserves_ai() {
     let _ = fs::create_dir_all(&dir);
     let file_path = dir.join("test.txt");
     fs::write(&file_path, "hello").unwrap();
-    editor.open_file_non_conversation(file_path.to_str().unwrap());
+    editor
+        .open_file_non_conversation(file_path.to_str().unwrap())
+        .unwrap();
     // Focused window should still show conversation.
     assert_eq!(editor.active_buffer_idx(), conv_idx);
     // Cleanup.

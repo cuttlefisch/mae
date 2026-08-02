@@ -1176,7 +1176,10 @@ impl Editor {
             "help" => {
                 // Complete from all KB node IDs + bare names (without namespace prefix)
                 let all_ids: Vec<String> = if let Some(q) = self.kb.query_layer() {
-                    q.list_ids(None)
+                    q.list_ids(None).unwrap_or_else(|e| {
+                        tracing::warn!(error = %e, "kb list_ids failed during :help completion");
+                        Vec::new()
+                    })
                 } else {
                     self.kb.primary.list_ids(None)
                 };
@@ -1300,7 +1303,7 @@ impl Editor {
     }
 
     pub fn open_file(&mut self, path: impl AsRef<Path>) {
-        if let Some(new_idx) = self.open_file_hidden(path) {
+        if let Ok(new_idx) = self.open_file_hidden(path) {
             let prev_idx = self.active_buffer_idx();
             self.vi.alternate_buffer_idx = Some(prev_idx);
             self.display_buffer(new_idx);
@@ -1309,7 +1312,12 @@ impl Editor {
 
     /// Opens a file and returns its buffer index without modifying the window manager focus.
     /// If the file is already open, it just returns that buffer's index.
-    pub fn open_file_hidden(&mut self, path: impl AsRef<Path>) -> Option<usize> {
+    ///
+    /// Returns `Err` with the real failure reason (from [`Buffer::from_file`]) when the
+    /// file cannot be opened, rather than swallowing the failure into `status_msg` for a
+    /// caller to sniff later (ADR-086) — `status_msg` is still set for the UI, but it is
+    /// no longer the only signal a caller has to decide success.
+    pub fn open_file_hidden(&mut self, path: impl AsRef<Path>) -> Result<usize, String> {
         let path = path.as_ref();
 
         // Check if file is already open
@@ -1317,7 +1325,7 @@ impl Editor {
             if let Some((idx, _)) = self.buffers.iter().enumerate().find(|(_, b)| {
                 b.file_path().and_then(|p| p.canonicalize().ok()).as_ref() == Some(&canonical)
             }) {
-                return Some(idx);
+                return Ok(idx);
             }
         }
 
@@ -1418,11 +1426,12 @@ impl Editor {
                 if let Some(lang) = detected_lang {
                     self.fire_hook(&format!("buffer-open:{}", lang.id()));
                 }
-                Some(new_idx)
+                Ok(new_idx)
             }
             Err(e) => {
-                self.set_status(format!("Error opening: {}", e));
-                None
+                let msg = format!("Error opening: {}", e);
+                self.set_status(msg.clone());
+                Err(msg)
             }
         }
     }

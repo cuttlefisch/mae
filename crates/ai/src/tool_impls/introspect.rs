@@ -262,7 +262,12 @@ fn build_frame_section(editor: &Editor) -> serde_json::Value {
 
 fn build_kb_section(editor: &Editor) -> serde_json::Value {
     let local_nodes = if let Some(q) = editor.kb.query_layer() {
-        q.list_ids(None).len()
+        // A failing store must not read to the agent as "0 nodes" —
+        // indistinguishable from an empty KB (ADR-086). No error channel here,
+        // so fall back to the in-memory count; the KB tools surface the error.
+        q.list_ids(None)
+            .map(|ids| ids.len())
+            .unwrap_or_else(|_| editor.kb.primary.len())
     } else {
         editor.kb.primary.len()
     };

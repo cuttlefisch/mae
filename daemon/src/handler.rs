@@ -567,6 +567,15 @@ pub async fn dispatch(
                 .unwrap_or_else(|| "unknown".to_string());
             {
                 let mut st = state.lock().await;
+                // ADR-086: `run_dialer` (the ONLY consumer of `pending_p2p_joins`) is
+                // spawned exclusively alongside a bound P2P endpoint (main.rs) -- with
+                // no mesh running there is no dialer to ever service this queue, so
+                // the "recorded, will connect" reply below would describe a join that
+                // can never actually happen. Refuse before queuing rather than return
+                // a success the daemon cannot make good on.
+                if st.p2p_endpoint.is_none() {
+                    return Err(DaemonError::NotReady);
+                }
                 // Idempotent: don't queue the same (peer, KB) twice.
                 if !st
                     .pending_p2p_joins
@@ -1279,15 +1288,26 @@ mod tests {
 
     #[tokio::test]
     async fn join_ticket_records_a_pending_target_idempotently() {
-        // A real minted ticket round-trips through the join method.
+        // A real minted ticket round-trips through the join method. This daemon's
+        // OWN mesh must be running to accept the join (ADR-086 below is the
+        // no-mesh counterpart) -- `run_dialer`, the only consumer of
+        // `pending_p2p_joins`, is spawned alongside a bound endpoint, so the join
+        // target used here is a SEPARATE peer's ticket, not this daemon's own.
         let id = mae_mcp::identity::Identity::generate("owner");
-        let endpoint = crate::p2p::bind_endpoint(&id, iroh::RelayMode::Disabled)
+        let remote_endpoint = crate::p2p::bind_endpoint(&id, iroh::RelayMode::Disabled)
             .await
             .unwrap();
-        let ticket = crate::p2p::mint_ticket(&endpoint, "concept:x").to_string();
-        endpoint.close().await;
+        let ticket = crate::p2p::mint_ticket(&remote_endpoint, "concept:x").to_string();
+        remote_endpoint.close().await;
 
-        let state = Arc::new(Mutex::new(DaemonState::new()));
+        let local_id = mae_mcp::identity::Identity::generate("local");
+        let local_endpoint = crate::p2p::bind_endpoint(&local_id, iroh::RelayMode::Disabled)
+            .await
+            .unwrap();
+        let mut st = DaemonState::new();
+        st.p2p_endpoint = Some(local_endpoint.clone());
+        let state = Arc::new(Mutex::new(st));
+
         let result = dispatch("p2p/join_ticket", json!({ "ticket": ticket }), &state)
             .await
             .unwrap();
@@ -1296,11 +1316,42 @@ mod tests {
         assert!(result["peer"].as_str().unwrap().starts_with("SHA256:"));
         assert_eq!(state.lock().await.pending_p2p_joins.len(), 1);
 
-        // Re-accepting the same ticket does not double-queue.
+        // Re-accepting the same ticket does not double-queue (ADR-086 D2: a
+        // repeat request against an already-satisfied/queued state is not an
+        // error).
         dispatch("p2p/join_ticket", json!({ "ticket": ticket }), &state)
             .await
             .unwrap();
         assert_eq!(state.lock().await.pending_p2p_joins.len(), 1);
+
+        local_endpoint.close().await;
+    }
+
+    /// ADR-086: with no P2P endpoint bound, `run_dialer` (the only consumer of
+    /// `pending_p2p_joins`) never gets spawned (see `main.rs`), so queuing a
+    /// join here would sit forever and the "recorded, will connect" reply
+    /// would describe a join that can never happen. The requested
+    /// postcondition (a join actually in flight to be dialed) does not hold,
+    /// so this must be `Err`, and the ticket must NOT be queued.
+    #[tokio::test]
+    async fn join_ticket_without_mesh_is_not_ready() {
+        let id = mae_mcp::identity::Identity::generate("owner");
+        let endpoint = crate::p2p::bind_endpoint(&id, iroh::RelayMode::Disabled)
+            .await
+            .unwrap();
+        let ticket = crate::p2p::mint_ticket(&endpoint, "concept:x").to_string();
+        endpoint.close().await;
+
+        let state = Arc::new(Mutex::new(DaemonState::new()));
+        let result = dispatch("p2p/join_ticket", json!({ "ticket": ticket }), &state).await;
+        assert!(
+            matches!(result, Err(DaemonError::NotReady)),
+            "expected NotReady with no mesh running, got {result:?}"
+        );
+        assert!(
+            state.lock().await.pending_p2p_joins.is_empty(),
+            "a refused join must not be queued as if it would be serviced"
+        );
     }
 
     #[tokio::test]

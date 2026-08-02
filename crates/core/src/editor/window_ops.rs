@@ -1038,10 +1038,18 @@ impl Editor {
     ///
     /// The file is opened "hidden" (not assigned to focused window), then
     /// routed via `display_buffer_for_agent`.
-    pub fn open_file_non_conversation(&mut self, path: impl AsRef<std::path::Path>) {
-        if let Some(new_idx) = self.open_file_hidden(path) {
-            self.display_buffer_for_agent(new_idx);
-        }
+    ///
+    /// Returns the new buffer index on success, or the real open failure
+    /// (propagated from [`Editor::open_file_hidden`]) on error — callers
+    /// (notably the AI `open_file`/`create_file` tools, ADR-086) must not
+    /// decide success by re-inspecting `status_msg` afterward.
+    pub fn open_file_non_conversation(
+        &mut self,
+        path: impl AsRef<std::path::Path>,
+    ) -> Result<usize, String> {
+        let new_idx = self.open_file_hidden(path)?;
+        self.display_buffer_for_agent(new_idx);
+        Ok(new_idx)
     }
 
     /// Save current mode to the active buffer before switching away.
