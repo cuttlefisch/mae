@@ -1,0 +1,91 @@
+:PROPERTIES:
+:ID: practice:prior-art-review
+:ROLE: atom
+:KIND: procedure
+:END:
+#+title: Prior-Art Review Before Deciding
+#+filetags: :adr:research:devpractice:
+
+Before an architecture decision is written down, review it against published, proven practice — and
+review it specifically for *evidence that contradicts the choice you are inclined toward*. An ADR
+grounded only in reasoning about the codebase records what the author found plausible; an ADR
+grounded in prior art records what the field has already learned, including the costs the author
+had not thought of.
+
+This is not literature review for its own sake. It is cheap insurance against a specific, common
+failure: a decision that is locally coherent, internally justified, and already known elsewhere to
+fail. Most architectural mistakes are not novel.
+
+* When it applies
+
+Reach for this when a decision has any of these properties:
+
+- It establishes a *convention* others will follow, rather than making one local change.
+- It concerns security, authorization, concurrency, data integrity, or protocol design — domains
+  where the failure modes are subtle and the literature is deep.
+- The reasoning behind it is your own judgment rather than a measurement.
+- You are about to reject an alternative on intuition ("that would be surprising", "that feels
+  like overkill"). A rejected alternative defended by taste is the highest-value thing to check.
+
+Skip it for reversible, local, mechanical changes. The test is whether being wrong would be
+expensive to undo.
+
+* The procedure
+
+1. **State the decision and its arguable parts explicitly**, before searching. Write down which
+   parts rest on judgment rather than evidence. Those are the research questions. A review that
+   starts from "is this good?" returns nothing useful; one that starts from "I rejected X on the
+   grounds that Y — is that right?" returns a verdict.
+
+2. **Ask for the refutation, not the confirmation.** Brief the search to find the strongest case
+   *against* the intended choice, and to name systems that tried it and retreated. Vendor
+   postmortems and deprecation notices are unusually high-value: a feature removed from a shipping
+   product is a decision someone paid for.
+
+3. **Prefer primary sources.** Specifications, papers, official documentation, changelogs, and
+   incident writeups over summaries and blog commentary. Quote the load-bearing sentence rather
+   than paraphrasing it — paraphrase is where the meaning quietly shifts to match what you wanted
+   it to say.
+
+4. **Demand an explicit verdict per question** — supports / complicates / contradicts. A summary
+   of "what's out there" is not a decision input. A verdict is.
+
+5. **Verify the claims that carry the decision.** Both the external ones (does the cited source
+   actually say that?) and the internal ones (does our code actually do what the decision assumes?).
+   Research is generated text like any other; a citation that cannot be checked should not be
+   load-bearing.
+
+6. **Record the outcome in the ADR** — an Evidence section listing what was consulted and what it
+   established. Include the sources that *cut against* the decision. An ADR whose evidence section
+   is unanimously supportive is usually one where the search was aimed at confirmation.
+
+* What to do when the evidence contradicts you
+
+Change the decision, and say so in the ADR rather than quietly editing it into agreement. A
+revision note naming the reversed decision and the evidence that reversed it is more useful to a
+future reader than a document that looks like it was right the first time — it tells them the
+decision was genuinely tested, and it shows them what kind of argument is strong enough to move it.
+
+If the evidence is mixed, say that too, and record which way the residual risk points.
+
+* Failure modes
+
+- **Confirmation search.** Asking "why is X good?" and finding out. The brief must invite refutation
+  explicitly, or the answer is worthless.
+- **Cargo-culting scale.** A practice that is correct for a system with thousands of contributors
+  or millions of users may be pure overhead at a smaller scale. Prior art tells you what a design
+  costs and where it breaks — it does not tell you that you have the same problem. Check that the
+  cited system's constraints resemble yours before adopting its answer.
+- **Citation laundering.** A plausible-sounding attribution to a famous paper that the paper does
+  not contain. Verify quotes against the source text; this failure is common and hard to spot,
+  because the fabricated claim is usually one the field would agree with anyway.
+- **Deciding by consensus count.** "Five systems do X" is weaker than one well-documented account
+  of *why* X, and much weaker than a documented case of X failing. Weigh reasons, not votes.
+
+* Relation to other practices
+
+This sits upstream of [[id:practice:adr-format][ADR Format]]: the review happens before the record
+is written, and its output becomes the Evidence section and sharpens Alternatives Rejected. It is
+the design-time counterpart of [[id:practice:adversarial-testing][Adversarial Testing]] — the same
+instinct (try to falsify it) applied to a decision rather than to an implementation, and for the
+same reason: a conclusion is trustworthy in proportion to how hard you tried to break it.
