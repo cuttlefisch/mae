@@ -25,6 +25,12 @@ MAE has several security-relevant subsystems. This section documents the current
 - **shell** — AI can execute shell commands (default)
 - **privileged** — Full access including configuration changes
 
+**Workspace trust** — A project-local `.mae/init.scm` is arbitrary Scheme, and Scheme can spawn processes, so evaluating one is equivalent to running the project's code. MAE evaluates it **only** from a directory listed in `~/.config/mae/trusted-projects` (one absolute path per line; `#` comments allowed). Untrusted directories are skipped with a message naming the file and the line to add. Trust is exact-match: it is deliberately **not** inherited by subdirectories, so trusting a project does not trust a vendored dependency cloned inside it. A missing, unreadable, or malformed trust list trusts nothing.
+
+Trust can only be granted by editing that file. There is no command, Scheme primitive, or MCP tool that grants it — an agent able to grant trust could then write `.mae/init.scm` and escalate across a restart. For the same reason, AI-originated writes to MAE's own configuration (`~/.config/mae/**` and any `.mae/**`) are refused across `create_file`, `rename_file`, and buffer saves; a human editing their own config, including `:set-save`, is unaffected.
+
+The legacy v0.6 fallbacks that loaded a bare `init.scm` or `scheme/init.scm` from the working directory have been removed — those filenames are too ordinary to be safe. Move such a file to `~/.config/mae/init.scm`.
+
 **Watchdog thread** — A background thread monitors AI operations for stalls. If an AI operation exceeds 10 seconds without progress, the watchdog captures a backtrace and triggers auto-recovery. The user can also cancel via Esc or Ctrl-C (input lock).
 
 **Stagnation scoring** — Semantic progress checkpoints are evaluated every 10 rounds. If the AI makes no meaningful progress (repeating the same actions), it receives escalating warnings and is eventually aborted.

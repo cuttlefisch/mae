@@ -62,6 +62,7 @@ pub mod tween;
 pub mod visual_buffer;
 pub mod window;
 pub mod word;
+pub mod workspace_trust;
 pub mod wrap;
 
 pub use buffer::{BabelEditContext, Buffer, BufferKind, BufferLocalOptions};

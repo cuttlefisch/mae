@@ -207,6 +207,7 @@ Source: `crates/core/src/lib.rs`
 | `visual_buffer` | mod |
 | `window` | mod |
 | `word` | mod |
+| `workspace_trust` | mod |
 | `wrap` | mod |
 | `SchemeToolDef` | struct |
 | `redraw` | mod |

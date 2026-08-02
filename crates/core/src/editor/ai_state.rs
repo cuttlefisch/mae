@@ -109,6 +109,25 @@ pub struct AiState {
     /// unaffected by this map. See `MAX_TRACKED_MCP_SESSION_WINDOWS` for the
     /// growth bound.
     pub mcp_session_windows: std::collections::HashMap<u64, McpSessionWindowState>,
+    /// Nesting depth of the current AI-originated dispatch, or 0 when the
+    /// running operation originated from a human.
+    ///
+    /// This is the minimum viable form of ADR-088's carried authority: rather
+    /// than asking "what tier is this session?" (ambient), effects can ask
+    /// "did a human ask for this?" — the question the confused-deputy problem
+    /// actually turns on. Maintained by
+    /// `Editor::with_ai_dispatch_scope_for_session`, which already wraps every
+    /// MCP-originated dispatch, and read via `Editor::is_ai_originated_dispatch`.
+    ///
+    /// A depth counter rather than a bool because dispatch nests (a tool that
+    /// runs a command that dispatches another); a bool would be cleared by the
+    /// inner scope's exit while the outer one is still running.
+    ///
+    /// @ai-caution: [security] Load-bearing for ADR-089 D4 — it is what lets
+    /// `save_buffer_*` refuse to write MAE's own config for an agent while
+    /// leaving the human's `:w` and `:set-save` untouched. Anything that sets
+    /// this to 0 inside an AI dispatch re-opens that path.
+    pub ai_dispatch_depth: u32,
     /// AI editor/agent command (e.g. "claude", "aider").
     pub editor_name: String,
     /// Whether `open-ai-agent`'s shell wraps `editor_name` through the
@@ -192,6 +211,7 @@ impl AiState {
             last_output_scroll: None,
             work_window: DrivenWindow::none(),
             mcp_session_windows: std::collections::HashMap::new(),
+            ai_dispatch_depth: 0,
             editor_name: "mae-agent".to_string(),
             agent_login_shell: true,
             provider: String::new(),

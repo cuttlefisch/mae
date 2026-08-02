@@ -482,6 +482,10 @@
           "kind": "mod"
         },
         {
+          "name": "workspace_trust",
+          "kind": "mod"
+        },
+        {
           "name": "wrap",
           "kind": "mod"
         },

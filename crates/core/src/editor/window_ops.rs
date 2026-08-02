@@ -544,6 +544,37 @@ impl Editor {
         session_id: Option<u64>,
         f: impl FnOnce(&mut Editor) -> R,
     ) -> R {
+        // Mark this dispatch as AI-originated for its whole extent, so effects
+        // can ask "did a human ask for this?" rather than only "what tier is
+        // this session?" (ADR-088's minimum viable carried authority; ADR-089 D4
+        // is its first consumer).
+        //
+        // If `f` unwinds, the decrement is skipped and the depth stays elevated.
+        // That direction is deliberate: a leaked increment makes the editor treat
+        // subsequent work as AI-originated, which is *more* restrictive, not less.
+        self.ai.ai_dispatch_depth = self.ai.ai_dispatch_depth.saturating_add(1);
+        let result = self.with_ai_dispatch_scope_windows(session_id, f);
+        self.ai.ai_dispatch_depth = self.ai.ai_dispatch_depth.saturating_sub(1);
+        result
+    }
+
+    /// Is the currently-running operation AI-originated?
+    ///
+    /// True inside any [`Self::with_ai_dispatch_scope_for_session`] extent — which
+    /// wraps every MCP-originated tool dispatch and Scheme-command bridge call —
+    /// and false for work a human drove from a keybinding or the ex-line.
+    pub fn is_ai_originated_dispatch(&self) -> bool {
+        self.ai.ai_dispatch_depth > 0
+    }
+
+    /// Window-targeting half of [`Self::with_ai_dispatch_scope_for_session`], split
+    /// out so the AI-origin marking above wraps every exit path including the
+    /// early return below.
+    fn with_ai_dispatch_scope_windows<R>(
+        &mut self,
+        session_id: Option<u64>,
+        f: impl FnOnce(&mut Editor) -> R,
+    ) -> R {
         let Some(sid) = session_id else {
             self.ensure_ai_dispatch_target();
             let target = self.ai.target_window_id;

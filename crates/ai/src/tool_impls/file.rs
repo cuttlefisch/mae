@@ -188,6 +188,22 @@ pub fn execute_rename_file(
         .ok_or("Buffer has no file path")?;
 
     let new = PathBuf::from(&new_path);
+
+    // @ai-caution: [security] Rename is a write in disguise — moving a buffer onto
+    // `.mae/init.scm` reaches the same escalation `create_file` is guarded against
+    // (ADR-089 D4). Both source and destination are checked: the destination so a
+    // file cannot be moved *into* config, the source so config cannot be moved out
+    // of the way to defeat a subsequent check.
+    for candidate in [&old_path, &new] {
+        if mae_core::workspace_trust::is_protected_config_path(candidate) {
+            return Err(format!(
+                "Refused: '{}' is MAE configuration, which governs what tools are permitted. \
+                 Renaming it is not allowed at this permission tier.",
+                candidate.display()
+            ));
+        }
+    }
+
     std::fs::rename(&old_path, &new).map_err(|e| format!("Rename failed: {}", e))?;
 
     editor.buffers[idx].set_file_path(new.clone());
@@ -215,6 +231,18 @@ pub fn execute_create_file(
     let content = args.get("content").and_then(|v| v.as_str()).unwrap_or("");
 
     let file_path = Path::new(&path);
+
+    // @ai-caution: [security] MAE's own config governs what the agent may do, so the
+    // agent may not write it (ADR-089 D4). Without this, a write-tier agent plants
+    // `.mae/init.scm` and escalates to arbitrary code execution on the next start —
+    // the shape of CVE-2025-53773. The check resolves symlinks and `..` first.
+    if mae_core::workspace_trust::is_protected_config_path(file_path) {
+        return Err(format!(
+            "Refused: '{}' is MAE configuration, which governs what tools are permitted. \
+             Writing it is not allowed at this permission tier. Ask the user to edit it.",
+            path
+        ));
+    }
 
     // Create parent directories if needed
     if let Some(parent) = file_path.parent() {
