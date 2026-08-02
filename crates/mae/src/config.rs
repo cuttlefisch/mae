@@ -692,26 +692,66 @@ pub fn resolve_ai_config(file_config: &Config) -> Option<ProviderConfig> {
     resolve_ai_config_with_scheme(file_config, &empty)
 }
 
+/// The permission-tier spellings MAE accepts, for error messages and validation.
+pub const VALID_PERMISSION_TIERS: &[&str] = &[
+    "readonly",
+    "write",
+    "standard",
+    "shell",
+    "trusted",
+    "privileged",
+    "full",
+];
+
+/// Parse a permission-tier string, or `None` if it is not a recognised spelling.
+///
+/// @ai-caution: [security] Callers MUST treat `None` as an error and refuse to
+/// start (ADR-084 D4). Resolving an unrecognised tier to *any* real tier —
+/// especially via `unwrap_or_default()`, whose default is Shell — is CWE-636
+/// ("using the most permissive access control restrictions"), and it means a
+/// typo silently widens access with nothing to notice it. The realistic source
+/// of an unknown value here is a typo in a local config written by the same
+/// person running the binary, not version skew, so leniency buys nothing.
+pub fn parse_permission_tier(s: &str) -> Option<PermissionTier> {
+    match s {
+        "readonly" => Some(PermissionTier::ReadOnly),
+        "write" | "standard" => Some(PermissionTier::Write),
+        "shell" | "trusted" => Some(PermissionTier::Shell),
+        "privileged" | "full" => Some(PermissionTier::Privileged),
+        _ => None,
+    }
+}
+
 /// Resolve AI permission policy with precedence: env > file > default (trusted).
-pub fn resolve_permission_policy(config: &Config) -> PermissionPolicy {
-    let tier_str = std::env::var("MAE_AI_PERMISSIONS")
-        .ok()
-        .or_else(|| config.ai.auto_approve_tier.clone())
-        .unwrap_or_else(|| "trusted".into());
-    let tier = match tier_str.as_str() {
-        "readonly" => PermissionTier::ReadOnly,
-        "write" | "standard" => PermissionTier::Write,
-        "shell" | "trusted" => PermissionTier::Shell,
-        "privileged" | "full" => PermissionTier::Privileged,
-        _ => {
-            warn!(tier = %tier_str, "unknown AI permission tier, defaulting to 'shell'");
-            PermissionTier::Shell
-        }
+///
+/// Returns `Err` with a user-facing message when the configured tier is not a
+/// recognised value, so startup can refuse rather than guess. `make check-config`
+/// surfaces this before launch.
+pub fn resolve_permission_policy(config: &Config) -> Result<PermissionPolicy, String> {
+    let (tier_str, source) = match std::env::var("MAE_AI_PERMISSIONS").ok() {
+        Some(v) => (v, "MAE_AI_PERMISSIONS"),
+        None => match config.ai.auto_approve_tier.clone() {
+            Some(v) => (v, "[ai] auto_approve_tier in config.toml"),
+            // NOTE: this default is permissive, and deliberately unchanged here.
+            // Lowering it is ADR-090's business, not this function's: `is_allowed`
+            // currently hard-denies rather than prompting, so a stricter default
+            // would break `run_build`/`run_test` outright instead of asking.
+            None => ("trusted".to_string(), "built-in default"),
+        },
     };
-    PermissionPolicy {
+    let tier = parse_permission_tier(&tier_str).ok_or_else(|| {
+        format!(
+            "unknown AI permission tier {tier_str:?} (from {source}).\n\
+             Valid values: {}.\n\
+             Refusing to start rather than guess — an unrecognised tier previously \
+             resolved to 'shell', so a typo silently granted shell access.",
+            VALID_PERMISSION_TIERS.join(", ")
+        )
+    })?;
+    Ok(PermissionPolicy {
         auto_approve_up_to: tier,
         allowed_categories: None,
-    }
+    })
 }
 
 /// Update a single editor preference in the config file (load → modify → save).
@@ -1579,7 +1619,7 @@ mod tests {
         let _lock = ENV_LOCK.lock().unwrap();
         std::env::remove_var("MAE_AI_PERMISSIONS");
         let cfg = Config::default();
-        let policy = resolve_permission_policy(&cfg);
+        let policy = resolve_permission_policy(&cfg).expect("default tier must parse");
         assert_eq!(policy.auto_approve_up_to, PermissionTier::Shell);
     }
 
@@ -1594,7 +1634,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let policy = resolve_permission_policy(&cfg);
+        let policy = resolve_permission_policy(&cfg).expect("'full' must parse");
         assert_eq!(policy.auto_approve_up_to, PermissionTier::Privileged);
     }
 
@@ -1609,7 +1649,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let policy = resolve_permission_policy(&cfg);
+        let policy = resolve_permission_policy(&cfg).expect("'readonly' must parse");
         assert_eq!(policy.auto_approve_up_to, PermissionTier::ReadOnly);
         std::env::remove_var("MAE_AI_PERMISSIONS");
     }
@@ -1632,7 +1672,8 @@ mod tests {
                 },
                 ..Default::default()
             };
-            let policy = resolve_permission_policy(&cfg);
+            let policy = resolve_permission_policy(&cfg)
+                .unwrap_or_else(|e| panic!("tier '{name}' must parse: {e}"));
             assert_eq!(
                 policy.auto_approve_up_to, expected,
                 "tier '{}' mismatch",
@@ -1641,8 +1682,11 @@ mod tests {
         }
     }
 
+    /// ADR-084 D4. This test previously asserted the opposite — that an
+    /// unrecognised tier resolved to Shell — which pinned CWE-636 in place as
+    /// intended behaviour. A typo must refuse to start, not silently widen access.
     #[test]
-    fn resolve_permission_unknown_tier_defaults_to_trusted() {
+    fn resolve_permission_unknown_tier_from_config_is_rejected() {
         let _lock = ENV_LOCK.lock().unwrap();
         std::env::remove_var("MAE_AI_PERMISSIONS");
         let cfg = Config {
@@ -1652,8 +1696,84 @@ mod tests {
             },
             ..Default::default()
         };
-        let policy = resolve_permission_policy(&cfg);
-        assert_eq!(policy.auto_approve_up_to, PermissionTier::Shell);
+        let err = resolve_permission_policy(&cfg)
+            .expect_err("an unknown tier must be rejected, never resolved");
+        assert!(
+            err.contains("bogus"),
+            "error must name the bad value: {err}"
+        );
+        assert!(
+            err.contains("readonly") && err.contains("privileged"),
+            "error must list the valid values: {err}"
+        );
+    }
+
+    /// The env var is the higher-precedence source, so it needs its own case —
+    /// a typo there must not fall through to the config value or to a default.
+    #[test]
+    fn resolve_permission_unknown_tier_from_env_is_rejected() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::set_var("MAE_AI_PERMISSIONS", "shel");
+        let cfg = Config {
+            ai: AiSection {
+                auto_approve_tier: Some("readonly".into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let result = resolve_permission_policy(&cfg);
+        std::env::remove_var("MAE_AI_PERMISSIONS");
+        let err = result.expect_err("a typo'd env tier must be rejected");
+        assert!(
+            err.contains("MAE_AI_PERMISSIONS"),
+            "error must name the source: {err}"
+        );
+    }
+
+    /// Near-miss spellings are exactly what a fail-open default swallows, and
+    /// each one previously became Shell.
+    #[test]
+    fn near_miss_tier_spellings_are_all_rejected() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        std::env::remove_var("MAE_AI_PERMISSIONS");
+        for bad in [
+            "read-only",
+            "readOnly",
+            "READONLY",
+            "shel",
+            "Shell",
+            " shell",
+            "shell ",
+            "read_only",
+            "none",
+            "off",
+            "",
+            "no-shell",
+        ] {
+            let cfg = Config {
+                ai: AiSection {
+                    auto_approve_tier: Some(bad.into()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            assert!(
+                resolve_permission_policy(&cfg).is_err(),
+                "{bad:?} must be rejected, not silently resolved"
+            );
+        }
+    }
+
+    /// Every advertised spelling must actually parse — otherwise the strict
+    /// parser turns a documented value into a startup failure.
+    #[test]
+    fn every_advertised_tier_spelling_parses() {
+        for name in VALID_PERMISSION_TIERS {
+            assert!(
+                parse_permission_tier(name).is_some(),
+                "advertised spelling {name:?} must parse"
+            );
+        }
     }
 
     #[test]

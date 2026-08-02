@@ -284,7 +284,17 @@ async fn main() -> anyhow::Result<()> {
         return run_once(&args, prompt, mcp, tools, provider, system_prompt).await;
     }
 
-    let permission_mode = PermissionMode::parse(&args.permission_mode).unwrap_or_default();
+    // @ai-caution: [security] Do NOT restore `.unwrap_or_default()` here — the
+    // default is Shell, so a typo'd --permission-mode silently granted shell
+    // access instead of erroring (CWE-636, ADR-084 D4).
+    let Some(permission_mode) = PermissionMode::parse(&args.permission_mode) else {
+        eprintln!(
+            "mae-agent: unknown --permission-mode {:?}.\nValid values: readonly, write, \
+             standard, shell, trusted, privileged, full, yolo.",
+            args.permission_mode
+        );
+        std::process::exit(2);
+    };
     let mut app = AppState::new(args.model.clone(), args.provider.clone(), permission_mode);
     app.push_system_note(format!(
         "Connected to {} ({} tools available). Permission mode: {}.",
@@ -314,7 +324,17 @@ async fn run_once(
     provider: Arc<dyn AgentProvider>,
     system_prompt: String,
 ) -> anyhow::Result<()> {
-    let permission_mode = PermissionMode::parse(&args.permission_mode).unwrap_or_default();
+    // @ai-caution: [security] Do NOT restore `.unwrap_or_default()` here — the
+    // default is Shell, so a typo'd --permission-mode silently granted shell
+    // access instead of erroring (CWE-636, ADR-084 D4).
+    let Some(permission_mode) = PermissionMode::parse(&args.permission_mode) else {
+        eprintln!(
+            "mae-agent: unknown --permission-mode {:?}.\nValid values: readonly, write, \
+             standard, shell, trusted, privileged, full, yolo.",
+            args.permission_mode
+        );
+        std::process::exit(2);
+    };
     eprintln!(
         "mae-agent: --prompt mode (non-interactive) -- permission ceiling: {permission_mode:?}. \
          Tool calls exceeding this tier are denied, not confirmed (no human to ask)."

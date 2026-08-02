@@ -718,7 +718,14 @@ fn main() -> io::Result<()> {
             tools.extend(mae_ai::scheme_tools_to_definitions(&editor.ai.scheme_tools));
             tools
         };
-        let mut permission_policy = config::resolve_permission_policy(&app_config);
+        let mut permission_policy = match config::resolve_permission_policy(&app_config) {
+            Ok(p) => p,
+            Err(e) => {
+                error!("{e}");
+                eprintln!("mae: {e}");
+                std::process::exit(2);
+            }
+        };
         // ADR-056: seed the server's global tool-category restriction from
         // config/init.scm before any MCP session connects, same pattern as
         // `mcp_tools_tiered` below. Empty (default) leaves the policy

@@ -830,19 +830,45 @@ fn effective_permission_policy(
     declared_ceiling: Option<&str>,
     declared_categories: Option<&str>,
 ) -> PermissionPolicy {
-    let auto_approve_up_to = match declared_ceiling.and_then(parse_permission_tier) {
-        Some(declared) => global.auto_approve_up_to.min(declared),
+    // @ai-caution: [security] Distinguish "declared nothing" from "declared
+    // something unparseable" (ADR-084 D4). Both used to fall through to the
+    // global policy, so a session that *meant* to restrict itself but sent a
+    // value this build doesn't recognise got no tightening at all — the typo
+    // silently removed the restriction. An unparseable declaration now resolves
+    // to the most restrictive value on its axis. It still cannot escalate: the
+    // tier axis is a `min` against the global, and the category axis only ever
+    // narrows.
+    let auto_approve_up_to = match declared_ceiling {
         None => global.auto_approve_up_to,
+        Some(raw) => match parse_permission_tier(raw) {
+            Some(declared) => global.auto_approve_up_to.min(declared),
+            None => {
+                warn!(
+                    declared = %raw,
+                    "unparseable session permission ceiling — falling back to the most \
+                     restrictive tier, not to the global policy"
+                );
+                global.auto_approve_up_to.min(PermissionTier::ReadOnly)
+            }
+        },
     };
-    let allowed_categories = match declared_categories.map(mae_ai::parse_categories) {
-        Some(declared) if !declared.is_empty() => {
-            let declared: std::collections::HashSet<_> = declared.into_iter().collect();
+    let allowed_categories = match declared_categories {
+        None => global.allowed_categories.clone(),
+        Some(raw) => {
+            let declared: std::collections::HashSet<_> =
+                mae_ai::parse_categories(raw).into_iter().collect();
+            if declared.is_empty() {
+                warn!(
+                    declared = %raw,
+                    "session tool-category allowlist parsed to nothing — denying all \
+                     categories rather than falling back to unrestricted"
+                );
+            }
             match &global.allowed_categories {
                 Some(global_set) => Some(global_set.intersection(&declared).copied().collect()),
                 None => Some(declared),
             }
         }
-        _ => global.allowed_categories.clone(),
     };
     PermissionPolicy {
         auto_approve_up_to,
@@ -1980,17 +2006,66 @@ mod tests {
         );
     }
 
+    /// ADR-084 D4. This previously asserted the opposite — that an unparseable
+    /// ceiling fell back to the *global* policy. Since the ceiling is
+    /// tighten-only, that meant a session which tried to restrict itself and
+    /// misspelled the value received no restriction at all.
     #[test]
-    fn effective_permission_policy_ignores_unrecognized_declared_value() {
+    fn unparseable_declared_ceiling_resolves_to_the_most_restrictive_tier() {
         let global = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Shell,
             allowed_categories: None,
         };
-        let effective = effective_permission_policy(&global, Some("not-a-real-tier"), None);
-        assert_eq!(
-            effective.auto_approve_up_to,
-            PermissionTier::Shell,
-            "an unparseable declared ceiling must fall back to the global policy, not deny/allow arbitrarily"
+        for bad in ["not-a-real-tier", "readonly", "read-only", "", "SHELL"] {
+            let effective = effective_permission_policy(&global, Some(bad), None);
+            assert_eq!(
+                effective.auto_approve_up_to,
+                PermissionTier::ReadOnly,
+                "{bad:?}: an unparseable ceiling must restrict, not fall through to global"
+            );
+        }
+    }
+
+    /// Declaring nothing is different from declaring nonsense: a session that
+    /// never asked to be restricted keeps the global policy.
+    #[test]
+    fn a_session_that_declares_no_ceiling_keeps_the_global_policy() {
+        let global = PermissionPolicy {
+            auto_approve_up_to: PermissionTier::Shell,
+            allowed_categories: None,
+        };
+        let effective = effective_permission_policy(&global, None, None);
+        assert_eq!(effective.auto_approve_up_to, PermissionTier::Shell);
+    }
+
+    /// The fail-closed path must not become an escalation path: restricting to
+    /// ReadOnly is a `min` against the global, so a garbage declaration can
+    /// never raise a ceiling that was already lower.
+    #[test]
+    fn an_unparseable_ceiling_cannot_escalate_an_already_restricted_global() {
+        let global = PermissionPolicy {
+            auto_approve_up_to: PermissionTier::ReadOnly,
+            allowed_categories: None,
+        };
+        let effective = effective_permission_policy(&global, Some("Privileged!!"), None);
+        assert_eq!(effective.auto_approve_up_to, PermissionTier::ReadOnly);
+    }
+
+    /// Same rule on the category axis: a declared allowlist that parses to
+    /// nothing denies everything rather than reverting to unrestricted.
+    #[test]
+    fn a_category_allowlist_parsing_to_nothing_denies_rather_than_unrestricts() {
+        let global = PermissionPolicy {
+            auto_approve_up_to: PermissionTier::Shell,
+            allowed_categories: None,
+        };
+        let effective = effective_permission_policy(&global, None, Some("not-a-category"));
+        let cats = effective
+            .allowed_categories
+            .expect("a declared allowlist must produce a restriction, not None");
+        assert!(
+            cats.is_empty(),
+            "an unrecognised category list must deny, got {cats:?}"
         );
     }
 
