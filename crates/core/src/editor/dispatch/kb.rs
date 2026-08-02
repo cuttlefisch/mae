@@ -92,7 +92,9 @@ impl Editor {
                 self.kb.primary =
                     crate::kb_seed::seed_kb(&self.commands, &self.keymaps, &self.hooks);
                 let count = if let Some(q) = self.kb.query_layer() {
-                    q.list_ids(None).len()
+                    q.list_ids(None)
+                        .map(|ids| ids.len())
+                        .unwrap_or_else(|_| self.kb.primary.list_ids(None).len())
                 } else {
                     self.kb.primary.list_ids(None).len()
                 };

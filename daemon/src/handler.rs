@@ -138,13 +138,14 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Scan,
             )
             .await?;
-            spawn_query(move || {
+            spawn_query_result(move || {
                 let hits: Vec<Value> = ql
                     .search(&query, limit)
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?
                     .into_iter()
                     .map(|h: SearchHit| json!({ "id": h.id, "score": h.score }))
                     .collect();
-                json!(hits)
+                Ok(json!(hits))
             })
             .await
         }
@@ -160,9 +161,10 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Read,
             )
             .await?;
-            spawn_query(move || {
+            spawn_query_result(move || {
                 let links: Vec<Value> = ql
                     .links_from(&id)
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?
                     .into_iter()
                     .map(|l| {
                         json!({
@@ -172,7 +174,7 @@ pub async fn dispatch(
                         })
                     })
                     .collect();
-                json!(links)
+                Ok(json!(links))
             })
             .await
         }
@@ -188,9 +190,10 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Read,
             )
             .await?;
-            spawn_query(move || {
+            spawn_query_result(move || {
                 let links: Vec<Value> = ql
                     .links_to(&id)
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?
                     .into_iter()
                     .map(|l| {
                         json!({
@@ -200,7 +203,7 @@ pub async fn dispatch(
                         })
                     })
                     .collect();
-                json!(links)
+                Ok(json!(links))
             })
             .await
         }
@@ -213,7 +216,12 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Read,
             )
             .await?;
-            spawn_query(move || json!(ql.list_ids(prefix.as_deref()))).await
+            spawn_query_result(move || {
+                ql.list_ids(prefix.as_deref())
+                    .map(|ids| json!(ids))
+                    .map_err(|e| DaemonError::Internal(e.to_string()))
+            })
+            .await
         }
 
         "kb/health" => {
@@ -223,14 +231,19 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Read,
             )
             .await?;
-            spawn_query(move || match ql.health_report() {
-                Some(report) => json!({
-                    "total_nodes": report.total_nodes,
-                    "total_links": report.total_links,
-                    "orphan_count": report.orphan_ids.len(),
-                    "broken_link_count": report.broken_links.len(),
-                }),
-                None => json!({"error": "health report unavailable"}),
+            spawn_query_result(move || {
+                let report = ql
+                    .health_report()
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?;
+                Ok(match report {
+                    Some(report) => json!({
+                        "total_nodes": report.total_nodes,
+                        "total_links": report.total_links,
+                        "orphan_count": report.orphan_ids.len(),
+                        "broken_link_count": report.broken_links.len(),
+                    }),
+                    None => json!({"error": "health report unavailable"}),
+                })
             })
             .await
         }
@@ -247,12 +260,17 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Scan,
             )
             .await?;
-            spawn_query(move || match ql.neighborhood(&id, depth) {
-                Some(sg) => json!({
-                    "nodes": sg.nodes.iter().map(|(id, t)| json!([id, t])).collect::<Vec<_>>(),
-                    "edges": sg.edges.iter().map(|(s, d, r)| json!([s, d, r])).collect::<Vec<_>>(),
-                }),
-                None => json!({"nodes": [], "edges": []}),
+            spawn_query_result(move || {
+                let sg = ql
+                    .neighborhood(&id, depth)
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?;
+                Ok(match sg {
+                    Some(sg) => json!({
+                        "nodes": sg.nodes.iter().map(|(id, t)| json!([id, t])).collect::<Vec<_>>(),
+                        "edges": sg.edges.iter().map(|(s, d, r)| json!([s, d, r])).collect::<Vec<_>>(),
+                    }),
+                    None => json!({"nodes": [], "edges": []}),
+                })
             })
             .await
         }
@@ -269,13 +287,14 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Scan,
             )
             .await?;
-            spawn_query(move || {
+            spawn_query_result(move || {
                 let related: Vec<Value> = ql
                     .related(&id, limit)
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?
                     .into_iter()
                     .map(|(id, score)| json!([id, score]))
                     .collect();
-                json!(related)
+                Ok(json!(related))
             })
             .await
         }
@@ -314,16 +333,17 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Read,
             )
             .await?;
-            spawn_query(move || {
+            spawn_query_result(move || {
                 let nodes: Vec<Value> = ql
                     .todo_nodes()
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?
                     .into_iter()
                     .map(|mut n| {
                         n.crdt_doc = None;
                         serde_json::to_value(&n).unwrap_or(Value::Null)
                     })
                     .collect();
-                json!(nodes)
+                Ok(json!(nodes))
             })
             .await
         }
@@ -336,13 +356,14 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Read,
             )
             .await?;
-            spawn_query(move || {
+            spawn_query_result(move || {
                 let pairs: Vec<Value> = ql
                     .id_title_pairs(prefix.as_deref())
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?
                     .into_iter()
                     .map(|(id, title)| json!([id, title]))
                     .collect();
-                json!(pairs)
+                Ok(json!(pairs))
             })
             .await
         }
@@ -357,13 +378,14 @@ pub async fn dispatch(
                 crate::tenant::RequestCost::Read,
             )
             .await?;
-            spawn_query(move || {
+            spawn_query_result(move || {
                 let triples: Vec<Value> = ql
                     .id_title_body_triples(prefix.as_deref(), body_limit)
+                    .map_err(|e| DaemonError::Internal(e.to_string()))?
                     .into_iter()
                     .map(|(id, title, body)| json!([id, title, body]))
                     .collect();
-                json!(triples)
+                Ok(json!(triples))
             })
             .await
         }

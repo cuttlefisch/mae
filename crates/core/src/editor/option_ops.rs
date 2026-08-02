@@ -2006,11 +2006,31 @@ impl super::Editor {
         // else the local cozo via FederatedQuery), then the local store, then the
         // in-memory mirror. Under a thin primary the local store/mirror are empty, so
         // routing through the query layer is what makes the report accurate.
-        let store_report = self
-            .kb
-            .query_layer()
-            .and_then(|q| q.health_report())
-            .or_else(|| self.kb.store.as_ref().and_then(|s| s.health_report().ok()));
+        // No error channel on this display path; log and fall back to the local
+        // store rather than silently showing an empty/missing report (ADR-086).
+        let local_store_report =
+            || {
+                self.kb.store.as_ref().and_then(|s| match s.health_report() {
+                Ok(report) => Some(report),
+                Err(e) => {
+                    tracing::warn!(error = %e, "Local KB store failed computing health report");
+                    None
+                }
+            })
+            };
+        let store_report = match self.kb.query_layer() {
+            Some(q) => match q.health_report() {
+                Ok(report) => report.or_else(local_store_report),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "KB query layer failed computing health report; falling back to the local store"
+                    );
+                    local_store_report()
+                }
+            },
+            None => local_store_report(),
+        };
 
         if let Some(ref report) = store_report {
             lines.push(format!(

@@ -258,7 +258,7 @@ fn expired_token_produces_a_clean_observable_auth_failure_not_a_silent_empty_res
         layer.last_outcome()
     );
 
-    let hits = layer.search("anything", 10);
+    let hits = layer.search("anything", 10).unwrap();
     assert!(hits.is_empty());
     assert!(matches!(layer.last_outcome(), LastOutcome::AuthFailed(_)));
 }
