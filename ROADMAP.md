@@ -863,7 +863,13 @@ claims (13 refuted, 29 severity-corrected downward). Twelve were high severity: 
 `SECURITY.md` had described as having "no bypass vectors", a claim now corrected. The remaining 77 are
 batched by subsystem in #578-591.
 
-The audit's own coverage gaps are recorded in #592 rather than implied away: six of twenty capability
-slices were never traced (git, options/config, org-babel/export, shell/terminal, project/pickers,
-help/KB-seed), and the horizontal per-crate pass — AI-slop, dead code, error-convention consistency,
-module boundaries — did not run at all.
+**Completed 2026-08-02.** All twenty capability slices traced, plus a horizontal per-crate pass over all
+23 crates. Final totals: **245 claims -> 211 confirmed, 34 refuted**, with 37 severity-downgraded.
+
+Two results worth carrying forward. First, the two axes found genuinely different things: 17 dead-code and
+11 AI-slop findings came only from the per-crate pass, because neither can surface from tracing a
+capability that works — and conversely the per-crate pass produced **zero** high-severity findings, since
+the capability pass had already caught those. Running only one axis would have missed a category outright.
+Second, adversarial verification was not ceremony: it refuted 34 claims and downgraded 37 more, including
+one that cited files the code never reads. `module-boundary` claims were 66% refuted — structural
+intuitions are cheap to assert and expensive to verify, worth remembering next audit.
