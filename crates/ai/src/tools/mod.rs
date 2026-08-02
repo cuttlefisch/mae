@@ -3,8 +3,12 @@ mod categories;
 mod collab_tools;
 mod core_tools;
 mod dap_tools;
+#[cfg(test)]
+mod dispatch_contract_tests;
 mod kb_tools;
 mod lsp_tools;
+#[cfg(test)]
+mod name_roundtrip_tests;
 mod shell_tools;
 mod tool_def;
 pub mod tool_search;
@@ -31,17 +35,53 @@ pub const AI_PROFILES: &[&str] = &[
     "verifier",
 ];
 
+/// Encode a `CommandRegistry` command name (kebab-case, occasionally with a
+/// trailing punctuation character, e.g. `ai-status!`) into the `[a-z0-9_]`
+/// alphabet required for an MCP/LLM tool name. Paired with
+/// `unsanitize_command_name` in `crate::executor::tool_dispatch`, which MUST
+/// invert this exactly — verified for every registered command name by
+/// `all_registered_command_names_round_trip` (a prior version of this
+/// function dropped `!` outright, which made `ai-status!` permanently
+/// unreachable through the `command_*` MCP tool: `unsanitize_command_name`
+/// had no way to recover the character that was never encoded).
+///
+/// Encoding: `-` -> `_` (kept as a single character for backward
+/// compatibility with already-shipped tool names like `command_move_down`
+/// — MCP tool names are part of MAE's API-stability surface, see CLAUDE.md's
+/// "API Stability" section). Any other byte outside `[a-z0-9-]` is escaped
+/// as `_{hex}_` (lowercase hex of its byte value) — a general escape
+/// mechanism, not a one-off substitution for `!` specifically, so it also
+/// covers any future non-hyphen punctuation in a command name. A bare `_`
+/// in the output is therefore always either a hyphen or part of an `_XX_`
+/// escape triplet: decoding scans for the triplet form first and only
+/// falls back to "this `_` was a hyphen" when the triplet doesn't match.
+pub fn sanitize_command_name(name: &str) -> String {
+    let mut out = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c == '-' {
+            out.push('_');
+        } else if c.is_ascii_lowercase() || c.is_ascii_digit() {
+            out.push(c);
+        } else {
+            out.push_str(&format!("_{:02x}_", c as u32));
+        }
+    }
+    out
+}
+
 /// Generate tool definitions from the CommandRegistry.
 /// Every command (builtin or Scheme) becomes a callable AI tool.
 ///
-/// Tool names are prefixed with `command_` and hyphens replaced with underscores
-/// to satisfy all LLM provider naming constraints (alphanumeric + underscore only).
+/// Tool names are prefixed with `command_` and sanitized via
+/// `sanitize_command_name` to satisfy all LLM provider naming constraints
+/// (alphanumeric + underscore only) — invertibly, so dispatch can recover
+/// the original command name (see `sanitize_command_name`'s doc comment).
 pub fn tools_from_registry(registry: &CommandRegistry) -> Vec<ToolDefinition> {
     registry
         .list_commands()
         .iter()
         .map(|cmd| {
-            let sanitized = cmd.name.replace('-', "_").replace('!', "");
+            let sanitized = sanitize_command_name(&cmd.name);
             let tool_name = format!("command_{}", sanitized);
             ToolDefinition {
                 name: tool_name,

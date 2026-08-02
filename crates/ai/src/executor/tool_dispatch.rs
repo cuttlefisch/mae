@@ -703,13 +703,50 @@ fn dispatch_tool(
     Err(format!("Unknown tool: {}", call.name))
 }
 
+/// Inverse of `crate::tools::sanitize_command_name` — decodes a `command_*`
+/// MCP tool-name suffix back into the original `CommandRegistry` command
+/// name. MUST stay exactly paired with that function; see its doc comment
+/// for the encoding and `all_registered_command_names_round_trip` for the
+/// property test that holds the pairing accountable.
+///
+/// Scans left to right: a bare `_` decodes to `-`, but first checks for the
+/// 4-character `_XX_` hex-escape triplet (two lowercase hex digits) used to
+/// recover any non-hyphen character `sanitize_command_name` had to escape.
+pub(crate) fn unsanitize_command_name(tool_suffix: &str) -> String {
+    let chars: Vec<char> = tool_suffix.chars().collect();
+    let mut out = String::with_capacity(chars.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '_'
+            && i + 3 < chars.len()
+            && chars[i + 1].is_ascii_hexdigit()
+            && chars[i + 2].is_ascii_hexdigit()
+            && chars[i + 3] == '_'
+        {
+            let hex: String = [chars[i + 1], chars[i + 2]].iter().collect();
+            if let Some(ch) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                out.push(ch);
+                i += 4;
+                continue;
+            }
+        }
+        if chars[i] == '_' {
+            out.push('-');
+        } else {
+            out.push(chars[i]);
+        }
+        i += 1;
+    }
+    out
+}
+
 /// Execute a registered editor command by name (MCP `command_*` tool
 /// handler). Plain `dispatch_builtin` is correct here (no target-window
 /// redirection needed locally) -- the enclosing `with_ai_dispatch_scope`
 /// call in `execute_tool_with_requester` has already focused the companion
 /// window, if one was needed, before this ever runs (issue #372).
 fn execute_registry_command(editor: &mut Editor, tool_suffix: &str) -> Result<String, String> {
-    let cmd_name = tool_suffix.replace('_', "-");
+    let cmd_name = unsanitize_command_name(tool_suffix);
     if editor.dispatch_builtin(&cmd_name) {
         Ok(format!("Executed: {}", cmd_name))
     } else {

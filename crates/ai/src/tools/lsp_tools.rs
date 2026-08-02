@@ -44,7 +44,12 @@ pub(super) fn lsp_tool_definitions() -> Vec<ToolDefinition> {
             "Search for symbols across the workspace by name. Returns JSON array of {name, kind, location}.",
         )
         .prop("query", "string", "Symbol name or prefix to search for")
-        .required(["query"])
+        .prop(
+            "language_id",
+            "string",
+            "LSP language identifier selecting which language server to query (e.g. 'rust', 'python', 'typescript')",
+        )
+        .required(["query", "language_id"])
         .permission(PermissionTier::ReadOnly)
         .build(),
         ToolDefBuilder::new(

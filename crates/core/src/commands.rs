@@ -1777,4 +1777,148 @@ mod tests {
         let editor = crate::Editor::new();
         assert!(!editor.debug_init, "debug_init should default to false");
     }
+
+    /// Ratchet allowlist for builtin commands that are registered in
+    /// `CommandRegistry` but not reachable through `Editor::dispatch_builtin`
+    /// — every entry here is a confirmed gap found by the #521-era
+    /// permission-enforcement audit. This list must only ever shrink — a PR
+    /// that adds an entry without a reason is adding a new "registered but
+    /// unreachable" defect, exactly the class this test exists to prevent.
+    /// See `all_builtin_commands_dispatch` below.
+    ///
+    /// Everything that WAS on this list and had an obvious cause has been
+    /// fixed (either a real dispatch arm, or delegating to
+    /// `Editor::execute_command`, which itself falls back to
+    /// `dispatch_builtin` for anything it doesn't special-case — see
+    /// `crates/core/src/editor/dispatch/mod.rs`'s Group-A delegation block
+    /// and the `kb-set-encryption` arm in `dispatch/collab.rs`). What
+    /// remains here is architecturally blocked: mae-core (where
+    /// `dispatch_builtin` lives) cannot depend on `mae-ai` or the `mae`
+    /// binary crate (workspace dependency direction is the other way), so a
+    /// command whose only real implementation calls `mae_ai::execute_*` or
+    /// needs the binary's `ai_tx`/`PendingInteractiveEvent` state genuinely
+    /// has no dispatch arm to add here without inverting that graph.
+    const UNDISPATCHABLE_BUILTIN_COMMANDS: &[(&str, &str)] = &[
+        (
+            "ai-accept",
+            "human-interactive-only: resolves a PendingInteractiveEvent held by the mae \
+             binary's key_handling state (crates/mae/src/ai_event_handler.rs), not present \
+             on mae-core::Editor. The event being approved is the AI's OWN proposal, so \
+             there is no AI-facing tool gap here.",
+        ),
+        (
+            "ai-reject",
+            "Same as ai-accept — human-interactive-only PendingInteractiveEvent resolution; \
+             not present on mae-core::Editor.",
+        ),
+        (
+            "ai-ping",
+            "Binary-layer diagnostic: pings the configured AI provider over the ai_tx \
+             mpsc channel owned by the mae binary's event loop (crates/mae/src/key_handling/\
+             command.rs), which mae-core::Editor has no handle to. No dedicated AI-facing MCP \
+             tool exists for this either — a real (if minor) AI-peer-parity gap, tracked here \
+             rather than fixed, since closing it means adding a new MCP tool, out of scope \
+             for a dispatch-reachability fix.",
+        ),
+        (
+            "ai-status!",
+            "Binary-layer diagnostic: build_ai_status_report() (crates/mae/src/key_handling/\
+             command.rs) assembles a report from AI provider/session config only the mae \
+             binary holds. No dedicated AI-facing MCP tool exists — same tracked gap as \
+             ai-ping.",
+        ),
+        (
+            "kb-export-guidance",
+            "Its only implementation calls mae_ai::execute_kb_export_guidance — mae-core \
+             cannot depend on mae-ai. AI reachability is unaffected: the dedicated \
+             kb_export_guidance MCP tool calls the same function directly, just not by this \
+             command name.",
+        ),
+        (
+            "kb-export-html",
+            "Its only implementation calls mae_ai::execute_kb_export_subgraph_html — same \
+             mae-core/mae-ai layering block as kb-export-guidance. AI reachability is via the \
+             dedicated kb_export_subgraph_html MCP tool.",
+        ),
+        (
+            "self-test",
+            "Binary-layer AI-driven workflow (crates/mae/src/key_handling/command.rs + \
+             crates/ai/src/session/workflow.rs's WorkflowTracker). The AI-appropriate \
+             replacement is the self_test_suite MCP tool (see CLAUDE.md's Self-test \
+             section), which returns a structured JSON test plan instead of a fire-and-forget \
+             command — a strictly better AI surface than dispatch_builtin(\"self-test\") would \
+             be even if it were reachable.",
+        ),
+        (
+            "verify",
+            "Binary-layer: spawns a verifier sub-agent through the mae binary's session/\
+             workflow machinery. The AI-facing equivalent is the delegate tool with \
+             profile=\"verifier\" (AI_PROFILES includes \"verifier\" for exactly this).",
+        ),
+    ];
+
+    /// Registry-driven reachability guard (CLAUDE.md principle #14): every
+    /// name in `CommandRegistry::with_builtins()` must actually be handled
+    /// by `Editor::dispatch_builtin`, or invoking it (from a keybinding,
+    /// Scheme, or an AI tool call) silently does nothing. This is the test
+    /// that makes the "registered but unreachable command" defect class
+    /// unrepeatable — see the audit that found ~57 findings of this shape
+    /// (confirmed examples included `git-commit`, `git-branch-create` —
+    /// both already fixed upstream of this branch, see this test's
+    /// docstring history / report for confirmation they now dispatch).
+    ///
+    /// Each command gets a fresh `Editor` so no command's side effects (e.g.
+    /// `quit` flipping `running`) can influence whether a later command in
+    /// the list dispatches.
+    #[test]
+    fn all_builtin_commands_dispatch() {
+        let reg = CommandRegistry::with_builtins();
+        let mut undispatchable: Vec<String> = Vec::new();
+        for name in reg.list_names() {
+            if UNDISPATCHABLE_BUILTIN_COMMANDS
+                .iter()
+                .any(|(allowed, _reason)| *allowed == name)
+            {
+                continue;
+            }
+            let mut editor = crate::Editor::new();
+            if !editor.dispatch_builtin(name) {
+                undispatchable.push(name.to_string());
+            }
+        }
+        assert!(
+            undispatchable.is_empty(),
+            "Registered builtin commands with no dispatch arm (add a match arm, or add \
+             a documented, shrink-only allowlist entry to UNDISPATCHABLE_BUILTIN_COMMANDS \
+             with a reason): {undispatchable:#?}"
+        );
+    }
+
+    /// Pins the allowlist itself: every allowlisted name must still be a
+    /// real registered command (otherwise the entry is stale — the command
+    /// was renamed/removed and the allowlist should shrink), and the
+    /// allowlist must not silently grow past this fixed size without a
+    /// reviewer noticing (bump this count only alongside a reasoned addition
+    /// to `UNDISPATCHABLE_BUILTIN_COMMANDS` above).
+    #[test]
+    fn undispatchable_allowlist_entries_are_real_commands() {
+        let reg = CommandRegistry::with_builtins();
+        for (name, reason) in UNDISPATCHABLE_BUILTIN_COMMANDS {
+            assert!(
+                reg.contains(name),
+                "allowlisted command '{name}' is no longer registered — remove it from \
+                 UNDISPATCHABLE_BUILTIN_COMMANDS"
+            );
+            assert!(
+                !reason.is_empty(),
+                "allowlist entry for '{name}' must have a non-empty reason"
+            );
+        }
+        assert_eq!(
+            UNDISPATCHABLE_BUILTIN_COMMANDS.len(),
+            8,
+            "UNDISPATCHABLE_BUILTIN_COMMANDS changed size — update this count alongside a \
+             reviewed, reasoned change to the list (must only shrink; see its doc comment)"
+        );
+    }
 }

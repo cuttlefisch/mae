@@ -190,6 +190,42 @@ impl Editor {
                 self.mark_full_redraw();
                 Some(true)
             }
+            "kb-set-encryption" => {
+                // :kb-set-encryption <kb> [mode]  (args via command_line, mode
+                // defaults to "e2e" — the only supported mode; encryption is
+                // one-way). Was previously registered in `CommandRegistry` but
+                // had NO dispatch arm anywhere in mae-core — reachable only via
+                // the `kb_set_encryption` MCP tool (`execute_kb_set_encryption`,
+                // `crates/ai/src/executor/collab_exec.rs`) directly setting this
+                // same `CollabIntent`, never through `dispatch_builtin` by name.
+                // That meant `:kb-set-encryption <kb> e2e` was a dead ex-command
+                // for a human too (not just an AI-parity gap) — the #521-era
+                // permission-enforcement audit's "registered but unreachable"
+                // defect class, closed here for real (matching behavior, not a
+                // stub), not just papered over with a recognized-but-inert arm.
+                let line = self.vi.command_line.trim().to_string();
+                let mut parts = line.split_whitespace();
+                let kb_id = parts.next().unwrap_or("").to_string();
+                let mode = parts.next().unwrap_or("e2e").to_string();
+                if kb_id.is_empty() {
+                    self.set_status(
+                        "Usage: :kb-set-encryption <kb> [mode]  (only 'e2e' is supported)",
+                    );
+                    return Some(true);
+                }
+                if mode != "e2e" {
+                    self.set_status(format!(
+                        "Invalid mode '{mode}' (only 'e2e' is supported; encryption is one-way)"
+                    ));
+                    return Some(true);
+                }
+                self.collab.pending_intent = Some(CollabIntent::KbSetEncryption {
+                    kb_id: kb_id.clone(),
+                    mode,
+                });
+                self.set_status(format!("Enabling E2E encryption on KB '{kb_id}'..."));
+                Some(true)
+            }
             // Accept both the editor's historical `kb-member-*` spelling AND the
             // canonical `kb-add-member`/`kb-remove-member` names used by the docs,
             // the Scheme prims, and the MCP tools (three-surface parity, #3).

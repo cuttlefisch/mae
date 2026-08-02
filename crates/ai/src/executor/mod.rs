@@ -22,6 +22,10 @@ use crate::tools::PermissionPolicy;
 use crate::types::*;
 
 pub use tool_dispatch::{execute_tool, execute_tool_with_requester};
+// Exposed crate-wide so `crate::tools`' name-sanitisation round-trip test
+// (paired with `crate::tools::sanitize_command_name`) can reach it without
+// duplicating the decode logic.
+pub(crate) use tool_dispatch::unsanitize_command_name;
 
 /// What kind of deferred tool call is pending (LSP or DAP).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
