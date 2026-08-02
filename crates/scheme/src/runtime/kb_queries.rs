@@ -357,7 +357,9 @@ pub(super) fn register_kb_query_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>
             let state = s.lock();
             if let Some(ref store) = state.kb_store {
                 let backend = mae_kb::graph_query::KbStoreRelatedBackend(store.as_ref());
-                let items = mae_kb::graph_query::related_enriched(&backend, &id, limit);
+                // A store failure surfaces as a Scheme error, not an empty list.
+                let items = mae_kb::graph_query::related_enriched(&backend, &id, limit)
+                    .map_err(|e| LispError::internal(format!("kb-related: {}", e)))?;
                 Ok(Value::list(
                     items
                         .into_iter()

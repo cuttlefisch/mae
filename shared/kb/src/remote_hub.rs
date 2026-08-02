@@ -27,7 +27,7 @@
 
 use crate::federation::{RemoteHubAuth, RemoteHubConfig};
 use crate::query::KbQueryLayer;
-use crate::store::{Link, SearchHit};
+use crate::store::{KbStoreError, Link, SearchHit};
 use crate::{Node, NodeKind};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -309,18 +309,31 @@ impl KbQueryLayer for RemoteHubQueryLayer {
         self.get(id).is_some()
     }
 
-    fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
+    // NOTE ON THE `Result` CONTRACT (ADR-086 read-side twin, see `query.rs` module doc):
+    // every method below still returns `Ok(...)` even on a network/transport failure.
+    // This is deliberate, NOT the defect the rest of this crate's `KbQueryLayer`
+    // implementors were fixed for: `RemoteHubQueryLayer` already has its own,
+    // separately-designed and separately-tested "timeout-and-continue" graceful
+    // degradation contract (ADR-062 Phase E) — a failure here is recorded via
+    // `set_outcome`/`last_outcome()` and surfaced through `degraded()`, which
+    // `FederatedQuery` already polls after every fan-out round. Turning every hub
+    // hiccup into an `Err` would regress that already-correct, already-adversarially-
+    // tested behavior (see `n_way_blended_query_with_a_hung_hub_bounds_latency_to_the_
+    // slowest_source_and_flags_partial` below) in favor of a contract this layer was
+    // never meant to have. `Result` in the signature is kept purely for trait-object
+    // compatibility with every other `KbQueryLayer` implementor.
+    fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, KbStoreError> {
         let Some(result) = self.call(
             "kb/query.search",
             serde_json::json!({"query": query, "limit": limit}),
         ) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
         let Some(results) = result.get("results").and_then(|r| r.as_array()) else {
             self.set_outcome(LastOutcome::MalformedResponse(
                 "search response missing 'results' array".to_string(),
             ));
-            return Vec::new();
+            return Ok(Vec::new());
         };
         // The hub's `kb/query.search` response carries no numeric relevance score (see
         // `daemon/src/kb_query.rs::search` — it returns `{id, title, excerpt}`, ranked by
@@ -330,7 +343,7 @@ impl KbQueryLayer for RemoteHubQueryLayer {
         // are NOT comparable in magnitude to a real BM25-style local score, only in
         // relative order among themselves. Documented here rather than silently treated
         // as an equivalent score.
-        results
+        Ok(results
             .iter()
             .enumerate()
             .filter_map(|(i, r)| {
@@ -339,26 +352,26 @@ impl KbQueryLayer for RemoteHubQueryLayer {
                 Some(SearchHit { id, score })
             })
             .take(limit)
-            .collect()
+            .collect())
     }
 
-    fn links_from(&self, _id: &str) -> Vec<Link> {
+    fn links_from(&self, _id: &str) -> Result<Vec<Link>, KbStoreError> {
         // ADR-053's surface has no links_from/links_to endpoint (only get/search/graph) —
         // structurally empty rather than a partial/best-effort attempt via kb/query.graph
         // (whole-KB, no per-node filtering), matching the trait's own documented default
         // for layers that don't implement link traversal.
-        Vec::new()
+        Ok(Vec::new())
     }
 
-    fn links_to(&self, _id: &str) -> Vec<Link> {
-        Vec::new()
+    fn links_to(&self, _id: &str) -> Result<Vec<Link>, KbStoreError> {
+        Ok(Vec::new())
     }
 
-    fn list_ids(&self, _prefix: Option<&str>) -> Vec<String> {
+    fn list_ids(&self, _prefix: Option<&str>) -> Result<Vec<String>, KbStoreError> {
         let Some(result) = self.call("kb/query.graph", serde_json::json!({})) else {
-            return Vec::new();
+            return Ok(Vec::new());
         };
-        result
+        Ok(result
             .get("nodes")
             .and_then(|n| n.as_array())
             .map(|a| {
@@ -366,16 +379,16 @@ impl KbQueryLayer for RemoteHubQueryLayer {
                     .filter_map(|v| v.as_str().map(str::to_string))
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap_or_default())
     }
 
-    fn health_report(&self) -> Option<crate::store::HealthReport> {
+    fn health_report(&self) -> Result<Option<crate::store::HealthReport>, KbStoreError> {
         // No health endpoint on ADR-053's surface; a hub's health is the hub operator's
         // concern, not something a read-through client can meaningfully report.
-        None
+        Ok(None)
     }
 
-    fn id_title_pairs(&self, _prefix: Option<&str>) -> Vec<(String, String)> {
+    fn id_title_pairs(&self, _prefix: Option<&str>) -> Result<Vec<(String, String)>, KbStoreError> {
         // ADR-053's `kb/query.graph` returns bare node ids, no titles (no bulk
         // id+title endpoint exists on this surface) — deliberately NOT implemented via
         // `list_ids` + a `get()` call per id: for a hub with thousands of nodes that
@@ -384,13 +397,17 @@ impl KbQueryLayer for RemoteHubQueryLayer {
         // ADR-062's own org-roam-grounded Context section warns against. Empty here
         // (same graceful-degrade contract `related`'s trait default already uses for
         // capabilities a layer doesn't support), not a slow best-effort attempt.
-        Vec::new()
+        Ok(Vec::new())
     }
 
-    fn neighborhood(&self, _id: &str, _depth: u32) -> Option<crate::store::SubGraph> {
+    fn neighborhood(
+        &self,
+        _id: &str,
+        _depth: u32,
+    ) -> Result<Option<crate::store::SubGraph>, KbStoreError> {
         // No BFS/neighborhood endpoint on ADR-053's surface (`kb/query.graph` is a flat,
         // undepthed whole-KB dump, not a per-node BFS) — not supported.
-        None
+        Ok(None)
     }
 }
 
@@ -483,7 +500,7 @@ mod tests {
             Duration::from_secs(5),
         );
 
-        let hits = layer.search("anything", 10);
+        let hits = layer.search("anything", 10).unwrap();
         assert_eq!(hits.len(), 2);
         assert_eq!(hits[0].id, "note:first");
         assert_eq!(hits[1].id, "note:second");
@@ -700,7 +717,7 @@ mod tests {
         federated.add_instance("hung-hub".into(), 1, Arc::new(hung_hub));
 
         let start = std::time::Instant::now();
-        let hits = federated.search("widget", 10);
+        let hits = federated.search("widget", 10).unwrap();
         let elapsed = start.elapsed();
 
         // The other 3 sources' real content must still be present.
@@ -733,7 +750,7 @@ mod tests {
             kb.insert(Node::new("h:1", "Healthy", NodeKind::Note, "widget"));
             kb
         })));
-        federated_healthy.search("widget", 10);
+        federated_healthy.search("widget", 10).unwrap();
         assert!(
             !federated_healthy.last_query_was_partial(),
             "a federation with no degraded source must not report partial results"

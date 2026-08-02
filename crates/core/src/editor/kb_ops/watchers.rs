@@ -303,7 +303,11 @@ impl Editor {
         let node_id: Option<String> = buf.file_path().and_then(|path| {
             // Find a node whose source_file matches this path
             if let Some(q) = self.kb.query_layer() {
-                q.list_ids(None).into_iter().find(|id| {
+                let ids = q.list_ids(None).unwrap_or_else(|e| {
+                    tracing::warn!(error = %e, "kb list_ids failed while validating links on save");
+                    Vec::new()
+                });
+                ids.into_iter().find(|id| {
                     q.get(id)
                         .and_then(|n| n.source_file)
                         .map(|sf| sf.as_path() == path)
@@ -337,11 +341,19 @@ impl Editor {
 
         if let Some(id) = node_id {
             let missing: Vec<String> = if let Some(q) = self.kb.query_layer() {
-                q.links_from(&id)
-                    .into_iter()
-                    .filter(|l| !q.contains(&l.dst))
-                    .map(|l| l.dst)
-                    .collect()
+                match q.links_from(&id) {
+                    Ok(links) => links
+                        .into_iter()
+                        .filter(|l| !q.contains(&l.dst))
+                        .map(|l| l.dst)
+                        .collect(),
+                    Err(e) => {
+                        // A storage failure is surfaced to the user, not silently
+                        // rendered as "no broken links" (ADR-086 read-side twin).
+                        self.set_status(format!("KB link validation failed: {e}"));
+                        Vec::new()
+                    }
+                }
             } else {
                 let m = self.kb.primary.validate_links(&id);
                 // Also check federated instances for the targets
@@ -374,7 +386,14 @@ impl Editor {
     pub fn kb_cleanup_orphans(&mut self) -> usize {
         let seed_prefixes = ["cmd:", "concept:", "lesson:", "scheme:", "option:"];
         let orphan_ids: Vec<String> = if let Some(q) = self.kb.query_layer() {
-            q.health_report().map(|r| r.orphan_ids).unwrap_or_default()
+            match q.health_report() {
+                Ok(Some(report)) => report.orphan_ids,
+                Ok(None) => Vec::new(),
+                Err(e) => {
+                    tracing::warn!(error = %e, "kb health_report failed during orphan cleanup");
+                    Vec::new()
+                }
+            }
         } else {
             self.kb.primary.health_report().orphan_ids
         };

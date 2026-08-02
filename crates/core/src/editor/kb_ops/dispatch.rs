@@ -67,7 +67,15 @@ impl Editor {
         // layer, closing part of the #118 thin-client gap). Fall back to the primary
         // store directly if no query layer is built yet.
         let nodes = if let Some(q) = self.kb.query_layer() {
-            q.agenda(&filter)
+            match q.agenda(&filter) {
+                Ok(nodes) => nodes,
+                Err(e) => {
+                    // A storage failure is surfaced to the user, not silently rendered
+                    // as "no matching nodes" (ADR-086 read-side twin).
+                    self.set_status(format!("KB agenda query failed: {e}"));
+                    return;
+                }
+            }
         } else if let Some(ref store) = self.kb.store {
             store.agenda_query(&filter).unwrap_or_default()
         } else {
@@ -101,7 +109,13 @@ impl Editor {
         // Phase 3: route history through the query layer (uniform in both modes),
         // falling back to the primary store directly if no query layer is built.
         let versions = if let Some(q) = self.kb.query_layer() {
-            q.history(id, 50)
+            match q.history(id, 50) {
+                Ok(versions) => versions,
+                Err(e) => {
+                    self.set_status(format!("KB history query failed: {e}"));
+                    return;
+                }
+            }
         } else if let Some(ref store) = self.kb.store {
             store.node_history(id, 50).unwrap_or_default()
         } else {

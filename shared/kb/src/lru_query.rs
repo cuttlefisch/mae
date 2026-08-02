@@ -8,7 +8,7 @@
 //! Memory budget: ~400KB for 200 nodes (default capacity).
 
 use crate::query::KbQueryLayer;
-use crate::store::{HealthReport, Link, SearchHit, SubGraph};
+use crate::store::{HealthReport, KbStoreError, Link, SearchHit, SubGraph};
 use crate::Node;
 use mae_mcp::daemon_client::{DaemonClient, DaemonClientError};
 use serde_json::{json, Value};
@@ -184,22 +184,25 @@ impl KbQueryLayer for LruQueryLayer {
         self.fetch_node(id).is_some()
     }
 
-    fn search(&self, query: &str, limit: usize) -> Vec<SearchHit> {
+    fn search(&self, query: &str, limit: usize) -> Result<Vec<SearchHit>, KbStoreError> {
         // Search is not cacheable — always goes to daemon
         let result = {
             let mut client = self.client.lock().unwrap_or_else(|e| e.into_inner());
             client.call("kb/search", json!({"query": query, "limit": limit}))
         };
         match result {
-            Ok(val) => parse_search_hits(&val),
+            Ok(val) => Ok(parse_search_hits(&val)),
             Err(e) => {
-                tracing::debug!(error = %e, "LruQueryLayer: search failed");
-                Vec::new()
+                // A daemon RPC failure is a real storage-layer failure, not "the KB has
+                // nothing matching this query" — propagate it (ADR-086 read-side twin)
+                // instead of silently returning an empty result set.
+                tracing::warn!(error = %e, "LruQueryLayer: search failed");
+                Err(KbStoreError::Storage(e.to_string()))
             }
         }
     }
 
-    fn links_from(&self, id: &str) -> Vec<Link> {
+    fn links_from(&self, id: &str) -> Result<Vec<Link>, KbStoreError> {
         // Check cache
         {
             let mut cache = self
@@ -207,7 +210,7 @@ impl KbQueryLayer for LruQueryLayer {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             if let Some(links) = cache.get(id) {
-                return links.clone();
+                return Ok(links.clone());
             }
         }
         // RPC
@@ -223,16 +226,16 @@ impl KbQueryLayer for LruQueryLayer {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 cache.put(id.to_string(), links.clone());
-                links
+                Ok(links)
             }
             Err(e) => {
-                tracing::debug!(error = %e, id, "LruQueryLayer: links_from failed");
-                Vec::new()
+                tracing::warn!(error = %e, id, "LruQueryLayer: links_from failed");
+                Err(KbStoreError::Storage(e.to_string()))
             }
         }
     }
 
-    fn links_to(&self, id: &str) -> Vec<Link> {
+    fn links_to(&self, id: &str) -> Result<Vec<Link>, KbStoreError> {
         // Check cache
         {
             let mut cache = self
@@ -240,7 +243,7 @@ impl KbQueryLayer for LruQueryLayer {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             if let Some(links) = cache.get(id) {
-                return links.clone();
+                return Ok(links.clone());
             }
         }
         // RPC
@@ -256,16 +259,16 @@ impl KbQueryLayer for LruQueryLayer {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner());
                 cache.put(id.to_string(), links.clone());
-                links
+                Ok(links)
             }
             Err(e) => {
-                tracing::debug!(error = %e, id, "LruQueryLayer: links_to failed");
-                Vec::new()
+                tracing::warn!(error = %e, id, "LruQueryLayer: links_to failed");
+                Err(KbStoreError::Storage(e.to_string()))
             }
         }
     }
 
-    fn list_ids(&self, prefix: Option<&str>) -> Vec<String> {
+    fn list_ids(&self, prefix: Option<&str>) -> Result<Vec<String>, KbStoreError> {
         // Listing is cheap via RPC — don't cache
         let params = match prefix {
             Some(p) => json!({"prefix": p}),
@@ -276,22 +279,22 @@ impl KbQueryLayer for LruQueryLayer {
             client.call("kb/list_ids", params)
         };
         match result {
-            Ok(val) => val
+            Ok(val) => Ok(val
                 .as_array()
                 .map(|arr| {
                     arr.iter()
                         .filter_map(|v| v.as_str().map(String::from))
                         .collect()
                 })
-                .unwrap_or_default(),
+                .unwrap_or_default()),
             Err(e) => {
-                tracing::debug!(error = %e, "LruQueryLayer: list_ids failed");
-                Vec::new()
+                tracing::warn!(error = %e, "LruQueryLayer: list_ids failed");
+                Err(KbStoreError::Storage(e.to_string()))
             }
         }
     }
 
-    fn id_title_pairs(&self, prefix: Option<&str>) -> Vec<(String, String)> {
+    fn id_title_pairs(&self, prefix: Option<&str>) -> Result<Vec<(String, String)>, KbStoreError> {
         // Delegate to daemon — this is used for completion, not worth caching all
         let params = match prefix {
             Some(p) => json!({"prefix": p}),
@@ -302,7 +305,7 @@ impl KbQueryLayer for LruQueryLayer {
             client.call("kb/id_title_pairs", params)
         };
         match result {
-            Ok(val) => val
+            Ok(val) => Ok(val
                 .as_array()
                 .map(|arr| {
                     arr.iter()
@@ -313,10 +316,10 @@ impl KbQueryLayer for LruQueryLayer {
                         })
                         .collect()
                 })
-                .unwrap_or_default(),
+                .unwrap_or_default()),
             Err(e) => {
-                tracing::debug!(error = %e, "LruQueryLayer: id_title_pairs failed");
-                Vec::new()
+                tracing::warn!(error = %e, "LruQueryLayer: id_title_pairs failed");
+                Err(KbStoreError::Storage(e.to_string()))
             }
         }
     }
@@ -325,7 +328,7 @@ impl KbQueryLayer for LruQueryLayer {
         &self,
         prefix: Option<&str>,
         body_limit: usize,
-    ) -> Vec<(String, String, String)> {
+    ) -> Result<Vec<(String, String, String)>, KbStoreError> {
         let mut params = json!({"body_limit": body_limit});
         if let Some(p) = prefix {
             params["prefix"] = json!(p);
@@ -335,7 +338,7 @@ impl KbQueryLayer for LruQueryLayer {
             client.call("kb/id_title_body_triples", params)
         };
         match result {
-            Ok(val) => val
+            Ok(val) => Ok(val
                 .as_array()
                 .map(|arr| {
                     arr.iter()
@@ -347,15 +350,15 @@ impl KbQueryLayer for LruQueryLayer {
                         })
                         .collect()
                 })
-                .unwrap_or_default(),
+                .unwrap_or_default()),
             Err(e) => {
-                tracing::debug!(error = %e, "LruQueryLayer: id_title_body_triples failed");
-                Vec::new()
+                tracing::warn!(error = %e, "LruQueryLayer: id_title_body_triples failed");
+                Err(KbStoreError::Storage(e.to_string()))
             }
         }
     }
 
-    fn health_report(&self) -> Option<HealthReport> {
+    fn health_report(&self) -> Result<Option<HealthReport>, KbStoreError> {
         let result = {
             let mut client = self.client.lock().unwrap_or_else(|e| e.into_inner());
             client.call("kb/health", json!({}))
@@ -363,7 +366,7 @@ impl KbQueryLayer for LruQueryLayer {
         match result {
             Ok(val) => {
                 // Parse the subset the daemon returns
-                Some(HealthReport {
+                Ok(Some(HealthReport {
                     total_nodes: val["total_nodes"].as_u64().unwrap_or(0) as usize,
                     total_links: val["total_links"].as_u64().unwrap_or(0) as usize,
                     namespace_counts: HashMap::new(),
@@ -373,40 +376,40 @@ impl KbQueryLayer for LruQueryLayer {
                     broken_links: Vec::new(),
                     hub_nodes: Vec::new(),
                     by_instance: HashMap::new(),
-                })
+                }))
             }
             Err(e) => {
-                tracing::debug!(error = %e, "LruQueryLayer: health failed");
-                None
+                tracing::warn!(error = %e, "LruQueryLayer: health failed");
+                Err(KbStoreError::Storage(e.to_string()))
             }
         }
     }
 
-    fn neighborhood(&self, id: &str, depth: u32) -> Option<SubGraph> {
+    fn neighborhood(&self, id: &str, depth: u32) -> Result<Option<SubGraph>, KbStoreError> {
         // Not cached — graph views are infrequent + the result is large.
         let result = {
             let mut client = self.client.lock().unwrap_or_else(|e| e.into_inner());
             client.call("kb/neighborhood", json!({"id": id, "depth": depth}))
         };
         match result {
-            Ok(val) => parse_subgraph(&val),
+            Ok(val) => Ok(parse_subgraph(&val)),
             Err(e) => {
-                tracing::debug!(error = %e, id, "LruQueryLayer: neighborhood failed");
-                None
+                tracing::warn!(error = %e, id, "LruQueryLayer: neighborhood failed");
+                Err(KbStoreError::Storage(e.to_string()))
             }
         }
     }
 
-    fn related(&self, id: &str, limit: usize) -> Vec<(String, f64)> {
+    fn related(&self, id: &str, limit: usize) -> Result<Vec<(String, f64)>, KbStoreError> {
         let result = {
             let mut client = self.client.lock().unwrap_or_else(|e| e.into_inner());
             client.call("kb/related", json!({"id": id, "limit": limit}))
         };
         match result {
-            Ok(val) => parse_related(&val),
+            Ok(val) => Ok(parse_related(&val)),
             Err(e) => {
-                tracing::debug!(error = %e, id, "LruQueryLayer: related failed");
-                Vec::new()
+                tracing::warn!(error = %e, id, "LruQueryLayer: related failed");
+                Err(KbStoreError::Storage(e.to_string()))
             }
         }
     }
@@ -434,23 +437,23 @@ impl KbQueryLayer for LruQueryLayer {
         }
     }
 
-    fn todo_nodes(&self) -> Vec<Node> {
+    fn todo_nodes(&self) -> Result<Vec<Node>, KbStoreError> {
         let result = {
             let mut client = self.client.lock().unwrap_or_else(|e| e.into_inner());
             client.call("kb/todo_nodes", json!({}))
         };
         match result {
-            Ok(val) => val
+            Ok(val) => Ok(val
                 .as_array()
                 .map(|arr| {
                     arr.iter()
                         .filter_map(|v| serde_json::from_value::<Node>(v.clone()).ok())
                         .collect()
                 })
-                .unwrap_or_default(),
+                .unwrap_or_default()),
             Err(e) => {
-                tracing::debug!(error = %e, "LruQueryLayer: todo_nodes failed");
-                Vec::new()
+                tracing::warn!(error = %e, "LruQueryLayer: todo_nodes failed");
+                Err(KbStoreError::Storage(e.to_string()))
             }
         }
     }
