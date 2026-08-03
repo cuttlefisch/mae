@@ -156,7 +156,7 @@ data) · ❌ absent.
 | DAP: session start/stop/step | ✅ `debug-start/stop/continue/step-*` | — | ✅ `dap-start`, `dap-continue`, `dap-step-over/into/out` | ✅ `dap_start`, `dap_continue`, `dap_step` | **Closed.** Actions queue and return `#t`; `(debug-state)` is the reader. Command-surface naming stays `debug-*` (a naming inconsistency, not a functional gap). |
 | DAP: breakpoints | ✅ `debug-toggle-breakpoint` | — | ✅ `dap-set-breakpoint` (no `dap-remove-breakpoint` yet) | ✅ `dap_set_breakpoint`, `dap_remove_breakpoint` | **Partly closed** — removal still MCP-only. |
 | DAP: inspect variables/call stack | ✅ `debug-inspect`, `debug-panel` | — | ✅ `debug-state`, `dap-inspect-variable` | ✅ `debug_state`, `dap_inspect_variable`, `dap_list_variables`, `dap_expand_variable` | **Closed** for CLAUDE.md's own `(dap-inspect-variable ...)` example, both synchronous. `dap_list_variables`/`dap_expand_variable` remain MCP-only (`(debug-state)` already returns all variables by scope). |
-| KB: search | ✅ `kb-find` | — | ✅ `kb-search` | ✅ `kb_search` | **Closed.** Scheme searches the durable store (like every sibling `kb-*` query primitive); MCP searches the in-memory federated mirror. |
+| KB: search | ✅ `kb-find` | — | ✅ `kb-search` | ✅ `kb_search` | **Closed**, and both surfaces rank with the same `KnowledgeBase::search_ranked`. |
 | KB: get node by ID | ➖ `kb-view`/`kb-preview` | — | ✅ `kb-get` | ✅ `kb_get` | **Closed.** Resolves across primary ∪ federated instances; `#f` when absent, an error when the store fails. |
 | KB: create/update/delete node | ✅ `kb-create`, `kb-update`, `kb-delete` | — | ✅ `kb-create`, `kb-update`, `kb-delete` | ✅ `kb_create`, `kb_update`, `kb_delete` | **Closed.** All three queue into the same `Editor::kb_*_node` the MCP tools call. |
 | KB: graph/neighborhood/related/shortest-path | ✅ (via graph view) | — | ✅ `kb-graph`, `kb-neighborhood`, `kb-related`, `kb-shortest-path` | ✅ `kb_graph`, `kb_neighborhood`, `kb_related`, `kb_shortest_path` | Full parity (and now fully documented — see gap #4 above). |
@@ -303,14 +303,16 @@ Two consequences worth stating plainly:
 - LSP position arguments are `[BUFFER-NAME] [LINE] [COL]`, not `[FILE LINE
   COL]` — the MCP tools take `buffer_name`, and taking a *path* on the Scheme
   surface only would have been a third addressing convention.
-- `(kb-search …)`'s `SCOPE` is `"primary"` (default) / `"all"`, and `QUERY` is
-  treated as **literal terms, not a CozoDB full-text-search expression**:
-  `-`, `:` and `*` separate terms instead of acting as operators, so
-  `(kb-search "concept:buffer")` searches rather than failing to parse. Without
-  this, the most natural MAE queries — every shipped node id contains `:` and
-  most contain `-` — returned a parser error on the Scheme surface while the
-  `kb_search` MCP tool (which searches the in-memory federated mirror) accepted
-  them.
+- `(kb-search …)`'s `SCOPE` is `"primary"` (default) / `"all"`, and matching
+  goes through the **same `KnowledgeBase::search_ranked`** the `kb_search` MCP
+  tool ranks with, over an in-memory `KnowledgeBase` loaded from the store —
+  *not* through `KbStore::fts_search`. Two reasons, both found by testing this
+  primitive: the CozoDB FTS query parser rejects `-`/`:`/`*` as operators, so
+  `(kb-search "concept:buffer")` was a parse error while the MCP tool accepted
+  it; and the FTS index silently drops terms (see
+  `docs/DECISIONS_FOR_REVIEW.md` item 9), which would have made the Scheme
+  surface *miss* nodes the MCP tool returns — the more dangerous direction of
+  asymmetry, since a missing result reads as an absent node.
 - `(kb-create/update/delete …)` return `#t` once **queued**; the write itself
   runs on the next tick through `Editor::kb_*_node`. `kb-update`/`kb-delete`
   pre-check existence against the same store the write targets, so "no such

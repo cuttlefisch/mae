@@ -10,6 +10,7 @@
 
 use super::*;
 use mae_core::Editor;
+use mae_kb::KbStore as _;
 
 fn new_runtime() -> SchemeRuntime {
     SchemeRuntime::new().unwrap()
@@ -371,23 +372,40 @@ fn kb_search_treats_punctuation_as_separators_not_operators() {
         "hyphenated query should still match: {hits}"
     );
 
-    // A query with no usable term matches NOTHING, not everything — the
-    // failure mode of sanitizing to the empty string, which `fts_search`
-    // treats as "list all".
-    for junk in ["---", "!!!", "::"] {
-        let out = rt.eval(&format!(r#"(kb-search "{junk}")"#)).unwrap();
+    // Every term that IS present is found, whichever field it sits in — the
+    // property the CozoDB FTS index does not have (see `store_as_kb`'s
+    // `@ai-caution`: a node titled "alpha beta gamma delta" with body
+    // "epsilon zeta eta" is not found there by `delta` or `epsilon`). Each
+    // term below is checked against the node it belongs to, so a search that
+    // returned everything would pass while one that silently dropped a term
+    // would not.
+    for (term, expected) in [
+        ("rope", "note:probe-buffer"),
+        ("backed", "note:probe-buffer"),
+        ("container", "note:probe-buffer"),
+        ("share", "note:probe-kb-share"),
+        ("command", "note:probe-kb-share"),
+        ("knowledge", "note:probe-kb-share"),
+    ] {
+        let out = rt.eval(&format!(r#"(kb-search "{term}")"#)).unwrap();
         assert!(
-            !out.contains("note:probe-buffer") && !out.contains("note:probe-kb-share"),
-            "{junk:?} must not match everything: {out}"
+            out.contains(expected),
+            "{term:?} should find {expected}: {out}"
         );
     }
 
-    // …while an explicitly empty query does list everything, matching
-    // `KbStore::fts_search`'s own documented contract.
+    // An explicitly empty query lists everything, capped by LIMIT — matching
+    // the MCP tool, whose federated search behaves the same way.
     let all = rt.eval(r#"(kb-search "")"#).unwrap();
     assert!(
-        all.contains("note:probe-buffer"),
+        all.contains("note:probe-buffer") && all.contains("note:probe-kb-share"),
         "empty query lists all: {all}"
+    );
+    let capped = rt.eval(r#"(kb-search "" "primary" 1)"#).unwrap();
+    assert_eq!(
+        capped.matches("note:probe").count(),
+        1,
+        "LIMIT must cap the list-everything path too: {capped}"
     );
 }
 
@@ -415,6 +433,76 @@ fn kb_search_validates_its_scope_and_limit() {
         rt.eval(&format!(r#"(kb-search "q" "{scope}")"#))
             .unwrap_or_else(|e| panic!("{scope} should be accepted: {}", e.message));
     }
+}
+
+/// `SharedState::kb_instance_stores` is populated primary-first *and already
+/// contains the primary store*. A `scope="all"` search that concatenated it
+/// with `kb_store` would therefore visit the primary twice and return every
+/// primary hit twice — a bug invisible to any test with only one KB
+/// registered, which is why this one registers a real federated instance.
+///
+/// The oracle is the multiset of returned ids, not merely "the hit is
+/// present": duplication is exactly what a `contains` assertion cannot see.
+#[test]
+fn kb_search_all_scope_visits_each_store_once() {
+    let mut rt = new_runtime();
+    let mut editor = editor_with_cozo_store();
+    editor
+        .kb_create_node(
+            "note:onlyprimary",
+            "Only Primary flamingo",
+            "body",
+            mae_kb::NodeKind::Note,
+        )
+        .unwrap();
+
+    // A second, genuinely separate store registered as a federated instance.
+    let inst_store = std::sync::Arc::new(mae_kb::CozoKbStore::open_mem().unwrap());
+    inst_store.seed_type_system().unwrap();
+    inst_store
+        .insert_node(&mae_kb::Node::new(
+            "note:onlyinstance",
+            "Only Instance flamingo",
+            mae_kb::NodeKind::Note,
+            "body",
+        ))
+        .unwrap();
+    editor
+        .kb
+        .instance_stores
+        .insert("parity-instance".to_string(), inst_store);
+    rt.inject_editor_state(&editor);
+
+    let all = rt.eval(r#"(kb-search "flamingo" "all")"#).unwrap();
+    // Both nodes reachable…
+    assert!(all.contains("note:onlyprimary"), "{all}");
+    assert!(all.contains("note:onlyinstance"), "{all}");
+    // …and each exactly once. `matches().count()` is the assertion a
+    // `contains` check cannot make.
+    assert_eq!(
+        all.matches("note:onlyprimary").count(),
+        1,
+        "the primary store was searched more than once: {all}"
+    );
+    assert_eq!(
+        all.matches("note:onlyinstance").count(),
+        1,
+        "the instance store was searched more than once: {all}"
+    );
+
+    // "primary" scope is genuinely narrower — it must NOT reach the instance.
+    let primary = rt.eval(r#"(kb-search "flamingo" "primary")"#).unwrap();
+    assert!(primary.contains("note:onlyprimary"), "{primary}");
+    assert!(
+        !primary.contains("note:onlyinstance"),
+        "primary scope leaked a federated instance's node: {primary}"
+    );
+
+    // `kb-get` resolves across the federation without duplicating either.
+    assert!(rt
+        .eval(r#"(kb-get "note:onlyinstance")"#)
+        .unwrap()
+        .contains("Only Instance"));
 }
 
 /// With no KB store at all, the reads must degrade to "nothing found" rather

@@ -1680,7 +1680,7 @@ pub(crate) const SCHEME_API_FUNCTIONS: &[(&str, &str, &str, &str, &str)] = &[
         (
             "kb-search",
             "(kb-search QUERY [SCOPE] [LIMIT])",
-            "Full-text search the knowledge base. SCOPE is \"primary\" (default) or \"all\" (primary plus every registered federated instance); LIMIT caps the hits (default 20). Returns a list of (id title kind instance) — instance is #f for a primary-KB hit. Scheme counterpart of the kb_search MCP tool.",
+            "Search the knowledge base. SCOPE is \"primary\" (default) or \"all\" (primary plus every registered federated instance); LIMIT caps the hits (default 20). Returns a list of (id title kind instance) — instance is #f for a primary-KB hit. Matching and ranking use the same KnowledgeBase::search_ranked the kb_search MCP tool uses: a case-insensitive term/substring search over title and body, with no query-operator syntax, so \"concept:buffer\" and \"kb-sharing\" search for themselves. An empty QUERY lists everything, capped by LIMIT.",
             "(kb-search \"window group\" \"all\" 5)",
             "kb-graph",
         ),

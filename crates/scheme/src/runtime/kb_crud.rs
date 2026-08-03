@@ -69,18 +69,27 @@ pub enum KbNodeOp {
     },
 }
 
+/// Every KB store to consult, primary first, **each exactly once**.
+///
+/// @ai-caution: [architecture-debt] `SharedState::kb_instance_stores` is
+/// populated as *primary-first, then each federated instance*
+/// (`state_sync_inject.rs`), so it already contains the primary store —
+/// concatenating it with `kb_store` would visit the primary twice, which for
+/// `kb-search` means every primary hit appearing twice in the result list.
+/// Do not "fix" a missing-primary bug by adding `kb_store` back on top; the
+/// only case where it is not already in the list is when the list is empty.
+fn all_stores(state: &SharedState) -> Vec<Arc<dyn mae_kb::KbStore>> {
+    if !state.kb_instance_stores.is_empty() {
+        return state.kb_instance_stores.clone();
+    }
+    state.kb_store.iter().cloned().collect()
+}
+
 /// Look a node up across the primary store and every registered federated
 /// instance store, mirroring how `Editor::kb_owner_of` resolves an id across
 /// `primary ∪ instances`. Returns `Ok(None)` when no store holds the id.
 fn lookup_node(state: &SharedState, id: &str) -> Result<Option<mae_kb::Node>, LispError> {
-    let mut stores: Vec<&Arc<dyn mae_kb::KbStore>> = Vec::new();
-    if let Some(ref primary) = state.kb_store {
-        stores.push(primary);
-    }
-    for inst in &state.kb_instance_stores {
-        stores.push(inst);
-    }
-    for store in stores {
+    for store in all_stores(state) {
         match store.get_node(id) {
             Ok(Some(node)) => return Ok(Some(node)),
             Ok(None) => {}
@@ -125,43 +134,36 @@ fn opt_string(v: &Value, fn_name: &str) -> Result<Option<String>, LispError> {
     }
 }
 
-/// Reduce a user's query string to plain search terms.
+/// Load one store's nodes into an in-memory [`mae_kb::KnowledgeBase`] so the
+/// SAME `search_ranked` the `kb_search` MCP tool uses can rank them.
 ///
-/// `KbStore::fts_search` hands the query to CozoDB's full-text **expression**
-/// parser, which reserves `-`, `:`, `"`, `*` and friends as operators. That is
-/// a trap for a Scheme caller: `(kb-search "kb-sharing")` or
-/// `(kb-search "concept:buffer")` — both entirely natural things to type, and
-/// both matching real MAE node ids — would come back as a CozoDB *parse error*
-/// rather than as results, while the `kb_search` MCP tool (which searches the
-/// in-memory federated mirror, not the FTS index) accepts them happily. Two
-/// surfaces disagreeing on what counts as a valid query is exactly the
-/// asymmetry principle #3 rules out.
+/// @ai-caution: [architecture-debt] Do NOT "optimise" this back to
+/// `KbStore::fts_search`. That index is demonstrably lossy — on a freshly
+/// seeded store, a node titled `"alpha beta gamma delta"` with body
+/// `"epsilon zeta eta"` is found by `alpha`/`beta`/`gamma`/`zeta`/`eta` and
+/// **not** by `delta`/`epsilon`; `mae-kb`'s own `fts_search_finds_nodes` test
+/// passes only because `quantum` happens to be one of the terms that work
+/// (the "unicorn value" failure mode CLAUDE.md principle #14 names). Building
+/// `kb-search` on it would make the Scheme surface silently *miss* nodes the
+/// MCP `kb_search` tool returns, which is the parity asymmetry principle #3
+/// rules out — in the more dangerous direction, since a missing result looks
+/// like an absent node. See `docs/DECISIONS_FOR_REVIEW.md` for the defect
+/// itself, which is pre-existing and independent of this primitive.
 ///
-/// So the query is treated as literal terms: anything that is not
-/// alphanumeric or an underscore becomes a separator. This deliberately gives
-/// up FTS operator syntax on this surface — a Scheme caller cannot write an
-/// FTS boolean expression through `kb-search`, and gets a term search instead
-/// of an error.
-///
-/// Returns `None` when a non-empty query contains no usable term at all
-/// (`"---"`, `"!!!"`), because passing the resulting empty string through to
-/// `fts_search` would match *everything* — the opposite of what the caller
-/// asked for.
-fn sanitize_fts_query(query: &str) -> Option<String> {
-    if query.is_empty() {
-        // An explicitly empty query means "list everything", which is
-        // `fts_search`'s own documented behaviour for `""`.
-        return Some(String::new());
+/// Cost: one `load_all()` per store per search. That is the same O(n) shape
+/// `Editor::kb_federated_search_scoped` already pays (it scans the in-memory
+/// federated mirror), so this is not a new order of cost for the editor —
+/// but it does deserialize rather than reuse a resident mirror, which this
+/// crate has no access to.
+fn store_as_kb(store: &Arc<dyn mae_kb::KbStore>) -> Result<mae_kb::KnowledgeBase, LispError> {
+    let nodes = store
+        .load_all()
+        .map_err(|e| LispError::internal(format!("kb-search: {e}")))?;
+    let mut kb = mae_kb::KnowledgeBase::new();
+    for node in nodes {
+        kb.insert(node);
     }
-    let terms: Vec<&str> = query
-        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-        .filter(|t| !t.is_empty())
-        .collect();
-    if terms.is_empty() {
-        None
-    } else {
-        Some(terms.join(" "))
-    }
+    Ok(kb)
 }
 
 /// Register the KB CRUD/search primitives.
@@ -174,11 +176,11 @@ pub(super) fn register_kb_crud_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>
          \"primary\" (the primary KB only, the default) or \"all\" (primary plus every \
          registered federated instance); optional LIMIT caps the number of hits (default 20). \
          Returns a list of (id title kind instance) — instance is #f for a primary-KB hit and \
-         the instance's ordinal for a federated one. QUERY is treated as literal search terms, \
-         not a full-text-search expression: punctuation (`-`, `:`, `\"`, `*`) separates terms \
-         rather than acting as an operator, so \"concept:buffer\" and \"kb-sharing\" search for \
-         their words instead of failing to parse. An empty QUERY lists everything. Counterpart \
-         of the kb_search MCP tool.",
+         the instance's ordinal for a federated one. Matching and ranking use the same \
+         KnowledgeBase::search_ranked the kb_search MCP tool uses, so both surfaces agree on what \
+         matches: a plain substring/term search over title and body, case-insensitive, with no \
+         query-operator syntax — \"concept:buffer\" and \"kb-sharing\" search for themselves. An \
+         empty QUERY lists everything, capped by LIMIT.",
         Arity::Variadic(1),
         tier::READ,
         move |args: &[Value]| {
@@ -209,42 +211,46 @@ pub(super) fn register_kb_crud_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>
                 }
             };
 
-            // Punctuation-only query: no term to match, so no hits. Returning
-            // early rather than passing "" down, which would list everything.
-            let Some(query) = sanitize_fts_query(&query) else {
-                return Ok(Value::list(vec![]));
-            };
-
             let state = s.lock();
-            let mut layers: Vec<(Value, &Arc<dyn mae_kb::KbStore>)> = Vec::new();
-            if let Some(ref primary) = state.kb_store {
-                layers.push((Value::Bool(false), primary));
-            }
-            if federated {
-                for (i, inst) in state.kb_instance_stores.iter().enumerate() {
-                    layers.push((Value::Int(i as i64), inst));
-                }
-            }
+            // `all_stores` is primary-first and duplicate-free (see its
+            // `@ai-caution`), so index 0 is the primary and every later index
+            // is a federated instance. "primary" scope takes only the first.
+            let stores = all_stores(&state);
+            let layers: Vec<(Value, Arc<dyn mae_kb::KbStore>)> = stores
+                .into_iter()
+                .enumerate()
+                .take(if federated { usize::MAX } else { 1 })
+                .map(|(i, store)| {
+                    let label = if i == 0 {
+                        Value::Bool(false)
+                    } else {
+                        Value::Int((i - 1) as i64)
+                    };
+                    (label, store)
+                })
+                .collect();
 
             let mut out = Vec::new();
             for (instance, store) in layers {
                 if out.len() >= limit {
                     break;
                 }
-                let hits = store
-                    .fts_search(&query, limit)
-                    .map_err(|e| LispError::internal(format!("kb-search: {e}")))?;
-                for hit in hits {
+                let kb = store_as_kb(&store)?;
+                // `search_ranked` is the same `mae_kb::KnowledgeBase` method
+                // `Editor::kb_federated_search_scoped` ranks with, so the two
+                // surfaces agree on what "matches" means, including for a
+                // query full of `:` and `-` (every MAE node id).
+                for (id, _score) in kb.search_ranked(&query, limit) {
                     if out.len() >= limit {
                         break;
                     }
-                    // A hit whose node cannot be re-read is a store
-                    // inconsistency, not a result — skip it rather than
-                    // fabricating empty title/kind fields.
-                    if let Ok(Some(node)) = store.get_node(&hit.id) {
+                    // A ranked id that is no longer in the KB would be a
+                    // KnowledgeBase inconsistency, not a result — skip it
+                    // rather than fabricating empty title/kind fields.
+                    if let Some(node) = kb.get(&id) {
                         out.push(Value::list(vec![
-                            Value::string(node.id),
-                            Value::string(node.title),
+                            Value::string(node.id.clone()),
+                            Value::string(node.title.clone()),
                             Value::string(node.kind.as_str()),
                             instance.clone(),
                         ]));
