@@ -45,6 +45,7 @@ pub mod keymap_registry;
 pub mod link_detect;
 pub mod lock_stats;
 pub mod lsp_intent;
+pub mod lsp_position;
 pub mod messages;
 pub mod notifications;
 pub mod notifications_view;

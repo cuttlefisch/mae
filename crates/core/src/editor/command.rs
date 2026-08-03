@@ -516,7 +516,11 @@ impl Editor {
                                 uri,
                                 language_id,
                                 line: win.cursor_row as u32,
-                                character: win.cursor_col as u32,
+                                // ADR-087 Rule 1: named conversion, not a cast.
+                                character: crate::lsp_position::byte_col_to_lsp_character(
+                                    &self.buffers[idx].line_text_no_newline(win.cursor_row),
+                                    win.cursor_col,
+                                ),
                                 new_name: new_name.to_string(),
                             });
                         self.set_status(format!("LSP rename → '{}'", new_name));

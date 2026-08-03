@@ -57,12 +57,12 @@ impl Editor {
         let language_id = language_id_from_path(path)?;
         let uri = path_to_uri(path);
         let win = self.window_mgr.focused_window();
-        Some((
-            uri,
-            language_id,
-            win.cursor_row as u32,
-            win.cursor_col as u32,
-        ))
+        // ADR-087 Rule 1: byte col -> LSP `character` is a named conversion,
+        // never a bare cast. (Rule 5 — the encoding that conversion should
+        // use — is tracked in `lsp_position`'s module docs.)
+        let line_text = buf.line_text_no_newline(win.cursor_row);
+        let character = crate::lsp_position::byte_col_to_lsp_character(&line_text, win.cursor_col);
+        Some((uri, language_id, win.cursor_row as u32, character))
     }
 
     /// Return a status suffix if the LSP server for `language_id` is still

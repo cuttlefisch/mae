@@ -1,5 +1,19 @@
 use crate::window::WindowId;
 
+/// Clamp a byte column to the start of the **last** grapheme cluster on
+/// `row` — vi's "the cursor sits on a character, not past the end" rule.
+///
+/// ADR-087 Rule 4: the pre-migration idiom was `line_len.saturating_sub(1)`,
+/// which is off by (cluster_len - 1) bytes on any non-ASCII line and could
+/// land mid-UTF-8.
+fn last_grapheme_col(buf: &crate::buffer::Buffer, row: usize, col: usize) -> usize {
+    let len = buf.line_byte_len(row);
+    if col < len {
+        return buf.snap_col_to_grapheme(row, col);
+    }
+    buf.prev_grapheme_col(row, len)
+}
+
 impl super::Editor {
     pub fn handle_mouse_click(
         &mut self,
@@ -113,9 +127,12 @@ impl super::Editor {
 
                 // --- Shift-click: extend or start selection ---
                 if shift_held {
+                    let policy = self.width_policy();
                     let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
-                    let line_len = buf.line_byte_len(target_row);
-                    let target_col = text_col.min(if line_len > 0 { line_len - 1 } else { 0 });
+                    // ADR-087 Rule 4: `text_col` is a DISPLAY column (screen
+                    // cells); the cursor wants a byte column.
+                    let target_col = buf.byte_col_for_display_col(target_row, text_col, policy);
+                    let target_col = last_grapheme_col(buf, target_row, target_col);
 
                     if !matches!(self.mode, crate::Mode::Visual(_)) {
                         // Start new visual selection from current cursor to click pos
@@ -151,9 +168,10 @@ impl super::Editor {
                     // overruns a short line — which would push char_offset_at past
                     // the rope and panic in word_start_backward.
                     let click_col = {
+                        let policy = self.width_policy();
                         let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
-                        let line_len = buf.line_byte_len(target_row);
-                        text_col.min(if line_len > 0 { line_len - 1 } else { 0 })
+                        let c = buf.byte_col_for_display_col(target_row, text_col, policy);
+                        last_grapheme_col(buf, target_row, c)
                     };
 
                     // Try link following first (existing behavior)
@@ -181,9 +199,10 @@ impl super::Editor {
                 }
 
                 // Single-click: just position cursor
+                let policy = self.width_policy();
                 let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
-                let line_len = buf.line_byte_len(target_row);
-                let target_col = text_col.min(if line_len > 0 { line_len - 1 } else { 0 });
+                let target_col = buf.byte_col_for_display_col(target_row, text_col, policy);
+                let target_col = last_grapheme_col(buf, target_row, target_col);
                 // Exit visual mode on single click
                 if matches!(self.mode, crate::Mode::Visual(_)) {
                     self.set_mode(crate::Mode::Normal);
@@ -292,7 +311,11 @@ impl super::Editor {
                 let target_row = ln
                     .saturating_sub(1)
                     .min(buf.display_line_count().saturating_sub(1));
-                let target_col = col.unwrap_or(1).saturating_sub(1);
+                // `path:line:col` link suffixes are 1-based CHARACTER columns
+                // by convention (grep/rustc/ripgrep all emit them that way);
+                // ADR-087 Rule 4 requires the explicit conversion here.
+                let char_col = col.unwrap_or(1).saturating_sub(1);
+                let target_col = buf.char_col_to_byte_col(target_row, char_col);
                 let win = self.window_mgr.focused_window_mut();
                 win.cursor_row = target_row;
                 win.cursor_col = target_col;
@@ -331,8 +354,13 @@ impl super::Editor {
         let buf_row = win.scroll_offset + row.saturating_sub(1);
         let max_row = buf.display_line_count().saturating_sub(1);
         let target_row = buf_row.min(max_row);
-        let line_len = buf.line_byte_len(target_row);
-        let target_col = text_col.min(if line_len > 0 { line_len - 1 } else { 0 });
+        // ADR-087 Rule 4: `text_col` is a DISPLAY column; convert, don't clamp.
+        let policy = self.width_policy();
+        let target_col = last_grapheme_col(
+            buf,
+            target_row,
+            buf.byte_col_for_display_col(target_row, text_col, policy),
+        );
 
         // Enter Visual mode on first drag if not already in it.
         if !matches!(self.mode, crate::Mode::Visual(_)) {

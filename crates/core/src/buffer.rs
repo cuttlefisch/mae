@@ -1212,6 +1212,43 @@ impl Buffer {
         crate::grapheme::char_idx_to_byte_idx(&text, char_col)
     }
 
+    /// Convert a **display column** (terminal cells, e.g. a mouse click's
+    /// screen column) on `row` into a byte column, landing on the
+    /// grapheme-cluster boundary that *contains* that cell.
+    ///
+    /// The pre-ADR-087 idiom was `screen_col.min(line_len_in_chars)`, which
+    /// silently equated three domains at once; a click on the right half of a
+    /// CJK character resolved to the wrong character.
+    ///
+    /// @ai-caution: [rendering] This measures the RAW line, so a line with an
+    /// active display region (tab expansion, link concealment) still resolves
+    /// approximately — the same pre-existing gap the char-based version had.
+    /// Fixing it needs the inverse of `display_text_and_col`, which is
+    /// `display_region::display_col_to_rope_col` plus the region lookup;
+    /// deliberately not folded in here with the ADR-087 Rule 4 migration.
+    pub fn byte_col_for_display_col(
+        &self,
+        row: usize,
+        display_col: usize,
+        policy: crate::grapheme::WidthPolicy,
+    ) -> usize {
+        let text = self.line_text_no_newline(row);
+        crate::grapheme::byte_offset_for_max_width_with(&text, display_col, policy)
+    }
+
+    /// Display width (terminal cells) of `row`'s text up to `byte_col`.
+    /// The inverse direction of [`Buffer::byte_col_for_display_col`].
+    pub fn display_col_for_byte_col(
+        &self,
+        row: usize,
+        byte_col: usize,
+        policy: crate::grapheme::WidthPolicy,
+    ) -> usize {
+        let text = self.line_text_no_newline(row);
+        let b = crate::grapheme::floor_char_boundary(&text, byte_col);
+        crate::grapheme::display_width_with(&text[..b], policy)
+    }
+
     /// Convert a byte column on `row` into a **char** column.
     pub fn byte_col_to_char_col(&self, row: usize, byte_col: usize) -> usize {
         let text = self.line_text_no_newline(row);
