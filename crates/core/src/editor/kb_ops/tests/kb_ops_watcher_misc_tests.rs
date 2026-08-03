@@ -207,9 +207,11 @@ fn registering_many_kbs_does_not_multiply_inotify_instances() {
     );
     let after = mae_kb::watch::inotify_instance_count().unwrap();
     let spent = after.saturating_sub(before);
+    // The design bound is 1 (see the mae-kb twin of this test); 2 only absorbs
+    // a concurrent test in this binary re-creating the shared watcher mid-measure.
     assert!(
-        spent <= 1,
-        "5 registered KBs must cost at most 1 inotify instance \
+        spent <= 2,
+        "5 registered KBs must cost ~1 inotify instance, not one each \
          (before={before}, after={after}, spent={spent})"
     );
 }

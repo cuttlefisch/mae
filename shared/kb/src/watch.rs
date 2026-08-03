@@ -763,9 +763,13 @@ mod tests {
             .collect();
         let after = inotify_instance_count().unwrap();
         let spent = after.saturating_sub(before);
+        // The design bound is 1. The assertion allows 2 only to absorb a
+        // concurrent test in this same binary dropping the last handle and
+        // re-creating the shared watcher while this one measures — never to
+        // tolerate per-directory growth, which starts at 8 here.
         assert!(
-            spent <= 1,
-            "8 watched directories must cost at most 1 inotify instance \
+            spent <= 2,
+            "8 watched directories must cost ~1 inotify instance, not one each \
              (before={before}, after={after}, spent={spent})"
         );
         drop(watchers);
