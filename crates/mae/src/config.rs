@@ -1107,9 +1107,18 @@ fn write_managed_init_options(options: &[(String, String)]) -> io::Result<PathBu
     const MARKER_START: &str = ";; --- MAE managed options ---";
     const MARKER_END: &str = ";; --- end managed options ---";
 
+    // Audit #599.2 — values reach here unescaped from config/wizard input; an
+    // embedded `"` or `\` used to emit a malformed Scheme literal and corrupt
+    // the very file MAE reads at startup. Shared with `save_option_to_init`.
     let managed_block: String = options
         .iter()
-        .map(|(k, v)| format!("(set-option! \"{}\" \"{}\")", k, v))
+        .map(|(k, v)| {
+            format!(
+                "(set-option! \"{}\" \"{}\")",
+                k,
+                mae_core::options::scheme_string_literal(v)
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -1377,6 +1386,79 @@ mod tests {
     /// Tests that manipulate environment variables must hold this lock
     /// to avoid races when cargo runs tests in parallel.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    /// Audit #599.2 — the first-run/wizard writer emitted values raw while
+    /// `Editor::save_option_to_init` escaped them, so the two writers of the
+    /// SAME file disagreed. A value containing `"` or `\` (an
+    /// `ai_api_key_command` with a quoted shell argument is the everyday case)
+    /// produced a malformed Scheme literal in the one file MAE reads at
+    /// startup — breaking the user's entire config, not just that option.
+    /// Both writers now share `mae_core::options::scheme_string_literal`.
+    #[test]
+    fn wizard_written_options_are_escaped_like_set_save_writes_them() {
+        let _lock = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().expect("tmpdir");
+        let prev = std::env::var("XDG_CONFIG_HOME").ok();
+        std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+
+        // Varied real shapes, not one cherry-picked value: an embedded quote,
+        // a backslash, both, and a Windows-style path.
+        let cases = [
+            r#"pass show api | head -1"#,
+            r#"sh -c "echo hi""#,
+            r#"C:\Users\me\key.txt"#,
+            r#"echo "a\b" && echo 'c'"#,
+        ];
+
+        for value in cases {
+            let opts = vec![("ai_api_key_command".to_string(), value.to_string())];
+            let path = write_managed_init_options(&opts).expect("write");
+            let content = std::fs::read_to_string(&path).expect("read");
+
+            let expected = format!(
+                "(set-option! \"ai_api_key_command\" \"{}\")",
+                mae_core::options::scheme_string_literal(value)
+            );
+            assert!(
+                content.contains(&expected),
+                "value {value:?} written unescaped; init.scm is:\n{content}"
+            );
+
+            // Selective oracle: the emitted literal must be *balanced* — an
+            // unescaped inner quote closes the string early, which is exactly
+            // the corruption this guards against. Count the unescaped `"` on
+            // the setter line; a well-formed one has exactly four.
+            let line = content
+                .lines()
+                .find(|l| {
+                    l.trim_start()
+                        .starts_with("(set-option! \"ai_api_key_command\"")
+                })
+                .unwrap_or_else(|| panic!("no setter line in:\n{content}"));
+            let mut unescaped_quotes = 0;
+            let mut chars = line.chars();
+            while let Some(c) = chars.next() {
+                match c {
+                    '\\' => {
+                        chars.next();
+                    }
+                    '"' => unescaped_quotes += 1,
+                    _ => {}
+                }
+            }
+            assert_eq!(
+                unescaped_quotes, 4,
+                "unbalanced string literal for {value:?}: {line}"
+            );
+
+            std::fs::remove_file(&path).ok();
+        }
+
+        match prev {
+            Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+            None => std::env::remove_var("XDG_CONFIG_HOME"),
+        }
+    }
 
     /// Every `(set-option! "name" ...)` referenced in the default init.scm
     /// template (commented-out examples included) must resolve against the

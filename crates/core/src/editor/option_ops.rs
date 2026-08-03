@@ -159,6 +159,7 @@ impl super::Editor {
             "babel_confirm" => self.babel_confirm.to_string(),
             "org_export_allow_raw_html_blocks" => self.org_export_allow_raw_html_blocks.to_string(),
             "babel_timeout" => self.babel_timeout.to_string(),
+            "babel_trust_paths" => self.babel_trust_paths.join(","),
             "babel_inherit_shell_env" => self.babel_inherit_shell_env.to_string(),
             "babel_cxx_compiler" => self.babel_cxx_compiler.clone(),
             "babel_c_compiler" => self.babel_c_compiler.clone(),
@@ -855,6 +856,16 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.babel_timeout = v.clamp(1, 3600);
+            }
+            "babel_trust_paths" => {
+                // Comma-separated patterns; blank entries dropped so a trailing
+                // comma can't become an empty pattern that matches by accident.
+                self.babel_trust_paths = value
+                    .split(',')
+                    .map(str::trim)
+                    .filter(|p| !p.is_empty())
+                    .map(str::to_string)
+                    .collect();
             }
             "babel_inherit_shell_env" => {
                 self.babel_inherit_shell_env = parse_option_bool(value)?;
@@ -1763,14 +1774,27 @@ impl super::Editor {
         // Escape backslashes and quotes so a value containing either (e.g. a
         // shell command in ai_api_key_command) still writes a valid Scheme
         // string literal instead of corrupting init.scm on next load.
-        let escaped_value = value.replace('\\', "\\\\").replace('"', "\\\"");
+        let escaped_value = crate::options::scheme_string_literal(&value);
         let set_line = format!("(set-option! \"{}\" \"{}\")", def.name, escaped_value);
         let pattern = format!("(set-option! \"{}\"", def.name);
 
         const MARKER_START: &str = ";; --- MAE managed options ---";
         const MARKER_END: &str = ";; --- end managed options ---";
 
-        let new_content = if content.contains(&pattern) {
+        // Audit #599.1: the branch predicate MUST be the same predicate the
+        // rewrite below uses. It was `content.contains(&pattern)` — a
+        // substring test — while the rewrite only replaces lines that *start*
+        // with the pattern. Any commented-out (`;; (set-option! "x" ...)`) or
+        // nested (`(begin (set-option! "x" ...))`) occurrence therefore
+        // selected the replace branch, replaced nothing, wrote the file back
+        // unchanged, and still reported "Saved". A commented-out example line
+        // is exactly what MAE's own init.scm template is full of, so this fired
+        // on the most ordinary config there is.
+        let has_settable_line = |c: &str| {
+            c.lines()
+                .any(|line| line.trim_start().starts_with(&pattern))
+        };
+        let new_content = if has_settable_line(&content) {
             // Replace existing line containing this option
             content
                 .lines()

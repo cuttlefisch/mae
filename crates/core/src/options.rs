@@ -424,6 +424,16 @@ impl OptionRegistry {
                 opt!("babel_timeout", &["babel-timeout"],
                     "Execution timeout in seconds for babel source blocks",
                     OptionKind::Int, "30", Some("babel.timeout"), &[]),
+                opt!("babel_trust_paths", &["babel-trust-paths"],
+                    "Comma-separated path patterns whose org files may execute `:eval yes` \
+                     source blocks WITHOUT a confirmation prompt, even when babel-confirm is \
+                     on. Patterns support `*` (trust everything — strongly discouraged), a \
+                     `dir/*` prefix, a `*/suffix`, a `*.ext` extension, and a bare directory \
+                     prefix. Empty (default) = nothing is pre-trusted, so every `:eval yes` \
+                     block in a file you open still asks. Set this only for directories whose \
+                     org files you author yourself: a trusted path is a standing grant to run \
+                     arbitrary code on open-and-execute.",
+                    OptionKind::String, "", Some("babel.trust_paths"), &[]),
                 opt!("babel_inherit_shell_env", &["babel-inherit-shell-env"],
                     "Merge the user's resolved interactive login shell environment (sourcing \
                      .bashrc/.zshrc/.profile via `$SHELL -i -l -c env`, resolved once and \
@@ -1298,6 +1308,21 @@ impl OptionRegistry {
             *slot = value;
         }
     }
+}
+
+/// Escape `value` for embedding inside a double-quoted Scheme string literal.
+///
+/// @ai-caution: [config-corruption] The ONE place this escaping lives. Every
+/// writer of `(set-option! "name" "value")` into `init.scm` must call it —
+/// `Editor::save_option_to_init` (the `:set-save` path) and
+/// `config::write_managed_init_options` (the first-run/wizard path). An
+/// unescaped `"` or `\` in a value produces a malformed literal, and init.scm
+/// is the file MAE reads at startup: corrupting it breaks the user's entire
+/// config, not just the one option. The second writer was missing the escaping
+/// entirely (audit #599.2) — values like an `ai_api_key_command` containing a
+/// quoted shell argument reach both paths.
+pub fn scheme_string_literal(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 /// Parse a string as an integer value.

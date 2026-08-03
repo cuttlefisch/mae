@@ -1180,6 +1180,78 @@ mod set_save_tests {
         });
     }
 
+    /// Audit #599.1 — the branch predicate (`content.contains(pattern)`, a
+    /// substring test) disagreed with the rewrite (`line.starts_with(pattern)`).
+    /// So a COMMENTED-OUT or nested occurrence of the same `(set-option! "x"`
+    /// text selected the replace branch, replaced nothing, and still reported
+    /// "Saved" — the option silently never persisted. MAE's own shipped
+    /// init.scm template is full of commented-out example lines, so this fired
+    /// on the most ordinary config there is.
+    #[test]
+    fn a_commented_out_set_option_does_not_swallow_the_real_save() {
+        // Several genuinely different shapes of "the pattern is present but
+        // not as a settable line", not one hand-picked string.
+        let decoys = [
+            r#";; (set-option! "ai_chat_enabled" "false")"#,
+            r#";  (set-option! "ai_chat_enabled" "false")"#,
+            r#"; example: (set-option! "ai_chat_enabled" "false")"#,
+            r#"(begin (set-option! "ai_chat_enabled" "false"))"#,
+        ];
+
+        for decoy in decoys {
+            with_isolated_config_home(|config_home| {
+                let init = config_home.join("mae").join("init.scm");
+                std::fs::create_dir_all(init.parent().unwrap()).unwrap();
+                std::fs::write(&init, format!("{decoy}\n")).unwrap();
+
+                let mut editor = Editor::new();
+                editor.set_option("ai_chat_enabled", "true").unwrap();
+                let msg = editor.save_option_to_init("ai_chat_enabled").unwrap();
+                assert!(msg.contains("Saved"), "{msg}");
+
+                let content = init_scm_contents(config_home);
+                // Selective oracle: a REAL, line-initial setter now exists with
+                // the new value. Merely asserting the file changed would pass on
+                // a write that only reformatted the decoy.
+                assert!(
+                    content
+                        .lines()
+                        .any(|l| l.trim_start() == r#"(set-option! "ai_chat_enabled" "true")"#),
+                    "decoy {decoy:?} swallowed the save; init.scm is:\n{content}"
+                );
+                // And the user's own line is left exactly as they wrote it.
+                assert!(
+                    content.contains(decoy),
+                    "the user's own line must not be rewritten:\n{content}"
+                );
+            });
+        }
+    }
+
+    /// The counter-case: a genuine line-initial setter must still be REPLACED,
+    /// not duplicated — the predicate change must not have turned every save
+    /// into an append.
+    #[test]
+    fn a_real_line_initial_setter_is_still_replaced_not_appended() {
+        with_isolated_config_home(|config_home| {
+            let init = config_home.join("mae").join("init.scm");
+            std::fs::create_dir_all(init.parent().unwrap()).unwrap();
+            std::fs::write(&init, "(set-option! \"ai_chat_enabled\" \"false\")\n").unwrap();
+
+            let mut editor = Editor::new();
+            editor.set_option("ai_chat_enabled", "true").unwrap();
+            editor.save_option_to_init("ai_chat_enabled").unwrap();
+
+            let content = init_scm_contents(config_home);
+            assert_eq!(
+                content.matches(r#"(set-option! "ai_chat_enabled""#).count(),
+                1,
+                "exactly one setter must remain:\n{content}"
+            );
+            assert!(content.contains(r#"(set-option! "ai_chat_enabled" "true")"#));
+        });
+    }
+
     #[test]
     fn set_save_command_applies_value_then_persists() {
         with_isolated_config_home(|config_home| {

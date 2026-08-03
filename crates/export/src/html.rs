@@ -13,7 +13,9 @@ impl Exporter for HtmlExporter {
 
         html.push_str("<!DOCTYPE html>\n<html");
         if let Some(lang) = &meta.language {
-            html.push_str(&format!(" lang=\"{}\"", lang));
+            // `#+LANGUAGE:` is document content, not a trusted constant — a
+            // `"` closes the attribute (audit #596.3).
+            html.push_str(&format!(" lang=\"{}\"", html_escape(lang)));
         }
         html.push_str(">\n<head>\n<meta charset=\"utf-8\">\n");
 
@@ -85,7 +87,8 @@ pub(crate) fn render_element(html: &mut String, element: &OrgElement, opts: &Exp
             if !tags.is_empty() {
                 html.push_str("<span class=\"tag\">");
                 for tag in tags {
-                    html.push_str(&format!("<span class=\"tag-{}\">{}</span>", tag, tag));
+                    let tag = html_escape(tag);
+                    html.push_str(&format!("<span class=\"tag-{tag}\">{tag}</span>"));
                 }
                 html.push_str("</span>\n");
             }
@@ -106,7 +109,10 @@ pub(crate) fn render_element(html: &mut String, element: &OrgElement, opts: &Exp
                 ExportsType::Code | ExportsType::Both => {
                     html.push_str(&format!(
                         "<pre><code class=\"language-{}\">{}</code></pre>\n",
-                        language,
+                        // The `#+begin_src <lang>` token is arbitrary document
+                        // text; unescaped it breaks out of the class attribute
+                        // and injects markup (audit #596.3).
+                        html_escape(language),
                         html_escape(body)
                     ));
                 }
@@ -316,6 +322,66 @@ mod tests {
         let exporter = HtmlExporter;
         let html = exporter.export(&meta, &elements);
         assert!(html.contains("<pre><code class=\"language-python\">print(1)</code></pre>"));
+    }
+
+    /// Audit #596.3 — the attacker's test. An org file is *content*, not a
+    /// trusted template: it can arrive from a shared KB, a git checkout, or a
+    /// downloaded doc, and `#+LANGUAGE:`, `:tags:` and the `#+begin_src <lang>`
+    /// token were all interpolated raw into attribute position. Exporting such
+    /// a file produced a page that executes the author's script in whoever
+    /// opens it. Each payload closes the attribute it lands in.
+    #[test]
+    fn hostile_org_metadata_cannot_inject_markup_into_the_exported_page() {
+        let payload = r#""><script>alert(1)</script><span x=""#;
+
+        let meta = OrgMeta {
+            title: Some(payload.to_string()),
+            language: Some(payload.to_string()),
+            ..Default::default()
+        };
+        let elements = vec![
+            OrgElement::Heading {
+                level: 1,
+                title: "H".to_string(),
+                tags: vec![payload.to_string()],
+                todo: None,
+                children: vec![],
+            },
+            OrgElement::SrcBlock {
+                language: payload.to_string(),
+                body: "print(1)".to_string(),
+                exports: mae_babel::ExportsType::Code,
+            },
+        ];
+        let html = HtmlExporter.export(&meta, &elements);
+
+        // Selective oracle: the *executable* form must not survive anywhere in
+        // the output — asserting only "the escaped form is present" would pass
+        // on a page that contained both.
+        assert!(
+            !html.contains("<script>"),
+            "a raw <script> tag reached the exported page:\n{html}"
+        );
+        assert!(
+            !html.contains("</script>"),
+            "a raw </script> tag reached the exported page:\n{html}"
+        );
+        // And every injection point specifically carries the escaped text, so
+        // this fails if a future refactor drops the content instead of escaping
+        // it (which would also pass the negative assertions above).
+        assert!(html.contains("&lt;script&gt;"), "{html}");
+        assert!(
+            html.contains(r#"lang="&quot;&gt;"#),
+            "the lang attribute must be quote-escaped:\n{html}"
+        );
+        assert!(
+            html.contains(r#"class="language-&quot;&gt;"#),
+            "the src-block language class must be quote-escaped:\n{html}"
+        );
+        assert!(
+            html.contains(r#"class="tag-&quot;&gt;"#),
+            "the tag class must be quote-escaped:\n{html}"
+        );
     }
 
     #[test]

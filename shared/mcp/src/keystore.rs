@@ -214,10 +214,33 @@ fn render(entries: &[KeyEntry]) -> String {
     out
 }
 
-/// Write `content` to `path`, then restrict the file to the owner. This is the single
+/// Write `content` to `path`, restricted to the owner. This is the single
 /// secret-file write path — the identity key, the PSK keystore, and per-KB content keys
-/// all funnel through it — so [`set_secure_file_perms`] hardens every key file at once.
+/// all funnel through it — so the hardening here covers every key file at once.
+///
+/// @ai-caution: [security] The file is CREATED 0600, not created-then-chmodded.
+/// The previous `fs::write(..)` + `chmod` pair (audit #608.4) created every
+/// secret at `0666 & ~umask` — 0644 under the usual umask — and only narrowed
+/// it afterwards, leaving a window in which any local user could open MAE's
+/// private identity key, the PSK keystore, or a per-KB content key. The window
+/// scales with the content size, so the keystore (the largest of the three) had
+/// the widest one. The post-write `set_secure_file_perms` is still needed and
+/// still runs: `mode()` applies only at creation, so it is what tightens a
+/// *pre-existing* file that was written before this fix.
 pub fn write_secure(path: &Path, content: &str) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        f.write_all(content.as_bytes())?;
+    }
+    #[cfg(not(unix))]
     std::fs::write(path, content)?;
     set_secure_file_perms(path)
 }
@@ -276,6 +299,94 @@ mod tests {
     fn unenforced_perms_warning_is_callable_on_all_platforms() {
         warn_unenforced_perms(std::path::Path::new("/nonexistent/key"));
         warn_unenforced_perms(std::path::Path::new("/nonexistent/key"));
+    }
+
+    /// Audit #608.4 — the attacker's test. Secrets were written with
+    /// `fs::write` (creating the file `0666 & ~umask`, i.e. world-readable
+    /// under the usual 022) and only chmodded to 0600 *afterwards*. Any local
+    /// user polling the path during that window could open MAE's private
+    /// identity key, the PSK keystore, or a per-KB content key.
+    ///
+    /// A second thread polls the mode while a large secret is written. The
+    /// oracle is one-directional by construction: correct code can NEVER be
+    /// observed permissive (the file is created 0600), so this test cannot
+    /// produce a false failure — while the old code loses the race with high
+    /// probability at this payload size.
+    #[cfg(unix)]
+    #[test]
+    fn a_secret_is_never_observable_with_permissive_mode_while_being_written() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let dir = std::env::temp_dir().join("mae-keystore-toctou");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("secret.key");
+        let _ = std::fs::remove_file(&path);
+
+        // Large enough that the write is not a single instantaneous syscall.
+        let secret = "s3cr3t-".repeat(2_000_000);
+
+        let done = Arc::new(AtomicBool::new(false));
+        let leaked = Arc::new(AtomicBool::new(false));
+        let poller = {
+            let (path, done, leaked) = (path.clone(), done.clone(), leaked.clone());
+            std::thread::spawn(move || {
+                while !done.load(Ordering::Relaxed) {
+                    if let Ok(md) = std::fs::metadata(&path) {
+                        // Any group or other bit set at any instant is a leak.
+                        if md.permissions().mode() & 0o077 != 0 {
+                            leaked.store(true, Ordering::Relaxed);
+                            return;
+                        }
+                    }
+                    std::hint::spin_loop();
+                }
+            })
+        };
+
+        write_secure(&path, &secret).expect("write_secure");
+        done.store(true, Ordering::Relaxed);
+        poller.join().unwrap();
+
+        assert!(
+            !leaked.load(Ordering::Relaxed),
+            "the secret at {} was observable with group/other permissions while \
+             being written",
+            path.display()
+        );
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "final mode must still be owner-only"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// The complementary case the `mode()` flag alone does NOT cover: an
+    /// already-existing, already-permissive file must be tightened on rewrite,
+    /// because `OpenOptions::mode` applies at CREATION only. This is why the
+    /// post-write `set_secure_file_perms` call has to stay.
+    #[cfg(unix)]
+    #[test]
+    fn rewriting_a_preexisting_world_readable_secret_tightens_it() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join("mae-keystore-preexisting");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("legacy.key");
+        std::fs::write(&path, "old").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_secure(&path, "new-secret").expect("write_secure");
+
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600,
+            "a legacy world-readable key file must be tightened on rewrite"
+        );
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "new-secret");
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

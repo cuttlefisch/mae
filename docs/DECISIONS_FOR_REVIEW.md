@@ -561,3 +561,138 @@ boolean queries turn out to matter. A knowledge base whose own addressing scheme
 a worse outcome than losing an operator syntax most users will never type.
 
 Pinned by two tests so a future fix has to update them consciously.
+
+---
+
+## 12. `sandbox_guard` protects only one of `shell_exec`'s two implementations
+
+**Status:** confirmed against current source while fixing audit #590.3. Not fixed — the fix lands
+in `crates/ai/src/executor/tool_dispatch.rs`, which the concurrent ADR-090 three-state permission
+work owns, so editing it underneath that workstream would conflict.
+
+`shell_exec` has two implementations, and they exist for a real reason: the embedded `AgentSession`
+runs commands on tokio (`session/run_loop.rs`), while MCP and other non-session callers run them
+synchronously (`executor/shell_exec.rs`) because `dispatch_tool` holds a `!Send` `&mut Editor`.
+
+The *blocklist* was copy-pasted between them; #590.3's fix consolidated that into
+`crate::shell_policy`, so refusal rules and timeouts can no longer drift. **Sandbox confinement did
+not get the same treatment.** `sandbox_guard` (`tool_dispatch.rs:896`, called at `:610`) is applied
+on the dispatch path only. The embedded session's `execute_shell` is reached through the session's
+own event loop, not through `dispatch_tool`, so a command run there is not confined to the sandbox
+directory.
+
+**Why this needs a decision rather than a patch.** Whether it is currently *exploitable* depends on
+facts the permission workstream owns:
+
+- `ai_chat_enabled` defaults to **off** (ADR-049), so the embedded session is not the default
+  surface. If it stays off-by-default and is genuinely frozen at its current feature set (ADR-046),
+  this is a latent asymmetry rather than a live hole.
+- ADR-090's three-state model changes what "the user approved a shell command" means. Threading
+  sandbox confinement through the session path is a different amount of work depending on where
+  that lands.
+
+**Options**
+
+1. **Move `sandbox_guard` into `shell_policy`** alongside the blocklist and call it from both
+   implementations. Consistent with the consolidation just done, and the smallest conceptual change
+   — but `sandbox_guard` inspects tool *arguments* generically (not just `shell_exec`), so it is
+   not a clean fit for a shell-specific module without either splitting it or widening that module's
+   remit.
+2. **Route the embedded session's tool calls through `dispatch_tool`** so there is one enforcement
+   point rather than two. Correct in principle; a real refactor of the session loop, and ADR-046
+   explicitly froze that surface.
+3. **Declare the embedded session out of scope for sandboxing**, document it in SECURITY.md next to
+   the existing "the shell blocklist is not a sandbox" language, and gate the session behind an
+   explicit opt-in that says so.
+
+**My recommendation: option 3 for v0.15, with option 1 as the follow-up.** The embedded chat is
+already off by default and frozen; adding a second enforcement path to a surface being wound down
+buys little, whereas an honest SECURITY.md sentence closes the *documentation* gap immediately.
+Option 1 becomes worthwhile the moment anything else grows a second dispatch path — at which point
+the enforcement point, not just the rule table, should be the shared thing.
+
+**What I did do:** the commit for #590.3 names this gap explicitly so it is not lost, and
+`shell_policy`'s module doc carries an `@ai-caution` saying policy belongs in one place.
+
+---
+
+## 13. When does the signed membership op-log become authoritative?
+
+**Status:** surfaced while fixing audit #589.4. The observable false-success is fixed; the
+underlying question is not mine to answer.
+
+`append_signed_membership` (`daemon/src/collab_handler/mod.rs`) mirrors every membership mutation
+into the ADR-026 signed, hash-chained op-log — the record peers verify **without trusting the
+relay**. Its doc comment says the failure path is deliberately non-fatal because "the legacy
+`member_roles` map remains authoritative until `kb_access` switches to derived membership (slice
+2b-6c)".
+
+That slice has not landed. Two consequences are live today:
+
+- **#589.2** — the `*KB Sharing*` buffer builds its displayed roster from unsigned
+  `coll.member_roles()` rather than `derive_valid_members_governed`. What the owner *sees* is
+  therefore the unsigned view, not the verifiable one.
+- **#589.4** — a signing/persist failure left the two records diverged with nobody told. I fixed
+  the reporting (`kb/set_governance` now errors, since the append is its only effect;
+  `kb/add_member`/`kb/approve_member` return `signed_oplog: false` plus a warning, since the legacy
+  mutation genuinely did land). I did **not** change which record is authoritative.
+
+**The call:** does the legacy `member_roles` map remain the source of truth through v0.15, or does
+derived membership take over — and if it does, what should a failed signed append do then?
+
+**Options**
+
+1. **Keep legacy authoritative through v0.15.** Then today's behaviour is correct-by-design and the
+   two findings reduce to: display the derived view in the sharing buffer (#589.2) so the owner is
+   at least *looking* at the verifiable record, and keep the divergence warning I added.
+2. **Switch `kb_access` to derived membership now.** Then a failed signed append is no longer a
+   bookkeeping divergence — it is a membership change that did not happen, and every caller should
+   fail closed the way `kb/set_governance` now does. This is the ADR-026 end state.
+3. **Dual-read with a mismatch alarm** — enforce on legacy, but compute derived alongside and raise
+   an ADR-024 notification whenever they disagree. A migration aid rather than a destination.
+
+**My recommendation: option 1 for v0.15, plus #589.2's display fix, with option 3 as the bridge.**
+Option 2 is the right destination but changes the failure mode of every membership RPC at once,
+which is a poor thing to ship in the same release as ADR-090's permission changes. Option 3 is
+cheap, and the mismatch alarm is exactly the evidence needed to know whether option 2 is safe —
+right now nobody can say how often the two records actually diverge in practice, which is itself
+the reason this is a decision and not a fix.
+
+---
+
+## 14. What should `babel-execute-all` do with blocks that need confirmation?
+
+**Status:** audit #596.1 is fixed; this is about the behaviour I chose, which is defensible but not
+obviously the only right answer.
+
+`babel-execute-all` ignored `effective_eval_policy` entirely, testing only `:eval never`. So a
+`:eval query` block — which single-block `babel-execute` refuses without a human answer — ran
+unprompted, as did any default block in a file outside `babel_trust_paths` with `babel_confirm` on.
+"Execute all" being *looser* than "execute one" is backwards, and it is precisely the command a
+hostile org file wants you to run.
+
+I made it consult the same gate, **skipping** blocks that need confirmation and reporting a count.
+One command cannot open N sequential dialogs, and skipping is the conservative direction.
+
+**The call:** is skip-and-count the right UX, or should the command be able to ask?
+
+**Options**
+
+1. **Skip and count (what I shipped).** Safe and simple. The cost: on a document where most blocks
+   need confirmation, `babel-execute-all` becomes a no-op that tells you to go run each block by
+   hand — which is a real usability regression against the (unsafe) previous behaviour.
+2. **One batch prompt** — "3 blocks require confirmation. Execute them? (y/n/list)". Matches how
+   users think about the command. Needs a new mini-dialog context that carries a block *set* rather
+   than the single `MiniDialogContext::BabelConfirm` block that exists today, and it weakens the
+   per-block granularity `:eval query` was presumably meant to express.
+3. **Queue the dialogs** — confirm each in turn. Preserves per-block granularity exactly; needs a
+   dialog queue the mini-dialog system does not have, and is tedious on a large document.
+4. **Skip, but make it trivially recoverable** — option 1 plus a `babel-execute-all-confirmed`
+   variant, or a `babel_execute_all_prompt` option choosing between 1 and 2.
+
+**My recommendation: keep option 1 for v0.15, and take option 4 if anyone hits the no-op case.**
+The unsafe behaviour needed to stop now; the *right* prompt UX is worth choosing with a real user
+complaint in hand rather than speculatively. Worth noting that `babel_trust_paths` — dead config
+until this same pass registered it (#596.5) — is the intended escape hatch: a user who trusts their
+own org directory adds it once and never sees the skip. That may make the no-op case rare enough
+that nothing further is needed.

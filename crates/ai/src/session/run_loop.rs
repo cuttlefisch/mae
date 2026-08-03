@@ -30,33 +30,21 @@ impl AgentSession {
             };
         }
 
-        // Reject obviously dangerous commands. Defense in depth, not a
-        // sandbox — substring-based and bypassable; see SECURITY.md.
-        let blocked_patterns = [
-            "rm -rf /", "rm -fr /", "mkfs.", "dd if=", ":(){", // fork bomb
-            ">(){ :",
-        ];
-        for pattern in &blocked_patterns {
-            if command.contains(pattern) {
-                warn!(command, pattern, "blocked dangerous shell command");
-                return ToolResult {
-                    tool_call_id: call.id.clone(),
-                    tool_name: call.name.clone(),
-                    success: false,
-                    output: format!("Command blocked: contains dangerous pattern '{}'", pattern),
-                };
-            }
+        // Shared with the sync/MCP version — see `crate::shell_policy`.
+        if let Some(pattern) = crate::shell_policy::blocked_pattern(command) {
+            warn!(command, pattern, "blocked dangerous shell command");
+            return ToolResult {
+                tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
+                success: false,
+                output: format!("Command blocked: contains dangerous pattern '{}'", pattern),
+            };
         }
 
-        let timeout_secs = call
-            .arguments
-            .get("timeout_secs")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(30)
-            .min(120); // Cap at 2 minutes
+        let timeout = crate::shell_policy::timeout_from_args(&call.arguments);
 
         let result = tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
+            timeout,
             tokio::process::Command::new("sh")
                 .arg("-c")
                 .arg(command)
@@ -112,7 +100,10 @@ impl AgentSession {
                 tool_call_id: call.id.clone(),
                 tool_name: call.name.clone(),
                 success: false,
-                output: format!("Command timed out after {} seconds", timeout_secs),
+                output: format!(
+                    "Command timed out after {}",
+                    crate::shell_policy::describe_timeout(timeout)
+                ),
             },
         }
     }

@@ -15,6 +15,7 @@ pub mod openai;
 pub mod pricing;
 pub mod provider;
 pub mod session;
+pub mod shell_policy;
 pub mod token_estimate;
 mod tool_impls;
 pub mod tools;
