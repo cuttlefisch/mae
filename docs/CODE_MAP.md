@@ -99,6 +99,7 @@ Source: `crates/ai/src/lib.rs`
 | `token_estimate` | mod |
 | `tools` | mod |
 | `types` | mod |
+| `web` | mod |
 
 ## mae-babel
 
@@ -190,6 +191,7 @@ Source: `crates/core/src/lib.rs`
 | `link_detect` | mod |
 | `lock_stats` | mod |
 | `lsp_intent` | mod |
+| `lsp_position` | mod |
 | `messages` | mod |
 | `notifications` | mod |
 | `notifications_view` | mod |

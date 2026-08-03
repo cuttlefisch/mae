@@ -2,6 +2,7 @@
 //! opening a store (sled/sqlite/mem engines), instance-id bootstrap, the
 //! FTS index, and seeding the node/rel-type + view metadata relations.
 
+use super::db::retry_on_transient_sqlite_busy;
 use super::util::{btree_params, cozo_err, dv_str, generate_uuid_v4};
 use super::*;
 
@@ -601,120 +602,6 @@ impl CozoKbStore {
             .map_err(cozo_err)?;
         }
         Ok(())
-    }
-}
-
-/// Run `f` (a `DbInstance::new`-shaped call returning `Result<T, E>`),
-/// retrying a bounded number of times on a transient SQLite
-/// `SQLITE_BUSY`/"database is locked" condition — surfacing EITHER as a
-/// PANIC (cozo 0.7.6's own bootstrap `create table if not exists cozo`
-/// `.unwrap()`s this) OR as a normal `Err(E)` (cozo's post-open
-/// `initialize()`/`load_last_ids()` step, which DOES propagate via `?`
-/// rather than panicking) — both are the SAME underlying condition
-/// (confirmed by direct source read of `cozo-0.7.6/src/runtime/db.rs`'s
-/// `initialize()`/`load_last_ids()`), just surfaced two different ways
-/// depending on which internal cozo code path hits it first. **Found via
-/// two separate real CI failures, not assumed**: an earlier version of this
-/// function only caught the panic shape, and a later CI run reproduced the
-/// SAME race manifesting as the Err shape instead — proving both needed
-/// covering, not just the one first observed. See `open_with_engine`'s
-/// `@ai-caution` note for why this is needed at all (cozo 0.7.6 never
-/// configures `busy_timeout`). Any OTHER panic message or `Err` (a
-/// genuinely corrupt/inaccessible store, matching the sibling sled
-/// `@ai-caution` above) is NOT retried — returned on the first occurrence,
-/// for the caller's existing error mapping to handle exactly as if this
-/// wrapper weren't here.
-///
-/// Deliberately mirrors `Db::run_with_busy_retry`'s already-battle-tested
-/// backoff shape immediately below in this same crate (exponential cap with
-/// FULL jitter, not the two-instance-lockstep-prone linear/no-jitter backoff
-/// an earlier draft of this function used) rather than reinventing a worse
-/// one (principle #8) — the two can't literally share code (that one only
-/// ever sees a `Result`, never a panic; this one must handle both shapes
-/// from the same underlying condition) — but there is no reason for this
-/// backoff's *quality* to regress from established precedent just because
-/// the call shape differs. `run_with_busy_retry`'s own doc comment explains
-/// why jitter specifically matters here: "Without jitter, identical backoff
-/// keeps them in lockstep and they collide forever."
-///
-/// Bounded by wall-clock time (issue #484), same reasoning and same fix as
-/// `Db::run_with_busy_retry`'s own doc comment: a fixed attempt count is an
-/// indirect, hardware-dependent proxy for "how long can I wait," and this
-/// function had the IDENTICAL `MAX_ATTEMPTS: u32 = 400` vulnerability its
-/// sibling did, just never observed failing in CI yet — fixed here too for
-/// consistency rather than leaving a second copy of the same latent bug
-/// (principle #15: fix drift for the whole feature area, not just the one
-/// symptom that happened to be reported first).
-pub(crate) fn retry_on_transient_sqlite_busy<T, E: std::fmt::Display>(
-    f: impl Fn() -> Result<T, E>,
-) -> Result<T, E> {
-    retry_on_transient_sqlite_busy_with_deadline(f, DEFAULT_BUSY_RETRY_DEADLINE)
-}
-
-/// Production default — matches `Db::run_with_busy_retry`'s own budget
-/// (principle #8: one tuned constant, not two that can drift apart). That
-/// budget was raised from 20s to 45s after a real Windows CI miss (see
-/// `Db::run_with_busy_retry`'s doc comment in `db.rs` for the full story);
-/// this constant was not updated to match at the time (cuttlefisch/mae#518
-/// item 5) — kept in sync here.
-const DEFAULT_BUSY_RETRY_DEADLINE: std::time::Duration = std::time::Duration::from_secs(45);
-
-/// Test-only seam: the "gives up eventually" tests need a SHORT deadline to
-/// stay fast (a persistent-contention closure genuinely runs for the entire
-/// budget by construction — that's the property being tested), so the real
-/// 20s production deadline isn't usable directly in a unit test without
-/// making the suite slow. Not part of the public API surface (`pub(crate)`,
-/// `#[cfg(test)]`-only caller) — production code always goes through
-/// [`retry_on_transient_sqlite_busy`] with the real budget above.
-#[cfg(test)]
-pub(crate) fn retry_on_transient_sqlite_busy_for_test<T, E: std::fmt::Display>(
-    f: impl Fn() -> Result<T, E>,
-    deadline: std::time::Duration,
-) -> Result<T, E> {
-    retry_on_transient_sqlite_busy_with_deadline(f, deadline)
-}
-
-fn retry_on_transient_sqlite_busy_with_deadline<T, E: std::fmt::Display>(
-    f: impl Fn() -> Result<T, E>,
-    deadline: std::time::Duration,
-) -> Result<T, E> {
-    fn is_transient_busy_message(s: &str) -> bool {
-        let s = s.to_ascii_lowercase();
-        s.contains("database is locked") || s.contains("sqlite_busy") || s.contains("busy")
-    }
-    // Poor-man's per-call entropy (a stack address, like `Db::run_with_busy_retry`'s
-    // `self as *const Self as u64`) -- no need for a real RNG crate just to
-    // desynchronize two competing retriers.
-    let seed = &f as *const _ as u64;
-    let start = std::time::Instant::now();
-    let mut attempt: u32 = 0;
-    loop {
-        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&f));
-        let is_retryable = match &outcome {
-            Ok(Err(e)) => is_transient_busy_message(&e.to_string()),
-            Err(payload) => payload
-                .downcast_ref::<String>()
-                .map(|s| s.as_str())
-                .or_else(|| payload.downcast_ref::<&str>().copied())
-                .map(is_transient_busy_message)
-                .unwrap_or(false),
-            Ok(Ok(_)) => false,
-        };
-        if !is_retryable || start.elapsed() >= deadline {
-            return match outcome {
-                Ok(result) => result,
-                Err(payload) => std::panic::resume_unwind(payload),
-            };
-        }
-        attempt += 1;
-        // Exponential cap (~0.25ms -> 8ms) with full jitter, same shape as
-        // `Db::run_with_busy_retry` below.
-        let cap = (250u64 << attempt.min(5)).min(8_000);
-        let jitter = seed
-            .wrapping_mul(attempt as u64 + 1)
-            .wrapping_add(attempt as u64)
-            % (cap + 1);
-        std::thread::sleep(std::time::Duration::from_micros(jitter));
     }
 }
 

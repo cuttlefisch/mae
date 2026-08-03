@@ -102,6 +102,10 @@
         {
           "name": "types",
           "kind": "mod"
+        },
+        {
+          "name": "web",
+          "kind": "mod"
         }
       ]
     },
@@ -411,6 +415,10 @@
         },
         {
           "name": "lsp_intent",
+          "kind": "mod"
+        },
+        {
+          "name": "lsp_position",
           "kind": "mod"
         },
         {

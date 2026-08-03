@@ -14,6 +14,8 @@ mod agenda_tests;
 mod blocks_tests;
 mod db_tests;
 mod fts_migration_tests;
+mod fts_query_tests;
+mod fts_search_tests;
 mod graph_tests;
 mod health_tests;
 mod kb_store_impl_tests;
