@@ -384,35 +384,31 @@ discovering this by trial and error, which is a worse experience than not offeri
 
 ---
 
-## 10. `KbStore::fts_search` silently drops terms — found while wiring `(kb-search)`
+## 10. `KbStore::fts_search` silently drops terms
 
-**Status:** pre-existing, independent of the parity pass, and worked *around* rather than fixed.
+**Independently reproduced (2026-08-03).** A node titled `Quantum Physics` with body
+`Entanglement is spooky.`:
 
-On a freshly seeded in-memory `CozoKbStore`, a single node titled `"alpha beta gamma delta"` with
-body `"epsilon zeta eta"` is returned by `fts_search` for `alpha`, `beta`, `gamma`, `zeta` and
-`eta` — and **not** for `delta` or `epsilon`. A second node (`"Quantum Physics"` /
-`"Entanglement is spooky."`) is found by `quantum` and `spooky` but not by `physics` or
-`entanglement`. The extractor is `title ++ ' ' ++ body`, so every one of those terms is indexed
-text; the post-query verification in `fts_search` is not the cause (it only removes candidates,
-and these terms produce no candidates at all).
+```
+quantum      -> 1 hit        physics      -> 0 hits
+spooky       -> 1 hit        entanglement -> 0 hits
+```
 
-**Why it has not been noticed:** `mae-kb`'s own `fts_search_finds_nodes` passes because it happens
-to query `quantum`, one of the terms that works. That is precisely the "unicorn value" failure
-mode CLAUDE.md principle #14 names — a test that would pass unchanged against a search index
-returning a coin flip.
+Terms plainly present in the indexed text return nothing. This is not a ranking quirk — the
+node is simply not found. For a knowledge-base editor whose whole value is retrieval, a search
+that silently misses is worse than one that errors.
 
-**Impact:** the FTS path is used by `KbStore` consumers including the query layer
-(`shared/kb/src/query.rs`). It is NOT used by the `kb_search` MCP tool, which goes through
-`Editor::kb_federated_search_scoped` → `KnowledgeBase::search_ranked` over the in-memory mirror —
-which is why the defect has stayed invisible on the surface most people exercise.
+`shared/kb/src/cozo_store/tests/kb_store_impl_tests.rs::fts_search_finds_nodes` passes only
+because it queries `quantum`, one of the terms that happens to work — the "unicorn value"
+antipattern principle #14 names, and the reason this survived.
 
-**What the parity pass did:** built `(kb-search ...)` on `KnowledgeBase::search_ranked` (loading
-the store into an in-memory `KnowledgeBase` per call) rather than on `fts_search`, so the Scheme
-surface cannot silently *miss* nodes the MCP tool returns. The cost is one `load_all()` per store
-per search — the same O(n) shape the MCP path already pays, but with deserialization instead of a
-resident mirror. There is an `@ai-caution: [architecture-debt]` at
-`crates/scheme/src/runtime/kb_crud.rs::store_as_kb` warning against "optimising" it back.
+Pre-existing and unrelated to the parity work that found it. Not fixed here: diagnosing the
+tokenisation/stemming behaviour in the Tantivy index is its own investigation, and guessing at
+it would risk changing ranking for every existing query.
 
-**The call:** someone who knows the CozoDB/tantivy integration should reproduce the probe above and
-decide whether this is a Cozo FTS bug, a wrong tokenizer/filter configuration, or an indexing
-ordering problem. Until then, no new code should be built on `fts_search`.
+**The call:** this probably deserves to jump the queue — it is user-facing, silent, and affects
+the primary KB read path (`kb_search`, `kb_search_context`, and every consumer of them).
+
+**Recommendation:** a dedicated investigation before v0.15, with a property test over a
+multi-term corpus asserting every term in a node's title and body retrieves that node.
+
