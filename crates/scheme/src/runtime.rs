@@ -1197,3 +1197,11 @@ mod tests;
 #[cfg(test)]
 #[path = "permission_tests.rs"]
 mod permission_tests;
+
+// CLAUDE.md principle-#3 parity primitives (KB CRUD, set-option-save!, LSP,
+// DAP). A child of this module for the same reason as `permission_tests`: the
+// oracles are the real `SharedState` queues and the real `Editor` after
+// `apply_to_editor`, not a restatement of what the tests expect.
+#[cfg(test)]
+#[path = "parity_tests.rs"]
+mod parity_tests;

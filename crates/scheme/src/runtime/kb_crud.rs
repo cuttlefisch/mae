@@ -125,6 +125,45 @@ fn opt_string(v: &Value, fn_name: &str) -> Result<Option<String>, LispError> {
     }
 }
 
+/// Reduce a user's query string to plain search terms.
+///
+/// `KbStore::fts_search` hands the query to CozoDB's full-text **expression**
+/// parser, which reserves `-`, `:`, `"`, `*` and friends as operators. That is
+/// a trap for a Scheme caller: `(kb-search "kb-sharing")` or
+/// `(kb-search "concept:buffer")` — both entirely natural things to type, and
+/// both matching real MAE node ids — would come back as a CozoDB *parse error*
+/// rather than as results, while the `kb_search` MCP tool (which searches the
+/// in-memory federated mirror, not the FTS index) accepts them happily. Two
+/// surfaces disagreeing on what counts as a valid query is exactly the
+/// asymmetry principle #3 rules out.
+///
+/// So the query is treated as literal terms: anything that is not
+/// alphanumeric or an underscore becomes a separator. This deliberately gives
+/// up FTS operator syntax on this surface — a Scheme caller cannot write an
+/// FTS boolean expression through `kb-search`, and gets a term search instead
+/// of an error.
+///
+/// Returns `None` when a non-empty query contains no usable term at all
+/// (`"---"`, `"!!!"`), because passing the resulting empty string through to
+/// `fts_search` would match *everything* — the opposite of what the caller
+/// asked for.
+fn sanitize_fts_query(query: &str) -> Option<String> {
+    if query.is_empty() {
+        // An explicitly empty query means "list everything", which is
+        // `fts_search`'s own documented behaviour for `""`.
+        return Some(String::new());
+    }
+    let terms: Vec<&str> = query
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .filter(|t| !t.is_empty())
+        .collect();
+    if terms.is_empty() {
+        None
+    } else {
+        Some(terms.join(" "))
+    }
+}
+
 /// Register the KB CRUD/search primitives.
 pub(super) fn register_kb_crud_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>) {
     // (kb-search QUERY [SCOPE] [LIMIT]) → list of (id title kind instance)
@@ -135,7 +174,11 @@ pub(super) fn register_kb_crud_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>
          \"primary\" (the primary KB only, the default) or \"all\" (primary plus every \
          registered federated instance); optional LIMIT caps the number of hits (default 20). \
          Returns a list of (id title kind instance) — instance is #f for a primary-KB hit and \
-         the instance's ordinal for a federated one. Counterpart of the kb_search MCP tool.",
+         the instance's ordinal for a federated one. QUERY is treated as literal search terms, \
+         not a full-text-search expression: punctuation (`-`, `:`, `\"`, `*`) separates terms \
+         rather than acting as an operator, so \"concept:buffer\" and \"kb-sharing\" search for \
+         their words instead of failing to parse. An empty QUERY lists everything. Counterpart \
+         of the kb_search MCP tool.",
         Arity::Variadic(1),
         tier::READ,
         move |args: &[Value]| {
@@ -164,6 +207,12 @@ pub(super) fn register_kb_crud_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>
                         "kb-search: unknown SCOPE {other:?} (expected \"primary\" or \"all\")"
                     )))
                 }
+            };
+
+            // Punctuation-only query: no term to match, so no hits. Returning
+            // early rather than passing "" down, which would list everything.
+            let Some(query) = sanitize_fts_query(&query) else {
+                return Ok(Value::list(vec![]));
             };
 
             let state = s.lock();
