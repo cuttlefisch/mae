@@ -135,6 +135,15 @@ enum ExceptionHandler {
 }
 
 /// The virtual machine.
+///
+/// @ai-caution: [architecture-debt] One mutable Scheme image is an escalation
+/// channel, and principle #6 (runtime redefinability is sacred) makes it worse:
+/// write-tier Scheme can redefine a procedure that privileged Scheme later
+/// calls, and the per-primitive tier check (ADR-084 D3) does not see that.
+/// PostgreSQL solves the equivalent problem by running trusted and untrusted PL
+/// in *separate interpreter instances* — and still ships a warning that the
+/// mechanism may not hold. MAE does not separate them. Recorded here rather
+/// than silently accepted; see ADR-084 "What this does *not* fix".
 pub struct Vm {
     /// Value stack.
     stack: Vec<Value>,

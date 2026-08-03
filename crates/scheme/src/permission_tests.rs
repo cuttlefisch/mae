@@ -221,7 +221,7 @@ fn a_denied_dispatcher_never_reaches_the_editors_queue() {
 /// as a side effect of the sweep.
 #[test]
 fn every_primitive_above_readonly_is_refused_at_readonly() {
-    let (rt, _editor) = runtime_with_editor();
+    let (mut rt, _editor) = runtime_with_editor();
     let names: Vec<String> = rt
         .vm
         .globals
@@ -235,7 +235,6 @@ fn every_primitive_above_readonly_is_refused_at_readonly() {
             _ => None,
         })
         .collect();
-    drop(rt);
 
     assert!(
         names.len() > 50,
@@ -243,16 +242,18 @@ fn every_primitive_above_readonly_is_refused_at_readonly() {
         names.len()
     );
 
+    // One runtime for the whole sweep: every call below is refused, so none of
+    // them mutates anything — and running them back-to-back on one VM also
+    // shows a denial does not leave the interpreter degraded for the next one.
     let mut escaped = Vec::new();
-    for name in &names {
-        let (mut rt, _editor) = runtime_with_editor();
-        let result =
-            rt.with_ambient_tier(PermissionTier::ReadOnly, |rt| rt.eval(&format!("({name})")));
-        match result {
-            Err(e) if e.message.contains("permission denied") => {}
-            other => escaped.push(format!("{name}: {other:?}")),
+    rt.with_ambient_tier(PermissionTier::ReadOnly, |rt| {
+        for name in &names {
+            match rt.eval(&format!("({name})")) {
+                Err(e) if e.message.contains("permission denied") => {}
+                other => escaped.push(format!("{name}: {other:?}")),
+            }
         }
-    }
+    });
     assert!(
         escaped.is_empty(),
         "primitives above ReadOnly that were not refused at ReadOnly: {escaped:#?}"
