@@ -31,11 +31,26 @@
 //! watcher itself does not parse files — the caller's `ingest_org_file`
 //! already produces the id list, so callers feed it back via
 //! `record_ids` to keep the removal map warm without a double read.
+//!
+//! # One OS watcher per process, many watched paths
+//!
+//! @ai-caution: [resource-exhaustion] NEVER construct a fresh
+//! `notify::recommended_watcher()` per watched directory. Every
+//! `RecommendedWatcher` costs one `inotify_init` fd on Linux, and
+//! `fs.inotify.max_user_instances` is **128 per user** while
+//! `max_user_watches` is ~250,000 — instances are the scarce resource by
+//! three orders of magnitude. A watcher-per-KB design made MAE consume 70% of
+//! the machine-wide budget (89 of 128) and starve every other application; see
+//! `docs/INOTIFY_INSTANCE_EXHAUSTION.md`. Both public handles in this module
+//! ([`OrgDirWatcher`], [`StoreWatcher`]) are therefore thin registrations on
+//! one process-wide [`SharedDirWatcher`], which spends *watches* (cheap and
+//! plentiful) instead of *instances*. Emacs has always worked this way. If you
+//! need a new kind of watcher, register it here too — do not add a third
+//! parallel watcher implementation (CLAUDE.md #8/#15).
 
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 
@@ -50,17 +65,288 @@ pub enum OrgChange {
     Removed(Vec<String>),
 }
 
-/// Recursive watcher for a directory of org files. Keeps the
-/// `RecommendedWatcher` alive for the lifetime of the struct and tracks
-/// path→id mappings so removals can be reported by id.
+/// Identifies one registration on the [`SharedDirWatcher`].
+type RegId = u64;
+
+/// One handle's slice of the shared watcher: the root it cares about, the
+/// events routed to it since its last drain, and the errors attributed to it.
+struct Registration {
+    /// Normalized root this registration owns (a directory for a recursive
+    /// registration, a single file for a non-recursive one).
+    root: PathBuf,
+    /// `root`'s component count, cached — the key used for longest-prefix
+    /// routing, so a nested registration wins over its ancestor.
+    depth: usize,
+    /// Events routed here, awaiting this registration's handle draining them.
+    /// Unbounded, exactly like the per-watcher `mpsc` channel it replaces: a
+    /// handle that is never drained accumulates the same way it always did.
+    queue: VecDeque<Event>,
+    /// Cumulative watcher errors attributed to this registration. Per
+    /// registration (not global) so a fresh handle always starts at zero.
+    errors: u64,
+}
+
+/// Routing table for the one shared watcher.
+#[derive(Default)]
+struct Routes {
+    next_id: RegId,
+    regs: HashMap<RegId, Registration>,
+    /// Refcount per watched root, so two KBs registering the same directory
+    /// share one `watch()` and the first to drop doesn't unwatch the other.
+    /// `recursive` is the effective (OR'd) mode currently applied to the root.
+    roots: HashMap<PathBuf, RootState>,
+}
+
+struct RootState {
+    refs: usize,
+    recursive: bool,
+}
+
+/// The process-wide watcher: ONE `notify` watcher (one `inotify_init` fd on
+/// Linux, one FSEvents stream on macOS) with one path per registration.
+///
+/// Every event is routed to the registration with the **longest** matching
+/// root prefix. Longest-prefix rather than first-match is what makes a KB
+/// registered *inside* another KB's directory correct: the file belongs to the
+/// innermost KB that claims it. (Ties — two registrations on the same
+/// directory — all receive the event, matching the old one-watcher-each
+/// behavior for that case.)
+struct SharedDirWatcher {
+    /// Lock order: `routes` may be taken while holding nothing, and `watcher`
+    /// only while already holding `routes`. `rx` is only ever taken alone,
+    /// before `routes`. No path takes them in any other order, so no cycle.
+    watcher: Mutex<RecommendedWatcher>,
+    rx: Mutex<mpsc::Receiver<notify::Result<Event>>>,
+    routes: Mutex<Routes>,
+}
+
+/// The process-wide instance, created on first use.
+///
+/// Deliberately re-tried on failure rather than memoized as a permanent error:
+/// the one failure mode that matters here (the per-user instance limit being
+/// momentarily exhausted by *other* processes) is transient, and a caller
+/// registering a KB minutes later should get a working watcher.
+static SHARED: Mutex<Option<Arc<SharedDirWatcher>>> = Mutex::new(None);
+
+impl SharedDirWatcher {
+    fn get() -> notify::Result<Arc<Self>> {
+        let mut slot = SHARED.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(existing) = slot.as_ref() {
+            return Ok(Arc::clone(existing));
+        }
+        let (tx, rx) = mpsc::channel();
+        let watcher = notify::recommended_watcher(move |res| {
+            let _ = tx.send(res);
+        })?;
+        let shared = Arc::new(Self {
+            watcher: Mutex::new(watcher),
+            rx: Mutex::new(rx),
+            routes: Mutex::new(Routes::default()),
+        });
+        *slot = Some(Arc::clone(&shared));
+        Ok(shared)
+    }
+
+    /// Add `path` to the shared watcher and return the new registration's id.
+    /// Errors (missing path, exhausted OS limits) surface exactly as they did
+    /// when each handle owned its own watcher.
+    fn register(&self, path: &Path, recursive: bool) -> notify::Result<RegId> {
+        let root = normalize_path(path);
+        let mut routes = self.routes.lock().unwrap_or_else(|e| e.into_inner());
+        let effective_recursive = recursive
+            || routes
+                .roots
+                .get(&root)
+                .map(|s| s.recursive)
+                .unwrap_or(false);
+        let mode = if effective_recursive {
+            RecursiveMode::Recursive
+        } else {
+            RecursiveMode::NonRecursive
+        };
+        // Always call `watch()`, even for an already-watched root: `notify`
+        // treats a repeat watch of the same path as an update, and calling it
+        // unconditionally is what preserves the "path must exist" error for
+        // the second registrant.
+        self.watcher
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .watch(&root, mode)?;
+        let entry = routes.roots.entry(root.clone()).or_insert(RootState {
+            refs: 0,
+            recursive: effective_recursive,
+        });
+        entry.refs += 1;
+        entry.recursive = effective_recursive;
+        let id = routes.next_id;
+        routes.next_id += 1;
+        let depth = root.components().count();
+        routes.regs.insert(
+            id,
+            Registration {
+                root,
+                depth,
+                queue: VecDeque::new(),
+                errors: 0,
+            },
+        );
+        Ok(id)
+    }
+
+    /// Drop a registration; unwatch its root once no registration wants it.
+    fn unregister(&self, id: RegId) {
+        let mut routes = self.routes.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(reg) = routes.regs.remove(&id) else {
+            return;
+        };
+        let drop_root = match routes.roots.get_mut(&reg.root) {
+            Some(state) => {
+                state.refs = state.refs.saturating_sub(1);
+                state.refs == 0
+            }
+            None => false,
+        };
+        if drop_root {
+            routes.roots.remove(&reg.root);
+            // Best-effort: the root may already be gone from the filesystem,
+            // in which case `notify` has dropped the watch itself.
+            let _ = self
+                .watcher
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .unwatch(&reg.root);
+        }
+    }
+
+    /// Move everything the OS has delivered so far into per-registration
+    /// queues. Called by every drain, so no registration depends on another
+    /// handle being drained first.
+    fn pump(&self) {
+        let mut incoming: Vec<notify::Result<Event>> = Vec::new();
+        {
+            let rx = self.rx.lock().unwrap_or_else(|e| e.into_inner());
+            while let Ok(res) = rx.try_recv() {
+                incoming.push(res);
+            }
+        }
+        if incoming.is_empty() {
+            return;
+        }
+        let mut routes = self.routes.lock().unwrap_or_else(|e| e.into_inner());
+        for res in incoming {
+            match res {
+                Ok(ev) => {
+                    for id in Self::targets(&routes, &ev.paths) {
+                        if let Some(reg) = routes.regs.get_mut(&id) {
+                            reg.queue.push_back(ev.clone());
+                        }
+                    }
+                }
+                Err(err) => {
+                    // A `notify` error carrying paths belongs to whoever owns
+                    // those paths; a watcher-level error (no paths) affects
+                    // every registration, so every registration counts it —
+                    // the same number each handle would have observed back
+                    // when it owned the failing watcher outright.
+                    let targets = Self::targets(&routes, &err.paths);
+                    if targets.is_empty() {
+                        for reg in routes.regs.values_mut() {
+                            reg.errors += 1;
+                        }
+                    } else {
+                        for id in targets {
+                            if let Some(reg) = routes.regs.get_mut(&id) {
+                                reg.errors += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Registrations owning `paths`: for each path, the registration(s) whose
+    /// root is its longest matching prefix. Resolved per path independently,
+    /// then unioned — a rename event carries two paths that can legitimately
+    /// belong to two different KBs.
+    ///
+    /// O(registrations) per path, with registrations bounded by the number of
+    /// KBs a process has open (single digits) — the same order of work the
+    /// per-watcher design spent inside the kernel instead.
+    fn targets(routes: &Routes, paths: &[PathBuf]) -> Vec<RegId> {
+        let mut out: Vec<RegId> = Vec::new();
+        for p in paths {
+            let np = normalize_path(p);
+            let mut best_depth: Option<usize> = None;
+            let mut best: Vec<RegId> = Vec::new();
+            for (id, reg) in routes.regs.iter() {
+                if !is_prefix_of(&reg.root, &np) {
+                    continue;
+                }
+                match best_depth {
+                    Some(d) if reg.depth < d => continue,
+                    Some(d) if reg.depth == d => best.push(*id),
+                    _ => {
+                        best.clear();
+                        best.push(*id);
+                        best_depth = Some(reg.depth);
+                    }
+                }
+            }
+            for id in best {
+                if !out.contains(&id) {
+                    out.push(id);
+                }
+            }
+        }
+        out
+    }
+
+    /// Pump, then hand this registration everything routed to it.
+    fn take_events(&self, id: RegId) -> Vec<Event> {
+        self.pump();
+        let mut routes = self.routes.lock().unwrap_or_else(|e| e.into_inner());
+        match routes.regs.get_mut(&id) {
+            Some(reg) => reg.queue.drain(..).collect(),
+            None => Vec::new(),
+        }
+    }
+
+    fn error_count(&self, id: RegId) -> u64 {
+        let routes = self.routes.lock().unwrap_or_else(|e| e.into_inner());
+        routes.regs.get(&id).map(|r| r.errors).unwrap_or(0)
+    }
+}
+
+/// Component-wise prefix test — `/a/bc` is NOT a prefix of `/a/bcd`, which a
+/// naive string comparison would get wrong and silently misroute.
+fn is_prefix_of(root: &Path, path: &Path) -> bool {
+    let mut r = root.components();
+    let mut p = path.components();
+    loop {
+        match (r.next(), p.next()) {
+            (None, _) => return true,
+            (Some(_), None) => return false,
+            (Some(a), Some(b)) if a != b => return false,
+            _ => {}
+        }
+    }
+}
+
+/// Recursive watcher for a directory of org files. A registration on the
+/// process-wide [`SharedDirWatcher`] (NOT its own OS watcher — see this
+/// module's `@ai-caution`), plus the path→id mappings that let removals be
+/// reported by id.
 pub struct OrgDirWatcher {
-    // The watcher must stay alive to keep receiving events. It owns an
-    // internal thread; dropping this field tears the thread down.
-    _watcher: RecommendedWatcher,
-    rx: mpsc::Receiver<notify::Result<Event>>,
-    path_to_ids: Arc<Mutex<HashMap<PathBuf, Vec<String>>>>,
-    /// Cumulative count of watcher errors (channel recv errors).
-    errors: Arc<AtomicU64>,
+    core: Arc<SharedDirWatcher>,
+    id: RegId,
+    path_to_ids: Mutex<HashMap<PathBuf, Vec<String>>>,
+}
+
+impl Drop for OrgDirWatcher {
+    fn drop(&mut self) {
+        self.core.unregister(self.id);
+    }
 }
 
 impl OrgDirWatcher {
@@ -68,16 +354,12 @@ impl OrgDirWatcher {
     /// already called `kb.ingest_org_dir(dir)` so the id map is warm —
     /// but the watcher will also populate it lazily on events.
     pub fn new(dir: impl AsRef<Path>) -> notify::Result<Self> {
-        let (tx, rx) = mpsc::channel();
-        let mut watcher = notify::recommended_watcher(move |res| {
-            let _ = tx.send(res);
-        })?;
-        watcher.watch(dir.as_ref(), RecursiveMode::Recursive)?;
+        let core = SharedDirWatcher::get()?;
+        let id = core.register(dir.as_ref(), true)?;
         Ok(Self {
-            _watcher: watcher,
-            rx,
-            path_to_ids: Arc::new(Mutex::new(HashMap::new())),
-            errors: Arc::new(AtomicU64::new(0)),
+            core,
+            id,
+            path_to_ids: Mutex::new(HashMap::new()),
         })
     }
 
@@ -117,9 +399,10 @@ impl OrgDirWatcher {
         }
     }
 
-    /// Cumulative count of watcher errors since creation.
+    /// Cumulative count of watcher errors since creation, attributed to this
+    /// watcher's own registration.
     pub fn error_count(&self) -> u64 {
-        self.errors.load(Ordering::Relaxed)
+        self.core.error_count(self.id)
     }
 
     /// Drain all pending events and return coalesced `OrgChange`s.
@@ -127,11 +410,7 @@ impl OrgDirWatcher {
     pub fn drain(&self) -> Vec<OrgChange> {
         let mut changes: Vec<OrgChange> = Vec::new();
         let mut seen_upsert: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
-        while let Ok(ev) = self.rx.try_recv() {
-            let Ok(ev) = ev else {
-                self.errors.fetch_add(1, Ordering::Relaxed);
-                continue;
-            };
+        for ev in self.core.take_events(self.id) {
             match ev.kind {
                 EventKind::Create(_) | EventKind::Modify(_) => {
                     for p in ev.paths {
@@ -169,54 +448,48 @@ impl OrgDirWatcher {
 /// OTHER processes — the basis of daemon-less cross-instance freshness. When another
 /// mae process commits to the shared sqlite store, this fires so the editor can reload
 /// its in-memory mirror. `drain_changed()` coalesces all pending events into one bool.
+///
+/// A single-file, non-recursive registration on the same process-wide
+/// [`SharedDirWatcher`] the org-directory watchers use: a store file and an
+/// org directory are different *paths*, not different watchers, so folding
+/// them onto one instance costs nothing and keeps the "one home for one
+/// concern" boundary (CLAUDE.md #8). Their events never collide — an exact
+/// file path is always a strictly longer prefix match than any directory that
+/// happens to contain it.
 pub struct StoreWatcher {
-    // Owns the watcher thread; dropping tears it down.
-    _watcher: RecommendedWatcher,
-    rx: mpsc::Receiver<notify::Result<Event>>,
-    errors: Arc<AtomicU64>,
+    core: Arc<SharedDirWatcher>,
+    id: RegId,
+}
+
+impl Drop for StoreWatcher {
+    fn drop(&mut self) {
+        self.core.unregister(self.id);
+    }
 }
 
 impl StoreWatcher {
     /// Start watching the store `file` (non-recursive). The file must exist.
     pub fn new(file: impl AsRef<Path>) -> notify::Result<Self> {
-        let (tx, rx) = mpsc::channel();
-        let mut watcher = notify::recommended_watcher(move |res| {
-            let _ = tx.send(res);
-        })?;
-        watcher.watch(file.as_ref(), RecursiveMode::NonRecursive)?;
-        Ok(Self {
-            _watcher: watcher,
-            rx,
-            errors: Arc::new(AtomicU64::new(0)),
-        })
+        let core = SharedDirWatcher::get()?;
+        let id = core.register(file.as_ref(), false)?;
+        Ok(Self { core, id })
     }
 
     /// Cumulative watcher errors since creation.
     pub fn error_count(&self) -> u64 {
-        self.errors.load(Ordering::Relaxed)
+        self.core.error_count(self.id)
     }
 
     /// Drain all pending events; return true if the store changed (create/modify/
     /// remove). Non-blocking. Always consumes the queued events so a caller that
     /// chooses NOT to act (e.g. within its own-write cooldown) doesn't reprocess them.
     pub fn drain_changed(&self) -> bool {
-        let mut changed = false;
-        while let Ok(res) = self.rx.try_recv() {
-            match res {
-                Ok(ev) => {
-                    if matches!(
-                        ev.kind,
-                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-                    ) {
-                        changed = true;
-                    }
-                }
-                Err(_) => {
-                    self.errors.fetch_add(1, Ordering::Relaxed);
-                }
-            }
-        }
-        changed
+        self.core.take_events(self.id).into_iter().any(|ev| {
+            matches!(
+                ev.kind,
+                EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
+            )
+        })
     }
 }
 
@@ -271,6 +544,40 @@ pub fn wait_for<F: FnMut() -> bool>(mut cond: F) -> bool {
         std::thread::sleep(std::time::Duration::from_millis(25));
     }
     false
+}
+
+/// How many inotify **instances** (`inotify_init` file descriptors) this
+/// process currently holds, or `None` on a platform where that is not
+/// observable.
+///
+/// The scarce kernel resource behind `docs/INOTIFY_INSTANCE_EXHAUSTION.md`:
+/// `fs.inotify.max_user_instances` defaults to 128 per user, while
+/// `max_user_watches` is typically ~250,000 — so a watcher design must spend
+/// watches, not instances. This is the empirical oracle for that invariant, so
+/// the regression tests measure it instead of inferring it from the code shape.
+///
+/// Linux-only by nature (`/proc/self/fd` + the `anon_inode:inotify` link
+/// target). Returns `None` on macOS/other, where `notify` uses FSEvents/kqueue
+/// and there is no equivalent per-user instance cap to exhaust — callers
+/// (tests) must skip rather than assert, never silently treat `None` as 0.
+/// Exported as a normal `pub fn` for the same reason as [`wait_for`]: a
+/// `cfg(test)` item is invisible to a downstream crate's tests, and `mae-core`
+/// needs this to assert the same invariant end-to-end through `kb_register`.
+pub fn inotify_instance_count() -> Option<usize> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let entries = std::fs::read_dir("/proc/self/fd").ok()?;
+    let mut count = 0usize;
+    for entry in entries.flatten() {
+        // A raced-away fd (the dir listing is a snapshot) just doesn't count.
+        if let Ok(target) = std::fs::read_link(entry.path()) {
+            if target.to_string_lossy() == "anon_inode:inotify" {
+                count += 1;
+            }
+        }
+    }
+    Some(count)
 }
 
 #[cfg(test)]
@@ -328,6 +635,150 @@ mod tests {
                 .iter()
                 .all(|c| !matches!(c, OrgChange::Upserted(p) if p.extension().and_then(|e| e.to_str()) != Some("org"))),
             "non-org change leaked through: {changes:?}"
+        );
+    }
+
+    /// The defect in `docs/INOTIFY_INSTANCE_EXHAUSTION.md`, pinned empirically:
+    /// N watched directories must cost O(1) inotify *instances*, not N. Measured
+    /// as a delta so a watcher some other test in this process already holds
+    /// can't mask (or manufacture) a failure. Skipped where instances aren't a
+    /// concept (macOS/FSEvents) rather than asserted blindly — cross-platform
+    /// parity means "no false claim on the other OS", not "assert the Linux
+    /// number everywhere".
+    #[test]
+    fn many_watched_dirs_cost_one_inotify_instance() {
+        let Some(before) = inotify_instance_count() else {
+            return; // not Linux: no per-user instance cap to exhaust
+        };
+        let dirs: Vec<TempDir> = (0..8).map(|_| TempDir::new().unwrap()).collect();
+        let watchers: Vec<OrgDirWatcher> = dirs
+            .iter()
+            .map(|d| OrgDirWatcher::new(d.path()).unwrap())
+            .collect();
+        let after = inotify_instance_count().unwrap();
+        let spent = after.saturating_sub(before);
+        assert!(
+            spent <= 1,
+            "8 watched directories must cost at most 1 inotify instance \
+             (before={before}, after={after}, spent={spent})"
+        );
+        drop(watchers);
+    }
+
+    /// The failure mode that collapsing onto one instance could silently
+    /// introduce: events delivered for the first registered directory only.
+    /// Adversarial oracle — every one of the N watchers must see ITS OWN file
+    /// and no other's, so neither "only the first works" nor "everyone gets
+    /// everything" passes.
+    #[test]
+    fn every_watched_dir_still_receives_only_its_own_events() {
+        let dirs: Vec<TempDir> = (0..4).map(|_| TempDir::new().unwrap()).collect();
+        let watchers: Vec<OrgDirWatcher> = dirs
+            .iter()
+            .map(|d| OrgDirWatcher::new(d.path()).unwrap())
+            .collect();
+        let expected: Vec<PathBuf> = dirs
+            .iter()
+            .enumerate()
+            .map(|(i, d)| {
+                let p = d.path().join(format!("note-{i}.org"));
+                std::fs::write(&p, SAMPLE).unwrap();
+                p.canonicalize().unwrap()
+            })
+            .collect();
+
+        let mut seen: Vec<std::collections::HashSet<PathBuf>> =
+            vec![Default::default(); watchers.len()];
+        let all = wait_for(|| {
+            for (i, w) in watchers.iter().enumerate() {
+                for c in w.drain() {
+                    if let OrgChange::Upserted(p) = c {
+                        seen[i].insert(p);
+                    }
+                }
+            }
+            seen.iter()
+                .enumerate()
+                .all(|(i, s)| s.contains(&expected[i]))
+        });
+        assert!(
+            all,
+            "each watcher must observe its own directory's file: {seen:?}"
+        );
+        for (i, s) in seen.iter().enumerate() {
+            for (j, other) in expected.iter().enumerate() {
+                if i != j {
+                    assert!(
+                        !s.contains(other),
+                        "watcher {i} must not receive watcher {j}'s event ({other:?})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Nested registrations: a file under the INNER directory belongs to the
+    /// inner watcher, not the outer one — longest-prefix routing, not
+    /// first-match. The outer watcher still owns files that are only under it.
+    #[test]
+    fn nested_dirs_route_by_longest_prefix() {
+        let outer = TempDir::new().unwrap();
+        let inner_path = outer.path().join("inner");
+        std::fs::create_dir(&inner_path).unwrap();
+        let w_outer = OrgDirWatcher::new(outer.path()).unwrap();
+        let w_inner = OrgDirWatcher::new(&inner_path).unwrap();
+
+        let inner_file = inner_path.join("deep.org");
+        let outer_file = outer.path().join("shallow.org");
+        std::fs::write(&inner_file, SAMPLE).unwrap();
+        std::fs::write(&outer_file, SAMPLE).unwrap();
+        let inner_file = inner_file.canonicalize().unwrap();
+        let outer_file = outer_file.canonicalize().unwrap();
+
+        let mut outer_seen: std::collections::HashSet<PathBuf> = Default::default();
+        let mut inner_seen: std::collections::HashSet<PathBuf> = Default::default();
+        let ok = wait_for(|| {
+            for c in w_outer.drain() {
+                if let OrgChange::Upserted(p) = c {
+                    outer_seen.insert(p);
+                }
+            }
+            for c in w_inner.drain() {
+                if let OrgChange::Upserted(p) = c {
+                    inner_seen.insert(p);
+                }
+            }
+            outer_seen.contains(&outer_file) && inner_seen.contains(&inner_file)
+        });
+        assert!(ok, "outer={outer_seen:?} inner={inner_seen:?}");
+        assert!(
+            !outer_seen.contains(&inner_file),
+            "the inner directory's file must route to the inner watcher only"
+        );
+        assert!(
+            !inner_seen.contains(&outer_file),
+            "the outer directory's file must not reach the inner watcher"
+        );
+    }
+
+    /// A dropped handle must stop receiving — otherwise the shared instance
+    /// would leak routing state (and keep an unwatch pending forever).
+    #[test]
+    fn dropping_one_watcher_leaves_the_others_working() {
+        let a = TempDir::new().unwrap();
+        let b = TempDir::new().unwrap();
+        let wa = OrgDirWatcher::new(a.path()).unwrap();
+        let wb = OrgDirWatcher::new(b.path()).unwrap();
+        drop(wa);
+        let f = b.path().join("still-live.org");
+        std::fs::write(&f, SAMPLE).unwrap();
+        let expected = f.canonicalize().unwrap();
+        assert!(
+            wait_for(|| wb
+                .drain()
+                .iter()
+                .any(|c| matches!(c, OrgChange::Upserted(p) if p == &expected))),
+            "dropping one watcher must not stop delivery to the rest"
         );
     }
 
