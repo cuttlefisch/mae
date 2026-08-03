@@ -24,3 +24,40 @@
 # binaries from past code states over time — run `make clean` periodically for a
 # full reclaim, or `make clean-cache` to drop just the regenerable caches.)
 incremental = false
+
+[env]
+# Stop git's upward repository discovery at `target/`.
+#
+# `skia-bindings`' build script invokes skia's `git-sync-deps` WITHOUT setting a
+# working directory (`build_support/skia/config.rs`, the `Command::new(python)
+# .arg("skia/tools/git-sync-deps")` call — contrast the very next call, which
+# does set `.current_dir(&build.skia_source_dir)`). Every path that script
+# resolves is therefore relative to an unpinned cwd, and the `git` commands it
+# runs inside dependency directories that are not themselves repositories walk
+# UP the tree until they find a `.git` — which, for a build happening under
+# `target/`, is MAE's own.
+#
+# skia's script has a guard for exactly this, and its comment names the outcome:
+#
+#     if not is_git_toplevel(git, directory):
+#       # if the directory exists, but isn't a git repo, you will modify
+#       # the parent repository, which isn't what you want.
+#
+# The guard does not always hold. Observed twice on this repo during a single
+# day of GUI builds: `origin` silently rewritten to
+# `https://skia.googlesource.com/external/github.com/google/wuffs-mirror-release-c`
+# (a skia DEPS entry), leaving `git push` prompting for Google credentials and
+# `origin/main` pointing at an unrelated project's history.
+#
+# `GIT_CEILING_DIRECTORIES` is the precise counter: git will not ascend past the
+# listed directory when searching for a repository. Pointing it at `target/`
+# means a git process started anywhere in the build tree can never reach MAE's
+# `.git`, while git run from `crates/`, `shared/` or the root is unaffected
+# (`target/` is not an ancestor of those).
+#
+# `relative = true` resolves this against the directory containing this config
+# file, so it stays correct on every machine and inside git worktrees.
+#
+# This is a containment fix for a third-party build script we do not control.
+# The upstream defect is the missing `.current_dir()` in rust-skia.
+GIT_CEILING_DIRECTORIES = { value = "target", relative = true }
