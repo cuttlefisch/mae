@@ -1,6 +1,7 @@
 # ADR-090: Permission decisions are three-state (allow / ask / deny)
 
-**Status:** Proposed. Blocks lowering the default permission tier.
+**Status:** Accepted and implemented (v0.15). Decisions 1-5 are all in the tree; see
+*Implementation notes* at the end for where each landed and what is still open.
 **Extends:** ADR-084 (enforcement at the effect — this ADR supplies the *decision* vocabulary
 that enforcement returns), ADR-049 (`mae-agent` as the default AI surface — which already has
 half of this and is the model for the rest).
@@ -114,3 +115,68 @@ shows even a deliberately-restricted operator got shell execution.
 **Give only `mae-agent` the ask state (i.e. do nothing).** Rejected: it is already true, and it
 means MAE's security posture depends on which surface the user happens to be on, with the external
 MCP path — the one ADR-051/056 argue is the only real boundary — being the weakest.
+
+
+## Implementation notes (v0.15)
+
+**Where the decision lives.** `crates/ai/src/tools/decision.rs` defines `Decision { Allow, Ask,
+Deny(DenyReason) }`; `PermissionPolicy::decide(tool_name, tier)`
+(`crates/ai/src/tools/categories.rs`) is the single PDP. `is_allowed` is gone — a bool cannot
+carry three states, and leaving it would have let a call site keep the old semantics.
+
+`PermissionPolicy` gained `hard_ceiling: Option<HardCeiling>` to carry D2: a session-declared
+ceiling (ADR-051) and an unparseable declaration (ADR-084 D4) set it and produce `Deny`; the
+config/env `auto_approve_tier` sets only `auto_approve_up_to` and produces `Ask` above it.
+
+**How `Ask` reaches surfaces.** `ExecuteResult` gained `NeedsApproval(ApprovalRequest)`. Because
+every existing `match` on it was exhaustive, adding the variant made `rustc` name every surface that
+had to decide — the same Capsicum technique ADR-084 D3 uses for the Scheme registration sites.
+
+| Surface | `Ask` |
+|---|---|
+| `mae-agent` TUI | prompts (`y`/`a`/`n`) — the pre-existing overlay, now driven by `decide` |
+| Embedded session (`:ai`, `delegate()`) | `AgentSession::decide_and_present` emits `AiEvent::ConfirmToolCall`; the human answers with `:ai-accept`/`:ai-reject` (reusing `PendingInteractiveEvent`, not a new mechanism) |
+| `mae-agent --prompt` | denies via `ask_denied_message` |
+| External MCP dispatch | denies via `ApprovalRequest::into_denied(MCP_SURFACE)` |
+| `mae --self-test` | denies, likewise |
+
+A human approval is carried back as `AiEvent::ToolCallRequest { approved_tier }` and applied with
+`PermissionPolicy::with_one_time_approval(tier)`, which raises **only** the auto-approval ceiling.
+The hard ceiling and the category allowlist survive it, so an approval — or a forged `approved_tier`
+— can never promote a `Deny` (`approval_can_never_promote_a_deny`).
+
+**D4 (consolidation).** `PermissionTier::parse` + `PermissionTier::VALID_SPELLINGS`
+(`crates/ai/src/types.rs`) are now the one tier vocabulary. `mae::config::parse_permission_tier` is
+a thin alias; `mae-agent`'s `PermissionMode` enum and `needs_confirmation` are **deleted**, replaced
+by `policy_for_mode(&str) -> Option<PermissionPolicy>`. `confirm.rs` is presentation only. Two
+latent bugs fell out of the merge: the config parser was case-sensitive (so ADR-051's CamelCase wire
+values `"ReadOnly"`/`"Privileged"` never actually parsed — they were silently taking the
+unparseable-declaration path), and `mae-agent`'s `FullAuto` mode was redundant with a `Privileged`
+ceiling.
+
+**D5 (the default).** `PermissionPolicy::default()` is now `ReadOnly`, and
+`resolve_permission_policy` takes its built-in default *from* that value rather than repeating a
+literal — so `mae`, `mae-agent`, and the embedded session cannot disagree about "unconfigured".
+Breaking change; recorded in `SECURITY.md` and the release notes.
+
+**ADR-084 D2/D7, partly closed alongside.** `AgentSession` now carries a `PermissionPolicy`
+(threaded from `bootstrap::setup_ai`; `delegate()` sub-agents inherit the parent's verbatim), and
+`drain_pending_scheme_evals` takes an `ambient_tier` and wraps evaluation in
+`SchemeRuntime::with_ambient_tier` — so D3's per-primitive tiers stop being inert. The tier passed
+is `PermissionPolicy::ambient_scheme_tier()`, deliberately the *`Allow`* line and not the hard
+ceiling: guest Scheme cannot be prompted mid-evaluation, so anything merely askable must not be
+ambiently granted. The human keypress path passes `HUMAN_AMBIENT_TIER` (`Privileged`) — the user
+already has a shell, and bounding their own keystrokes by the AI's policy would be nonsense.
+
+**Still open.**
+
+- **ADR-084 D7's other half**: the `ai_tier` editor option still only paints the status bar. Making
+  it reach the enforced policy means a live-mutable policy shared between the main thread and the
+  spawned `AgentSession` task, which is a different change from this one.
+- **An interactive `Ask` for external MCP.** The mechanism exists —`deferred_mcp_reply` already
+  parks replies for LSP/DAP — but resolving one needs `all_tools` + the policy at the keypress site,
+  i.e. the pending-op-applied-in-the-event-loop pattern across all three loops (terminal, GUI,
+  headless). Until then a paired external editor must set `auto_approve_tier` explicitly, which is
+  documented in `docs/EXTERNAL_EDITOR_MCP_PAIRING.md`.
+- **`ApproveAlwaysThisSession`** in `mae-agent` is still treated as a one-time approve. A real
+  per-session allowlist is a deliberate follow-up, not an oversight.
