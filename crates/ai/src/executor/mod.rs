@@ -10,6 +10,7 @@ mod perf;
 mod permission;
 pub mod sandbox;
 pub(crate) mod self_test;
+mod session_exec;
 mod shell_exec;
 mod sync_exec;
 mod tool_dispatch;
@@ -136,6 +137,10 @@ mod tests;
 #[cfg(test)]
 #[path = "authorization_tests.rs"]
 mod authorization_tests;
+
+#[cfg(test)]
+#[path = "session_dispatch_tests.rs"]
+mod session_dispatch_tests;
 
 #[cfg(test)]
 mod deferred_kind_tests {

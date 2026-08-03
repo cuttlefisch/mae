@@ -522,8 +522,16 @@ fn execute_tool_dispatch_body(
                     .collect()
             })
             .unwrap_or_default();
+        // ADR-091: `request_tools` is a discovery surface, so the
+        // embedded-session-only tools must not be reachable through it for an
+        // external client — offering them and then failing the `tools/call`
+        // is precisely the shape ADR-085 rejects. The embedded `AgentSession`
+        // dispatches with no session id and is unaffected: it is the one
+        // context where `ask_user` actually works.
+        let external = editor.is_external_mcp_dispatch();
         let matched: Vec<&ToolDefinition> = all_tools
             .iter()
+            .filter(|t| !(external && crate::tools::is_embedded_session_only(&t.name)))
             .filter(|t| {
                 categories
                     .iter()
@@ -567,7 +575,17 @@ fn execute_tool_dispatch_body(
             .get("limit")
             .and_then(|v| v.as_u64())
             .unwrap_or(10) as usize;
-        let results = crate::tools::tool_search::search_tools(all_tools, query, limit);
+        // ADR-091: same exclusion as `request_tools` above — `search_tools` is
+        // the surface an external client is explicitly told to use when the
+        // Core `tools/list` doesn't have what it wants, so leaving the
+        // interactive three findable here would defeat withholding them from
+        // `tools/list`. Only allocates the filtered copy for external callers.
+        let results = if editor.is_external_mcp_dispatch() {
+            let visible = crate::tools::external_discovery_tools(all_tools);
+            crate::tools::tool_search::search_tools(&visible, query, limit)
+        } else {
+            crate::tools::tool_search::search_tools(all_tools, query, limit)
+        };
         let json_results: Vec<serde_json::Value> = results
             .iter()
             .map(|r| {
@@ -690,6 +708,13 @@ fn dispatch_tool(
 ) -> Result<String, String> {
     // Try each category dispatcher in turn
     if let Some(result) = super::core_exec::dispatch(editor, call) {
+        return result;
+    }
+    // ADR-091: the six session-scoped tools. Placed here rather than in
+    // `ai_exec` because what makes them dispatchable is the session handle,
+    // not their subject matter — keeping them together is what makes
+    // "which tools need a session?" answerable by looking at one file.
+    if let Some(result) = super::session_exec::dispatch(editor, call) {
         return result;
     }
     if let Some(result) = super::ai_exec::dispatch(editor, call) {

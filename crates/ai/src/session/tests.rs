@@ -1964,7 +1964,7 @@ fn degradation_is_one_way() {
 #[test]
 fn strip_html_basic() {
     let html = "<html><body><h1>Hello</h1><p>World &amp; friends</p></body></html>";
-    let text = AgentSession::strip_html(html);
+    let text = crate::web::strip_html(html);
     assert!(text.contains("Hello"), "should contain text");
     assert!(text.contains("World & friends"), "entities decoded");
     assert!(!text.contains('<'), "no HTML tags");
@@ -1974,7 +1974,7 @@ fn strip_html_basic() {
 fn strip_html_script_style_removed() {
     let html = r#"<html><head><style>body { color: red }</style></head>
     <body><script>alert('xss')</script><p>Content</p></body></html>"#;
-    let text = AgentSession::strip_html(html);
+    let text = crate::web::strip_html(html);
     assert!(text.contains("Content"), "content preserved");
     assert!(!text.contains("alert"), "script removed");
     assert!(!text.contains("color"), "style removed");
@@ -1983,14 +1983,14 @@ fn strip_html_script_style_removed() {
 #[test]
 fn strip_html_plain_text_passthrough() {
     let plain = "This is just plain text with no tags.";
-    let text = AgentSession::strip_html(plain);
+    let text = crate::web::strip_html(plain);
     assert_eq!(text, plain);
 }
 
 #[test]
 fn strip_html_collapses_whitespace() {
     let html = "<p>Line 1</p>\n\n\n\n\n<p>Line 2</p>";
-    let text = AgentSession::strip_html(html);
+    let text = crate::web::strip_html(html);
     // Should not have more than one consecutive blank line
     assert!(!text.contains("\n\n\n"), "excessive blank lines collapsed");
 }
@@ -1998,7 +1998,7 @@ fn strip_html_collapses_whitespace() {
 #[test]
 fn strip_html_entities() {
     let html = "&lt;tag&gt; &quot;quoted&quot; &nbsp; &#39;apos&#39;";
-    let text = AgentSession::strip_html(html);
+    let text = crate::web::strip_html(html);
     assert!(text.contains("<tag>"), "lt/gt decoded");
     assert!(text.contains("\"quoted\""), "quot decoded");
     assert!(text.contains("'apos'"), "apos decoded");

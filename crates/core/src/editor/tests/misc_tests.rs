@@ -657,25 +657,25 @@ fn with_ai_dispatch_scope_for_session_isolates_three_concurrent_sessions() {
     editor.with_ai_dispatch_scope_for_session(Some(1), |e| e.dispatch_builtin("git-status"));
     let target_1 = editor
         .ai
-        .mcp_session_windows
+        .mcp_sessions
         .get(&1)
-        .and_then(|s| s.target_window_id)
+        .and_then(|s| s.windows.target_window_id)
         .expect("session 1 should have an established target");
 
     editor.with_ai_dispatch_scope_for_session(Some(2), |e| e.dispatch_builtin("git-diff"));
     let target_2 = editor
         .ai
-        .mcp_session_windows
+        .mcp_sessions
         .get(&2)
-        .and_then(|s| s.target_window_id)
+        .and_then(|s| s.windows.target_window_id)
         .expect("session 2 should have an established target");
 
     editor.with_ai_dispatch_scope_for_session(Some(3), |e| e.dispatch_builtin("git-log"));
     let target_3 = editor
         .ai
-        .mcp_session_windows
+        .mcp_sessions
         .get(&3)
-        .and_then(|s| s.target_window_id)
+        .and_then(|s| s.windows.target_window_id)
         .expect("session 3 should have an established target");
 
     assert_ne!(
@@ -701,9 +701,9 @@ fn with_ai_dispatch_scope_for_session_isolates_three_concurrent_sessions() {
     assert_eq!(
         editor
             .ai
-            .mcp_session_windows
+            .mcp_sessions
             .get(&1)
-            .and_then(|s| s.target_window_id),
+            .and_then(|s| s.windows.target_window_id),
         Some(target_1),
         "session 1 must keep reusing its own window across repeated dispatch"
     );
@@ -730,7 +730,7 @@ fn with_ai_dispatch_scope_for_session_none_matches_unscoped_behavior() {
     assert_eq!(editor.window_mgr.iter_windows().count(), 2);
     assert!(editor.ai.target_window_id.is_some());
     assert!(
-        editor.ai.mcp_session_windows.is_empty(),
+        editor.ai.mcp_sessions.is_empty(),
         "session_id: None must never populate the per-session map"
     );
 }
@@ -748,16 +748,16 @@ fn evicted_session_self_heals_on_next_dispatch() {
     // Simulate session 1 having a window, then being evicted (as the size
     // bound would do to some session under real long-running load).
     editor.with_ai_dispatch_scope_for_session(Some(1), |e| e.dispatch_builtin("git-status"));
-    assert!(editor.ai.mcp_session_windows.contains_key(&1));
-    editor.ai.mcp_session_windows.remove(&1);
+    assert!(editor.ai.mcp_sessions.contains_key(&1));
+    editor.ai.mcp_sessions.remove(&1);
 
     // Must not panic; must establish a (possibly new) valid window.
     editor.with_ai_dispatch_scope_for_session(Some(1), |e| e.dispatch_builtin("git-diff"));
     let target = editor
         .ai
-        .mcp_session_windows
+        .mcp_sessions
         .get(&1)
-        .and_then(|s| s.target_window_id);
+        .and_then(|s| s.windows.target_window_id);
     assert!(target.is_some());
     assert!(editor.window_mgr.window(target.unwrap()).is_some());
 }

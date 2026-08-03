@@ -65,7 +65,9 @@ pub mod vi_state;
 mod visual;
 mod window_ops;
 
-pub use ai_state::{AiNetworkCheck, AiState, InputLock};
+pub use ai_state::{
+    AgentSessionState, AiNetworkCheck, AiState, InputLock, McpSessionState, McpSessionWindowState,
+};
 pub use changes::{ChangeEntry, CHANGE_LIST_CAP};
 pub use daemon_capability::{
     DaemonFeature, DaemonRequirement, DaemonStateSnapshot, FeatureAvailability,

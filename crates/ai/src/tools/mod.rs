@@ -6,6 +6,7 @@ mod core_tools;
 mod dap_tools;
 #[cfg(test)]
 mod dispatch_contract_tests;
+pub mod dispatchability;
 mod kb_tools;
 mod lsp_tools;
 #[cfg(test)]
@@ -29,6 +30,10 @@ pub use authorization::{
 pub use categories::{
     annotations_for_tier, classify_command_permission, classify_tool_category, classify_tool_tier,
     parse_categories, request_tools_definition, PermissionPolicy, ToolCategory, ToolTier,
+};
+pub use dispatchability::{
+    external_discovery_tools, is_embedded_session_only, EMBEDDED_SESSION_ONLY_TOOLS,
+    SESSION_SCOPED_DISPATCHABLE_TOOLS,
 };
 
 /// Valid AI prompt profiles. Used in tool definitions for ai_set_profile and delegate.

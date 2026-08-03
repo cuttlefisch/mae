@@ -125,31 +125,21 @@ impl AgentSession {
             .and_then(|v| v.as_str())
             .unwrap_or("");
 
-        if url.is_empty() {
+        // ADR-091: scheme allow-list shared with the blocking transport
+        // (`executor::session_exec::execute_web_fetch`) so the two cannot
+        // disagree about what is fetchable.
+        if let Err(e) = crate::web::validate_url(url) {
             return ToolResult {
                 tool_call_id: call.id.clone(),
                 tool_name: call.name.clone(),
                 success: false,
-                output: "Missing 'url' argument".into(),
-            };
-        }
-
-        // Validate URL scheme
-        if !url.starts_with("http://") && !url.starts_with("https://") {
-            return ToolResult {
-                tool_call_id: call.id.clone(),
-                tool_name: call.name.clone(),
-                success: false,
-                output: format!(
-                    "Invalid URL scheme: only http:// and https:// are supported, got: {}",
-                    url
-                ),
+                output: e,
             };
         }
 
         let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .user_agent("MAE/0.5.0")
+            .timeout(std::time::Duration::from_secs(crate::web::TIMEOUT_SECS))
+            .user_agent(crate::web::USER_AGENT)
             .build();
 
         let client = match client {
@@ -173,29 +163,16 @@ impl AgentSession {
                     .and_then(|v| v.to_str().ok())
                     .unwrap_or("unknown")
                     .to_string();
-                let is_html = content_type.contains("html");
 
                 match response.text().await {
-                    Ok(body) => {
-                        let text = if is_html {
-                            Self::strip_html(&body)
-                        } else {
-                            body
-                        };
-                        // Truncate to 32KB
-                        let text = if text.len() > 32_768 {
-                            let boundary = text.floor_char_boundary(32_768);
-                            format!("{}...\n[truncated at 32KB]", &text[..boundary])
-                        } else {
-                            text
-                        };
-                        ToolResult {
-                            tool_call_id: call.id.clone(),
-                            tool_name: call.name.clone(),
-                            success: true,
-                            output: format!("HTTP {} ({})\n\n{}", status, content_type, text),
-                        }
-                    }
+                    Ok(body) => ToolResult {
+                        tool_call_id: call.id.clone(),
+                        tool_name: call.name.clone(),
+                        success: true,
+                        // ADR-091: HTML stripping + truncation shared with
+                        // the blocking transport.
+                        output: crate::web::shape_body(status, &content_type, body),
+                    },
                     Err(e) => ToolResult {
                         tool_call_id: call.id.clone(),
                         tool_name: call.name.clone(),
@@ -218,91 +195,6 @@ impl AgentSession {
     }
 
     /// Strip HTML tags, script/style blocks, and decode common entities.
-    pub(super) fn strip_html(html: &str) -> String {
-        let mut result = String::with_capacity(html.len() / 2);
-        let mut in_tag = false;
-        let mut in_script = false;
-        let mut in_style = false;
-        let mut chars = html.chars().peekable();
-
-        while let Some(ch) = chars.next() {
-            if ch == '<' {
-                // Check for script/style open/close tags
-                let rest: String = chars.clone().take(20).collect();
-                let rest_lower = rest.to_ascii_lowercase();
-                if rest_lower.starts_with("script") {
-                    in_script = true;
-                } else if rest_lower.starts_with("/script") {
-                    in_script = false;
-                } else if rest_lower.starts_with("style") {
-                    in_style = true;
-                } else if rest_lower.starts_with("/style") {
-                    in_style = false;
-                }
-                in_tag = true;
-                continue;
-            }
-            if ch == '>' {
-                in_tag = false;
-                continue;
-            }
-            if in_tag || in_script || in_style {
-                continue;
-            }
-            // Decode HTML entities
-            if ch == '&' {
-                let entity: String = chars
-                    .clone()
-                    .take_while(|c| *c != ';' && *c != ' ' && *c != '<')
-                    .collect();
-                if entity.len() < 10 {
-                    let decoded = match entity.as_str() {
-                        "amp" => Some('&'),
-                        "lt" => Some('<'),
-                        "gt" => Some('>'),
-                        "quot" => Some('"'),
-                        "nbsp" => Some(' '),
-                        "#39" | "apos" => Some('\''),
-                        _ => None,
-                    };
-                    if let Some(decoded_char) = decoded {
-                        result.push(decoded_char);
-                        // Advance past entity + semicolon
-                        for _ in 0..entity.len() {
-                            chars.next();
-                        }
-                        if chars.peek() == Some(&';') {
-                            chars.next();
-                        }
-                        continue;
-                    }
-                }
-                result.push('&');
-                continue;
-            }
-            result.push(ch);
-        }
-
-        // Collapse excessive whitespace
-        let mut collapsed = String::with_capacity(result.len());
-        let mut blank_lines = 0;
-        for line in result.lines() {
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                blank_lines += 1;
-                if blank_lines <= 1 {
-                    collapsed.push('\n');
-                }
-            } else {
-                blank_lines = 0;
-                collapsed.push_str(trimmed);
-                collapsed.push('\n');
-            }
-        }
-
-        collapsed.trim().to_string()
-    }
-
     /// Main loop: wait for prompts, run agentic loop, send results.
     pub async fn run(mut self) {
         info!("AI session started, waiting for prompts");

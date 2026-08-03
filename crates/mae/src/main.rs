@@ -809,8 +809,18 @@ fn main() -> io::Result<()> {
                 .get_option("mcp_tools_tiered_by_default")
                 .map(|(v, _)| v == "true")
                 .unwrap_or(true);
+            // ADR-091 (decision #9): withhold the inherently-interactive
+            // tools from EVERY external discovery surface. `ask_user` sat at
+            // Core tier, so it was in the very first list a paired external
+            // agent saw, while an external `tools/call` for it fell through
+            // to `Unknown tool` — it pauses the embedded session's task on a
+            // oneshot awaiting a human reply, which has no meaning
+            // mid-`tools/call`. Applied BEFORE the Core/Extended split so it
+            // holds for both branches; `search_tools`/`request_tools` apply
+            // the same filter in `tool_dispatch.rs`.
+            let advertisable = mae_ai::external_discovery_tools(&all_tools);
             let mcp_tool_defs: Vec<mae_ai::ToolDefinition> = if mcp_tools_tiered {
-                let mut core: Vec<mae_ai::ToolDefinition> = all_tools
+                let mut core: Vec<mae_ai::ToolDefinition> = advertisable
                     .iter()
                     .filter(|t| mae_ai::classify_tool_tier(&t.name) == mae_ai::ToolTier::Core)
                     .cloned()
@@ -820,7 +830,7 @@ fn main() -> io::Result<()> {
                 }
                 core
             } else {
-                all_tools.clone()
+                advertisable
             };
             let mcp_tools: Vec<mae_mcp::protocol::ToolInfo> = mcp_tool_defs
                 .iter()
