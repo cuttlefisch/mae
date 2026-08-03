@@ -12,6 +12,10 @@
 //! `apply_keymap_and_context`). The methods below are called from
 //! `apply_to_editor` in EXACTLY the original order; do not reorder them
 //! without re-verifying the ordering comments inline.
+//!
+//! @ai-caution: [architecture-debt] 814 lines, 14 over the 800-line ceiling, accepted in
+//! `docs/AUDIT_BASELINE.json`. It crossed the line mechanically — ADR-084 D3 added a required
+//! tier argument to every `register_fn` call — not by accreting logic. See ROADMAP.md.
 
 use mae_core::parse_key_seq_spaced;
 use mae_core::{CommandSource, Editor};

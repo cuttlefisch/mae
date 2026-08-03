@@ -25,7 +25,7 @@
 //!
 //! ## The pre-check on the write path
 //!
-//! @ai-caution: [architecture-debt] `kb-update`/`kb-delete` verify the node
+//! @ai-caution: [security] `kb-update`/`kb-delete` verify the node
 //! exists *before* queueing, so a Scheme program gets a real, catchable
 //! Scheme error for the case it can actually branch on ("no such node")
 //! instead of a status-line message it cannot see until the next eval. This
@@ -71,7 +71,7 @@ pub enum KbNodeOp {
 
 /// Every KB store to consult, primary first, **each exactly once**.
 ///
-/// @ai-caution: [architecture-debt] `SharedState::kb_instance_stores` is
+/// @ai-caution: [security] `SharedState::kb_instance_stores` is
 /// populated as *primary-first, then each federated instance*
 /// (`state_sync_inject.rs`), so it already contains the primary store —
 /// concatenating it with `kb_store` would visit the primary twice, which for
@@ -137,7 +137,7 @@ fn opt_string(v: &Value, fn_name: &str) -> Result<Option<String>, LispError> {
 /// Load one store's nodes into an in-memory [`mae_kb::KnowledgeBase`] so the
 /// SAME `search_ranked` the `kb_search` MCP tool uses can rank them.
 ///
-/// @ai-caution: [architecture-debt] Do NOT "optimise" this back to
+/// @ai-caution: [security] Do NOT "optimise" this back to
 /// `KbStore::fts_search`. That index is demonstrably lossy — on a freshly
 /// seeded store, a node titled `"alpha beta gamma delta"` with body
 /// `"epsilon zeta eta"` is found by `alpha`/`beta`/`gamma`/`zeta`/`eta` and

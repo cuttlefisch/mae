@@ -33,7 +33,7 @@
 //! alists, arrays become vectors. One data model, two surfaces, which is the
 //! strongest available reading of principle #3.
 //!
-//! @ai-caution: [architecture-debt] The precondition checks below (`no active
+//! @ai-caution: [security] The precondition checks below (`no active
 //! debug session`, `no such request id`) read the per-eval snapshot so a
 //! Scheme caller gets a real, catchable error instead of a status-line message
 //! it cannot see. They are fast-fail validations, not authorization: the

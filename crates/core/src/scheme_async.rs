@@ -29,7 +29,7 @@
 //! gets a single blocking round trip; a Scheme program already has `(debug-state)`
 //! for the same information and does not need a second correlation mechanism.
 //!
-//! @ai-caution: [architecture-debt] Do not add a second, parallel result
+//! @ai-caution: [dispatch] Do not add a second, parallel result
 //! registry for DAP without first establishing that `(debug-state)` genuinely
 //! cannot answer the question. Two correlation mechanisms for one editor is
 //! the duplication principle #8 exists to prevent.

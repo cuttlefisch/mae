@@ -5,6 +5,10 @@
 //! caught, retried, or argued out of, and that the ambient tier cannot be moved
 //! upward by anything a Scheme program can say. The "it still works normally"
 //! cases exist to prove the refusals are not vacuous.
+//!
+//! @ai-caution: [architecture-debt] 571 lines against a 500-line test ceiling, accepted in
+//! `docs/AUDIT_BASELINE.json`. Split candidate along the same lines as `parity_tests.rs`.
+//! See ROADMAP.md, "Architecture Debt".
 
 use super::*;
 use crate::permission::{PermissionTier, PrimitiveTier};

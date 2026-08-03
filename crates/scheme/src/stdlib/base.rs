@@ -49,6 +49,11 @@
 //! - **Full call/cc**: Captures entire VM state (stack + frames). One-shot
 //!   and multi-shot invocation supported. `dynamic-wind` is implemented
 //!   in Scheme (bootstrap) using `guard` for exception safety.
+//!
+//! @ai-caution: [architecture-debt] 2607 lines, long-standing accepted debt in
+//! `docs/AUDIT_BASELINE.json`. The +14% step came from ADR-084 D3's required tier argument on
+//! 268 registrations plus rustfmt reflowing the calls that gained it — mechanical, not new
+//! complexity. See ROADMAP.md, "Architecture Debt".
 
 use std::cell::RefCell;
 use std::rc::Rc;

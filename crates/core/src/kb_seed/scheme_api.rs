@@ -1,3 +1,9 @@
+//! @ai-caution: [architecture-debt] Over the 800-line ceiling (2391) and accepted in
+//! `docs/AUDIT_BASELINE.json`. This is a *data table* — one entry per registered Scheme
+//! primitive — not logic, and it is machine-checked against the VM's real registrations by
+//! `every_registered_scheme_fn_has_a_scheme_api_doc`. It grows when the API grows, which is
+//! correct. Split it only if the table itself becomes hard to navigate. See ROADMAP.md,
+//! "Architecture Debt".
 use mae_kb::{KnowledgeBase, Node, NodeKind};
 
 /// Every documented Scheme API function: (name, signature, doc, example, category).

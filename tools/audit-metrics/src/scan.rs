@@ -312,7 +312,16 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
         let name = name.to_string_lossy();
         if path.is_dir() {
             // `target` anywhere (root, daemon/, tools/*/), plus VCS/node noise.
-            if name == "target" || name == ".git" || name == "node_modules" {
+            //
+            // `.claude` matters as much as `target`: agent worktrees live under
+            // `.claude/worktrees/<id>/` and are FULL copies of the repo. Walking
+            // them multiplies every count by the number of live worktrees — a
+            // `--bless` run against six of them produced 4,893 files and 2.8M
+            // lines for a ~700-file, ~395k-line repo, and would have written a
+            // baseline of 977 "accepted" exceptions that mostly do not exist.
+            // A metrics tool that silently counts the same file N times is worse
+            // than no metrics tool, because the number still looks authoritative.
+            if name == "target" || name == ".git" || name == "node_modules" || name == ".claude" {
                 continue;
             }
             walk(root, &path, out);
@@ -331,6 +340,35 @@ fn walk(root: &Path, dir: &Path, out: &mut Vec<(String, String)>) {
 
 #[cfg(test)]
 mod tests {
+    /// A live agent worktree under `.claude/worktrees/<id>/` is a full copy of
+    /// the repo. Walking it counts every file twice (or six times), which is how
+    /// a `--bless` run once produced 4,893 files for a ~700-file repo. The
+    /// exclusion is load-bearing, not hygiene.
+    #[test]
+    fn the_walker_never_descends_into_claude_worktrees() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        std::fs::create_dir_all(root.join("crates/core/src")).unwrap();
+        std::fs::write(root.join("crates/core/src/lib.rs"), "pub fn a() {}\n").unwrap();
+        // A worktree copy of the very same file.
+        std::fs::create_dir_all(root.join(".claude/worktrees/agent-x/crates/core/src")).unwrap();
+        std::fs::write(
+            root.join(".claude/worktrees/agent-x/crates/core/src/lib.rs"),
+            "pub fn a() {}\n",
+        )
+        .unwrap();
+
+        let mut out = Vec::new();
+        super::walk(root, root, &mut out);
+        assert_eq!(
+            out.len(),
+            1,
+            "the worktree copy must not be counted; got {:?}",
+            out.iter().map(|(p, _)| p).collect::<Vec<_>>()
+        );
+        assert!(!out[0].0.contains(".claude"));
+    }
+
     use super::*;
 
     #[test]

@@ -7,6 +7,11 @@
 //! id — because a primitive that silently succeeds on those is worse than one
 //! that does not exist: a Scheme program would branch on a lie. The
 //! happy-path cases exist only to prove the failures are not vacuous.
+//!
+//! @ai-caution: [architecture-debt] 896 lines against a 500-line test ceiling, accepted in
+//! `docs/AUDIT_BASELINE.json`. Genuine split candidate: the LSP/DAP, KB-CRUD and tier-sweep
+//! groups are independent and would read better as siblings. Kept whole for now because the
+//! adversarial cases share fixtures. See ROADMAP.md, "Architecture Debt".
 
 use super::*;
 use mae_core::Editor;
