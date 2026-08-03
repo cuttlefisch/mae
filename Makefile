@@ -49,7 +49,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean clean-cache ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual practices-kb install-practices adr-kb install-adr devpractices-kb install-devpractices verify-adr-kb-sync install-vscode
+.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean clean-cache ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check audit-metrics audit-metrics-check audit-metrics-bless gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual practices-kb install-practices adr-kb install-adr devpractices-kb install-devpractices verify-adr-kb-sync install-vscode
 
 # Default target: release build
 all: build
@@ -359,6 +359,24 @@ code-map:
 ## code-map-check: verify code map is up to date (for CI)
 code-map-check:
 	cd tools/code-map && $(CARGO) run --release -- --workspace-root ../.. --check
+
+## audit-metrics: regenerate docs/AUDIT_METRICS.json (structural metrics + marker cross-refs)
+audit-metrics:
+	cd tools/audit-metrics && $(CARGO) run --release -- --workspace-root ../..
+
+## audit-metrics-check: fail on NEW or growing ceiling violations (for CI).
+## Ratchets against docs/AUDIT_BASELINE.json -- pre-existing debt passes at its
+## accepted size, a file that grows past tolerance fails, a file that shrinks
+## never fails.
+audit-metrics-check:
+	cd tools/audit-metrics && $(CARGO) run --release -- --workspace-root ../.. --check
+
+## audit-metrics-bless: re-accept the CURRENT set of ceiling violations as the
+## baseline. Run this ONLY when deliberately taking on new debt -- and pair it
+## with an `@ai-caution: [architecture-debt]` marker + a ROADMAP.md cross-link,
+## per CLAUDE.md's tagging convention.
+audit-metrics-bless:
+	cd tools/audit-metrics && $(CARGO) run --release -- --workspace-root ../.. --bless
 
 ## gen-fixtures: generate large test fixtures for perf benchmarking
 gen-fixtures:

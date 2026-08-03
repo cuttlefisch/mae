@@ -18,7 +18,7 @@
 //! ceiling. All state lives in `self` fields (not raw locals), so a further
 //! per-arm/per-phase split of `window_event`/`about_to_wait` is a real,
 //! low-risk future candidate, not attempted this pass. Tracked in
-//! .claude/commands/mae-audit.md's "Known exceptions" and ROADMAP.md's
+//! `docs/AUDIT_BASELINE.json` (machine-checked) and ROADMAP.md's
 //! "Architecture Debt" section — re-verify line/field counts each audit
 //! pass rather than trusting this comment's numbers to stay current.
 

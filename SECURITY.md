@@ -19,11 +19,28 @@ MAE has several security-relevant subsystems. This section documents the current
 
 ### Strong Protections
 
-**Permission tiers** — The AI agent operates under a configurable permission tier. The primary surface is `init.scm` via `(set-option! "permission_tier" …)` (also settable at runtime with `:set permission_tier …` and persisted with `:set-save`); `config.toml` is a narrow legacy bootstrap, and `MAE_AI_PERMISSIONS` env var still works. Tiers are enforced before every tool execution with no bypass vectors:
+**Permission tiers** — The AI agent operates under a configurable permission tier:
 - **readonly** — AI can read buffers and navigate, but cannot modify files
 - **write** — AI can edit buffers and create files
 - **shell** — AI can execute shell commands (default)
 - **privileged** — Full access including configuration changes
+
+> [!WARNING]
+> **The tier is not currently enforced on every path.** A pre-v0.15 audit found that the embedded
+> AI session does not consult the permission policy at all, and that the `write` tier reaches shell
+> effects through the Scheme-eval queue. This section previously claimed tiers were "enforced before
+> every tool execution with no bypass vectors" — that claim was wrong and has been removed. Tracked
+> privately as a security advisory; treat the tier as a guard-rail against accident, **not** as a
+> boundary against a prompt-injected or adversarial model, until that advisory is resolved.
+
+**Setting the tier.** Only two surfaces actually reach the enforced policy:
+- `MAE_AI_PERMISSIONS=readonly|write|shell|privileged` (environment variable), or
+- `auto_approve_tier` in `config.toml`'s `[ai]` section — **lowercase values only**; an unrecognised
+  value currently falls back to `shell`, i.e. it fails *open*.
+
+The `ai_tier` editor option (`(set-option! "ai_tier" …)` / `:set ai-tier …`) currently changes only the
+status-bar badge and does **not** alter the enforced policy. Earlier revisions of this document referred
+to an option named `permission_tier`; no such option exists.
 
 **Watchdog thread** — A background thread monitors AI operations for stalls. If an AI operation exceeds 10 seconds without progress, the watchdog captures a backtrace and triggers auto-recovery. The user can also cancel via Esc or Ctrl-C (input lock).
 
@@ -68,7 +85,7 @@ MAE has several security-relevant subsystems. This section documents the current
 - **Secrets are never plaintext in config.toml.** `config.toml` is a legacy bootstrap; do not store API keys or the collab PSK in it directly.
 - **API keys:** Use `api_key_command` with a password manager (e.g., `api_key_command = "pass show anthropic/api-key"`), not plaintext `api_key`.
 - **Collab secrets:** Never put `collab_psk` plaintext in config.toml — use `collab_psk_command` (shell to pass/keychain), or preferably `collab_auth_mode = "key"` (Ed25519 trusted-peer mTLS) with the keystore at `$XDG_DATA_HOME/mae/collab/trusted_keys`.
-- **Permission tier:** Set it via `(set-option! "permission_tier" "write")` (or `:set permission_tier write`) unless your workflow requires shell access. Use `"readonly"` for review-only sessions.
+- **Permission tier:** Set it via the `MAE_AI_PERMISSIONS` environment variable (e.g. `MAE_AI_PERMISSIONS=write`), or lowercase `auto_approve_tier` under `[ai]` in `config.toml`. The `ai_tier` editor option does not affect enforcement — see the warning above. Until the tracked advisory is resolved, do not rely on any tier as a boundary against an adversarial or prompt-injected model; run MAE in a container for genuinely untrusted input.
 - **Untrusted files:** Run MAE in a container when opening untrusted org files or working with untrusted AI prompts (see below).
 - **Transcripts:** Review files in `~/.local/share/mae/transcripts/` before sharing or committing them.
 - **MCP access:** The MCP socket is ephemeral (per-process PID). Only grant `mae-mcp-shim` access to tools appropriate for your trust level.

@@ -3,9 +3,9 @@
 //! earlier round (`fix/backlog-review-root-cause-patterns`), but the file's
 //! *size* was never addressed — not split (design work, not attempted this
 //! pass; round-5 tech-debt pass, 2026-07). Tracked in
-//! `.claude/commands/mae-audit.md`'s "Known exceptions" and `ROADMAP.md`'s
-//! "Architecture Debt" section — re-verify the line count each audit pass
-//! rather than trusting this comment's number to stay current.
+//! `docs/AUDIT_BASELINE.json` (machine-checked; `make audit-metrics-check`)
+//! and `ROADMAP.md`'s "Architecture Debt" section. The line count is NOT
+//! repeated here on purpose — the baseline holds it, and CI fails if it grows.
 
 use ropey::Rope;
 use sha2::{Digest, Sha256};

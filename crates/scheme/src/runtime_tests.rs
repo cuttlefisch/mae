@@ -3,7 +3,7 @@
 // since), well over the 500-line test-file ceiling. A further split into
 // focused sibling test files (mirroring `runtime/*.rs`'s category split of
 // the non-test code) is a reasonable future candidate, not attempted here.
-// Tracked in .claude/commands/mae-audit.md's "Known exceptions" and
+// Tracked in `docs/AUDIT_BASELINE.json` (machine-checked) and
 // ROADMAP.md's "Architecture Debt" section; re-measure each audit pass
 // rather than trusting this comment's line count to stay current.
 

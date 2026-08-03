@@ -1,5 +1,7 @@
 //! mae-daemon — background KB persistence, collaboration, and maintenance service.
 //!
+//! @stability: stable
+//!
 //! Provides:
 //! - CozoDB with SQLite storage backend (no sled SIGABRT on nightly)
 //! - JSON-RPC API over Unix socket for editor KB queries

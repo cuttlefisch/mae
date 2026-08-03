@@ -15,7 +15,7 @@
 //! ceiling — `GraphView`'s scene graph, viewport, and flattening logic grew
 //! as one file across the KB graph view feature's build-out. Not split
 //! (design work, not attempted this pass; round-5 tech-debt pass, 2026-07).
-//! Tracked in `.claude/commands/mae-audit.md`'s "Known exceptions" and
+//! Tracked in `docs/AUDIT_BASELINE.json` (machine-checked) and
 //! `ROADMAP.md`'s "Architecture Debt" section — re-verify the line count
 //! each audit pass rather than trusting this comment's number to stay current.
 
