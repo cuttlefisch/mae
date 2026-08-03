@@ -617,6 +617,78 @@ fn lsp_diagnostics_without_a_server_is_a_well_formed_empty_payload() {
     assert!(err.message.contains("unknown SCOPE"), "{}", err.message);
 }
 
+/// The scope filter is the one piece of diagnostics logic that lives on the
+/// Scheme side (the snapshot is taken once with `scope="all"`), so it gets the
+/// adversarial case: two files with diagnostics, and `"buffer"` must return
+/// **only** the active one's — with recomputed counts, not the counts for
+/// everything. A filter that dropped the wrong file, or kept the global
+/// counts, would look correct to a test that only checked "some diagnostics
+/// came back".
+#[test]
+fn lsp_diagnostics_buffer_scope_returns_only_the_active_buffer() {
+    use mae_core::{Diagnostic, DiagnosticSeverity};
+
+    let mut rt = new_runtime();
+    let mut editor = Editor::new();
+
+    let dir = std::env::temp_dir().join(format!("mae-parity-diag-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mine = dir.join("mine.rs");
+    let theirs = dir.join("theirs.rs");
+    std::fs::write(&mine, "fn main() {}\n").unwrap();
+    std::fs::write(&theirs, "fn other() {}\n").unwrap();
+
+    let diag = |message: &str, severity| Diagnostic {
+        line: 0,
+        col_start: 0,
+        col_end: 1,
+        end_line: 0,
+        severity,
+        message: message.to_string(),
+        source: None,
+        code: None,
+    };
+    editor.lsp.diagnostics.set(
+        mae_core::path_to_uri(&mine),
+        vec![
+            diag("mine-error", DiagnosticSeverity::Error),
+            diag("mine-warning", DiagnosticSeverity::Warning),
+        ],
+    );
+    editor.lsp.diagnostics.set(
+        mae_core::path_to_uri(&theirs),
+        vec![diag("theirs-error", DiagnosticSeverity::Error)],
+    );
+    editor.open_file(&mine);
+    rt.inject_editor_state(&editor);
+
+    let all = rt.eval(r#"(lsp-diagnostics "all")"#).unwrap();
+    assert!(all.contains("mine-error"), "{all}");
+    assert!(all.contains("theirs-error"), "{all}");
+
+    let buffer = rt.eval(r#"(lsp-diagnostics "buffer")"#).unwrap();
+    assert!(buffer.contains("mine-error"), "{buffer}");
+    assert!(buffer.contains("mine-warning"), "{buffer}");
+    assert!(
+        !buffer.contains("theirs-error"),
+        "another file's diagnostics leaked into buffer scope: {buffer}"
+    );
+    // Counts are recomputed for what was actually returned: 1 error + 1
+    // warning here, NOT the 2 errors the "all" payload reports.
+    assert!(
+        buffer.contains("(\"error\" . 1)") || buffer.contains("error . 1"),
+        "error count should be recomputed to 1: {buffer}"
+    );
+    assert!(
+        buffer.contains("(\"total\" . 2)") || buffer.contains("total . 2"),
+        "total should be recomputed to 2: {buffer}"
+    );
+    // "buffer" is the default, so the two must agree.
+    assert_eq!(rt.eval("(lsp-diagnostics)").unwrap(), buffer);
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ---------------------------------------------------------------------------
 // DAP
 // ---------------------------------------------------------------------------

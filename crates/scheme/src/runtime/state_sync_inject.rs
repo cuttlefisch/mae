@@ -408,9 +408,19 @@ impl SchemeRuntime {
             } else {
                 mae_ai::execute_lsp_diagnostics(editor, &serde_json::json!({"scope": "all"})).ok()
             };
+            // The payload's `path` field is derived from the diagnostic's URI
+            // (`uri.strip_prefix("file://")`), which `path_to_uri` has already
+            // made absolute. Deriving the comparison key the same way — rather
+            // than stringifying `file_path()` directly — is what makes
+            // `(lsp-diagnostics "buffer")` work for a buffer opened by a
+            // RELATIVE path, where the two spellings would otherwise never
+            // compare equal and the scope would silently return nothing.
             state.diagnostics_buffer_path = buf
                 .file_path()
-                .map(|p| p.to_string_lossy().into_owned())
+                .map(|p| {
+                    let uri = mae_core::path_to_uri(p);
+                    uri.strip_prefix("file://").unwrap_or(&uri).to_string()
+                })
                 .filter(|_| state.lsp_diagnostics_json.is_some());
             state.dap_state_json = if editor.dap.state.is_some() {
                 mae_ai::execute_debug_state(editor).ok()
