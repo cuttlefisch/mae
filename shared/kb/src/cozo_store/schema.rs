@@ -5,6 +5,58 @@
 use super::util::{btree_params, cozo_err, dv_str, generate_uuid_v4};
 use super::*;
 
+/// DDL for the `nodes:fts` full-text index — the SINGLE source of truth, shared
+/// by initial schema creation and [`CozoKbStore::rebuild_fts`]. Previously these
+/// two sites each carried their own copy of the script, so a fix applied to one
+/// silently left the other building a differently-shaped index (principle #8).
+///
+/// @ai-caution: [kb-search] The `'.'` separator between `title` and `body` is
+/// load-bearing and MUST NOT be "tidied" back to a space (`' '`), which is what
+/// it used to be and what silently broke KB search for every node.
+///
+/// CozoDB does not persist the extractor as written. `parse/sys.rs` parses it,
+/// partial-evaluates it, and stores `expr.to_string()` — and `Display for
+/// DataValue` renders a string constant with Rust's `{:?}`, i.e. always DOUBLE
+/// quotes. The stored text is re-parsed by `cozoscript.pest` on every indexed
+/// row, where `quoted_string_inner = { char* }` is a NON-atomic rule: pest skips
+/// implicit `WHITESPACE` between `char` repetitions, so a double-quoted,
+/// ALL-whitespace literal matches zero chars and parses back as the EMPTY
+/// string. `title ++ ' ' ++ body` therefore persisted as
+/// `concat(concat(title, " "), body)` and evaluated as `title ++ body`, welding
+/// the last title token onto the first body token: a node titled
+/// `"Quantum Physics"` with body `"Entanglement is spooky."` indexed the tokens
+/// `quantum`, `physicsentanglement`, `is`, `spooky` — so `quantum` and `spooky`
+/// found it while `physics` and `entanglement` returned nothing at all.
+///
+/// Any non-whitespace separator survives the round trip. `.` is used because the
+/// `Simple` tokenizer splits on `!c.is_alphanumeric()`, making it a hard token
+/// boundary, and because it needs no escaping in `{:?}` (an escape would NOT
+/// survive: cozoscript does not unescape `\n`, so `'\n'` would come back as a
+/// literal backslash + `n`, and `n` IS alphanumeric — it would just glue a
+/// stray `n` onto the body's first token instead).
+///
+/// [`FTS_EXTRACTOR_VERSION`] must be bumped whenever this DDL changes, so that
+/// stores carrying an index built by the previous definition are rebuilt on open.
+const NODES_FTS_DDL: &str = r#"::fts create nodes:fts {
+                extractor: title ++ '.' ++ body,
+                tokenizer: Simple,
+                filters: [Lowercase]
+            }"#;
+
+/// Version stamp for [`NODES_FTS_DDL`], persisted in `instance_meta`.
+///
+/// Bump on any change to the FTS index definition. On open, a store whose stamp
+/// differs (or is absent, i.e. predates this mechanism) has its FTS index
+/// rebuilt exactly once. Version-stamping rather than comparing the stored
+/// manifest text keeps the migration bounded: matching against CozoDB's
+/// `Display` output would silently re-trigger a full reindex on every open if a
+/// CozoDB upgrade ever changed that formatting.
+const FTS_EXTRACTOR_VERSION: &str = "2";
+
+/// `instance_meta` key holding the [`FTS_EXTRACTOR_VERSION`] the on-disk index
+/// was built with.
+const FTS_VERSION_KEY: &str = "fts_extractor_version";
+
 impl CozoKbStore {
     /// Open (or create) a CozoDB at the given path using the sled storage engine.
     pub fn open(path: impl Into<PathBuf>) -> Result<Self, KbStoreError> {
@@ -260,25 +312,20 @@ impl CozoKbStore {
             .map_err(cozo_err)?;
         }
 
-        // Tantivy FTS index on nodes (title + body combined).
+        // Tantivy FTS index on nodes (title + body combined) — see
+        // `NODES_FTS_DDL` for the separator invariant.
         // NOTE: Post-query verification in fts_search() guards against stale FTS
         // entries (observed with sled backend; kept as defensive measure).
-        self.run_mut(
-            r#"::fts create nodes:fts {
-                extractor: title ++ ' ' ++ body,
-                tokenizer: Simple,
-                filters: [Lowercase]
-            }"#,
-        )
-        .or_else(|e| {
-            let msg = e.to_string();
-            if msg.contains("already exists") || msg.contains("duplicate") {
-                Ok(NamedRows::default())
-            } else {
-                Err(e)
-            }
-        })
-        .map_err(cozo_err)?;
+        self.run_mut(NODES_FTS_DDL)
+            .or_else(|e| {
+                let msg = e.to_string();
+                if msg.contains("already exists") || msg.contains("duplicate") {
+                    Ok(NamedRows::default())
+                } else {
+                    Err(e)
+                }
+            })
+            .map_err(cozo_err)?;
 
         // --- Phase B: Enhanced schema relations ---
 
@@ -457,6 +504,49 @@ impl CozoKbStore {
         // Generate instance_id UUID if not already set
         self.ensure_instance_id()?;
 
+        // Rebuild the FTS index if it was built by an older extractor
+        // definition. MUST come after `instance_meta` exists.
+        self.ensure_fts_index_current()?;
+
+        Ok(())
+    }
+    /// Rebuild `nodes:fts` if it was built by a superseded [`NODES_FTS_DDL`].
+    ///
+    /// A CozoDB FTS index is populated at `::fts create` time and incrementally
+    /// maintained on write — changing the DDL therefore has NO effect on a store
+    /// whose index already exists. Without this, the separator fix documented on
+    /// [`NODES_FTS_DDL`] would only ever reach brand-new KBs, and every KB
+    /// already on disk would keep silently dropping search terms forever.
+    ///
+    /// Runs at most once per version bump: the stamp is written after a
+    /// successful rebuild, so an interrupted rebuild retries on the next open
+    /// rather than being recorded as done.
+    fn ensure_fts_index_current(&self) -> Result<(), KbStoreError> {
+        let stamped = self
+            .run_immut_params(
+                "?[val] := *instance_meta{key: $key, val}",
+                btree_params([("key", dv_str(FTS_VERSION_KEY))]),
+            )
+            .map_err(cozo_err)?
+            .rows
+            .first()
+            .and_then(|r| r.first())
+            .and_then(|v| v.get_str())
+            .map(|s| s.to_string());
+
+        if stamped.as_deref() == Some(FTS_EXTRACTOR_VERSION) {
+            return Ok(());
+        }
+
+        self.rebuild_fts()?;
+        self.run_mut_params(
+            r#"?[key, val] <- [[$key, $ver]] :put instance_meta {key => val}"#,
+            btree_params([
+                ("key", dv_str(FTS_VERSION_KEY)),
+                ("ver", dv_str(FTS_EXTRACTOR_VERSION)),
+            ]),
+        )
+        .map_err(cozo_err)?;
         Ok(())
     }
     /// Create a relation if it doesn't already exist.
@@ -627,14 +717,7 @@ impl CozoKbStore {
                 }
             })
             .map_err(cozo_err)?;
-        self.run_mut(
-            r#"::fts create nodes:fts {
-                extractor: title ++ ' ' ++ body,
-                tokenizer: Simple,
-                filters: [Lowercase]
-            }"#,
-        )
-        .map_err(cozo_err)?;
+        self.run_mut(NODES_FTS_DDL).map_err(cozo_err)?;
         Ok(())
     }
     /// Get this instance's UUID (generated on first open).
