@@ -2,6 +2,27 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.89] - 2026-08-03
+
+### Bug Fixes
+
+- *(code-map)* Scheme primitive extractor had reported zero since the split ([e1a21bb](https://github.com/cuttlefisch/mae/commit/e1a21bb5a1b5c947a32ad83904b82845894b2e93))
+
+### Documentation
+
+- Correct tracking docs from measured data, retire the hand-maintained list ([cc4ffd4](https://github.com/cuttlefisch/mae/commit/cc4ffd44f98bc85fce86430fd634853fc6a2f100))
+- *(security)* Correct the permission-tier claims SECURITY.md could not support ([d3e47d6](https://github.com/cuttlefisch/mae/commit/d3e47d61b57b86b3c201d64a6290fa31a4b6065e))
+- *(roadmap)* Record the pre-v0.15 audit findings and its coverage gaps ([8a8e8f7](https://github.com/cuttlefisch/mae/commit/8a8e8f70cba1cb973dd5b7c7318cd08b95c8f1a3))
+- *(roadmap)* Audit complete — 211 confirmed findings across both axes ([cc82e34](https://github.com/cuttlefisch/mae/commit/cc82e34807cca3d34e92b65e3f6ffb09008a199c))
+
+### Miscellaneous
+
+- Sync Cargo.lock files to 0.14.88 ([550932e](https://github.com/cuttlefisch/mae/commit/550932e88efdd20468afe5087e146402029f3c6a))
+
+### Build
+
+- *(audit)* Mechanical structural-ceiling metrics + CI ratchet ([1bda211](https://github.com/cuttlefisch/mae/commit/1bda211a967bb2eeac25045eb44780f72f27578f))
+
 ## [0.14.88] - 2026-08-01
 
 ### Bug Fixes
@@ -57,6 +78,7 @@ All notable changes to this project will be documented in this file.
 
 - *(daemon)* Sync Cargo.lock to workspace version 0.14.87 ([940ab25](https://github.com/cuttlefisch/mae/commit/940ab25ce3adf3a3dd931ca79d29994ef016088b))
 - Fix CI — cargo fmt + regenerate stale code map ([a5a7146](https://github.com/cuttlefisch/mae/commit/a5a7146a557afafefe1d4051f6566ab6eaa0fdea))
+- Bump version to 0.14.88 ([119c227](https://github.com/cuttlefisch/mae/commit/119c227141888b0dc02b3ee04221c39dff297a28))
 
 ### Refactor
 
