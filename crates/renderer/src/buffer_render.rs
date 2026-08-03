@@ -453,7 +453,7 @@ pub(crate) fn render_buffer(
             if wrap {
                 // Word wrap with word-boundary breaks + breakindent.
                 let indent_len = if editor.break_indent {
-                    content_indent_len(&full_chars)
+                    content_indent_len(&full_chars, editor.width_policy())
                 } else {
                     0
                 };
@@ -473,7 +473,7 @@ pub(crate) fn render_buffer(
                     }
 
                     let avail = if is_first { text_width } else { cont_text_w };
-                    let end = find_wrap_break(&full_chars, pos, avail);
+                    let end = find_wrap_break(&full_chars, pos, avail, editor.width_policy());
                     let chunk_chars = &full_chars[pos..end];
                     let chunk_styles = &styles[pos..end];
 
@@ -555,7 +555,7 @@ pub(crate) fn render_buffer(
             let full_chars: Vec<char> = full_display.chars().collect();
             let full_count = full_chars.len();
             let indent_len = if editor.break_indent {
-                content_indent_len(&full_chars)
+                content_indent_len(&full_chars, editor.width_policy())
             } else {
                 0
             };
@@ -573,7 +573,7 @@ pub(crate) fn render_buffer(
                     break;
                 }
                 let avail = if is_first { text_width } else { cont_text_w };
-                let end = find_wrap_break(&full_chars, pos, avail);
+                let end = find_wrap_break(&full_chars, pos, avail, editor.width_policy());
                 let chunk: String = full_chars[pos..end].iter().collect();
                 let mut spans: Vec<Span> = Vec::new();
                 if is_first {

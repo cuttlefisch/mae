@@ -168,6 +168,20 @@ pub fn display_width_up_to_grapheme(s: &str, grapheme_idx: usize) -> usize {
         .sum()
 }
 
+/// Display width (terminal cells) of `s`'s first `byte_idx` bytes, under
+/// `policy`.
+///
+/// **This is the byte-column -> screen-column conversion** (ADR-087 Rule 1),
+/// and the replacement for feeding a cursor column to
+/// [`display_width_up_to_grapheme`] — which takes a *grapheme index* and was
+/// one of the four domains `Window::cursor_col` was silently read as.
+/// `byte_idx` is floored to a char boundary, so a column that drifted
+/// mid-sequence measures short rather than panicking.
+pub fn display_width_of_prefix_with(s: &str, byte_idx: usize, policy: WidthPolicy) -> usize {
+    let b = floor_char_boundary(s, byte_idx);
+    display_width_with(&s[..b], policy)
+}
+
 // ---------------------------------------------------------------------------
 // ADR-087 Rule 4 — byte offsets that sit on grapheme-cluster boundaries.
 //
