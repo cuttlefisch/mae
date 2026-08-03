@@ -299,17 +299,12 @@ fn fetch_notes_in_range(current: &Version, target: &Version) -> String {
     out
 }
 
-/// Compute the SHA-256 of a byte slice as lowercase hex (reliable, via `sha2`).
-fn sha256_hex(data: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    hasher
-        .finalize()
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
+// SHA-256 has exactly one implementation in this binary (audit #607.2 —
+// `pkg::lockfile`'s copy shelled out to `sha256sum` and silently degraded to a
+// non-cryptographic hash where that binary is absent, i.e. on macOS). Both the
+// release-archive checksum check below and package `integrity` pins go through
+// it. Do not re-inline a second one here.
+use crate::pkg::lockfile::sha256_hex;
 
 /// Detect a source-checkout: walk up from `exe` looking for a repo root that has
 /// both a `.git` dir and a `Makefile` (the `make install-upgrade` target lives

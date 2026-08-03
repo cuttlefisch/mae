@@ -32,12 +32,40 @@ pub struct Lockfile {
 }
 
 impl Lockfile {
-    /// Load lockfile from disk, returning empty if not found.
+    /// Load lockfile from disk.
+    ///
+    /// A **missing** file is `Ok(empty)` — that is the legitimate first-run
+    /// state. A file that exists but does not parse is `Err`, NOT an empty
+    /// lockfile: this file is the user's committed record of every pinned
+    /// package, so silently degrading a corrupt or half-written one to "no
+    /// packages" loses data the moment anything saves over it.
+    pub fn load_checked(path: &Path) -> Result<Self, String> {
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Self::default()),
+            Err(e) => return Err(format!("Failed to read {}: {e}", path.display())),
+        };
+        toml::from_str(&content).map_err(|e| {
+            format!(
+                "{} is not valid lockfile TOML: {e}. Refusing to treat it as empty — \
+                 fix or delete the file (it is meant to be committed to version control).",
+                path.display()
+            )
+        })
+    }
+
+    /// Load lockfile from disk, returning empty on any failure.
+    ///
+    /// @ai-caution: [data-loss] Read-only callers ONLY. This collapses a
+    /// corrupt lockfile to an empty one, so anything that loads through here
+    /// and later saves will overwrite the user's real pins with nothing (audit
+    /// #607.7). Mutating flows must use `load_checked`/`update`, which refuse
+    /// to write over a lockfile they could not read.
     pub fn load(path: &Path) -> Self {
-        match std::fs::read_to_string(path) {
-            Ok(content) => toml::from_str(&content).unwrap_or_default(),
-            Err(_) => Self::default(),
-        }
+        Self::load_checked(path).unwrap_or_else(|e| {
+            tracing::warn!("{e}");
+            Self::default()
+        })
     }
 
     /// Write lockfile to disk.
@@ -95,15 +123,33 @@ impl Lockfile {
     /// decisions (it's purely an accumulator for this run's own pins). Only
     /// the final apply-and-persist step needs the lock; callers should apply
     /// just the pins/unpins this run actually decided on inside `mutate`.
+    ///
+    /// Fails **closed** on an unreadable existing lockfile (audit #607.7): the
+    /// load and the save are both inside the advisory lock, so if the on-disk
+    /// file exists but does not parse, this reports the error and writes
+    /// nothing rather than replacing the user's pins with an empty file.
     pub fn update<R>(
         path: &Path,
         mutate: impl FnOnce(&mut Self) -> R,
     ) -> (Self, R, io::Result<()>) {
+        // Set inside the lock by `load`, read inside the lock by `save`.
+        let corrupt: std::cell::RefCell<Option<String>> = std::cell::RefCell::new(None);
         mae_mcp::file_lock::with_locked_update(
             path,
-            || Self::load(path),
+            || match Self::load_checked(path) {
+                Ok(lf) => lf,
+                Err(e) => {
+                    *corrupt.borrow_mut() = Some(e);
+                    Self::default()
+                }
+            },
             mutate,
-            |lf| lf.save(path).map_err(io::Error::other),
+            |lf| match corrupt.borrow().as_deref() {
+                Some(e) => Err(io::Error::other(format!(
+                    "{e} (no changes were written — the existing lockfile was left intact)"
+                ))),
+                None => lf.save(path).map_err(io::Error::other),
+            },
         )
     }
 
@@ -114,38 +160,28 @@ impl Lockfile {
     }
 }
 
-/// Compute SHA-256 hex digest of a byte slice.
+/// Compute the SHA-256 of a byte slice as lowercase hex.
+///
+/// The single implementation for the whole binary: package `integrity` pins
+/// here, and release-archive checksum verification in `crate::upgrade`.
+///
+/// @ai-caution: [security] In-process via `sha2`, never a subprocess. This
+/// previously shelled out to `sha256sum` and, when that was absent, fell back
+/// to a 64-bit non-cryptographic multiply-add "hash" (audit #607.2). That
+/// fallback fired on **every macOS machine** — macOS ships `shasum -a 256`, not
+/// `sha256sum` — so a value being compared for integrity was silently a
+/// trivially-forgeable 16-hex-digit digest on one of MAE's two primary
+/// platforms, and produced a different string than Linux for identical bytes
+/// (principle #13). Do not reintroduce a subprocess or a fallback here.
 pub fn sha256_hex(data: &[u8]) -> String {
-    // Minimal SHA-256 using the sha2 crate would be ideal, but to avoid
-    // adding a dependency we shell out to sha256sum if available, or use
-    // a simple fallback of hashing the length + first/last bytes.
-    // For now, use a basic approach that works everywhere.
-    if let Ok(output) = std::process::Command::new("sha256sum")
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .and_then(|mut child| {
-            use std::io::Write as IoWrite;
-            if let Some(ref mut stdin) = child.stdin {
-                let _ = stdin.write_all(data);
-            }
-            child.wait_with_output()
-        })
-    {
-        if output.status.success() {
-            let out = String::from_utf8_lossy(&output.stdout);
-            return out.split_whitespace().next().unwrap_or("").to_string();
-        }
-    }
-    // Fallback: simple non-cryptographic hash (for platforms without sha256sum)
-    let mut hash = 0u64;
-    for (i, &b) in data.iter().enumerate() {
-        hash = hash
-            .wrapping_mul(31)
-            .wrapping_add(b as u64)
-            .wrapping_add(i as u64);
-    }
-    format!("{:016x}", hash)
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(data);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 #[cfg(test)]
@@ -200,5 +236,93 @@ mod tests {
         let h2 = sha256_hex(data);
         assert_eq!(h1, h2);
         assert!(!h1.is_empty());
+    }
+
+    /// Audit #607.2 — `sha256_hex` shelled out to `sha256sum` and, where that
+    /// binary is absent (every macOS box), silently returned a 16-hex-digit
+    /// non-cryptographic hash instead. Pin the published NIST vectors so the
+    /// function is checked against SHA-256 itself, not against its own past
+    /// output: a determinism-only test passed happily on the broken fallback.
+    #[test]
+    fn sha256_matches_published_vectors_on_every_platform() {
+        assert_eq!(
+            sha256_hex(b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            sha256_hex(b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            sha256_hex(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
+            "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+        );
+        // 64 hex chars, always — the old fallback produced 16.
+        assert_eq!(sha256_hex(b"anything").len(), 64);
+        // Avalanche: a one-bit difference must not collide (the old fallback's
+        // multiply-add over 64 bits made near-neighbours cheap to construct).
+        assert_ne!(sha256_hex(b"integrity"), sha256_hex(b"integritz"));
+    }
+
+    /// Audit #607.7 — the data-loss test. `packages.lock` is documented as a
+    /// file to COMMIT to version control; a truncated or hand-mangled one used
+    /// to parse-fail silently into an empty `Lockfile`, and the very next
+    /// `update()` persisted that emptiness over every real pin the user had.
+    #[test]
+    fn a_corrupt_lockfile_is_never_silently_emptied_or_overwritten() {
+        // Several genuinely different corruptions, not one hand-picked string:
+        // a truncated write, invalid TOML, and a well-formed TOML file with the
+        // wrong shape.
+        let corruptions = [
+            "# MAE packages.lock\n[packages.org-roam]\nsource = \"github:u/r\"\nsha = \"ab",
+            "this is not toml at all {{{",
+            "[packages]\norg-roam = \"not-a-table\"\n",
+        ];
+
+        for original in corruptions {
+            let tmp = NamedTempFile::new().unwrap();
+            std::fs::write(tmp.path(), original).unwrap();
+
+            // 1. The checked load reports the failure instead of inventing an
+            //    empty lockfile.
+            let err = Lockfile::load_checked(tmp.path())
+                .expect_err("a corrupt lockfile must not parse as empty");
+            assert!(
+                err.contains("not valid lockfile TOML"),
+                "unhelpful error: {err}"
+            );
+
+            // 2. `update` — the mutating path every `mae sync`/`upgrade`/`purge`
+            //    goes through — must refuse to write and leave the bytes alone.
+            let (_lf, (), saved) = Lockfile::update(tmp.path(), |lf| {
+                lf.pin("newpkg", "github:u/r", "sha", "");
+            });
+            assert!(saved.is_err(), "update must fail closed on a corrupt file");
+
+            let after = std::fs::read_to_string(tmp.path()).unwrap();
+            assert_eq!(
+                after, original,
+                "the on-disk lockfile must be byte-identical after a refused update"
+            );
+        }
+    }
+
+    /// The complementary case — a *missing* lockfile is the legitimate
+    /// first-run state and must still load empty and save normally, or the
+    /// guard above would have broken `mae sync` on a fresh machine.
+    #[test]
+    fn a_missing_lockfile_is_not_treated_as_corrupt() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("packages.lock");
+        assert!(Lockfile::load_checked(&path).unwrap().packages.is_empty());
+
+        let (_lf, (), saved) = Lockfile::update(&path, |lf| {
+            lf.pin("newpkg", "github:u/r", "sha", "");
+        });
+        assert!(saved.is_ok(), "first-run save must succeed: {saved:?}");
+        assert!(Lockfile::load_checked(&path)
+            .unwrap()
+            .get("newpkg")
+            .is_some());
     }
 }

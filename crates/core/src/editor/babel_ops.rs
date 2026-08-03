@@ -166,6 +166,17 @@ impl Editor {
 
     /// Execute all source blocks in the current buffer.
     /// Uses AI-aware buffer targeting.
+    ///
+    /// @ai-caution: [security] Every block MUST clear
+    /// `babel::safety::effective_eval_policy`, exactly as the single-block
+    /// `babel_execute` does. Testing only `header_args.eval == Never` (as this
+    /// did before audit #596.1) silently ignored the two gates that actually
+    /// protect a *file you did not write*: `:eval query` blocks, and `:eval yes`
+    /// blocks in a file outside `babel_trust_paths` while `babel_confirm` is on.
+    /// "Execute all" is precisely the operation a hostile org file wants you to
+    /// run, so it must be the *stricter* path, never the looser one. Blocks that
+    /// need a human answer are skipped and counted rather than executed — one
+    /// command cannot open N sequential confirm dialogs.
     pub fn babel_execute_all(&mut self) {
         let buf_idx = self.ai_active_buffer_idx();
         let source = self.buffers[buf_idx].rope().to_string();
@@ -177,6 +188,9 @@ impl Editor {
         }
 
         let count = blocks.len();
+        let mut executed = 0usize;
+        let mut blocked = 0usize;
+        let mut needs_confirm = 0usize;
         // Execute blocks in reverse order to preserve line offsets
         for i in (0..count).rev() {
             // Re-read source after each edit
@@ -186,11 +200,25 @@ impl Editor {
                 continue;
             }
             let block = &current_blocks[i];
-            if block.header_args.eval == babel::EvalPolicy::Never {
-                continue;
-            }
 
             let file_path = self.buffers[buf_idx].file_path().map(PathBuf::from);
+            match babel::safety::effective_eval_policy(
+                &block.header_args.eval,
+                file_path.as_deref(),
+                &self.babel_trust_paths,
+                self.babel_confirm,
+            ) {
+                babel::safety::EffectivePolicy::Allow => {}
+                babel::safety::EffectivePolicy::Blocked => {
+                    blocked += 1;
+                    continue;
+                }
+                babel::safety::EffectivePolicy::NeedsConfirmation => {
+                    needs_confirm += 1;
+                    continue;
+                }
+            }
+
             let buf_dir = file_path
                 .as_ref()
                 .and_then(|p| p.parent())
@@ -225,11 +253,24 @@ impl Editor {
             }
             buf.insert_text_at(del_start, &insert_text);
             buf.end_undo_group();
+            executed += 1;
         }
 
         self.clamp_all_cursors();
         self.mark_full_redraw();
-        self.set_status(format!("Executed {} block(s)", count));
+        // Report what actually ran, not the block count (ADR-086: a skipped
+        // block must not be indistinguishable from an executed one).
+        let mut msg = format!("Executed {executed} of {count} block(s)");
+        if blocked > 0 {
+            msg.push_str(&format!("; {blocked} blocked by :eval never"));
+        }
+        if needs_confirm > 0 {
+            msg.push_str(&format!(
+                "; {needs_confirm} need confirmation (run babel-execute on each, \
+                 or add this file to babel-trust-paths)"
+            ));
+        }
+        self.set_status(msg);
     }
 
     /// Tangle all source blocks in the current buffer.
@@ -707,6 +748,158 @@ mod tests {
             result.contains("#+end_src\n\n#+RESULTS:\n: hi\n\n** Downstream Section"),
             "results must land directly after #+end_src and the following heading \
              must survive intact — got:\n{result}"
+        );
+    }
+
+    // --- babel-execute-all confirm gate (audit #596.1 / #596.5) ---
+
+    /// Three blocks whose echoed markers say *which* one ran, so the oracle
+    /// pins the specific block rather than a count that could come out right
+    /// for the wrong reason. The marker is *computed* by the shell
+    /// (`$((1 + 1))` -> `2`) so the asserted string can only appear in the
+    /// buffer if the block actually EXECUTED — searching for a literal that is
+    /// already present in the block's own source would pass unconditionally.
+    const HOSTILE_FILE: &str = "\
+#+begin_src sh :eval query\necho QUERY-$((1 + 1))\n#+end_src\n\n\
+#+begin_src sh\necho DEFAULT-$((1 + 1))\n#+end_src\n\n\
+#+begin_src sh :eval never\necho NEVER-$((1 + 1))\n#+end_src\n";
+
+    /// The strings that exist ONLY in executed output, never in the source.
+    const QUERY_OUT: &str = "QUERY-2";
+    const DEFAULT_OUT: &str = "DEFAULT-2";
+    const NEVER_OUT: &str = "NEVER-2";
+
+    /// A per-test directory, created for real: babel runs a block with the
+    /// file's parent as cwd, so a made-up path would fail the *spawn* and mask
+    /// whether the confirm gate or the shell refused. Named per test (never a
+    /// shared path) so these stay parallel-safe.
+    fn editor_in_temp_dir(src: &str, test_name: &str) -> (Editor, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("mae-babel-gate-{test_name}"));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let file = dir.join("notes.org");
+        let mut editor = editor_with_block(src);
+        editor.buffers[0].set_file_path(file);
+        (editor, dir)
+    }
+
+    /// Audit #596.1 — the attacker's test. "Execute all" is exactly the command
+    /// a hostile org file wants you to run, so it must be at least as strict as
+    /// single-block execute. Before the fix it consulted only
+    /// `header_args.eval == Never`, so a `:eval query` block — which
+    /// `babel_execute` refuses without a human answer — ran unprompted, as did
+    /// any default block in a file outside `babel_trust_paths`.
+    #[test]
+    fn execute_all_refuses_blocks_the_confirm_gate_would_stop() {
+        let (mut editor, _dir) = editor_in_temp_dir(HOSTILE_FILE, "refuses");
+        assert!(
+            editor.babel_confirm,
+            "precondition: the global confirm gate is on by default"
+        );
+        assert!(
+            editor.babel_trust_paths.is_empty(),
+            "precondition: this file is not pre-trusted"
+        );
+
+        editor.babel_execute_all();
+
+        let text = editor.buffers[0].rope().to_string();
+        // Selective oracle: no marker from ANY block reached the buffer.
+        for marker in [QUERY_OUT, DEFAULT_OUT, NEVER_OUT] {
+            assert!(
+                !text.contains(marker),
+                "{marker} executed despite the confirm gate — got:\n{text}"
+            );
+        }
+        assert!(
+            !text.contains("#+RESULTS:"),
+            "no results block should have been written at all — got:\n{text}"
+        );
+        // ADR-086: the status must not claim work that did not happen.
+        let status = editor.status_msg.clone();
+        assert!(
+            status.contains("Executed 0 of 3"),
+            "status must report what actually ran, got: {status:?}"
+        );
+        assert!(
+            status.contains("need confirmation") && status.contains("blocked"),
+            "status must distinguish the two skip reasons, got: {status:?}"
+        );
+    }
+
+    /// The complementary case: with the gate satisfied, the blocks it allows DO
+    /// run and the one it hard-blocks still does not. A refusal test alone
+    /// would pass on a function that refuses everything.
+    #[test]
+    fn execute_all_runs_exactly_the_blocks_the_gate_allows() {
+        let (mut editor, _dir) = editor_in_temp_dir(HOSTILE_FILE, "allows");
+        editor.babel_confirm = false; // user disabled the global gate
+
+        editor.babel_execute_all();
+
+        let text = editor.buffers[0].rope().to_string();
+        assert!(text.contains(DEFAULT_OUT), "got:\n{text}");
+        assert!(
+            !text.contains(NEVER_OUT),
+            ":eval never must still refuse even with babel_confirm off — got:\n{text}"
+        );
+        // `:eval query` is NeedsConfirmation unconditionally — turning off the
+        // *global* gate must not silently downgrade a per-block request for a
+        // human answer.
+        assert!(
+            !text.contains(QUERY_OUT),
+            ":eval query must not be downgraded by babel_confirm=false — got:\n{text}"
+        );
+    }
+
+    /// Audit #596.5 — `babel_trust_paths` was a field nothing could ever write:
+    /// no `options.rs` entry, no setter, so `is_trusted_path` was dead code and
+    /// the whole trust axis of `effective_eval_policy` was unreachable. Drive it
+    /// through the real OptionRegistry (`set_option`/`get_option`), not by
+    /// poking the field, so the test fails if the registration regresses.
+    #[test]
+    fn babel_trust_paths_option_grants_trust_through_the_registry() {
+        let (mut editor, dir) = editor_in_temp_dir(HOSTILE_FILE, "trusted");
+        assert!(editor.babel_confirm, "the global gate stays ON");
+
+        let pattern = format!("{}/*", dir.display());
+        editor
+            .set_option("babel_trust_paths", &format!("{pattern}, /nonexistent/*"))
+            .expect("babel_trust_paths must be a registered, settable option");
+        assert_eq!(
+            editor.get_option("babel_trust_paths").map(|(v, _)| v),
+            Some(format!("{pattern},/nonexistent/*")),
+            "the value must round-trip through the registry"
+        );
+
+        editor.babel_execute_all();
+
+        let text = editor.buffers[0].rope().to_string();
+        assert!(
+            text.contains(DEFAULT_OUT),
+            "a trusted path must allow :eval yes without a prompt — got:\n{text}"
+        );
+        // Trust grants the `:eval yes` gate only. It is NOT a master key: an
+        // explicit per-block `never`/`query` still wins.
+        assert!(!text.contains(NEVER_OUT), "got:\n{text}");
+        assert!(!text.contains(QUERY_OUT), "got:\n{text}");
+    }
+
+    /// A trust pattern that does NOT match must not grant anything — the
+    /// negative half of the pair above, guarding against a matcher that
+    /// accidentally returns true for a non-empty pattern list.
+    #[test]
+    fn babel_trust_paths_does_not_grant_a_non_matching_file() {
+        let (mut editor, _dir) = editor_in_temp_dir(HOSTILE_FILE, "nonmatching");
+        editor
+            .set_option("babel_trust_paths", "/definitely/not/this/path/*")
+            .unwrap();
+
+        editor.babel_execute_all();
+
+        let text = editor.buffers[0].rope().to_string();
+        assert!(
+            !text.contains(DEFAULT_OUT),
+            "a non-matching trust pattern must not grant execution — got:\n{text}"
         );
     }
 

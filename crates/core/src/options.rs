@@ -424,6 +424,16 @@ impl OptionRegistry {
                 opt!("babel_timeout", &["babel-timeout"],
                     "Execution timeout in seconds for babel source blocks",
                     OptionKind::Int, "30", Some("babel.timeout"), &[]),
+                opt!("babel_trust_paths", &["babel-trust-paths"],
+                    "Comma-separated path patterns whose org files may execute `:eval yes` \
+                     source blocks WITHOUT a confirmation prompt, even when babel-confirm is \
+                     on. Patterns support `*` (trust everything — strongly discouraged), a \
+                     `dir/*` prefix, a `*/suffix`, a `*.ext` extension, and a bare directory \
+                     prefix. Empty (default) = nothing is pre-trusted, so every `:eval yes` \
+                     block in a file you open still asks. Set this only for directories whose \
+                     org files you author yourself: a trusted path is a standing grant to run \
+                     arbitrary code on open-and-execute.",
+                    OptionKind::String, "", Some("babel.trust_paths"), &[]),
                 opt!("babel_inherit_shell_env", &["babel-inherit-shell-env"],
                     "Merge the user's resolved interactive login shell environment (sourcing \
                      .bashrc/.zshrc/.profile via `$SHELL -i -l -c env`, resolved once and \
