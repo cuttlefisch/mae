@@ -70,6 +70,14 @@ parking_lot = "0.12"
 [dev-dependencies]
 tempfile = "3"
 criterion = { version = "0.8", features = ["html_reports"] }
+# ADR-087 enforcement item 5: proptest invariants (never panics, output
+# width <= N, grapheme-boundary prefix, idempotence) for the width/
+# truncation helpers. Caveat (measured, see the ADR): proptest's default
+# `String` generator cannot produce ZWJ sequences (category Cf is
+# excluded), so the named nasty-string corpus in `grapheme.rs`'s test
+# module covers ZWJ/combining-mark/flag/skin-tone cases proptest can't
+# reach on its own.
+proptest = "1"
 # ADR-067 Phase E test fixtures: constructing a real signed membership op-log
 # needs a real Ed25519 identity, same as the daemon crate's own test suite.
 mae-mcp = { path = "../../shared/mcp" }
