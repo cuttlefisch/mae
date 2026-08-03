@@ -205,6 +205,20 @@ fn compile_via_stdin(
     }
 }
 
+/// Per-process counter making each Go scratch file unique even within one
+/// process (the pid alone does not separate concurrent compiles).
+static GO_TMP_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// A scratch `.go` path in `dir` that no other compile — in this process or
+/// another MAE — can collide with. See `compile_go`'s `@ai-caution`.
+fn go_tmp_path(dir: &Path) -> PathBuf {
+    dir.join(format!(
+        ".mae-babel-tmp-{}-{}.go",
+        std::process::id(),
+        GO_TMP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ))
+}
+
 fn compile_rust(compiler: &str, source: &str, output: &Path) -> Result<(), String> {
     let args = vec![
         "-".to_string(),
@@ -215,8 +229,18 @@ fn compile_rust(compiler: &str, source: &str, output: &Path) -> Result<(), Strin
 }
 
 fn compile_go(compiler: &str, source: &str, output: &Path, dir: &Path) -> Result<(), String> {
-    // Go requires a file, not stdin.
-    let tmp = dir.join(".mae-babel-tmp.go");
+    // Go requires a file, not stdin — and it must live in `dir` so the module's
+    // package resolution works, which means it lands in the USER's project
+    // directory, not a private temp dir.
+    //
+    // @ai-caution: [concurrency] The name must stay unique per compile (audit
+    // #596.8). It was the fixed `.mae-babel-tmp.go`, so two Go blocks compiling
+    // at once — babel-execute-all, a second MAE window, the AI peer and the
+    // human at the same time — wrote over each other's source and then deleted
+    // it out from under the other's `go build`, producing a compile error with
+    // no relation to either block. A fixed name in a directory the process does
+    // not own is also an overwrite of whatever was already there.
+    let tmp = go_tmp_path(dir);
     std::fs::write(&tmp, source).map_err(|e| format!("Failed to write temp file: {}", e))?;
 
     let result = Command::new(compiler)
@@ -280,8 +304,17 @@ fn spawn_with_etxtbsy_retry(path: &Path, dir: &Path) -> std::io::Result<std::pro
     retry_on_etxtbsy(|| {
         Command::new(path)
             .current_dir(dir)
+            // Audit #596.4 — parity with the shell path (`execute.rs:138-146`).
+            // Without an explicit `stdin`, a compiled block INHERITS MAE's own
+            // stdin: in the TUI that is the user's terminal, so a block that
+            // reads stdin silently eats the user's keystrokes and blocks the
+            // editor until its timeout. `MAE_BABEL=1` is the marker a block
+            // uses to detect it is running under babel; it was set for shell
+            // blocks only, so the same script behaved differently by language.
+            .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
+            .env("MAE_BABEL", "1")
             .spawn()
     })
 }
@@ -384,6 +417,62 @@ fn run_binary(path: &Path, dir: &Path, timeout_secs: u64, max_output_bytes: usiz
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Audit #596.8 — the Go scratch file was the fixed `.mae-babel-tmp.go` in
+    /// the user's own project directory. Concurrency is the normal case here,
+    /// not an exotic one: `babel-execute-all` runs blocks back to back, the AI
+    /// peer and the human share one editor, and a second MAE window sees the
+    /// same directory. Two overlapping compiles wrote over each other's source
+    /// and then each deleted the file the other was still building.
+    ///
+    /// Driven from real threads rather than a sequential loop, because the
+    /// counter has to be safe under genuine contention, not just monotonic.
+    #[test]
+    fn concurrent_go_compiles_never_share_a_scratch_path() {
+        use std::collections::HashSet;
+
+        let dir = std::path::PathBuf::from("/tmp/mae-go-tmp-uniqueness");
+        const THREADS: usize = 8;
+        const PER_THREAD: usize = 64;
+
+        let handles: Vec<_> = (0..THREADS)
+            .map(|_| {
+                let dir = dir.clone();
+                std::thread::spawn(move || {
+                    (0..PER_THREAD)
+                        .map(|_| go_tmp_path(&dir))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+
+        let all: Vec<PathBuf> = handles
+            .into_iter()
+            .flat_map(|h| h.join().expect("thread panicked"))
+            .collect();
+
+        let unique: HashSet<&PathBuf> = all.iter().collect();
+        assert_eq!(
+            unique.len(),
+            THREADS * PER_THREAD,
+            "every concurrent compile must get its own scratch file; {} of {} collided",
+            THREADS * PER_THREAD - unique.len(),
+            THREADS * PER_THREAD
+        );
+
+        // And none of them is the old fixed name, so a user's own
+        // `.mae-babel-tmp.go` — or another MAE's in-flight one — is never
+        // overwritten or deleted.
+        let legacy = dir.join(".mae-babel-tmp.go");
+        assert!(!all.contains(&legacy), "the fixed name must not be reused");
+        // Still a hidden `.go` in the right directory (go needs it in-module).
+        for p in &all {
+            assert_eq!(p.parent(), Some(dir.as_path()));
+            assert_eq!(p.extension().and_then(|e| e.to_str()), Some("go"));
+            let name = p.file_name().unwrap().to_string_lossy().into_owned();
+            assert!(name.starts_with(".mae-babel-tmp-"), "{name}");
+        }
+    }
 
     // issue #482: retry_on_etxtbsy, tested via an injected closure rather than
     // trying to reproduce the real OS race deterministically.

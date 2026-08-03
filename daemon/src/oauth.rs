@@ -325,12 +325,29 @@ fn extract_view_bearer_token(req: &Request<Incoming>) -> Option<String> {
     None
 }
 
+/// Apply the no-caching headers every response from this listener needs.
+///
+/// @ai-caution: [security] EVERY response builder in this module must go
+/// through here (audit #588.3). This listener serves bearer-token-authenticated
+/// KB content, and the webview response embeds a live access token directly in
+/// its HTML — without `no-store` a browser writes that token to its on-disk
+/// cache and an intermediary proxy may retain the KB content. `no-store` is
+/// mandated for token-bearing responses by RFC 6749 §5.1, which OAuth 2.1
+/// carries forward; `Pragma: no-cache` covers HTTP/1.0 intermediaries.
+fn with_no_store(builder: hyper::http::response::Builder) -> hyper::http::response::Builder {
+    builder
+        .header(hyper::header::CACHE_CONTROL, "no-store")
+        .header(hyper::header::PRAGMA, "no-cache")
+}
+
 fn json_response(status: StatusCode, body: serde_json::Value) -> Response<Full<Bytes>> {
-    Response::builder()
-        .status(status)
-        .header(hyper::header::CONTENT_TYPE, "application/json")
-        .body(Full::new(Bytes::from(body.to_string())))
-        .expect("building a response from a fixed status/body never fails")
+    with_no_store(
+        Response::builder()
+            .status(status)
+            .header(hyper::header::CONTENT_TYPE, "application/json"),
+    )
+    .body(Full::new(Bytes::from(body.to_string())))
+    .expect("building a response from a fixed status/body never fails")
 }
 
 fn unauthorized(config: &ResourceServerConfig, reason: &str) -> Response<Full<Bytes>> {
@@ -543,11 +560,15 @@ pub(crate) async fn render_webview_response(
     }
 
     let html = crate::webview::render_page(kb_id, token);
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(hyper::header::CONTENT_TYPE, "text/html; charset=utf-8")
-        .body(Full::new(Bytes::from(html)))
-        .expect("building a response from a fixed status/body never fails")
+    // This page embeds `token` verbatim — it is the single most important
+    // response on this listener to keep out of any cache (see `with_no_store`).
+    with_no_store(
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(hyper::header::CONTENT_TYPE, "text/html; charset=utf-8"),
+    )
+    .body(Full::new(Bytes::from(html)))
+    .expect("building a response from a fixed status/body never fails")
 }
 
 /// The routing decision `handle_request` makes once a bearer token has
@@ -725,6 +746,63 @@ mod tests {
     use rsa::pkcs1::EncodeRsaPrivateKey;
     use rsa::traits::PublicKeyParts;
     use rsa::RsaPrivateKey;
+
+    /// Audit #588.3 — no response on this listener carried `Cache-Control`.
+    /// It serves bearer-authenticated KB content, and the webview response
+    /// embeds a live access token in its HTML, so an absent `no-store` lets a
+    /// browser persist that token to its on-disk cache and lets an
+    /// intermediary retain authenticated KB content. RFC 6749 §5.1 (carried
+    /// forward by OAuth 2.1) requires it.
+    ///
+    /// Covers every status class this module emits — success, the PRM
+    /// document, 401, 403 — because a helper that only hardened the happy
+    /// path would leave the error bodies (which echo request details back)
+    /// cacheable.
+    #[test]
+    fn every_response_is_marked_no_store() {
+        let config = base_config();
+
+        let cases: Vec<(&str, Response<Full<Bytes>>)> = vec![
+            (
+                "200 json",
+                json_response(StatusCode::OK, serde_json::json!({"ok": true})),
+            ),
+            (
+                "403 json",
+                json_response(
+                    StatusCode::FORBIDDEN,
+                    serde_json::json!({"error": "access_denied"}),
+                ),
+            ),
+            ("401 unauthorized", unauthorized(&config, "no token")),
+        ];
+
+        for (label, resp) in cases {
+            let headers = resp.headers();
+            assert_eq!(
+                headers
+                    .get(hyper::header::CACHE_CONTROL)
+                    .and_then(|v| v.to_str().ok()),
+                Some("no-store"),
+                "{label}: missing Cache-Control: no-store"
+            );
+            assert_eq!(
+                headers
+                    .get(hyper::header::PRAGMA)
+                    .and_then(|v| v.to_str().ok()),
+                Some("no-cache"),
+                "{label}: missing Pragma: no-cache"
+            );
+        }
+
+        // The 401 must keep its WWW-Authenticate challenge — the header helper
+        // must not have clobbered the header it is layered on top of.
+        let resp = unauthorized(&config, "no token");
+        assert!(
+            resp.headers().contains_key(hyper::header::WWW_AUTHENTICATE),
+            "the challenge header must survive the no-store wrapper"
+        );
+    }
 
     const TEST_KID: &str = "test-key-1";
     const TEST_RESOURCE: &str = "https://mae.example.com/mcp";
