@@ -24,6 +24,7 @@ use crate::value::Value;
 use crate::vm::Vm;
 
 use super::SharedState;
+use crate::permission::tier;
 
 /// A single Scheme-list element expected to be a string OR a symbol --
 /// mirrors `ffi::arg_string`'s own String/Symbol tolerance (bare-atom ids
@@ -69,7 +70,7 @@ pub(super) fn register_kb_export_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState
          see ADR-082. Queues the request; applied on the next editor tick, with the result (success message, \
          or error) shown via the status line — the same underlying export the \
          kb_export_subgraph_html MCP tool and :kb-export-html colon-command use.",
-        Arity::Variadic(2),
+        Arity::Variadic(2), tier::SHELL,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-export-subgraph-html")?;
             let path = arg_string(args, 1, "kb-export-subgraph-html")?;

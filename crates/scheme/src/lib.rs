@@ -30,6 +30,7 @@ pub mod library;
 pub mod lisp_error;
 pub mod lsp;
 pub mod macros;
+pub mod permission;
 pub mod reader;
 pub mod stdlib;
 pub mod value;

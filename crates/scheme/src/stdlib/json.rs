@@ -26,6 +26,7 @@ use std::collections::HashMap;
 
 use crate::library::{Library, LibraryName};
 use crate::lisp_error::{Arity, LispError};
+use crate::permission::tier;
 use crate::value::Value;
 use crate::vm::Vm;
 
@@ -104,7 +105,7 @@ pub fn register(vm: &mut Vm) {
     vm.register_fn(
         "json-encode",
         "Encode a Scheme value as a JSON string (objects: alist of (key . value) string-keyed pairs; arrays: vectors)",
-        Arity::Fixed(1),
+        Arity::Fixed(1), tier::PURE,
         |args: &[Value]| {
             let json = value_to_json(&args[0])?;
             serde_json::to_string(&json)
@@ -116,7 +117,7 @@ pub fn register(vm: &mut Vm) {
     vm.register_fn(
         "json-decode",
         "Decode a JSON string into a Scheme value (objects become alists, arrays become vectors, null becomes the symbol 'null)",
-        Arity::Fixed(1),
+        Arity::Fixed(1), tier::PURE,
         |args: &[Value]| {
             let s = args[0].as_str()?;
             let parsed: serde_json::Value = serde_json::from_str(s).map_err(|e| {

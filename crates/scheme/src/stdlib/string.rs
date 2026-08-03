@@ -28,6 +28,7 @@
 use std::rc::Rc;
 
 use crate::lisp_error::{Arity, LispError};
+use crate::permission::tier;
 use crate::value::Value;
 use crate::vm::Vm;
 
@@ -36,6 +37,7 @@ pub fn register(vm: &mut Vm) {
         "make-string",
         "Create string of k copies of char",
         Arity::Variadic(1),
+        tier::PURE,
         |args| {
             let k = args[0].as_int()? as usize;
             let c = if args.len() > 1 {
@@ -52,6 +54,7 @@ pub fn register(vm: &mut Vm) {
         "string",
         "Create string from chars",
         Arity::Variadic(0),
+        tier::PURE,
         |args| {
             let mut s = String::with_capacity(args.len());
             for a in args {
@@ -65,6 +68,7 @@ pub fn register(vm: &mut Vm) {
         "string-length",
         "Length of string",
         Arity::Fixed(1),
+        tier::PURE,
         |args| Ok(Value::Int(args[0].as_str()?.chars().count() as i64)),
     );
 
@@ -72,6 +76,7 @@ pub fn register(vm: &mut Vm) {
         "string-ref",
         "Character at index",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let s = args[0].as_str()?;
             let k = args[1].as_int()? as usize;
@@ -86,6 +91,7 @@ pub fn register(vm: &mut Vm) {
         "substring",
         "Extract substring",
         Arity::Variadic(2),
+        tier::PURE,
         |args| {
             let s = args[0].as_str()?;
             // Handle UTF-8 properly via char indices
@@ -108,6 +114,7 @@ pub fn register(vm: &mut Vm) {
         "string-append",
         "Concatenate strings",
         Arity::Variadic(0),
+        tier::PURE,
         |args| {
             let mut result = String::new();
             for a in args {
@@ -118,22 +125,35 @@ pub fn register(vm: &mut Vm) {
     );
 
     // Comparison
-    vm.register_fn("string=?", "String equality", Arity::Fixed(2), |args| {
-        Ok(Value::Bool(args[0].as_str()? == args[1].as_str()?))
-    });
+    vm.register_fn(
+        "string=?",
+        "String equality",
+        Arity::Fixed(2),
+        tier::PURE,
+        |args| Ok(Value::Bool(args[0].as_str()? == args[1].as_str()?)),
+    );
 
-    vm.register_fn("string<?", "String less than", Arity::Fixed(2), |args| {
-        Ok(Value::Bool(args[0].as_str()? < args[1].as_str()?))
-    });
+    vm.register_fn(
+        "string<?",
+        "String less than",
+        Arity::Fixed(2),
+        tier::PURE,
+        |args| Ok(Value::Bool(args[0].as_str()? < args[1].as_str()?)),
+    );
 
-    vm.register_fn("string>?", "String greater than", Arity::Fixed(2), |args| {
-        Ok(Value::Bool(args[0].as_str()? > args[1].as_str()?))
-    });
+    vm.register_fn(
+        "string>?",
+        "String greater than",
+        Arity::Fixed(2),
+        tier::PURE,
+        |args| Ok(Value::Bool(args[0].as_str()? > args[1].as_str()?)),
+    );
 
     vm.register_fn(
         "string<=?",
         "String less or equal",
         Arity::Fixed(2),
+        tier::PURE,
         |args| Ok(Value::Bool(args[0].as_str()? <= args[1].as_str()?)),
     );
 
@@ -141,6 +161,7 @@ pub fn register(vm: &mut Vm) {
         "string>=?",
         "String greater or equal",
         Arity::Fixed(2),
+        tier::PURE,
         |args| Ok(Value::Bool(args[0].as_str()? >= args[1].as_str()?)),
     );
 
@@ -149,6 +170,7 @@ pub fn register(vm: &mut Vm) {
         "string-ci=?",
         "Case-insensitive string equality",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let a = args[0].as_str()?.to_lowercase();
             let b = args[1].as_str()?.to_lowercase();
@@ -160,6 +182,7 @@ pub fn register(vm: &mut Vm) {
         "string-ci<?",
         "Case-insensitive string less than",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let a = args[0].as_str()?.to_lowercase();
             let b = args[1].as_str()?.to_lowercase();
@@ -171,6 +194,7 @@ pub fn register(vm: &mut Vm) {
         "string-ci>?",
         "Case-insensitive string greater than",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let a = args[0].as_str()?.to_lowercase();
             let b = args[1].as_str()?.to_lowercase();
@@ -182,6 +206,7 @@ pub fn register(vm: &mut Vm) {
         "string-ci<=?",
         "Case-insensitive string less or equal",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let a = args[0].as_str()?.to_lowercase();
             let b = args[1].as_str()?.to_lowercase();
@@ -193,6 +218,7 @@ pub fn register(vm: &mut Vm) {
         "string-ci>=?",
         "Case-insensitive string greater or equal",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let a = args[0].as_str()?.to_lowercase();
             let b = args[1].as_str()?.to_lowercase();
@@ -205,6 +231,7 @@ pub fn register(vm: &mut Vm) {
         "string->list",
         "Convert string to list of chars",
         Arity::Variadic(1),
+        tier::PURE,
         |args| {
             let s = args[0].as_str()?;
             let chars: Vec<char> = s.chars().collect();
@@ -227,6 +254,7 @@ pub fn register(vm: &mut Vm) {
         "list->string",
         "Convert list of chars to string",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let v = args[0].to_vec()?;
             let mut s = String::with_capacity(v.len());
@@ -237,27 +265,34 @@ pub fn register(vm: &mut Vm) {
         },
     );
 
-    vm.register_fn("string-copy", "Copy a string", Arity::Variadic(1), |args| {
-        let s = args[0].as_str()?;
-        let chars: Vec<char> = s.chars().collect();
-        let start = if args.len() > 1 {
-            args[1].as_int()? as usize
-        } else {
-            0
-        };
-        let end = if args.len() > 2 {
-            args[2].as_int()? as usize
-        } else {
-            chars.len()
-        };
-        let result: String = chars[start..end].iter().collect();
-        Ok(Value::String(Rc::from(result.as_str())))
-    });
+    vm.register_fn(
+        "string-copy",
+        "Copy a string",
+        Arity::Variadic(1),
+        tier::PURE,
+        |args| {
+            let s = args[0].as_str()?;
+            let chars: Vec<char> = s.chars().collect();
+            let start = if args.len() > 1 {
+                args[1].as_int()? as usize
+            } else {
+                0
+            };
+            let end = if args.len() > 2 {
+                args[2].as_int()? as usize
+            } else {
+                chars.len()
+            };
+            let result: String = chars[start..end].iter().collect();
+            Ok(Value::String(Rc::from(result.as_str())))
+        },
+    );
 
     vm.register_fn(
         "string-contains",
         "Does string contain substring?",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let haystack = args[0].as_str()?;
             let needle = args[1].as_str()?;
@@ -269,6 +304,7 @@ pub fn register(vm: &mut Vm) {
         "string-upcase",
         "Uppercase string",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let s = args[0].as_str()?;
             Ok(Value::String(Rc::from(s.to_uppercase().as_str())))
@@ -279,6 +315,7 @@ pub fn register(vm: &mut Vm) {
         "string-downcase",
         "Lowercase string",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let s = args[0].as_str()?;
             Ok(Value::String(Rc::from(s.to_lowercase().as_str())))
@@ -289,6 +326,7 @@ pub fn register(vm: &mut Vm) {
         "string-trim",
         "Trim whitespace from both ends",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let s = args[0].as_str()?;
             Ok(Value::String(Rc::from(s.trim())))
@@ -299,6 +337,7 @@ pub fn register(vm: &mut Vm) {
         "string-split",
         "Split string by delimiter",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let s = args[0].as_str()?;
             let delim = args[1].as_str()?;
@@ -311,6 +350,7 @@ pub fn register(vm: &mut Vm) {
         "string-join",
         "Join list of strings with separator",
         Arity::Fixed(2),
+        tier::PURE,
         |args| {
             let v = args[0].to_vec()?;
             let sep = args[1].as_str()?;
@@ -327,7 +367,7 @@ pub fn register(vm: &mut Vm) {
     vm.register_fn(
         "string-set!",
         "Mutate character in string. Error: mae-scheme strings are immutable. Use string-copy + string-append to build new strings.",
-        Arity::Fixed(3),
+        Arity::Fixed(3), tier::PURE,
         |_args| Err(LispError::user(
             "string-set!: mae-scheme strings are immutable. Use (string-append (substring s 0 k) (string c) (substring s (+ k 1))) to create a modified copy.",
             vec![],
@@ -337,7 +377,7 @@ pub fn register(vm: &mut Vm) {
     vm.register_fn(
         "string-copy!",
         "Copy into string. Error: mae-scheme strings are immutable. Use substring + string-append instead.",
-        Arity::Variadic(3),
+        Arity::Variadic(3), tier::PURE,
         |_args| Err(LispError::user(
             "string-copy!: mae-scheme strings are immutable. Use substring and string-append to construct new strings.",
             vec![],
@@ -347,7 +387,7 @@ pub fn register(vm: &mut Vm) {
     vm.register_fn(
         "string-fill!",
         "Fill string with character. Error: mae-scheme strings are immutable. Use make-string instead.",
-        Arity::Variadic(2),
+        Arity::Variadic(2), tier::PURE,
         |_args| Err(LispError::user(
             "string-fill!: mae-scheme strings are immutable. Use (make-string k char) to create a new string filled with a character.",
             vec![],
@@ -358,6 +398,7 @@ pub fn register(vm: &mut Vm) {
         "string-foldcase",
         "Unicode case-fold",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let s = args[0].as_str()?;
             // Case folding: lowercase is a reasonable approximation for ASCII

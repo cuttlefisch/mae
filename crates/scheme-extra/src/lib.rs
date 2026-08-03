@@ -37,6 +37,7 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
+use mae_scheme::permission::tier;
 use mae_scheme::runtime::SharedState;
 use mae_scheme::vm::Vm;
 
@@ -76,6 +77,7 @@ mod tests {
             "extra-kernel-crate-test-primitive",
             "Validation-only primitive proving the extension point works end to end",
             Arity::Fixed(0),
+            tier::PURE,
             move |_args: &[Value]| {
                 let has_store = shared_for_closure.lock().kb_store().is_some();
                 Ok(Value::Bool(has_store))

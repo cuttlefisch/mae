@@ -301,8 +301,25 @@ impl Vm {
     }
 
     /// Register a Rust function as a global.
-    pub fn register_fn<F>(&mut self, name: &str, doc: &str, arity: Arity, f: F)
-    where
+    ///
+    /// `tier` is the primitive's ADR-084 D3 allow-list entry: what privilege the
+    /// ambient authority must hold for this primitive to run. It is a **required**
+    /// argument on purpose — an unclassified primitive is a build failure, not a
+    /// silent gap, and a new primitive that spawns a process cannot be added
+    /// without someone typing a tier for it.
+    ///
+    /// @ai-caution: [permission] Do not add a defaulting wrapper (a
+    /// `register_pure_fn`, a `Default` impl, a `..Default::default()`) around
+    /// this. The signature *is* the completeness test; a wrapper that supplies
+    /// the tier for the caller deletes it.
+    pub fn register_fn<F>(
+        &mut self,
+        name: &str,
+        doc: &str,
+        arity: Arity,
+        tier: crate::permission::PrimitiveTier,
+        f: F,
+    ) where
         F: Fn(&[Value]) -> Result<Value, LispError> + 'static,
     {
         let foreign = ForeignFn {
@@ -310,6 +327,7 @@ impl Vm {
             func: Box::new(f),
             arity,
             doc: doc.to_string(),
+            tier,
         };
         self.globals
             .define(name.to_string(), Value::Foreign(Rc::new(foreign)));
@@ -1750,6 +1768,7 @@ use crate::lisp_error::SourceLocation;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::permission::tier;
 
     fn eval(code: &str) -> Value {
         let mut vm = Vm::new();
@@ -1765,7 +1784,7 @@ mod tests {
 
     /// Register minimal builtins for testing.
     fn register_builtins(vm: &mut Vm) {
-        vm.register_fn("+", "Add numbers", Arity::Variadic(0), |args| {
+        vm.register_fn("+", "Add numbers", Arity::Variadic(0), tier::PURE, |args| {
             let mut sum = 0i64;
             let mut is_float = false;
             let mut fsum = 0.0f64;
@@ -1795,67 +1814,85 @@ mod tests {
             }
         });
 
-        vm.register_fn("-", "Subtract numbers", Arity::Variadic(1), |args| {
-            if args.len() == 1 {
-                return match &args[0] {
-                    Value::Int(n) => Ok(Value::Int(-n)),
-                    Value::Float(n) => Ok(Value::Float(-n)),
-                    _ => Err(LispError::type_error("number", args[0].type_name())),
-                };
-            }
-            let first = args[0].as_float()?;
-            let mut result = first;
-            for arg in &args[1..] {
-                result -= arg.as_float()?;
-            }
-            if args.iter().all(|a| matches!(a, Value::Int(_))) {
-                Ok(Value::Int(result as i64))
-            } else {
-                Ok(Value::Float(result))
-            }
-        });
-
-        vm.register_fn("*", "Multiply numbers", Arity::Variadic(0), |args| {
-            let mut product = 1i64;
-            let mut is_float = false;
-            let mut fproduct = 1.0f64;
-            for arg in args {
-                match arg {
-                    Value::Int(n) => {
-                        if is_float {
-                            fproduct *= *n as f64;
-                        } else {
-                            product *= n;
-                        }
-                    }
-                    Value::Float(n) => {
-                        if !is_float {
-                            fproduct = product as f64;
-                            is_float = true;
-                        }
-                        fproduct *= n;
-                    }
-                    _ => return Err(LispError::type_error("number", arg.type_name())),
+        vm.register_fn(
+            "-",
+            "Subtract numbers",
+            Arity::Variadic(1),
+            tier::PURE,
+            |args| {
+                if args.len() == 1 {
+                    return match &args[0] {
+                        Value::Int(n) => Ok(Value::Int(-n)),
+                        Value::Float(n) => Ok(Value::Float(-n)),
+                        _ => Err(LispError::type_error("number", args[0].type_name())),
+                    };
                 }
-            }
-            if is_float {
-                Ok(Value::Float(fproduct))
-            } else {
-                Ok(Value::Int(product))
-            }
-        });
-
-        vm.register_fn("=", "Numeric equality", Arity::Variadic(2), |args| {
-            let first = args[0].as_float()?;
-            for arg in &args[1..] {
-                if arg.as_float()? != first {
-                    return Ok(Value::Bool(false));
+                let first = args[0].as_float()?;
+                let mut result = first;
+                for arg in &args[1..] {
+                    result -= arg.as_float()?;
                 }
-            }
-            Ok(Value::Bool(true))
-        });
+                if args.iter().all(|a| matches!(a, Value::Int(_))) {
+                    Ok(Value::Int(result as i64))
+                } else {
+                    Ok(Value::Float(result))
+                }
+            },
+        );
 
-        vm.register_fn("<", "Less than", Arity::Variadic(2), |args| {
+        vm.register_fn(
+            "*",
+            "Multiply numbers",
+            Arity::Variadic(0),
+            tier::PURE,
+            |args| {
+                let mut product = 1i64;
+                let mut is_float = false;
+                let mut fproduct = 1.0f64;
+                for arg in args {
+                    match arg {
+                        Value::Int(n) => {
+                            if is_float {
+                                fproduct *= *n as f64;
+                            } else {
+                                product *= n;
+                            }
+                        }
+                        Value::Float(n) => {
+                            if !is_float {
+                                fproduct = product as f64;
+                                is_float = true;
+                            }
+                            fproduct *= n;
+                        }
+                        _ => return Err(LispError::type_error("number", arg.type_name())),
+                    }
+                }
+                if is_float {
+                    Ok(Value::Float(fproduct))
+                } else {
+                    Ok(Value::Int(product))
+                }
+            },
+        );
+
+        vm.register_fn(
+            "=",
+            "Numeric equality",
+            Arity::Variadic(2),
+            tier::PURE,
+            |args| {
+                let first = args[0].as_float()?;
+                for arg in &args[1..] {
+                    if arg.as_float()? != first {
+                        return Ok(Value::Bool(false));
+                    }
+                }
+                Ok(Value::Bool(true))
+            },
+        );
+
+        vm.register_fn("<", "Less than", Arity::Variadic(2), tier::PURE, |args| {
             for w in args.windows(2) {
                 if w[0].as_float()? >= w[1].as_float()? {
                     return Ok(Value::Bool(false));
@@ -1864,97 +1901,166 @@ mod tests {
             Ok(Value::Bool(true))
         });
 
-        vm.register_fn(">", "Greater than", Arity::Variadic(2), |args| {
-            for w in args.windows(2) {
-                if w[0].as_float()? <= w[1].as_float()? {
-                    return Ok(Value::Bool(false));
+        vm.register_fn(
+            ">",
+            "Greater than",
+            Arity::Variadic(2),
+            tier::PURE,
+            |args| {
+                for w in args.windows(2) {
+                    if w[0].as_float()? <= w[1].as_float()? {
+                        return Ok(Value::Bool(false));
+                    }
                 }
-            }
-            Ok(Value::Bool(true))
-        });
+                Ok(Value::Bool(true))
+            },
+        );
 
-        vm.register_fn("<=", "Less or equal", Arity::Variadic(2), |args| {
-            for w in args.windows(2) {
-                if w[0].as_float()? > w[1].as_float()? {
-                    return Ok(Value::Bool(false));
+        vm.register_fn(
+            "<=",
+            "Less or equal",
+            Arity::Variadic(2),
+            tier::PURE,
+            |args| {
+                for w in args.windows(2) {
+                    if w[0].as_float()? > w[1].as_float()? {
+                        return Ok(Value::Bool(false));
+                    }
                 }
-            }
-            Ok(Value::Bool(true))
-        });
+                Ok(Value::Bool(true))
+            },
+        );
 
-        vm.register_fn(">=", "Greater or equal", Arity::Variadic(2), |args| {
-            for w in args.windows(2) {
-                if w[0].as_float()? < w[1].as_float()? {
-                    return Ok(Value::Bool(false));
+        vm.register_fn(
+            ">=",
+            "Greater or equal",
+            Arity::Variadic(2),
+            tier::PURE,
+            |args| {
+                for w in args.windows(2) {
+                    if w[0].as_float()? < w[1].as_float()? {
+                        return Ok(Value::Bool(false));
+                    }
                 }
-            }
-            Ok(Value::Bool(true))
-        });
+                Ok(Value::Bool(true))
+            },
+        );
 
-        vm.register_fn("not", "Boolean not", Arity::Fixed(1), |args| {
+        vm.register_fn("not", "Boolean not", Arity::Fixed(1), tier::PURE, |args| {
             Ok(Value::Bool(!args[0].is_true()))
         });
 
-        vm.register_fn("cons", "Construct pair", Arity::Fixed(2), |args| {
-            Ok(Value::cons(args[0].clone(), args[1].clone()))
+        vm.register_fn(
+            "cons",
+            "Construct pair",
+            Arity::Fixed(2),
+            tier::PURE,
+            |args| Ok(Value::cons(args[0].clone(), args[1].clone())),
+        );
+
+        vm.register_fn(
+            "car",
+            "First of pair",
+            Arity::Fixed(1),
+            tier::PURE,
+            |args| args[0].car(),
+        );
+
+        vm.register_fn("cdr", "Rest of pair", Arity::Fixed(1), tier::PURE, |args| {
+            args[0].cdr()
         });
 
-        vm.register_fn("car", "First of pair", Arity::Fixed(1), |args| {
-            args[0].car()
-        });
-
-        vm.register_fn("cdr", "Rest of pair", Arity::Fixed(1), |args| args[0].cdr());
-
-        vm.register_fn("null?", "Is null?", Arity::Fixed(1), |args| {
+        vm.register_fn("null?", "Is null?", Arity::Fixed(1), tier::PURE, |args| {
             Ok(Value::Bool(args[0].is_null()))
         });
 
-        vm.register_fn("pair?", "Is pair?", Arity::Fixed(1), |args| {
+        vm.register_fn("pair?", "Is pair?", Arity::Fixed(1), tier::PURE, |args| {
             Ok(Value::Bool(args[0].is_pair()))
         });
 
-        vm.register_fn("list", "Construct list", Arity::Variadic(0), |args| {
-            Ok(Value::list(args.iter().cloned()))
-        });
+        vm.register_fn(
+            "list",
+            "Construct list",
+            Arity::Variadic(0),
+            tier::PURE,
+            |args| Ok(Value::list(args.iter().cloned())),
+        );
 
-        vm.register_fn("display", "Display value", Arity::Fixed(1), |args| {
-            print!("{}", crate::value::display_value(&args[0]));
-            Ok(Value::Void)
-        });
+        vm.register_fn(
+            "display",
+            "Display value",
+            Arity::Fixed(1),
+            tier::PURE,
+            |args| {
+                print!("{}", crate::value::display_value(&args[0]));
+                Ok(Value::Void)
+            },
+        );
 
-        vm.register_fn("newline", "Print newline", Arity::Fixed(0), |_| {
-            println!();
-            Ok(Value::Void)
-        });
+        vm.register_fn(
+            "newline",
+            "Print newline",
+            Arity::Fixed(0),
+            tier::PURE,
+            |_| {
+                println!();
+                Ok(Value::Void)
+            },
+        );
 
-        vm.register_fn("eq?", "Identity equality", Arity::Fixed(2), |args| {
-            Ok(Value::Bool(args[0] == args[1]))
-        });
+        vm.register_fn(
+            "eq?",
+            "Identity equality",
+            Arity::Fixed(2),
+            tier::PURE,
+            |args| Ok(Value::Bool(args[0] == args[1])),
+        );
 
-        vm.register_fn("number?", "Is number?", Arity::Fixed(1), |args| {
-            Ok(Value::Bool(args[0].is_number()))
-        });
+        vm.register_fn(
+            "number?",
+            "Is number?",
+            Arity::Fixed(1),
+            tier::PURE,
+            |args| Ok(Value::Bool(args[0].is_number())),
+        );
 
-        vm.register_fn("string?", "Is string?", Arity::Fixed(1), |args| {
-            Ok(Value::Bool(args[0].is_string()))
-        });
+        vm.register_fn(
+            "string?",
+            "Is string?",
+            Arity::Fixed(1),
+            tier::PURE,
+            |args| Ok(Value::Bool(args[0].is_string())),
+        );
 
-        vm.register_fn("symbol?", "Is symbol?", Arity::Fixed(1), |args| {
-            Ok(Value::Bool(args[0].is_symbol()))
-        });
+        vm.register_fn(
+            "symbol?",
+            "Is symbol?",
+            Arity::Fixed(1),
+            tier::PURE,
+            |args| Ok(Value::Bool(args[0].is_symbol())),
+        );
 
-        vm.register_fn("procedure?", "Is procedure?", Arity::Fixed(1), |args| {
-            Ok(Value::Bool(args[0].is_procedure()))
-        });
+        vm.register_fn(
+            "procedure?",
+            "Is procedure?",
+            Arity::Fixed(1),
+            tier::PURE,
+            |args| Ok(Value::Bool(args[0].is_procedure())),
+        );
 
-        vm.register_fn("boolean?", "Is boolean?", Arity::Fixed(1), |args| {
-            Ok(Value::Bool(matches!(args[0], Value::Bool(_))))
-        });
+        vm.register_fn(
+            "boolean?",
+            "Is boolean?",
+            Arity::Fixed(1),
+            tier::PURE,
+            |args| Ok(Value::Bool(matches!(args[0], Value::Bool(_)))),
+        );
 
         vm.register_fn(
             "apply",
             "Apply function to args",
             Arity::Variadic(2),
+            tier::PURE,
             |_args| {
                 // (apply f arg1 ... args-list)
                 // Not fully implementable as a foreign fn since it needs the VM.
@@ -1965,15 +2071,21 @@ mod tests {
             },
         );
 
-        vm.register_fn("error", "Raise an error", Arity::Variadic(1), |args| {
-            let msg = if args[0].is_string() {
-                args[0].as_str().unwrap().to_string()
-            } else {
-                format!("{}", args[0])
-            };
-            let irritants: Vec<String> = args[1..].iter().map(|a| format!("{a}")).collect();
-            Err(LispError::user(msg, irritants))
-        });
+        vm.register_fn(
+            "error",
+            "Raise an error",
+            Arity::Variadic(1),
+            tier::PURE,
+            |args| {
+                let msg = if args[0].is_string() {
+                    args[0].as_str().unwrap().to_string()
+                } else {
+                    format!("{}", args[0])
+                };
+                let irritants: Vec<String> = args[1..].iter().map(|a| format!("{a}")).collect();
+                Err(LispError::user(msg, irritants))
+            },
+        );
     }
 
     // --- Basic expressions ---
@@ -2422,7 +2534,7 @@ mod tests {
     fn yield_sleep_from_foreign_fn() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), tier::PURE, |args| {
             let ms = args[0].as_int().unwrap_or(0) as u64;
             Err(LispError::yield_sleep(Duration::from_millis(ms)))
         });
@@ -2435,7 +2547,7 @@ mod tests {
     fn yield_eval_yielding_returns_yield() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), tier::PURE, |args| {
             let ms = args[0].as_int().unwrap_or(0) as u64;
             Err(LispError::yield_sleep(Duration::from_millis(ms)))
         });
@@ -2452,7 +2564,7 @@ mod tests {
     fn yield_resume_continues_execution() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), tier::PURE, |args| {
             let ms = args[0].as_int().unwrap_or(0) as u64;
             Err(LispError::yield_sleep(Duration::from_millis(ms)))
         });
@@ -2475,7 +2587,7 @@ mod tests {
     fn yield_multiple_yields_in_sequence() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), tier::PURE, |args| {
             let ms = args[0].as_int().unwrap_or(0) as u64;
             Err(LispError::yield_sleep(Duration::from_millis(ms)))
         });
@@ -2496,7 +2608,7 @@ mod tests {
     fn yield_in_loop() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), tier::PURE, |args| {
             let ms = args[0].as_int().unwrap_or(0) as u64;
             Err(LispError::yield_sleep(Duration::from_millis(ms)))
         });
@@ -2531,7 +2643,7 @@ mod tests {
     fn yield_resume_value_visible_to_scheme() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |_| {
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), tier::PURE, |_| {
             Err(LispError::yield_sleep(Duration::from_millis(1)))
         });
         // The resume value is the result of the yielding call
@@ -2553,16 +2665,22 @@ mod tests {
     fn yield_wait_for_file() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-wait-file", "test", Arity::Fixed(2), |args| {
-            let path = args[0]
-                .as_str()
-                .map_err(|_| LispError::type_error("string", ""))?;
-            let ms = args[1].as_int().unwrap_or(1000) as u64;
-            Err(LispError::yield_wait_for_file(
-                std::path::PathBuf::from(path),
-                Duration::from_millis(ms),
-            ))
-        });
+        vm.register_fn(
+            "test-wait-file",
+            "test",
+            Arity::Fixed(2),
+            tier::READ,
+            |args| {
+                let path = args[0]
+                    .as_str()
+                    .map_err(|_| LispError::type_error("string", ""))?;
+                let ms = args[1].as_int().unwrap_or(1000) as u64;
+                Err(LispError::yield_wait_for_file(
+                    std::path::PathBuf::from(path),
+                    Duration::from_millis(ms),
+                ))
+            },
+        );
         let r = vm
             .eval_yielding(r#"(test-wait-file "/tmp/test.txt" 5000)"#)
             .unwrap();
@@ -2602,7 +2720,7 @@ mod tests {
     fn yield_error_from_foreign_fn_propagates() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-err", "test", Arity::Fixed(0), |_| {
+        vm.register_fn("test-err", "test", Arity::Fixed(0), tier::PURE, |_| {
             Err(LispError::user("test error", vec![]))
         });
         let r = vm.eval_yielding("(test-err)");
@@ -2614,7 +2732,7 @@ mod tests {
     fn yield_guard_does_not_catch_yields() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |_| {
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), tier::PURE, |_| {
             Err(LispError::yield_sleep(Duration::from_millis(1)))
         });
         // Guard should NOT catch yield errors — they must pass through
@@ -2635,7 +2753,7 @@ mod tests {
     fn yield_blocking_eval_handles_sleep() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |_| {
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), tier::PURE, |_| {
             Err(LispError::yield_sleep(Duration::from_millis(1)))
         });
         // Regular eval() blocks on yields

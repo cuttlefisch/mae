@@ -13,6 +13,7 @@ use crate::value::Value;
 use crate::vm::Vm;
 
 use super::SharedState;
+use crate::permission::tier;
 
 /// Register keybinding-definition and hook-system primitives.
 pub(super) fn register_keybinding_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>) {
@@ -22,6 +23,7 @@ pub(super) fn register_keybinding_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "gc-stats",
         "Return GC statistics as an association list.",
         Arity::Fixed(0),
+        tier::READ,
         move |_args| {
             let st = s.lock();
             let stats = &st.gc_stats_snapshot;
@@ -58,6 +60,7 @@ pub(super) fn register_keybinding_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "define-key",
         "Bind KEY to COMMAND in keymap MAP",
         Arity::Fixed(3),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let map = arg_string(args, 0, "define-key")?;
             let key = arg_string(args, 1, "define-key")?;
@@ -73,6 +76,7 @@ pub(super) fn register_keybinding_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "define-keymap",
         "Create a new keymap NAME with PARENT",
         Arity::Fixed(2),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "define-keymap")?;
             let parent = arg_string(args, 1, "define-keymap")?;
@@ -91,6 +95,7 @@ pub(super) fn register_keybinding_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "bind-context-keymap",
         "Route a buffer context (kind/language) to a context keymap",
         Arity::Fixed(3),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let selector_type = arg_string(args, 0, "bind-context-keymap")?;
             let selector_value = arg_string(args, 1, "bind-context-keymap")?;
@@ -108,6 +113,7 @@ pub(super) fn register_keybinding_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "define-command",
         "Register a command NAME with doc and handler",
         Arity::Fixed(3),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "define-command")?;
             let doc = arg_string(args, 1, "define-command")?;
@@ -123,6 +129,7 @@ pub(super) fn register_keybinding_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "set-status",
         "Set the status bar message",
         Arity::Fixed(1),
+        tier::WRITE,
         move |args: &[Value]| {
             let msg = arg_string(args, 0, "set-status")?;
             s.lock().status_message = Some(msg);
@@ -136,6 +143,7 @@ pub(super) fn register_keybinding_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "set-theme",
         "Set the color theme",
         Arity::Fixed(1),
+        tier::WRITE,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "set-theme")?;
             s.lock().theme_request = Some(name);
@@ -151,6 +159,7 @@ pub(super) fn register_keybinding_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "add-hook!",
         "Register a hook callback",
         Arity::Fixed(2),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let hook = arg_string(args, 0, "add-hook!")?;
             let fn_name = arg_string(args, 1, "add-hook!")?;
@@ -165,6 +174,7 @@ pub(super) fn register_keybinding_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "remove-hook!",
         "Remove a hook callback",
         Arity::Fixed(2),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let hook = arg_string(args, 0, "remove-hook!")?;
             let fn_name = arg_string(args, 1, "remove-hook!")?;
