@@ -310,7 +310,7 @@ pub fn compute_layout(
 
     let wrap = buf.local_options.word_wrap.unwrap_or(editor.word_wrap) && text_width > 0;
     let show_break_width = if wrap {
-        mae_core::display_width(editor.show_break.as_str())
+        mae_core::grapheme::display_width_with(editor.show_break.as_str(), editor.width_policy())
     } else {
         0
     };

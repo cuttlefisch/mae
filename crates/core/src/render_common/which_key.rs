@@ -15,7 +15,7 @@
 //! cell's key/label/doc truncation and padding.
 
 use crate::keymap::WhichKeyEntry;
-use crate::text_utils::{display_width, format_keypress, truncate_end, WK_DOC_MIN_WIDTH};
+use crate::text_utils::{format_keypress, WK_DOC_MIN_WIDTH};
 
 /// One rendered cell in the which-key grid, already truncated and measured —
 /// backends only need to draw the strings at the given style/position.
@@ -78,9 +78,20 @@ pub fn compute_which_key_layout(
     sep_width: usize,
     max_desc: usize,
     requested_scroll: usize,
+    policy: crate::grapheme::WidthPolicy,
 ) -> WhichKeyLayout {
-    let (col_width, num_cols) =
-        crate::text_utils::which_key_column_layout(entries, inner_width, sep_width, max_desc);
+    // ADR-087 Rule 3: which-key was one of the sites still using the
+    // hardcoded default policy, so `ambiguous_width=wide` changed the status
+    // bar and nothing else.
+    let display_width = |s: &str| crate::grapheme::display_width_with(s, policy);
+    let truncate_end = |s: &str, n: usize| crate::text_utils::truncate_end_with(s, n, policy);
+    let (col_width, num_cols) = crate::text_utils::which_key_column_layout(
+        entries,
+        inner_width,
+        sep_width,
+        max_desc,
+        policy,
+    );
 
     let total_rows = entries.len().div_ceil(num_cols.max(1));
     let max_scroll = total_rows.saturating_sub(inner_height);
@@ -203,7 +214,15 @@ mod tests {
             entry('a', "save", false, Some("save the buffer")),
             entry('b', "quit", false, None),
         ];
-        let layout = compute_which_key_layout(&entries, 80, 24, 1, 40, 0);
+        let layout = compute_which_key_layout(
+            &entries,
+            80,
+            24,
+            1,
+            40,
+            0,
+            crate::grapheme::WidthPolicy::default(),
+        );
         assert_eq!(layout.cells.len(), 2);
         assert!(layout.above_count.is_none());
         assert!(layout.below_count.is_none());
@@ -215,7 +234,15 @@ mod tests {
     #[test]
     fn doc_omitted_for_group_entries() {
         let entries = vec![entry('a', "group", true, Some("should not show"))];
-        let layout = compute_which_key_layout(&entries, 80, 24, 1, 40, 0);
+        let layout = compute_which_key_layout(
+            &entries,
+            80,
+            24,
+            1,
+            40,
+            0,
+            crate::grapheme::WidthPolicy::default(),
+        );
         assert!(layout.cells[0].doc_text.is_none());
     }
 
@@ -228,8 +255,16 @@ mod tests {
             None,
         )];
         // Force a narrow column via a tiny max_desc so column width is small.
-        let layout = compute_which_key_layout(&entries, 80, 24, 1, 10, 0);
-        assert!(display_width(&layout.cells[0].label_text) <= layout.col_width);
+        let layout = compute_which_key_layout(
+            &entries,
+            80,
+            24,
+            1,
+            10,
+            0,
+            crate::grapheme::WidthPolicy::default(),
+        );
+        assert!(crate::grapheme::display_width(&layout.cells[0].label_text) <= layout.col_width);
     }
 
     #[test]
@@ -238,7 +273,15 @@ mod tests {
             .map(|i| entry((b'a' + (i % 26) as u8) as char, "x", false, None))
             .collect();
         // inner_height=2 rows, num_cols will be small -> total_rows > 2
-        let layout = compute_which_key_layout(&entries, 20, 2, 1, 5, 9_999);
+        let layout = compute_which_key_layout(
+            &entries,
+            20,
+            2,
+            1,
+            5,
+            9_999,
+            crate::grapheme::WidthPolicy::default(),
+        );
         // Whatever scroll ended up clamped to, we must not have skipped past
         // the point where zero entries remain to render.
         assert!(
@@ -253,7 +296,15 @@ mod tests {
             .map(|i| entry((b'a' + (i % 26) as u8) as char, "x", false, None))
             .collect();
         // 1 column (narrow width), 5 visible rows, scrolled to the middle.
-        let layout = compute_which_key_layout(&entries, 10, 5, 1, 3, 2);
+        let layout = compute_which_key_layout(
+            &entries,
+            10,
+            5,
+            1,
+            3,
+            2,
+            crate::grapheme::WidthPolicy::default(),
+        );
         assert!(layout.above_count.is_some());
         assert!(layout.below_count.is_some());
         // Both indicators shown -> effective grid rows <= inner_height - 2.
@@ -265,7 +316,15 @@ mod tests {
         // A CJK label must be measured/truncated by display columns, not
         // byte or char count (ADR-087).
         let entries = vec![entry('a', "日本語ラベルテキスト", false, None)];
-        let layout = compute_which_key_layout(&entries, 12, 24, 1, 40, 0);
+        let layout = compute_which_key_layout(
+            &entries,
+            12,
+            24,
+            1,
+            40,
+            0,
+            crate::grapheme::WidthPolicy::default(),
+        );
         let cell = &layout.cells[0];
         assert!(
             cell.label_width <= layout.col_width,
@@ -281,7 +340,15 @@ mod tests {
         // overcount and could also cut mid-cluster on truncation.
         let zwj_family = "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466}";
         let entries = vec![entry('a', zwj_family, false, None)];
-        let layout = compute_which_key_layout(&entries, 15, 24, 1, 40, 0);
+        let layout = compute_which_key_layout(
+            &entries,
+            15,
+            24,
+            1,
+            40,
+            0,
+            crate::grapheme::WidthPolicy::default(),
+        );
         let cell = &layout.cells[0];
         assert!(cell.label_width <= layout.col_width);
     }

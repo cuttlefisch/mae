@@ -58,6 +58,7 @@ pub(crate) fn render_which_key_popup(
         sep_width,
         max_desc,
         editor.which_key_scroll,
+        editor.width_policy(),
     );
 
     let mut lines: Vec<Line> = Vec::new();
