@@ -433,7 +433,7 @@ pub(super) async fn handle_kb_add_remove_member(
             } else {
                 (MembershipAction::Remove, None)
             };
-            append_signed_membership(
+            let appended = append_signed_membership(
                 doc_store,
                 broadcaster,
                 session_id,
@@ -447,10 +447,20 @@ pub(super) async fn handle_kb_add_remove_member(
             )
             .await;
             info!(session = session_id, kb_id = %kb_id, member = %member, add, role = role.as_str(), "kb membership change");
-            JsonRpcResponse::success(
-                id,
-                serde_json::json!({ "kb_id": kb_id, "member": member, "added": add }),
-            )
+            // The legacy `member_roles` mutation above DID persist, so this is
+            // a real success — but if the peer-verifiable signed op-log did not
+            // get the matching op, say so rather than implying both landed
+            // (audit #589.4).
+            let mut result = serde_json::json!({ "kb_id": kb_id, "member": member, "added": add });
+            result["signed_oplog"] = serde_json::json!(appended.failure().is_none());
+            if let Some(e) = appended.failure() {
+                result["warning"] = serde_json::json!(format!(
+                    "membership applied locally, but the signed op-log was not updated \
+                     ({e}) — peers verifying membership from the op-log will not see this \
+                     change"
+                ));
+            }
+            JsonRpcResponse::success(id, result)
         }
         Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
     }
@@ -558,7 +568,7 @@ pub(super) async fn handle_kb_approve_member(
     {
         Ok(_) => {
             // ADR-026: an approval is a signed Admit in the op-log.
-            append_signed_membership(
+            let appended = append_signed_membership(
                 doc_store,
                 broadcaster,
                 session_id,
@@ -572,10 +582,19 @@ pub(super) async fn handle_kb_approve_member(
             )
             .await;
             info!(session = session_id, kb_id = %kb_id, principal = %principal, role = role.as_str(), "kb/approve_member: complete");
-            JsonRpcResponse::success(
-                id,
-                serde_json::json!({ "kb_id": kb_id, "principal": principal, "role": role.as_str() }),
-            )
+            // Same split as `kb/set_member` above (audit #589.4): the approval
+            // itself persisted, the signed mirror may not have.
+            let mut result = serde_json::json!({
+                "kb_id": kb_id, "principal": principal, "role": role.as_str()
+            });
+            result["signed_oplog"] = serde_json::json!(appended.failure().is_none());
+            if let Some(e) = appended.failure() {
+                result["warning"] = serde_json::json!(format!(
+                    "approval applied locally, but the signed op-log was not updated ({e}) \
+                     — peers verifying membership from the op-log will not see this change"
+                ));
+            }
+            JsonRpcResponse::success(id, result)
         }
         Err(e) => JsonRpcResponse::error(id, McpError::internal_error(e)),
     }
