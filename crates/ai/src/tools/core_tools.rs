@@ -17,7 +17,9 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
             .map(|o| format!("'{}' ({})", o.name, o.kind))
             .collect();
         format!(
-            "Set an editor option by name. Options: {}.",
+            "Set an editor option by name. Options: {}. By default this only changes the \
+             running editor's in-memory value (parity with `:set`) — pass persist=true to also \
+             write it to init.scm (parity with `:set-save`), surviving restarts.",
             items.join(", ")
         )
     };
@@ -221,6 +223,13 @@ pub(super) fn core_tool_definitions(registry: &OptionRegistry) -> Vec<ToolDefini
         ToolDefBuilder::new("set_option", option_desc)
             .prop_enum("option", "string", "Option name", option_names)
             .prop("value", "string", "New value for the option")
+            .prop(
+                "persist",
+                "boolean",
+                "Also persist this option to init.scm (parity with `:set-save`), so the value \
+                 survives editor restarts. Default false — a plain runtime-only change, parity \
+                 with `:set`.",
+            )
             .required(["option", "value"])
             .permission(PermissionTier::Write)
             .build(),
