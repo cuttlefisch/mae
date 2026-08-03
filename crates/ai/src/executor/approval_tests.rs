@@ -254,3 +254,52 @@ fn reads_still_dispatch_without_a_prompt_under_the_shipped_default() {
         other => panic!("a read must not prompt, got {other:?}"),
     }
 }
+
+/// The sharp edge that bit `request_tools` when the default dropped: a tool
+/// **absent** from `all_tools` has no declared tier, so dispatch falls back to
+/// `Write` — which under the shipped default is askable, not automatic.
+///
+/// That fallback is correct (an unknown tool is not a trusted one), but it
+/// means any tool that is *dispatchable by name* must also be *present in the
+/// dispatch list*, or its own declared tier is silently ignored. `request_tools`
+/// declares `ReadOnly` and was only ever appended to the **advertised** list;
+/// pure discovery consequently started requiring approval. Asserted here so the
+/// fallback's blast radius is written down rather than rediscovered.
+#[test]
+fn a_tool_missing_from_the_dispatch_list_falls_back_to_write_not_to_its_own_tier() {
+    let mut editor = Editor::new();
+    let tools_without_it: Vec<ToolDefinition> = all_tools()
+        .into_iter()
+        .filter(|t| t.name != "search_tools")
+        .collect();
+    assert_eq!(
+        crate::tools::request_tools_definition().permission,
+        Some(PermissionTier::ReadOnly),
+        "precondition: the discovery meta-tools declare ReadOnly"
+    );
+    match execute_tool(
+        &mut editor,
+        &call("search_tools", serde_json::json!({"query": "buffer"})),
+        &tools_without_it,
+        &PermissionPolicy::default(),
+    ) {
+        ExecuteResult::NeedsApproval(req) => assert_eq!(
+            req.tier,
+            PermissionTier::Write,
+            "an absent tool takes the Write fallback, NOT its own declared tier"
+        ),
+        other => panic!("expected the Write fallback to ask, got {other:?}"),
+    }
+    // ...and with the tool present, its own `ReadOnly` is honoured and no
+    // approval is needed. This is the pair that makes the assertion above a
+    // statement about the *list*, not about `search_tools`.
+    match execute_tool(
+        &mut editor,
+        &call("search_tools", serde_json::json!({"query": "buffer"})),
+        &all_tools(),
+        &PermissionPolicy::default(),
+    ) {
+        ExecuteResult::Immediate(r) => assert!(r.success, "{}", r.output),
+        other => panic!("a listed ReadOnly discovery tool must not prompt, got {other:?}"),
+    }
+}

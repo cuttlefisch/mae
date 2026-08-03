@@ -716,6 +716,18 @@ fn main() -> io::Result<()> {
             let mut tools = tools_from_registry(&editor.commands);
             tools.extend(ai_specific_tools(&editor.option_registry));
             tools.extend(mae_ai::scheme_tools_to_definitions(&editor.ai.scheme_tools));
+            // `request_tools` is dispatchable (`tool_dispatch.rs` step 4d2
+            // handles it by name), so it belongs in the DISPATCH list, not
+            // only in the advertised one. It was previously appended solely
+            // to `mcp_tool_defs` below, which meant `tool_def` was `None` at
+            // dispatch and its tier fell back to the unknown-tool default of
+            // `Write` — silently ignoring the `ReadOnly` its own definition
+            // declares. Harmless while the shipped policy auto-approved
+            // Write; under ADR-090's readonly default it made pure discovery
+            // require approval, which is precisely backwards.
+            if !tools.iter().any(|t| t.name == "request_tools") {
+                tools.push(mae_ai::request_tools_definition());
+            }
             tools
         };
         let mut permission_policy = match config::resolve_permission_policy(&app_config) {
@@ -825,6 +837,11 @@ fn main() -> io::Result<()> {
                     .filter(|t| mae_ai::classify_tool_tier(&t.name) == mae_ai::ToolTier::Core)
                     .cloned()
                     .collect();
+                // Belt-and-braces: `request_tools` is now in `all_tools`
+                // (see above) and `classify_tool_tier` calls it Core, so this
+                // normally finds it already present. Kept so the advertised
+                // list cannot lose the escalation path if either of those
+                // changes.
                 if !core.iter().any(|t| t.name == "request_tools") {
                     core.push(mae_ai::request_tools_definition());
                 }
