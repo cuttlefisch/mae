@@ -1022,6 +1022,31 @@ impl Editor {
                                     self.open_file(&sb.file_path);
                                 }
                             }
+                            // Restore the focused buffer's cursor. ADR-087
+                            // Rule 4: `sb.cursor_col` is in whatever domain the
+                            // *file* declares (char for pre-migration
+                            // sessions), so it goes through
+                            // `cursor_col_as_byte_col` against the reopened
+                            // buffer — never assigned raw.
+                            if let Some(sb) = session.buffers.get(session.focused_idx) {
+                                if let Some(idx) = self
+                                    .buffers
+                                    .iter()
+                                    .position(|b| b.file_path() == Some(&sb.file_path))
+                                {
+                                    let row = sb
+                                        .cursor_row
+                                        .min(self.buffers[idx].line_count().saturating_sub(1));
+                                    let col = sb.cursor_col_as_byte_col(&self.buffers[idx]);
+                                    let scroll = sb.scroll_offset;
+                                    self.display_buffer_and_focus(idx);
+                                    let win = self.window_mgr.focused_window_mut();
+                                    win.cursor_row = row;
+                                    win.cursor_col = col;
+                                    win.scroll_offset = scroll;
+                                    win.sync_primary();
+                                }
+                            }
                             self.set_status(format!("Session loaded ({} buffers)", count));
                         }
                         Err(e) => self.set_status(e),
