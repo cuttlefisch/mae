@@ -1195,6 +1195,22 @@ jobs:
             exit 1
           fi
 
+  audit-metrics:
+    name: structural ceilings (ratchet)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./.github/actions/setup-rust
+      # Ratchets against docs/AUDIT_BASELINE.json: pre-existing debt passes at
+      # its accepted size, a NEW over-ceiling file fails, an accepted file that
+      # grows past tolerance fails, and a file that shrinks never fails.
+      # Deliberately does not diff a committed metrics file — per-file line
+      # counts change on nearly every commit, so that would churn every PR.
+      - name: Check structural ceilings
+        run: make audit-metrics-check
+
   adr-kb-sync:
     name: ADR KB staleness gate (ADR-059 Phase E)
     runs-on: ubuntu-latest

@@ -2,6 +2,8 @@
 //!
 //! The primary entry point is the binary (`main.rs`). This lib re-exports
 //! modules needed by integration tests.
+//!
+//! @stability: stable
 
 pub mod artifact_store;
 pub mod checkpoint;

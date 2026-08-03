@@ -3,7 +3,7 @@
 //! Each connected MCP client gets a `ClientSession` that tracks
 //! its lifecycle, capabilities, and subscriptions.
 //!
-//! @ai-caution: Sync methods (`sync/state_vector`, `sync/update`,
+//! @ai-caution: [dispatch] Sync methods (`sync/state_vector`, `sync/update`,
 //! `sync/full_state`, `sync/enable`) are implemented in `sync_exec.rs`.
 //! Awareness/presence (`sync/awareness`) is implemented too
 //! (`daemon/src/collab_handler/sync_methods.rs::handle_sync_awareness`,

@@ -11,8 +11,8 @@
 //! remaining debt is narrower now — see `run_collab_task`'s own
 //! `@ai-caution` marker for why it's deliberately not split further. Its
 //! test module was also split into `tests/` (per-feature files, all under
-//! the 500-line ceiling). Tracked in `.claude/commands/mae-audit.md`'s
-//! "Known exceptions" and `ROADMAP.md`'s "Architecture Debt" section.
+//! the 500-line ceiling). Tracked in `docs/AUDIT_BASELINE.json` (machine-checked)
+//! and `ROADMAP.md`'s "Architecture Debt" section.
 //!
 //! `handle_collab_event`'s per-variant bodies and `drain_collab_intents`'s
 //! per-intent translation are split by topic into sibling files (pure code
@@ -1805,8 +1805,8 @@ fn route_kb_node_update(
 // struct — a mechanical split-by-arm would relocate the entanglement, not resolve
 // it. A future dedicated pass could bundle these locals into a CollabTaskState
 // struct first, converting arms to methods, then split by command prefix. See
-// ROADMAP.md's "Architecture Debt" section and .claude/commands/mae-audit.md's
-// "Known exceptions" list.
+// ROADMAP.md's "Architecture Debt" section and `docs/AUDIT_BASELINE.json` (machine-checked)
+//  list.
 #[allow(clippy::too_many_arguments)]
 async fn run_collab_task(
     mut cmd_rx: mpsc::Receiver<CollabCommand>,

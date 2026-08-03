@@ -51,9 +51,13 @@ mae/                              (repo root)
 
 ### Editor Workspace (`Cargo.toml`)
 
-| Crate | Purpose | Key Dependencies (planned) |
+Dependency column lists the defining external crates, or — where a crate has intra-repo edges — those.
+Verified against the real `Cargo.toml` graph 2026-08; the column previously read "(planned)" and had the
+direction **backwards** for five leaf crates.
+
+| Crate | Purpose | Key dependencies |
 |---|---|---|
-| `mae-core` | Buffer management (rope), event loop, core primitives | `ropey`, `crossbeam` |
+| `mae-core` | Buffer management (rope), event loop, core primitives | `ropey`, `crossbeam`; also depends on 10 intra-repo crates incl. `mae-canvas`/`mae-kb`/`mae-export` |
 | `mae-renderer` | Display/rendering — `Renderer` trait + terminal backend | `ratatui`, `crossterm` |
 | `mae-gui` | GUI rendering backend — winit window + Skia 2D + native SVG | `winit`, `skia-safe` (features: `svg`) |
 | `mae-scheme` | Embedded Scheme runtime for configuration and packages | purpose-built R7RS-small |
@@ -62,15 +66,16 @@ mae/                              (repo root)
 | `mae-ai` | AI agent integration — tool-calling transport (Claude/OpenAI/Gemini/DeepSeek/Ollama) | `reqwest`, `serde_json` |
 | `mae-agent-cli` | Terminal AI-agent harness (ADR-046) — the default `SPC a a`/`SPC a p` surface, binary `mae-agent` | `mae-ai`, `mae-mcp`, `ratatui` |
 | `mae-shell` | Embedded terminal emulator (alacritty_terminal) | `alacritty_terminal` |
-| `mae-babel` | Org-mode code block execution (12 languages) | `mae-shell` |
-| `mae-export` | Org/Markdown → HTML/Markdown export | `mae-kb` |
-| `mae-canvas` | Visual buffer (diagrams, drawings) | `mae-core` |
-| `mae-snippets` | Snippet expansion engine | `mae-core` |
-| `mae-format` | Buffer formatting (external formatters) | `mae-core` |
-| `mae-make` | Build system integration (make, cargo, npm) | `mae-core` |
+| `mae-babel` | Org-mode code block execution (12 languages) | *(none)* |
+| `mae-export` | Org/Markdown → HTML/Markdown export | `mae-babel` |
+| `mae-canvas` | Visual buffer (diagrams, drawings) | *(none — `mae-core` depends on it)* |
+| `mae-snippets` | Snippet expansion engine | *(none — `mae-core` depends on it)* |
+| `mae-format` | Buffer formatting (external formatters) | *(none — `mae-core` depends on it)* |
+| `mae-make` | Build system integration (make, cargo, npm) | *(none — `mae-core` depends on it)* |
 | `mae-lookup` | Online lookup (dictionary, docs) | `reqwest` |
-| `mae-spell` | Spell checking integration | `mae-core` |
-| `mae` | Binary crate — CLI entry point, config loading, event loops | `clap`, `tokio` |
+| `mae-spell` | Spell checking integration | *(none — `mae-core` depends on it)* |
+| `mae-scheme-extra` | Extension point for out-of-tree Scheme kernel primitives (#521) — ships as a no-op; downstream forks add their own crates here | `mae-scheme` |
+| `mae` | Binary crate — CLI entry point, config loading, event loops | `clap`, `tokio`; depends on 13 intra-repo crates |
 
 ### Shared Crates (`shared/` — editor workspace members, also used by daemon)
 
@@ -166,11 +171,22 @@ MAE uses two distinct in-code comment conventions — don't confuse them:
   is meant, and vice versa.
 
 Architectural debt is tracked in three places that should cross-reference each other: this file's
-principles, `ROADMAP.md`'s "Architecture Debt" checklist, and `.claude/commands/mae-audit.md`'s
-"Known exceptions" list (files over the audit's size ceilings that are accepted debt, not audit
-failures). When you add a new tracked exception in one place, add an `@ai-caution:
-[architecture-debt]` marker at the file in question and a pointer in the other two, so a reader
-landing in any one of the three finds the others.
+principles, `ROADMAP.md`'s "Architecture Debt" checklist, and — for size-ceiling debt specifically —
+`docs/AUDIT_BASELINE.json`, the machine-checked accepted-exceptions set. When you add a new tracked
+exception in one place, add an `@ai-caution: [architecture-debt]` marker at the file in question and a
+pointer in the other two, so a reader landing in any one of the three finds the others.
+
+**Never write a line count (or any other measured number) into that prose.** Size-ceiling debt is
+enforced by `tools/audit-metrics` and ratcheted in CI (`make audit-metrics-check`): a new
+over-ceiling file fails, an accepted file that grows past 10% fails, a file that shrinks never fails.
+The baseline holds the numbers; `make audit-metrics-bless` re-accepts them deliberately. This
+replaced a hand-maintained list in `.claude/commands/mae-audit.md` that had drifted badly by 2026-08
+— 14 of 15 tracked sizes stale, one file +96% past its recorded figure, and an untracked backlog
+roughly twice what the prose claimed. The cross-reference *placement* discipline held; the
+*number-freshness* discipline could not, because a moving number cannot live in prose.
+`tools/audit-metrics` also verifies the cross-reference itself, reporting orphaned markers, tracked
+entries with no in-code marker, `@ai-caution`s missing their `[category]`, and crate roots missing
+`@stability`.
 
 ## Development Priorities
 
@@ -606,12 +622,19 @@ mae-daemon doctor                   # run diagnostics
 
 These APIs are intended to remain stable through v1.0:
 
-- **Scheme API:** 190+ registered functions + ~18 variables (see `:help concept:scheme-api`)
+Counts below are approximate by design — `docs/CODE_MAP.json` (regenerated by `make code-map`, CI-gated)
+is the authoritative source for the Scheme and command surfaces. Do not hand-maintain exact figures here.
+
+- **Scheme API:** ~210 editor-facing primitives + ~18 variables (see `:help concept:scheme-api`).
+  This counts `crates/scheme/src/runtime/**` only — the ~310 further `register_fn` calls under
+  `crates/scheme/src/stdlib/**` are R7RS-standard library functions (`string-append`, `vector-ref`, …),
+  specified by the language, not by MAE.
 - **Hooks:** 26 hook points (see `:help concept:hooks`)
-- **MCP tools:** 700+ tools, categorized (core/lsp/dap/kb/execution/shell/ai/commands/git/web/visual/debug/collab)
-  — most are 1:1 command mirrors; see `docs/MODEL_SUPPORT.md` for the exam methodology
-  this scale is validated against
-- **Config options:** 175+ registered, persistable via `:set-save`
+- **MCP tools:** ~770 tools (~210 hand-authored + one generated per registered command), categorized
+  (core/lsp/dap/kb/execution/shell/ai/commands/git/web/visual/debug/collab) — most are 1:1 command mirrors; see
+  `docs/MODEL_SUPPORT.md` for the exam methodology this scale is validated against
+- **Commands:** ~560 registered builtins
+- **Config options:** ~230 registered, persistable via `:set-save`
 
 ## Related Resources
 

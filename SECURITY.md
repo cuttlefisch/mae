@@ -19,11 +19,36 @@ MAE has several security-relevant subsystems. This section documents the current
 
 ### Strong Protections
 
-**Permission tiers** — The AI agent operates under a configurable permission tier. The primary surface is `init.scm` via `(set-option! "permission_tier" …)` (also settable at runtime with `:set permission_tier …` and persisted with `:set-save`); `config.toml` is a narrow legacy bootstrap, and `MAE_AI_PERMISSIONS` env var still works. Tiers are enforced before every tool execution with no bypass vectors:
+**Permission tiers** — The AI agent operates under a configurable permission tier:
 - **readonly** — AI can read buffers and navigate, but cannot modify files
 - **write** — AI can edit buffers and create files
 - **shell** — AI can execute shell commands (default)
 - **privileged** — Full access including configuration changes
+
+> [!WARNING]
+> **The tier is not yet enforced on every path.** A pre-v0.15 audit found that the embedded AI
+> session does not consult the permission policy at all, and that the `write` tier reaches shell
+> effects through the Scheme-eval queue. An earlier revision of this document claimed tiers were
+> "enforced before every tool execution with no bypass vectors" — that claim was wrong and has been
+> removed.
+>
+> **Fixed since that audit:** an unrecognised tier value is now rejected at startup rather than
+> silently falling back to `shell`; a project-local `.mae/init.scm` now requires explicit workspace
+> trust; the `knowledge` tool-category allowlist no longer reaches code execution; and every Scheme
+> primitive now carries a declared tier checked at the interpreter's single dispatch point.
+>
+> **Still open:** that last check has no effect yet, because nothing lowers the ambient tier — the
+> embedded and MCP entry points do not yet carry a policy. Until they do, treat the tier as a
+> guard-rail against accident, **not** as a boundary against a prompt-injected or adversarial model.
+
+**Setting the tier.** Only two surfaces reach the enforced policy:
+- `MAE_AI_PERMISSIONS=readonly|write|shell|privileged` (environment variable), or
+- `auto_approve_tier` in `config.toml`'s `[ai]` section — **lowercase values only**. An unrecognised
+  value is now a startup error naming the bad value and the valid ones, rather than failing open.
+
+The `ai_tier` editor option (`(set-option! "ai_tier" …)` / `:set ai-tier …`) currently changes only the
+status-bar badge and does **not** alter the enforced policy. Earlier revisions of this document referred
+to an option named `permission_tier`; no such option exists.
 
 **Workspace trust** — A project-local `.mae/init.scm` is arbitrary Scheme, and Scheme can spawn processes, so evaluating one is equivalent to running the project's code. MAE evaluates it **only** from a directory listed in `~/.config/mae/trusted-projects` (one absolute path per line; `#` comments allowed). Untrusted directories are skipped with a message naming the file and the line to add. Trust is exact-match: it is deliberately **not** inherited by subdirectories, so trusting a project does not trust a vendored dependency cloned inside it. A missing, unreadable, or malformed trust list trusts nothing.
 
@@ -74,7 +99,7 @@ The legacy v0.6 fallbacks that loaded a bare `init.scm` or `scheme/init.scm` fro
 - **Secrets are never plaintext in config.toml.** `config.toml` is a legacy bootstrap; do not store API keys or the collab PSK in it directly.
 - **API keys:** Use `api_key_command` with a password manager (e.g., `api_key_command = "pass show anthropic/api-key"`), not plaintext `api_key`.
 - **Collab secrets:** Never put `collab_psk` plaintext in config.toml — use `collab_psk_command` (shell to pass/keychain), or preferably `collab_auth_mode = "key"` (Ed25519 trusted-peer mTLS) with the keystore at `$XDG_DATA_HOME/mae/collab/trusted_keys`.
-- **Permission tier:** Set it via `(set-option! "permission_tier" "write")` (or `:set permission_tier write`) unless your workflow requires shell access. Use `"readonly"` for review-only sessions.
+- **Permission tier:** Set it via the `MAE_AI_PERMISSIONS` environment variable (e.g. `MAE_AI_PERMISSIONS=write`), or lowercase `auto_approve_tier` under `[ai]` in `config.toml`. The `ai_tier` editor option does not affect enforcement — see the warning above. Until the tracked advisory is resolved, do not rely on any tier as a boundary against an adversarial or prompt-injected model; run MAE in a container for genuinely untrusted input.
 - **Untrusted files:** Run MAE in a container when opening untrusted org files or working with untrusted AI prompts (see below).
 - **Transcripts:** Review files in `~/.local/share/mae/transcripts/` before sharing or committing them.
 - **MCP access:** The MCP socket is ephemeral (per-process PID). Only grant `mae-mcp-shim` access to tools appropriate for your trust level.

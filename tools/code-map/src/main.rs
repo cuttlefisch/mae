@@ -186,8 +186,34 @@ fn generate_code_map(workspace_root: &Path) -> CodeMap {
     }
 
     // 2. Extract Scheme primitives.
-    let runtime_path = workspace_root.join("crates/scheme/src/runtime.rs");
-    let (scheme_primitives, scheme_globals) = extract_scheme_api(&runtime_path);
+    //
+    // Scan `runtime.rs` AND every `runtime/*.rs` submodule. The 2026-07 split
+    // moved the `register_fn` calls out of the monolithic `runtime.rs` into
+    // per-category submodules; this scanned only the old path and had been
+    // silently reporting ZERO primitives ever since (found 2026-08 — the
+    // generated summary line literally read "0 Scheme primitives" and nothing
+    // flagged it, because an empty extraction looks the same as a clean run).
+    let runtime_dir = workspace_root.join("crates/scheme/src/runtime");
+    let mut scheme_sources = vec![workspace_root.join("crates/scheme/src/runtime.rs")];
+    if let Ok(entries) = fs::read_dir(&runtime_dir) {
+        let mut subs: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "rs"))
+            .collect();
+        subs.sort();
+        scheme_sources.extend(subs);
+    }
+    let mut scheme_primitives = Vec::new();
+    let mut scheme_globals = Vec::new();
+    for path in &scheme_sources {
+        let (prims, globals) = extract_scheme_api(path);
+        scheme_primitives.extend(prims);
+        scheme_globals.extend(globals);
+    }
+    scheme_primitives.sort_by(|a: &SchemePrimitive, b: &SchemePrimitive| a.name.cmp(&b.name));
+    scheme_globals.sort_by(|a: &SchemeGlobal, b: &SchemeGlobal| a.name.cmp(&b.name));
+    scheme_globals.dedup_by(|a, b| a.name == b.name);
 
     // 3. Extract built-in commands.
     let commands_path = workspace_root.join("crates/core/src/commands.rs");
@@ -276,13 +302,24 @@ fn extract_scheme_api(path: &Path) -> (Vec<SchemePrimitive>, Vec<SchemeGlobal>) 
 
     // Match register_fn("name", ...) or register_fn( "name", ...)
     let fn_re = Regex::new(r#"register_fn\s*\(\s*"([^"]+)""#).unwrap();
-    let primitives: Vec<SchemePrimitive> = fn_re
+    let mut primitives: Vec<SchemePrimitive> = fn_re
         .captures_iter(&content)
         .map(|cap| SchemePrimitive {
             name: cap[1].to_string(),
             source: source.clone(),
         })
         .collect();
+
+    // Macro-generated registrations. `register_collab_command_prim!("name", …)`
+    // expands to a `register_fn($name, …)` whose name is a macro parameter, so
+    // the literal-only regex above cannot see it — the 9 `collab-*` primitives
+    // it generates were invisible to this map (and to any audit grepping for
+    // `register_fn("`). Match the invocation instead of the expansion.
+    let macro_re = Regex::new(r#"register_collab_command_prim!\s*\(\s*"([^"]+)""#).unwrap();
+    primitives.extend(macro_re.captures_iter(&content).map(|cap| SchemePrimitive {
+        name: cap[1].to_string(),
+        source: source.clone(),
+    }));
 
     // Match define("*name*", ...) for injected globals.
     let global_re = Regex::new(r#"define\s*\(\s*"\*([^"]+)\*""#).unwrap();

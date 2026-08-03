@@ -25,10 +25,10 @@
 //!
 //! @ai-caution: [architecture-debt] At 3,577 lines, well over the 800-line
 //! ceiling. Not split (design work, not attempted this pass; round-5
-//! tech-debt pass, 2026-07). Tracked in `.claude/commands/mae-audit.md`'s
-//! "Known exceptions" and `ROADMAP.md`'s "Architecture Debt" section —
-//! re-verify the line count each audit pass rather than trusting this
-//! comment's number to stay current.
+//! tech-debt pass, 2026-07). Tracked in `docs/AUDIT_BASELINE.json` (machine-checked)
+//! and `ROADMAP.md`'s "Architecture Debt" section.
+//! The line count is deliberately not repeated here: the baseline holds it
+//! and `make audit-metrics-check` fails if it grows.
 
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};

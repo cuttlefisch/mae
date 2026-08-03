@@ -10,7 +10,7 @@
 // belongs in a sub-struct instead. `runtime_tests.rs` (this file's extracted
 // test module) is also tracked separately and has grown ~32% since it was
 // split out — re-measure both each audit pass. Tracked in
-// .claude/commands/mae-audit.md's "Known exceptions" and ROADMAP.md's
+// `docs/AUDIT_BASELINE.json` (machine-checked) and ROADMAP.md's
 // "Architecture Debt" section; prefer extending an existing `runtime/*.rs`
 // submodule (or adding a new one) over growing this file further.
 

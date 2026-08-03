@@ -1,0 +1,14 @@
+[package]
+name = "mae-audit-metrics"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+syn = { version = "2", features = ["full", "parsing", "visit"] }
+# `span-locations` is what makes `Span::start().line` available on stable when
+# parsing a string (rather than running as a real proc macro) -- that is how
+# every length/nesting metric here gets real line numbers instead of guesses.
+proc-macro2 = { version = "1", features = ["span-locations"] }

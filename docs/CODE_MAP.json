@@ -438,6 +438,10 @@
           "kind": "mod"
         },
         {
+          "name": "scheme_async",
+          "kind": "mod"
+        },
+        {
           "name": "search",
           "kind": "mod"
         },
@@ -1060,6 +1064,10 @@
           "kind": "mod"
         },
         {
+          "name": "permission",
+          "kind": "mod"
+        },
+        {
           "name": "reader",
           "kind": "mod"
         },
@@ -1210,7 +1218,912 @@
       ]
     }
   },
-  "scheme_primitives": [],
+  "scheme_primitives": [
+    {
+      "name": "add-hook!",
+      "source": "scheme/src/runtime/keybindings.rs"
+    },
+    {
+      "name": "add-to-load-path!",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "advice-add!",
+      "source": "scheme/src/runtime/misc_primitives.rs"
+    },
+    {
+      "name": "advice-remove!",
+      "source": "scheme/src/runtime/misc_primitives.rs"
+    },
+    {
+      "name": "agenda-add!",
+      "source": "scheme/src/runtime/shell_agenda.rs"
+    },
+    {
+      "name": "agenda-list",
+      "source": "scheme/src/runtime/shell_agenda.rs"
+    },
+    {
+      "name": "agenda-remove!",
+      "source": "scheme/src/runtime/shell_agenda.rs"
+    },
+    {
+      "name": "ai-tool-param!",
+      "source": "scheme/src/runtime/kb_queries.rs"
+    },
+    {
+      "name": "ai-tool-require!",
+      "source": "scheme/src/runtime/kb_queries.rs"
+    },
+    {
+      "name": "autoload",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "bind-context-keymap",
+      "source": "scheme/src/runtime/keybindings.rs"
+    },
+    {
+      "name": "buffer-apply-update",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "buffer-compute-diff",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "buffer-delete-range",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "buffer-disable-sync",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "buffer-drain-updates",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "buffer-enable-sync",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "buffer-encode-state",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "buffer-encode-state-vector",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "buffer-get-diff",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "buffer-get-reconcile-result",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "buffer-get-state-vector",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "buffer-insert",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "buffer-line",
+      "source": "scheme/src/runtime/state_sync_inject.rs"
+    },
+    {
+      "name": "buffer-load-sync-state",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "buffer-pending-updates",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "buffer-reconcile-to",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "buffer-redo",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "buffer-replace-range",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "buffer-string",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "buffer-sync-content",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "buffer-sync-enabled?",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "buffer-text",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "buffer-text-range",
+      "source": "scheme/src/runtime/state_sync_inject.rs"
+    },
+    {
+      "name": "buffer-undo",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "buffer-undo-boundary",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "check-deprecated",
+      "source": "scheme/src/runtime/misc_primitives.rs"
+    },
+    {
+      "name": "collab-confirmed-shares",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "collab-connect",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "collab-disconnect",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "collab-discover",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "collab-doctor",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "collab-list",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "collab-recover-identity",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "collab-register-recovery-key",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "collab-rotate-identity",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "collab-share",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "collab-status",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "collab-sync",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "collab-synced-buffers",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "command-exists?",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "create-buffer",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "current-buffer-file",
+      "source": "scheme/src/runtime/state_sync_inject.rs"
+    },
+    {
+      "name": "current-buffer-name",
+      "source": "scheme/src/runtime/state_sync_inject.rs"
+    },
+    {
+      "name": "current-column",
+      "source": "scheme/src/runtime/state_sync_inject.rs"
+    },
+    {
+      "name": "current-line-number",
+      "source": "scheme/src/runtime/state_sync_inject.rs"
+    },
+    {
+      "name": "current-mode",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "cursor-goto",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "daemon-available?",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "daemon-status",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "dap-inspect-variable",
+      "source": "scheme/src/runtime/lsp_dap.rs"
+    },
+    {
+      "name": "dap-set-breakpoint",
+      "source": "scheme/src/runtime/lsp_dap.rs"
+    },
+    {
+      "name": "dap-start",
+      "source": "scheme/src/runtime/lsp_dap.rs"
+    },
+    {
+      "name": "debug-state",
+      "source": "scheme/src/runtime/lsp_dap.rs"
+    },
+    {
+      "name": "define-command",
+      "source": "scheme/src/runtime/keybindings.rs"
+    },
+    {
+      "name": "define-kb-node!",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "define-key",
+      "source": "scheme/src/runtime/keybindings.rs"
+    },
+    {
+      "name": "define-keymap",
+      "source": "scheme/src/runtime/keybindings.rs"
+    },
+    {
+      "name": "define-option!",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "deprecate-function!",
+      "source": "scheme/src/runtime/kb_queries.rs"
+    },
+    {
+      "name": "display-buffer-policy",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "execute-ex",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "exit",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "feature-available?",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "featurep",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "feed-keys",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "file-exists?",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "gc-stats",
+      "source": "scheme/src/runtime/keybindings.rs"
+    },
+    {
+      "name": "get-buffer-by-name",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "get-option",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "get-selection",
+      "source": "scheme/src/runtime/state_sync_inject.rs"
+    },
+    {
+      "name": "goto-char",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "kb-add-link!",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-add-member",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-add-meta-member!",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-add-rel-type!",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-agenda",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "kb-approve",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-block-count",
+      "source": "scheme/src/runtime/kb_queries.rs"
+    },
+    {
+      "name": "kb-block-member",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-compose-meta",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-create",
+      "source": "scheme/src/runtime/kb_crud.rs"
+    },
+    {
+      "name": "kb-delete",
+      "source": "scheme/src/runtime/kb_crud.rs"
+    },
+    {
+      "name": "kb-export-subgraph-html",
+      "source": "scheme/src/runtime/kb_export.rs"
+    },
+    {
+      "name": "kb-get",
+      "source": "scheme/src/runtime/kb_crud.rs"
+    },
+    {
+      "name": "kb-get-block",
+      "source": "scheme/src/runtime/kb_queries.rs"
+    },
+    {
+      "name": "kb-graph",
+      "source": "scheme/src/runtime/kb_queries.rs"
+    },
+    {
+      "name": "kb-graph-view-close",
+      "source": "scheme/src/runtime/kb_graph_view.rs"
+    },
+    {
+      "name": "kb-graph-view-navigate",
+      "source": "scheme/src/runtime/kb_graph_view.rs"
+    },
+    {
+      "name": "kb-graph-view-open",
+      "source": "scheme/src/runtime/kb_graph_view.rs"
+    },
+    {
+      "name": "kb-graph-view-refresh",
+      "source": "scheme/src/runtime/kb_graph_view.rs"
+    },
+    {
+      "name": "kb-graph-view-select-current",
+      "source": "scheme/src/runtime/kb_graph_view.rs"
+    },
+    {
+      "name": "kb-graph-view-set-depth",
+      "source": "scheme/src/runtime/kb_graph_view.rs"
+    },
+    {
+      "name": "kb-graph-view-set-pinned",
+      "source": "scheme/src/runtime/kb_graph_view.rs"
+    },
+    {
+      "name": "kb-graph-view-state",
+      "source": "scheme/src/runtime/kb_graph_view.rs"
+    },
+    {
+      "name": "kb-graph-view-toggle-overlay",
+      "source": "scheme/src/runtime/kb_graph_view.rs"
+    },
+    {
+      "name": "kb-graph-view-zoom-to",
+      "source": "scheme/src/runtime/kb_graph_view.rs"
+    },
+    {
+      "name": "kb-history",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "kb-join",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-join-p2p",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-join-ticket",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-leave",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-links-from",
+      "source": "scheme/src/runtime/kb_queries.rs"
+    },
+    {
+      "name": "kb-links-to",
+      "source": "scheme/src/runtime/kb_queries.rs"
+    },
+    {
+      "name": "kb-links-typed",
+      "source": "scheme/src/runtime/kb_queries.rs"
+    },
+    {
+      "name": "kb-list-remote",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-meta-members",
+      "source": "scheme/src/runtime/kb_queries.rs"
+    },
+    {
+      "name": "kb-neighborhood",
+      "source": "scheme/src/runtime/kb_queries.rs"
+    },
+    {
+      "name": "kb-pending",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-preview-dismiss",
+      "source": "scheme/src/runtime/kb_preview.rs"
+    },
+    {
+      "name": "kb-preview-show",
+      "source": "scheme/src/runtime/kb_preview.rs"
+    },
+    {
+      "name": "kb-raw-query",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "kb-register",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-rel-types",
+      "source": "scheme/src/runtime/kb_queries.rs"
+    },
+    {
+      "name": "kb-related",
+      "source": "scheme/src/runtime/kb_queries.rs"
+    },
+    {
+      "name": "kb-remove-link!",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-remove-member",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-remove-meta-member!",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-restore",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "kb-search",
+      "source": "scheme/src/runtime/kb_crud.rs"
+    },
+    {
+      "name": "kb-set-ai-residency",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-set-encryption",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-set-policy",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-set-role",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-share",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-share-p2p",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-sharing-status",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "kb-shortest-path",
+      "source": "scheme/src/runtime/kb_queries.rs"
+    },
+    {
+      "name": "kb-unblock-member",
+      "source": "scheme/src/runtime/kb_primitives.rs"
+    },
+    {
+      "name": "kb-update",
+      "source": "scheme/src/runtime/kb_crud.rs"
+    },
+    {
+      "name": "keymap-bindings",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "kill-buffer-by-name",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "line-beginning-position",
+      "source": "scheme/src/runtime/state_sync_inject.rs"
+    },
+    {
+      "name": "line-end-position",
+      "source": "scheme/src/runtime/state_sync_inject.rs"
+    },
+    {
+      "name": "list-directory",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "load-path",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "lsp-diagnostics",
+      "source": "scheme/src/runtime/lsp_dap.rs"
+    },
+    {
+      "name": "lsp-document-symbols",
+      "source": "scheme/src/runtime/lsp_dap.rs"
+    },
+    {
+      "name": "lsp-result",
+      "source": "scheme/src/runtime/lsp_dap.rs"
+    },
+    {
+      "name": "lsp-workspace-symbol",
+      "source": "scheme/src/runtime/lsp_dap.rs"
+    },
+    {
+      "name": "mae-declare-module!",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "mae-declare-package!",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "mae-declared-modules",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "message",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "messages-buffer-text",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "module-flags",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "module-list",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "module-loaded?",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "module-version",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "open-file",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "point",
+      "source": "scheme/src/runtime/state_sync_inject.rs"
+    },
+    {
+      "name": "point-max",
+      "source": "scheme/src/runtime/state_sync_inject.rs"
+    },
+    {
+      "name": "point-min",
+      "source": "scheme/src/runtime/state_sync_inject.rs"
+    },
+    {
+      "name": "provide-feature",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "read-file",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "recent-files-add!",
+      "source": "scheme/src/runtime/shell_agenda.rs"
+    },
+    {
+      "name": "recent-projects-add!",
+      "source": "scheme/src/runtime/shell_agenda.rs"
+    },
+    {
+      "name": "redo-available?",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "region-active?",
+      "source": "scheme/src/runtime/state_sync_inject.rs"
+    },
+    {
+      "name": "region-beginning",
+      "source": "scheme/src/runtime/state_sync_inject.rs"
+    },
+    {
+      "name": "region-end",
+      "source": "scheme/src/runtime/state_sync_inject.rs"
+    },
+    {
+      "name": "register-ai-tool!",
+      "source": "scheme/src/runtime/kb_queries.rs"
+    },
+    {
+      "name": "register-module!",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "register-splash-art!",
+      "source": "scheme/src/runtime/kb_queries.rs"
+    },
+    {
+      "name": "register-splash-art-image!",
+      "source": "scheme/src/runtime/kb_queries.rs"
+    },
+    {
+      "name": "remove-hook!",
+      "source": "scheme/src/runtime/keybindings.rs"
+    },
+    {
+      "name": "require-feature",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "run-command",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "set-buffer-kind-replaceable!",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "set-display-rule!",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "set-group-name",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "set-local-option!",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "set-option!",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "set-option-save!",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "set-status",
+      "source": "scheme/src/runtime/keybindings.rs"
+    },
+    {
+      "name": "set-theme",
+      "source": "scheme/src/runtime/keybindings.rs"
+    },
+    {
+      "name": "shell-command",
+      "source": "scheme/src/runtime/misc_primitives.rs"
+    },
+    {
+      "name": "shell-cwd",
+      "source": "scheme/src/runtime/state_sync_inject.rs"
+    },
+    {
+      "name": "shell-read-output",
+      "source": "scheme/src/runtime/state_sync_inject.rs"
+    },
+    {
+      "name": "shell-send-input",
+      "source": "scheme/src/runtime/shell_agenda.rs"
+    },
+    {
+      "name": "string-contains?",
+      "source": "scheme/src/runtime/misc_primitives.rs"
+    },
+    {
+      "name": "string-downcase",
+      "source": "scheme/src/runtime/misc_primitives.rs"
+    },
+    {
+      "name": "string-join",
+      "source": "scheme/src/runtime/misc_primitives.rs"
+    },
+    {
+      "name": "string-replace",
+      "source": "scheme/src/runtime/misc_primitives.rs"
+    },
+    {
+      "name": "string-split",
+      "source": "scheme/src/runtime/misc_primitives.rs"
+    },
+    {
+      "name": "string-trim",
+      "source": "scheme/src/runtime/misc_primitives.rs"
+    },
+    {
+      "name": "string-upcase",
+      "source": "scheme/src/runtime/misc_primitives.rs"
+    },
+    {
+      "name": "switch-to-buffer",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "test-buffer-string",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "test-buffer-text",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "test-cursor-col",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "test-cursor-row",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "test-encode-state",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "test-get-buffer-by-name",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "test-get-option",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "test-pending-updates",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "test-region-active?",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "test-region-end",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "test-region-start",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "test-search-forward",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "test-status-message",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "test-sync-content",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "test-sync-enabled?",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "undefine-command!",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "undefine-key!",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "undefine-option!",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "undo-available?",
+      "source": "scheme/src/runtime/state_sync_inject_kb.rs"
+    },
+    {
+      "name": "unload-feature",
+      "source": "scheme/src/runtime/io_packages.rs"
+    },
+    {
+      "name": "visual-buffer-add-circle!",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "visual-buffer-add-line!",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "visual-buffer-add-rect!",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "visual-buffer-add-text!",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "visual-buffer-clear!",
+      "source": "scheme/src/runtime/editor_ops.rs"
+    },
+    {
+      "name": "which-key-entry-count",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "which-key-open?",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    },
+    {
+      "name": "write-file",
+      "source": "scheme/src/runtime/test_primitives.rs"
+    }
+  ],
   "scheme_globals": [],
   "commands": [
     {

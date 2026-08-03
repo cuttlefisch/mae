@@ -17,7 +17,7 @@
 //! ceiling — a candidate for a further domain-grouping split, not attempted
 //! in the 2026-07 pass. Its test module was split into `tests/` (per-feature
 //! files, all under the 500-line ceiling). Tracked in
-//! .claude/commands/mae-audit.md's "Known exceptions" and ROADMAP.md's
+//! `docs/AUDIT_BASELINE.json` (machine-checked) and ROADMAP.md's
 //! "Architecture Debt" section.
 
 mod docs_methods;
