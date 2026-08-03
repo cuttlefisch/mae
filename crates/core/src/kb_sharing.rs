@@ -119,10 +119,28 @@ pub struct SyncState {
 /// Truncate an Ed25519 key fingerprint for display: `SHA256:ab12…cd`
 /// (head + tail of the base64 digest). The full fingerprint stays available in
 /// the structured `fingerprint` field. Non-`SHA256:` inputs pass through.
+///
+/// @ai-caution: [text-index] `fp` is NOT trusted to be ASCII. It reaches this
+/// function straight off the collection CRDT — a hostile peer's join request
+/// carries a self-declared `fingerprint` string (`collab_bridge::mod.rs`'s
+/// pending-request notification path), so a remote peer chooses these bytes.
+/// The head/tail cut is therefore taken in CHARACTERS, never bytes: the former
+/// `&digest[..4]` / `&digest[digest.len() - 4..]` byte slicing panicked the
+/// editor on any multi-byte codepoint straddling those offsets (audit #589.1).
+/// This is a display truncation of untrusted input, not an index-domain bug, so
+/// `grapheme::checked_byte_boundary` (ADR-087's *assert-and-clamp* chokepoint
+/// for offsets that should already be valid) is deliberately not used here.
 pub fn short_fingerprint(fp: &str) -> String {
     if let Some(digest) = fp.strip_prefix("SHA256:") {
-        if digest.len() > 8 {
-            return format!("SHA256:{}…{}", &digest[..4], &digest[digest.len() - 4..]);
+        // `.count()` rather than `.len()`: the threshold must be in the same
+        // unit as the cut, or an 8-byte/4-char digest slices past its own end.
+        if digest.chars().count() > 8 {
+            let head: String = digest.chars().take(4).collect();
+            let tail: String = {
+                let n = digest.chars().count();
+                digest.chars().skip(n - 4).collect()
+            };
+            return format!("SHA256:{head}…{tail}");
         }
     }
     fp.to_string()
