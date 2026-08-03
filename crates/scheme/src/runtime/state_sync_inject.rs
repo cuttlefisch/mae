@@ -16,6 +16,7 @@ use crate::lisp_error::Arity;
 use crate::value::Value;
 
 use super::SchemeRuntime;
+use crate::permission::tier;
 
 impl SchemeRuntime {
     pub fn inject_editor_state(&mut self, editor: &Editor) {
@@ -104,6 +105,7 @@ impl SchemeRuntime {
             "buffer-line",
             "Read a specific line (0-indexed)",
             Arity::Fixed(1),
+            tier::READ,
             move |args: &[Value]| {
                 let n = arg_int(args, 0, "buffer-line")?;
                 Ok(Value::string(
@@ -129,6 +131,7 @@ impl SchemeRuntime {
             "shell-cwd",
             "Return cached CWD for a shell buffer",
             Arity::Fixed(1),
+            tier::READ,
             move |args: &[Value]| {
                 let idx = arg_int(args, 0, "shell-cwd")?;
                 Ok(Value::string(
@@ -145,6 +148,7 @@ impl SchemeRuntime {
             "shell-read-output",
             "Read viewport snapshot",
             Arity::Fixed(2),
+            tier::READ,
             move |args: &[Value]| {
                 let idx = arg_int(args, 0, "shell-read-output")?.max(0) as usize;
                 let max = arg_int(args, 1, "shell-read-output")?.max(1) as usize;
@@ -182,6 +186,7 @@ impl SchemeRuntime {
             "current-buffer-name",
             "Name of current buffer",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::string(buf_name.clone())),
         );
 
@@ -190,6 +195,7 @@ impl SchemeRuntime {
             "current-buffer-file",
             "File path of current buffer",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| match &file_path {
                 Some(p) => Ok(Value::string(p.clone())),
                 None => Ok(Value::Bool(false)),
@@ -201,6 +207,7 @@ impl SchemeRuntime {
             "current-line-number",
             "Current line number (1-indexed)",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Int(line_num)),
         );
 
@@ -209,6 +216,7 @@ impl SchemeRuntime {
             "current-column",
             "Current column",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Int(col)),
         );
 
@@ -217,6 +225,7 @@ impl SchemeRuntime {
             "point",
             "Cursor character offset",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Int(cursor_offset)),
         );
 
@@ -224,6 +233,7 @@ impl SchemeRuntime {
             "point-min",
             "Minimum point",
             Arity::Fixed(0),
+            tier::READ,
             |_args: &[Value]| Ok(Value::Int(0)),
         );
 
@@ -232,6 +242,7 @@ impl SchemeRuntime {
             "point-max",
             "Maximum point",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Int(max_chars)),
         );
 
@@ -241,6 +252,7 @@ impl SchemeRuntime {
             "line-beginning-position",
             "Start of current line",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Int(line_begin)),
         );
 
@@ -253,6 +265,7 @@ impl SchemeRuntime {
             "line-end-position",
             "End of current line",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Int(line_end)),
         );
     }
@@ -271,6 +284,7 @@ impl SchemeRuntime {
             "region-active?",
             "Whether visual selection is active",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Bool(s.lock().region_active)),
         );
 
@@ -279,6 +293,7 @@ impl SchemeRuntime {
             "region-beginning",
             "Start of region",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Int(s.lock().region_start as i64)),
         );
         let s = self.shared.clone();
@@ -286,6 +301,7 @@ impl SchemeRuntime {
             "region-end",
             "End of region",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::Int(s.lock().region_end as i64)),
         );
 
@@ -306,6 +322,7 @@ impl SchemeRuntime {
             "get-selection",
             "Get selected text",
             Arity::Fixed(0),
+            tier::READ,
             move |_args: &[Value]| Ok(Value::string(st.clone())),
         );
 
@@ -321,6 +338,7 @@ impl SchemeRuntime {
             "buffer-text-range",
             "Substring of buffer text",
             Arity::Fixed(2),
+            tier::READ,
             move |args: &[Value]| {
                 let start = arg_int(args, 0, "buffer-text-range")?.max(0) as usize;
                 let end = arg_int(args, 1, "buffer-text-range")?.max(0) as usize;

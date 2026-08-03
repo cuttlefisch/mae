@@ -20,6 +20,7 @@ use crate::value::Value;
 use crate::vm::Vm;
 
 use super::SharedState;
+use crate::permission::tier;
 
 /// Register native KB graph view primitives.
 pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>) {
@@ -28,7 +29,7 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
     vm.register_fn(
         "kb-graph-view-open",
         "Open the native KB graph view, centered on ID (default: whichever KB node the *KB* buffer is currently showing, else the active project's own registered KB instance's default node if one is registered for it, else \"index\"), at DEPTH hops (default: kb_graph_default_depth option). Reuses the existing graph window if already open.",
-        Arity::Variadic(0),
+        Arity::Variadic(0), tier::WRITE,
         move |args: &[Value]| {
             let center = if !args.is_empty() {
                 Some(arg_string(args, 0, "kb-graph-view-open")?)
@@ -53,6 +54,7 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
         "kb-graph-view-close",
         "Close the native KB graph view, if open.",
         Arity::Fixed(0),
+        tier::WRITE,
         move |_args: &[Value]| {
             s.lock()
                 .pending_graph_view_intents
@@ -66,7 +68,7 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
     vm.register_fn(
         "kb-graph-view-refresh",
         "Refresh the native KB graph view in place (same center node/depth, freshly re-extracted data) if it's open. Never re-splits or steals focus.",
-        Arity::Fixed(0),
+        Arity::Fixed(0), tier::WRITE,
         move |_args: &[Value]| {
             s.lock()
                 .pending_graph_view_intents
@@ -81,6 +83,7 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
         "kb-graph-view-set-depth",
         "Change the native KB graph view's hop radius to N and refresh in place.",
         Arity::Fixed(1),
+        tier::WRITE,
         move |args: &[Value]| {
             let depth = arg_int(args, 0, "kb-graph-view-set-depth")? as usize;
             s.lock()
@@ -95,7 +98,7 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
     vm.register_fn(
         "kb-graph-view-navigate",
         "Move the native KB graph view's node selection toward DIR (\"up\"/\"down\"/\"left\"/\"right\").",
-        Arity::Fixed(1),
+        Arity::Fixed(1), tier::WRITE,
         move |args: &[Value]| {
             let dir_str = arg_string(args, 0, "kb-graph-view-navigate")?;
             let dir = mae_core::GraphNavDirection::parse(&dir_str).ok_or_else(|| {
@@ -116,7 +119,7 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
     vm.register_fn(
         "kb-graph-view-select-current",
         "Navigate the graph view's captured companion window (the last non-graph window focused) to the currently-selected node's KB buffer.",
-        Arity::Fixed(0),
+        Arity::Fixed(0), tier::WRITE,
         move |_args: &[Value]| {
             s.lock()
                 .pending_graph_view_intents
@@ -130,7 +133,7 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
     vm.register_fn(
         "kb-graph-view-zoom-to",
         "Set the native KB graph view's zoom to an explicit level (0.1-10.0, clamped) — the AI-appropriate equivalent of the mouse wheel's pixel-focus-based zoom, which has no meaningful non-pointer input. Applies to the focused window if it's showing the graph, else the first window found showing it.",
-        Arity::Fixed(1),
+        Arity::Fixed(1), tier::WRITE,
         move |args: &[Value]| {
             let target = arg_float(args, 0, "kb-graph-view-zoom-to")?;
             s.lock()
@@ -145,7 +148,7 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
     vm.register_fn(
         "kb-graph-view-set-pinned",
         "Pin or unpin a graph node by KB ID — the AI-appropriate equivalent of drag-to-pin, no drag gesture needed. Optionally repositions it to (X Y) in scene coordinates; omit both to leave it wherever it currently is. Reflattens every window showing the graph (shared topology, not per-window state).",
-        Arity::Variadic(2),
+        Arity::Variadic(2), tier::WRITE,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-graph-view-set-pinned")?;
             let pinned = arg_bool(args, 1, "kb-graph-view-set-pinned")?;
@@ -173,7 +176,7 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
     vm.register_fn(
         "kb-graph-view-toggle-overlay",
         "Toggle the native KB graph view between its normal tiled split-window pane and a full-frame modal overlay with a dimmed background, so the graph can be inspected without the tiled pane's size constraints. No-op if no graph view is open.",
-        Arity::Fixed(0),
+        Arity::Fixed(0), tier::WRITE,
         move |_args: &[Value]| {
             s.lock()
                 .pending_graph_view_intents
@@ -208,7 +211,7 @@ pub(super) fn register_kb_graph_view_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedS
     vm.register_fn(
         "kb-graph-view-state",
         "Structured introspection snapshot of the open native KB graph view: which node is hovered, which is selected, every node currently rendered (the ego-network), and every edge/link shown between them. Returns #f if no graph view is open. Returns (center depth kb-instance follow-current? selected-node hovered-node nodes edges mode hidden-cross-instance-link-count diagrams hidden-related-instance-count) — nodes: list of (id title kind x y pinned? selected? hovered? render-tier); edges: list of (source-id target-id boundary? label-or-#f); mode: \"single\"|\"multi\" (#462); diagrams: list of (instance-or-#f name node-count loaded?), one entry per composed KB instance — loaded? (#479, appended as the 4th element, append-only) is #f when a registered KB instance failed to load/open (distinct from a genuinely empty-but-healthy instance, which reports loaded? = #t with node-count 0); render-tier (ADR-068 Phase B4, appended as a node's 9th element, append-only) is \"full\"|\"clustered\"|\"hidden\" — \"full\" unless kb_graph_multi_kb_full_corpus DOI/LOD tiering is active and elided this node into an aggregate stub (\"clustered\") or off-screen entirely (\"hidden\"); hidden-related-instance-count: how many candidate related instances kb_graph_multi_kb_max_related_instances capped away. In \"multi\" mode, nodes/edges appear in CONTIGUOUS per-diagram blocks matching diagrams' order — diagram 0's node-count nodes come first, then diagram 1's, etc. — so a consumer can determine a node's/edge's owning KB instance purely positionally, by walking diagrams' node-counts cumulatively, with no separate per-node/per-edge instance tag needed.",
-        Arity::Fixed(0),
+        Arity::Fixed(0), tier::READ,
         move |_args: &[Value]| {
             let state = s.lock();
             let Some(gv) = state.graph_view_state.as_ref() else {

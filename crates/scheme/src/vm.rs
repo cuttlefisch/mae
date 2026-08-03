@@ -18,6 +18,7 @@ use crate::compiler::{CodeObject, Compiler, MacroDef, Op, UpvalueDesc};
 use crate::env::Env;
 use crate::library::{self, LibraryRegistry};
 use crate::lisp_error::{Arity, LispError};
+use crate::permission::PermissionTier;
 use crate::reader;
 use crate::value::{CallFrame, Closure, Continuation, ForeignFn, Value, Winder};
 
@@ -134,6 +135,15 @@ enum ExceptionHandler {
 }
 
 /// The virtual machine.
+///
+/// @ai-caution: [architecture-debt] One mutable Scheme image is an escalation
+/// channel, and principle #6 (runtime redefinability is sacred) makes it worse:
+/// write-tier Scheme can redefine a procedure that privileged Scheme later
+/// calls, and the per-primitive tier check (ADR-084 D3) does not see that.
+/// PostgreSQL solves the equivalent problem by running trusted and untrusted PL
+/// in *separate interpreter instances* — and still ships a warning that the
+/// mechanism may not hold. MAE does not separate them. Recorded here rather
+/// than silently accepted; see ADR-084 "What this does *not* fix".
 pub struct Vm {
     /// Value stack.
     stack: Vec<Value>,
@@ -176,6 +186,23 @@ pub struct Vm {
     /// Uses `Rc<RefCell<Env>>` so defines during body evaluation are visible
     /// to closures that already captured a reference to this env.
     library_env: Option<Rc<RefCell<Env>>>,
+    /// Permission tier in force for code this VM is currently running
+    /// (ADR-084 D3). Compared against each primitive's declared tier at the
+    /// single site where a `ForeignFn` is invoked.
+    ///
+    /// @ai-caution: [permission] Three invariants make this defensible as
+    /// ambient authority rather than a confused deputy, and all three are
+    /// structural, not conventional:
+    ///   1. It is only ever *lowered*, by [`Vm::with_ambient_tier`], which
+    ///      takes `min(current, requested)` and restores the outer value on
+    ///      the way out. There is no setter that raises it.
+    ///   2. It is never derived from anything the running program says — the
+    ///      host decides it before guest code starts, from the session's
+    ///      policy, not from an argument.
+    ///   3. No Scheme primitive reads or writes it. Exposing one would let
+    ///      evaluated code re-grant itself the authority this field exists to
+    ///      withhold (asserted by `ambient_tier_is_not_reachable_from_scheme`).
+    ambient_tier: PermissionTier,
 }
 
 /// GC observability metrics (Stage 1: Rc-based, monitors for cycle leaks).
@@ -212,6 +239,13 @@ impl Vm {
             last_break_line: None,
             debug_mode: false,
             library_env: None,
+            // A freshly constructed VM is the editor's own runtime, evaluating
+            // the human's `init.scm`, modules and REPL input — that is full
+            // user authority, and lowering it here would break config loading
+            // rather than bound an agent. Guest code (an AI session, an MCP
+            // client) is what must be dropped, at the entry point that knows
+            // whose code is about to run. See `with_ambient_tier`.
+            ambient_tier: PermissionTier::Privileged,
         }
     }
 
@@ -301,8 +335,25 @@ impl Vm {
     }
 
     /// Register a Rust function as a global.
-    pub fn register_fn<F>(&mut self, name: &str, doc: &str, arity: Arity, f: F)
-    where
+    ///
+    /// `tier` is the primitive's ADR-084 D3 allow-list entry: what privilege the
+    /// ambient authority must hold for this primitive to run. It is a **required**
+    /// argument on purpose — an unclassified primitive is a build failure, not a
+    /// silent gap, and a new primitive that spawns a process cannot be added
+    /// without someone typing a tier for it.
+    ///
+    /// @ai-caution: [permission] Do not add a defaulting wrapper (a
+    /// `register_pure_fn`, a `Default` impl, a `..Default::default()`) around
+    /// this. The signature *is* the completeness test; a wrapper that supplies
+    /// the tier for the caller deletes it.
+    pub fn register_fn<F>(
+        &mut self,
+        name: &str,
+        doc: &str,
+        arity: Arity,
+        tier: crate::permission::PrimitiveTier,
+        f: F,
+    ) where
         F: Fn(&[Value]) -> Result<Value, LispError> + 'static,
     {
         let foreign = ForeignFn {
@@ -310,9 +361,57 @@ impl Vm {
             func: Box::new(f),
             arity,
             doc: doc.to_string(),
+            tier,
         };
         self.globals
             .define(name.to_string(), Value::Foreign(Rc::new(foreign)));
+    }
+
+    /// The permission tier currently in force for evaluated code.
+    pub fn ambient_tier(&self) -> PermissionTier {
+        self.ambient_tier
+    }
+
+    /// Run `f` with the ambient tier lowered to `min(current, tier)`, restoring
+    /// the previous value afterwards.
+    ///
+    /// This is the ONLY way the ambient tier changes, and it is monotone
+    /// non-increasing by construction: asking for a *higher* tier than the one
+    /// in force is silently a no-op, not an escalation. A host that wraps guest
+    /// code in this can rely on nested calls never widening what an inner scope
+    /// may do.
+    ///
+    /// @ai-caution: [permission] Do not add a `set_ambient_tier`. The absence of
+    /// a raising setter is what makes this ambient authority auditable — the
+    /// `min` here is the whole guarantee (ADR-084 D3; Hardy 1988 on why the
+    /// ambient "switch hats" fix fails when either direction is reachable).
+    pub fn with_ambient_tier<R>(
+        &mut self,
+        tier: PermissionTier,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let previous = self.lower_ambient_tier(tier);
+        let result = f(self);
+        self.restore_ambient_tier(previous);
+        result
+    }
+
+    /// Lower the ambient tier to `min(current, tier)`, returning the previous
+    /// value for [`Vm::restore_ambient_tier`].
+    ///
+    /// The single implementation of the monotone rule. Crate-private: outside
+    /// this crate the only way to change the tier is the scoped
+    /// `with_ambient_tier`, so a caller cannot forget to restore, and cannot
+    /// hand `restore_ambient_tier` a value it never lowered from.
+    pub(crate) fn lower_ambient_tier(&mut self, tier: PermissionTier) -> PermissionTier {
+        let previous = self.ambient_tier;
+        self.ambient_tier = previous.min(tier);
+        previous
+    }
+
+    /// Restore a tier previously returned by [`Vm::lower_ambient_tier`].
+    pub(crate) fn restore_ambient_tier(&mut self, previous: PermissionTier) {
+        self.ambient_tier = previous;
     }
 
     /// Define a global variable (updates existing if present).
@@ -929,6 +1028,15 @@ impl Vm {
                         if e.is_yield() {
                             return self.convert_yield(e);
                         }
+                        // ADR-084 D5: a tier denial aborts the evaluation. It is
+                        // deliberately not offered to `guard` /
+                        // `with-exception-handler` — a catchable denial is one a
+                        // denied program can retry in a loop, and a program that
+                        // has already mutated buffers and files is better stopped
+                        // than resumed (Garfinkel, NDSS 2003 §4.5).
+                        if e.is_permission_denied() {
+                            return Err(e);
+                        }
                         self.handle_exception(e)?;
                     }
                 }
@@ -937,6 +1045,15 @@ impl Vm {
                     if let Err(e) = self.do_call(argc, true) {
                         if e.is_yield() {
                             return self.convert_yield(e);
+                        }
+                        // ADR-084 D5: a tier denial aborts the evaluation. It is
+                        // deliberately not offered to `guard` /
+                        // `with-exception-handler` — a catchable denial is one a
+                        // denied program can retry in a loop, and a program that
+                        // has already mutated buffers and files is better stopped
+                        // than resumed (Garfinkel, NDSS 2003 §4.5).
+                        if e.is_permission_denied() {
+                            return Err(e);
                         }
                         self.handle_exception(e)?;
                     }
@@ -1132,6 +1249,15 @@ impl Vm {
                     if let Err(e) = self.do_call(argc, false) {
                         if e.is_yield() {
                             return self.convert_yield(e);
+                        }
+                        // ADR-084 D5: a tier denial aborts the evaluation. It is
+                        // deliberately not offered to `guard` /
+                        // `with-exception-handler` — a catchable denial is one a
+                        // denied program can retry in a loop, and a program that
+                        // has already mutated buffers and files is better stopped
+                        // than resumed (Garfinkel, NDSS 2003 §4.5).
+                        if e.is_permission_denied() {
+                            return Err(e);
                         }
                         self.handle_exception(e)?;
                     }
@@ -1344,6 +1470,37 @@ impl Vm {
             }
 
             Value::Foreign(ff) => {
+                // ADR-084 D3: the chokepoint. This is the single site where any
+                // `ForeignFn` is ever invoked, which is why the check lives here
+                // and not at ~516 call sites (Saltzer & Schroeder: complete
+                // mediation without multiplying the decision logic).
+                //
+                // Absence — not binding a privileged primitive at a lower tier —
+                // is NOT sufficient on its own: Scheme procedures are
+                // first-class, so a `Value::Foreign` captured into a shared
+                // global outlives an environment swap and stays callable. The
+                // ambient check is what makes the captured reference useless.
+                //
+                // Deliberately ahead of the arity check: refusal must not depend
+                // on the shape of the call, so a denied primitive answers the
+                // same way whatever it is passed — and so an audit can probe
+                // every registered primitive uniformly without executing any of
+                // the permitted ones.
+                //
+                // @ai-caution: [permission] Exhaustive by construction — the
+                // `match` in `PrimitiveTier::required()` has no `_` arm, so a new
+                // classification variant fails the build here rather than
+                // silently falling through to "allowed".
+                if let Some(required) = ff.tier.required() {
+                    if self.ambient_tier < required {
+                        self.stack.truncate(fn_pos);
+                        return Err(LispError::permission_denied(
+                            &ff.name,
+                            required,
+                            self.ambient_tier,
+                        ));
+                    }
+                }
                 // Check arity before calling
                 match &ff.arity {
                     Arity::Fixed(n) if argc != *n => {
@@ -1750,6 +1907,7 @@ use crate::lisp_error::SourceLocation;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::permission::tier;
 
     fn eval(code: &str) -> Value {
         let mut vm = Vm::new();
@@ -1765,7 +1923,7 @@ mod tests {
 
     /// Register minimal builtins for testing.
     fn register_builtins(vm: &mut Vm) {
-        vm.register_fn("+", "Add numbers", Arity::Variadic(0), |args| {
+        vm.register_fn("+", "Add numbers", Arity::Variadic(0), tier::PURE, |args| {
             let mut sum = 0i64;
             let mut is_float = false;
             let mut fsum = 0.0f64;
@@ -1795,67 +1953,85 @@ mod tests {
             }
         });
 
-        vm.register_fn("-", "Subtract numbers", Arity::Variadic(1), |args| {
-            if args.len() == 1 {
-                return match &args[0] {
-                    Value::Int(n) => Ok(Value::Int(-n)),
-                    Value::Float(n) => Ok(Value::Float(-n)),
-                    _ => Err(LispError::type_error("number", args[0].type_name())),
-                };
-            }
-            let first = args[0].as_float()?;
-            let mut result = first;
-            for arg in &args[1..] {
-                result -= arg.as_float()?;
-            }
-            if args.iter().all(|a| matches!(a, Value::Int(_))) {
-                Ok(Value::Int(result as i64))
-            } else {
-                Ok(Value::Float(result))
-            }
-        });
-
-        vm.register_fn("*", "Multiply numbers", Arity::Variadic(0), |args| {
-            let mut product = 1i64;
-            let mut is_float = false;
-            let mut fproduct = 1.0f64;
-            for arg in args {
-                match arg {
-                    Value::Int(n) => {
-                        if is_float {
-                            fproduct *= *n as f64;
-                        } else {
-                            product *= n;
-                        }
-                    }
-                    Value::Float(n) => {
-                        if !is_float {
-                            fproduct = product as f64;
-                            is_float = true;
-                        }
-                        fproduct *= n;
-                    }
-                    _ => return Err(LispError::type_error("number", arg.type_name())),
+        vm.register_fn(
+            "-",
+            "Subtract numbers",
+            Arity::Variadic(1),
+            tier::PURE,
+            |args| {
+                if args.len() == 1 {
+                    return match &args[0] {
+                        Value::Int(n) => Ok(Value::Int(-n)),
+                        Value::Float(n) => Ok(Value::Float(-n)),
+                        _ => Err(LispError::type_error("number", args[0].type_name())),
+                    };
                 }
-            }
-            if is_float {
-                Ok(Value::Float(fproduct))
-            } else {
-                Ok(Value::Int(product))
-            }
-        });
-
-        vm.register_fn("=", "Numeric equality", Arity::Variadic(2), |args| {
-            let first = args[0].as_float()?;
-            for arg in &args[1..] {
-                if arg.as_float()? != first {
-                    return Ok(Value::Bool(false));
+                let first = args[0].as_float()?;
+                let mut result = first;
+                for arg in &args[1..] {
+                    result -= arg.as_float()?;
                 }
-            }
-            Ok(Value::Bool(true))
-        });
+                if args.iter().all(|a| matches!(a, Value::Int(_))) {
+                    Ok(Value::Int(result as i64))
+                } else {
+                    Ok(Value::Float(result))
+                }
+            },
+        );
 
-        vm.register_fn("<", "Less than", Arity::Variadic(2), |args| {
+        vm.register_fn(
+            "*",
+            "Multiply numbers",
+            Arity::Variadic(0),
+            tier::PURE,
+            |args| {
+                let mut product = 1i64;
+                let mut is_float = false;
+                let mut fproduct = 1.0f64;
+                for arg in args {
+                    match arg {
+                        Value::Int(n) => {
+                            if is_float {
+                                fproduct *= *n as f64;
+                            } else {
+                                product *= n;
+                            }
+                        }
+                        Value::Float(n) => {
+                            if !is_float {
+                                fproduct = product as f64;
+                                is_float = true;
+                            }
+                            fproduct *= n;
+                        }
+                        _ => return Err(LispError::type_error("number", arg.type_name())),
+                    }
+                }
+                if is_float {
+                    Ok(Value::Float(fproduct))
+                } else {
+                    Ok(Value::Int(product))
+                }
+            },
+        );
+
+        vm.register_fn(
+            "=",
+            "Numeric equality",
+            Arity::Variadic(2),
+            tier::PURE,
+            |args| {
+                let first = args[0].as_float()?;
+                for arg in &args[1..] {
+                    if arg.as_float()? != first {
+                        return Ok(Value::Bool(false));
+                    }
+                }
+                Ok(Value::Bool(true))
+            },
+        );
+
+        vm.register_fn("<", "Less than", Arity::Variadic(2), tier::PURE, |args| {
             for w in args.windows(2) {
                 if w[0].as_float()? >= w[1].as_float()? {
                     return Ok(Value::Bool(false));
@@ -1864,97 +2040,166 @@ mod tests {
             Ok(Value::Bool(true))
         });
 
-        vm.register_fn(">", "Greater than", Arity::Variadic(2), |args| {
-            for w in args.windows(2) {
-                if w[0].as_float()? <= w[1].as_float()? {
-                    return Ok(Value::Bool(false));
+        vm.register_fn(
+            ">",
+            "Greater than",
+            Arity::Variadic(2),
+            tier::PURE,
+            |args| {
+                for w in args.windows(2) {
+                    if w[0].as_float()? <= w[1].as_float()? {
+                        return Ok(Value::Bool(false));
+                    }
                 }
-            }
-            Ok(Value::Bool(true))
-        });
+                Ok(Value::Bool(true))
+            },
+        );
 
-        vm.register_fn("<=", "Less or equal", Arity::Variadic(2), |args| {
-            for w in args.windows(2) {
-                if w[0].as_float()? > w[1].as_float()? {
-                    return Ok(Value::Bool(false));
+        vm.register_fn(
+            "<=",
+            "Less or equal",
+            Arity::Variadic(2),
+            tier::PURE,
+            |args| {
+                for w in args.windows(2) {
+                    if w[0].as_float()? > w[1].as_float()? {
+                        return Ok(Value::Bool(false));
+                    }
                 }
-            }
-            Ok(Value::Bool(true))
-        });
+                Ok(Value::Bool(true))
+            },
+        );
 
-        vm.register_fn(">=", "Greater or equal", Arity::Variadic(2), |args| {
-            for w in args.windows(2) {
-                if w[0].as_float()? < w[1].as_float()? {
-                    return Ok(Value::Bool(false));
+        vm.register_fn(
+            ">=",
+            "Greater or equal",
+            Arity::Variadic(2),
+            tier::PURE,
+            |args| {
+                for w in args.windows(2) {
+                    if w[0].as_float()? < w[1].as_float()? {
+                        return Ok(Value::Bool(false));
+                    }
                 }
-            }
-            Ok(Value::Bool(true))
-        });
+                Ok(Value::Bool(true))
+            },
+        );
 
-        vm.register_fn("not", "Boolean not", Arity::Fixed(1), |args| {
+        vm.register_fn("not", "Boolean not", Arity::Fixed(1), tier::PURE, |args| {
             Ok(Value::Bool(!args[0].is_true()))
         });
 
-        vm.register_fn("cons", "Construct pair", Arity::Fixed(2), |args| {
-            Ok(Value::cons(args[0].clone(), args[1].clone()))
+        vm.register_fn(
+            "cons",
+            "Construct pair",
+            Arity::Fixed(2),
+            tier::PURE,
+            |args| Ok(Value::cons(args[0].clone(), args[1].clone())),
+        );
+
+        vm.register_fn(
+            "car",
+            "First of pair",
+            Arity::Fixed(1),
+            tier::PURE,
+            |args| args[0].car(),
+        );
+
+        vm.register_fn("cdr", "Rest of pair", Arity::Fixed(1), tier::PURE, |args| {
+            args[0].cdr()
         });
 
-        vm.register_fn("car", "First of pair", Arity::Fixed(1), |args| {
-            args[0].car()
-        });
-
-        vm.register_fn("cdr", "Rest of pair", Arity::Fixed(1), |args| args[0].cdr());
-
-        vm.register_fn("null?", "Is null?", Arity::Fixed(1), |args| {
+        vm.register_fn("null?", "Is null?", Arity::Fixed(1), tier::PURE, |args| {
             Ok(Value::Bool(args[0].is_null()))
         });
 
-        vm.register_fn("pair?", "Is pair?", Arity::Fixed(1), |args| {
+        vm.register_fn("pair?", "Is pair?", Arity::Fixed(1), tier::PURE, |args| {
             Ok(Value::Bool(args[0].is_pair()))
         });
 
-        vm.register_fn("list", "Construct list", Arity::Variadic(0), |args| {
-            Ok(Value::list(args.iter().cloned()))
-        });
+        vm.register_fn(
+            "list",
+            "Construct list",
+            Arity::Variadic(0),
+            tier::PURE,
+            |args| Ok(Value::list(args.iter().cloned())),
+        );
 
-        vm.register_fn("display", "Display value", Arity::Fixed(1), |args| {
-            print!("{}", crate::value::display_value(&args[0]));
-            Ok(Value::Void)
-        });
+        vm.register_fn(
+            "display",
+            "Display value",
+            Arity::Fixed(1),
+            tier::PURE,
+            |args| {
+                print!("{}", crate::value::display_value(&args[0]));
+                Ok(Value::Void)
+            },
+        );
 
-        vm.register_fn("newline", "Print newline", Arity::Fixed(0), |_| {
-            println!();
-            Ok(Value::Void)
-        });
+        vm.register_fn(
+            "newline",
+            "Print newline",
+            Arity::Fixed(0),
+            tier::PURE,
+            |_| {
+                println!();
+                Ok(Value::Void)
+            },
+        );
 
-        vm.register_fn("eq?", "Identity equality", Arity::Fixed(2), |args| {
-            Ok(Value::Bool(args[0] == args[1]))
-        });
+        vm.register_fn(
+            "eq?",
+            "Identity equality",
+            Arity::Fixed(2),
+            tier::PURE,
+            |args| Ok(Value::Bool(args[0] == args[1])),
+        );
 
-        vm.register_fn("number?", "Is number?", Arity::Fixed(1), |args| {
-            Ok(Value::Bool(args[0].is_number()))
-        });
+        vm.register_fn(
+            "number?",
+            "Is number?",
+            Arity::Fixed(1),
+            tier::PURE,
+            |args| Ok(Value::Bool(args[0].is_number())),
+        );
 
-        vm.register_fn("string?", "Is string?", Arity::Fixed(1), |args| {
-            Ok(Value::Bool(args[0].is_string()))
-        });
+        vm.register_fn(
+            "string?",
+            "Is string?",
+            Arity::Fixed(1),
+            tier::PURE,
+            |args| Ok(Value::Bool(args[0].is_string())),
+        );
 
-        vm.register_fn("symbol?", "Is symbol?", Arity::Fixed(1), |args| {
-            Ok(Value::Bool(args[0].is_symbol()))
-        });
+        vm.register_fn(
+            "symbol?",
+            "Is symbol?",
+            Arity::Fixed(1),
+            tier::PURE,
+            |args| Ok(Value::Bool(args[0].is_symbol())),
+        );
 
-        vm.register_fn("procedure?", "Is procedure?", Arity::Fixed(1), |args| {
-            Ok(Value::Bool(args[0].is_procedure()))
-        });
+        vm.register_fn(
+            "procedure?",
+            "Is procedure?",
+            Arity::Fixed(1),
+            tier::PURE,
+            |args| Ok(Value::Bool(args[0].is_procedure())),
+        );
 
-        vm.register_fn("boolean?", "Is boolean?", Arity::Fixed(1), |args| {
-            Ok(Value::Bool(matches!(args[0], Value::Bool(_))))
-        });
+        vm.register_fn(
+            "boolean?",
+            "Is boolean?",
+            Arity::Fixed(1),
+            tier::PURE,
+            |args| Ok(Value::Bool(matches!(args[0], Value::Bool(_)))),
+        );
 
         vm.register_fn(
             "apply",
             "Apply function to args",
             Arity::Variadic(2),
+            tier::PURE,
             |_args| {
                 // (apply f arg1 ... args-list)
                 // Not fully implementable as a foreign fn since it needs the VM.
@@ -1965,15 +2210,21 @@ mod tests {
             },
         );
 
-        vm.register_fn("error", "Raise an error", Arity::Variadic(1), |args| {
-            let msg = if args[0].is_string() {
-                args[0].as_str().unwrap().to_string()
-            } else {
-                format!("{}", args[0])
-            };
-            let irritants: Vec<String> = args[1..].iter().map(|a| format!("{a}")).collect();
-            Err(LispError::user(msg, irritants))
-        });
+        vm.register_fn(
+            "error",
+            "Raise an error",
+            Arity::Variadic(1),
+            tier::PURE,
+            |args| {
+                let msg = if args[0].is_string() {
+                    args[0].as_str().unwrap().to_string()
+                } else {
+                    format!("{}", args[0])
+                };
+                let irritants: Vec<String> = args[1..].iter().map(|a| format!("{a}")).collect();
+                Err(LispError::user(msg, irritants))
+            },
+        );
     }
 
     // --- Basic expressions ---
@@ -2422,7 +2673,7 @@ mod tests {
     fn yield_sleep_from_foreign_fn() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), tier::PURE, |args| {
             let ms = args[0].as_int().unwrap_or(0) as u64;
             Err(LispError::yield_sleep(Duration::from_millis(ms)))
         });
@@ -2435,7 +2686,7 @@ mod tests {
     fn yield_eval_yielding_returns_yield() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), tier::PURE, |args| {
             let ms = args[0].as_int().unwrap_or(0) as u64;
             Err(LispError::yield_sleep(Duration::from_millis(ms)))
         });
@@ -2452,7 +2703,7 @@ mod tests {
     fn yield_resume_continues_execution() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), tier::PURE, |args| {
             let ms = args[0].as_int().unwrap_or(0) as u64;
             Err(LispError::yield_sleep(Duration::from_millis(ms)))
         });
@@ -2475,7 +2726,7 @@ mod tests {
     fn yield_multiple_yields_in_sequence() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), tier::PURE, |args| {
             let ms = args[0].as_int().unwrap_or(0) as u64;
             Err(LispError::yield_sleep(Duration::from_millis(ms)))
         });
@@ -2496,7 +2747,7 @@ mod tests {
     fn yield_in_loop() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |args| {
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), tier::PURE, |args| {
             let ms = args[0].as_int().unwrap_or(0) as u64;
             Err(LispError::yield_sleep(Duration::from_millis(ms)))
         });
@@ -2531,7 +2782,7 @@ mod tests {
     fn yield_resume_value_visible_to_scheme() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |_| {
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), tier::PURE, |_| {
             Err(LispError::yield_sleep(Duration::from_millis(1)))
         });
         // The resume value is the result of the yielding call
@@ -2553,16 +2804,22 @@ mod tests {
     fn yield_wait_for_file() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-wait-file", "test", Arity::Fixed(2), |args| {
-            let path = args[0]
-                .as_str()
-                .map_err(|_| LispError::type_error("string", ""))?;
-            let ms = args[1].as_int().unwrap_or(1000) as u64;
-            Err(LispError::yield_wait_for_file(
-                std::path::PathBuf::from(path),
-                Duration::from_millis(ms),
-            ))
-        });
+        vm.register_fn(
+            "test-wait-file",
+            "test",
+            Arity::Fixed(2),
+            tier::READ,
+            |args| {
+                let path = args[0]
+                    .as_str()
+                    .map_err(|_| LispError::type_error("string", ""))?;
+                let ms = args[1].as_int().unwrap_or(1000) as u64;
+                Err(LispError::yield_wait_for_file(
+                    std::path::PathBuf::from(path),
+                    Duration::from_millis(ms),
+                ))
+            },
+        );
         let r = vm
             .eval_yielding(r#"(test-wait-file "/tmp/test.txt" 5000)"#)
             .unwrap();
@@ -2602,7 +2859,7 @@ mod tests {
     fn yield_error_from_foreign_fn_propagates() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-err", "test", Arity::Fixed(0), |_| {
+        vm.register_fn("test-err", "test", Arity::Fixed(0), tier::PURE, |_| {
             Err(LispError::user("test error", vec![]))
         });
         let r = vm.eval_yielding("(test-err)");
@@ -2614,7 +2871,7 @@ mod tests {
     fn yield_guard_does_not_catch_yields() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |_| {
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), tier::PURE, |_| {
             Err(LispError::yield_sleep(Duration::from_millis(1)))
         });
         // Guard should NOT catch yield errors — they must pass through
@@ -2635,7 +2892,7 @@ mod tests {
     fn yield_blocking_eval_handles_sleep() {
         let mut vm = Vm::new();
         register_builtins(&mut vm);
-        vm.register_fn("test-sleep", "test", Arity::Fixed(1), |_| {
+        vm.register_fn("test-sleep", "test", Arity::Fixed(1), tier::PURE, |_| {
             Err(LispError::yield_sleep(Duration::from_millis(1)))
         });
         // Regular eval() blocks on yields

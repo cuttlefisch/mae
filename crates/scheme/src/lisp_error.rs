@@ -114,6 +114,25 @@ pub enum ErrorKind {
     /// The VM catches this and returns `EvalResult::Yield` to the host.
     /// Not a real error — it's a cooperative suspension point.
     Yield(YieldReason),
+
+    /// A primitive was refused because the ambient permission tier is below
+    /// the tier the primitive declares (ADR-084 D3).
+    ///
+    /// @ai-caution: [permission] This variant is deliberately NOT routed
+    /// through the Scheme exception handlers. ADR-084 D5: a tier denial
+    /// aborts the evaluation rather than returning an ignorable error,
+    /// because a denied program has typically already mutated buffers and
+    /// files and continuing is worse than stopping (Garfinkel, NDSS 2003
+    /// §4.5). If you make this catchable by `guard`, a denied script can
+    /// simply retry in a loop and the denial stops being a boundary.
+    PermissionDenied {
+        /// Name of the primitive that was refused.
+        primitive: String,
+        /// Tier the primitive declares.
+        required: mae_ai::types::PermissionTier,
+        /// Tier that was in force at the time of the call.
+        ambient: mae_ai::types::PermissionTier,
+    },
 }
 
 /// Why a foreign function wants to yield control to the host.
@@ -304,6 +323,30 @@ impl LispError {
         matches!(self.kind, ErrorKind::Yield(_))
     }
 
+    /// Construct a tier denial for `primitive` (ADR-084 D3).
+    pub fn permission_denied(
+        primitive: impl Into<String>,
+        required: mae_ai::types::PermissionTier,
+        ambient: mae_ai::types::PermissionTier,
+    ) -> Self {
+        LispError {
+            kind: ErrorKind::PermissionDenied {
+                primitive: primitive.into(),
+                required,
+                ambient,
+            },
+            location: None,
+            stack_trace: Vec::new(),
+            error_value: None,
+        }
+    }
+
+    /// Whether this is a tier denial, which must abort the evaluation instead
+    /// of being dispatched to Scheme exception handlers (ADR-084 D5).
+    pub fn is_permission_denied(&self) -> bool {
+        matches!(self.kind, ErrorKind::PermissionDenied { .. })
+    }
+
     /// Attach a source location to this error.
     pub fn at(mut self, loc: SourceLocation) -> Self {
         self.location = Some(loc);
@@ -345,6 +388,21 @@ impl LispError {
             ErrorKind::DivisionByZero => "division by zero".to_string(),
             ErrorKind::Immutable { what } => format!("attempt to mutate immutable {what}"),
             ErrorKind::Internal(msg) => format!("internal error: {msg}"),
+            ErrorKind::PermissionDenied {
+                primitive,
+                required,
+                ambient,
+            } => {
+                // ADR-084 "Negative / Risks": the error must say plainly which
+                // tier was required and which was in force, or a legitimate
+                // refusal reads as a malfunction.
+                format!(
+                    "permission denied: ({primitive}) requires the {} tier, \
+                     but this session is running at {}",
+                    required.config_name(),
+                    ambient.config_name()
+                )
+            }
             ErrorKind::Yield(reason) => match reason {
                 YieldReason::Sleep(d) => format!("yield: sleep {}ms", d.as_millis()),
                 YieldReason::WaitForFile(p, t) => {

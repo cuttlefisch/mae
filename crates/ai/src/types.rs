@@ -18,6 +18,29 @@ pub enum PermissionTier {
     Privileged,
 }
 
+impl PermissionTier {
+    /// The canonical config spelling of this tier — the one
+    /// `mae::config::parse_permission_tier` round-trips and the one a denial
+    /// message should name, so a user can paste it straight back into
+    /// `ai_tier` without guessing.
+    ///
+    /// The legacy aliases (`standard`/`trusted`/`full`) are still accepted on
+    /// input and still used by `ai_permissions`' human-readable help text;
+    /// they are deliberately not produced here.
+    ///
+    /// @ai-caution: [permission] Exhaustive by construction — no `_` arm, so a
+    /// new tier variant breaks the build rather than acquiring a name by
+    /// default (ADR-084 D3).
+    pub fn config_name(self) -> &'static str {
+        match self {
+            PermissionTier::ReadOnly => "readonly",
+            PermissionTier::Write => "write",
+            PermissionTier::Shell => "shell",
+            PermissionTier::Privileged => "privileged",
+        }
+    }
+}
+
 /// A tool definition sent to the LLM provider.
 /// Format is provider-agnostic — serialized into Claude/OpenAI format by each provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]

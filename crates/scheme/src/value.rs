@@ -318,17 +318,26 @@ impl fmt::Debug for Port {
 
 /// A Rust function callable from Scheme.
 /// Returns Result for proper error propagation as Scheme exceptions.
+///
+/// @ai-caution: [permission] `tier` is the ADR-084 D3 allow-list entry for this
+/// primitive. It is checked at the single site where any `ForeignFn` is ever
+/// invoked (`SchemeVm::do_call`). A `ForeignFn` may only be constructed through
+/// `SchemeVm::register_fn`, which takes the tier as a required argument — do not
+/// add a constructor that defaults it, or unclassified primitives become
+/// possible again.
 pub struct ForeignFn {
     pub name: String,
     #[allow(clippy::type_complexity)]
     pub func: Box<dyn Fn(&[Value]) -> Result<Value, LispError>>,
     pub arity: Arity,
     pub doc: String,
+    /// Privilege this primitive requires. See [`crate::permission`].
+    pub tier: crate::permission::PrimitiveTier,
 }
 
 impl fmt::Debug for ForeignFn {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "<foreign {}>", self.name)
+        write!(f, "<foreign {} [{}]>", self.name, self.tier.label())
     }
 }
 

@@ -51,6 +51,7 @@ pub fn register_all(_vm: &mut Vm, _shared: &Arc<Mutex<SharedState>>) {
 mod tests {
     use super::*;
     use mae_scheme::lisp_error::Arity;
+    use mae_scheme::permission::tier;
     use mae_scheme::value::Value;
 
     /// Compile-time-only assertion that `register_all` genuinely has the
@@ -76,6 +77,7 @@ mod tests {
             "extra-kernel-crate-test-primitive",
             "Validation-only primitive proving the extension point works end to end",
             Arity::Fixed(0),
+            tier::PURE,
             move |_args: &[Value]| {
                 let has_store = shared_for_closure.lock().kb_store().is_some();
                 Ok(Value::Bool(has_store))

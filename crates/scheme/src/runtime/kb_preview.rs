@@ -19,6 +19,7 @@ use crate::value::Value;
 use crate::vm::Vm;
 
 use super::SharedState;
+use crate::permission::tier;
 
 /// Register KB-link hover preview primitives.
 pub(super) fn register_kb_preview_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>) {
@@ -27,7 +28,7 @@ pub(super) fn register_kb_preview_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
     vm.register_fn(
         "kb-preview-show",
         "Show the KB-link hover preview popup for ID, anchored at the current cursor position. Scoped to KB-view-mode buffers; ID does not need to be the target of a link under the cursor.",
-        Arity::Fixed(1),
+        Arity::Fixed(1), tier::WRITE,
         move |args: &[Value]| {
             let id = arg_string(args, 0, "kb-preview-show")?;
             s.lock()
@@ -43,6 +44,7 @@ pub(super) fn register_kb_preview_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
         "kb-preview-dismiss",
         "Dismiss the KB-link hover preview popup, if showing.",
         Arity::Fixed(0),
+        tier::WRITE,
         move |_args: &[Value]| {
             s.lock()
                 .pending_kb_preview_intents

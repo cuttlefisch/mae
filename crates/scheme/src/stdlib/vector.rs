@@ -4,6 +4,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::lisp_error::{Arity, LispError};
+use crate::permission::tier;
 use crate::value::Value;
 use crate::vm::Vm;
 
@@ -17,6 +18,7 @@ fn register_vectors(vm: &mut Vm) {
         "make-vector",
         "Create vector of k elements",
         Arity::Variadic(1),
+        tier::PURE,
         |args| {
             let k = args[0].as_int()? as usize;
             let fill = if args.len() > 1 {
@@ -32,6 +34,7 @@ fn register_vectors(vm: &mut Vm) {
         "vector",
         "Create vector from arguments",
         Arity::Variadic(0),
+        tier::PURE,
         |args| Ok(Value::vector(args.to_vec())),
     );
 
@@ -39,6 +42,7 @@ fn register_vectors(vm: &mut Vm) {
         "vector-length",
         "Length of vector",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Vector(v) => Ok(Value::Int(v.borrow().len() as i64)),
             _ => Err(LispError::type_error("vector", format!("{}", args[0]))),
@@ -49,6 +53,7 @@ fn register_vectors(vm: &mut Vm) {
         "vector-ref",
         "Element at index",
         Arity::Fixed(2),
+        tier::PURE,
         |args| match &args[0] {
             Value::Vector(v) => {
                 let k = args[1].as_int()? as usize;
@@ -65,6 +70,7 @@ fn register_vectors(vm: &mut Vm) {
         "vector-set!",
         "Set element at index",
         Arity::Fixed(3),
+        tier::PURE,
         |args| match &args[0] {
             Value::Vector(v) => {
                 let k = args[1].as_int()? as usize;
@@ -83,6 +89,7 @@ fn register_vectors(vm: &mut Vm) {
         "vector->list",
         "Convert vector to list",
         Arity::Variadic(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Vector(v) => {
                 let vec = v.borrow();
@@ -106,6 +113,7 @@ fn register_vectors(vm: &mut Vm) {
         "list->vector",
         "Convert list to vector",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let v = args[0].to_vec()?;
             Ok(Value::vector(v))
@@ -116,6 +124,7 @@ fn register_vectors(vm: &mut Vm) {
         "vector-fill!",
         "Fill vector with value",
         Arity::Fixed(2),
+        tier::PURE,
         |args| match &args[0] {
             Value::Vector(v) => {
                 let fill = args[1].clone();
@@ -133,6 +142,7 @@ fn register_vectors(vm: &mut Vm) {
         "vector-copy",
         "Copy vector",
         Arity::Variadic(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Vector(v) => {
                 let vec = v.borrow();
@@ -156,6 +166,7 @@ fn register_vectors(vm: &mut Vm) {
         "vector-append",
         "Concatenate vectors",
         Arity::Variadic(0),
+        tier::PURE,
         |args| {
             let mut result = Vec::new();
             for a in args {
@@ -173,6 +184,7 @@ fn register_vectors(vm: &mut Vm) {
         "vector-copy!",
         "Copy elements into vector",
         Arity::Variadic(3),
+        tier::PURE,
         |args| {
             let to = match &args[0] {
                 Value::Vector(v) => v.clone(),
@@ -208,6 +220,7 @@ fn register_vectors(vm: &mut Vm) {
         "vector->string",
         "Convert char vector to string",
         Arity::Variadic(1),
+        tier::PURE,
         |args| {
             let v = match &args[0] {
                 Value::Vector(v) => v.borrow().clone(),
@@ -232,6 +245,7 @@ fn register_vectors(vm: &mut Vm) {
         "string->vector",
         "Convert string to char vector",
         Arity::Variadic(1),
+        tier::PURE,
         |args| {
             let s = args[0].as_str()?;
             let start = if args.len() > 1 {
@@ -256,6 +270,7 @@ fn register_bytevectors(vm: &mut Vm) {
         "make-bytevector",
         "Create bytevector of k bytes",
         Arity::Variadic(1),
+        tier::PURE,
         |args| {
             let k = args[0].as_int()? as usize;
             let fill = if args.len() > 1 {
@@ -271,6 +286,7 @@ fn register_bytevectors(vm: &mut Vm) {
         "bytevector",
         "Create bytevector from bytes",
         Arity::Variadic(0),
+        tier::PURE,
         |args| {
             let mut bytes = Vec::with_capacity(args.len());
             for a in args {
@@ -284,6 +300,7 @@ fn register_bytevectors(vm: &mut Vm) {
         "bytevector-length",
         "Length of bytevector",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Bytevector(bv) => Ok(Value::Int(bv.borrow().len() as i64)),
             _ => Err(LispError::type_error("bytevector", format!("{}", args[0]))),
@@ -294,6 +311,7 @@ fn register_bytevectors(vm: &mut Vm) {
         "bytevector-u8-ref",
         "Byte at index",
         Arity::Fixed(2),
+        tier::PURE,
         |args| match &args[0] {
             Value::Bytevector(bv) => {
                 let k = args[1].as_int()? as usize;
@@ -310,6 +328,7 @@ fn register_bytevectors(vm: &mut Vm) {
         "bytevector-u8-set!",
         "Set byte at index",
         Arity::Fixed(3),
+        tier::PURE,
         |args| match &args[0] {
             Value::Bytevector(bv) => {
                 let k = args[1].as_int()? as usize;
@@ -332,6 +351,7 @@ fn register_bytevectors(vm: &mut Vm) {
         "bytevector-copy",
         "Copy bytevector",
         Arity::Variadic(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Bytevector(bv) => {
                 let vec = bv.borrow();
@@ -355,6 +375,7 @@ fn register_bytevectors(vm: &mut Vm) {
         "bytevector-append",
         "Concatenate bytevectors",
         Arity::Variadic(0),
+        tier::PURE,
         |args| {
             let mut result = Vec::new();
             for a in args {
@@ -371,6 +392,7 @@ fn register_bytevectors(vm: &mut Vm) {
         "utf8->string",
         "Decode bytevector as UTF-8",
         Arity::Fixed(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Bytevector(bv) => {
                 let bytes = bv.borrow();
@@ -386,6 +408,7 @@ fn register_bytevectors(vm: &mut Vm) {
         "string->utf8",
         "Encode string as UTF-8 bytevector",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let s = args[0].as_str()?;
             Ok(Value::bytevector(s.as_bytes().to_vec()))
@@ -397,6 +420,7 @@ fn register_bytevectors(vm: &mut Vm) {
         "bytevector-copy!",
         "Copy bytes into bytevector",
         Arity::Variadic(3),
+        tier::PURE,
         |args| {
             let to = match &args[0] {
                 Value::Bytevector(bv) => bv.clone(),
@@ -432,6 +456,7 @@ fn register_bytevectors(vm: &mut Vm) {
         "bytevector->list",
         "Convert bytevector to list of integers",
         Arity::Variadic(1),
+        tier::PURE,
         |args| match &args[0] {
             Value::Bytevector(bv) => {
                 let vec = bv.borrow();
@@ -459,6 +484,7 @@ fn register_bytevectors(vm: &mut Vm) {
         "list->bytevector",
         "Convert list of integers to bytevector",
         Arity::Fixed(1),
+        tier::PURE,
         |args| {
             let elems = args[0].to_vec()?;
             let mut bytes = Vec::with_capacity(elems.len());
@@ -470,13 +496,21 @@ fn register_bytevectors(vm: &mut Vm) {
     );
 
     // vector? and bytevector? predicates
-    vm.register_fn("vector?", "Is vector?", Arity::Fixed(1), |args| {
-        Ok(Value::Bool(matches!(args[0], Value::Vector(_))))
-    });
+    vm.register_fn(
+        "vector?",
+        "Is vector?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| Ok(Value::Bool(matches!(args[0], Value::Vector(_)))),
+    );
 
-    vm.register_fn("bytevector?", "Is bytevector?", Arity::Fixed(1), |args| {
-        Ok(Value::Bool(matches!(args[0], Value::Bytevector(_))))
-    });
+    vm.register_fn(
+        "bytevector?",
+        "Is bytevector?",
+        Arity::Fixed(1),
+        tier::PURE,
+        |args| Ok(Value::Bool(matches!(args[0], Value::Bytevector(_)))),
+    );
 }
 
 #[cfg(test)]

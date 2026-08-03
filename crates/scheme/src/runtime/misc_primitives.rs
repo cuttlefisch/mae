@@ -15,6 +15,7 @@ use crate::value::Value;
 use crate::vm::Vm;
 
 use super::SharedState;
+use crate::permission::tier;
 
 /// Register string-utility, process-execution, and advice-system primitives.
 pub(super) fn register_misc_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedState>>) {
@@ -24,6 +25,7 @@ pub(super) fn register_misc_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<Shared
         "string-split",
         "Split a string by separator",
         Arity::Fixed(2),
+        tier::PURE,
         move |args: &[Value]| {
             let s = arg_string(args, 0, "string-split")?;
             let sep = arg_string(args, 1, "string-split")?;
@@ -37,6 +39,7 @@ pub(super) fn register_misc_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<Shared
         "string-join",
         "Join a list of strings with separator",
         Arity::Fixed(2),
+        tier::PURE,
         move |args: &[Value]| {
             let lst = list_to_strings(&args[0]);
             let sep = arg_string(args, 1, "string-join")?;
@@ -48,6 +51,7 @@ pub(super) fn register_misc_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<Shared
         "string-trim",
         "Trim whitespace from string",
         Arity::Fixed(1),
+        tier::PURE,
         move |args: &[Value]| {
             let s = arg_string(args, 0, "string-trim")?;
             Ok(Value::string(s.trim()))
@@ -58,6 +62,7 @@ pub(super) fn register_misc_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<Shared
         "string-contains?",
         "Check if string contains substring",
         Arity::Fixed(2),
+        tier::PURE,
         move |args: &[Value]| {
             let s = arg_string(args, 0, "string-contains?")?;
             let sub = arg_string(args, 1, "string-contains?")?;
@@ -69,6 +74,7 @@ pub(super) fn register_misc_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<Shared
         "string-replace",
         "Replace occurrences in string",
         Arity::Fixed(3),
+        tier::PURE,
         move |args: &[Value]| {
             let s = arg_string(args, 0, "string-replace")?;
             let from = arg_string(args, 1, "string-replace")?;
@@ -81,6 +87,7 @@ pub(super) fn register_misc_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<Shared
         "string-upcase",
         "Convert to uppercase",
         Arity::Fixed(1),
+        tier::PURE,
         move |args: &[Value]| {
             let s = arg_string(args, 0, "string-upcase")?;
             Ok(Value::string(s.to_uppercase()))
@@ -91,6 +98,7 @@ pub(super) fn register_misc_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<Shared
         "string-downcase",
         "Convert to lowercase",
         Arity::Fixed(1),
+        tier::PURE,
         move |args: &[Value]| {
             let s = arg_string(args, 0, "string-downcase")?;
             Ok(Value::string(s.to_lowercase()))
@@ -103,6 +111,7 @@ pub(super) fn register_misc_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<Shared
         "shell-command",
         "Execute a shell command",
         Arity::Fixed(1),
+        tier::SHELL,
         move |args: &[Value]| {
             let cmd = arg_string(args, 0, "shell-command")?;
             use std::process::Command;
@@ -127,6 +136,7 @@ pub(super) fn register_misc_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<Shared
         "advice-add!",
         "Add advice to a command",
         Arity::Fixed(3),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let command = arg_string(args, 0, "advice-add!")?;
             let kind = arg_string(args, 1, "advice-add!")?;
@@ -141,6 +151,7 @@ pub(super) fn register_misc_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<Shared
         "advice-remove!",
         "Remove advice from a command",
         Arity::Fixed(2),
+        tier::PRIVILEGED,
         move |args: &[Value]| {
             let command = arg_string(args, 0, "advice-remove!")?;
             let fn_name = arg_string(args, 1, "advice-remove!")?;
@@ -155,6 +166,7 @@ pub(super) fn register_misc_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<Shared
         "check-deprecated",
         "Check if function is deprecated",
         Arity::Fixed(1),
+        tier::READ,
         move |args: &[Value]| {
             let name = arg_string(args, 0, "check-deprecated")?;
             let mut state = s.lock();
