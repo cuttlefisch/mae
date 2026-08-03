@@ -517,7 +517,7 @@ the remaining reason `(kb-search …)` is built on `KnowledgeBase::search_ranked
 
 ---
 
-## 11. `sandbox_guard` protects only one of `shell_exec`'s two implementations
+## 12. `sandbox_guard` protects only one of `shell_exec`'s two implementations
 
 **Status:** confirmed against current source while fixing audit #590.3. Not fixed — the fix lands
 in `crates/ai/src/executor/tool_dispatch.rs`, which the concurrent ADR-090 three-state permission
@@ -569,7 +569,7 @@ the enforcement point, not just the rule table, should be the shared thing.
 
 ---
 
-## 12. When does the signed membership op-log become authoritative?
+## 13. When does the signed membership op-log become authoritative?
 
 **Status:** surfaced while fixing audit #589.4. The observable false-success is fixed; the
 underlying question is not mine to answer.
@@ -613,7 +613,7 @@ the reason this is a decision and not a fix.
 
 ---
 
-## 13. What should `babel-execute-all` do with blocks that need confirmation?
+## 14. What should `babel-execute-all` do with blocks that need confirmation?
 
 **Status:** audit #596.1 is fixed; this is about the behaviour I chose, which is defensible but not
 obviously the only right answer.
