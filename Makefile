@@ -338,6 +338,24 @@ audit:
 setup-hooks:
 	git config core.hooksPath .githooks
 	@echo "Git hooks configured to use .githooks/"
+# skia-bindings' build script runs skia's `git-sync-deps` without setting a
+# working directory, so the `git remote set-url origin` / `git fetch` it runs
+# inside non-repository dependency directories walk UP and land on THIS repo.
+# Observed repeatedly: `origin` silently rewritten to a skia DEPS mirror
+# (wuffs), after which `git push` prompts for Google credentials and
+# `origin/main` points at an unrelated project's history.
+#
+# skia's script has an opt-out it checks before touching anything —
+# `git_repository_sync_is_disabled()` reads `sync-deps.disable` from the repo
+# it is about to modify and returns early. Setting it here is the targeted fix:
+# it uses the upstream guard rather than fighting it, and it cannot be defeated
+# by a build running from a worktree (unlike a path-based ceiling, which only
+# covers the directories you thought to list).
+#
+# It lives in .git/config, which is per-clone and cannot be committed — hence
+# this target. Re-run `make setup-hooks` in any fresh clone or worktree.
+	git config sync-deps.disable true
+	@echo "skia git-sync-deps opt-out set (protects this repo's git remote)"
 
 ## setup-dev: install dev dependencies (rustfmt/clippy + DAP/LSP tools) + git hooks
 setup-dev:
