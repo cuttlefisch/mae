@@ -26,6 +26,21 @@ CI-enforced half of this — it guarantees the Scheme *doc* column can't drift
 from Scheme *registration*. This document covers the wider four-surface
 question that guard doesn't: whether a capability is on Scheme **at all**.
 
+> **Status update — parity pass landed.** Gaps 1, 2 and 3 below have since
+> been closed: `crates/scheme/src/runtime/kb_crud.rs` adds `kb-search`,
+> `kb-get`, `kb-create`, `kb-update`, `kb-delete`;
+> `crates/scheme/src/runtime/editor_ops.rs` adds `set-option-save!`; and
+> `crates/scheme/src/runtime/lsp_dap.rs` adds `lsp-definition`,
+> `lsp-references`, `lsp-hover`, `lsp-workspace-symbol`,
+> `lsp-document-symbols`, `lsp-result`, `lsp-diagnostics`, `dap-start`,
+> `dap-set-breakpoint`, `dap-continue`, `dap-step-over/into/out`,
+> `dap-inspect-variable` and `debug-state`. The sections below are kept as the
+> record of what the gap *was* and what was proposed; where the shipped
+> signature differs from the proposal, the difference is noted inline and the
+> reason is the LSP/DAP async boundary — see **"How the async boundary was
+> resolved"** at the end of this document, and `runtime/lsp_dap.rs`'s module
+> header for the per-primitive table.
+
 ## Headline gaps
 
 1. **LSP and DAP have zero Scheme primitives.** CLAUDE.md's own principle #3
@@ -132,24 +147,24 @@ data) · ❌ absent.
 |---|---|---|---|---|---|
 | Buffer edit (insert/delete/replace/undo/redo) | ✅ | — | ✅ | ✅ | Full parity — the model surface for principle #3. |
 | Cursor/navigation (goto, search) | ✅ | — | ✅ | ✅ | Full parity. |
-| LSP: go to definition | ✅ `lsp-goto-definition` | — | ❌ | ✅ `lsp_definition` | Scheme can trigger the UI jump, not retrieve the location as data. |
-| LSP: find references | ✅ `lsp-find-references` | — | ❌ | ✅ `lsp_references` | Same shape gap. |
-| LSP: hover/type info | ✅ `lsp-hover` | — | ❌ | ✅ `lsp_hover` | Same shape gap. |
-| LSP: diagnostics | ✅ `lsp-show-diagnostics`, `lsp-next/prev-diagnostic` | — | ❌ | ✅ `lsp_diagnostics` | Same shape gap. |
-| LSP: workspace/document symbols | ✅ `lsp-symbol-outline` | — | ❌ | ✅ `lsp_workspace_symbol`, `lsp_document_symbols` | Same shape gap. |
+| LSP: go to definition | ✅ `lsp-goto-definition` | — | ✅ `lsp-definition` + `lsp-result` | ✅ `lsp_definition` | **Closed.** Request/result pair — the reply is asynchronous; see "How the async boundary was resolved". |
+| LSP: find references | ✅ `lsp-find-references` | — | ✅ `lsp-references` + `lsp-result` | ✅ `lsp_references` | **Closed.** CLAUDE.md principle #3's own example. |
+| LSP: hover/type info | ✅ `lsp-hover` | — | ✅ `lsp-hover` + `lsp-result` | ✅ `lsp_hover` | **Closed.** |
+| LSP: diagnostics | ✅ `lsp-show-diagnostics`, `lsp-next/prev-diagnostic` | — | ✅ `lsp-diagnostics` | ✅ `lsp_diagnostics` | **Closed**, and synchronous — diagnostics are pushed, so there is nothing to wait for. |
+| LSP: workspace/document symbols | ✅ `lsp-symbol-outline` | — | ✅ `lsp-workspace-symbol`, `lsp-document-symbols` (+ `lsp-result`) | ✅ `lsp_workspace_symbol`, `lsp_document_symbols` | **Closed.** |
 | LSP: rename/format/code action | ✅ `lsp-rename`, `lsp-format`, `lsp-code-action` | — | ❌ | ✅ `lsp_rename`, `lsp_format`, `lsp_code_action` | Same shape gap. |
-| DAP: session start/stop/step | ✅ `debug-start/stop/continue/step-*` | — | ❌ | ✅ `dap_start`, `dap_continue`, `dap_step` | Same shape gap; note the Command-surface naming is `debug-*`, not `dap-*` (a minor cross-surface naming inconsistency, not a functional gap). |
-| DAP: breakpoints | ✅ `debug-toggle-breakpoint` | — | ❌ | ✅ `dap_set_breakpoint`, `dap_remove_breakpoint` | Same shape gap. |
-| DAP: inspect variables/call stack | ✅ `debug-inspect`, `debug-panel` | — | ❌ | ✅ `debug_state`, `dap_inspect_variable`, `dap_list_variables`, `dap_expand_variable` | Same shape gap — this is CLAUDE.md's own `(dap-inspect-variable ...)` example. |
-| KB: search | ✅ `kb-find` | — | ❌ | ✅ `kb_search` | **Gap.** No `kb-search` Scheme primitive. |
-| KB: get node by ID | ➖ `kb-view`/`kb-preview` | — | ❌ | ✅ `kb_get` | **Gap.** No `kb-get`; `kb-get-block` only fetches a block within an already-known node. |
-| KB: create/update/delete node | ✅ `kb-create`, `kb-update`, `kb-delete` | — | ❌ | ✅ `kb_create`, `kb_update`, `kb_delete` | **Gap.** Backing `Editor` methods already exist in `mae-core`; only the `register_fn` call sites are missing. |
+| DAP: session start/stop/step | ✅ `debug-start/stop/continue/step-*` | — | ✅ `dap-start`, `dap-continue`, `dap-step-over/into/out` | ✅ `dap_start`, `dap_continue`, `dap_step` | **Closed.** Actions queue and return `#t`; `(debug-state)` is the reader. Command-surface naming stays `debug-*` (a naming inconsistency, not a functional gap). |
+| DAP: breakpoints | ✅ `debug-toggle-breakpoint` | — | ✅ `dap-set-breakpoint` (no `dap-remove-breakpoint` yet) | ✅ `dap_set_breakpoint`, `dap_remove_breakpoint` | **Partly closed** — removal still MCP-only. |
+| DAP: inspect variables/call stack | ✅ `debug-inspect`, `debug-panel` | — | ✅ `debug-state`, `dap-inspect-variable` | ✅ `debug_state`, `dap_inspect_variable`, `dap_list_variables`, `dap_expand_variable` | **Closed** for CLAUDE.md's own `(dap-inspect-variable ...)` example, both synchronous. `dap_list_variables`/`dap_expand_variable` remain MCP-only (`(debug-state)` already returns all variables by scope). |
+| KB: search | ✅ `kb-find` | — | ✅ `kb-search` | ✅ `kb_search` | **Closed.** Scheme searches the durable store (like every sibling `kb-*` query primitive); MCP searches the in-memory federated mirror. |
+| KB: get node by ID | ➖ `kb-view`/`kb-preview` | — | ✅ `kb-get` | ✅ `kb_get` | **Closed.** Resolves across primary ∪ federated instances; `#f` when absent, an error when the store fails. |
+| KB: create/update/delete node | ✅ `kb-create`, `kb-update`, `kb-delete` | — | ✅ `kb-create`, `kb-update`, `kb-delete` | ✅ `kb_create`, `kb_update`, `kb_delete` | **Closed.** All three queue into the same `Editor::kb_*_node` the MCP tools call. |
 | KB: graph/neighborhood/related/shortest-path | ✅ (via graph view) | — | ✅ `kb-graph`, `kb-neighborhood`, `kb-related`, `kb-shortest-path` | ✅ `kb_graph`, `kb_neighborhood`, `kb_related`, `kb_shortest_path` | Full parity (and now fully documented — see gap #4 above). |
 | KB: links/authoring (`kb-add-link!` etc.) | ✅ | — | ✅ | ✅ | Full parity. |
 | KB: sharing/collab lifecycle | ✅ | — | ✅ (guarded by `kb_sharing_actions_have_scheme_api_docs`) | ✅ | Full parity — the one area with an existing, working cross-surface test. |
 | Options: read | ✅ `:describe-option` | ✅ | ✅ `get-option`/`set-option!` reads | ✅ `get_option` | Full parity. |
 | Options: set (runtime only) | ✅ `:set` | ✅ | ✅ `(set-option! ...)` | ✅ `set_option` | Full parity. |
-| Options: set + persist to `init.scm` | ✅ `:set-save` | ✅ (`config_key` opt-in) | ❌ | ✅ `set_option` with `persist: true` (**fixed this branch**) | **Gap** on Scheme only, now 2-of-4 (was 1-of-4). |
+| Options: set + persist to `init.scm` | ✅ `:set-save` | ✅ (`config_key` opt-in) | ✅ `set-option-save!` | ✅ `set_option` with `persist: true` | **Closed** — 4-of-4 (was 1-of-4, then 2-of-4). |
 | Introspection: procedure arity/doc/name, GC | — | — | ✅ `procedure-arity`, `procedure-documentation`, `procedure-name`, `gc-collect!` | ➖ (`introspect` tool covers editor state, not Scheme procedure metadata) | Scheme-only capability; no command/MCP equivalent needed (REPL-oriented). |
 | Scheme API discoverability (`scheme:*` KB docs) | — | — | 216 registered primitives; 192 documented pre-fix (35 gap), 227 documented post-fix (216 registered + 11 pure-Scheme-library, 0 gap) | ✅ `kb_search`/`kb_get` surface the same nodes | **Fixed this branch** — see gap #4. |
 
@@ -243,6 +258,64 @@ implementations (`crates/ai/src/tool_impls/lsp.rs`, `dap.rs`,
 a second time in `mae-scheme` — the same "thin Scheme wrapper over an
 existing mae-ai implementation" precedent `kb-export-subgraph-html` already
 established for `mae-scheme` depending on `mae-ai`.
+
+## How the async boundary was resolved
+
+The proposals above assumed the LSP/DAP primitives could return their results
+directly. They cannot, and the reason is structural rather than a matter of
+effort:
+
+- **A Scheme primitive cannot block on an LSP/DAP reply.** It runs on the
+  editor's main thread inside `eval`. LSP/DAP replies are delivered *by that
+  same main event loop* (`LspTaskEvent` / `DapTaskEvent`). Blocking inside the
+  primitive would block the loop that has to deliver the answer — a deadlock,
+  not a slow call.
+- **`mae-scheme` never holds a live `&Editor`**, only
+  `Arc<Mutex<SharedState>>` (the constraint `kb_export.rs` already documents),
+  so even a *synchronous* `mae-ai` implementation cannot simply be called from
+  inside a primitive.
+
+The rule adopted is: **a primitive returns exactly what its `mae-ai`
+counterpart can return synchronously, and nothing it cannot.** That yields
+three shapes, all driving the same `mae-ai` implementation the MCP tool
+drives:
+
+| Shape | Primitives | Mechanism |
+|---|---|---|
+| Synchronous structured read | `lsp-diagnostics`, `debug-state`, `dap-inspect-variable` | The `mae-ai` implementation takes `&Editor` and answers now, so `inject_editor_state` calls it once per eval — **only while the subsystem is live** (`editor.lsp.diagnostics` non-empty / `editor.dap.state.is_some()`), so an editor with no language server and no debug session pays nothing — and the primitive reads the snapshot. |
+| Request + result | `lsp-definition`, `lsp-references`, `lsp-hover`, `lsp-workspace-symbol`, `lsp-document-symbols` | The `mae-ai` implementation returns nothing at all; MCP defers the tool call until the event arrives, and Scheme has no reply channel to defer. So the request returns an **integer request id** and `(lsp-result ID)` reads the slot, answering `'pending` until `crates/mae/src/lsp_bridge.rs` fills it from the event (via the existing `try_complete_deferred`, so the payload is byte-identical to the MCP tool's). Storage: `mae_core::scheme_async::SchemeAsyncRegistry` on `Editor`. |
+| Action + existing reader | `dap-start`, `dap-set-breakpoint`, `dap-continue`, `dap-step-over/into/out` | The action is queued and applied on the next tick; the *result* is already readable through `(debug-state)`, which reflects durable session state. A second correlation mechanism for DAP would duplicate what `(debug-state)` already answers (principle #8), so deliberately none was added. |
+
+Two consequences worth stating plainly:
+
+- Polling `(lsp-result ID)` only makes progress **across evals** — from a hook,
+  a `mae --test` step, or the REPL. A single `eval` never returns to the event
+  loop, so a busy-wait loop inside one expression will never see anything but
+  `'pending`. This is inherent, not a limitation of the implementation.
+- Because `LspTaskEvent` carries no correlation id, a result is matched to the
+  **oldest pending request of the same kind**. Two `(lsp-hover)` calls in
+  flight simultaneously may receive each other's answers. The MCP deferred
+  path has the same limitation for the same reason (it holds one deferred
+  reply per session); it is documented in `scheme_async.rs` rather than hidden.
+
+### Where the shipped signatures differ from the proposals
+
+- LSP position arguments are `[BUFFER-NAME] [LINE] [COL]`, not `[FILE LINE
+  COL]` — the MCP tools take `buffer_name`, and taking a *path* on the Scheme
+  surface only would have been a third addressing convention.
+- `(kb-search …)`'s `SCOPE` is `"primary"` (default) / `"all"`, and `QUERY` is
+  treated as **literal terms, not a CozoDB full-text-search expression**:
+  `-`, `:` and `*` separate terms instead of acting as operators, so
+  `(kb-search "concept:buffer")` searches rather than failing to parse. Without
+  this, the most natural MAE queries — every shipped node id contains `:` and
+  most contain `-` — returned a parser error on the Scheme surface while the
+  `kb_search` MCP tool (which searches the in-memory federated mirror) accepted
+  them.
+- `(kb-create/update/delete …)` return `#t` once **queued**; the write itself
+  runs on the next tick through `Editor::kb_*_node`. `kb-update`/`kb-delete`
+  pre-check existence against the same store the write targets, so "no such
+  node" is a catchable Scheme error rather than a status-line message. Seed
+  protection, KB write policy and instance routing stay editor-side.
 
 ## Methodology
 
