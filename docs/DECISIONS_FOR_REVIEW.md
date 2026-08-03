@@ -514,3 +514,44 @@ language to users at all — lower-casing or escaping the query would make a del
 the remaining reason `(kb-search …)` is built on `KnowledgeBase::search_ranked` rather than
 `fts_search`.
 
+---
+
+## 11. KB search cannot find a node by its own ID
+
+**Status:** verified; deliberately not fixed. Needs a product call.
+
+MAE addresses KB nodes with namespaced IDs — `concept:buffer`, `cmd:save`, `scheme:buffer-insert`,
+`option:ai_tier` — and CLAUDE.md documents that convention. **Searching for one errors.**
+
+Reproduced directly against a store holding a node with id `concept:buffer`:
+
+```
+concept:buffer  -> ERROR      buffer  -> 1 hit
+read-only       -> ERROR      notes   -> 0 hits
+NOTES           -> ERROR      1.5     -> ERROR
+```
+
+Cozo's FTS *query* grammar treats `:`, `-` and `.` as operators, and reserves uppercase
+`AND`/`OR`/`NOT`/`NEAR` with no word-boundary anchor — so any ALL-CAPS word merely *beginning* with
+one is also an error (`ANDROID`, `ORBIT`, `NEARBY`, `NOTES`). Lower-case forms parse fine, so the
+index holds them; this is purely query-side.
+
+These fail **loudly** rather than silently, which is why the fix was not forced alongside the
+separator bug (that one was silent and got fixed immediately). But the affected shapes are exactly
+the ones this KB uses.
+
+**The call:** does MAE expose cozo's boolean query language to users, or present a plain search box?
+
+1. **Escape/quote the query by default** — treat user input as literal terms. `concept:buffer` works;
+   a deliberate `foo AND bar` becomes a literal search for "and". Simplest, and matches what a search
+   box usually means.
+2. **Sanitise only the ID-shaped cases** — quote a query matching `^[a-z]+:[a-z-]+$`, leave the rest.
+   Keeps boolean syntax for people who want it; more rules to explain.
+3. **Expose the grammar and document it** — teach users to quote. Cheapest, worst ergonomics for the
+   single most natural query against this KB.
+
+**Recommendation:** option 1, with an escape hatch (a `raw:` prefix, or a separate parameter) if
+boolean queries turn out to matter. A knowledge base whose own addressing scheme is unsearchable is
+a worse outcome than losing an operator syntax most users will never type.
+
+Pinned by two tests so a future fix has to update them consciously.
