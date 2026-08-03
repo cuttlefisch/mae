@@ -416,7 +416,7 @@ pub fn render_buffer_content(
         if is_wrap_cont {
             // Wrap continuation segment: draw showbreak prefix + chunk.
             let indent_len = if editor.break_indent {
-                content_indent_len(&full_chars)
+                content_indent_len(&full_chars, editor.width_policy())
             } else {
                 0
             };
@@ -460,6 +460,7 @@ pub fn render_buffer_content(
                 ll.glyph_advance,
                 &mut pixel_buf,
                 &mut col_buf,
+                editor.width_policy(),
             );
         } else if wrap {
             // First segment of a wrapped line.
@@ -507,6 +508,7 @@ pub fn render_buffer_content(
                 ll.glyph_advance,
                 &mut pixel_buf,
                 &mut col_buf,
+                editor.width_policy(),
             );
         } else {
             // No wrap: single segment per line.
@@ -563,6 +565,7 @@ pub fn render_buffer_content(
                 ll.glyph_advance,
                 &mut pixel_buf,
                 &mut col_buf,
+                editor.width_policy(),
             );
 
             // Fold indicator: show "... N lines" after fold start lines.
@@ -577,6 +580,7 @@ pub fn render_buffer_content(
                     &line_str,
                     vis_char_count,
                     effective_scale,
+                    editor.width_policy(),
                 );
                 let indicator_col = text_col + scaled_vis_width;
                 let fold_fg = theme::ts_fg(editor, "comment");
@@ -710,6 +714,7 @@ fn draw_styled_at(
     glyph_advance: f32,
     pixel_buf: &mut Vec<f32>,
     col_buf: &mut Vec<usize>,
+    policy: mae_core::grapheme::WidthPolicy,
 ) {
     if chars.is_empty() {
         return;
@@ -725,14 +730,14 @@ fn draw_styled_at(
         let mut acc = 0.0f32;
         for &ch in chars {
             pixel_buf.push(acc);
-            acc += char_width(ch) as f32 * glyph_advance;
+            acc += char_width(ch, policy) as f32 * glyph_advance;
         }
         pixel_buf.push(acc);
     } else {
         let mut acc = 0.0f32;
         for &ch in chars {
             pixel_buf.push(acc);
-            acc += char_width(ch) as f32 * cw;
+            acc += char_width(ch, policy) as f32 * cw;
         }
         pixel_buf.push(acc);
     }
@@ -1157,7 +1162,8 @@ mod tests {
         let mut acc = 0.0f32;
         for &ch in &chars {
             pixel_offsets.push(acc);
-            acc += char_width(ch) as f32 * glyph_advance;
+            acc += char_width(ch, mae_core::grapheme::WidthPolicy::default()) as f32
+                * glyph_advance;
         }
         pixel_offsets.push(acc);
 
