@@ -128,12 +128,19 @@ pub use crate::grapheme::display_width;
 /// Cut points accumulate per-grapheme-cluster width (ADR-087 Rule 2), so a
 /// family ZWJ emoji or a base+combining-mark pair is never split.
 pub fn truncate_end(s: &str, max_cols: usize) -> String {
-    if max_cols == 0 {
-        return String::new();
-    }
+    // Width-fits check FIRST, before the max_cols==0 special case: a
+    // zero-width string (e.g. a lone ZWSP, or "") already fits any budget
+    // including 0, and must round-trip unchanged -- `truncate_end(s, n) ==
+    // s` whenever `display_width(s) <= n` is an invariant this function is
+    // tested against (ADR-087), and checking max_cols==0 first would
+    // violate it for zero-width content.
     let total = display_width(s);
     if total <= max_cols {
         return s.to_string();
+    }
+    if max_cols == 0 {
+        // Truncation is needed but there's no room even for the ellipsis.
+        return String::new();
     }
     let target = max_cols.saturating_sub(1); // reserve 1 col for '…'
     let byte_idx = crate::grapheme::byte_offset_for_max_width(s, target);
@@ -146,12 +153,14 @@ pub fn truncate_end(s: &str, max_cols: usize) -> String {
 /// Prepends `…` if truncation occurs.
 /// Safe for multi-byte / wide characters — never slices mid-grapheme-cluster.
 pub fn truncate_start(s: &str, max_cols: usize) -> String {
-    if max_cols == 0 {
-        return String::new();
-    }
+    // See `truncate_end`'s identical reordering: width-fits check first, so
+    // zero-width content round-trips through a budget of 0 unchanged.
     let total = display_width(s);
     if total <= max_cols {
         return s.to_string();
+    }
+    if max_cols == 0 {
+        return String::new();
     }
     let target = max_cols.saturating_sub(1); // reserve 1 col for '…'
     let start = crate::grapheme::byte_offset_for_max_width_from_end(s, target);
