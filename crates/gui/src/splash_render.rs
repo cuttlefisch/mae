@@ -12,7 +12,6 @@
 
 use mae_core::render_common::splash::{ALL_ARTS, MAE_LOGO, QUICK_ACTIONS};
 use mae_core::Editor;
-use unicode_width::UnicodeWidthStr;
 
 use crate::canvas::SkiaCanvas;
 use crate::theme;
@@ -44,7 +43,11 @@ impl SplashSection {
     }
 
     fn max_width(&self) -> usize {
-        self.lines.iter().map(|l| l.text.width()).max().unwrap_or(0)
+        self.lines
+            .iter()
+            .map(|l| mae_core::display_width(&l.text))
+            .max()
+            .unwrap_or(0)
     }
 
     fn height(&self) -> usize {

@@ -1349,3 +1349,92 @@ fn tab_width_change_forces_display_regions_to_recompute() {
     editor.set_option("tab_width", "4").unwrap();
     assert_eq!(editor.buffers[idx].display_regions_gen, u64::MAX);
 }
+
+// --- ADR-087 Rule 3: ambiguous_width / control_char_width options ---
+
+#[test]
+fn ambiguous_width_set_get_and_alias_round_trip() {
+    let mut editor = Editor::new();
+    assert!(!editor.ambiguous_width_wide, "default is narrow");
+    assert_eq!(
+        editor
+            .get_option("ambiguous_width")
+            .map(|(v, _)| v)
+            .as_deref(),
+        Some("narrow")
+    );
+
+    editor.set_option("ambiguous_width", "wide").unwrap();
+    assert!(editor.ambiguous_width_wide);
+    assert_eq!(
+        editor
+            .get_option("ambiguous_width")
+            .map(|(v, _)| v)
+            .as_deref(),
+        Some("wide")
+    );
+
+    // Kebab-case alias, as used by `:set` at the command line.
+    editor.set_option("ambiguous-width", "narrow").unwrap();
+    assert!(!editor.ambiguous_width_wide);
+}
+
+#[test]
+fn ambiguous_width_rejects_invalid_value() {
+    let mut editor = Editor::new();
+    assert!(editor.set_option("ambiguous_width", "extra-wide").is_err());
+    assert!(
+        !editor.ambiguous_width_wide,
+        "invalid value must not mutate state"
+    );
+}
+
+#[test]
+fn ambiguous_width_actually_changes_computed_width() {
+    // Not a dead option: U+2014 (EM DASH) is EAW=Ambiguous. Flipping the
+    // policy must change what `Editor::width_policy()` produces.
+    let mut editor = Editor::new();
+    let s = "\u{2014}"; // em dash
+    let narrow = crate::grapheme::display_width_with(s, editor.width_policy());
+    editor.set_option("ambiguous_width", "wide").unwrap();
+    let wide = crate::grapheme::display_width_with(s, editor.width_policy());
+    assert_eq!(narrow, 1);
+    assert_eq!(wide, 2);
+}
+
+#[test]
+fn control_char_width_set_get_round_trip() {
+    let mut editor = Editor::new();
+    assert_eq!(editor.control_char_width, 0);
+    assert_eq!(
+        editor
+            .get_option("control_char_width")
+            .map(|(v, _)| v)
+            .as_deref(),
+        Some("0")
+    );
+
+    editor.set_option("control_char_width", "1").unwrap();
+    assert_eq!(editor.control_char_width, 1);
+
+    editor.set_option("control-char-width", "3").unwrap();
+    assert_eq!(editor.control_char_width, 3);
+}
+
+#[test]
+fn control_char_width_out_of_range_values_are_clamped_not_rejected() {
+    let mut editor = Editor::new();
+    editor.set_option("control_char_width", "9999").unwrap();
+    assert_eq!(editor.control_char_width, 16, "clamped to the maximum");
+}
+
+#[test]
+fn control_char_width_actually_changes_computed_width() {
+    let mut editor = Editor::new();
+    let s = "\u{0001}"; // control char, undefined width upstream
+    let default_w = crate::grapheme::display_width_with(s, editor.width_policy());
+    editor.set_option("control_char_width", "5").unwrap();
+    let configured_w = crate::grapheme::display_width_with(s, editor.width_policy());
+    assert_eq!(default_w, 0);
+    assert_eq!(configured_w, 5);
+}

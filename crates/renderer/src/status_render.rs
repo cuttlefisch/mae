@@ -9,7 +9,6 @@ use mae_core::render_common::status::{
 use mae_core::Editor;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
-use unicode_width::UnicodeWidthStr;
 
 use crate::theme_convert::ts;
 
@@ -29,17 +28,23 @@ pub(crate) fn render_status_bar(frame: &mut Frame, area: Rect, editor: &Editor) 
         ts(editor, "ui.statusline")
     };
 
-    let mode_len = UnicodeWidthStr::width(mode_str.as_str());
+    let mode_len = mae_core::display_width(mode_str.as_str());
     let avail = (area.width as usize).saturating_sub(mode_len);
 
     // Build and lay out segments using shared logic.
     // TUI doesn't pass frame_ms (no FPS display in terminal mode).
     let mut segments = build_status_segments(editor, None);
-    let layout = layout_status_segments(&mut segments, avail, &buf.name, buf.modified);
+    let layout = layout_status_segments(
+        &mut segments,
+        avail,
+        &buf.name,
+        buf.modified,
+        editor.width_policy(),
+    );
 
-    let right_w = UnicodeWidthStr::width(layout.right_text.as_str());
+    let right_w = mae_core::display_width(layout.right_text.as_str());
     let remaining = avail
-        .saturating_sub(UnicodeWidthStr::width(layout.left_text.as_str()))
+        .saturating_sub(mae_core::display_width(layout.left_text.as_str()))
         .saturating_sub(right_w);
 
     // Build right-side spans, applying styled spans for colored badges.

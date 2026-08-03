@@ -1463,6 +1463,14 @@ pub struct Editor {
     /// Display width of a `\t` character, in columns to the next tab-stop
     /// (default 8, the universal terminal/Unix convention — see #353).
     pub tab_width: usize,
+    /// ADR-087 Rule 3: resolve East_Asian_Width=Ambiguous characters as wide
+    /// (2 columns, CJK convention) instead of narrow (1 column, default).
+    /// Mirrors the `ambiguous_width` option (`"narrow"`/`"wide"`).
+    pub ambiguous_width_wide: bool,
+    /// ADR-087 Rule 3: display width assigned to a raw control character,
+    /// which Unicode leaves undefined. Mirrors the `control_char_width`
+    /// option (default 0, MAE's prior implicit behavior).
+    pub control_char_width: usize,
     /// Per-buffer markup span cache, keyed by buffer index. Avoids recomputing
     /// regex-based markup spans every frame for org/markdown buffers.
     pub markup_cache: HashMap<usize, crate::syntax::MarkupCache>,
@@ -1773,6 +1781,8 @@ impl Editor {
             display_region_debounce_ms: 150,
             syntax_reparse_debounce_ms: 50,
             tab_width: 8,
+            ambiguous_width_wide: false,
+            control_char_width: 0,
             markup_cache: HashMap::new(),
             code_block_cache: HashMap::new(),
             org_agenda_files: Vec::new(),
@@ -1877,5 +1887,16 @@ impl Editor {
     /// Consume the count prefix, returning the count (default 1).
     pub fn take_count(&mut self) -> usize {
         self.vi.count_prefix.take().unwrap_or(1)
+    }
+
+    /// Build a `WidthPolicy` from the live `ambiguous_width`/`control_char_width`
+    /// options (ADR-087 Rule 3). Call sites that have `&Editor` and want the
+    /// user's configured width policy (rather than the hardcoded default)
+    /// should use `crate::grapheme::display_width_with(s, editor.width_policy())`.
+    pub fn width_policy(&self) -> crate::grapheme::WidthPolicy {
+        crate::grapheme::WidthPolicy {
+            ambiguous_wide: self.ambiguous_width_wide,
+            control_char_width: self.control_char_width,
+        }
     }
 }

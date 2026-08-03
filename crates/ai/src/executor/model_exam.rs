@@ -258,8 +258,12 @@ pub fn grade_exam_response(
                     reason: format!(
                         "Answer does not contain '{}': got '{}'",
                         test.expected_answer,
+                        // ADR-087 / audit #594: model output is arbitrary
+                        // UTF-8 (any language, emoji, punctuation); a fixed
+                        // byte cut can land mid-character and panic.
                         if final_text.len() > 100 {
-                            &final_text[..100]
+                            let cut = mae_core::grapheme::checked_byte_boundary(final_text, 100);
+                            &final_text[..cut]
                         } else {
                             final_text
                         }

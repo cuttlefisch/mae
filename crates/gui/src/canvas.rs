@@ -950,11 +950,15 @@ impl SkiaCanvas {
             self.draw_text_run_at_y(pixel_y, col, text, fg, false, false, scale);
             return;
         }
-        use unicode_width::UnicodeWidthChar;
+        // ADR-087 Rule 7: width call goes through mae-core, not a direct
+        // unicode_width import. Fallback of 1 (not the configurable
+        // control_char_width option) is a rendering invariant, not a policy
+        // choice: this loop advances the cell cursor per glyph it just drew,
+        // and 0 would draw the next glyph on top of this one.
         let mut c = col;
         for ch in text.chars() {
             self.draw_char_at_y(pixel_y, c, ch, fg, false, false, scale);
-            c += ch.width().unwrap_or(1);
+            c += mae_core::grapheme::char_width_or(ch, 1);
         }
     }
 
@@ -1060,11 +1064,15 @@ impl SkiaCanvas {
             self.draw_text_run(row, col, text, fg, false, false, 1.0);
             return;
         }
-        use unicode_width::UnicodeWidthChar;
+        // ADR-087 Rule 7: width call goes through mae-core, not a direct
+        // unicode_width import. Fallback of 1 (not the configurable
+        // control_char_width option) is a rendering invariant, not a policy
+        // choice: this loop advances the cell cursor per glyph it just drew,
+        // and 0 would draw the next glyph on top of this one.
         let mut c = col;
         for ch in text.chars() {
             self.draw_char(row, c, ch, fg, false, false, 1.0);
-            c += ch.width().unwrap_or(1);
+            c += mae_core::grapheme::char_width_or(ch, 1);
         }
     }
 
@@ -1075,11 +1083,15 @@ impl SkiaCanvas {
             self.draw_text_run(row, col, text, fg, true, false, 1.0);
             return;
         }
-        use unicode_width::UnicodeWidthChar;
+        // ADR-087 Rule 7: width call goes through mae-core, not a direct
+        // unicode_width import. Fallback of 1 (not the configurable
+        // control_char_width option) is a rendering invariant, not a policy
+        // choice: this loop advances the cell cursor per glyph it just drew,
+        // and 0 would draw the next glyph on top of this one.
         let mut c = col;
         for ch in text.chars() {
             self.draw_char(row, c, ch, fg, true, false, 1.0);
-            c += ch.width().unwrap_or(1);
+            c += mae_core::grapheme::char_width_or(ch, 1);
         }
     }
 

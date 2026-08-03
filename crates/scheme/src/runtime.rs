@@ -778,10 +778,15 @@ impl SchemeRuntime {
         debug!(code_len = code.len(), "scheme eval");
         let result = self.vm.eval(code).map_err(|e| {
             let err = SchemeError::from(e);
-            error!(error = %err.message, code_preview = &code[..code.len().min(100)], "scheme eval error");
+            // ADR-087 / audit #594: Scheme source is arbitrary UTF-8 (string
+            // literals, comments -- MAE's own style uses em dashes); a fixed
+            // byte cut can land mid-character and panic.
+            let preview_end = mae_core::grapheme::checked_byte_boundary(code, code.len().min(100));
+            error!(error = %err.message, code_preview = &code[..preview_end], "scheme eval error");
             self.error_seq += 1;
+            let expr_end = mae_core::grapheme::checked_byte_boundary(code, code.len().min(200));
             let snapshot = SchemeErrorSnapshot {
-                expression: code[..code.len().min(200)].to_string(),
+                expression: code[..expr_end].to_string(),
                 error_message: err.message.clone(),
                 seq: self.error_seq,
             };

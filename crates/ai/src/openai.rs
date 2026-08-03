@@ -294,9 +294,13 @@ impl AgentProvider for OpenAiProvider {
 
         if !status.is_success() {
             let retryable = status.as_u16() == 429 || status.as_u16() >= 500;
+            // ADR-087 / audit #594: `body_preview` is decoded text (provider
+            // error JSON can contain non-ASCII messages); slicing it at a
+            // fixed byte offset can land mid-character and panic.
             let body_preview = String::from_utf8_lossy(&raw_body);
             let body_preview = if body_preview.len() > 500 {
-                format!("{}...", &body_preview[..500])
+                let cut = mae_core::grapheme::checked_byte_boundary(&body_preview, 500);
+                format!("{}...", &body_preview[..cut])
             } else {
                 body_preview.to_string()
             };

@@ -734,8 +734,13 @@ impl AgentSession {
                         .event_tx
                         .send(AiEvent::ToolCallFinished {
                             success: result.success,
+                            // ADR-087 / audit #594: fetched page text is
+                            // arbitrary UTF-8; a fixed byte cut can land
+                            // mid-character and panic.
                             output: if result.output.len() > 200 {
-                                format!("{}...", &result.output[..200])
+                                let cut =
+                                    mae_core::grapheme::checked_byte_boundary(&result.output, 200);
+                                format!("{}...", &result.output[..cut])
                             } else {
                                 result.output.clone()
                             },

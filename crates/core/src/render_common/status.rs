@@ -9,9 +9,9 @@ use crate::{
     Buffer, BufferKind, CollabStatus, Editor, InputLock, LspServerStatus, Mode, VisualType, Window,
 };
 
+use crate::grapheme::{byte_offset_for_max_width_with, display_width_with, WidthPolicy};
 #[cfg(test)]
 use crate::LspServerInfo;
-use unicode_width::UnicodeWidthStr;
 
 /// A status bar segment with a priority (1 = highest = last to drop).
 pub struct Segment {
@@ -38,44 +38,42 @@ impl Segment {
         }
     }
 
+    /// Width under the default width policy. Prefer `width_with` at call
+    /// sites that have an `Editor` (and so the live `ambiguous_width`/
+    /// `control_char_width` options) available.
     pub fn width(&self) -> usize {
-        UnicodeWidthStr::width(self.text.as_str())
+        self.width_with(WidthPolicy::default())
+    }
+
+    pub fn width_with(&self, policy: WidthPolicy) -> usize {
+        display_width_with(&self.text, policy)
     }
 }
 
-/// Truncate a path to `.../<filename>` if it exceeds `max_w` columns.
-pub fn truncate_path(path: &str, max_w: usize) -> String {
-    if UnicodeWidthStr::width(path) <= max_w || max_w < 6 {
+/// Truncate a path to `.../<filename>` if it exceeds `max_w` columns
+/// (ADR-087 Rule 3: `policy` resolves ambiguous-width chars; the cut point
+/// falls on a grapheme-cluster boundary, never mid-character/mid-ZWJ).
+pub fn truncate_path(path: &str, max_w: usize, policy: WidthPolicy) -> String {
+    if display_width_with(path, policy) <= max_w || max_w < 6 {
         return path.to_string();
     }
     if let Some(name) = path.rsplit('/').next() {
         let truncated = format!(".../{}", name);
-        if UnicodeWidthStr::width(truncated.as_str()) <= max_w {
+        if display_width_with(&truncated, policy) <= max_w {
             return truncated;
         }
     }
-    let mut s = path.to_string();
-    while UnicodeWidthStr::width(s.as_str()) > max_w && s.len() > 1 {
-        s.pop();
-    }
-    s.push('…');
-    s
+    let cut = byte_offset_for_max_width_with(path, max_w.saturating_sub(1), policy);
+    format!("{}…", &path[..cut])
 }
 
-/// Truncate a branch name with ellipsis if it exceeds `max_w`.
-pub fn truncate_branch(branch: &str, max_w: usize) -> String {
-    if UnicodeWidthStr::width(branch) <= max_w {
+/// Truncate a branch name with ellipsis if it exceeds `max_w` columns.
+pub fn truncate_branch(branch: &str, max_w: usize, policy: WidthPolicy) -> String {
+    if display_width_with(branch, policy) <= max_w {
         return branch.to_string();
     }
-    let mut s = String::new();
-    for ch in branch.chars() {
-        if UnicodeWidthStr::width(s.as_str()) + 2 > max_w {
-            break;
-        }
-        s.push(ch);
-    }
-    s.push('…');
-    s
+    let cut = byte_offset_for_max_width_with(branch, max_w.saturating_sub(2), policy);
+    format!("{}…", &branch[..cut])
 }
 
 /// Build the mode label string.
@@ -306,7 +304,7 @@ pub fn build_status_segments(editor: &Editor, frame_ms: Option<u64>) -> Vec<Segm
         .git_branch
         .as_ref()
         .or(editor.git_branch.as_ref())
-        .map(|b| format!("  {}", truncate_branch(b, 20)))
+        .map(|b| format!("  {}", truncate_branch(b, 20, editor.width_policy())))
         .unwrap_or_default();
     let project_info = buf
         .project_root
@@ -343,27 +341,35 @@ pub struct StatusLayout {
 
 /// Elide, truncate, and split segments into left/right text for the status bar.
 ///
-/// `avail` is the number of columns available after the mode label.
+/// `avail` is the number of columns available after the mode label. `policy`
+/// is the caller's live width policy (ADR-087 Rule 3) -- pass
+/// `editor.width_policy()` when an `Editor` is available, or
+/// `WidthPolicy::default()` otherwise.
 pub fn layout_status_segments(
     segments: &mut Vec<Segment>,
     avail: usize,
     buf_name: &str,
     buf_modified: bool,
+    policy: WidthPolicy,
 ) -> StatusLayout {
     // Elide lowest-priority segments until they fit.
     segments.sort_by_key(|s| s.priority);
-    let total_width = |segs: &[Segment]| -> usize { segs.iter().map(|s| s.width()).sum() };
+    let total_width =
+        |segs: &[Segment]| -> usize { segs.iter().map(|s| s.width_with(policy)).sum() };
     while total_width(segments) > avail && !segments.is_empty() {
         segments.pop();
     }
 
     // Truncate filename if still too long.
     if let Some(fname_seg) = segments.iter_mut().find(|s| s.priority == 2) {
-        if fname_seg.width() > avail / 2 {
+        if fname_seg.width_with(policy) > avail / 2 {
             let max_w = avail / 2;
             let modified_suffix = if buf_modified { " [+]" } else { "" };
-            let truncated =
-                truncate_path(buf_name, max_w.saturating_sub(modified_suffix.len() + 1));
+            let truncated = truncate_path(
+                buf_name,
+                max_w.saturating_sub(modified_suffix.len() + 1),
+                policy,
+            );
             fname_seg.text = format!(" {}{}", truncated, modified_suffix);
         }
     }
@@ -729,25 +735,28 @@ mod tests {
 
     #[test]
     fn truncate_path_short() {
-        assert_eq!(truncate_path("src/main.rs", 20), "src/main.rs");
+        assert_eq!(
+            truncate_path("src/main.rs", 20, WidthPolicy::default()),
+            "src/main.rs"
+        );
     }
 
     #[test]
     fn truncate_path_long() {
         let long = "some/deeply/nested/directory/file.rs";
-        let result = truncate_path(long, 15);
+        let result = truncate_path(long, 15, WidthPolicy::default());
         assert!(result.contains("file.rs"));
         assert!(result.starts_with("..."));
     }
 
     #[test]
     fn truncate_branch_short() {
-        assert_eq!(truncate_branch("main", 10), "main");
+        assert_eq!(truncate_branch("main", 10, WidthPolicy::default()), "main");
     }
 
     #[test]
     fn truncate_branch_long() {
-        let result = truncate_branch("feature/very-long-branch-name", 15);
+        let result = truncate_branch("feature/very-long-branch-name", 15, WidthPolicy::default());
         assert!(result.ends_with('…'));
     }
 
@@ -891,7 +900,7 @@ mod tests {
             Segment::new("BB".to_string(), 5),
             Segment::new("CCCCCC".to_string(), 8),
         ];
-        let layout = layout_status_segments(&mut segs, 7, "test", false);
+        let layout = layout_status_segments(&mut segs, 7, "test", false, WidthPolicy::default());
         // After elision, the 8-priority segment should be gone
         assert!(!layout.left_text.contains("CCCCCC"));
     }
@@ -940,7 +949,7 @@ mod tests {
             Segment::new("pos".to_string(), 1),
             Segment::with_style(" MODE ".to_string(), 4, "test.style"),
         ];
-        let layout = layout_status_segments(&mut segs, 40, "test", false);
+        let layout = layout_status_segments(&mut segs, 40, "test", false, WidthPolicy::default());
         assert_eq!(layout.right_styled_spans.len(), 1);
         assert_eq!(layout.right_styled_spans[0].style_key, "test.style");
         let span = &layout.right_styled_spans[0];
