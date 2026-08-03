@@ -1135,11 +1135,18 @@ fn self_test_suite_unknown_action_reports_failure() {
         &all_tools(),
         &PermissionPolicy::default(),
     ));
+    // Two layers can reject this, and both must agree it's a failure:
+    // schema validation (the "action" prop declares an enum of
+    // ["plan", "grade"], so `execute_tool`'s pre-dispatch `validate_tool_args`
+    // rejects "bogus" before dispatch ever runs) and, if that layer were ever
+    // loosened, `tool_dispatch.rs`'s own `_ => (false, ...)` fallback arm.
+    // This test only asserts the externally-observable contract (failure,
+    // not a specific message), since which layer catches it is an
+    // implementation detail either way must satisfy.
     assert!(
         !result.success,
         "an unrecognised action must not report success"
     );
-    assert!(result.output.contains("Invalid action"));
 }
 
 /// Same ADR-086 class: `grade` with no `results` array is a refusal, not a
@@ -1189,11 +1196,13 @@ fn model_exam_unknown_action_reports_failure() {
         &all_tools(),
         &PermissionPolicy::default(),
     ));
+    // See self_test_suite_unknown_action_reports_failure's comment: schema
+    // validation's enum check on "action" intercepts this before dispatch,
+    // so only the failure contract (not a specific message) is asserted.
     assert!(
         !result.success,
         "an unrecognised model_exam action must not report success"
     );
-    assert!(result.output.contains("Invalid action"));
 }
 
 /// Same class: `model_exam` `grade` with no `results` array is a refusal.
