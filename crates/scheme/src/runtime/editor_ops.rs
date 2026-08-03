@@ -140,7 +140,10 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
     // enforced option, any primitive that can set an arbitrary option is a
     // self-escalation path; `Privileged` is the ceiling of the current
     // lattice, so nothing weaker is available, but do NOT relax this to
-    // `WRITE` on the grounds that "it's just an option".
+    // `WRITE` on the grounds that "it's just an option". See
+    // `docs/DECISIONS_FOR_REVIEW.md` items 6 and 8: whatever fix lands for
+    // `set_option`'s own tier must cover this primitive and `set-option!`
+    // too, or the Scheme surface stays open after the MCP one is closed.
     let s = shared.clone();
     vm.register_fn(
         "set-option-save!",
