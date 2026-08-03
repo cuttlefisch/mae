@@ -162,7 +162,11 @@ pub fn execute_set_option(editor: &mut Editor, args: &serde_json::Value) -> Resu
     // option at runtime but never persist it, so an AI-driven config change silently
     // reverted on the next editor restart with no equivalent to the human's
     // `:set-save`. Mirrors `Editor::command`'s own "set-save" arm: apply, then persist.
-    if args.get("persist").and_then(|v| v.as_bool()).unwrap_or(false) {
+    if args
+        .get("persist")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
         let persist_msg = editor.save_option_to_init(option)?;
         return Ok(format!("{result}\n{persist_msg}"));
     }
