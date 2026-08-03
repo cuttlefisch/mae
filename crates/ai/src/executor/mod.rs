@@ -24,7 +24,13 @@ use crate::types::*;
 pub use tool_dispatch::{execute_tool, execute_tool_with_requester};
 // Exposed crate-wide so `crate::tools`' name-sanitisation round-trip test
 // (paired with `crate::tools::sanitize_command_name`) can reach it without
-// duplicating the decode logic.
+// duplicating the decode logic. Test-only: its one consumer
+// (`crate::tools::name_roundtrip_tests`) is itself `#[cfg(test)]`, so the
+// plain (non-test) lib target has no user of this re-export -- pre-existing
+// `unused_imports` warning under `cargo clippy --all-targets -D warnings`,
+// unrelated to ADR-087; fixed opportunistically while getting a clean
+// clippy run for this change.
+#[cfg(test)]
 pub(crate) use tool_dispatch::unsanitize_command_name;
 
 /// What kind of deferred tool call is pending (LSP or DAP).

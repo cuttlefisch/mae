@@ -1355,7 +1355,7 @@ fn tab_width_change_forces_display_regions_to_recompute() {
 #[test]
 fn ambiguous_width_set_get_and_alias_round_trip() {
     let mut editor = Editor::new();
-    assert_eq!(editor.ambiguous_width_wide, false, "default is narrow");
+    assert!(!editor.ambiguous_width_wide, "default is narrow");
     assert_eq!(
         editor
             .get_option("ambiguous_width")

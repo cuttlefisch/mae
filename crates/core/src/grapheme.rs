@@ -40,8 +40,9 @@ pub fn grapheme_count(s: &str) -> usize {
 
 /// Resolved width-computation policy. Build via `WidthPolicy::default()`
 /// (narrow ambiguous width, 0-width control chars -- matches MAE's prior,
-/// implicit behavior) or from the live editor options.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// implicit behavior; `bool::default()`/`usize::default()` already give
+/// exactly these values) or from the live editor options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct WidthPolicy {
     /// Resolve East_Asian_Width=Ambiguous code points as 2 columns (CJK
     /// convention) instead of the default 1 column (non-CJK convention).
@@ -49,15 +50,6 @@ pub struct WidthPolicy {
     /// Display width assigned to a control character, which
     /// `unicode-width` reports as `None` (undefined) rather than a number.
     pub control_char_width: usize,
-}
-
-impl Default for WidthPolicy {
-    fn default() -> Self {
-        WidthPolicy {
-            ambiguous_wide: false,
-            control_char_width: 0,
-        }
-    }
 }
 
 /// Width of a single character under `policy`. Returns `policy.control_char_width`
