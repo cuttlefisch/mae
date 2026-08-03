@@ -124,6 +124,13 @@ const IMPL_SOURCES: &[(&str, &str)] = &[
         "executor/self_test.rs",
         include_str!("../executor/self_test.rs"),
     ),
+    // ADR-091: the six session-scoped tools got conventional
+    // `execute_<tool_name>` impls here, so they leave the coverage ratchet
+    // below and come under the schema/impl check like everything else.
+    (
+        "executor/session_exec.rs",
+        include_str!("../executor/session_exec.rs"),
+    ),
     (
         "executor/shell_exec.rs",
         include_str!("../executor/shell_exec.rs"),
@@ -247,9 +254,6 @@ const CONDITIONALLY_REQUIRED_PARAMS: &[(&str, &str)] = &[
 
 const NOT_CHECKED_NO_CONVENTIONAL_IMPL_FN: &[&str] = &[
     "ai_permissions",
-    "ai_set_budget",
-    "ai_set_mode",
-    "ai_set_profile",
     "ask_user",
     "convert_buffer",
     "delegate",
@@ -258,7 +262,6 @@ const NOT_CHECKED_NO_CONVENTIONAL_IMPL_FN: &[&str] = &[
     "input_lock",
     "kb_block_member",
     "kb_unblock_member",
-    "log_activity",
     "lookup_online",
     "model_exam",
     "next_error",
@@ -266,7 +269,6 @@ const NOT_CHECKED_NO_CONVENTIONAL_IMPL_FN: &[&str] = &[
     "pkg_sync",
     "pkg_upgrade",
     "propose_changes",
-    "read_transcript",
     "run_build",
     "run_test",
     "search_tools",
@@ -276,7 +278,6 @@ const NOT_CHECKED_NO_CONVENTIONAL_IMPL_FN: &[&str] = &[
     "terminal_read",
     "terminal_send",
     "toggle_file_tree",
-    "web_fetch",
 ];
 
 /// The actual guard: every parameter an `execute_<tool>` impl treats as

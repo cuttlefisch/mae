@@ -1,10 +1,12 @@
 mod ai_tools;
+pub mod authorization;
 mod categories;
 mod collab_tools;
 mod core_tools;
 mod dap_tools;
 #[cfg(test)]
 mod dispatch_contract_tests;
+pub mod dispatchability;
 mod kb_tools;
 mod lsp_tools;
 #[cfg(test)]
@@ -21,9 +23,17 @@ use mae_core::{CommandRegistry, OptionRegistry};
 use crate::types::*;
 
 // Re-export all public items from submodules.
+pub use authorization::{
+    effective_tier, is_authorization_change, is_permission_tier_option, AUTHORIZATION_CHANGE_OPS,
+    PERMISSION_TIER_OPTION,
+};
 pub use categories::{
     annotations_for_tier, classify_command_permission, classify_tool_category, classify_tool_tier,
     parse_categories, request_tools_definition, PermissionPolicy, ToolCategory, ToolTier,
+};
+pub use dispatchability::{
+    external_discovery_tools, is_embedded_session_only, EMBEDDED_SESSION_ONLY_TOOLS,
+    SESSION_SCOPED_DISPATCHABLE_TOOLS,
 };
 
 /// Valid AI prompt profiles. Used in tool definitions for ai_set_profile and delegate.

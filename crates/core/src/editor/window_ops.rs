@@ -250,9 +250,9 @@ impl Editor {
         // ever runs.
         if self
             .ai
-            .mcp_session_windows
+            .mcp_sessions
             .values()
-            .any(|s| s.target_window_id == Some(win_id))
+            .any(|s| s.windows.target_window_id == Some(win_id))
         {
             return true;
         }
@@ -553,7 +553,18 @@ impl Editor {
         // That direction is deliberate: a leaked increment makes the editor treat
         // subsequent work as AI-originated, which is *more* restrictive, not less.
         self.ai.ai_dispatch_depth = self.ai.ai_dispatch_depth.saturating_add(1);
+        // ADR-091: record *whose* dispatch this is for the same extent, so a
+        // tool implementation can resolve its own session's state
+        // (`Editor::agent_session_mut`) without every dispatcher in the chain
+        // threading a session-id parameter. Saved/restored rather than
+        // cleared, so a nested dispatch (a tool that runs a command that
+        // dispatches again) restores the OUTER session's id rather than
+        // leaking `None` — which would silently redirect the outer session's
+        // remaining work at the process-wide fallback record.
+        let saved_session = self.ai.dispatch_session_id;
+        self.ai.dispatch_session_id = session_id;
         let result = self.with_ai_dispatch_scope_windows(session_id, f);
+        self.ai.dispatch_session_id = saved_session;
         self.ai.ai_dispatch_depth = self.ai.ai_dispatch_depth.saturating_sub(1);
         result
     }
@@ -623,9 +634,9 @@ impl Editor {
         // global fields to whatever they held before this call -- never
         // leaking `sid`'s state into the global/no-session view or a
         // different session's subsequent call.
-        let entry = self.ai.mcp_session_windows.entry(sid).or_default();
-        entry.target_window_id = self.ai.target_window_id;
-        entry.work_window = self.ai.work_window;
+        let entry = self.ai.mcp_sessions.entry(sid).or_default();
+        entry.windows.target_window_id = self.ai.target_window_id;
+        entry.windows.work_window = self.ai.work_window;
 
         self.ai.target_window_id = saved_global_target;
         self.ai.work_window = saved_global_work_window;
@@ -645,8 +656,8 @@ impl Editor {
     /// ensures the window-scan branches inside `find_or_create_companion_window`
     /// can't repurpose a window already tracked as another live session's.
     fn resolve_session_target(&mut self, sid: u64) -> Option<crate::window::WindowId> {
-        if let Some(state) = self.ai.mcp_session_windows.get(&sid) {
-            if let Some(id) = state.target_window_id {
+        if let Some(state) = self.ai.mcp_sessions.get(&sid) {
+            if let Some(id) = state.windows.target_window_id {
                 if self.window_mgr.window(id).is_some() {
                     return Some(id);
                 }
@@ -662,20 +673,20 @@ impl Editor {
         self.ai.target_window_id = saved_target;
         self.ai.work_window = saved_work_window;
 
-        if !self.ai.mcp_session_windows.contains_key(&sid)
-            && self.ai.mcp_session_windows.len() >= super::ai_state::MAX_TRACKED_MCP_SESSION_WINDOWS
+        if !self.ai.mcp_sessions.contains_key(&sid)
+            && self.ai.mcp_sessions.len() >= super::ai_state::MAX_TRACKED_MCP_SESSION_WINDOWS
         {
             // Coarse size bound, not LRU -- see MAX_TRACKED_MCP_SESSION_WINDOWS'
             // doc comment. Evicting is always safe: a session that gets
             // evicted here just re-creates a companion window on its next
             // dispatch, same as any other stale/never-set entry.
-            if let Some(&evict) = self.ai.mcp_session_windows.keys().next() {
-                self.ai.mcp_session_windows.remove(&evict);
+            if let Some(&evict) = self.ai.mcp_sessions.keys().next() {
+                self.ai.mcp_sessions.remove(&evict);
             }
         }
-        let entry = self.ai.mcp_session_windows.entry(sid).or_default();
-        entry.target_window_id = result;
-        entry.work_window.set(result);
+        let entry = self.ai.mcp_sessions.entry(sid).or_default();
+        entry.windows.target_window_id = result;
+        entry.windows.work_window.set(result);
 
         result
     }

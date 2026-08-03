@@ -178,6 +178,27 @@ pub fn classify_tool_category(name: &str) -> Option<ToolCategory> {
     if name.starts_with("mcp_") || name.starts_with("collab_") {
         return Some(ToolCategory::Mcp);
     }
+    // Decision #6 relocations. These are the `kb_` tools that grant, revoke,
+    // or relax another principal's access to a knowledge base — raised to
+    // `Privileged` because an authorization change is not an edit. That raise
+    // makes them illegal members of `Knowledge`, which `is_read_flavoured`
+    // declares read-flavoured and the invariant test below caps at `Write`:
+    // an operator who allowlists "knowledge" for a note-taking agent must not
+    // thereby hand it the ability to add a member to a shared KB.
+    //
+    // Relocated to `Mcp` (the peer-collaboration/external category) rather
+    // than `Execution`, because that is what they are *about* — `collab_share`,
+    // the buffer-level sibling of `kb_share`, already lives there via the
+    // `collab_` prefix. Named explicitly rather than splitting the `kb_`
+    // prefix wholesale, following ADR-085's own precedent for the
+    // `kb_raw_query`/`kb_enrich` outliers a few branches down. The read-only
+    // `kb_sharing_status` deliberately stays in `Knowledge`: it is
+    // introspection, the invariant does not touch it, and moving it would take
+    // "who are the members?" away from knowledge-scoped sessions for no
+    // security gain.
+    if super::authorization::is_authorization_change(name) {
+        return Some(ToolCategory::Mcp);
+    }
     if name.starts_with("lsp_") || name == "syntax_tree" {
         Some(ToolCategory::Lsp)
     } else if name.starts_with("dap_") || name == "debug_state" {
@@ -304,6 +325,15 @@ pub fn classify_command_permission(name: &str) -> PermissionTier {
 
         // Dangerous operations
         "quit" | "force-quit" => PermissionTier::Privileged,
+
+        // Authorization changes (decision #6). Placed AFTER the explicit arms
+        // above so the list stays the single source of truth for this one
+        // question and does not quietly reclassify anything else. Without
+        // this, `command_kb_share` — generated from the registry and landing
+        // on the `_ => Write` default below — is a Write-tier path to the
+        // exact effect `kb_share` was raised to Privileged to gate, and it
+        // needs no arguments: it shares the *active* KB.
+        n if super::authorization::is_authorization_change(n) => PermissionTier::Privileged,
 
         // Default to Write for unknown commands
         _ => PermissionTier::Write,

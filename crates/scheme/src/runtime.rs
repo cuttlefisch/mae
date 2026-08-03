@@ -1196,6 +1196,14 @@ mod tests;
 #[path = "permission_tests.rs"]
 mod permission_tests;
 
+// Decision #6's Scheme half: the option-setting primitives are the Scheme
+// route to `ai_tier`, i.e. to a session raising its own ceiling. Kept as its
+// own file rather than appended to `permission_tests.rs`, which is already
+// over its size ceiling as accepted debt.
+#[cfg(test)]
+#[path = "permission_option_tests.rs"]
+mod permission_option_tests;
+
 // CLAUDE.md principle-#3 parity primitives (KB CRUD, set-option-save!, LSP,
 // DAP). A child of this module for the same reason as `permission_tests`: the
 // oracles are the real `SharedState` queues and the real `Editor` after

@@ -19,6 +19,7 @@ pub mod token_estimate;
 mod tool_impls;
 pub mod tools;
 pub mod types;
+pub mod web;
 
 pub use claude::ClaudeProvider;
 pub use connectivity::ConnectivityResult;
@@ -50,7 +51,8 @@ pub use tool_impls::{
 };
 pub use tools::{
     ai_specific_tools, annotations_for_tier, classify_command_permission, classify_tool_tier,
-    parse_categories, request_tools_definition, scheme_tools_to_definitions, tools_from_registry,
-    PermissionPolicy, ToolCategory, ToolTier,
+    external_discovery_tools, is_embedded_session_only, parse_categories, request_tools_definition,
+    scheme_tools_to_definitions, tools_from_registry, PermissionPolicy, ToolCategory, ToolTier,
+    EMBEDDED_SESSION_ONLY_TOOLS, SESSION_SCOPED_DISPATCHABLE_TOOLS,
 };
 pub use types::*;

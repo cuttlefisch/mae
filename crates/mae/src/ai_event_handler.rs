@@ -1973,9 +1973,9 @@ mod tests {
         assert!(
             editor
                 .ai
-                .mcp_session_windows
+                .mcp_sessions
                 .get(&0)
-                .and_then(|s| s.target_window_id)
+                .and_then(|s| s.windows.target_window_id)
                 .is_some(),
             "companion window must be recorded under the requesting session's own id"
         );
@@ -2540,21 +2540,21 @@ mod tests {
         // before the permission check runs inside it).
         let target_101 = editor
             .ai
-            .mcp_session_windows
+            .mcp_sessions
             .get(&101)
-            .and_then(|s| s.target_window_id)
+            .and_then(|s| s.windows.target_window_id)
             .expect("session 101 should have an established target");
         let target_102 = editor
             .ai
-            .mcp_session_windows
+            .mcp_sessions
             .get(&102)
-            .and_then(|s| s.target_window_id)
+            .and_then(|s| s.windows.target_window_id)
             .expect("session 102 (denied) must still have its own established target");
         let target_103 = editor
             .ai
-            .mcp_session_windows
+            .mcp_sessions
             .get(&103)
-            .and_then(|s| s.target_window_id)
+            .and_then(|s| s.windows.target_window_id)
             .expect("session 103 should have an established target");
 
         assert_ne!(
@@ -2596,9 +2596,9 @@ mod tests {
         assert!(result1b.success);
         let target_101_again = editor
             .ai
-            .mcp_session_windows
+            .mcp_sessions
             .get(&101)
-            .and_then(|s| s.target_window_id)
+            .and_then(|s| s.windows.target_window_id)
             .expect("session 101 should still have a target");
         assert_eq!(
             target_101_again, target_101,
