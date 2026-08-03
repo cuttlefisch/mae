@@ -152,8 +152,8 @@ impl Editor {
             self.buffers[idx].delete_range(*start, *end);
             let rope = self.buffers[idx].rope();
             let new_row = rope.char_to_line((*start).min(rope.len_chars().saturating_sub(1)));
-            let line_start = rope.line_to_char(new_row);
-            new_positions.push((new_row, start.saturating_sub(line_start)));
+            let new_col = self.buffers[idx].byte_col_of_char_offset(new_row, *start);
+            new_positions.push((new_row, new_col));
         }
         // Each position was clamped against the rope state immediately
         // after ITS OWN deletion -- but earlier (higher-offset) entries can
@@ -227,10 +227,10 @@ impl Editor {
             let (start, _) = ranges[0];
             let rope = self.buffers[idx].rope();
             let new_row = rope.char_to_line(start);
-            let line_start = rope.line_to_char(new_row);
+            let new_col = self.buffers[idx].byte_col_of_char_offset(new_row, start);
             let win = self.window_mgr.focused_window_mut();
             win.cursor_row = new_row;
-            win.cursor_col = start - line_start;
+            win.cursor_col = new_col;
         }
         self.set_mode(Mode::Normal);
     }
@@ -501,8 +501,8 @@ impl Editor {
                     .saturating_sub(1);
             let rope = self.buffers[idx].rope();
             let new_row = rope.char_to_line(end_pos.min(rope.len_chars().saturating_sub(1)));
-            let line_start = rope.line_to_char(new_row);
-            new_positions.push((new_row, end_pos.saturating_sub(line_start)));
+            let new_col = self.buffers[idx].byte_col_of_char_offset(new_row, end_pos);
+            new_positions.push((new_row, new_col));
         }
         // Re-clamp every position against the FINAL buffer state before
         // dedup, same rationale as visual_delete: earlier (higher-offset)

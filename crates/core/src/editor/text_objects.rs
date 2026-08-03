@@ -157,10 +157,10 @@ impl Editor {
             // Move cursor to start of deleted range
             let rope = self.buffers[idx].rope();
             let new_row = rope.char_to_line(start.min(rope.len_chars().saturating_sub(1)));
-            let line_start = rope.line_to_char(new_row);
+            let new_col = self.buffers[idx].byte_col_of_char_offset(new_row, start);
             let win = self.window_mgr.focused_window_mut();
             win.cursor_row = new_row;
-            win.cursor_col = start.saturating_sub(line_start);
+            win.cursor_col = new_col;
             win.clamp_cursor(&self.buffers[idx]);
             let cmd_name = if inner {
                 "delete-inner-object"
@@ -184,10 +184,10 @@ impl Editor {
             // Move cursor to start of deleted range
             let rope = self.buffers[idx].rope();
             let new_row = rope.char_to_line(start.min(rope.len_chars().saturating_sub(1)));
-            let line_start = rope.line_to_char(new_row);
+            let new_col = self.buffers[idx].byte_col_of_char_offset(new_row, start);
             let win = self.window_mgr.focused_window_mut();
             win.cursor_row = new_row;
-            win.cursor_col = start.saturating_sub(line_start);
+            win.cursor_col = new_col;
             win.clamp_cursor(&self.buffers[idx]);
             let cmd_name = if inner {
                 "change-inner-object"
