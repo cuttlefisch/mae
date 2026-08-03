@@ -137,18 +137,27 @@ fn opt_string(v: &Value, fn_name: &str) -> Result<Option<String>, LispError> {
 /// Load one store's nodes into an in-memory [`mae_kb::KnowledgeBase`] so the
 /// SAME `search_ranked` the `kb_search` MCP tool uses can rank them.
 ///
-/// @ai-caution: [security] Do NOT "optimise" this back to
-/// `KbStore::fts_search`. That index is demonstrably lossy — on a freshly
-/// seeded store, a node titled `"alpha beta gamma delta"` with body
-/// `"epsilon zeta eta"` is found by `alpha`/`beta`/`gamma`/`zeta`/`eta` and
-/// **not** by `delta`/`epsilon`; `mae-kb`'s own `fts_search_finds_nodes` test
-/// passes only because `quantum` happens to be one of the terms that work
-/// (the "unicorn value" failure mode CLAUDE.md principle #14 names). Building
-/// `kb-search` on it would make the Scheme surface silently *miss* nodes the
-/// MCP `kb_search` tool returns, which is the parity asymmetry principle #3
-/// rules out — in the more dangerous direction, since a missing result looks
-/// like an absent node. See `docs/DECISIONS_FOR_REVIEW.md` for the defect
-/// itself, which is pre-existing and independent of this primitive.
+/// @ai-caution: [kb-search] Do NOT "optimise" this back to
+/// `KbStore::fts_search`. The original reason — that the index was lossy, so a
+/// node titled `"alpha beta gamma delta"` with body `"epsilon zeta eta"` was
+/// found by `alpha`/`beta`/`gamma`/`zeta`/`eta` but **not** by
+/// `delta`/`epsilon` — has since been **fixed** (the extractor was welding the
+/// last title token onto the first body token; see `NODES_FTS_DDL` in
+/// `shared/kb/src/cozo_store/schema.rs`), and
+/// `fts_search_and_search_ranked_agree_on_the_reproducer` now pins the two
+/// paths together.
+///
+/// The *other* reason still stands and is on its own sufficient: cozo's FTS
+/// **query** grammar reads `:`, `-`, `.` and a leading `*` as operators, and
+/// reserves UPPERCASE `AND`/`OR`/`NOT`/`NEAR` with an unanchored lookahead. So
+/// `(kb-search "concept:buffer")` — a namespaced node id, the single most
+/// natural thing to search this KB for — is a hard parse error through
+/// `fts_search`, as are `read-only`, `1.5` and `ANDROID`. `search_ranked`
+/// takes them literally. Both classes are pinned by
+/// `fts_query_syntax_characters_are_still_parse_errors` and
+/// `fts_uppercase_boolean_keyword_prefixes_are_parse_errors` in `mae-kb`;
+/// until those are resolved, switching this primitive over would regress the
+/// Scheme surface relative to the MCP tool, which principle #3 rules out.
 ///
 /// Cost: one `load_all()` per store per search. That is the same O(n) shape
 /// `Editor::kb_federated_search_scoped` already pays (it scans the in-memory

@@ -307,12 +307,16 @@ Two consequences worth stating plainly:
   goes through the **same `KnowledgeBase::search_ranked`** the `kb_search` MCP
   tool ranks with, over an in-memory `KnowledgeBase` loaded from the store —
   *not* through `KbStore::fts_search`. Two reasons, both found by testing this
-  primitive: the CozoDB FTS query parser rejects `-`/`:`/`*` as operators, so
-  `(kb-search "concept:buffer")` was a parse error while the MCP tool accepted
-  it; and the FTS index silently drops terms (see
-  `docs/DECISIONS_FOR_REVIEW.md` item 9), which would have made the Scheme
-  surface *miss* nodes the MCP tool returns — the more dangerous direction of
-  asymmetry, since a missing result reads as an absent node.
+  primitive. The second — that the FTS index silently dropped terms — has since
+  been **fixed** (`docs/DECISIONS_FOR_REVIEW.md` item 10: the index extractor
+  was welding a node's last title token onto its first body token, so terms at
+  that boundary retrieved nothing; existing stores are reindexed automatically
+  on open). The first still stands and is sufficient on its own: the CozoDB FTS
+  *query* parser reads `-`/`:`/`.`/`*` as operators and reserves uppercase
+  `AND`/`OR`/`NOT`/`NEAR` with an unanchored lookahead, so
+  `(kb-search "concept:buffer")` is a parse error through `fts_search` — as are
+  `read-only`, `1.5` and `ANDROID` — while `search_ranked` takes them
+  literally.
 - `(kb-create/update/delete …)` return `#t` once **queued**; the write itself
   runs on the next tick through `Editor::kb_*_node`. `kb-update`/`kb-delete`
   pre-check existence against the same store the write targets, so "no such
