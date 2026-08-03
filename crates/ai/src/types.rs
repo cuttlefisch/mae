@@ -147,6 +147,27 @@ pub enum AiEvent {
     ToolCallRequest {
         call: ToolCall,
         reply: tokio::sync::oneshot::Sender<ToolResult>,
+        /// ADR-090: `Some(tier)` when a human was shown this exact call at
+        /// this exact tier and approved it, so the main thread dispatches
+        /// under `PermissionPolicy::with_one_time_approval(tier)`.
+        ///
+        /// @ai-caution: [security] This is a *presentation* result being
+        /// carried back to the enforcement point, not a second decision.
+        /// `with_one_time_approval` raises only the auto-approval ceiling, so
+        /// a forged value here still cannot cross a hard ceiling (ADR-051) or
+        /// a category restriction (ADR-056) — the enforcement point re-decides
+        /// either way.
+        approved_tier: Option<PermissionTier>,
+    },
+    /// ADR-090 D3: the AI wants to run a tool above the auto-approval ceiling
+    /// and a human must answer. The embedded editor's implementation of `Ask`.
+    ConfirmToolCall {
+        tool_name: String,
+        arguments: serde_json::Value,
+        tier: PermissionTier,
+        /// The ceiling that was exceeded, for the prompt text.
+        auto_approve_up_to: PermissionTier,
+        reply: tokio::sync::oneshot::Sender<bool>,
     },
     /// AI produced a text response.
     TextResponse {

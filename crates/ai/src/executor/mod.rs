@@ -119,6 +119,62 @@ pub enum ExecuteResult {
         tool_call_id: String,
         kind: DeferredKind,
     },
+    /// ADR-090: the policy answered `Ask` — the call exceeds the
+    /// auto-approval ceiling, but nothing forbids it. **Nothing was
+    /// executed.**
+    ///
+    /// @ai-caution: [security] This variant exists so that `rustc` forces
+    /// every surface to say what it does with `Ask` (ADR-090 D3, the same
+    /// Capsicum "change the signature to find the missed paths" technique
+    /// ADR-084 D3 uses). A surface either prompts a human and re-dispatches
+    /// with `PermissionPolicy::with_one_time_approval`, or it declares itself
+    /// non-interactive and converts this to a denial via
+    /// [`ApprovalRequest::into_denied`]. Treating it as success — or matching
+    /// it with a `_ =>` arm that falls through to execution — is the one
+    /// outcome the ADR forbids.
+    NeedsApproval(ApprovalRequest),
+}
+
+/// A tool call parked awaiting a human's answer to [`ExecuteResult::NeedsApproval`].
+#[derive(Debug, Clone)]
+pub struct ApprovalRequest {
+    pub tool_call_id: String,
+    pub tool_name: String,
+    /// The tier the human must be shown — already through `effective_tier`,
+    /// so it reflects the call's real blast radius, not just the tool's
+    /// declared floor.
+    pub tier: PermissionTier,
+    /// The ceiling that was exceeded, for the message.
+    pub auto_approve_up_to: PermissionTier,
+}
+
+impl ApprovalRequest {
+    /// The non-interactive mapping (ADR-090 D3): `Ask` becomes a denial, and
+    /// says so, naming the ceiling an operator can raise. `surface` names the
+    /// caller ("--prompt mode", "external MCP dispatch") so the message is
+    /// actionable rather than generic.
+    ///
+    /// One implementation, shared by every non-interactive surface — the
+    /// wording is not re-typed per call site (principle #8).
+    pub fn into_denied(self, surface: &str) -> ToolResult {
+        let output = crate::tools::ask_denied_message(
+            &self.tool_name,
+            self.tier,
+            self.auto_approve_up_to,
+            surface,
+        );
+        ToolResult {
+            tool_call_id: self.tool_call_id,
+            tool_name: self.tool_name,
+            success: false,
+            output,
+        }
+    }
+
+    /// The prompt line for an interactive surface.
+    pub fn prompt_line(&self) -> String {
+        crate::tools::ask_message(&self.tool_name, self.tier, self.auto_approve_up_to)
+    }
 }
 
 // Convenience re-export for tests that use `build_self_test_plan` directly.

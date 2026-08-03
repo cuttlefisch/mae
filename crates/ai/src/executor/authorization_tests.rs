@@ -25,7 +25,7 @@ fn all_tools() -> Vec<ToolDefinition> {
 fn policy(tier: PermissionTier) -> PermissionPolicy {
     PermissionPolicy {
         auto_approve_up_to: tier,
-        allowed_categories: None,
+        ..PermissionPolicy::default()
     }
 }
 
@@ -42,6 +42,15 @@ fn run(name: &str, args: serde_json::Value, tier: PermissionTier) -> (bool, Stri
     match execute_tool(&mut editor, &call(name, args), &all_tools(), &policy(tier)) {
         ExecuteResult::Immediate(r) => (r.success, r.output),
         ExecuteResult::Deferred { .. } => (true, "deferred".into()),
+        // ADR-090: the oracle these tests care about is "the authorization
+        // change did NOT happen". `NeedsApproval` satisfies it -- nothing ran
+        // -- and this crate is a non-interactive surface for the purposes of a
+        // unit test, so it takes the documented D3 mapping rather than
+        // inventing a local one.
+        ExecuteResult::NeedsApproval(req) => {
+            let r = req.into_denied("this test harness");
+            (r.success, r.output)
+        }
     }
 }
 
@@ -116,25 +125,25 @@ fn a_write_tier_session_is_refused_every_authorization_change_on_every_surface()
     }
 }
 
-/// Shell tier is the *default* policy's ceiling, so "raised to Privileged"
-/// must mean "above the default", not merely "above ReadOnly". A raise that
-/// stopped at Shell would look green in the Write test above and change
-/// nothing for the shipped default.
+/// "Raised to Privileged" must mean *above Shell*, not merely above ReadOnly.
+/// A raise that stopped at Shell would look green in the Write test above and
+/// change nothing for an operator who deliberately grants shell access — which
+/// is the configuration MAE's own development runs under.
 #[test]
-fn the_default_shell_tier_policy_is_also_refused() {
+fn a_shell_tier_policy_is_also_refused() {
     for op in AUTHORIZATION_CHANGE_OPS {
         let (success, output) = run(op, args_for(op), PermissionTier::Shell);
-        assert!(!success, "{op} succeeded at the DEFAULT (Shell) tier");
+        assert!(!success, "{op} succeeded at Shell tier");
         assert!(
             output.contains("Permission denied"),
             "{op} at Shell tier: {output}"
         );
     }
-    // ...and the default policy really is Shell, so the line above is testing
-    // what it claims to.
+    // ADR-090 D5: and the shipped default is now *below* every tier tested
+    // above, so none of these tests is accidentally asserting the default.
     assert_eq!(
         PermissionPolicy::default().auto_approve_up_to,
-        PermissionTier::Shell
+        PermissionTier::ReadOnly
     );
 }
 

@@ -103,33 +103,30 @@ fn execute_tool_dispatch_body(
         }
     }
 
-    // 2. Check permission
-    if !policy.is_allowed(permission) {
-        return ExecuteResult::Immediate(ToolResult {
-            tool_call_id: call.id.clone(),
-            tool_name: call.name.clone(),
-            success: false,
-            output: format!(
-                "Permission denied: {} requires {:?} tier",
-                call.name, permission
-            ),
-        });
-    }
-
-    // 2b. Check tool-category restriction (ADR-056) -- orthogonal to the
-    // tier check above: tier answers "how mutating," category answers
-    // "which subsystem." An engine instance/session scoped to e.g.
-    // Knowledge-only tools is enforced here, not just at advertisement time.
-    if !policy.is_category_allowed(&call.name) {
-        return ExecuteResult::Immediate(ToolResult {
-            tool_call_id: call.id.clone(),
-            tool_name: call.name.clone(),
-            success: false,
-            output: format!(
-                "Category denied: {} is not in this session's allowed tool categories",
-                call.name
-            ),
-        });
+    // 2. Ask the policy (ADR-090). This is the enforcement point; the
+    // decision itself lives in `PermissionPolicy::decide` and covers BOTH the
+    // tier axis and the tool-category axis (ADR-056) -- tier answers "how
+    // mutating," category answers "which subsystem," and `decide` evaluates
+    // deny-first so neither can be softened into an `Ask`.
+    match policy.decide(&call.name, permission) {
+        crate::tools::Decision::Allow => {}
+        crate::tools::Decision::Deny(reason) => {
+            return ExecuteResult::Immediate(ToolResult {
+                tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
+                success: false,
+                output: crate::tools::deny_message(&call.name, permission, reason),
+            });
+        }
+        crate::tools::Decision::Ask => {
+            // Nothing has run. The caller decides: prompt, or deny explicitly.
+            return ExecuteResult::NeedsApproval(super::ApprovalRequest {
+                tool_call_id: call.id.clone(),
+                tool_name: call.name.clone(),
+                tier: permission,
+                auto_approve_up_to: policy.auto_approve_up_to,
+            });
+        }
     }
 
     // 3. Check for deferred (async) tools first -- LSP and DAP
@@ -1170,6 +1167,9 @@ mod tests {
             }
             ExecuteResult::Deferred { .. } => {
                 panic!("unknown tool must not be treated as deferred")
+            }
+            ExecuteResult::NeedsApproval(_) => {
+                panic!("a ReadOnly-tier probe must not need approval")
             }
         }
     }

@@ -27,6 +27,14 @@ fn unwrap_immediate(result: ExecuteResult) -> ToolResult {
             success: true,
             output: "deferred".into(),
         },
+        // A test that reached here wanted a result, not a prompt. Surface it
+        // as the loud failure it is rather than as a plausible-looking
+        // `success: false` that a weak assertion could swallow.
+        ExecuteResult::NeedsApproval(req) => panic!(
+            "unexpected approval prompt for {} ({:?} tier) -- give the test an \
+             explicit policy rather than relying on the shipped default",
+            req.tool_name, req.tier
+        ),
     }
 }
 
@@ -806,7 +814,7 @@ fn switch_to_buffer_sets_alternate() {
 fn privileged_policy() -> PermissionPolicy {
     PermissionPolicy {
         auto_approve_up_to: PermissionTier::Privileged,
-        allowed_categories: None,
+        ..PermissionPolicy::default()
     }
 }
 
@@ -938,6 +946,9 @@ fn lsp_definition_returns_deferred() {
             assert_eq!(kind, DeferredKind::LspDefinition);
         }
         ExecuteResult::Immediate(r) => panic!("expected Deferred, got Immediate: {}", r.output),
+        ExecuteResult::NeedsApproval(req) => {
+            panic!("expected Deferred, got an approval prompt for {}", req.tool_name)
+        }
     }
     assert_eq!(editor.lsp.pending_requests.len(), 1);
 }
@@ -997,6 +1008,9 @@ fn lsp_definition_returns_immediate_error_for_scratch() {
     let result = match result {
         ExecuteResult::Immediate(r) => r,
         ExecuteResult::Deferred { .. } => panic!("expected Immediate error for scratch buffer"),
+        ExecuteResult::NeedsApproval(req) => {
+            panic!("expected Immediate error, got an approval prompt for {}", req.tool_name)
+        }
     };
     assert!(!result.success);
     assert!(result.output.contains("no file path"));
@@ -1023,7 +1037,7 @@ fn ai_permissions_tool_reflects_policy() {
     let call = make_call("ai_permissions", serde_json::json!({}));
     let policy = PermissionPolicy {
         auto_approve_up_to: PermissionTier::ReadOnly,
-        allowed_categories: None,
+        ..PermissionPolicy::default()
     };
     let result = unwrap_immediate(execute_tool(&mut editor, &call, &all_tools(), &policy));
     assert!(result.success);
