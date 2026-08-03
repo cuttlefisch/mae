@@ -126,6 +126,20 @@ impl OptionRegistry {
                 opt!("tab_width", &["tab-width"],
                     "Display width of a tab character, in columns to the next tab-stop",
                     OptionKind::Int, "8", Some("editor.tab_width"), &[]),
+                opt!("ambiguous_width", &["ambiguous-width"],
+                    "Resolution for Unicode East_Asian_Width=Ambiguous characters (box-drawing, \
+                     Greek/Cyrillic subsets, etc): narrow (1 column, default -- correct for most \
+                     terminals/fonts) or wide (2 columns -- for CJK-locale terminals that render \
+                     these wide). See ADR-087 Rule 3 -- there is no universally correct answer; \
+                     this is Vim's 'ambiwidth' / WezTerm's/Ghostty's equivalent option.",
+                    OptionKind::String, "narrow", Some("editor.ambiguous_width"),
+                    &["narrow", "wide"]),
+                opt!("control_char_width", &["control-char-width"],
+                    "Display width (in columns) assigned to a raw control character (U+0000..=U+001F, \
+                     U+007F..=U+009F) when one appears in buffer/UI text. Unicode leaves this \
+                     undefined (unicode-width returns None); MAE previously collapsed it to a \
+                     silent 0. Does not affect tab (see tab_width) or newline handling.",
+                    OptionKind::Int, "0", Some("editor.control_char_width"), &[]),
                 opt!("org_hide_emphasis_markers", &["org-hide-emphasis-markers"],
                     "Hide *bold* and /italic/ markers in Org-mode",
                     OptionKind::Bool, "false", Some("editor.org_hide_emphasis_markers"), &[]),

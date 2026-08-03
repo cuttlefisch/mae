@@ -1,7 +1,7 @@
 //! Popup overlays: file picker, file browser, command palette, LSP completion,
 //! hover popup, code action menu.
 
-use mae_core::text_utils::centered_popup_dims;
+use mae_core::text_utils::{centered_popup_dims, truncate_end, truncate_start};
 use mae_core::Editor;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
@@ -187,12 +187,13 @@ pub(crate) fn render_file_picker(frame: &mut Frame, area: Rect, editor: &Editor)
             text_style
         };
 
+        // ADR-087 / audit #594: was `path.len() > max_w` + `&path[path.len() -
+        // max_w + 1..]` -- byte length compared against a display-column
+        // budget, then byte-sliced at an offset computed from that
+        // mismatched unit. Panics on a CJK/multi-byte path component.
+        // `truncate_start` keeps the distinctive end of the path, safely.
         let max_w = inner.width as usize - 1;
-        let display = if path.len() > max_w {
-            format!("…{}", &path[path.len() - max_w + 1..])
-        } else {
-            path.clone()
-        };
+        let display = truncate_start(path, max_w);
 
         lines.push(Line::from(Span::styled(display, style)));
     }
@@ -272,11 +273,10 @@ pub(crate) fn render_file_browser(frame: &mut Frame, area: Rect, editor: &Editor
             base_style
         };
 
-        let mut name = entry.display();
+        // See the file-picker site above: same byte-length-vs-column-budget bug.
+        let name = entry.display();
         let max_w = inner.width as usize - 1;
-        if name.len() > max_w {
-            name = format!("…{}", &name[name.len() - max_w + 1..]);
-        }
+        let name = truncate_start(&name, max_w);
         lines.push(Line::from(Span::styled(name, style)));
     }
 
@@ -383,12 +383,15 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
     } else {
         (inner.width as usize * 2 / 5).max(12)
     };
+    // ADR-087 / audit #594: was `.name.len()` (byte length) used as a
+    // display-column budget below -- fine for ASCII names, wrong (and the
+    // downstream byte-slicing panics) for anything multi-byte.
     let name_col = palette
         .filtered
         .iter()
         .skip(start)
         .take(results_height)
-        .map(|&i| palette.entries[i].name.len())
+        .map(|&i| mae_core::display_width(&palette.entries[i].name))
         .max()
         .unwrap_or(0)
         .min(max_name_width);
@@ -414,13 +417,19 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
             doc_style
         };
 
-        let name_display = if entry.name.len() > name_col {
+        // ADR-087 / audit #594: was `entry.name.len() > name_col` (byte length
+        // vs a display-column budget) feeding `&entry.name[skip..]` /
+        // `&entry.name[..name_col]` -- byte offsets computed from that
+        // mismatched unit, panicking on a multi-byte name (CJK, accented
+        // paths, etc). `truncate_start`/`byte_offset_for_max_width` cut on
+        // grapheme-cluster boundaries in display-column space instead.
+        let name_display = if mae_core::display_width(&entry.name) > name_col {
             if full_width_name {
-                // For paths, show the end (most distinctive part)
-                let skip = entry.name.len() - name_col + 1;
-                format!("…{}", &entry.name[skip..])
+                // For paths, show the end (most distinctive part).
+                truncate_start(&entry.name, name_col)
             } else {
-                format!("{:<w$}", &entry.name[..name_col], w = name_col)
+                let cut = mae_core::grapheme::byte_offset_for_max_width(&entry.name, name_col);
+                format!("{:<w$}", &entry.name[..cut], w = name_col)
             }
         } else {
             format!("{:<w$}", entry.name, w = name_col)
@@ -432,11 +441,12 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
                 row_style,
             )));
         } else {
+            // Same byte-length-vs-column-budget bug as above.
             let available_for_doc = (inner.width as usize).saturating_sub(name_col + 3);
-            let doc_display = if entry.doc.len() > available_for_doc && available_for_doc > 1 {
-                let mut s = entry.doc[..available_for_doc.saturating_sub(1)].to_string();
-                s.push('…');
-                s
+            let doc_display = if mae_core::display_width(&entry.doc) > available_for_doc
+                && available_for_doc > 1
+            {
+                truncate_end(&entry.doc, available_for_doc)
             } else {
                 entry.doc.clone()
             };

@@ -322,9 +322,17 @@ async fn run_session<R, W>(
                 // WU6: Log message classification for dispatch diagnostics.
                 let is_doc = is_doc_method(&msg);
                 let is_notif = is_notification(&msg);
+                // ADR-087 / audit #594: JSON-RPC message content can carry
+                // arbitrary UTF-8 (e.g. synced document text); a fixed byte
+                // cut can land mid-character and panic. `daemon` is a
+                // separate workspace (ADR-014) that doesn't depend on
+                // `mae-core`, so this uses the stable stdlib equivalent
+                // directly rather than pull in a cross-workspace dependency
+                // for one debug-log preview.
+                let preview_end = msg.floor_char_boundary(msg.len().min(120));
                 debug!(session = session_id, msg_len = msg.len(),
                     is_doc, is_notif,
-                    preview = &msg[..msg.len().min(120)],
+                    preview = &msg[..preview_end],
                     "dispatch: message classified");
 
                 // Check if this is a sync/* method we handle differently.

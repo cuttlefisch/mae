@@ -8,7 +8,6 @@ use mae_core::render_common::status::{
 };
 use mae_core::Editor;
 use skia_safe::Color4f;
-use unicode_width::UnicodeWidthStr;
 
 use crate::canvas::SkiaCanvas;
 use crate::theme;
@@ -48,7 +47,7 @@ pub fn render_status_bar(
     canvas.draw_rect_fill(row, 0, cols, 1, sl_bg);
 
     // Mode label.
-    let mode_len = UnicodeWidthStr::width(mode_str.as_str());
+    let mode_len = mae_core::display_width(mode_str.as_str());
     canvas.draw_rect_fill(row, 0, mode_len, 1, mode_bg);
     canvas.draw_text_at(row, 0, &mode_str, mode_fg);
 
@@ -60,11 +59,17 @@ pub fn render_status_bar(
 
     // Build and lay out segments using shared logic.
     let mut segments = build_status_segments(editor, frame_ms);
-    let layout = layout_status_segments(&mut segments, avail, &buf.name, buf.modified);
+    let layout = layout_status_segments(
+        &mut segments,
+        avail,
+        &buf.name,
+        buf.modified,
+        editor.width_policy(),
+    );
 
     canvas.draw_text_at(row, mode_len, &layout.left_text, sl_fg);
 
-    let right_w = UnicodeWidthStr::width(layout.right_text.as_str());
+    let right_w = mae_core::display_width(layout.right_text.as_str());
     let right_col = (mode_len + avail).saturating_sub(right_w);
 
     if layout.right_styled_spans.is_empty() {
@@ -78,7 +83,7 @@ pub fn render_status_bar(
             if span.byte_offset > byte_pos {
                 let plain = &layout.right_text[byte_pos..span.byte_offset];
                 canvas.draw_text_at(row, col, plain, sl_fg);
-                col += UnicodeWidthStr::width(plain);
+                col += mae_core::display_width(plain);
             }
             // Draw the styled span with its own fg/bg.
             let styled_text =
@@ -86,7 +91,7 @@ pub fn render_status_bar(
             let span_style = editor.theme.style(span.style_key);
             let span_fg = theme::color_or(span_style.fg, sl_fg);
             let span_bg_opt = span_style.bg.map(|c| theme::color_or(Some(c), sl_bg));
-            let w = UnicodeWidthStr::width(styled_text);
+            let w = mae_core::display_width(styled_text);
             if let Some(span_bg) = span_bg_opt {
                 canvas.draw_rect_fill(row, col, w, 1, span_bg);
             }

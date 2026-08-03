@@ -107,6 +107,11 @@ pub use graph_view::{
     GraphMultiKbScope, GraphNavDirection, GraphStyleOptions, GraphView, GraphViewIntent,
     GraphViewMode,
 };
+// ADR-087 Rule 7: `mae-core` is the sole owner of the width/segmentation call
+// (`unicode_width`/`unicode_segmentation`). `mae-renderer` and `mae-gui` reach
+// display width exclusively through this re-export, never by importing those
+// crates directly.
+pub use grapheme::display_width;
 pub use hooks::HookRegistry;
 pub use input::{InputEvent, MouseButton};
 pub use kb_view::{KbLinkSpan, KbPreviewIntent, KbPreviewPopup, KbView};

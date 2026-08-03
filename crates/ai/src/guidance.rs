@@ -43,8 +43,17 @@ pub fn read_project_context(cwd: &Path) -> Option<String> {
             continue;
         }
         if let Ok(content) = std::fs::read_to_string(&path) {
+            // ADR-087 / audit #594: `content[..PROJECT_CONTEXT_MAX_CHARS]` slices
+            // at a fixed *byte* offset into arbitrary project-context file
+            // content (CLAUDE.md/README.md routinely contain em dashes,
+            // checkmarks, arrows, etc.) -- a multi-byte character straddling
+            // that boundary panics on session startup, which is process-fatal
+            // for this path (`mae-agent-cli`'s system-prompt construction).
+            // `checked_byte_boundary` rounds down to the nearest char boundary.
             let truncated = if content.len() > PROJECT_CONTEXT_MAX_CHARS {
-                format!("{}...\n[truncated]", &content[..PROJECT_CONTEXT_MAX_CHARS])
+                let cut =
+                    mae_core::grapheme::checked_byte_boundary(&content, PROJECT_CONTEXT_MAX_CHARS);
+                format!("{}...\n[truncated]", &content[..cut])
             } else {
                 content
             };

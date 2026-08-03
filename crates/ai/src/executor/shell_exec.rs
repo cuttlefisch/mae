@@ -131,8 +131,12 @@ pub(super) fn execute_shell_exec_sync(args: &serde_json::Value) -> Result<String
 
     let mut out = format!("exit_code: {}\n", status);
     if !stdout.is_empty() {
+        // ADR-087 / audit #594: shell output is arbitrary UTF-8; a fixed byte
+        // cut can land mid-character. See `session/run_loop.rs`'s identical
+        // truncation for the same reasoning.
         let stdout_str = if stdout.len() > 10_000 {
-            format!("{}...[truncated]", &stdout[..10_000])
+            let cut = mae_core::grapheme::checked_byte_boundary(&stdout, 10_000);
+            format!("{}...[truncated]", &stdout[..cut])
         } else {
             stdout.to_string()
         };
@@ -140,7 +144,8 @@ pub(super) fn execute_shell_exec_sync(args: &serde_json::Value) -> Result<String
     }
     if !stderr.is_empty() {
         let stderr_str = if stderr.len() > 5_000 {
-            format!("{}...[truncated]", &stderr[..5_000])
+            let cut = mae_core::grapheme::checked_byte_boundary(&stderr, 5_000);
+            format!("{}...[truncated]", &stderr[..cut])
         } else {
             stderr.to_string()
         };

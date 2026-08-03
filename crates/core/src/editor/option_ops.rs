@@ -67,6 +67,14 @@ impl super::Editor {
             "relative_line_numbers" => self.relative_line_numbers.to_string(),
             "word_wrap" => self.word_wrap.to_string(),
             "tab_width" => self.tab_width.to_string(),
+            "ambiguous_width" => {
+                if self.ambiguous_width_wide {
+                    "wide".to_string()
+                } else {
+                    "narrow".to_string()
+                }
+            }
+            "control_char_width" => self.control_char_width.to_string(),
             "break_indent" => self.break_indent.to_string(),
             "show_break" => self.show_break.clone(),
             "org_hide_emphasis_markers" => self.org_hide_emphasis_markers.to_string(),
@@ -820,6 +828,19 @@ impl super::Editor {
                     .parse()
                     .map_err(|_| format!("Invalid integer: '{}'", value))?;
                 self.syntax_reparse_debounce_ms = v.clamp(0, 5000);
+            }
+            "ambiguous_width" => {
+                self.ambiguous_width_wide = match value {
+                    "narrow" => false,
+                    "wide" => true,
+                    _ => return Err(format!("Invalid ambiguous_width: '{}' (expected narrow or wide)", value)),
+                };
+            }
+            "control_char_width" => {
+                let v: usize = value
+                    .parse()
+                    .map_err(|_| format!("Invalid integer: '{}'", value))?;
+                self.control_char_width = v.clamp(0, 16);
             }
             // Babel options were registered + persisted but never applied to
             // their editor fields (dead config); wire them here so `:set` works.

@@ -3078,7 +3078,6 @@ dependencies = [
  "skia-safe",
  "softbuffer",
  "tracing",
- "unicode-width 0.2.2",
  "winit",
 ]
 
@@ -3163,7 +3162,6 @@ dependencies = [
  "mae-shell",
  "ratatui",
  "tracing",
- "unicode-width 0.2.2",
 ]
 
 [[package]]
