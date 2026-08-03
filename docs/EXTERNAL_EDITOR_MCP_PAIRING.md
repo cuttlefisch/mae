@@ -319,9 +319,13 @@ these up expecting them to affect Copilot in any way.
   automatically on first activation per workspace (`mae.autoConfigureGuidance`, default
   `true`).
 - **The server-side permission policy** (`MAE_AI_PERMISSIONS` env var, or `config.toml`'s
-  `[ai] auto_approve_tier`; default `"trusted"` = auto-approves up through Shell-tier
-  tools with **no server-side confirmation at all**) — this, not VS Code's own
+  `[ai] auto_approve_tier`; default `"readonly"` since ADR-090) — this, not VS Code's own
   confirmation dialog, is MAE's actual security boundary. See the note below.
+  **External MCP dispatch cannot prompt**: MAE implements no MCP elicitation, and the
+  requesting client is not the local human, so this path maps ADR-090's `ask` state to a
+  denial. A paired-editor deployment therefore needs an explicit `auto_approve_tier` —
+  under the shipped default, anything above a read comes back as
+  `Permission denied: … There is no human to confirm this on external MCP dispatch`.
 - **The KB registry** (`kb_register`/`kb_instances` — which KBs MAE has open and
   searchable).
 - **AI-residency policy** (`kb_set_ai_residency`, ADR-048) — if the guidance KB is marked
@@ -340,7 +344,8 @@ Once that's set, there is no client-side prompt standing between the model and t
 enforcement**, regardless of what any client's UI does or doesn't show. Don't rely on
 "Copilot will ask before doing anything destructive" as your actual safety net; set
 `MAE_AI_PERMISSIONS`/`auto_approve_tier` to a tier you're actually comfortable auto-
-approving for *any* MCP client, paired or not. (Per-session permission ceilings — a
+approving for *any* MCP client, paired or not — and note that on this path there is no
+"ask" fallback to catch a tier you set too high. (Per-session permission ceilings — a
 connecting client can *further restrict*, never loosen, its own ceiling via
 `initialize`'s `permissionCeiling` param — exist for exactly this kind of scoped pairing;
 see [ADR-051](adr/051-per-session-permission-driven-window-isolation.md). VS Code's own MCP client doesn't
