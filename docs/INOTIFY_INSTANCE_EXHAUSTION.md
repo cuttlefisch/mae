@@ -1,8 +1,9 @@
 # MAE exhausts the per-user inotify instance budget
 
-**Status:** diagnosed with measurements, not yet fixed. Reported by Hayden after Sway began
-alerting on inotify limits — with the observation that no other software on the machine, *including
-heavily-used Emacs*, has ever caused it.
+**Status:** **fixed** in `shared/kb/src/watch.rs` — one watcher per process, many watched paths
+(see "The fix" below and the `@ai-caution: [resource-exhaustion]` marker on that module). Reported
+by Hayden after Sway began alerting on inotify limits — with the observation that no other software
+on the machine, *including heavily-used Emacs*, has ever caused it.
 
 ## The measurement
 
@@ -63,14 +64,27 @@ calls; nothing about the current design requires a watcher per directory. The pe
 (`path_to_ids`, `errors`, the receiver) becomes a routing table keyed by path prefix, so an event
 is dispatched to the right KB instance by matching its directory.
 
-Concretely:
-- A process-wide `SharedDirWatcher` owning one `RecommendedWatcher` and one receiver.
-- `watch_dir(uuid, dir)` / `unwatch_dir(uuid)` add and remove paths on that single instance.
-- Event dispatch resolves `event.path` to a uuid by longest-prefix match against the registered
-  directories.
-- `StoreWatcher` and the registry watcher fold into the same instance.
+As implemented:
+- A process-wide `SharedDirWatcher` owning one `RecommendedWatcher` and one receiver, created on
+  first use (and re-tried, not memoized, if creation fails — the limit being momentarily full is a
+  transient condition caused by *other* processes).
+- `OrgDirWatcher` and `StoreWatcher` are now registration handles on it: constructing one calls
+  `watch()` on the shared instance, dropping one `unwatch()`es (refcounted, so two KBs on the same
+  directory share one watch and the first to drop doesn't blind the second).
+- Event dispatch resolves each event path to a registration by **longest-prefix match**
+  (component-wise, so `/a/bc` never matches `/a/bcd`), which is what makes a KB registered *inside*
+  another KB's directory feed the innermost KB rather than both. Ties — two registrations on the
+  same root — both receive, matching the old one-watcher-each behavior.
+- `StoreWatcher` (the durable store file) and the registry watcher fold into the same instance: an
+  exact file path is always a strictly longer match than any directory containing it, so their
+  events can never be misrouted to a KB.
 
-Expected result: **1–2 instances per process regardless of KB count**, down from N+2.
+Result, measured on the real code (`inotify_init1` calls, counted with an `LD_PRELOAD` shim so the
+measurement works even on the exhausted machine): 8 watched directories cost **8** instances
+before, **1** after — and that same single instance also absorbs the store and registry watchers,
+i.e. **1 per process regardless of KB count**, down from N+2. `mae_kb::watch::inotify_instance_count()`
+is the in-tree oracle; two regression tests (in `mae-kb` and in `mae-core`, the latter through the
+real `kb_register` path) assert the invariant against `/proc/self/fd` directly.
 
 ## Why this is worth doing properly rather than raising the limit
 
