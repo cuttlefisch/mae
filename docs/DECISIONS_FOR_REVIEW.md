@@ -12,7 +12,7 @@ Delete an entry once it is decided (and record the decision in the relevant ADR)
 | # | Topic | Decision |
 |---|---|---|
 | 0 | Disclosure sequencing | **Push.** Done; #612 merged, #613 open. |
-| 1 | Default permission tier | **Three-state model (allow/ask/deny) is in v0.15 scope.** Build the ask state, then lower the default. |
+| 1 | Default permission tier | **Done.** Three-state model built (ADR-090, now Accepted); default lowered to `readonly`. Remaining: an interactive `ask` for the external-MCP path, and ADR-084 D7's `ai_tier` wiring — both recorded in ADR-090's implementation notes. |
 | 2 | RCE advisory / CVE | **None needed** — no other users today, so no separate advisory, no CVE, no v0.14 backport. The draft advisory stays unpublished. |
 | 3 | ADR-085 category split | **Ship as a breaking change** with release notes naming all eight relocated tools. |
 | 4 | `Window::cursor_col` | **Do the byte migration in v0.15**, not just the declaration. |
@@ -85,9 +85,15 @@ release is quick once you decide. Nothing is blocked on this except the push its
 
 ---
 
-## 1. The default permission tier is permissive, and fixing it is a feature, not a patch
+## 1. RESOLVED — the three-state model is built and the default is lowered
 
-**Status:** analysed, blocked on a product call. See ADR-090.
+**Status:** implemented. ADR-090 is Accepted; its *Implementation notes* section records where each
+decision landed and the two follow-ups that remain (an interactive `ask` for the external-MCP path,
+and ADR-084 D7's `ai_tier` wiring). The shipped default is now `readonly`: reads run, writes and
+shell are *asked* on an interactive surface and denied — explicitly, with a message that says why —
+on a headless one.
+
+The original analysis is kept below for the record.
 
 MAE ships `auto_approve_tier = "trusted"` (= Shell), so the default posture is *all categories ×
 shell tier*. Lowering it is the single highest-leverage security change available.

@@ -24,7 +24,9 @@ pub mod web;
 pub use claude::ClaudeProvider;
 pub use connectivity::ConnectivityResult;
 pub use context_limits::{lookup as lookup_context_limit, ModelVerification};
-pub use executor::{execute_tool, execute_tool_with_requester, DeferredKind, ExecuteResult};
+pub use executor::{
+    execute_tool, execute_tool_with_requester, ApprovalRequest, DeferredKind, ExecuteResult,
+};
 pub use gemini::GeminiProvider;
 pub use guardrail::{GuardrailProvider, StagePolicy, ToolStage};
 pub use ollama::OllamaProvider;
@@ -50,9 +52,11 @@ pub use tool_impls::{
     execute_lsp_references, execute_lsp_workspace_symbol,
 };
 pub use tools::{
-    ai_specific_tools, annotations_for_tier, classify_command_permission, classify_tool_tier,
-    external_discovery_tools, is_embedded_session_only, parse_categories, request_tools_definition,
-    scheme_tools_to_definitions, tools_from_registry, PermissionPolicy, ToolCategory, ToolTier,
-    EMBEDDED_SESSION_ONLY_TOOLS, SESSION_SCOPED_DISPATCHABLE_TOOLS,
+    ai_specific_tools, annotations_for_tier, ask_denied_message, ask_message,
+    classify_command_permission, classify_tool_tier, deny_message, external_discovery_tools,
+    is_embedded_session_only, parse_categories, request_tools_definition,
+    scheme_tools_to_definitions, tools_from_registry, Decision, DenyReason, HardCeiling,
+    HardCeilingSource, PermissionPolicy, ToolCategory, ToolTier, EMBEDDED_SESSION_ONLY_TOOLS,
+    SESSION_SCOPED_DISPATCHABLE_TOOLS,
 };
 pub use types::*;

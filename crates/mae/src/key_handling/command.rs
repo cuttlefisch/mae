@@ -123,6 +123,11 @@ pub fn handle_command_mode(
                             let _ = reply.send("User accepted without typing".into());
                             editor.set_status("[AI] User accepted");
                         }
+                        // ADR-090: the human's answer to `Ask`.
+                        PendingInteractiveEvent::ConfirmToolCall(reply) => {
+                            let _ = reply.send(true);
+                            editor.set_status("[AI] Tool call approved");
+                        }
                     }
                 } else {
                     editor.set_status("No pending AI interaction to accept");
@@ -141,6 +146,10 @@ pub fn handle_command_mode(
                         PendingInteractiveEvent::AskUser(reply) => {
                             let _ = reply.send("User rejected/cancelled".into());
                             editor.set_status("[AI] User rejected");
+                        }
+                        PendingInteractiveEvent::ConfirmToolCall(reply) => {
+                            let _ = reply.send(false);
+                            editor.set_status("[AI] Tool call refused");
                         }
                     }
                 } else {

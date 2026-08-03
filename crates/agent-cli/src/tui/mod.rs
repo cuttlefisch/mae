@@ -14,9 +14,7 @@ mod input;
 mod statusline;
 mod transcript;
 
-pub use confirm::{
-    needs_confirmation, parse_confirm_key, ConfirmChoice, PendingConfirm, PermissionMode,
-};
+pub use confirm::{parse_confirm_key, policy_for_mode, ConfirmChoice, PendingConfirm};
 pub use transcript::TranscriptEntry;
 
 use ratatui::layout::{Constraint, Direction, Layout};
@@ -30,7 +28,9 @@ pub struct AppState {
     pub input: String,
     pub cursor: usize,
     pub scroll_offset: usize,
-    pub permission_mode: PermissionMode,
+    /// ADR-090: the session's policy, not a local mode enum. Rendered in the
+    /// status line and consulted by the executors — one value, one vocabulary.
+    pub policy: mae_ai::PermissionPolicy,
     pub pending_confirm: Option<PendingConfirm>,
     pub model: String,
     pub provider: String,
@@ -51,13 +51,13 @@ pub struct AppState {
 }
 
 impl AppState {
-    pub fn new(model: String, provider: String, permission_mode: PermissionMode) -> Self {
+    pub fn new(model: String, provider: String, policy: mae_ai::PermissionPolicy) -> Self {
         Self {
             transcript: Vec::new(),
             input: String::new(),
             cursor: 0,
             scroll_offset: 0,
-            permission_mode,
+            policy,
             pending_confirm: None,
             model,
             provider,
@@ -223,7 +223,7 @@ mod tests {
         AppState::new(
             "qwen3:8b".into(),
             "ollama".into(),
-            PermissionMode::default(),
+            mae_ai::PermissionPolicy::default(),
         )
     }
 

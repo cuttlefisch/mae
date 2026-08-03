@@ -4,6 +4,9 @@ mod categories;
 mod collab_tools;
 mod core_tools;
 mod dap_tools;
+pub mod decision;
+#[cfg(test)]
+mod decision_tests;
 #[cfg(test)]
 mod dispatch_contract_tests;
 pub mod dispatchability;
@@ -30,6 +33,10 @@ pub use authorization::{
 pub use categories::{
     annotations_for_tier, classify_command_permission, classify_tool_category, classify_tool_tier,
     parse_categories, request_tools_definition, PermissionPolicy, ToolCategory, ToolTier,
+};
+pub use decision::{
+    ask_denied_message, ask_message, deny_message, Decision, DenyReason, HardCeiling,
+    HardCeilingSource,
 };
 pub use dispatchability::{
     external_discovery_tools, is_embedded_session_only, EMBEDDED_SESSION_ONLY_TOOLS,
@@ -604,12 +611,27 @@ mod tests {
         assert!(AI_PROFILES.contains(&"verifier"));
     }
 
+    /// ADR-090 D5: the shipped default auto-approves reads and *asks* for
+    /// everything else. The load-bearing assertion is the second half --
+    /// nothing above the ceiling is silently denied, because a denial is what
+    /// used to force operators back to `auto_approve_tier = "shell"`.
     #[test]
-    fn default_policy_allows_up_to_shell() {
+    fn default_policy_allows_reads_and_asks_for_everything_above() {
         let policy = PermissionPolicy::default();
-        assert!(policy.is_allowed(PermissionTier::ReadOnly));
-        assert!(policy.is_allowed(PermissionTier::Write));
-        assert!(policy.is_allowed(PermissionTier::Shell));
-        assert!(!policy.is_allowed(PermissionTier::Privileged));
+        assert_eq!(
+            policy.decide("buffer_read", PermissionTier::ReadOnly),
+            Decision::Allow
+        );
+        for tier in [
+            PermissionTier::Write,
+            PermissionTier::Shell,
+            PermissionTier::Privileged,
+        ] {
+            assert_eq!(
+                policy.decide("buffer_write", tier),
+                Decision::Ask,
+                "{tier:?} must be askable under the default policy, never denied"
+            );
+        }
     }
 }

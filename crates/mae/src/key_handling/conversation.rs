@@ -134,6 +134,14 @@ pub(crate) fn submit_conversation_prompt(
                 let _ = reply.send(false);
                 editor.set_status("[AI] Changes rejected via chat");
             }
+            // ADR-090: typing a chat message instead of answering the prompt
+            // is not an approval. Refuse, and say so -- the alternative
+            // (dropping the sender silently) would also refuse, but leave the
+            // human with no idea their tool call was gone.
+            PendingInteractiveEvent::ConfirmToolCall(reply) => {
+                let _ = reply.send(false);
+                editor.set_status("[AI] Tool call refused (use :ai-accept to approve)");
+            }
         }
         return;
     }

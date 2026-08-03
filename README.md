@@ -195,7 +195,9 @@ the Scheme runtime starts), add it to `~/.config/mae/config.toml`:
 provider = "claude"                    # claude | openai | gemini | deepseek | ollama
 model = "claude-sonnet-4-20250514"     # any supported model name
 # api_key_command = "pass show mae/anthropic"  # password manager integration
-# auto_approve_tier = "shell"          # readonly | write | shell (default) | privileged
+# auto_approve_tier = "readonly"       # readonly (default) | write | shell | privileged
+                                        # the AUTO-APPROVAL ceiling: above it, interactive
+                                        # surfaces ask a human, headless ones deny (ADR-090)
 # editor = "mae-agent"                 # CLI command for SPC a a / SPC a p (AI agent shell,
                                         # default since ADR-049 — set to "claude"/"aider"/etc.
                                         # to use a different agent CLI instead)

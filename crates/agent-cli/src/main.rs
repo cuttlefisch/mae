@@ -28,9 +28,7 @@ use ratatui::Terminal;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::mcp_client::{McpClient, ToolCallOutcome, ToolExecutor};
-use crate::tui::{
-    needs_confirmation, AppState, ConfirmChoice, PendingConfirm, PermissionMode, SlashCommand,
-};
+use crate::tui::{policy_for_mode, AppState, ConfirmChoice, PendingConfirm, SlashCommand};
 
 #[derive(Parser, Debug)]
 #[command(name = "mae-agent", about = "Terminal chat harness for MAE's AI tools")]
@@ -284,18 +282,18 @@ async fn main() -> anyhow::Result<()> {
         return run_once(&args, prompt, mcp, tools, provider, system_prompt).await;
     }
 
-    // @ai-caution: [security] Do NOT restore `.unwrap_or_default()` here — the
-    // default is Shell, so a typo'd --permission-mode silently granted shell
-    // access instead of erroring (CWE-636, ADR-084 D4).
-    let Some(permission_mode) = PermissionMode::parse(&args.permission_mode) else {
+    // @ai-caution: [security] Do NOT restore `.unwrap_or_default()` here — a
+    // typo'd --permission-mode must error, never resolve to a real tier
+    // (CWE-636, ADR-084 D4).
+    let Some(policy) = policy_for_mode(&args.permission_mode) else {
         eprintln!(
-            "mae-agent: unknown --permission-mode {:?}.\nValid values: readonly, write, \
-             standard, shell, trusted, privileged, full, yolo.",
-            args.permission_mode
+            "mae-agent: unknown --permission-mode {:?}.\nValid values: {}.",
+            args.permission_mode,
+            mae_ai::PermissionTier::VALID_SPELLINGS.join(", ")
         );
         std::process::exit(2);
     };
-    let mut app = AppState::new(args.model.clone(), args.provider.clone(), permission_mode);
+    let mut app = AppState::new(args.model.clone(), args.provider.clone(), policy);
     app.push_system_note(format!(
         "Connected to {} ({} tools available). Permission mode: {}.",
         socket_path.display(),
@@ -324,25 +322,26 @@ async fn run_once(
     provider: Arc<dyn AgentProvider>,
     system_prompt: String,
 ) -> anyhow::Result<()> {
-    // @ai-caution: [security] Do NOT restore `.unwrap_or_default()` here — the
-    // default is Shell, so a typo'd --permission-mode silently granted shell
-    // access instead of erroring (CWE-636, ADR-084 D4).
-    let Some(permission_mode) = PermissionMode::parse(&args.permission_mode) else {
+    // @ai-caution: [security] Do NOT restore `.unwrap_or_default()` here — a
+    // typo'd --permission-mode must error, never resolve to a real tier
+    // (CWE-636, ADR-084 D4).
+    let Some(policy) = policy_for_mode(&args.permission_mode) else {
         eprintln!(
-            "mae-agent: unknown --permission-mode {:?}.\nValid values: readonly, write, \
-             standard, shell, trusted, privileged, full, yolo.",
-            args.permission_mode
+            "mae-agent: unknown --permission-mode {:?}.\nValid values: {}.",
+            args.permission_mode,
+            mae_ai::PermissionTier::VALID_SPELLINGS.join(", ")
         );
         std::process::exit(2);
     };
     eprintln!(
-        "mae-agent: --prompt mode (non-interactive) -- permission ceiling: {permission_mode:?}. \
-         Tool calls exceeding this tier are denied, not confirmed (no human to ask)."
+        "mae-agent: --prompt mode (non-interactive) -- permission ceiling: {}. \
+         Tool calls exceeding this tier are denied, not confirmed (no human to ask).",
+        policy.auto_approve_up_to.config_name()
     );
     let mut executor = NonInteractiveExecutor {
         inner: mcp,
         tools: tools.clone(),
-        mode: permission_mode,
+        policy,
         own_provider: args.provider.clone(),
     };
 
@@ -453,7 +452,7 @@ enum HarnessEvent {
 struct ConfirmingExecutor {
     inner: McpClient,
     tools: Vec<ToolDefinition>,
-    mode: PermissionMode,
+    policy: mae_ai::PermissionPolicy,
     own_provider: String,
     events_tx: mpsc::UnboundedSender<HarnessEvent>,
 }
@@ -493,25 +492,43 @@ impl ToolExecutor for ConfirmingExecutor {
             // trusted just because we don't know better.
             .unwrap_or(mae_ai::PermissionTier::Privileged);
 
-        if needs_confirmation(tier, self.mode) {
-            let (tx, rx) = oneshot::channel();
-            let pending = PendingConfirm {
-                tool_name: name.to_string(),
-                arguments: arguments.clone(),
-                tier,
-            };
-            let _ = self
-                .events_tx
-                .send(HarnessEvent::ConfirmRequest(pending, tx));
-            // `ApproveAlwaysThisSession` is intentionally treated as a one-time
-            // approve for now (a safe, honest subset) rather than a persistent
-            // per-session allowlist — every subsequent call still gates on
-            // `needs_confirmation`. A real allowlist is a documented follow-up.
-            if rx.await.unwrap_or(ConfirmChoice::Deny) == ConfirmChoice::Deny {
+        // ADR-090: this is MAE's interactive surface — it implements `Ask`.
+        match self.policy.decide(name, tier) {
+            mae_ai::Decision::Allow => {}
+            // A `Deny` is not promptable. `--permission-mode` never produces
+            // one today (it is an auto-approval ceiling), but a future hard
+            // ceiling or category restriction would, and the prompt must not
+            // become a way around it.
+            mae_ai::Decision::Deny(reason) => {
                 return Ok(ToolCallOutcome {
                     success: false,
-                    text: "Denied by user.".to_string(),
+                    text: mae_ai::deny_message(name, tier, reason),
                 });
+            }
+            mae_ai::Decision::Ask => {
+                let (tx, rx) = oneshot::channel();
+                let pending = PendingConfirm {
+                    tool_name: name.to_string(),
+                    arguments: arguments.clone(),
+                    tier,
+                };
+                let _ = self
+                    .events_tx
+                    .send(HarnessEvent::ConfirmRequest(pending, tx));
+                // `ApproveAlwaysThisSession` is intentionally treated as a
+                // one-time approve for now (a safe, honest subset) rather than
+                // a persistent per-session allowlist — every subsequent call
+                // re-decides. A real allowlist is a documented follow-up.
+                //
+                // @ai-caution: [security] `unwrap_or(Deny)`: a dropped channel
+                // (TUI gone, task cancelled) is a refusal. An `Ask` that loses
+                // its answer must never resolve to `Allow`.
+                if rx.await.unwrap_or(ConfirmChoice::Deny) == ConfirmChoice::Deny {
+                    return Ok(ToolCallOutcome {
+                        success: false,
+                        text: "Denied by user.".to_string(),
+                    });
+                }
             }
         }
 
@@ -559,7 +576,7 @@ async fn fetch_kb_residency(
 struct NonInteractiveExecutor {
     inner: McpClient,
     tools: Vec<ToolDefinition>,
-    mode: PermissionMode,
+    policy: mae_ai::PermissionPolicy,
     own_provider: String,
 }
 
@@ -598,13 +615,21 @@ impl ToolExecutor for NonInteractiveExecutor {
             // trusted just because we don't know better.
             .unwrap_or(mae_ai::PermissionTier::Privileged);
 
-        if needs_confirmation(tier, self.mode) {
-            let text = format!(
-                "Denied: '{name}' is {tier:?}-tier, which exceeds the --permission-mode \
-                 ceiling ({:?}). --prompt mode has no human to confirm this -- pass a \
-                 higher --permission-mode explicitly if this call is expected.",
-                self.mode
-            );
+        // ADR-090 D3: `--prompt` declares itself non-interactive and maps
+        // `Ask` to a denial, explicitly. This is the precedent the other
+        // headless surfaces (external MCP dispatch, `--self-test`) follow, and
+        // the wording is the shared one -- not a message re-typed per surface.
+        let decision = self.policy.decide(name, tier);
+        if !decision.is_allow() {
+            let text = match decision {
+                mae_ai::Decision::Deny(reason) => mae_ai::deny_message(name, tier, reason),
+                _ => mae_ai::ask_denied_message(
+                    name,
+                    tier,
+                    self.policy.auto_approve_up_to,
+                    "--prompt mode",
+                ),
+            };
             eprintln!("mae-agent: {text}");
             return Ok(ToolCallOutcome {
                 success: false,
@@ -650,7 +675,7 @@ async fn run_event_loop(
     let (events_tx, mut events_rx) = mpsc::unbounded_channel::<HarnessEvent>();
     let mut turn_handle: Option<tokio::task::JoinHandle<()>> = None;
     let mut pending_confirm_reply: Option<oneshot::Sender<ConfirmChoice>> = None;
-    let permission_mode = app.permission_mode;
+    let policy = app.policy.clone();
     let own_provider = app.provider.clone();
     // `None` exactly while a turn's spawned task owns the client (it's handed
     // back via `HarnessEvent::TurnDone`) — `turn_handle.is_none()` is checked
@@ -683,7 +708,7 @@ async fn run_event_loop(
                             let executor = ConfirmingExecutor {
                                 inner: client,
                                 tools: tools.clone(),
-                                mode: permission_mode,
+                                policy: policy.clone(),
                                 own_provider: own_provider.clone(),
                                 events_tx: events_tx.clone(),
                             };
@@ -849,7 +874,10 @@ fn handle_slash_command(app: &mut AppState, cmd: SlashCommand) {
             app.push_system_note(msg);
         }
         SlashCommand::Permissions => {
-            let msg = format!("{:?}", app.permission_mode);
+            let msg = format!(
+                "auto-approve up to {} (higher tiers prompt, they are not denied)",
+                app.policy.auto_approve_up_to.config_name()
+            );
             app.push_system_note(msg);
         }
         SlashCommand::Quit => app.should_quit = true,
@@ -884,7 +912,7 @@ mod tests {
         AppState::new(
             "qwen3:latest".into(),
             "ollama".into(),
-            PermissionMode::default(),
+            mae_ai::PermissionPolicy::default(),
         )
     }
 
@@ -1188,7 +1216,8 @@ mod tests {
         let mut executor = NonInteractiveExecutor {
             inner: mcp,
             tools: vec![shell_tool("shell_exec")],
-            mode: PermissionMode::ReadOnly, // ceiling well below Shell
+            // ceiling well below Shell
+            policy: policy_for_mode("readonly").unwrap(),
             own_provider: "ollama".to_string(),
         };
 
@@ -1202,8 +1231,17 @@ mod tests {
             "a Shell-tier call must be denied, not executed"
         );
         assert!(
-            outcome.text.contains("Denied"),
+            outcome.text.contains("Permission denied"),
             "denial reason should be explicit: {}",
+            outcome.text
+        );
+        // ADR-090 D3: the *decision* was `Ask`; this surface mapped it to a
+        // denial because it has no human. The message must say so, otherwise
+        // an operator cannot tell "policy forbids this" from "nobody was
+        // around to approve it".
+        assert!(
+            outcome.text.contains("no human to confirm"),
+            "the non-interactive mapping must be visible in the message: {}",
             outcome.text
         );
 
@@ -1227,7 +1265,8 @@ mod tests {
         let mut executor = NonInteractiveExecutor {
             inner: mcp,
             tools: vec![shell_tool("shell_exec")],
-            mode: PermissionMode::Shell, // ceiling covers Shell -- explicit opt-in
+            // ceiling covers Shell -- explicit opt-in
+            policy: policy_for_mode("shell").unwrap(),
             own_provider: "ollama".to_string(),
         };
 

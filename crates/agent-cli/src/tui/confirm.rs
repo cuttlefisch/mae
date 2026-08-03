@@ -1,60 +1,40 @@
-//! Inline tool-call confirm prompt — the "reviewability/interviewing" UX.
-//! Genuinely net-new: no human-in-the-loop permission-approval UI exists
-//! anywhere in MAE today (confirmed gap in ADR-045/046).
+//! Inline tool-call confirm prompt — `mae-agent`'s implementation of
+//! ADR-090's `Ask` state.
+//!
+//! This file used to own a `PermissionMode` enum and a `needs_confirmation`
+//! function: a third parallel tier vocabulary, after `mae::config`'s
+//! lowercase config spellings and `ai_event_handler`'s wire spellings. ADR-090
+//! D4 collapsed all three. What lives here now is **presentation only** — the
+//! y/n/always overlay and the key mapping. The decision comes from
+//! `mae_ai::PermissionPolicy::decide`, the same PDP the MCP and embedded
+//! surfaces ask.
+//!
+//! @ai-caution: [permission] Do not reintroduce a local ceiling/mode type
+//! here. If `mae-agent` needs a new permission concept, it belongs in
+//! `mae_ai::tools::decision` so every surface gets it at once.
 
-use mae_ai::PermissionTier;
+use mae_ai::{PermissionPolicy, PermissionTier};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 use ratatui::Frame;
 
-/// Mirrors MAE's own `readonly|write|shell|privileged` policy strings
-/// (`crates/mae/src/config.rs::resolve_permission_policy`) for consistency,
-/// plus a Claude-Code-style full-auto override.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PermissionMode {
-    ReadOnly,
-    Write,
-    #[default]
-    Shell,
-    Privileged,
-    /// Auto-approve everything, never prompt. Opt-in, not the default.
-    FullAuto,
-}
-
-impl PermissionMode {
-    pub fn parse(s: &str) -> Option<Self> {
-        match s.to_ascii_lowercase().as_str() {
-            "readonly" | "read-only" | "read_only" => Some(Self::ReadOnly),
-            "write" | "standard" => Some(Self::Write),
-            "shell" | "trusted" => Some(Self::Shell),
-            "privileged" | "full" => Some(Self::Privileged),
-            "yolo" | "full-auto" | "full_auto" | "auto" => Some(Self::FullAuto),
-            _ => None,
-        }
-    }
-
-    fn ceiling(self) -> Option<PermissionTier> {
-        match self {
-            Self::ReadOnly => Some(PermissionTier::ReadOnly),
-            Self::Write => Some(PermissionTier::Write),
-            Self::Shell => Some(PermissionTier::Shell),
-            Self::Privileged => Some(PermissionTier::Privileged),
-            Self::FullAuto => None, // no ceiling — everything auto-approved
-        }
-    }
-}
-
-/// Does a tool call at `tier` need an interactive confirm under `mode`?
-/// `ReadOnly`/`Write` tools are auto-approved by default (matches MAE's own
-/// container-first `PermissionPolicy` default); `Shell`/`Privileged` always
-/// prompt unless the mode's ceiling already covers them.
-pub fn needs_confirmation(tier: PermissionTier, mode: PermissionMode) -> bool {
-    match mode.ceiling() {
-        None => false, // FullAuto
-        Some(ceiling) => tier > ceiling,
-    }
+/// Build `mae-agent`'s session policy from a `--permission-mode` string.
+///
+/// Returns `None` for an unrecognised spelling so the caller can refuse to
+/// start (ADR-084 D4) rather than defaulting to something permissive. The
+/// spellings themselves come from [`PermissionTier::parse`] — this function
+/// adds no aliases of its own.
+pub fn policy_for_mode(mode: &str) -> Option<PermissionPolicy> {
+    Some(PermissionPolicy {
+        auto_approve_up_to: PermissionTier::parse(mode)?,
+        // `--permission-mode` is an auto-approval ceiling, not a prohibition:
+        // an interactive run prompts above it. A HARD ceiling would make
+        // `--permission-mode readonly` mean "refuse everything else", which is
+        // not what the flag has ever meant.
+        ..PermissionPolicy::default()
+    })
 }
 
 /// A tool call awaiting the user's y/n/always decision.
@@ -131,90 +111,96 @@ pub fn render_overlay(frame: &mut Frame, area: Rect, pending: &PendingConfirm) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mae_ai::Decision;
 
-    /// Full 4-tier x 5-mode `needs_confirmation` matrix, asserted explicitly
-    /// so no combination — including the "higher tier vs. a lower-than-Shell
-    /// ceiling" diagonal (`Write`x`ReadOnly`, `Privileged`x`ReadOnly`,
-    /// `Privileged`x`Write`) that earlier per-tier tests never actually
-    /// exercised — can silently regress. Expected value is simply "does
-    /// `tier` exceed `mode`'s ceiling", with `FullAuto` having no ceiling.
+    /// Full 4-tier x 5-mode matrix, now asserted against the **shared** PDP
+    /// rather than a local `needs_confirmation`. The oracle changed with
+    /// ADR-090: what used to be "needs confirmation: true/false" is now
+    /// "`Ask` vs `Allow`", and — the load-bearing part — *never* `Deny`. A
+    /// `--permission-mode` ceiling is an auto-approval line, so exceeding it
+    /// must always be askable; a `Deny` here would be the regression that
+    /// makes users pass `--permission-mode yolo` and lose the prompt entirely.
     #[test]
-    fn needs_confirmation_matrix_covers_all_tier_mode_combinations() {
-        use PermissionMode::{FullAuto, Privileged, ReadOnly, Shell, Write};
-        use PermissionTier::{
-            Privileged as PPriv, ReadOnly as PRead, Shell as PShell, Write as PWrite,
-        };
+    fn decide_matrix_covers_all_tier_mode_combinations_and_never_denies() {
+        use PermissionTier::{Privileged, ReadOnly, Shell, Write};
 
-        let cases: &[(PermissionTier, PermissionMode, bool)] = &[
-            // tier = ReadOnly: never needs confirmation, any mode.
-            (PRead, ReadOnly, false),
-            (PRead, Write, false),
-            (PRead, Shell, false),
-            (PRead, Privileged, false),
-            (PRead, FullAuto, false),
-            // tier = Write: needs confirmation only when the ceiling is
-            // below Write (i.e. ReadOnly).
-            (PWrite, ReadOnly, true),
-            (PWrite, Write, false),
-            (PWrite, Shell, false),
-            (PWrite, Privileged, false),
-            (PWrite, FullAuto, false),
-            // tier = Shell: needs confirmation unless the ceiling is Shell
-            // or above.
-            (PShell, ReadOnly, true),
-            (PShell, Write, true),
-            (PShell, Shell, false),
-            (PShell, Privileged, false),
-            (PShell, FullAuto, false),
-            // tier = Privileged: needs confirmation unless the ceiling is
-            // Privileged (the top tier).
-            (PPriv, ReadOnly, true),
-            (PPriv, Write, true),
-            (PPriv, Shell, true),
-            (PPriv, Privileged, false),
-            (PPriv, FullAuto, false),
+        let modes = [
+            ("readonly", ReadOnly),
+            ("write", Write),
+            ("shell", Shell),
+            ("privileged", Privileged),
+            ("yolo", Privileged),
         ];
+        let tiers = [ReadOnly, Write, Shell, Privileged];
 
-        assert_eq!(cases.len(), 20, "must cover all 4 tiers x 5 modes");
+        let mut checked = 0;
+        for (mode_str, ceiling) in modes {
+            let policy = policy_for_mode(mode_str).expect("mode must parse");
+            assert_eq!(policy.auto_approve_up_to, ceiling);
+            for tier in tiers {
+                let expected = if tier <= ceiling {
+                    Decision::Allow
+                } else {
+                    Decision::Ask
+                };
+                let got = policy.decide("some_tool", tier);
+                assert_eq!(
+                    got, expected,
+                    "decide({tier:?}) under --permission-mode {mode_str} should be {expected:?}"
+                );
+                assert!(
+                    !got.is_deny(),
+                    "a --permission-mode ceiling must never DENY ({tier:?} under {mode_str})"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 20, "must cover all 4 tiers x 5 modes");
+    }
 
-        for &(tier, mode, expected) in cases {
+    /// The alias set is `PermissionTier::parse`'s, not a local one — including
+    /// the `read-only` spelling `mae-agent` accepted but `mae::config` did
+    /// not, which is exactly the drift D4 names.
+    #[test]
+    fn mode_strings_are_the_one_shared_vocabulary() {
+        for (spelling, expected) in [
+            ("readonly", PermissionTier::ReadOnly),
+            ("read-only", PermissionTier::ReadOnly),
+            ("write", PermissionTier::Write),
+            ("standard", PermissionTier::Write),
+            ("shell", PermissionTier::Shell),
+            ("trusted", PermissionTier::Shell),
+            ("privileged", PermissionTier::Privileged),
+            ("full", PermissionTier::Privileged),
+            ("yolo", PermissionTier::Privileged),
+            ("full-auto", PermissionTier::Privileged),
+            ("auto", PermissionTier::Privileged),
+        ] {
             assert_eq!(
-                needs_confirmation(tier, mode),
-                expected,
-                "needs_confirmation({tier:?}, {mode:?}) should be {expected}"
+                policy_for_mode(spelling).map(|p| p.auto_approve_up_to),
+                Some(expected),
+                "{spelling}"
+            );
+        }
+        assert!(policy_for_mode("nonsense").is_none());
+        // ADR-084 D4: an unrecognised value resolves to nothing at all, so the
+        // caller must refuse to start. It must NOT quietly become a tier.
+        for typo in ["Shel", "read only", "privelaged", "", "  "] {
+            assert!(
+                policy_for_mode(typo).is_none(),
+                "{typo:?} must not resolve to a tier"
             );
         }
     }
 
     #[test]
-    fn parse_mode_strings_match_maes_own_policy_vocabulary() {
-        assert_eq!(
-            PermissionMode::parse("readonly"),
-            Some(PermissionMode::ReadOnly)
-        );
-        assert_eq!(PermissionMode::parse("write"), Some(PermissionMode::Write));
-        assert_eq!(
-            PermissionMode::parse("standard"),
-            Some(PermissionMode::Write)
-        );
-        assert_eq!(PermissionMode::parse("shell"), Some(PermissionMode::Shell));
-        assert_eq!(
-            PermissionMode::parse("trusted"),
-            Some(PermissionMode::Shell)
-        );
-        assert_eq!(
-            PermissionMode::parse("privileged"),
-            Some(PermissionMode::Privileged)
-        );
-        assert_eq!(
-            PermissionMode::parse("full"),
-            Some(PermissionMode::Privileged)
-        );
-        assert_eq!(
-            PermissionMode::parse("yolo"),
-            Some(PermissionMode::FullAuto)
-        );
-        assert_eq!(PermissionMode::parse("nonsense"), None);
+    fn every_advertised_spelling_parses() {
+        for s in PermissionTier::VALID_SPELLINGS {
+            assert!(
+                PermissionTier::parse(s).is_some(),
+                "{s} is advertised but does not parse"
+            );
+        }
     }
 
     #[test]

@@ -26,7 +26,7 @@ fn all_tools() -> Vec<ToolDefinition> {
 fn privileged() -> PermissionPolicy {
     PermissionPolicy {
         auto_approve_up_to: PermissionTier::Privileged,
-        allowed_categories: None,
+        ..PermissionPolicy::default()
     }
 }
 
@@ -47,6 +47,9 @@ fn call_as(
     {
         ExecuteResult::Immediate(r) => r,
         ExecuteResult::Deferred { .. } => panic!("{name} unexpectedly deferred"),
+        ExecuteResult::NeedsApproval(_) => {
+            panic!("{name} needed approval under a Privileged policy")
+        }
     }
 }
 

@@ -1,3 +1,4 @@
+use super::decision::{Decision, DenyReason, HardCeiling};
 use crate::types::*;
 
 /// Tool tiers for payload optimization — only core tools are sent by default.
@@ -362,10 +363,22 @@ pub fn annotations_for_tier(tier: PermissionTier) -> (bool, bool, bool) {
 }
 
 /// Policy for auto-approving or prompting for tool calls.
+///
+/// ADR-090: the check ([`PermissionPolicy::decide`]) is three-state. There is
+/// deliberately no `is_allowed(...) -> bool` any more — a bool cannot
+/// distinguish "not auto-approved" from "forbidden", and collapsing them is
+/// what forced the shipped default to be permissive.
 #[derive(Debug, Clone)]
 pub struct PermissionPolicy {
     /// Maximum tier that is auto-approved without user confirmation.
+    /// **Above** this tier the answer is [`Decision::Ask`], not a denial.
     pub auto_approve_up_to: PermissionTier,
+    /// ADR-090 D2: a ceiling that forbids rather than prompts. `None` means
+    /// the only limit is `auto_approve_up_to`, so everything above it is
+    /// askable. `Some(..)` is set by a session that declared its own ceiling
+    /// (ADR-051) or by a declaration that failed to parse (ADR-084 D4) —
+    /// neither of which a prompt may undo.
+    pub hard_ceiling: Option<HardCeiling>,
     /// ADR-056: categories this session/instance is restricted to. `None`
     /// (default, backward compatible) = unrestricted. `Some(set)` = only
     /// tools whose `classify_tool_category` is in `set` may be dispatched.
@@ -381,18 +394,102 @@ pub struct PermissionPolicy {
 
 impl Default for PermissionPolicy {
     fn default() -> Self {
-        // Container-first: auto-approve up to Shell tier.
+        // ADR-090 D5: reads are auto-approved; writes and shell are *asked*,
+        // not denied. This is the Devin Local posture ("read-only operations
+        // are auto-approved while writes and shell commands require your
+        // explicit approval"), and it is only affordable because `decide`
+        // returns `Ask` rather than a denial above this line. Raising it back
+        // to `Shell` re-creates the fail-open default ADR-084 D4 identified;
+        // don't, without reading ADR-090's "Alternatives considered".
         PermissionPolicy {
-            auto_approve_up_to: PermissionTier::Shell,
+            auto_approve_up_to: PermissionTier::ReadOnly,
+            hard_ceiling: None,
             allowed_categories: None,
         }
     }
 }
 
 impl PermissionPolicy {
-    /// Check if a permission tier is auto-approved.
-    pub fn is_allowed(&self, tier: PermissionTier) -> bool {
-        tier <= self.auto_approve_up_to
+    /// **The** permission decision (ADR-090 D1, ADR-084 D1's PDP). Every
+    /// enforcement point calls this; none re-derives it.
+    ///
+    /// Evaluation order is deny-first, matching the near-universal prior art
+    /// (Claude Code's deny → ask → allow, Windsurf/Devin's Deny > Ask >
+    /// Allow): a category restriction and a hard ceiling are checked before
+    /// the auto-approval ceiling, so neither can be softened into an `Ask`.
+    pub fn decide(&self, tool_name: &str, tier: PermissionTier) -> Decision {
+        if !self.is_category_allowed(tool_name) {
+            return Decision::Deny(DenyReason::Category);
+        }
+        self.decide_tier(tier)
+    }
+
+    /// The tier half of [`PermissionPolicy::decide`], for enforcement points
+    /// that have a tier but no tool name (the Scheme VM's ambient tier, the
+    /// `execute_command` Scheme bridge's blanket `Write` bar).
+    pub fn decide_tier(&self, tier: PermissionTier) -> Decision {
+        if let Some(hc) = self.hard_ceiling {
+            if tier > hc.tier {
+                return Decision::Deny(DenyReason::HardCeiling(hc));
+            }
+        }
+        if tier <= self.auto_approve_up_to {
+            Decision::Allow
+        } else {
+            Decision::Ask
+        }
+    }
+
+    /// The tier at which evaluated Scheme should run under this policy
+    /// (ADR-084 D2/D7). The ambient tier is set *before* guest code starts and
+    /// there is no way to prompt mid-evaluation, so it is the highest tier
+    /// this policy answers `Allow` for — anything askable is not ambiently
+    /// granted.
+    ///
+    /// @ai-caution: [permission] This must stay the `Allow` line, not the hard
+    /// ceiling. Raising it to the hard ceiling would ambiently grant every
+    /// tier a human would otherwise have been asked about, which is exactly
+    /// the silent `Ask`-as-`Allow` promotion ADR-090 D3 forbids.
+    pub fn ambient_scheme_tier(&self) -> PermissionTier {
+        match self.hard_ceiling {
+            Some(hc) => self.auto_approve_up_to.min(hc.tier),
+            None => self.auto_approve_up_to,
+        }
+    }
+
+    /// A copy of this policy in which a human has approved **one specific
+    /// call** at `tier`, after being shown it (ADR-090 D3).
+    ///
+    /// @ai-caution: [security] This raises the auto-approval ceiling *only*.
+    /// The hard ceiling and the category allowlist are carried through
+    /// untouched, so an approval can never convert a `Deny` into an `Allow` —
+    /// asserted by `approval_can_never_promote_a_deny`. Do not "simplify" this
+    /// into setting `auto_approve_up_to = Privileged` and clearing the rest.
+    pub fn with_one_time_approval(&self, tier: PermissionTier) -> Self {
+        PermissionPolicy {
+            auto_approve_up_to: self.auto_approve_up_to.max(tier),
+            ..self.clone()
+        }
+    }
+
+    /// Tighten this policy with a hard ceiling (ADR-051/ADR-084 D4). Only ever
+    /// lowers: a declared ceiling above an existing one is ignored, and the
+    /// auto-approval ceiling is clamped along with it so a hard ceiling below
+    /// it does not leave a nonsensical `Allow` band above the `Deny` line.
+    pub fn with_hard_ceiling(&self, ceiling: HardCeiling) -> Self {
+        let tier = match self.hard_ceiling {
+            Some(existing) => existing.tier.min(ceiling.tier),
+            None => ceiling.tier,
+        };
+        let source = match self.hard_ceiling {
+            Some(existing) if existing.tier <= ceiling.tier => existing.source,
+            _ => ceiling.source,
+        };
+        PermissionPolicy {
+            auto_approve_up_to: self.auto_approve_up_to.min(tier),
+            hard_ceiling: Some(HardCeiling { tier, source }),
+            ..self.clone()
+        }
     }
 
     /// Check if `tool_name` is allowed under this policy's category

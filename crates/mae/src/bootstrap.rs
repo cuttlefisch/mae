@@ -582,8 +582,20 @@ pub fn setup_ai(
             prompt.push_str(hints);
         }
 
+        // ADR-084 D2 + ADR-090: the embedded session runs under the SAME
+        // resolved policy the MCP path enforces. An unparseable tier already
+        // refused startup upstream (`--check-config`/`main`), so a failure
+        // here can only be a re-read race -- take the restrictive default
+        // rather than inventing a permissive fallback.
+        let permission_policy = crate::config::resolve_permission_policy(&file_config)
+            .unwrap_or_else(|e| {
+                warn!(error = %e, "AI permission policy unresolvable — using the restrictive default");
+                mae_ai::PermissionPolicy::default()
+            });
+
         let session = AgentSession::new(provider, tools, prompt, event_tx.clone(), cmd_rx)
-            .with_budget(model, budget);
+            .with_budget(model, budget)
+            .with_permission_policy(permission_policy);
 
         // Self-test mode: wider checkpoint interval, higher stagnation tolerance
         let session = if std::env::args().any(|a| a == "--self-test") {
