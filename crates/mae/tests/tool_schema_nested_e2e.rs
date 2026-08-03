@@ -163,57 +163,96 @@ async fn propose_changes_schema_has_a_real_items_sub_schema_over_the_real_wire()
     .await
     .unwrap();
 
-    // propose_changes is Extended-tier (K2 default tiering), so request it
-    // explicitly -- this also proves nested schemas survive request_tools'
-    // own JSON round trip, not just direct struct serialization.
-    let req_resp = mcp_roundtrip(
-        &mut stream,
-        2,
-        "tools/call",
-        serde_json::json!({
-            "name": "request_tools",
-            "arguments": {"categories": "", "tools": "propose_changes"}
-        }),
-    )
-    .await;
-    let text = req_resp["result"]["content"][0]["text"]
-        .as_str()
-        .expect("request_tools returned text content");
-    let tools: serde_json::Value = serde_json::from_str(text)
-        .unwrap_or_else(|e| panic!("request_tools output wasn't valid JSON: {e}\n{text}"));
-    let propose_changes = tools
-        .as_array()
-        .and_then(|arr| arr.iter().find(|t| t["name"] == "propose_changes"))
-        .unwrap_or_else(|| panic!("propose_changes not found in request_tools output: {text}"));
-
-    let changes_schema = &propose_changes["input_schema"]["properties"]["changes"];
-    assert_eq!(
-        changes_schema["type"], "array",
-        "changes param must stay array-typed, got: {changes_schema}"
-    );
-    let item_schema = &changes_schema["items"];
-    assert_eq!(
-        item_schema["type"], "object",
-        "changes.items must be a real object schema, not absent -- got: {changes_schema}"
-    );
-    assert!(
-        item_schema["properties"]["file_path"]["type"] == "string",
-        "changes.items.properties.file_path must be present and string-typed, got: {item_schema}"
-    );
-    assert!(
-        item_schema["properties"]["new_content"]["type"] == "string",
-        "changes.items.properties.new_content must be present and string-typed, got: {item_schema}"
-    );
-    let required: Vec<&str> = item_schema["required"]
-        .as_array()
-        .expect("changes.items.required must be present")
-        .iter()
-        .map(|v| v.as_str().unwrap())
-        .collect();
-    assert!(required.contains(&"file_path") && required.contains(&"new_content"));
+    // ADR-085 / decision #9: `propose_changes` is one of three inherently
+    // interactive tools (with `ask_user` and `delegate`) that an external MCP
+    // client cannot actually invoke — they pause the embedded session on a
+    // oneshot channel awaiting a human reply, which has no meaning mid
+    // `tools/call`. They are therefore withheld from every EXTERNAL discovery
+    // surface rather than advertised and then refused.
+    //
+    // So this half of the test now pins that absence over the real wire, and
+    // the nested-schema assertions move below to the registry definition.
+    // Losing the over-the-wire nested-schema check is a real (small) reduction
+    // in fidelity, taken deliberately: `propose_changes` is the ONLY tool in
+    // the registry with a nested array-items sub-schema, so there is no
+    // substitute vehicle, and inventing a fake tool to keep the shape of the
+    // test would prove less than testing the real serialization does. The
+    // framing layer does not reshape JSON — `write_framed` prepends a
+    // Content-Length to bytes serde already produced — so the serialization
+    // round trip below covers the actual risk (a nested `items` sub-schema
+    // being flattened or dropped).
+    for withheld in ["propose_changes", "ask_user", "delegate"] {
+        let req_resp = mcp_roundtrip(
+            &mut stream,
+            2,
+            "tools/call",
+            serde_json::json!({
+                "name": "request_tools",
+                "arguments": {"categories": "", "tools": withheld}
+            }),
+        )
+        .await;
+        let text = req_resp["result"]["content"][0]["text"]
+            .as_str()
+            .expect("request_tools returned text content");
+        assert!(
+            !text.contains(&format!("\"{withheld}\"")),
+            "{withheld} is interactive-only and must not be reachable through an \
+             external discovery surface, but request_tools returned it: {text}"
+        );
+    }
 
     drop(stream);
     let mut child = guard.child.take().unwrap();
     send_sigterm(&child);
     wait_for_exit(&mut child, Duration::from_secs(10));
+}
+
+/// The nested-schema coverage that used to run over the socket, kept against
+/// the registry definition now that `propose_changes` is embedded-only.
+///
+/// The risk this guards is real and easy to reintroduce: a builder that
+/// declares `"type": "array"` without an `items` sub-schema, or a serializer
+/// that flattens one, produces a schema an agent cannot construct a valid call
+/// against — the same "advertised but unusable" class as a tool whose schema
+/// omits a required parameter.
+#[test]
+fn propose_changes_nested_items_schema_survives_serialization() {
+    let tools = mae_ai::ai_specific_tools(&mae_core::OptionRegistry::new());
+    let def = tools
+        .iter()
+        .find(|t| t.name == "propose_changes")
+        .expect("propose_changes must still be registered (embedded-only, not deleted)");
+
+    // Round-trip through serde exactly as the wire does, then assert on the
+    // decoded JSON rather than on the struct — a struct-level assertion would
+    // not catch a serializer that drops the nested schema.
+    let json: serde_json::Value =
+        serde_json::from_str(&serde_json::to_string(def).expect("tool definition serializes"))
+            .expect("serialized tool definition is valid JSON");
+
+    let changes = &json["parameters"]["properties"]["changes"];
+    assert_eq!(
+        changes["type"], "array",
+        "changes must stay array-typed: {changes}"
+    );
+
+    let item = &changes["items"];
+    assert_eq!(
+        item["type"], "object",
+        "changes.items must be a real object schema, not absent: {changes}"
+    );
+    assert_eq!(item["properties"]["file_path"]["type"], "string");
+    assert_eq!(item["properties"]["new_content"]["type"], "string");
+
+    let required: Vec<&str> = item["required"]
+        .as_array()
+        .expect("changes.items.required must be present")
+        .iter()
+        .filter_map(|v| v.as_str())
+        .collect();
+    assert!(
+        required.contains(&"file_path") && required.contains(&"new_content"),
+        "got: {required:?}"
+    );
 }
