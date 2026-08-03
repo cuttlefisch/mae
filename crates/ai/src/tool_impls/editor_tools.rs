@@ -156,7 +156,17 @@ pub fn execute_set_option(editor: &mut Editor, args: &serde_json::Value) -> Resu
         .get("value")
         .and_then(|v| v.as_str())
         .ok_or("Missing 'value' parameter")?;
-    editor.set_option(option, value)
+    let result = editor.set_option(option, value)?;
+    // Optional `persist` param (WS6 cross-surface-parity): `:set-save` has been a
+    // command-only feature since it landed — the MCP/AI surface could change an
+    // option at runtime but never persist it, so an AI-driven config change silently
+    // reverted on the next editor restart with no equivalent to the human's
+    // `:set-save`. Mirrors `Editor::command`'s own "set-save" arm: apply, then persist.
+    if args.get("persist").and_then(|v| v.as_bool()).unwrap_or(false) {
+        let persist_msg = editor.save_option_to_init(option)?;
+        return Ok(format!("{result}\n{persist_msg}"));
+    }
+    Ok(result)
 }
 
 pub fn execute_debug_state(editor: &Editor) -> Result<String, String> {
@@ -1388,5 +1398,119 @@ mod tests {
         assert_eq!(classify_tool_tier("pkg_sync"), ToolTier::Extended);
         assert_eq!(classify_tool_tier("pkg_upgrade"), ToolTier::Extended);
         assert_eq!(classify_tool_tier("pkg_doctor"), ToolTier::Extended);
+    }
+
+    // --- set_option `persist` param (WS6 cross-surface-parity: `:set-save` ---
+    // --- parity for the MCP/AI tool surface) ---
+    //
+    // `save_option_to_init` does real filesystem I/O keyed off XDG_CONFIG_HOME,
+    // so these tests serialize (env vars are process-global) and use an
+    // isolated tmp dir — never a shared/well-known path (principle #14 test
+    // isolation), mirroring `option_tests.rs`'s `set_save_tests` module.
+    mod set_option_persist_tests {
+        use super::*;
+        use std::sync::Mutex;
+
+        static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+        fn with_isolated_config_home<T>(f: impl FnOnce(&std::path::Path) -> T) -> T {
+            let _lock = ENV_LOCK.lock().unwrap();
+            let tmp = tempfile::tempdir().expect("tmpdir");
+            let prev = std::env::var("XDG_CONFIG_HOME").ok();
+            std::env::set_var("XDG_CONFIG_HOME", tmp.path());
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(tmp.path())));
+            match prev {
+                Some(v) => std::env::set_var("XDG_CONFIG_HOME", v),
+                None => std::env::remove_var("XDG_CONFIG_HOME"),
+            }
+            result.unwrap()
+        }
+
+        #[test]
+        fn default_is_runtime_only_and_does_not_write_init_scm() {
+            with_isolated_config_home(|config_home| {
+                let mut editor = Editor::new();
+                let result = execute_set_option(
+                    &mut editor,
+                    &serde_json::json!({"option": "tab_width", "value": "4"}),
+                )
+                .unwrap();
+                assert!(!result.to_lowercase().contains("init.scm"));
+                assert!(
+                    !config_home.join("mae").join("init.scm").exists(),
+                    "set_option without persist must not write init.scm — this is the exact \
+                     :set-save-vs-:set distinction; the AI surface must not silently upgrade a \
+                     runtime-only change into a persisted one"
+                );
+                assert_eq!(
+                    editor.get_option("tab_width").map(|(v, _)| v).as_deref(),
+                    Some("4"),
+                    "the runtime value must still have changed"
+                );
+            });
+        }
+
+        #[test]
+        fn persist_true_writes_init_scm_with_the_new_value() {
+            with_isolated_config_home(|config_home| {
+                let mut editor = Editor::new();
+                let result = execute_set_option(
+                    &mut editor,
+                    &serde_json::json!({"option": "tab_width", "value": "4", "persist": true}),
+                )
+                .unwrap();
+                assert!(
+                    result.contains("init.scm"),
+                    "persist=true's result should confirm the init.scm write, got: {result}"
+                );
+                let content =
+                    std::fs::read_to_string(config_home.join("mae").join("init.scm")).unwrap();
+                assert!(
+                    content.contains("tab_width") && content.contains('4'),
+                    "init.scm should persist the new value, got: {content}"
+                );
+            });
+        }
+
+        #[test]
+        fn persist_false_is_indistinguishable_from_omitting_the_param() {
+            with_isolated_config_home(|config_home| {
+                let mut a = Editor::new();
+                let mut b = Editor::new();
+                let omitted = execute_set_option(
+                    &mut a,
+                    &serde_json::json!({"option": "tab_width", "value": "6"}),
+                )
+                .unwrap();
+                let explicit_false = execute_set_option(
+                    &mut b,
+                    &serde_json::json!({"option": "tab_width", "value": "6", "persist": false}),
+                )
+                .unwrap();
+                assert_eq!(omitted, explicit_false);
+                assert!(!config_home.join("mae").join("init.scm").exists());
+            });
+        }
+
+        #[test]
+        fn persist_true_on_an_unknown_option_errors_and_does_not_partially_apply() {
+            // Adversarial case (principle #14): `option` is validated by
+            // `editor.set_option` before persistence is ever attempted, so an
+            // unknown option must error cleanly with no init.scm side effect —
+            // not silently persist garbage.
+            with_isolated_config_home(|config_home| {
+                let mut editor = Editor::new();
+                let result = execute_set_option(
+                    &mut editor,
+                    &serde_json::json!({
+                        "option": "definitely_not_a_real_option",
+                        "value": "x",
+                        "persist": true
+                    }),
+                );
+                assert!(result.is_err());
+                assert!(!config_home.join("mae").join("init.scm").exists());
+            });
+        }
     }
 }
