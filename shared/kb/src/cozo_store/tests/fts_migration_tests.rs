@@ -132,6 +132,75 @@ fn stale_fts_index_is_rebuilt_on_open() {
     assert_eq!(store.fts_search("entanglement", 10).unwrap().len(), 1);
 }
 
+/// A store the migration CANNOT repair must still open.
+///
+/// `::fts create` binds against `nodes`, so a store whose `nodes` relation is on
+/// disk at an older/short arity (the same real artifact
+/// `load_all_tolerates_query_bind_failure` pins) fails the rebuild. That must
+/// degrade to a warning, not an `Err` — propagating it would turn a store that
+/// previously opened degraded into one that cannot be opened at all, which is
+/// exactly the `kb_join`-abort + main-thread-stall failure that degradation was
+/// introduced to prevent. The version stamp must also NOT advance, so the
+/// repair is retried rather than recorded as done.
+#[test]
+fn failed_rebuild_degrades_instead_of_blocking_open() {
+    let tmp = tempfile::tempdir().unwrap();
+    let path = tmp.path().join("broken_cozo");
+
+    {
+        let store = CozoKbStore::open(&path).unwrap();
+        // Replace `nodes` with a relation the current extractor cannot bind
+        // (no `body` column). The index has to come off first — a relation
+        // with indices attached cannot be replaced — and is then put back
+        // over `title` alone, so an index still EXISTS on reopen. That is the
+        // shape that matters: `ensure_schema`'s own `::fts create` short-
+        // circuits on "already exists", so the only thing that touches this
+        // broken relation is the migration's rebuild.
+        store.run_mut("::fts drop nodes:fts").unwrap();
+        store
+            .run_mut(
+                r#"?[id, title] <- [["bad", "x"]]
+                   :replace nodes {id: String => title: String}"#,
+            )
+            .unwrap();
+        store
+            .run_mut(
+                r#"::fts create nodes:fts {
+                    extractor: title,
+                    tokenizer: Simple,
+                    filters: [Lowercase]
+                }"#,
+            )
+            .unwrap();
+        // Roll the stamp back so the migration attempts a rebuild on reopen.
+        store
+            .run_mut(
+                r#"?[key, val] <- [["fts_extractor_version", "1"]]
+                   :put instance_meta {key => val}"#,
+            )
+            .unwrap();
+    }
+
+    // Must open, not Err, and not panic.
+    let store = CozoKbStore::open(&path).expect("a store the migration cannot repair must open");
+
+    // The stamp must still be the pre-fix value — recording success here would
+    // permanently skip the repair for this store.
+    let stamped: Option<String> = store
+        .run_immut(r#"?[val] := *instance_meta{key: "fts_extractor_version", val}"#)
+        .unwrap()
+        .rows
+        .first()
+        .and_then(|r| r.first())
+        .and_then(|v| v.get_str())
+        .map(str::to_string);
+    assert_eq!(
+        stamped.as_deref(),
+        Some("1"),
+        "a failed rebuild must not advance the version stamp"
+    );
+}
+
 /// A store created fresh under the current DDL is correct without needing the
 /// migration at all — the migration is a repair path, not a load-bearing part
 /// of normal operation.

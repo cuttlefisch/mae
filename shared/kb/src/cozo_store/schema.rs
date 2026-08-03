@@ -538,7 +538,22 @@ impl CozoKbStore {
             return Ok(());
         }
 
-        self.rebuild_fts()?;
+        // A failed rebuild must NOT stop the store from opening. `nodes` can be
+        // on disk at an older/short arity (the artifact
+        // `load_all_tolerates_query_bind_failure` pins), and `::fts create`
+        // binds against it — propagating that error here would turn a store
+        // that previously degraded gracefully into one that cannot be opened
+        // at all, re-breaking the `kb_join` abort + main-thread-stall watchdog
+        // that degradation was added for. Leave the old index in place and
+        // skip the stamp, so the migration simply retries on the next open.
+        if let Err(e) = self.rebuild_fts() {
+            tracing::warn!(
+                error = %e,
+                "KB store: could not rebuild the FTS index; search may miss \
+                 terms at the title/body boundary until this succeeds"
+            );
+            return Ok(());
+        }
         self.run_mut_params(
             r#"?[key, val] <- [[$key, $ver]] :put instance_meta {key => val}"#,
             btree_params([
