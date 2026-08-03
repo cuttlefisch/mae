@@ -51,6 +51,7 @@ pub mod notifications_view;
 pub mod options;
 pub mod project;
 pub mod render_common;
+pub mod scheme_async;
 pub mod search;
 pub mod session;
 pub mod swap;
@@ -126,6 +127,9 @@ pub use messages::{LogEntry, MessageLevel, MessageLog, MessageLogHandle};
 pub use options::{OptionDef, OptionKind, OptionRegistry};
 pub use project::{
     detect_project_root, Project, ProjectConfig, ProjectList, RecentFiles, RecentProjects,
+};
+pub use scheme_async::{
+    SchemeAsyncRegistry, SchemeAsyncRequest, SchemeAsyncSlot, SCHEME_ASYNC_RETAINED,
 };
 pub use search::{SearchDirection, SearchMatch, SearchState};
 pub mod redraw;

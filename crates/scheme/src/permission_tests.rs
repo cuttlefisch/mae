@@ -370,6 +370,115 @@ fn nesting_the_tier_is_monotone_non_increasing() {
     }
 }
 
+/// Every primitive added by the principle-#3 parity pass (KB CRUD, option
+/// persistence, LSP, DAP), with a *real* call for each — refused exactly when
+/// the ambient tier is below what the primitive declares, and permitted
+/// exactly otherwise.
+///
+/// Written as one exhaustive sweep rather than a handful of hand-picked
+/// probes, because the interesting failure is a single primitive being
+/// classified one step too low. The oracle reads the declared tier back out of
+/// the VM (`declared_tier`) instead of restating it, so it tracks what shipped;
+/// what the test pins independently is the *ordering* property. A minimum tier
+/// is asserted separately below, because "declared tier is honoured" is
+/// vacuous if the declaration itself is `PURE`.
+#[test]
+fn parity_pass_primitives_are_refused_below_their_declared_tier() {
+    // (call, minimum tier this primitive must NOT be classified below).
+    // The calls are chosen to reach the tier check and then fail for an
+    // ordinary reason (no KB node, no debug session, no such request) — a
+    // denial and a domain error are distinguishable, which is what makes the
+    // oracle below meaningful.
+    let cases: &[(&str, PermissionTier)] = &[
+        // --- KB CRUD: reads are reads, writes are writes ---
+        (r#"(kb-search "anything")"#, PermissionTier::ReadOnly),
+        (
+            r#"(kb-get "concept:nonexistent")"#,
+            PermissionTier::ReadOnly,
+        ),
+        (
+            r#"(kb-create "note:perm-probe" "T" "B")"#,
+            PermissionTier::Write,
+        ),
+        (
+            r#"(kb-update "note:perm-probe" "T2")"#,
+            PermissionTier::Write,
+        ),
+        (r#"(kb-delete "note:perm-probe")"#, PermissionTier::Write),
+        // --- Option persistence: writes the user's init.scm ---
+        (
+            r#"(set-option-save! "theme" "dracula")"#,
+            PermissionTier::Privileged,
+        ),
+        // --- LSP: every one of these is a query ---
+        ("(lsp-definition)", PermissionTier::ReadOnly),
+        ("(lsp-references)", PermissionTier::ReadOnly),
+        ("(lsp-hover)", PermissionTier::ReadOnly),
+        (
+            r#"(lsp-workspace-symbol "Editor" "rust")"#,
+            PermissionTier::ReadOnly,
+        ),
+        ("(lsp-document-symbols)", PermissionTier::ReadOnly),
+        ("(lsp-result 1)", PermissionTier::ReadOnly),
+        ("(lsp-diagnostics)", PermissionTier::ReadOnly),
+        // --- DAP: queries are reads, control is not ---
+        (r#"(dap-inspect-variable "x")"#, PermissionTier::ReadOnly),
+        ("(debug-state)", PermissionTier::ReadOnly),
+        (
+            r#"(dap-set-breakpoint "src/main.rs" 42)"#,
+            PermissionTier::Write,
+        ),
+        ("(dap-continue)", PermissionTier::Write),
+        ("(dap-step-over)", PermissionTier::Write),
+        ("(dap-step-into)", PermissionTier::Write),
+        ("(dap-step-out)", PermissionTier::Write),
+        // Launching a debuggee spawns a process. Anything less than Shell here
+        // would be a bypass of the one tier that exists to bound exactly that.
+        (r#"(dap-start "lldb" "/bin/true")"#, PermissionTier::Shell),
+    ];
+
+    for (call, minimum) in cases {
+        // The primitive's name is the head symbol of the call.
+        let name = call
+            .trim_start_matches('(')
+            .split(|c: char| c.is_whitespace() || c == ')')
+            .next()
+            .unwrap();
+
+        let (rt, _editor) = runtime_with_editor();
+        let declared = declared_tier(&rt, name);
+        let required = declared
+            .required()
+            .unwrap_or_else(|| panic!("{name} must declare a required tier, got {declared:?}"));
+        drop(rt);
+
+        assert!(
+            required >= *minimum,
+            "{name} is classified {required:?}, below the {minimum:?} its effect requires — \
+             a Scheme program capped at {required:?} could reach it"
+        );
+
+        for ambient in ALL_TIERS {
+            let (mut rt, _editor) = runtime_with_editor();
+            let result = rt.with_ambient_tier(ambient, |rt| rt.eval(call));
+            let denied = matches!(&result, Err(e) if e.message.contains("permission denied"));
+            assert_eq!(
+                denied,
+                ambient < required,
+                "{call} (requires {required:?}) at ambient {ambient:?}: \
+                 denied={denied}, result={result:?}"
+            );
+            if denied {
+                let msg = &result.unwrap_err().message;
+                assert!(
+                    msg.contains(ambient.config_name()),
+                    "a denial must name the tier in force, got: {msg}"
+                );
+            }
+        }
+    }
+}
+
 /// A fresh runtime carries the human's own authority — the drop is the host's
 /// job at the entry point that knows whose code is about to run. If this ever
 /// reads as something lower, config loading silently half-works instead of

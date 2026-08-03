@@ -267,7 +267,14 @@ implies." Worth knowing before the option is documented as global.
 
 ---
 
-## 8. `checked_byte_boundary`'s debug_assert fires on legitimate flat truncation, in every debug build
+## 8. RESOLVED — `checked_byte_boundary` asserted on its own normal case
+
+**Fixed in `51158578`** after this entry was filed. Split into
+`floor_char_boundary` (clamp a byte budget, no assertion — mid-character is the expected
+case) and `checked_byte_boundary` (validate an offset that should already be valid, keeps
+the debug_assert). 16 call sites repointed. Original analysis below.
+
+### Original entry
 
 **Status:** found while adding an adversarial test for #604.2/#604.6 (pre-v0.15 audit tail pass).
 Not changed; needs a call from whoever owns ADR-087's chokepoint validator.
@@ -374,3 +381,38 @@ dispatch logic, and matches the precedent ADR-085 already established for a stru
 "advertised but not actually reachable this way" gap), with option 1 as a real follow-up feature once
 someone decides the UX for interactive tools over MCP. Option 3 leaves a paired external agent
 discovering this by trial and error, which is a worse experience than not offering the tool.
+
+---
+
+## 10. `KbStore::fts_search` silently drops terms — found while wiring `(kb-search)`
+
+**Status:** pre-existing, independent of the parity pass, and worked *around* rather than fixed.
+
+On a freshly seeded in-memory `CozoKbStore`, a single node titled `"alpha beta gamma delta"` with
+body `"epsilon zeta eta"` is returned by `fts_search` for `alpha`, `beta`, `gamma`, `zeta` and
+`eta` — and **not** for `delta` or `epsilon`. A second node (`"Quantum Physics"` /
+`"Entanglement is spooky."`) is found by `quantum` and `spooky` but not by `physics` or
+`entanglement`. The extractor is `title ++ ' ' ++ body`, so every one of those terms is indexed
+text; the post-query verification in `fts_search` is not the cause (it only removes candidates,
+and these terms produce no candidates at all).
+
+**Why it has not been noticed:** `mae-kb`'s own `fts_search_finds_nodes` passes because it happens
+to query `quantum`, one of the terms that works. That is precisely the "unicorn value" failure
+mode CLAUDE.md principle #14 names — a test that would pass unchanged against a search index
+returning a coin flip.
+
+**Impact:** the FTS path is used by `KbStore` consumers including the query layer
+(`shared/kb/src/query.rs`). It is NOT used by the `kb_search` MCP tool, which goes through
+`Editor::kb_federated_search_scoped` → `KnowledgeBase::search_ranked` over the in-memory mirror —
+which is why the defect has stayed invisible on the surface most people exercise.
+
+**What the parity pass did:** built `(kb-search ...)` on `KnowledgeBase::search_ranked` (loading
+the store into an in-memory `KnowledgeBase` per call) rather than on `fts_search`, so the Scheme
+surface cannot silently *miss* nodes the MCP tool returns. The cost is one `load_all()` per store
+per search — the same O(n) shape the MCP path already pays, but with deserialization instead of a
+resident mirror. There is an `@ai-caution: [architecture-debt]` at
+`crates/scheme/src/runtime/kb_crud.rs::store_as_kb` warning against "optimising" it back.
+
+**The call:** someone who knows the CozoDB/tantivy integration should reproduce the probe above and
+decide whether this is a Cozo FTS bug, a wrong tokenizer/filter configuration, or an indexing
+ordering problem. Until then, no new code should be built on `fts_search`.

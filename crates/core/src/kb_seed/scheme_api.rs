@@ -1673,6 +1673,163 @@ pub(crate) const SCHEME_API_FUNCTIONS: &[(&str, &str, &str, &str, &str)] = &[
             "(should-contain (test-status-message) \"Saved\")",
             "testing",
         ),
+
+        // --- Principle #3 parity pass: KB CRUD + option persistence ---
+        // Closes docs/CROSS_SURFACE_PARITY.md gaps #2 and #3 — capabilities
+        // that had Command + MCP surfaces but no Scheme counterpart.
+        (
+            "kb-search",
+            "(kb-search QUERY [SCOPE] [LIMIT])",
+            "Search the knowledge base. SCOPE is \"primary\" (default) or \"all\" (primary plus every registered federated instance); LIMIT caps the hits (default 20). Returns a list of (id title kind instance) — instance is #f for a primary-KB hit. Matching and ranking use the same KnowledgeBase::search_ranked the kb_search MCP tool uses: a case-insensitive term/substring search over title and body, with no query-operator syntax, so \"concept:buffer\" and \"kb-sharing\" search for themselves. An empty QUERY lists everything, capped by LIMIT.",
+            "(kb-search \"window group\" \"all\" 5)",
+            "kb-graph",
+        ),
+        (
+            "kb-get",
+            "(kb-get ID)",
+            "Fetch one KB node by ID from the primary KB or any registered federated instance. Returns (id title kind body tags), or #f when no node with that id exists. Signals an error if the store itself fails, so a storage failure never reads as \"node absent\". Scheme counterpart of the kb_get MCP tool.",
+            "(kb-get \"concept:buffer\")",
+            "kb-graph",
+        ),
+        (
+            "kb-create",
+            "(kb-create ID TITLE BODY [KIND])",
+            "Create a KB node. Signals an error for an empty or already-taken ID. KIND defaults to \"note\". Returns #t once queued; applied on the next editor tick via Editor::kb_create_node — the same method the kb_create MCP tool uses, which enforces seed protection and KB write policy.",
+            "(kb-create \"note:standup\" \"Standup\" \"* Notes\" \"note\")",
+            "kb-graph",
+        ),
+        (
+            "kb-update",
+            "(kb-update ID [TITLE] [BODY] [TAGS])",
+            "Update an existing KB node. Omit a field or pass #f to leave it unchanged; TAGS, when given, is a list of strings that replaces the node's tag set. Signals an error if the node does not exist, or if no field was given. Returns #t once queued; applied via Editor::kb_update_node — the same method the kb_update MCP tool uses.",
+            "(kb-update \"note:standup\" #f \"* Notes\\n- shipped\" '(\"work\"))",
+            "kb-graph",
+        ),
+        (
+            "kb-delete",
+            "(kb-delete ID)",
+            "Delete a KB node by ID. Signals an error if the node does not exist. Returns #t once queued; applied via Editor::kb_delete_node — the same method the kb_delete MCP tool uses, which refuses to delete a protected seed node.",
+            "(kb-delete \"note:standup\")",
+            "kb-graph",
+        ),
+        (
+            "set-option-save!",
+            "(set-option-save! KEY VALUE)",
+            "Set a global editor option AND persist it to ~/.config/mae/init.scm so it survives a restart — the Scheme counterpart of the `:set-save` command and of the set_option MCP tool's persist flag; all three call Editor::set_option then Editor::save_option_to_init. Signals an error for an unknown option name.",
+            "(set-option-save! \"theme\" \"dracula\")",
+            "options",
+        ),
+
+        // --- Principle #3 parity pass: LSP + DAP ---
+        // Closes docs/CROSS_SURFACE_PARITY.md headline gap #1. LSP and DAP are
+        // asynchronous in MAE, so each primitive takes the shape its backing
+        // mae-ai implementation can honestly support — see
+        // crates/scheme/src/runtime/lsp_dap.rs's header for the full table.
+        (
+            "lsp-definition",
+            "(lsp-definition [BUFFER-NAME] [LINE] [COL])",
+            "Request textDocument/definition (defaults: active buffer, cursor position; LINE/COL 1-indexed). QUEUES the request and returns a request id — a Scheme primitive cannot block for an LSP reply without deadlocking the event loop that delivers it. Read the answer with (lsp-result ID).",
+            "(define id (lsp-definition))",
+            "lsp",
+        ),
+        (
+            "lsp-references",
+            "(lsp-references [BUFFER-NAME] [LINE] [COL])",
+            "Request textDocument/references (defaults: active buffer, cursor position). Queues the request and returns a request id; read the answer with (lsp-result ID). CLAUDE.md principle #3's own example.",
+            "(define id (lsp-references))",
+            "lsp",
+        ),
+        (
+            "lsp-hover",
+            "(lsp-hover [BUFFER-NAME] [LINE] [COL])",
+            "Request textDocument/hover (defaults: active buffer, cursor position). Queues the request and returns a request id; read the answer with (lsp-result ID).",
+            "(define id (lsp-hover \"main.rs\" 42 9))",
+            "lsp",
+        ),
+        (
+            "lsp-workspace-symbol",
+            "(lsp-workspace-symbol QUERY LANGUAGE-ID)",
+            "Request workspace/symbol for QUERY from the LANGUAGE-ID server (both required — a workspace search is not scoped to a buffer, so it cannot infer its server). Queues the request and returns a request id; read the answer with (lsp-result ID).",
+            "(define id (lsp-workspace-symbol \"Editor\" \"rust\"))",
+            "lsp",
+        ),
+        (
+            "lsp-document-symbols",
+            "(lsp-document-symbols [BUFFER-NAME])",
+            "Request textDocument/documentSymbol for BUFFER-NAME (default: the active buffer). Queues the request and returns a request id; read the answer with (lsp-result ID).",
+            "(define id (lsp-document-symbols))",
+            "lsp",
+        ),
+        (
+            "lsp-result",
+            "(lsp-result ID)",
+            "Read the result of a queued LSP request. Returns the symbol 'pending until the language server replies — poll across editor ticks (a hook, a test step, the REPL), since one eval never returns to the event loop that delivers the reply. Signals an error for an unknown ID and for a request the server failed. The resolved value is the same payload the equivalent MCP tool returns.",
+            "(let loop () (let ((r (lsp-result id))) (if (eq? r 'pending) #f r)))",
+            "lsp",
+        ),
+        (
+            "lsp-diagnostics",
+            "(lsp-diagnostics [SCOPE])",
+            "Current LSP diagnostics as structured data — the same payload the lsp_diagnostics MCP tool returns (\"scope\", \"counts\", \"files\"). SCOPE is \"buffer\" (default) or \"all\". Answers synchronously: diagnostics are pushed by the server and already held in editor state, so unlike the other lsp-* primitives there is nothing to wait for.",
+            "(lsp-diagnostics \"all\")",
+            "lsp",
+        ),
+        (
+            "dap-start",
+            "(dap-start ADAPTER PROGRAM [ARGS] [STOP-ON-ENTRY])",
+            "Launch a debug session. ADAPTER is \"lldb\", \"debugpy\" or \"codelldb\"; ARGS is an optional list of program arguments. Queues the launch (the adapter starts asynchronously) and returns #t — poll (debug-state) on a later tick to see the session come up.",
+            "(dap-start \"lldb\" \"./target/debug/mae\" '(\"--headless\"))",
+            "dap",
+        ),
+        (
+            "dap-set-breakpoint",
+            "(dap-set-breakpoint SOURCE LINE [CONDITION])",
+            "Set a breakpoint at SOURCE:LINE (1-indexed), optionally guarded by an adapter-evaluated CONDITION. Idempotent. Returns #t once queued; read the resulting breakpoint set back from (debug-state)'s \"breakpoints\" field.",
+            "(dap-set-breakpoint \"src/main.rs\" 42)",
+            "dap",
+        ),
+        (
+            "dap-continue",
+            "(dap-continue)",
+            "Resume execution on the active thread. Signals an error if no debug session is active. Returns #t once queued; poll (debug-state) for the next stop — the debuggee runs asynchronously.",
+            "(dap-continue)",
+            "dap",
+        ),
+        (
+            "dap-step-over",
+            "(dap-step-over)",
+            "Step over the current line. Signals an error if no debug session is active. Returns #t once queued; poll (debug-state) for the new stop.",
+            "(dap-step-over)",
+            "dap",
+        ),
+        (
+            "dap-step-into",
+            "(dap-step-into)",
+            "Step into the call on the current line. Signals an error if no debug session is active. Returns #t once queued; poll (debug-state) for the new stop.",
+            "(dap-step-into)",
+            "dap",
+        ),
+        (
+            "dap-step-out",
+            "(dap-step-out)",
+            "Step out of the current frame. Signals an error if no debug session is active. Returns #t once queued; poll (debug-state) for the new stop.",
+            "(dap-step-out)",
+            "dap",
+        ),
+        (
+            "dap-inspect-variable",
+            "(dap-inspect-variable NAME [SCOPE])",
+            "Look up debug variable NAME across the active stop's scopes, optionally restricted to SCOPE (\"Locals\", \"Globals\", …). Returns an alist with \"name\", \"value\", \"type\", \"scope\" and \"variables_reference\" — the same payload the dap_inspect_variable MCP tool returns. Signals an error if no session is active or nothing matches. CLAUDE.md principle #3's own example.",
+            "(dap-inspect-variable \"count\")",
+            "dap",
+        ),
+        (
+            "debug-state",
+            "(debug-state)",
+            "Structured snapshot of the active debug session — the same payload the debug_state MCP tool returns (\"threads\", \"frames\", \"breakpoints\", \"variables\" by scope), or #f when no session is active. This is the reader for every dap-* action primitive.",
+            "(debug-state)",
+            "dap",
+        ),
     ];
 
 /// Discoverability aliases for a handful of `scheme:<name>` nodes whose
@@ -1939,6 +2096,10 @@ mod tests {
             include_str!("../../../scheme/src/runtime/io_packages.rs"),
         ),
         (
+            "scheme/runtime/kb_crud.rs",
+            include_str!("../../../scheme/src/runtime/kb_crud.rs"),
+        ),
+        (
             "scheme/runtime/kb_export.rs",
             include_str!("../../../scheme/src/runtime/kb_export.rs"),
         ),
@@ -1963,6 +2124,10 @@ mod tests {
             include_str!("../../../scheme/src/runtime/keybindings.rs"),
         ),
         (
+            "scheme/runtime/lsp_dap.rs",
+            include_str!("../../../scheme/src/runtime/lsp_dap.rs"),
+        ),
+        (
             "scheme/runtime/misc_primitives.rs",
             include_str!("../../../scheme/src/runtime/misc_primitives.rs"),
         ),
@@ -1973,6 +2138,10 @@ mod tests {
         (
             "scheme/runtime/state_sync_apply.rs",
             include_str!("../../../scheme/src/runtime/state_sync_apply.rs"),
+        ),
+        (
+            "scheme/runtime/state_sync_apply2.rs",
+            include_str!("../../../scheme/src/runtime/state_sync_apply2.rs"),
         ),
         (
             "scheme/runtime/state_sync_apply2.rs",
@@ -2005,7 +2174,21 @@ mod tests {
     /// `extract_registered_names` naturally skips that definition (no leading
     /// `"`) and only picks up names at the macro's *invocation* sites, which
     /// do start with a literal.
-    const REGISTRATION_PREFIXES: &[&str] = &["register_fn(", "register_collab_command_prim!("];
+    /// `lsp_positional_prim!(` / `dap_step_prim!(` are the two local macro
+    /// wrappers in `runtime/lsp_dap.rs`, shaped exactly like
+    /// `register_collab_command_prim!` and listed here for the same reason:
+    /// their *definition* passes `$name` (no leading `"`) so it is skipped,
+    /// while their invocation sites carry the literal primitive name.
+    ///
+    /// @ai-caution: [architecture-debt] A macro that wraps `register_fn` and
+    /// is NOT listed here makes every primitive it registers invisible to the
+    /// doc-parity guard below. If you add one, add its `name!(` prefix here.
+    const REGISTRATION_PREFIXES: &[&str] = &[
+        "register_fn(",
+        "register_collab_command_prim!(",
+        "lsp_positional_prim!(",
+        "dap_step_prim!(",
+    ];
 
     /// Extract every `<prefix>"name"` call site's `name` from `src`, for each
     /// prefix in `REGISTRATION_PREFIXES`. Loose by design: this only requires
@@ -2062,6 +2245,61 @@ mod tests {
     /// convention, any future addition here must cite the count and a
     /// tracking issue, and must only shrink over time.
     const KNOWN_UNDOCUMENTED_REGISTRATIONS: &[&str] = &[];
+
+    /// `RUNTIME_SOURCES` is hand-maintained, because `include_str!` cannot
+    /// glob a directory. That makes "add a new `crates/scheme/src/runtime/`
+    /// module" a silent way *around* the guard below: its registrations would
+    /// never be scanned, so its primitives could ship undocumented and the
+    /// doc-gap assertion would still read zero. This closes that door by
+    /// listing the directory at test time and requiring every `.rs` file in
+    /// it to appear in `RUNTIME_SOURCES` — including files that register
+    /// nothing today, since "registers nothing" is a property that changes
+    /// without anyone revisiting this list.
+    ///
+    /// @ai-caution: [architecture-debt] If you add a file under
+    /// `crates/scheme/src/runtime/`, add it to `RUNTIME_SOURCES` too. This
+    /// test will tell you; do not satisfy it by skipping the file.
+    #[test]
+    fn runtime_sources_covers_every_runtime_module() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../scheme/src/runtime");
+        let listed: std::collections::BTreeSet<String> = RUNTIME_SOURCES
+            .iter()
+            .filter_map(|(p, _)| p.strip_prefix("scheme/runtime/"))
+            .map(|p| p.to_string())
+            .collect();
+
+        let mut on_disk: Vec<String> = Vec::new();
+        for entry in
+            std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("cannot list {}: {e}", dir.display()))
+        {
+            let entry = entry.expect("readable dir entry");
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with(".rs") {
+                on_disk.push(name);
+            }
+        }
+        on_disk.sort();
+        assert!(
+            !on_disk.is_empty(),
+            "sanity check: {} yielded no .rs files",
+            dir.display()
+        );
+
+        let missing: Vec<&String> = on_disk.iter().filter(|n| !listed.contains(*n)).collect();
+        assert!(
+            missing.is_empty(),
+            "{} Scheme runtime module(s) exist on disk but are absent from RUNTIME_SOURCES, so \
+             any primitive they register escapes the doc-parity guard entirely: {:?}",
+            missing.len(),
+            missing
+        );
+
+        let stale: Vec<&String> = listed.iter().filter(|n| !on_disk.contains(n)).collect();
+        assert!(
+            stale.is_empty(),
+            "RUNTIME_SOURCES lists module(s) that no longer exist: {stale:?}"
+        );
+    }
 
     /// The primary guard (the WS6 deliverable): every Scheme-callable editor
     /// primitive `mae-scheme` actually registers must have a `scheme:<name>`

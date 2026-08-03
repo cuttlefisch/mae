@@ -31,12 +31,14 @@ use crate::vm::Vm;
 
 mod editor_ops;
 mod io_packages;
+mod kb_crud;
 mod kb_export;
 mod kb_graph_view;
 mod kb_preview;
 mod kb_primitives;
 mod kb_queries;
 mod keybindings;
+mod lsp_dap;
 mod misc_primitives;
 mod shell_agenda;
 mod state_sync_apply;
@@ -47,12 +49,14 @@ mod test_primitives;
 
 use editor_ops::register_editor_ops_fns;
 use io_packages::register_io_package_fns;
+use kb_crud::register_kb_crud_fns;
 use kb_export::register_kb_export_fns;
 use kb_graph_view::register_kb_graph_view_fns;
 use kb_preview::register_kb_preview_fns;
 use kb_primitives::register_kb_primitive_fns;
 use kb_queries::register_kb_query_fns;
 use keybindings::register_keybinding_fns;
+use lsp_dap::register_lsp_dap_fns;
 use misc_primitives::register_misc_primitive_fns;
 use shell_agenda::register_shell_agenda_fns;
 use test_primitives::register_test_primitive_fns;
@@ -92,6 +96,12 @@ pub struct SharedState {
     pending_hook_removes: Vec<(String, String)>,
     /// Editor option changes: (key, value)
     pending_options: Vec<(String, String)>,
+    /// Editor option changes that must ALSO be persisted to `init.scm`, from
+    /// `(set-option-save! KEY VALUE)` — drained into `Editor::set_option`
+    /// followed by `Editor::save_option_to_init`, the same pair the
+    /// `:set-save` colon-command and the `set_option` MCP tool's `persist`
+    /// flag drive (`docs/CROSS_SURFACE_PARITY.md` gap #3).
+    pending_option_saves: Vec<(String, String)>,
     /// Theme name requested by Scheme code via `(set-theme "name")`
     theme_request: Option<String>,
 
@@ -171,6 +181,12 @@ pub struct SharedState {
     /// instance), so it doesn't fit the synchronous-return primitive shape
     /// either, same as `pending_kb_nodes`'s own reasoning.
     pending_kb_register_requests: Vec<(String, String)>,
+    /// Pending KB node CRUD ops from `(kb-create)`/`(kb-update)`/`(kb-delete)`
+    /// — drained in order into the matching `Editor::kb_*_node` method (the
+    /// same one the `kb_create`/`kb_update`/`kb_delete` MCP tools call), so
+    /// the human/Scheme surface and the AI surface share one implementation
+    /// rather than two that can drift (CLAUDE.md principles #3 + #15).
+    pending_kb_node_ops: Vec<kb_crud::KbNodeOp>,
     /// Pending KB typed links: (source, target, rel_type).
     pending_kb_links: Vec<(String, String, String)>,
     /// Pending KB link removals: (source, target).
@@ -334,6 +350,34 @@ pub struct SharedState {
     // --- Introspection (Phase 13h) ---
     /// Cached GC stats snapshot (updated each eval cycle).
     gc_stats_snapshot: crate::vm::GcStats,
+
+    // --- LSP/DAP (docs/CROSS_SURFACE_PARITY.md gap #1) ---
+    /// Monotonic id source for Scheme-initiated LSP/DAP requests. Starts at 0
+    /// and is pre-incremented, so 0 is never a valid request id and an
+    /// uninitialized integer can never be mistaken for one.
+    next_async_request_id: u64,
+    /// Requests queued this eval: `(id, mcp_tool_name, args)`. Drained in
+    /// `state_sync_apply2.rs` into the matching `mae_ai::execute_*` with the
+    /// live `&mut Editor` — the same implementation the MCP tool calls.
+    pending_async_requests: Vec<(u64, String, serde_json::Value)>,
+    /// Snapshot of `Editor::scheme_async` (id, kind, outcome), refreshed each
+    /// eval — what `(lsp-result ID)` reads.
+    async_results: Vec<mae_core::SchemeAsyncSlot>,
+    /// `execute_lsp_diagnostics(editor, scope="all")`'s payload, snapshotted
+    /// only while the diagnostic store is non-empty (so a session with no
+    /// language server pays nothing).
+    lsp_diagnostics_json: Option<String>,
+    /// Active buffer's file path, used to narrow `lsp_diagnostics_json` to
+    /// scope "buffer" without recomputing the payload per scope.
+    diagnostics_buffer_path: Option<String>,
+    /// `execute_debug_state(editor)`'s payload, snapshotted only while a debug
+    /// session is live — what `(debug-state)` reads.
+    dap_state_json: Option<String>,
+    /// Clone of the live `DebugState`, so `(dap-inspect-variable)` can call
+    /// the same `DebugState::find_variable` the dap_inspect_variable MCP tool
+    /// calls rather than re-deriving the lookup from JSON. Cloned only while a
+    /// session is live.
+    dap_debug_state: Option<mae_core::debug::DebugState>,
 
     /// Generic async-completion channel for out-of-tree kernel primitives
     /// (#521): `(tag, outcome)` pairs pushed by a background thread a
@@ -551,6 +595,8 @@ impl SchemeRuntime {
         register_io_package_fns(&mut vm, &shared);
         register_kb_primitive_fns(&mut vm, &shared);
         register_kb_query_fns(&mut vm, &shared);
+        register_kb_crud_fns(&mut vm, &shared);
+        register_lsp_dap_fns(&mut vm, &shared);
         register_kb_graph_view_fns(&mut vm, &shared);
         register_kb_preview_fns(&mut vm, &shared);
         register_kb_export_fns(&mut vm, &shared);
@@ -1149,3 +1195,11 @@ mod tests;
 #[cfg(test)]
 #[path = "permission_tests.rs"]
 mod permission_tests;
+
+// CLAUDE.md principle-#3 parity primitives (KB CRUD, set-option-save!, LSP,
+// DAP). A child of this module for the same reason as `permission_tests`: the
+// oracles are the real `SharedState` queues and the real `Editor` after
+// `apply_to_editor`, not a restatement of what the tests expect.
+#[cfg(test)]
+#[path = "parity_tests.rs"]
+mod parity_tests;

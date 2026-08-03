@@ -17,6 +17,86 @@ use tracing::{debug, info, warn};
 use super::{SchemeRuntime, SharedState, VisualOp};
 
 impl SchemeRuntime {
+    /// Dispatch LSP/DAP requests queued by the `lsp-*`/`dap-*` primitives
+    /// into the SAME `mae_ai::execute_*` implementations the equivalent MCP
+    /// tools call (CLAUDE.md principles #3 + #15 — one implementation, two
+    /// surfaces; `mae-scheme` never re-implements an LSP/DAP read path).
+    ///
+    /// Three outcomes per request, and the distinction is what makes
+    /// `(lsp-result ID)` honest:
+    ///
+    /// - **Failed to dispatch** (no language server for this file type, no
+    ///   buffer path, no debug session): recorded as a completed *error*, so
+    ///   the Scheme caller gets an error rather than polling forever.
+    /// - **Answered synchronously** (`dap_set_breakpoint`, an attach-mode
+    ///   `dap_start`): recorded as a completed *success* immediately.
+    /// - **Genuinely deferred** (the five LSP requests, a launch-mode
+    ///   `dap_start`, continue/step): recorded as pending; the LSP event
+    ///   completes it later via `Editor::scheme_async`, and the DAP ones are
+    ///   read back through `(debug-state)`.
+    pub(super) fn apply_async_tool_requests(state: &mut SharedState, editor: &mut Editor) {
+        for (id, tool, args) in state.pending_async_requests.drain(..) {
+            // `Result<(), String>`-shaped (pure queue) vs
+            // `Result<String, String>`-shaped (may answer now) is a property
+            // of the mae-ai function, not of the tool name — normalize both
+            // into `Result<Option<String>, String>`: `Ok(None)` = deferred.
+            let outcome: Result<Option<String>, String> = match tool.as_str() {
+                "lsp_definition" => mae_ai::execute_lsp_definition(editor, &args).map(|()| None),
+                "lsp_references" => mae_ai::execute_lsp_references(editor, &args).map(|()| None),
+                "lsp_hover" => mae_ai::execute_lsp_hover(editor, &args).map(|()| None),
+                "lsp_workspace_symbol" => {
+                    mae_ai::execute_lsp_workspace_symbol(editor, &args).map(|()| None)
+                }
+                "lsp_document_symbols" => {
+                    mae_ai::execute_lsp_document_symbols(editor, &args).map(|()| None)
+                }
+                "dap_start" => mae_ai::execute_dap_start(editor, &args).map(|s| {
+                    if s.is_empty() {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                }),
+                "dap_set_breakpoint" => mae_ai::execute_dap_set_breakpoint(editor, &args).map(Some),
+                "dap_continue" => mae_ai::execute_dap_continue(editor).map(|s| {
+                    if s.is_empty() {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                }),
+                "dap_step" => mae_ai::execute_dap_step(editor, &args).map(|s| {
+                    if s.is_empty() {
+                        None
+                    } else {
+                        Some(s)
+                    }
+                }),
+                // Unreachable via the registered primitives, which only ever
+                // push the names above. Recorded as an error rather than
+                // silently dropped so a future primitive that forgets to add
+                // its arm here fails loudly instead of hanging on 'pending.
+                other => Err(format!("unsupported async tool: {other}")),
+            };
+
+            match outcome {
+                Ok(None) => editor.scheme_async.register(id, tool),
+                Ok(Some(payload)) => editor
+                    .scheme_async
+                    .register_completed(id, tool, Ok(payload)),
+                Err(e) => {
+                    warn!(
+                        id,
+                        tool = tool.as_str(),
+                        "scheme async request failed: {}",
+                        e
+                    );
+                    editor.scheme_async.register_completed(id, tool, Err(e))
+                }
+            }
+        }
+    }
+
     /// `(undefine-key! MAP KEY)` and `(set-group-name MAP PREFIX LABEL)`.
     /// @ai-caution: [scheme-api] set-group-name must drain alongside
     /// keymap_bindings.
