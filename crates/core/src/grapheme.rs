@@ -262,7 +262,12 @@ pub fn byte_offset_for_max_width_from_end_with(
 ) -> usize {
     let mut cols = 0;
     let mut start = s.len();
-    for (byte_idx, g) in s.grapheme_indices(true).collect::<Vec<_>>().into_iter().rev() {
+    for (byte_idx, g) in s
+        .grapheme_indices(true)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
         let w = grapheme_width(g, policy);
         if cols + w > max_width {
             break;
@@ -403,12 +408,27 @@ mod nasty_corpus {
 
     const CORPUS: &[Case] = &[
         // 1. héllo, NFC (single precomposed U+00E9 LATIN SMALL LETTER E WITH ACUTE)
-        Case { name: "hello_nfc", s: "h\u{e9}llo", graphemes: 5, width_narrow: Some(5) },
+        Case {
+            name: "hello_nfc",
+            s: "h\u{e9}llo",
+            graphemes: 5,
+            width_narrow: Some(5),
+        },
         // 2. héllo, NFD (e + U+0301 COMBINING ACUTE ACCENT) -- same visible text,
         //    same width/grapheme count as NFC despite being 6 chars not 5.
-        Case { name: "hello_nfd", s: "he\u{301}llo", graphemes: 5, width_narrow: Some(5) },
+        Case {
+            name: "hello_nfd",
+            s: "he\u{301}llo",
+            graphemes: 5,
+            width_narrow: Some(5),
+        },
         // 3. CJK: three wide ideographs.
-        Case { name: "cjk", s: "\u{65e5}\u{672c}\u{8a9e}", graphemes: 3, width_narrow: Some(6) },
+        Case {
+            name: "cjk",
+            s: "\u{65e5}\u{672c}\u{8a9e}",
+            graphemes: 3,
+            width_narrow: Some(6),
+        },
         // 4. Family ZWJ emoji (man+ZWJ+woman+ZWJ+girl+ZWJ+boy): one grapheme
         //    cluster, width 2 -- FALSIFIES the deleted per-char-sum
         //    `display_width` (man=2, ZWJ=0, woman=2, ZWJ=0, girl=2, ZWJ=0,
@@ -421,18 +441,38 @@ mod nasty_corpus {
         },
         // 5. Regional-indicator flag (Japan: two REGIONAL INDICATOR SYMBOL
         //    LETTERs forming one flag grapheme cluster).
-        Case { name: "flag_jp", s: "\u{1f1ef}\u{1f1f5}", graphemes: 1, width_narrow: Some(2) },
+        Case {
+            name: "flag_jp",
+            s: "\u{1f1ef}\u{1f1f5}",
+            graphemes: 1,
+            width_narrow: Some(2),
+        },
         // 6. Skin-tone modifier sequence (waving hand + Fitzpatrick type-4).
-        Case { name: "skin_tone_modifier", s: "\u{1f44b}\u{1f3fd}", graphemes: 1, width_narrow: Some(2) },
+        Case {
+            name: "skin_tone_modifier",
+            s: "\u{1f44b}\u{1f3fd}",
+            graphemes: 1,
+            width_narrow: Some(2),
+        },
         // 7. U+FE0F (VARIATION SELECTOR-16, forces emoji presentation) --
         //    FALSIFIES the deleted per-char-sum implementation: heavy black
         //    heart alone is narrow/ambiguous-ish under a naive per-char
         //    width, FE0F contributes 0, and the pair is never widened to 2.
-        Case { name: "heart_vs16_emoji", s: "\u{2764}\u{fe0f}", graphemes: 1, width_narrow: Some(2) },
+        Case {
+            name: "heart_vs16_emoji",
+            s: "\u{2764}\u{fe0f}",
+            graphemes: 1,
+            width_narrow: Some(2),
+        },
         // 8. U+FE0E (VARIATION SELECTOR-15, forces text presentation) --
         //    FALSIFIES the same way in the opposite direction: this must
         //    stay narrow (1), which only the sequence-aware algorithm knows.
-        Case { name: "heart_vs15_text", s: "\u{2764}\u{fe0e}", graphemes: 1, width_narrow: Some(1) },
+        Case {
+            name: "heart_vs15_text",
+            s: "\u{2764}\u{fe0e}",
+            graphemes: 1,
+            width_narrow: Some(1),
+        },
         // 9. Zalgo: a base char with a pile of combining marks -- one
         //    grapheme cluster, width 1 (every combining mark contributes 0).
         Case {
@@ -447,22 +487,52 @@ mod nasty_corpus {
         //     narrow-only in this table version, so this is the more
         //     reliable representative of the Ambiguous category). Covered
         //     separately in `ambiguous_width_policy_changes_ambiguous_char`.
-        Case { name: "eaw_ambiguous_section_sign", s: "\u{a7}", graphemes: 1, width_narrow: Some(1) },
+        Case {
+            name: "eaw_ambiguous_section_sign",
+            s: "\u{a7}",
+            graphemes: 1,
+            width_narrow: Some(1),
+        },
         // 11. ZWSP (ZERO WIDTH SPACE): its own grapheme cluster, width 0.
-        Case { name: "zwsp", s: "\u{200b}", graphemes: 1, width_narrow: Some(0) },
+        Case {
+            name: "zwsp",
+            s: "\u{200b}",
+            graphemes: 1,
+            width_narrow: Some(0),
+        },
         // 12. Halfwidth katakana: EAW=Halfwidth, always narrow (1) regardless
         //     of the ambiguous-width policy (Halfwidth != Ambiguous).
-        Case { name: "halfwidth_katakana", s: "\u{ff71}", graphemes: 1, width_narrow: Some(1) },
+        Case {
+            name: "halfwidth_katakana",
+            s: "\u{ff71}",
+            graphemes: 1,
+            width_narrow: Some(1),
+        },
         // 13. Control character: undefined upstream: default policy is 0.
-        Case { name: "control_char", s: "\u{1}", graphemes: 1, width_narrow: Some(0) },
+        Case {
+            name: "control_char",
+            s: "\u{1}",
+            graphemes: 1,
+            width_narrow: Some(0),
+        },
         // 14. RTL override (bidi format control): no hardcoded width
         //     assertion (Rule 6 terminal-rendering territory, out of this
         //     ADR pass's scope) -- still exercised for panic-safety.
-        Case { name: "rtl_override", s: "\u{202e}abc\u{202c}", graphemes: 5, width_narrow: None },
+        Case {
+            name: "rtl_override",
+            s: "\u{202e}abc\u{202c}",
+            graphemes: 5,
+            width_narrow: None,
+        },
         // 15. Astral plane: a CJK Extension B ideograph outside the BMP,
         //     encoded as a single Rust `char` (never a surrogate pair --
         //     Rust strings are UTF-8/scalar values, not UTF-16).
-        Case { name: "astral_cjk", s: "\u{20000}", graphemes: 1, width_narrow: Some(2) },
+        Case {
+            name: "astral_cjk",
+            s: "\u{20000}",
+            graphemes: 1,
+            width_narrow: Some(2),
+        },
     ];
 
     #[test]
@@ -473,7 +543,12 @@ mod nasty_corpus {
     #[test]
     fn corpus_grapheme_counts() {
         for c in CORPUS {
-            assert_eq!(grapheme_count(c.s), c.graphemes, "case {:?}: grapheme_count", c.name);
+            assert_eq!(
+                grapheme_count(c.s),
+                c.graphemes,
+                "case {:?}: grapheme_count",
+                c.name
+            );
         }
     }
 
@@ -496,7 +571,9 @@ mod nasty_corpus {
     /// assert against it directly, rather than only asserting the current
     /// (correct) value and trusting a comment that the old one differed.
     fn naive_per_char_sum(s: &str) -> usize {
-        s.chars().map(|c| UnicodeWidthChar::width(c).unwrap_or(0)).sum()
+        s.chars()
+            .map(|c| UnicodeWidthChar::width(c).unwrap_or(0))
+            .sum()
     }
 
     #[test]
@@ -506,12 +583,22 @@ mod nasty_corpus {
         // sum the deleted implementation used -- proof this corpus would
         // have caught the bug, not just that the new code looks right in
         // isolation.
-        let family = CORPUS.iter().find(|c| c.name == "family_zwj_emoji").unwrap();
+        let family = CORPUS
+            .iter()
+            .find(|c| c.name == "family_zwj_emoji")
+            .unwrap();
         assert_eq!(display_width(family.s), 2);
-        assert_eq!(naive_per_char_sum(family.s), 8, "man(2)+ZWJ(0)x3+woman(2)+girl(2)+boy(2)");
+        assert_eq!(
+            naive_per_char_sum(family.s),
+            8,
+            "man(2)+ZWJ(0)x3+woman(2)+girl(2)+boy(2)"
+        );
         assert_ne!(display_width(family.s), naive_per_char_sum(family.s));
 
-        let vs16 = CORPUS.iter().find(|c| c.name == "heart_vs16_emoji").unwrap();
+        let vs16 = CORPUS
+            .iter()
+            .find(|c| c.name == "heart_vs16_emoji")
+            .unwrap();
         assert_eq!(display_width(vs16.s), 2);
         assert_ne!(
             display_width(vs16.s),
@@ -530,9 +617,24 @@ mod nasty_corpus {
 
     #[test]
     fn ambiguous_width_policy_changes_ambiguous_char() {
-        let c = CORPUS.iter().find(|c| c.name == "eaw_ambiguous_section_sign").unwrap();
-        let narrow = display_width_with(c.s, WidthPolicy { ambiguous_wide: false, control_char_width: 0 });
-        let wide = display_width_with(c.s, WidthPolicy { ambiguous_wide: true, control_char_width: 0 });
+        let c = CORPUS
+            .iter()
+            .find(|c| c.name == "eaw_ambiguous_section_sign")
+            .unwrap();
+        let narrow = display_width_with(
+            c.s,
+            WidthPolicy {
+                ambiguous_wide: false,
+                control_char_width: 0,
+            },
+        );
+        let wide = display_width_with(
+            c.s,
+            WidthPolicy {
+                ambiguous_wide: true,
+                control_char_width: 0,
+            },
+        );
         assert_eq!(narrow, 1);
         assert_eq!(wide, 2);
     }
@@ -541,15 +643,30 @@ mod nasty_corpus {
     fn halfwidth_katakana_stays_narrow_under_wide_policy() {
         // Regression guard: EAW=Halfwidth must NOT be affected by the
         // ambiguous-width policy (only EAW=Ambiguous is).
-        let c = CORPUS.iter().find(|c| c.name == "halfwidth_katakana").unwrap();
-        let wide = display_width_with(c.s, WidthPolicy { ambiguous_wide: true, control_char_width: 0 });
+        let c = CORPUS
+            .iter()
+            .find(|c| c.name == "halfwidth_katakana")
+            .unwrap();
+        let wide = display_width_with(
+            c.s,
+            WidthPolicy {
+                ambiguous_wide: true,
+                control_char_width: 0,
+            },
+        );
         assert_eq!(wide, 1);
     }
 
     #[test]
     fn control_char_width_policy_applies_in_corpus() {
         let c = CORPUS.iter().find(|c| c.name == "control_char").unwrap();
-        let configured = display_width_with(c.s, WidthPolicy { ambiguous_wide: false, control_char_width: 4 });
+        let configured = display_width_with(
+            c.s,
+            WidthPolicy {
+                ambiguous_wide: false,
+                control_char_width: 4,
+            },
+        );
         assert_eq!(configured, 4);
     }
 
@@ -560,13 +677,31 @@ mod nasty_corpus {
             for budget in 0..=(width + 3) {
                 let end = crate::text_utils::truncate_end(c.s, budget);
                 let start = crate::text_utils::truncate_start(c.s, budget);
-                assert!(display_width(&end) <= budget, "case {:?} truncate_end budget {budget}: {end:?}", c.name);
-                assert!(display_width(&start) <= budget, "case {:?} truncate_start budget {budget}: {start:?}", c.name);
+                assert!(
+                    display_width(&end) <= budget,
+                    "case {:?} truncate_end budget {budget}: {end:?}",
+                    c.name
+                );
+                assert!(
+                    display_width(&start) <= budget,
+                    "case {:?} truncate_start budget {budget}: {start:?}",
+                    c.name
+                );
                 // Never a mid-grapheme cut: re-running grapheme segmentation
                 // on the result must reproduce the same string (i.e. it's
                 // already a valid sequence of whole clusters).
-                assert_eq!(end.graphemes(true).collect::<String>(), end, "case {:?}: truncate_end not grapheme-clean at budget {budget}", c.name);
-                assert_eq!(start.graphemes(true).collect::<String>(), start, "case {:?}: truncate_start not grapheme-clean at budget {budget}", c.name);
+                assert_eq!(
+                    end.graphemes(true).collect::<String>(),
+                    end,
+                    "case {:?}: truncate_end not grapheme-clean at budget {budget}",
+                    c.name
+                );
+                assert_eq!(
+                    start.graphemes(true).collect::<String>(),
+                    start,
+                    "case {:?}: truncate_start not grapheme-clean at budget {budget}",
+                    c.name
+                );
             }
         }
     }
@@ -608,12 +743,11 @@ mod nasty_corpus {
     #[test]
     fn checked_byte_boundary_passes_through_every_valid_offset_unchanged() {
         for c in CORPUS {
-            let valid: Vec<usize> = c
-                .s
-                .char_indices()
-                .map(|(i, _)| i)
-                .chain(std::iter::once(c.s.len()))
-                .collect();
+            let valid: Vec<usize> =
+                c.s.char_indices()
+                    .map(|(i, _)| i)
+                    .chain(std::iter::once(c.s.len()))
+                    .collect();
             for offset in valid {
                 assert_eq!(
                     checked_byte_boundary(c.s, offset),

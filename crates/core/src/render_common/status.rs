@@ -9,9 +9,9 @@ use crate::{
     Buffer, BufferKind, CollabStatus, Editor, InputLock, LspServerStatus, Mode, VisualType, Window,
 };
 
+use crate::grapheme::{byte_offset_for_max_width_with, display_width_with, WidthPolicy};
 #[cfg(test)]
 use crate::LspServerInfo;
-use crate::grapheme::{byte_offset_for_max_width_with, display_width_with, WidthPolicy};
 
 /// A status bar segment with a priority (1 = highest = last to drop).
 pub struct Segment {
@@ -354,7 +354,8 @@ pub fn layout_status_segments(
 ) -> StatusLayout {
     // Elide lowest-priority segments until they fit.
     segments.sort_by_key(|s| s.priority);
-    let total_width = |segs: &[Segment]| -> usize { segs.iter().map(|s| s.width_with(policy)).sum() };
+    let total_width =
+        |segs: &[Segment]| -> usize { segs.iter().map(|s| s.width_with(policy)).sum() };
     while total_width(segments) > avail && !segments.is_empty() {
         segments.pop();
     }
@@ -750,10 +751,7 @@ mod tests {
 
     #[test]
     fn truncate_branch_short() {
-        assert_eq!(
-            truncate_branch("main", 10, WidthPolicy::default()),
-            "main"
-        );
+        assert_eq!(truncate_branch("main", 10, WidthPolicy::default()), "main");
     }
 
     #[test]

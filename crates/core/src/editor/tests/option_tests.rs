@@ -1357,14 +1357,20 @@ fn ambiguous_width_set_get_and_alias_round_trip() {
     let mut editor = Editor::new();
     assert_eq!(editor.ambiguous_width_wide, false, "default is narrow");
     assert_eq!(
-        editor.get_option("ambiguous_width").map(|(v, _)| v).as_deref(),
+        editor
+            .get_option("ambiguous_width")
+            .map(|(v, _)| v)
+            .as_deref(),
         Some("narrow")
     );
 
     editor.set_option("ambiguous_width", "wide").unwrap();
     assert!(editor.ambiguous_width_wide);
     assert_eq!(
-        editor.get_option("ambiguous_width").map(|(v, _)| v).as_deref(),
+        editor
+            .get_option("ambiguous_width")
+            .map(|(v, _)| v)
+            .as_deref(),
         Some("wide")
     );
 
@@ -1377,7 +1383,10 @@ fn ambiguous_width_set_get_and_alias_round_trip() {
 fn ambiguous_width_rejects_invalid_value() {
     let mut editor = Editor::new();
     assert!(editor.set_option("ambiguous_width", "extra-wide").is_err());
-    assert!(!editor.ambiguous_width_wide, "invalid value must not mutate state");
+    assert!(
+        !editor.ambiguous_width_wide,
+        "invalid value must not mutate state"
+    );
 }
 
 #[test]
@@ -1398,7 +1407,10 @@ fn control_char_width_set_get_round_trip() {
     let mut editor = Editor::new();
     assert_eq!(editor.control_char_width, 0);
     assert_eq!(
-        editor.get_option("control_char_width").map(|(v, _)| v).as_deref(),
+        editor
+            .get_option("control_char_width")
+            .map(|(v, _)| v)
+            .as_deref(),
         Some("0")
     );
 

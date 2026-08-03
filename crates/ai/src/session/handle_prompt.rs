@@ -738,10 +738,8 @@ impl AgentSession {
                             // arbitrary UTF-8; a fixed byte cut can land
                             // mid-character and panic.
                             output: if result.output.len() > 200 {
-                                let cut = mae_core::grapheme::checked_byte_boundary(
-                                    &result.output,
-                                    200,
-                                );
+                                let cut =
+                                    mae_core::grapheme::checked_byte_boundary(&result.output, 200);
                                 format!("{}...", &result.output[..cut])
                             } else {
                                 result.output.clone()
