@@ -72,7 +72,10 @@ mod tests {
     #[test]
     fn round_trips_at_every_char_boundary_of_the_nasty_corpus() {
         for (name, line) in corpus() {
-            for (byte_col, _) in line.char_indices().chain(std::iter::once((line.len(), ' '))) {
+            for (byte_col, _) in line
+                .char_indices()
+                .chain(std::iter::once((line.len(), ' ')))
+            {
                 let ch = byte_col_to_lsp_character(line, byte_col);
                 let back = lsp_character_to_byte_col(line, ch);
                 // `back` snaps to a grapheme boundary, so it may move left of

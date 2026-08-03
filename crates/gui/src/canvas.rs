@@ -1604,7 +1604,12 @@ mod tests {
             let (actual_str_advance, _) = scaled_font.measure_str(test_text, None);
 
             // Our NEW cursor math: pixel_x_for_col with actual glyph_advance
-            let cursor_px = FrameLayout::pixel_x_for_col(test_text, char_count, glyph_advance, mae_core::grapheme::WidthPolicy::default());
+            let cursor_px = FrameLayout::pixel_x_for_col(
+                test_text,
+                char_count,
+                glyph_advance,
+                mae_core::grapheme::WidthPolicy::default(),
+            );
 
             let error_in_cells = (actual_str_advance - cursor_px).abs() / cell_width;
 

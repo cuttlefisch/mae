@@ -1162,8 +1162,8 @@ mod tests {
         let mut acc = 0.0f32;
         for &ch in &chars {
             pixel_offsets.push(acc);
-            acc += char_width(ch, mae_core::grapheme::WidthPolicy::default()) as f32
-                * glyph_advance;
+            acc +=
+                char_width(ch, mae_core::grapheme::WidthPolicy::default()) as f32 * glyph_advance;
         }
         pixel_offsets.push(acc);
 

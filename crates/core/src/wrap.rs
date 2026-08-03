@@ -52,12 +52,7 @@ pub fn char_width(ch: char, policy: WidthPolicy) -> usize {
 /// Find the best wrap break point within `chars[start..]` that fits in `limit`
 /// display columns. Returns the char index where the next display line should start.
 /// Prefers breaking after a word-boundary char; falls back to hard break.
-pub fn find_wrap_break(
-    chars: &[char],
-    start: usize,
-    limit: usize,
-    policy: WidthPolicy,
-) -> usize {
+pub fn find_wrap_break(chars: &[char], start: usize, limit: usize, policy: WidthPolicy) -> usize {
     // Walk forward accumulating display width to find the hard-break index.
     let mut width = 0;
     let mut end = start;
@@ -369,14 +364,18 @@ mod tests {
 
     #[test]
     fn wrap_cursor_on_first_row() {
-        let (row, col) = wrap_cursor_position("hello world foo", 3, 80, false, 0, WidthPolicy::default());
+        let (row, col) =
+            wrap_cursor_position("hello world foo", 3, 80, false, 0, WidthPolicy::default());
         assert_eq!(row, 0);
         assert_eq!(col, 3);
     }
 
     #[test]
     fn wrap_display_rows_short_line() {
-        assert_eq!(wrap_line_display_rows("short", 80, false, 0, WidthPolicy::default()), 1);
+        assert_eq!(
+            wrap_line_display_rows("short", 80, false, 0, WidthPolicy::default()),
+            1
+        );
     }
 
     // --- last_visible_wrapped_line: the shared bottom-visible-row walk,
@@ -456,7 +455,10 @@ mod tests {
 
     #[test]
     fn wrap_display_rows_empty() {
-        assert_eq!(wrap_line_display_rows("", 80, false, 0, WidthPolicy::default()), 1);
+        assert_eq!(
+            wrap_line_display_rows("", 80, false, 0, WidthPolicy::default()),
+            1
+        );
     }
 
     #[test]
@@ -540,7 +542,7 @@ mod tests {
         let (row, col) = wrap_cursor_position("你好世界", 3, 5, false, 0, p);
         assert_eq!(row, 0);
         assert_eq!(col, 2); // "好" starts at display col 2
-        // Third character wraps onto row 1 at display col 0.
+                            // Third character wraps onto row 1 at display col 0.
         let (row, col) = wrap_cursor_position("你好世界", 6, 5, false, 0, p);
         assert_eq!((row, col), (1, 0));
     }

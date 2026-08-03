@@ -59,11 +59,8 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
             // screen column is `display_width_of_prefix_with`, not
             // `display_width_up_to_grapheme` (which wants a grapheme index --
             // one of the four domains this field used to be read as).
-            let display_col = grapheme::display_width_of_prefix_with(
-                &line_text,
-                focused_win.cursor_col,
-                policy,
-            );
+            let display_col =
+                grapheme::display_width_of_prefix_with(&line_text, focused_win.cursor_col, policy);
             let cursor_x = inner.x + gutter_w as u16 + display_col as u16;
             let cursor_y = inner.y
                 + focused_win

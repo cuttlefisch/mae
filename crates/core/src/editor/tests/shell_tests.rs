@@ -179,7 +179,9 @@ fn clamp_all_cursors_clamps_visual_anchor_past_eof() {
 
     editor.clamp_all_cursors();
     assert!(editor.vi.visual_anchor_row < editor.buffers[0].display_line_count());
-    assert!(editor.vi.visual_anchor_col <= editor.buffers[0].line_byte_len(editor.vi.visual_anchor_row));
+    assert!(
+        editor.vi.visual_anchor_col <= editor.buffers[0].line_byte_len(editor.vi.visual_anchor_row)
+    );
 }
 
 #[test]

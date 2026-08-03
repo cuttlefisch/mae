@@ -108,23 +108,23 @@ fn every_cursor_column_the_editor_produces_is_a_grapheme_boundary() {
 fn move_right_visits_every_cluster_exactly_once_then_stops() {
     for (name, text) in corpus() {
         let mut editor = editor_with_text(text);
-        let expected: Vec<String> = text
-            .char_indices()
-            .fold(Vec::<usize>::new(), |mut acc, (i, _)| {
-                if acc.last().is_none_or(|&last| {
-                    crate::grapheme::next_grapheme_boundary(text, last) <= i
-                }) && crate::grapheme::snap_to_grapheme_boundary(text, i) == i
-                {
-                    acc.push(i);
-                }
-                acc
-            })
-            .iter()
-            .map(|&b| {
-                let e = crate::grapheme::next_grapheme_boundary(text, b);
-                text[b..e].to_string()
-            })
-            .collect();
+        let expected: Vec<String> =
+            text.char_indices()
+                .fold(Vec::<usize>::new(), |mut acc, (i, _)| {
+                    if acc.last().is_none_or(|&last| {
+                        crate::grapheme::next_grapheme_boundary(text, last) <= i
+                    }) && crate::grapheme::snap_to_grapheme_boundary(text, i) == i
+                    {
+                        acc.push(i);
+                    }
+                    acc
+                })
+                .iter()
+                .map(|&b| {
+                    let e = crate::grapheme::next_grapheme_boundary(text, b);
+                    text[b..e].to_string()
+                })
+                .collect();
 
         let mut seen = vec![cluster_at(&editor)];
         for _ in 0..expected.len() + 3 {

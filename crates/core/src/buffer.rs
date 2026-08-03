@@ -1116,7 +1116,9 @@ impl Buffer {
         let row = row.min(self.line_count().saturating_sub(1));
         let line_start = self.rope.line_to_byte(row);
         let line_end = line_start + self.rope.line(row).len_bytes();
-        (line_start + byte_col).min(line_end).min(self.rope.len_bytes())
+        (line_start + byte_col)
+            .min(line_end)
+            .min(self.rope.len_bytes())
     }
 
     /// Absolute **char** offset in the rope for `(row, byte_col)`.

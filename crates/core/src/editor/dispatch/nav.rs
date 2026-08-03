@@ -99,12 +99,25 @@ impl Editor {
                         let line = buf.rope().line(win.cursor_row);
                         let lt: String = line.chars().collect();
                         let lt = lt.trim_end_matches('\n');
-                        let (wrap_row, _) =
-                            crate::wrap::wrap_cursor_position(lt, win.cursor_col, tw, bi, sb_w, policy);
-                        let total_rows = crate::wrap::wrap_line_display_rows(lt, tw, bi, sb_w, policy);
+                        let (wrap_row, _) = crate::wrap::wrap_cursor_position(
+                            lt,
+                            win.cursor_col,
+                            tw,
+                            bi,
+                            sb_w,
+                            policy,
+                        );
+                        let total_rows =
+                            crate::wrap::wrap_line_display_rows(lt, tw, bi, sb_w, policy);
                         if wrap_row + 1 < total_rows {
-                            let next_start =
-                                crate::wrap::wrap_row_start_col(lt, wrap_row + 1, tw, bi, sb_w, policy);
+                            let next_start = crate::wrap::wrap_row_start_col(
+                                lt,
+                                wrap_row + 1,
+                                tw,
+                                bi,
+                                sb_w,
+                                policy,
+                            );
                             win.cursor_col = next_start;
                         } else {
                             win.move_down(buf);
@@ -130,18 +143,31 @@ impl Editor {
                         let line = buf.rope().line(win.cursor_row);
                         let lt: String = line.chars().collect();
                         let lt = lt.trim_end_matches('\n');
-                        let (wrap_row, _) =
-                            crate::wrap::wrap_cursor_position(lt, win.cursor_col, tw, bi, sb_w, policy);
+                        let (wrap_row, _) = crate::wrap::wrap_cursor_position(
+                            lt,
+                            win.cursor_col,
+                            tw,
+                            bi,
+                            sb_w,
+                            policy,
+                        );
                         if wrap_row > 0 {
-                            let prev_start =
-                                crate::wrap::wrap_row_start_col(lt, wrap_row - 1, tw, bi, sb_w, policy);
+                            let prev_start = crate::wrap::wrap_row_start_col(
+                                lt,
+                                wrap_row - 1,
+                                tw,
+                                bi,
+                                sb_w,
+                                policy,
+                            );
                             win.cursor_col = prev_start;
                         } else if win.cursor_row > 0 {
                             win.move_up(buf);
                             let prev_line = buf.rope().line(win.cursor_row);
                             let plt: String = prev_line.chars().collect();
                             let plt = plt.trim_end_matches('\n');
-                            let prev_rows = crate::wrap::wrap_line_display_rows(plt, tw, bi, sb_w, policy);
+                            let prev_rows =
+                                crate::wrap::wrap_line_display_rows(plt, tw, bi, sb_w, policy);
                             if prev_rows > 1 {
                                 let last_start = crate::wrap::wrap_row_start_col(
                                     plt,
@@ -172,7 +198,8 @@ impl Editor {
                     let lt = lt.trim_end_matches('\n');
                     let (wrap_row, _) =
                         crate::wrap::wrap_cursor_position(lt, win.cursor_col, tw, bi, sb_w, policy);
-                    win.cursor_col = crate::wrap::wrap_row_start_col(lt, wrap_row, tw, bi, sb_w, policy);
+                    win.cursor_col =
+                        crate::wrap::wrap_row_start_col(lt, wrap_row, tw, bi, sb_w, policy);
                 }
             }
             "move-display-line-end" => {

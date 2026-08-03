@@ -391,8 +391,12 @@ pub fn apply_display_regions_to_line(
             .position(|&b| b >= clamped)
             .unwrap_or(line_chars.len())
     };
-    let char_idx_to_byte_col =
-        |char_idx: usize| -> usize { byte_positions.get(char_idx).copied().unwrap_or(line_byte_len) };
+    let char_idx_to_byte_col = |char_idx: usize| -> usize {
+        byte_positions
+            .get(char_idx)
+            .copied()
+            .unwrap_or(line_byte_len)
+    };
 
     let mut display_chars = Vec::new();
     let mut rope_col_map = Vec::new();

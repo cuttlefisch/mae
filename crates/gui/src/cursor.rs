@@ -889,7 +889,8 @@ mod tests {
         // Verify FrameLayout::scaled_col produces correct results.
         let line = "** Heading text";
         let scale = 1.3;
-        let col5 = FrameLayout::scaled_col(line, 5, scale, mae_core::grapheme::WidthPolicy::default());
+        let col5 =
+            FrameLayout::scaled_col(line, 5, scale, mae_core::grapheme::WidthPolicy::default());
         let mut expected = 0.0f32;
         for ch in line.chars().take(5) {
             expected += char_width(ch, mae_core::grapheme::WidthPolicy::default()) as f32 * scale;
@@ -899,7 +900,15 @@ mod tests {
 
     #[test]
     fn scaled_col_at_zero_is_zero() {
-        assert_eq!(FrameLayout::scaled_col("* Heading", 0, 1.5, mae_core::grapheme::WidthPolicy::default()), 0);
+        assert_eq!(
+            FrameLayout::scaled_col(
+                "* Heading",
+                0,
+                1.5,
+                mae_core::grapheme::WidthPolicy::default()
+            ),
+            0
+        );
     }
 
     #[test]
@@ -955,13 +964,21 @@ mod tests {
 
         // Cursor uses pixel_x_for_col:
         for target_col in 0..line.len() {
-            let cursor_px = FrameLayout::pixel_x_for_col(line, target_col, glyph_advance, mae_core::grapheme::WidthPolicy::default());
+            let cursor_px = FrameLayout::pixel_x_for_col(
+                line,
+                target_col,
+                glyph_advance,
+                mae_core::grapheme::WidthPolicy::default(),
+            );
 
             // Text rendering uses the same accumulation in pixel_offsets:
             let text_px: f32 = line
                 .chars()
                 .take(target_col)
-                .map(|ch| char_width(ch, mae_core::grapheme::WidthPolicy::default()) as f32 * glyph_advance)
+                .map(|ch| {
+                    char_width(ch, mae_core::grapheme::WidthPolicy::default()) as f32
+                        * glyph_advance
+                })
                 .sum();
 
             assert_eq!(

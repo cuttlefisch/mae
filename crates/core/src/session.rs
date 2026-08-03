@@ -236,7 +236,10 @@ mod tests {
         vec![
             ("ascii-agrees", "fn main() { let x = 1; }"),
             ("cjk", "let 名前 = \"日本語のテキスト\";"),
-            ("combining", "cafe\u{0301} nai\u{0308}ve re\u{0301}sume\u{0301}"),
+            (
+                "combining",
+                "cafe\u{0301} nai\u{0308}ve re\u{0301}sume\u{0301}",
+            ),
             ("zwj-emoji", "let team = \"👨‍👩‍👧‍👦\"; // 👍🏽"),
             ("astral-cjk", "\u{20000}\u{2A6B2} rare ideographs"),
             ("mixed", "a日👨‍👩‍👧b\u{0301}c → d"),

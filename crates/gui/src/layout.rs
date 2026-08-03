@@ -829,40 +829,74 @@ mod tests {
     #[test]
     fn scaled_col_ascii() {
         // "## Hello" at scale 1.3, cursor at char 5
-        let result = FrameLayout::scaled_col("## Hello", 5, 1.3, mae_core::grapheme::WidthPolicy::default());
+        let result = FrameLayout::scaled_col(
+            "## Hello",
+            5,
+            1.3,
+            mae_core::grapheme::WidthPolicy::default(),
+        );
         // Accumulated: 1.3 + 1.3 + 1.3 + 1.3 + 1.3 = 6.5 → round = 7
         assert_eq!(result, 7);
     }
 
     #[test]
     fn scaled_col_identity() {
-        let result = FrameLayout::scaled_col("hello world", 5, 1.0, mae_core::grapheme::WidthPolicy::default());
+        let result = FrameLayout::scaled_col(
+            "hello world",
+            5,
+            1.0,
+            mae_core::grapheme::WidthPolicy::default(),
+        );
         assert_eq!(result, 5);
     }
 
     #[test]
     fn scaled_col_empty() {
-        assert_eq!(FrameLayout::scaled_col("", 0, 1.3, mae_core::grapheme::WidthPolicy::default()), 0);
-        assert_eq!(FrameLayout::scaled_col("abc", 0, 1.3, mae_core::grapheme::WidthPolicy::default()), 0);
+        assert_eq!(
+            FrameLayout::scaled_col("", 0, 1.3, mae_core::grapheme::WidthPolicy::default()),
+            0
+        );
+        assert_eq!(
+            FrameLayout::scaled_col("abc", 0, 1.3, mae_core::grapheme::WidthPolicy::default()),
+            0
+        );
     }
 
     #[test]
     fn scaled_col_precise_no_rounding() {
         // "## Hello" at scale 1.3, cursor at char 5:
         // 5 * 1.3 = 6.5 exactly (no rounding).
-        let result = FrameLayout::scaled_col_precise("## Hello", 5, 1.3, mae_core::grapheme::WidthPolicy::default());
+        let result = FrameLayout::scaled_col_precise(
+            "## Hello",
+            5,
+            1.3,
+            mae_core::grapheme::WidthPolicy::default(),
+        );
         assert!((result - 6.5).abs() < 1e-6);
     }
 
     #[test]
     fn scaled_col_precise_identity() {
-        let result = FrameLayout::scaled_col_precise("hello", 5, 1.0, mae_core::grapheme::WidthPolicy::default());
+        let result = FrameLayout::scaled_col_precise(
+            "hello",
+            5,
+            1.0,
+            mae_core::grapheme::WidthPolicy::default(),
+        );
         assert!((result - 5.0).abs() < 1e-6);
     }
 
     #[test]
     fn scaled_col_precise_zero() {
-        assert_eq!(FrameLayout::scaled_col_precise("abc", 0, 1.5, mae_core::grapheme::WidthPolicy::default()), 0.0);
+        assert_eq!(
+            FrameLayout::scaled_col_precise(
+                "abc",
+                0,
+                1.5,
+                mae_core::grapheme::WidthPolicy::default()
+            ),
+            0.0
+        );
     }
 
     #[test]
