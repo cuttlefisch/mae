@@ -105,23 +105,21 @@ pub fn display_width(s: &str) -> usize {
 
 /// `display_width`, parameterized by `WidthPolicy` (ADR-087 Rule 3).
 ///
-/// When `policy.control_char_width == 0` this delegates to
-/// `unicode-width`'s whole-string algorithm directly, which is both faster
-/// and *more* correct than summing per-grapheme widths: it tracks state
-/// across the whole string for cases like `"\r\n"` (width 1, not 2) and
-/// regional-indicator pairing that a per-cluster walk would not preserve
-/// across a cluster boundary. Only when a non-default `control_char_width`
-/// requires overriding what `unicode-width` bakes in for control chars do
-/// we fall back to a per-grapheme-cluster walk (still correct for ZWJ
-/// sequences, since those bind within a single cluster).
+/// Walks per-grapheme-cluster rather than delegating to `unicode-width`'s
+/// whole-string `UnicodeWidthStr::width(s)`/`width_cjk(s)` directly, because
+/// that whole-string algorithm has its own hardcoded control-character
+/// handling (a raw control byte contributes width 1 there, e.g. `"\r\n"` is
+/// deliberately 1 not 2) which disagrees with -- and cannot be overridden by
+/// -- `policy.control_char_width`. Every other cross-character width rule
+/// `unicode-width` implements (ZWJ sequences, regional-indicator flag
+/// pairs, emoji modifier/presentation sequences, CRLF) binds characters
+/// that Unicode's own extended-grapheme-cluster rules (UAX #29) already
+/// group into a single cluster, so computing width per-cluster (via
+/// `unicode-width`'s per-cluster algorithm, still exact within a cluster)
+/// and summing is equivalent to the whole-string computation for every case
+/// except control characters -- which is exactly the one case this
+/// function needs to diverge on.
 pub fn display_width_with(s: &str, policy: WidthPolicy) -> usize {
-    if policy.control_char_width == 0 {
-        return if policy.ambiguous_wide {
-            UnicodeWidthStr::width_cjk(s)
-        } else {
-            UnicodeWidthStr::width(s)
-        };
-    }
     s.graphemes(true).map(|g| grapheme_width(g, policy)).sum()
 }
 
