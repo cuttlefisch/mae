@@ -262,7 +262,7 @@ pub fn grade_exam_response(
                         // UTF-8 (any language, emoji, punctuation); a fixed
                         // byte cut can land mid-character and panic.
                         if final_text.len() > 100 {
-                            let cut = mae_core::grapheme::checked_byte_boundary(final_text, 100);
+                            let cut = mae_core::grapheme::floor_char_boundary(final_text, 100);
                             &final_text[..cut]
                         } else {
                             final_text

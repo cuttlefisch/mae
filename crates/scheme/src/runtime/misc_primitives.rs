@@ -121,7 +121,7 @@ pub(super) fn register_misc_primitive_fns(vm: &mut Vm, shared: &Arc<Mutex<Shared
                     // ADR-087 / audit #594: shell output is arbitrary UTF-8; a
                     // fixed byte cut can land mid-character and panic.
                     if stdout.len() > 1_048_576 {
-                        let cut = mae_core::grapheme::checked_byte_boundary(&stdout, 1_048_576);
+                        let cut = mae_core::grapheme::floor_char_boundary(&stdout, 1_048_576);
                         Ok(Value::string(&stdout[..cut]))
                     } else {
                         Ok(Value::string(stdout.into_owned()))

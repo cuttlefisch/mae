@@ -299,7 +299,7 @@ impl AgentProvider for OpenAiProvider {
             // fixed byte offset can land mid-character and panic.
             let body_preview = String::from_utf8_lossy(&raw_body);
             let body_preview = if body_preview.len() > 500 {
-                let cut = mae_core::grapheme::checked_byte_boundary(&body_preview, 500);
+                let cut = mae_core::grapheme::floor_char_boundary(&body_preview, 500);
                 format!("{}...", &body_preview[..cut])
             } else {
                 body_preview.to_string()

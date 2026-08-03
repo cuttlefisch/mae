@@ -49,10 +49,10 @@ pub fn read_project_context(cwd: &Path) -> Option<String> {
             // checkmarks, arrows, etc.) -- a multi-byte character straddling
             // that boundary panics on session startup, which is process-fatal
             // for this path (`mae-agent-cli`'s system-prompt construction).
-            // `checked_byte_boundary` rounds down to the nearest char boundary.
+            // `floor_char_boundary` rounds down to the nearest char boundary.
             let truncated = if content.len() > PROJECT_CONTEXT_MAX_CHARS {
                 let cut =
-                    mae_core::grapheme::checked_byte_boundary(&content, PROJECT_CONTEXT_MAX_CHARS);
+                    mae_core::grapheme::floor_char_boundary(&content, PROJECT_CONTEXT_MAX_CHARS);
                 format!("{}...\n[truncated]", &content[..cut])
             } else {
                 content

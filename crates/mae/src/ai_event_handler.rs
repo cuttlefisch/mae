@@ -266,7 +266,7 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 // ADR-087 / audit #594: AI model output is arbitrary UTF-8; a
                 // fixed byte cut can land mid-character and panic.
                 let display = if text.len() > 120 {
-                    let cut = mae_core::grapheme::checked_byte_boundary(&text, 117);
+                    let cut = mae_core::grapheme::floor_char_boundary(&text, 117);
                     format!("[AI] {}...", &text[..cut])
                 } else {
                     format!("[AI] {}", text)

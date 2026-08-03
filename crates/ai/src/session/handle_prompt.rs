@@ -739,7 +739,7 @@ impl AgentSession {
                             // mid-character and panic.
                             output: if result.output.len() > 200 {
                                 let cut =
-                                    mae_core::grapheme::checked_byte_boundary(&result.output, 200);
+                                    mae_core::grapheme::floor_char_boundary(&result.output, 200);
                                 format!("{}...", &result.output[..cut])
                             } else {
                                 result.output.clone()

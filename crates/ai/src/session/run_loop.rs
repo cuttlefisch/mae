@@ -76,9 +76,9 @@ impl AgentSession {
                     // command output is arbitrary UTF-8 (unicode filenames, git
                     // log messages, colored box-drawing, ...) -- ADR-087 /
                     // audit #594: a fixed byte cut can land mid-character and
-                    // panic. `checked_byte_boundary` rounds down.
+                    // panic. `floor_char_boundary` rounds down.
                     let stdout_str = if stdout.len() > 10_000 {
-                        let cut = mae_core::grapheme::checked_byte_boundary(&stdout, 10_000);
+                        let cut = mae_core::grapheme::floor_char_boundary(&stdout, 10_000);
                         format!("{}...[truncated]", &stdout[..cut])
                     } else {
                         stdout.to_string()
@@ -87,7 +87,7 @@ impl AgentSession {
                 }
                 if !stderr.is_empty() {
                     let stderr_str = if stderr.len() > 5_000 {
-                        let cut = mae_core::grapheme::checked_byte_boundary(&stderr, 5_000);
+                        let cut = mae_core::grapheme::floor_char_boundary(&stderr, 5_000);
                         format!("{}...[truncated]", &stderr[..cut])
                     } else {
                         stderr.to_string()

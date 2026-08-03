@@ -189,6 +189,30 @@ pub fn display_width_up_to_grapheme(s: &str, grapheme_idx: usize) -> usize {
 /// caller that constructs a byte offset some other way (e.g. arithmetic on
 /// `.len()`, the exact bug class fixed at the `popup_render.rs` call
 /// sites).
+/// Round `byte_idx` **down** to the nearest char boundary, with no assertion.
+///
+/// This is the "clamp a budget" counterpart to [`checked_byte_boundary`], and
+/// choosing between them matters:
+///
+/// - [`checked_byte_boundary`] means *"this offset should already be valid; if
+///   it is not, something upstream computed it wrongly"* — so it
+///   `debug_assert`s. Use it for offsets derived from grapheme/char iteration.
+/// - `floor_char_boundary` means *"cut this text at roughly N bytes"* — where
+///   landing mid-character is the **expected** case, not a bug. Truncating
+///   arbitrary external text (shell output, an HTTP response body, tool output)
+///   at a fixed byte budget lands mid-character routinely, and asserting on
+///   that would panic every debug build on ordinary input.
+///
+/// Conflating the two is how the chokepoint ended up asserting on its own
+/// normal case. Mirrors the unstable `str::floor_char_boundary`.
+pub fn floor_char_boundary(s: &str, byte_idx: usize) -> usize {
+    let mut idx = byte_idx.min(s.len());
+    while idx > 0 && !s.is_char_boundary(idx) {
+        idx -= 1;
+    }
+    idx
+}
+
 pub fn checked_byte_boundary(s: &str, byte_idx: usize) -> usize {
     if byte_idx <= s.len() && s.is_char_boundary(byte_idx) {
         return byte_idx;
@@ -747,6 +771,42 @@ mod nasty_corpus {
                     "case {:?}: a genuinely valid char-boundary offset must pass through unchanged",
                     c.name
                 );
+            }
+        }
+    }
+
+    /// The regression this pair of functions exists to prevent.
+    ///
+    /// Truncating arbitrary external text at a fixed byte budget lands
+    /// mid-character routinely — that is the *expected* case, not a caller
+    /// bug. Every one of the real call sites is of this shape: shell stdout
+    /// at 10_000 bytes, an HTTP body preview at 500, tool output at 200.
+    /// Routing those through the asserting validator made every debug build
+    /// (including `cargo test`) panic on ordinary non-ASCII output.
+    #[test]
+    fn flooring_a_byte_budget_mid_character_does_not_panic_in_debug() {
+        // 3-byte characters, so a 10-byte budget lands inside the 4th.
+        let s = "\u{65e5}\u{672c}\u{8a9e}\u{30c6}\u{30ad}\u{30b9}\u{30c8}";
+        for budget in 0..=s.len() + 4 {
+            let cut = floor_char_boundary(s, budget);
+            assert!(
+                s.is_char_boundary(cut),
+                "budget {budget} produced non-boundary offset {cut}"
+            );
+            assert!(cut <= budget.min(s.len()), "must round DOWN, never up");
+            // The real point: this must not panic, and must be sliceable.
+            let _ = &s[..cut];
+        }
+    }
+
+    /// Flooring must be a no-op on input that is already valid, so swapping a
+    /// call site from the validator to the floor cannot silently change a
+    /// correct offset.
+    #[test]
+    fn flooring_leaves_every_valid_offset_untouched() {
+        for c in CORPUS {
+            for (i, _) in c.s.char_indices().chain(std::iter::once((c.s.len(), ' '))) {
+                assert_eq!(floor_char_boundary(c.s, i), i, "case {:?}", c.name);
             }
         }
     }

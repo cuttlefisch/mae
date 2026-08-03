@@ -783,7 +783,7 @@ impl SchemeRuntime {
             // of the history-recording logic): Scheme source is arbitrary
             // UTF-8 (string literals, comments -- MAE's own style uses em
             // dashes); a fixed byte cut can land mid-character and panic.
-            let preview_end = mae_core::grapheme::checked_byte_boundary(code, code.len().min(100));
+            let preview_end = mae_core::grapheme::floor_char_boundary(code, code.len().min(100));
             error!(error = %err.message, code_preview = &code[..preview_end], "scheme eval error");
             self.record_error(code, &err);
             err
@@ -972,7 +972,7 @@ impl SchemeRuntime {
         // byte cut can land mid-character and panic. This is the AI/MCP
         // `eval_scheme` path (via `eval_yielding`), so an erroring non-ASCII
         // expression over 200 bytes previously panicked the whole session.
-        let expr_end = mae_core::grapheme::checked_byte_boundary(code, code.len().min(200));
+        let expr_end = mae_core::grapheme::floor_char_boundary(code, code.len().min(200));
         let snapshot = SchemeErrorSnapshot {
             expression: code[..expr_end].to_string(),
             error_message: err.message.clone(),
