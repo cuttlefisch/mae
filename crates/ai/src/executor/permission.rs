@@ -1,7 +1,6 @@
 //! Permission tier formatting and capability checks.
 
 use crate::tools::PermissionPolicy;
-use crate::types::PermissionTier;
 
 /// What `ai_permissions` reports.
 ///
@@ -71,6 +70,7 @@ pub(crate) fn format_permissions_info(policy: &PermissionPolicy) -> String {
 mod tests {
     use super::*;
     use crate::tools::{HardCeiling, HardCeilingSource};
+    use crate::types::PermissionTier;
 
     /// The reported tier name must round-trip through the one parser. An agent
     /// that reads this output and writes the name into a config must not have
