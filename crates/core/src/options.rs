@@ -1310,6 +1310,21 @@ impl OptionRegistry {
     }
 }
 
+/// Escape `value` for embedding inside a double-quoted Scheme string literal.
+///
+/// @ai-caution: [config-corruption] The ONE place this escaping lives. Every
+/// writer of `(set-option! "name" "value")` into `init.scm` must call it —
+/// `Editor::save_option_to_init` (the `:set-save` path) and
+/// `config::write_managed_init_options` (the first-run/wizard path). An
+/// unescaped `"` or `\` in a value produces a malformed literal, and init.scm
+/// is the file MAE reads at startup: corrupting it breaks the user's entire
+/// config, not just the one option. The second writer was missing the escaping
+/// entirely (audit #599.2) — values like an `ai_api_key_command` containing a
+/// quoted shell argument reach both paths.
+pub fn scheme_string_literal(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 /// Parse a string as an integer value.
 pub fn parse_option_int(s: &str) -> Result<i64, String> {
     s.parse().map_err(|_| format!("Invalid integer: '{}'", s))

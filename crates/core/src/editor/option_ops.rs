@@ -1774,14 +1774,27 @@ impl super::Editor {
         // Escape backslashes and quotes so a value containing either (e.g. a
         // shell command in ai_api_key_command) still writes a valid Scheme
         // string literal instead of corrupting init.scm on next load.
-        let escaped_value = value.replace('\\', "\\\\").replace('"', "\\\"");
+        let escaped_value = crate::options::scheme_string_literal(&value);
         let set_line = format!("(set-option! \"{}\" \"{}\")", def.name, escaped_value);
         let pattern = format!("(set-option! \"{}\"", def.name);
 
         const MARKER_START: &str = ";; --- MAE managed options ---";
         const MARKER_END: &str = ";; --- end managed options ---";
 
-        let new_content = if content.contains(&pattern) {
+        // Audit #599.1: the branch predicate MUST be the same predicate the
+        // rewrite below uses. It was `content.contains(&pattern)` — a
+        // substring test — while the rewrite only replaces lines that *start*
+        // with the pattern. Any commented-out (`;; (set-option! "x" ...)`) or
+        // nested (`(begin (set-option! "x" ...))`) occurrence therefore
+        // selected the replace branch, replaced nothing, wrote the file back
+        // unchanged, and still reported "Saved". A commented-out example line
+        // is exactly what MAE's own init.scm template is full of, so this fired
+        // on the most ordinary config there is.
+        let has_settable_line = |c: &str| {
+            c.lines()
+                .any(|line| line.trim_start().starts_with(&pattern))
+        };
+        let new_content = if has_settable_line(&content) {
             // Replace existing line containing this option
             content
                 .lines()
