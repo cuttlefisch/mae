@@ -51,8 +51,15 @@ impl SchemeRuntime {
             .define_global("*buffer-line-count*", Value::Int(buf.line_count() as i64));
         self.vm
             .define_global("*cursor-row*", Value::Int(win.cursor_row as i64));
-        self.vm
-            .define_global("*cursor-col*", Value::Int(win.cursor_col as i64));
+        // ADR-087 Rule 4: `Window::cursor_col` is a BYTE column, but the
+        // Scheme surface (`*cursor-col*`, `current-column`, `cursor-goto`) is
+        // and stays a CHARACTER column -- it is a documented stable API, and
+        // silently switching a user script's units is precisely the defect
+        // class this ADR exists to close. One named conversion, here.
+        self.vm.define_global(
+            "*cursor-col*",
+            Value::Int(buf.byte_col_to_char_col(win.cursor_row, win.cursor_col) as i64),
+        );
 
         // Full buffer text
         let text = buf.text();
@@ -211,7 +218,8 @@ impl SchemeRuntime {
             move |_args: &[Value]| Ok(Value::Int(line_num)),
         );
 
-        let col = win.cursor_col as i64;
+        // Character column -- see the `*cursor-col*` note above.
+        let col = buf.byte_col_to_char_col(win.cursor_row, win.cursor_col) as i64;
         self.vm.register_fn(
             "current-column",
             "Current column",
@@ -370,7 +378,9 @@ impl SchemeRuntime {
             state.leader_active = editor.leader_active;
             state.which_key_count = editor.which_key_entries_for_current_keymap().len();
             state.cursor_row = win.cursor_row;
-            state.cursor_col = win.cursor_col;
+            // SharedState feeds the Scheme test primitives, which are on the
+            // character-column surface (see `*cursor-col*`).
+            state.cursor_col = buf.byte_col_to_char_col(win.cursor_row, win.cursor_col);
             state.last_status_message = editor.status_msg.clone();
             state.buffer_names = editor
                 .buffers

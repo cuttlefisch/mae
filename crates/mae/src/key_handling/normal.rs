@@ -474,9 +474,12 @@ pub(super) fn handle_normal_mode(
                     // Append: move cursor right by 1 (past current char).
                     let row = editor.window_mgr.focused_window().cursor_row;
                     let line_len = editor.buffers[idx].line_byte_len(row);
+                    let col = editor.window_mgr.focused_window().cursor_col;
+                    // ADR-087 Rule 4: byte column -- step a grapheme, not a byte.
+                    let next = editor.buffers[idx].next_grapheme_col(row, col);
                     let win = editor.window_mgr.focused_window_mut();
                     if win.cursor_col < line_len {
-                        win.cursor_col += 1;
+                        win.cursor_col = next;
                     }
                     editor.set_mode(Mode::ConversationInput);
                     editor.vi.count_prefix = None;

@@ -524,10 +524,11 @@ impl SchemeRuntime {
             let end = offset + text.chars().count();
             let rope = editor.buffers[idx].rope();
             let new_row = rope.char_to_line(end.min(rope.len_chars()));
-            let line_start = rope.line_to_char(new_row);
+            // ADR-087 Rule 4: char offset -> BYTE column, via the one helper.
+            let new_col = editor.buffers[idx].byte_col_of_char_offset(new_row, end);
             let win = editor.window_mgr.focused_window_mut();
             win.cursor_row = new_row;
-            win.cursor_col = end.saturating_sub(line_start);
+            win.cursor_col = new_col;
             editor.fire_hook("after-insert");
         }
 
@@ -540,12 +541,14 @@ impl SchemeRuntime {
                 let offset = col.min(editor.buffers[idx].rope().len_chars());
                 let rope = editor.buffers[idx].rope();
                 let new_row = rope.char_to_line(offset);
-                let line_start = rope.line_to_char(new_row);
+                let line_start_byte = rope.line_to_byte(new_row);
                 win.cursor_row = new_row;
-                win.cursor_col = offset.saturating_sub(line_start);
+                win.cursor_col = rope.char_to_byte(offset).saturating_sub(line_start_byte);
             } else {
+                // (cursor-goto ROW COL): COL is a CHARACTER column on the
+                // Scheme surface (see `*cursor-col*` in state_sync_inject.rs).
                 win.cursor_row = row;
-                win.cursor_col = col;
+                win.cursor_col = editor.buffers[idx].char_col_to_byte_col(row, col);
             }
             win.clamp_cursor(&editor.buffers[idx]);
         }

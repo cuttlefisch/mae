@@ -214,8 +214,13 @@ pub(super) fn handle_conversation_input(
         KeyCode::Tab => {
             let tab_w: usize = 4;
             let idx = editor.active_buffer_idx();
+            // ADR-087 Rule 1: tab stops are a DISPLAY-column property, so the
+            // modulo must run on the display column, not the byte column.
+            let policy = editor.width_policy();
+            let row = editor.window_mgr.focused_window().cursor_row;
+            let byte_col = editor.window_mgr.focused_window().cursor_col;
+            let col = editor.buffers[idx].display_col_for_byte_col(row, byte_col, policy);
             let win = editor.window_mgr.focused_window_mut();
-            let col = win.cursor_col;
             let spaces = tab_w - (col % tab_w);
             for _ in 0..spaces {
                 editor.buffers[idx].insert_char(win, ' ');
@@ -260,33 +265,53 @@ pub(super) fn handle_conversation_input(
             editor.window_mgr.focused_window_mut().cursor_col = len;
         }
         KeyCode::Char('b') if ctrl => {
+            // ADR-087 Rule 4: cursor_col is a byte column -- step a
+            // grapheme cluster, not one byte.
+            let idx = editor.active_buffer_idx();
+            let (row, col) = {
+                let w = editor.window_mgr.focused_window();
+                (w.cursor_row, w.cursor_col)
+            };
+            let prev = editor.buffers[idx].prev_grapheme_col(row, col);
             let win = editor.window_mgr.focused_window_mut();
             if win.cursor_col > 0 {
-                win.cursor_col -= 1;
+                win.cursor_col = prev;
             }
         }
         KeyCode::Char('f') if ctrl => {
             let idx = editor.active_buffer_idx();
             let row = editor.window_mgr.focused_window().cursor_row;
             let len = editor.buffers[idx].line_byte_len(row);
+            let col = editor.window_mgr.focused_window().cursor_col;
+            let next = editor.buffers[idx].next_grapheme_col(row, col);
             let win = editor.window_mgr.focused_window_mut();
             if win.cursor_col < len {
-                win.cursor_col += 1;
+                win.cursor_col = next;
             }
         }
         KeyCode::Left => {
+            // ADR-087 Rule 4: cursor_col is a byte column -- step a
+            // grapheme cluster, not one byte.
+            let idx = editor.active_buffer_idx();
+            let (row, col) = {
+                let w = editor.window_mgr.focused_window();
+                (w.cursor_row, w.cursor_col)
+            };
+            let prev = editor.buffers[idx].prev_grapheme_col(row, col);
             let win = editor.window_mgr.focused_window_mut();
             if win.cursor_col > 0 {
-                win.cursor_col -= 1;
+                win.cursor_col = prev;
             }
         }
         KeyCode::Right => {
             let idx = editor.active_buffer_idx();
             let row = editor.window_mgr.focused_window().cursor_row;
             let len = editor.buffers[idx].line_byte_len(row);
+            let col = editor.window_mgr.focused_window().cursor_col;
+            let next = editor.buffers[idx].next_grapheme_col(row, col);
             let win = editor.window_mgr.focused_window_mut();
             if win.cursor_col < len {
-                win.cursor_col += 1;
+                win.cursor_col = next;
             }
         }
         KeyCode::Home => {
