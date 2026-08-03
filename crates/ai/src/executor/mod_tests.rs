@@ -174,7 +174,10 @@ fn a_privileged_tool_above_the_ceiling_asks_rather_than_running() {
             assert!(!req.clone().into_denied("a headless surface").success);
         }
         ExecuteResult::Immediate(r) => {
-            panic!("a Privileged tool must not resolve immediately: {}", r.output)
+            panic!(
+                "a Privileged tool must not resolve immediately: {}",
+                r.output
+            )
         }
         ExecuteResult::Deferred { .. } => panic!("unexpected deferral"),
     }
@@ -967,12 +970,7 @@ fn lsp_definition_returns_deferred() {
     b.set_file_path(std::path::PathBuf::from("/tmp/test.rs"));
     let mut editor = Editor::with_buffer(b);
     let call = make_call("lsp_definition", serde_json::json!({}));
-    let result = execute_tool(
-        &mut editor,
-        &call,
-        &all_tools(),
-        &tool_behaviour_policy(),
-    );
+    let result = execute_tool(&mut editor, &call, &all_tools(), &tool_behaviour_policy());
     match result {
         ExecuteResult::Deferred { kind, .. } => {
             assert_eq!(kind, DeferredKind::LspDefinition);
@@ -994,12 +992,7 @@ fn lsp_references_returns_deferred() {
     b.set_file_path(std::path::PathBuf::from("/tmp/test.rs"));
     let mut editor = Editor::with_buffer(b);
     let call = make_call("lsp_references", serde_json::json!({}));
-    let result = execute_tool(
-        &mut editor,
-        &call,
-        &all_tools(),
-        &tool_behaviour_policy(),
-    );
+    let result = execute_tool(&mut editor, &call, &all_tools(), &tool_behaviour_policy());
     assert!(matches!(
         result,
         ExecuteResult::Deferred {
@@ -1015,12 +1008,7 @@ fn lsp_hover_returns_deferred() {
     b.set_file_path(std::path::PathBuf::from("/tmp/test.rs"));
     let mut editor = Editor::with_buffer(b);
     let call = make_call("lsp_hover", serde_json::json!({}));
-    let result = execute_tool(
-        &mut editor,
-        &call,
-        &all_tools(),
-        &tool_behaviour_policy(),
-    );
+    let result = execute_tool(&mut editor, &call, &all_tools(), &tool_behaviour_policy());
     assert!(matches!(
         result,
         ExecuteResult::Deferred {
@@ -1034,12 +1022,7 @@ fn lsp_hover_returns_deferred() {
 fn lsp_definition_returns_immediate_error_for_scratch() {
     let mut editor = Editor::new();
     let call = make_call("lsp_definition", serde_json::json!({}));
-    let result = execute_tool(
-        &mut editor,
-        &call,
-        &all_tools(),
-        &tool_behaviour_policy(),
-    );
+    let result = execute_tool(&mut editor, &call, &all_tools(), &tool_behaviour_policy());
     let result = match result {
         ExecuteResult::Immediate(r) => r,
         ExecuteResult::Deferred { .. } => panic!("expected Immediate error for scratch buffer"),
@@ -1065,7 +1048,10 @@ fn ai_permissions_tool_returns_tier_info() {
         &tool_behaviour_policy(),
     ));
     assert!(result.success);
-    assert!(result.output.contains("trusted"));
+    // ADR-090 D4: the report now spells tiers with `config_name()`, the one
+    // vocabulary, so a Privileged ceiling reads "privileged" rather than the
+    // legacy "full"/"trusted" aliases (still accepted on *input*).
+    assert!(result.output.contains("privileged"), "{}", result.output);
     assert!(result.output.contains("Permission tiers"));
 }
 
