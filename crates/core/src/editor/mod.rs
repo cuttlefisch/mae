@@ -11,6 +11,7 @@
 //! "Architecture Debt" section.
 
 mod agenda_ops;
+mod agent_session;
 pub mod ai_state;
 mod babel_ops;
 mod changes;

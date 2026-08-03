@@ -17,10 +17,10 @@ Delete an entry once it is decided (and record the decision in the relevant ADR)
 | 3 | ADR-085 category split | **Ship as a breaking change** with release notes naming all eight relocated tools. |
 | 4 | `Window::cursor_col` | **Do the byte migration in v0.15**, not just the declaration. |
 | 5 | `dispatch_builtin` | **Change the contract properly** — a richer outcome across the ~559 command implementations. |
-| 6 | KB sharing/membership tiers | **Raise to Privileged.** |
+| 6 | KB sharing/membership tiers | **Raise to Privileged.** Implemented — see §6. |
 | 7 | ADR-087 follow-ups | Implied by #4 — `wrap.rs`'s third width impl and threading `WidthPolicy` past the status bar. |
 | 8 | Chokepoint assert | **Resolved** in `51158578`. |
-| 9 | Nine phantom MCP tools | **Wire up the six non-interactive ones** (session handle into `dispatch_tool` — new capability), and exclude the three interactive ones from external discovery. |
+| 9 | Nine phantom MCP tools | **Wire up the six non-interactive ones** (session handle into `dispatch_tool` — new capability), and exclude the three interactive ones from external discovery. Implemented — **ADR-091**. |
 | 10 | `fts_search` term miss | **Investigate before v0.15**, with a property test over a multi-term corpus. |
 
 Entries below are kept for their analysis; the Decision column above supersedes each one's
@@ -231,7 +231,19 @@ but is a genuinely large, separate initiative and shouldn't block v0.15.
 
 ## 6. KB sharing/membership MCP tools are Write tier — that is an authorization change
 
-**Status:** found while classifying the Scheme surface (ADR-084 D3). Not changed; needs your call.
+**Status: IMPLEMENTED.** Raised to `Privileged`, plus three siblings by the same criterion
+(`kb_share_p2p`, `kb_unblock_member`, `kb_set_encryption`); `kb_join`/`kb_join_p2p`/`kb_leave`/
+`kb_block_member`/`kb_set_role` deliberately left at `Write` with per-entry reasoning. The
+criterion and both lists live in `crates/ai/src/tools/authorization.rs`, which is also the single
+source consulted by the tool table, `classify_command_permission` (the `command_kb_share` mirror —
+a Write-tier path to the same effect, needing no arguments), and `effective_tier` (the
+`execute_command` passthrough). The related `set_option`/`ai_tier` self-escalation is closed by the
+same argument-sensitive escalation; the Scheme side is pinned in
+`crates/scheme/src/permission_option_tests.rs`.
+
+Original analysis below.
+
+**Status (at the time):** found while classifying the Scheme surface (ADR-084 D3). Not changed; needs your call.
 
 Classifying all 516 Scheme primitives forced a per-effect judgment, and comparing the result against
 the MCP tool table surfaced a mismatch. These tools are declared `PermissionTier::Write`
@@ -357,7 +369,17 @@ eventually be hit by someone typing genuinely accented text into a project they'
 
 ## 9. Nine AI tools are advertised over MCP but structurally undispatchable there
 
-**Status:** found while triaging issue #590 (pre-v0.15 audit tail pass). Not changed; needs a call.
+**Status: IMPLEMENTED — the ambitious option (option 1), designed in ADR-091.** `dispatch_tool`
+gained a session handle (`Editor::agent_session_mut`, resolved from the MCP session id
+`with_ai_dispatch_scope_for_session` now records). Six are genuinely dispatchable
+(`crates/ai/src/executor/session_exec.rs`); the three inherently-interactive ones are withheld from
+every external discovery surface via one shared filter. A registry-driven invariant
+(`no_advertised_tool_is_unroutable`) now fails the build if anything advertised to an external
+client is unroutable — the check whose absence let this exist.
+
+Original analysis below.
+
+**Status (at the time):** found while triaging issue #590 (pre-v0.15 audit tail pass). Not changed; needs a call.
 
 `ask_user`, `delegate`, `ai_set_mode`, `ai_set_profile`, `ai_set_budget`, `propose_changes`,
 `log_activity`, `read_transcript`, and `web_fetch` are all registered in `ai_specific_tools`
