@@ -177,10 +177,7 @@ fn fts_search_and_search_ranked_agree_on_the_reproducer() {
             .unwrap()
             .iter()
             .any(|h| h.id == "n1");
-        let via_ranked = kb
-            .search_ranked(term, 50)
-            .iter()
-            .any(|(id, _)| id == "n1");
+        let via_ranked = kb.search_ranked(term, 50).iter().any(|(id, _)| id == "n1");
         if via_fts != via_ranked {
             disagreements.push(format!(
                 "{term:?}: fts_search={via_fts} search_ranked={via_ranked}"

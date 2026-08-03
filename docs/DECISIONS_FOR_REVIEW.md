@@ -432,3 +432,63 @@ the primary KB read path (`kb_search`, `kb_search_context`, and every consumer o
 **Recommendation:** a dedicated investigation before v0.15, with a property test over a
 multi-term corpus asserting every term in a node's title and body retrieves that node.
 
+### RESOLVED — root cause found and fixed
+
+Neither tokenisation nor stemming: **the separator never reached the index.** The extractor was
+`title ++ ' ' ++ body`, but CozoDB does not persist an FTS extractor as written — it parses it,
+partial-evaluates it, and stores `expr.to_string()` (`cozo/src/parse/sys.rs`), where
+`Display for DataValue` renders string constants with Rust's `{:?}`, i.e. always *double* quotes.
+That stored text is re-parsed per indexed row by `cozoscript.pest`, in which
+`quoted_string_inner = { char* }` is a **non-atomic** rule — pest skips implicit `WHITESPACE`
+between `char` repetitions, so a double-quoted all-whitespace literal matches zero chars and
+parses back as `""`.
+
+The index was therefore built from `title ++ body`, welding the last title token onto the first
+body token. `"Quantum Physics"` + `"Entanglement is spooky."` indexed `quantum`,
+`physicsentanglement`, `is`, `spooky` — which is exactly the reported hit/miss split, and why it
+looked arbitrary. Fixed by using `'.'`, which survives the round trip and is a hard token
+boundary for the `Simple` tokenizer (splits on `!c.is_alphanumeric()`). An escape would not
+work: cozoscript does not unescape, so `'\n'` returns as a literal backslash + `n`.
+
+**Ranking:** unchanged in shape. Scoring is `tf * idf` over the same relation with the same
+tokenizer and filters; no weights, boosts or `k` were touched. Previously-correct hits keep
+their order relative to one another. What changes is that boundary terms now match at all, and
+the bogus welded tokens (`physicsentanglement` — never a real query) are gone.
+
+**Migration:** required, and automatic. A CozoDB FTS index is populated at `::fts create` and
+maintained incrementally, so the DDL change alone would only ever have helped brand-new KBs.
+`ensure_fts_index_current` stamps `instance_meta.fts_extractor_version` and rebuilds once, on
+open, for any store carrying an older stamp. No user action.
+
+Two further defects found by the property test that replaced the unicorn assertion:
+
+1. **`fts_search`'s own post-query verification** (MAE code, not cozo) split the raw query on
+   whitespace and required a literal substring match, so a prefix query like `buffer*` produced
+   the term `buffer*`, which no document text contains — every candidate the index correctly
+   returned was discarded. Same silent-miss direction. Fixed alongside.
+2. **Query-side parse errors, NOT fixed** — see below.
+
+### Still open — the FTS *query* surface
+
+Distinct from the above and deliberately left alone. Cozo's FTS query grammar treats `:`, `-`,
+`.` and a leading `*` as operators, and reserves uppercase `AND`/`OR`/`NOT`/`NEAR` via a
+lookahead with **no word-boundary anchor**. Consequences:
+
+- `concept:buffer` (a namespaced node id — the most natural thing to search this KB for),
+  `read-only`, `1.5`, `-buffer` are hard parse errors.
+- Any ALL-CAPS term merely *beginning* with a keyword is a parse error: `ANDROID`, `ORBIT`,
+  `NEARBY`, `ANDES`, `NOTES`, `ORDERING`. Their lower/title-case forms are fine, so this is
+  purely a query-grammar artifact — the index holds those terms correctly.
+
+These error loudly rather than missing silently, which is why they are lower severity than the
+defect above. Both classes are pinned by tests
+(`fts_query_syntax_characters_are_still_parse_errors`,
+`fts_uppercase_boolean_keyword_prefixes_are_parse_errors`) so a future fix must update them
+consciously.
+
+**The call needed:** suppressing this means deciding whether MAE exposes cozo's boolean query
+language to users at all — lower-casing or escaping the query would make a deliberate
+`foo AND bar` mean the literal word "and". That is a product decision, not a bug fix, and it is
+the remaining reason `(kb-search …)` is built on `KnowledgeBase::search_ranked` rather than
+`fts_search`.
+

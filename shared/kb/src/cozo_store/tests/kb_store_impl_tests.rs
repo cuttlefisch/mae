@@ -330,12 +330,7 @@ fn fts_every_indexed_term_retrieves_its_node() {
     let (_tmp, store) = make_store();
     for case in FTS_CORPUS {
         store
-            .insert_node(&Node::new(
-                case.id,
-                case.title,
-                NodeKind::Note,
-                case.body,
-            ))
+            .insert_node(&Node::new(case.id, case.title, NodeKind::Note, case.body))
             .unwrap();
     }
     // Larger than the corpus, so a miss is a genuine miss and never truncation.
@@ -393,12 +388,7 @@ fn fts_retrieval_is_case_insensitive() {
     let (_tmp, store) = make_store();
     for case in FTS_CORPUS {
         store
-            .insert_node(&Node::new(
-                case.id,
-                case.title,
-                NodeKind::Note,
-                case.body,
-            ))
+            .insert_node(&Node::new(case.id, case.title, NodeKind::Note, case.body))
             .unwrap();
     }
     let limit = FTS_CORPUS.len() * 4;
@@ -456,12 +446,7 @@ fn fts_unique_terms_rank_their_own_node_first() {
     let (_tmp, store) = make_store();
     for case in FTS_CORPUS {
         store
-            .insert_node(&Node::new(
-                case.id,
-                case.title,
-                NodeKind::Note,
-                case.body,
-            ))
+            .insert_node(&Node::new(case.id, case.title, NodeKind::Note, case.body))
             .unwrap();
     }
     let limit = FTS_CORPUS.len() * 4;
