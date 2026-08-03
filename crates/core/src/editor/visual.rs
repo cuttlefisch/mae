@@ -49,23 +49,41 @@ impl Editor {
                 // use block_selection_rect() directly.
                 let (min_row, max_row, min_col, max_col) = self.block_selection_rect();
                 let start = buf.char_offset_at(min_row, min_col);
-                let end_row_col = (max_col + 1).min(
-                    buf.line_text(max_row)
-                        .trim_end_matches('\n')
-                        .chars()
-                        .count(),
-                );
+                // ADR-087 Rule 4: cols are BYTE columns, so the inclusive end
+                // is the next grapheme boundary, not `+ 1`.
+                let end_row_col = buf
+                    .next_grapheme_col(max_row, max_col)
+                    .min(buf.line_byte_len(max_row));
                 let end = buf.char_offset_at(max_row, end_row_col);
                 (start, end.max(start))
             }
             _ => {
                 // Charwise
+                // ADR-087 Rule 4: charwise visual is *inclusive of the
+                // cluster under the cursor*. `+ 1` char included only the base
+                // of a combining/ZWJ cluster, cutting the selection mid-glyph;
+                // extend to the next grapheme boundary on whichever side is
+                // the max, then cross back into the char domain.
                 let anchor =
                     buf.char_offset_at(self.vi.visual_anchor_row, self.vi.visual_anchor_col);
                 let cursor = buf.char_offset_at(win.cursor_row, win.cursor_col);
+                let (max_row, max_col) = if cursor >= anchor {
+                    (win.cursor_row, win.cursor_col)
+                } else {
+                    (self.vi.visual_anchor_row, self.vi.visual_anchor_col)
+                };
                 let start = anchor.min(cursor);
-                let end = (anchor.max(cursor) + 1).min(buf.rope().len_chars());
-                (start, end)
+                let end_col = buf
+                    .next_grapheme_col(max_row, max_col)
+                    .min(buf.line_byte_len(max_row));
+                let end = if end_col > max_col {
+                    buf.char_offset_at(max_row, end_col)
+                } else {
+                    // Cursor sits at end-of-line: keep vi's inclusive `+ 1`,
+                    // which picks up the newline.
+                    (anchor.max(cursor) + 1).min(buf.rope().len_chars())
+                };
+                (start, end.max(start))
             }
         }
     }

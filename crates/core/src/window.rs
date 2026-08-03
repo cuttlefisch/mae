@@ -240,7 +240,10 @@ impl Window {
         let pos = char_pos.min(rope.len_chars().saturating_sub(1));
         let (row, col) = buf.row_col_from_offset(pos);
         self.cursor_row = row;
-        self.cursor_col = col;
+        // ADR-087 Rule 4: a char offset lands on a *char* boundary, which is
+        // not necessarily a *cluster* boundary — a word motion can stop
+        // between a base character and its combining mark. Snap.
+        self.cursor_col = buf.snap_col_to_grapheme(row, col);
         self.sync_primary();
     }
 
@@ -294,7 +297,8 @@ impl Window {
 
     /// vi `^` — move to first non-blank column on the current line.
     pub fn move_to_first_non_blank(&mut self, buf: &crate::buffer::Buffer) {
-        self.cursor_col = crate::word::first_non_blank_col(buf.rope(), self.cursor_row);
+        let col = crate::word::first_non_blank_col(buf.rope(), self.cursor_row);
+        self.cursor_col = buf.snap_col_to_grapheme(self.cursor_row, col);
     }
 
     pub fn move_matching_bracket(&mut self, buf: &crate::buffer::Buffer) {
@@ -322,7 +326,7 @@ impl Window {
         if let Some(col) =
             crate::word::find_char_forward(buf.rope(), self.cursor_row, self.cursor_col, ch)
         {
-            self.cursor_col = col;
+            self.cursor_col = buf.snap_col_to_grapheme(self.cursor_row, col);
         }
     }
 
@@ -330,7 +334,7 @@ impl Window {
         if let Some(col) =
             crate::word::find_char_backward(buf.rope(), self.cursor_row, self.cursor_col, ch)
         {
-            self.cursor_col = col;
+            self.cursor_col = buf.snap_col_to_grapheme(self.cursor_row, col);
         }
     }
 
@@ -338,7 +342,7 @@ impl Window {
         if let Some(col) =
             crate::word::find_char_forward_till(buf.rope(), self.cursor_row, self.cursor_col, ch)
         {
-            self.cursor_col = col;
+            self.cursor_col = buf.snap_col_to_grapheme(self.cursor_row, col);
         }
     }
 
@@ -346,7 +350,7 @@ impl Window {
         if let Some(col) =
             crate::word::find_char_backward_till(buf.rope(), self.cursor_row, self.cursor_col, ch)
         {
-            self.cursor_col = col;
+            self.cursor_col = buf.snap_col_to_grapheme(self.cursor_row, col);
         }
     }
 
