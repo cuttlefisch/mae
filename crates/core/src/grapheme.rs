@@ -811,6 +811,26 @@ mod nasty_corpus {
         }
     }
 
+    // Only meaningful where `debug_assert!` is compiled in. CI runs
+    // `cargo nextest run --release`, where `debug_assertions` is off, the
+    // assert vanishes, the function clamps instead of panicking, and a bare
+    // `#[should_panic]` therefore FAILS. The release path is covered instead by
+    // `checked_byte_boundary_clamps_rather_than_panicking_in_release` below, so
+    // both build profiles are asserted rather than one being skipped silently.
+    /// The release-profile half of the contract: with `debug_assertions` off the
+    /// assert is gone, and the documented behaviour is clamp-and-log — never a
+    /// panic in a user's build. Without this, a release build's behaviour at the
+    /// chokepoint would be entirely untested.
+    #[cfg(not(debug_assertions))]
+    #[test]
+    fn checked_byte_boundary_clamps_rather_than_panicking_in_release() {
+        // Byte 1 lands inside the 3-byte "\u{65e5}".
+        assert_eq!(checked_byte_boundary("\u{65e5}", 1), 0);
+        // Past the end clamps to the length, still on a boundary.
+        assert_eq!(checked_byte_boundary("\u{65e5}", 99), 3);
+    }
+
+    #[cfg(debug_assertions)]
     #[test]
     #[should_panic(expected = "not a valid char boundary")]
     fn checked_byte_boundary_debug_asserts_on_a_mid_character_offset() {
