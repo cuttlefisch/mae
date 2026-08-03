@@ -38,6 +38,7 @@ mod kb_preview;
 mod kb_primitives;
 mod kb_queries;
 mod keybindings;
+mod lsp_dap;
 mod misc_primitives;
 mod shell_agenda;
 mod state_sync_apply;
@@ -55,6 +56,7 @@ use kb_preview::register_kb_preview_fns;
 use kb_primitives::register_kb_primitive_fns;
 use kb_queries::register_kb_query_fns;
 use keybindings::register_keybinding_fns;
+use lsp_dap::register_lsp_dap_fns;
 use misc_primitives::register_misc_primitive_fns;
 use shell_agenda::register_shell_agenda_fns;
 use test_primitives::register_test_primitive_fns;
@@ -349,6 +351,34 @@ pub struct SharedState {
     /// Cached GC stats snapshot (updated each eval cycle).
     gc_stats_snapshot: crate::vm::GcStats,
 
+    // --- LSP/DAP (docs/CROSS_SURFACE_PARITY.md gap #1) ---
+    /// Monotonic id source for Scheme-initiated LSP/DAP requests. Starts at 0
+    /// and is pre-incremented, so 0 is never a valid request id and an
+    /// uninitialized integer can never be mistaken for one.
+    next_async_request_id: u64,
+    /// Requests queued this eval: `(id, mcp_tool_name, args)`. Drained in
+    /// `state_sync_apply2.rs` into the matching `mae_ai::execute_*` with the
+    /// live `&mut Editor` — the same implementation the MCP tool calls.
+    pending_async_requests: Vec<(u64, String, serde_json::Value)>,
+    /// Snapshot of `Editor::scheme_async` (id, kind, outcome), refreshed each
+    /// eval — what `(lsp-result ID)` reads.
+    async_results: Vec<(u64, String, Option<Result<String, String>>)>,
+    /// `execute_lsp_diagnostics(editor, scope="all")`'s payload, snapshotted
+    /// only while the diagnostic store is non-empty (so a session with no
+    /// language server pays nothing).
+    lsp_diagnostics_json: Option<String>,
+    /// Active buffer's file path, used to narrow `lsp_diagnostics_json` to
+    /// scope "buffer" without recomputing the payload per scope.
+    diagnostics_buffer_path: Option<String>,
+    /// `execute_debug_state(editor)`'s payload, snapshotted only while a debug
+    /// session is live — what `(debug-state)` reads.
+    dap_state_json: Option<String>,
+    /// Clone of the live `DebugState`, so `(dap-inspect-variable)` can call
+    /// the same `DebugState::find_variable` the dap_inspect_variable MCP tool
+    /// calls rather than re-deriving the lookup from JSON. Cloned only while a
+    /// session is live.
+    dap_debug_state: Option<mae_core::debug::DebugState>,
+
     /// Generic async-completion channel for out-of-tree kernel primitives
     /// (#521): `(tag, outcome)` pairs pushed by a background thread a
     /// `scheme-extra`-registered primitive spawned (mirroring
@@ -566,6 +596,7 @@ impl SchemeRuntime {
         register_kb_primitive_fns(&mut vm, &shared);
         register_kb_query_fns(&mut vm, &shared);
         register_kb_crud_fns(&mut vm, &shared);
+        register_lsp_dap_fns(&mut vm, &shared);
         register_kb_graph_view_fns(&mut vm, &shared);
         register_kb_preview_fns(&mut vm, &shared);
         register_kb_export_fns(&mut vm, &shared);

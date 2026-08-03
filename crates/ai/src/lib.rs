@@ -37,6 +37,17 @@ pub use session::AgentSession;
 pub use tool_impls::{
     execute_audit_configuration, execute_kb_export_guidance, execute_kb_export_subgraph_html,
 };
+// The LSP/DAP tool implementations, re-exported at the crate root so
+// `mae-scheme`'s `lsp-*`/`dap-*` primitives drive the SAME code path the
+// equivalent MCP tools do rather than re-implementing an LSP/DAP read path a
+// second time (CLAUDE.md principles #3 + #15; same precedent as
+// `execute_kb_export_subgraph_html` above).
+pub use tool_impls::{
+    execute_dap_continue, execute_dap_inspect_variable, execute_dap_set_breakpoint,
+    execute_dap_start, execute_dap_step, execute_debug_state, execute_lsp_definition,
+    execute_lsp_diagnostics, execute_lsp_document_symbols, execute_lsp_hover,
+    execute_lsp_references, execute_lsp_workspace_symbol,
+};
 pub use tools::{
     ai_specific_tools, annotations_for_tier, classify_command_permission, classify_tool_tier,
     parse_categories, request_tools_definition, scheme_tools_to_definitions, tools_from_registry,

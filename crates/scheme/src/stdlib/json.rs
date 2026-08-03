@@ -81,7 +81,15 @@ fn value_to_json(v: &Value) -> Result<serde_json::Value, LispError> {
     })
 }
 
-fn json_to_value(j: &serde_json::Value) -> Value {
+/// Convert a `serde_json::Value` into the Scheme shape `(json-decode)`
+/// produces: objects become alists, arrays become vectors, null becomes the
+/// symbol `null`.
+///
+/// `pub(crate)` so the LSP/DAP primitives (`runtime/lsp_dap.rs`) return MCP
+/// tool payloads through the SAME conversion `(json-decode)` uses — one data
+/// model across the Scheme surface, not a second hand-rolled mapping per
+/// primitive (CLAUDE.md principle #8).
+pub(crate) fn json_to_value(j: &serde_json::Value) -> Value {
     match j {
         serde_json::Value::Null => Value::symbol("null"),
         serde_json::Value::Bool(b) => Value::Bool(*b),

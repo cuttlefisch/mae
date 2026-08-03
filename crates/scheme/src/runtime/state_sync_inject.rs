@@ -394,6 +394,32 @@ impl SchemeRuntime {
                         .map(|s| s.clone() as std::sync::Arc<dyn mae_kb::KbStore>),
                 )
                 .collect();
+            // --- LSP/DAP snapshots (docs/CROSS_SURFACE_PARITY.md gap #1) ---
+            //
+            // Both are gated on the subsystem actually being live, so a
+            // session with no language server and no debug session pays
+            // nothing per eval. When one IS live, the payload is produced by
+            // the SAME `mae-ai` function the equivalent MCP tool calls, so
+            // `(lsp-diagnostics)`/`(debug-state)` and `lsp_diagnostics`/
+            // `debug_state` return identical data (CLAUDE.md principle #3),
+            // not two shapes that can drift.
+            state.lsp_diagnostics_json = if editor.lsp.diagnostics.iter().next().is_none() {
+                None
+            } else {
+                mae_ai::execute_lsp_diagnostics(editor, &serde_json::json!({"scope": "all"})).ok()
+            };
+            state.diagnostics_buffer_path = buf
+                .file_path()
+                .map(|p| p.to_string_lossy().into_owned())
+                .filter(|_| state.lsp_diagnostics_json.is_some());
+            state.dap_state_json = if editor.dap.state.is_some() {
+                mae_ai::execute_debug_state(editor).ok()
+            } else {
+                None
+            };
+            state.dap_debug_state = editor.dap.state.clone();
+            state.async_results = editor.scheme_async.snapshot();
+
             state.sync_content = buf.sync_doc.as_ref().map(|s| s.content());
             state.encoded_state = buf.sync_doc.as_ref().map(|s| {
                 use base64::Engine as _;

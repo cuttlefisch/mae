@@ -70,6 +70,7 @@ impl SchemeRuntime {
         Self::apply_hooks(&mut state, editor);
         Self::apply_display_policy(&mut state, editor);
         Self::apply_kb_mutations(&mut state, editor);
+        Self::apply_async_tool_requests(&mut state, editor);
         Self::apply_options_status_theme(&mut state, editor);
         Self::apply_live_editing(&mut state, editor);
         Self::apply_round2_buffer_editing(&mut state, editor);

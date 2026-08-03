@@ -1719,6 +1719,117 @@ pub(crate) const SCHEME_API_FUNCTIONS: &[(&str, &str, &str, &str, &str)] = &[
             "(set-option-save! \"theme\" \"dracula\")",
             "options",
         ),
+
+        // --- Principle #3 parity pass: LSP + DAP ---
+        // Closes docs/CROSS_SURFACE_PARITY.md headline gap #1. LSP and DAP are
+        // asynchronous in MAE, so each primitive takes the shape its backing
+        // mae-ai implementation can honestly support — see
+        // crates/scheme/src/runtime/lsp_dap.rs's header for the full table.
+        (
+            "lsp-definition",
+            "(lsp-definition [BUFFER-NAME] [LINE] [COL])",
+            "Request textDocument/definition (defaults: active buffer, cursor position; LINE/COL 1-indexed). QUEUES the request and returns a request id — a Scheme primitive cannot block for an LSP reply without deadlocking the event loop that delivers it. Read the answer with (lsp-result ID).",
+            "(define id (lsp-definition))",
+            "lsp",
+        ),
+        (
+            "lsp-references",
+            "(lsp-references [BUFFER-NAME] [LINE] [COL])",
+            "Request textDocument/references (defaults: active buffer, cursor position). Queues the request and returns a request id; read the answer with (lsp-result ID). CLAUDE.md principle #3's own example.",
+            "(define id (lsp-references))",
+            "lsp",
+        ),
+        (
+            "lsp-hover",
+            "(lsp-hover [BUFFER-NAME] [LINE] [COL])",
+            "Request textDocument/hover (defaults: active buffer, cursor position). Queues the request and returns a request id; read the answer with (lsp-result ID).",
+            "(define id (lsp-hover \"main.rs\" 42 9))",
+            "lsp",
+        ),
+        (
+            "lsp-workspace-symbol",
+            "(lsp-workspace-symbol QUERY LANGUAGE-ID)",
+            "Request workspace/symbol for QUERY from the LANGUAGE-ID server (both required — a workspace search is not scoped to a buffer, so it cannot infer its server). Queues the request and returns a request id; read the answer with (lsp-result ID).",
+            "(define id (lsp-workspace-symbol \"Editor\" \"rust\"))",
+            "lsp",
+        ),
+        (
+            "lsp-document-symbols",
+            "(lsp-document-symbols [BUFFER-NAME])",
+            "Request textDocument/documentSymbol for BUFFER-NAME (default: the active buffer). Queues the request and returns a request id; read the answer with (lsp-result ID).",
+            "(define id (lsp-document-symbols))",
+            "lsp",
+        ),
+        (
+            "lsp-result",
+            "(lsp-result ID)",
+            "Read the result of a queued LSP request. Returns the symbol 'pending until the language server replies — poll across editor ticks (a hook, a test step, the REPL), since one eval never returns to the event loop that delivers the reply. Signals an error for an unknown ID and for a request the server failed. The resolved value is the same payload the equivalent MCP tool returns.",
+            "(let loop () (let ((r (lsp-result id))) (if (eq? r 'pending) #f r)))",
+            "lsp",
+        ),
+        (
+            "lsp-diagnostics",
+            "(lsp-diagnostics [SCOPE])",
+            "Current LSP diagnostics as structured data — the same payload the lsp_diagnostics MCP tool returns (\"scope\", \"counts\", \"files\"). SCOPE is \"buffer\" (default) or \"all\". Answers synchronously: diagnostics are pushed by the server and already held in editor state, so unlike the other lsp-* primitives there is nothing to wait for.",
+            "(lsp-diagnostics \"all\")",
+            "lsp",
+        ),
+        (
+            "dap-start",
+            "(dap-start ADAPTER PROGRAM [ARGS] [STOP-ON-ENTRY])",
+            "Launch a debug session. ADAPTER is \"lldb\", \"debugpy\" or \"codelldb\"; ARGS is an optional list of program arguments. Queues the launch (the adapter starts asynchronously) and returns #t — poll (debug-state) on a later tick to see the session come up.",
+            "(dap-start \"lldb\" \"./target/debug/mae\" '(\"--headless\"))",
+            "dap",
+        ),
+        (
+            "dap-set-breakpoint",
+            "(dap-set-breakpoint SOURCE LINE [CONDITION])",
+            "Set a breakpoint at SOURCE:LINE (1-indexed), optionally guarded by an adapter-evaluated CONDITION. Idempotent. Returns #t once queued; read the resulting breakpoint set back from (debug-state)'s \"breakpoints\" field.",
+            "(dap-set-breakpoint \"src/main.rs\" 42)",
+            "dap",
+        ),
+        (
+            "dap-continue",
+            "(dap-continue)",
+            "Resume execution on the active thread. Signals an error if no debug session is active. Returns #t once queued; poll (debug-state) for the next stop — the debuggee runs asynchronously.",
+            "(dap-continue)",
+            "dap",
+        ),
+        (
+            "dap-step-over",
+            "(dap-step-over)",
+            "Step over the current line. Signals an error if no debug session is active. Returns #t once queued; poll (debug-state) for the new stop.",
+            "(dap-step-over)",
+            "dap",
+        ),
+        (
+            "dap-step-into",
+            "(dap-step-into)",
+            "Step into the call on the current line. Signals an error if no debug session is active. Returns #t once queued; poll (debug-state) for the new stop.",
+            "(dap-step-into)",
+            "dap",
+        ),
+        (
+            "dap-step-out",
+            "(dap-step-out)",
+            "Step out of the current frame. Signals an error if no debug session is active. Returns #t once queued; poll (debug-state) for the new stop.",
+            "(dap-step-out)",
+            "dap",
+        ),
+        (
+            "dap-inspect-variable",
+            "(dap-inspect-variable NAME [SCOPE])",
+            "Look up debug variable NAME across the active stop's scopes, optionally restricted to SCOPE (\"Locals\", \"Globals\", …). Returns an alist with \"name\", \"value\", \"type\", \"scope\" and \"variables_reference\" — the same payload the dap_inspect_variable MCP tool returns. Signals an error if no session is active or nothing matches. CLAUDE.md principle #3's own example.",
+            "(dap-inspect-variable \"count\")",
+            "dap",
+        ),
+        (
+            "debug-state",
+            "(debug-state)",
+            "Structured snapshot of the active debug session — the same payload the debug_state MCP tool returns (\"threads\", \"frames\", \"breakpoints\", \"variables\" by scope), or #f when no session is active. This is the reader for every dap-* action primitive.",
+            "(debug-state)",
+            "dap",
+        ),
     ];
 
 /// Discoverability aliases for a handful of `scheme:<name>` nodes whose
@@ -2013,6 +2124,10 @@ mod tests {
             include_str!("../../../scheme/src/runtime/keybindings.rs"),
         ),
         (
+            "scheme/runtime/lsp_dap.rs",
+            include_str!("../../../scheme/src/runtime/lsp_dap.rs"),
+        ),
+        (
             "scheme/runtime/misc_primitives.rs",
             include_str!("../../../scheme/src/runtime/misc_primitives.rs"),
         ),
@@ -2059,7 +2174,21 @@ mod tests {
     /// `extract_registered_names` naturally skips that definition (no leading
     /// `"`) and only picks up names at the macro's *invocation* sites, which
     /// do start with a literal.
-    const REGISTRATION_PREFIXES: &[&str] = &["register_fn(", "register_collab_command_prim!("];
+    /// `lsp_positional_prim!(` / `dap_step_prim!(` are the two local macro
+    /// wrappers in `runtime/lsp_dap.rs`, shaped exactly like
+    /// `register_collab_command_prim!` and listed here for the same reason:
+    /// their *definition* passes `$name` (no leading `"`) so it is skipped,
+    /// while their invocation sites carry the literal primitive name.
+    ///
+    /// @ai-caution: [architecture-debt] A macro that wraps `register_fn` and
+    /// is NOT listed here makes every primitive it registers invisible to the
+    /// doc-parity guard below. If you add one, add its `name!(` prefix here.
+    const REGISTRATION_PREFIXES: &[&str] = &[
+        "register_fn(",
+        "register_collab_command_prim!(",
+        "lsp_positional_prim!(",
+        "dap_step_prim!(",
+    ];
 
     /// Extract every `<prefix>"name"` call site's `name` from `src`, for each
     /// prefix in `REGISTRATION_PREFIXES`. Loose by design: this only requires
@@ -2140,8 +2269,8 @@ mod tests {
             .collect();
 
         let mut on_disk: Vec<String> = Vec::new();
-        for entry in std::fs::read_dir(&dir)
-            .unwrap_or_else(|e| panic!("cannot list {}: {e}", dir.display()))
+        for entry in
+            std::fs::read_dir(&dir).unwrap_or_else(|e| panic!("cannot list {}: {e}", dir.display()))
         {
             let entry = entry.expect("readable dir entry");
             let name = entry.file_name().to_string_lossy().to_string();

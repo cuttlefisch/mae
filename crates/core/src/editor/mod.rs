@@ -1096,6 +1096,11 @@ pub struct Editor {
     pub pending_notif_reply: Option<(u64, crate::notifications::NotifReply)>,
     /// LSP state: intent queues, completion, hover, peek, symbols, diagnostics.
     pub lsp: LspContext,
+    /// Result slots for Scheme-initiated asynchronous LSP requests
+    /// (`(lsp-definition)` … answered by `(lsp-result ID)`). See
+    /// [`crate::scheme_async`] for why a Scheme primitive cannot simply block
+    /// on the answer, and why DAP deliberately does not use this.
+    pub scheme_async: crate::scheme_async::SchemeAsyncRegistry,
     /// Shell/terminal intent queue and cached state.
     pub shell: ShellIntents,
     /// Buffer indices removed this tick, for the binary to rekey its own
@@ -1640,6 +1645,7 @@ impl Editor {
             notifications: crate::notifications::NotificationCenter::new(),
             pending_notif_reply: None,
             lsp: LspContext::new(),
+            scheme_async: crate::scheme_async::SchemeAsyncRegistry::default(),
             shell: ShellIntents::default(),
             pending_buffer_removals: Vec::new(),
             hooks,
