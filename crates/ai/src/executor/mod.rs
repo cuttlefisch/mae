@@ -134,6 +134,10 @@ use self_test::build_self_test_plan;
 mod tests;
 
 #[cfg(test)]
+#[path = "authorization_tests.rs"]
+mod authorization_tests;
+
+#[cfg(test)]
 mod deferred_kind_tests {
     use super::DeferredKind;
 

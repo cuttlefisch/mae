@@ -78,9 +78,18 @@ fn execute_tool_dispatch_body(
 ) -> ExecuteResult {
     // 1. Find the tool definition
     let tool_def = all_tools.iter().find(|t| t.name == call.name);
-    let permission = tool_def
-        .and_then(|t| t.permission)
-        .unwrap_or(PermissionTier::Write);
+    // Decision #6: a tool's declared tier is a floor, not the whole answer.
+    // `set_option` is ordinary configuration for every option except the one
+    // that carries the permission tier, and `execute_command` is a Write-tier
+    // passthrough to `dispatch_builtin` whose real blast radius is the tier of
+    // the command it was handed. `effective_tier` only ever raises.
+    let permission = crate::tools::effective_tier(
+        &call.name,
+        &call.arguments,
+        tool_def
+            .and_then(|t| t.permission)
+            .unwrap_or(PermissionTier::Write),
+    );
 
     // 1b. Validate arguments against schema
     if let Some(def) = tool_def {

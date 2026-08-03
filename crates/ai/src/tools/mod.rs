@@ -1,4 +1,5 @@
 mod ai_tools;
+pub mod authorization;
 mod categories;
 mod collab_tools;
 mod core_tools;
@@ -21,6 +22,10 @@ use mae_core::{CommandRegistry, OptionRegistry};
 use crate::types::*;
 
 // Re-export all public items from submodules.
+pub use authorization::{
+    effective_tier, is_authorization_change, is_permission_tier_option, AUTHORIZATION_CHANGE_OPS,
+    PERMISSION_TIER_OPTION,
+};
 pub use categories::{
     annotations_for_tier, classify_command_permission, classify_tool_category, classify_tool_tier,
     parse_categories, request_tools_definition, PermissionPolicy, ToolCategory, ToolTier,

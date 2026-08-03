@@ -422,7 +422,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "string",
             "Name of the KB instance to share, e.g. 'collabtest' (default: 'default' = primary KB). Alias: kb_name.",
         )
-        .permission(PermissionTier::Write)
+        .permission(PermissionTier::Privileged)
         .build(),
         ToolDefBuilder::new(
             "kb_share_p2p",
@@ -433,7 +433,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             "string",
             "KB instance to share (default: the active/primary KB). Alias: kb_name.",
         )
-        .permission(PermissionTier::Write)
+        .permission(PermissionTier::Privileged)
         .build(),
         ToolDefBuilder::new(
             "kb_join_p2p",
@@ -472,7 +472,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
             ["viewer", "editor", "owner"],
         )
         .required(["kb_id", "member"])
-        .permission(PermissionTier::Write)
+        .permission(PermissionTier::Privileged)
         .build(),
         ToolDefBuilder::new(
             "kb_remove_member",
@@ -481,7 +481,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .prop("kb_id", "string", "KB identifier (e.g. 'collabtest')")
         .prop("member", "string", "Peer's collab identity fingerprint to remove")
         .required(["kb_id", "member"])
-        .permission(PermissionTier::Write)
+        .permission(PermissionTier::Privileged)
         .build(),
         ToolDefBuilder::new(
             "kb_block_member",
@@ -499,7 +499,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .prop("kb_id", "string", "KB identifier (e.g. 'collabtest')")
         .prop("member", "string", "Principal's collab identity fingerprint to unblock")
         .required(["kb_id", "member"])
-        .permission(PermissionTier::Write)
+        .permission(PermissionTier::Privileged)
         .build(),
         ToolDefBuilder::new(
             "kb_approve",
@@ -509,7 +509,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .prop("member", "string", "Pending peer's collab identity fingerprint to approve")
         .prop_enum("role", "string", "Role to grant (default 'editor')", ["owner", "editor", "viewer"])
         .required(["kb_id", "member"])
-        .permission(PermissionTier::Write)
+        .permission(PermissionTier::Privileged)
         .build(),
         ToolDefBuilder::new(
             "kb_set_policy",
@@ -518,7 +518,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .prop("kb_id", "string", "KB identifier (e.g. 'collabtest')")
         .prop_enum("policy", "string", "Join policy", ["restrictive", "invite", "permissive"])
         .required(["kb_id", "policy"])
-        .permission(PermissionTier::Write)
+        .permission(PermissionTier::Privileged)
         .build(),
         ToolDefBuilder::new(
             "kb_set_encryption",
@@ -527,7 +527,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .prop("kb_id", "string", "KB identifier (e.g. 'collabtest')")
         .prop_enum("mode", "string", "Encryption mode (only 'e2e'; one-way)", ["e2e"])
         .required(["kb_id"])
-        .permission(PermissionTier::Write)
+        .permission(PermissionTier::Privileged)
         .build(),
         ToolDefBuilder::new(
             "kb_set_role",
@@ -550,7 +550,7 @@ pub(super) fn kb_tool_definitions() -> Vec<ToolDefinition> {
         .prop("kb", "string", "KB instance name/UUID, or \"primary\" for the primary/local KB")
         .prop_enum("policy", "string", "AI-residency policy", ["open", "local_models_only"])
         .required(["kb", "policy"])
-        .permission(PermissionTier::Write)
+        .permission(PermissionTier::Privileged)
         .build(),
         // --- Graph KB tools (v0.12.0) ---
         ToolDefBuilder::new(
