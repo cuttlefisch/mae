@@ -2,7 +2,7 @@
 
 use mae_core::text_utils::{
     centered_popup_dims, display_width, format_keypress, truncate_end, truncate_start,
-    which_key_column_layout, WK_BREADCRUMB_SEP, WK_DOC_MIN_WIDTH,
+    WK_BREADCRUMB_SEP,
 };
 use mae_core::Editor;
 use skia_safe::Color4f;
@@ -471,8 +471,13 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
 
 // ---------------------------------------------------------------------------
 // Which-key popup
-// @ai-caution: [which-key] Mirror of TUI which_key_render.rs layout logic. Changes here
-// MUST be reflected in the TUI renderer.
+//
+// Grid layout (column sizing, scroll clamping, doc truncation) is computed
+// once by `mae_core::render_common::which_key::compute_which_key_layout`,
+// shared with the TUI renderer (`renderer/src/which_key_render.rs`). This
+// used to be ~110 lines of hand-synced duplicate math behind an
+// `@ai-caution` telling maintainers to keep the two copies in step; now
+// there is only one copy, and this function just draws it.
 // ---------------------------------------------------------------------------
 
 pub fn render_which_key_popup(
@@ -525,107 +530,52 @@ pub fn render_which_key_popup(
     let inner_height = height.saturating_sub(2);
 
     let sep_width = display_width(&separator);
-    let (col_width, num_cols) = which_key_column_layout(entries, inner_width, sep_width, max_desc);
+    let layout = mae_core::render_common::which_key::compute_which_key_layout(
+        entries,
+        inner_width,
+        inner_height,
+        sep_width,
+        max_desc,
+        editor.which_key_scroll,
+    );
 
-    // Total rows needed for all entries
-    let total_rows = entries.len().div_ceil(num_cols);
+    let mut draw_row = 0usize;
 
-    // Clamp scroll offset so it can't go past the last page
-    let max_scroll = total_rows.saturating_sub(inner_height);
-    let scroll = editor.which_key_scroll.min(max_scroll);
-
-    let skip_entries = scroll * num_cols;
-    let show_above = scroll > 0;
-    let show_below = total_rows > scroll + inner_height;
-
-    let effective_max_rows = if show_above && show_below {
-        inner_height.saturating_sub(2)
-    } else if show_above || show_below {
-        inner_height.saturating_sub(1)
-    } else {
-        inner_height
-    };
-
-    let mut row = 0;
-
-    // "above" indicator
-    if show_above {
-        let above_count = skip_entries;
+    if let Some(above_count) = layout.above_count {
         canvas.draw_text_at(
             inner_row,
             inner_col,
             &format!("\u{2191} +{} above", above_count),
             doc_fg,
         );
-        row += 1;
+        draw_row += 1;
     }
 
-    let visible_entries = &entries[skip_entries..];
-    let mut col = 0;
-    let mut displayed = 0;
-
-    for entry in visible_entries.iter() {
-        if row >= effective_max_rows + if show_above { 1 } else { 0 } {
-            break;
-        }
-
-        let key_str = format_keypress(&entry.key);
-        let (kfg, lfg) = if entry.is_group {
+    for cell in &layout.cells {
+        let (kfg, lfg) = if cell.is_group {
             (group_fg, group_fg)
         } else {
             (key_fg, text_fg)
         };
 
-        let key_w = display_width(&key_str);
-        let max_label = col_width.saturating_sub(key_w + sep_width + 1);
-        let label_w = display_width(&entry.label);
-        let label = if label_w > max_label {
-            truncate_end(&entry.label, max_label)
-        } else {
-            entry.label.clone()
-        };
-        let actual_label_w = display_width(&label);
-
-        let x = inner_col + col * col_width;
-        canvas.draw_text_at(inner_row + row, x, &key_str, kfg);
-        let sep_x = x + key_w;
-        canvas.draw_text_at(inner_row + row, sep_x, &separator, text_fg);
-        let label_x = sep_x + sep_width;
-        canvas.draw_text_at(inner_row + row, label_x, &label, lfg);
-
-        // Doc string display for leaf entries
-        if !entry.is_group {
-            if let Some(ref doc) = entry.doc {
-                let used = key_w + sep_width + actual_label_w;
-                let remaining = col_width.saturating_sub(used + 2);
-                if remaining > WK_DOC_MIN_WIDTH {
-                    let trunc = truncate_end(doc, remaining);
-                    let doc_x = label_x + actual_label_w + 1;
-                    canvas.draw_text_at(inner_row + row, doc_x, &trunc, doc_fg);
-                }
-            }
-        }
-
-        col += 1;
-        displayed += 1;
-        if col >= num_cols {
-            col = 0;
-            row += 1;
+        let x = inner_col + cell.col * layout.col_width;
+        let y = inner_row + draw_row + cell.row;
+        canvas.draw_text_at(y, x, &cell.key_text, kfg);
+        canvas.draw_text_at(y, x + cell.sep_offset, &separator, text_fg);
+        canvas.draw_text_at(y, x + cell.label_offset, &cell.label_text, lfg);
+        if let Some(ref doc) = cell.doc_text {
+            canvas.draw_text_at(y, x + cell.doc_offset, doc, doc_fg);
         }
     }
 
-    // "below" indicator
-    if show_below {
-        let below_count = entries.len() - skip_entries - displayed;
-        if below_count > 0 {
-            let indicator_row = inner_row + inner_height.saturating_sub(1);
-            canvas.draw_text_at(
-                indicator_row,
-                inner_col,
-                &format!("\u{2193} +{} below", below_count),
-                doc_fg,
-            );
-        }
+    if let Some(below_count) = layout.below_count {
+        let indicator_row = inner_row + inner_height.saturating_sub(1);
+        canvas.draw_text_at(
+            indicator_row,
+            inner_col,
+            &format!("\u{2193} +{} below", below_count),
+            doc_fg,
+        );
     }
 }
 
@@ -634,6 +584,116 @@ pub fn render_which_key_popup(
 // ---------------------------------------------------------------------------
 // Hover popup
 // ---------------------------------------------------------------------------
+
+/// Shared implementation for both the LSP hover popup and the KB-link
+/// preview popup. See `mae_core::render_common::anchored_popup` for the
+/// consolidation rationale — this and its TUI counterpart
+/// (`crates/renderer/src/popup_render.rs::render_anchored_popup`) were
+/// previously four separate copies of the same geometry math.
+#[allow(clippy::too_many_arguments)]
+fn render_anchored_popup(
+    canvas: &mut SkiaCanvas,
+    editor: &Editor,
+    area_row: usize,
+    area_width: usize,
+    area_height: usize,
+    frame_layout: Option<&FrameLayout>,
+    win_col_offset: usize,
+    win_row_offset: usize,
+    win_height: usize,
+    contents: &str,
+    anchor_row: usize,
+    anchor_col: usize,
+    scroll_offset: usize,
+    max_visible: usize,
+    title: &str,
+) {
+    let win = editor.window_mgr.focused_window();
+    // Use the saved anchor position, not the live cursor, so the popup
+    // stays where it was requested.
+    let anchor_screen_row = frame_layout
+        .and_then(|fl| fl.display_row_of(anchor_row))
+        .unwrap_or_else(|| anchor_row.saturating_sub(win.scroll_offset));
+
+    // Dynamic max width: up to full screen width minus 4 cols margin, at least 40 cols.
+    // This matches VS Code / Emacs lsp-ui-doc behavior — wide enough for type sigs.
+    // Popup may overflow the focused window bounds (intentional — content visibility
+    // takes priority over window containment).
+    let max_popup_cols = area_width.saturating_sub(4).max(40);
+    // Wrap width for content: leave 2 cols for border.
+    let wrap_width = max_popup_cols.saturating_sub(2);
+
+    let lines = mae_core::render_common::hover::compute_hover_lines(contents, wrap_width);
+    if lines.is_empty() {
+        return;
+    }
+
+    let visible_count = lines.len().min(max_visible);
+
+    use mae_core::render_common::anchored_popup::{popup_position, popup_size};
+    let size = popup_size(&lines, max_visible, max_popup_cols, area_height);
+    // `anchor_screen_row`/`anchor_col` are window-relative; `win_row_offset`/
+    // `win_col_offset` fold in the focused window's screen position, and
+    // `win_height` (not `area_height`) drives the below/above flip decision
+    // so a popup in a short split doesn't assume the whole screen is below it.
+    let pos = popup_position(
+        anchor_screen_row,
+        anchor_col,
+        size,
+        win_row_offset,
+        win_col_offset,
+        win_height,
+        0,
+        area_row,
+        area_width,
+        area_height,
+    );
+
+    let border_fg = theme::ts_fg(editor, "ui.window.border");
+    let text_fg = theme::ts_fg(editor, "ui.popup.text");
+    // Use ui.popup bg → ui.popup.text bg → ui.background bg → DEFAULT_BG.
+    let bg = theme::ts_bg(editor, "ui.popup")
+        .or_else(|| theme::ts_bg(editor, "ui.popup.text"))
+        .or_else(|| theme::ts_bg(editor, "ui.background"))
+        .unwrap_or(theme::DEFAULT_BG);
+
+    canvas.draw_rect_fill(pos.top, pos.left, size.width, size.height, bg);
+    draw_border_titled(
+        canvas,
+        pos.top,
+        pos.left,
+        size.width,
+        size.height,
+        border_fg,
+        title,
+    );
+
+    let inner_top = pos.top + 1;
+    let inner_left = pos.left + 1;
+    let inner_width = size.width.saturating_sub(2);
+
+    for (i, line) in lines
+        .iter()
+        .skip(scroll_offset)
+        .take(visible_count)
+        .enumerate()
+    {
+        // Grapheme-safe hard clip (ADR-087): a wrapped line should already
+        // fit `inner_width`, but this defends against off-by-one rounding
+        // without risking a mid-cluster cut, unlike the previous
+        // `.chars().take(inner_width)` (char count, not display columns).
+        let byte_idx = mae_core::grapheme::byte_offset_for_max_width(line, inner_width);
+        canvas.draw_text_at(inner_top + i, inner_left, &line[..byte_idx], text_fg);
+    }
+
+    // Scroll indicator (clear border chars beneath it first to avoid strikethrough artifact).
+    if lines.len() > max_visible {
+        let indicator = format!("[{}/{}]", scroll_offset + visible_count, lines.len());
+        let x = pos.left + size.width.saturating_sub(indicator.len() + 1);
+        canvas.draw_rect_fill(pos.top + size.height - 1, x, indicator.len(), 1, bg);
+        canvas.draw_text_at(pos.top + size.height - 1, x, &indicator, border_fg);
+    }
+}
 
 pub fn render_hover_popup(
     canvas: &mut SkiaCanvas,
@@ -651,114 +711,33 @@ pub fn render_hover_popup(
         Some(p) => p,
         None => return,
     };
-
-    let win = editor.window_mgr.focused_window();
-    // Use the saved anchor position, not the live cursor, so the popup
-    // stays where the hover was requested.
-    let anchor_screen_row = frame_layout
-        .and_then(|fl| fl.display_row_of(popup.anchor_row))
-        .unwrap_or_else(|| popup.anchor_row.saturating_sub(win.scroll_offset));
-
-    // Dynamic max width: up to full screen width minus 4 cols margin, at least 40 cols.
-    // This matches VS Code / Emacs lsp-ui-doc behavior — wide enough for type sigs.
-    // Popup may overflow the focused window bounds (intentional — content visibility
-    // takes priority over window containment).
-    let max_popup_cols = area_width.saturating_sub(4).max(40);
-    // Wrap width for content: leave 2 cols for border.
-    let wrap_width = max_popup_cols.saturating_sub(2);
-
-    let lines = mae_core::render_common::hover::compute_hover_lines(&popup.contents, wrap_width);
-    if lines.is_empty() {
-        return;
-    }
-
-    let max_visible = editor.hover_max_lines;
-    let visible_count = lines.len().min(max_visible);
-    // Size popup to content, capped at available space (not a fixed 78).
-    let popup_width = lines
-        .iter()
-        .take(visible_count)
-        .map(|l| l.len())
-        .max()
-        .unwrap_or(20)
-        .min(max_popup_cols)
-        + 2; // border
-    let popup_height = (visible_count + 2).min(area_height.saturating_sub(2)); // border top+bottom, clamped
-
-    // Position below the anchor, offset by the focused window's screen position.
-    let abs_anchor_row = win_row_offset + anchor_screen_row;
-    let popup_top = if anchor_screen_row + 2 + popup_height < win_height {
-        abs_anchor_row + 2
-    } else if anchor_screen_row > popup_height {
-        abs_anchor_row.saturating_sub(popup_height + 1)
-    } else {
-        abs_anchor_row.saturating_sub(popup_height)
-    };
-    // Clamp top to visible area.
-    let popup_top = popup_top.clamp(
-        area_row,
-        area_row + area_height.saturating_sub(popup_height),
-    );
-
-    // Horizontal: position at anchor col within the window, clamped to screen.
-    let abs_anchor_col = win_col_offset + popup.anchor_col;
-    let popup_left = if abs_anchor_col + popup_width <= area_width {
-        abs_anchor_col
-    } else {
-        // Shift left to fit, but don't go past column 0.
-        area_width.saturating_sub(popup_width)
-    };
-
-    let border_fg = theme::ts_fg(editor, "ui.window.border");
-    let text_fg = theme::ts_fg(editor, "ui.popup.text");
-    // Use ui.popup bg → ui.popup.text bg → ui.background bg → DEFAULT_BG.
-    let bg = theme::ts_bg(editor, "ui.popup")
-        .or_else(|| theme::ts_bg(editor, "ui.popup.text"))
-        .or_else(|| theme::ts_bg(editor, "ui.background"))
-        .unwrap_or(theme::DEFAULT_BG);
-
-    canvas.draw_rect_fill(popup_top, popup_left, popup_width, popup_height, bg);
-    draw_border_titled(
+    render_anchored_popup(
         canvas,
-        popup_top,
-        popup_left,
-        popup_width,
-        popup_height,
-        border_fg,
+        editor,
+        area_row,
+        area_width,
+        area_height,
+        frame_layout,
+        win_col_offset,
+        win_row_offset,
+        win_height,
+        &popup.contents,
+        popup.anchor_row,
+        popup.anchor_col,
+        popup.scroll_offset,
+        editor.hover_max_lines,
         " Hover ",
     );
-
-    let inner_top = popup_top + 1;
-    let inner_left = popup_left + 1;
-    let inner_width = popup_width.saturating_sub(2);
-
-    let scroll = popup.scroll_offset;
-    for (i, line) in lines.iter().skip(scroll).take(visible_count).enumerate() {
-        let display: String = line.chars().take(inner_width).collect();
-        canvas.draw_text_at(inner_top + i, inner_left, &display, text_fg);
-    }
-
-    // Scroll indicator (clear border chars beneath it first to avoid strikethrough artifact).
-    if lines.len() > max_visible {
-        let indicator = format!("[{}/{}]", scroll + visible_count, lines.len());
-        let x = popup_left + popup_width.saturating_sub(indicator.len() + 1);
-        canvas.draw_rect_fill(popup_top + popup_height - 1, x, indicator.len(), 1, bg);
-        canvas.draw_text_at(popup_top + popup_height - 1, x, &indicator, border_fg);
-    }
 }
 
 // ---------------------------------------------------------------------------
 // KB-link hover preview popup (KB-graph-view plan, Part D)
 // ---------------------------------------------------------------------------
 
-/// Mirrors `render_hover_popup` above almost exactly — same anchor-based
-/// positioning, same theme keys, same scroll/border treatment — but reads
-/// `editor.kb_preview_popup()` (the ACTIVE buffer's `KbView.kb_preview_popup`,
-/// not a top-level `Editor` field) and titles the popup " KB Preview ".
-/// Reuses `render_common::hover::compute_hover_lines` directly (no separate
-/// `render_common::kb_preview` module) — the word-wrap it does is generic
-/// text wrapping with no hover-specific behavior baked in, so a parallel
-/// file would just be a byte-for-byte duplicate.
+/// Reads `editor.kb_preview_popup()` (the ACTIVE buffer's
+/// `KbView.kb_preview_popup`, not a top-level `Editor` field) and titles the
+/// popup " KB Preview " — otherwise identical to `render_hover_popup` above;
+/// both delegate to the shared `render_anchored_popup`.
 pub fn render_kb_preview_popup(
     canvas: &mut SkiaCanvas,
     editor: &Editor,
@@ -775,91 +754,23 @@ pub fn render_kb_preview_popup(
         Some(p) => p,
         None => return,
     };
-
-    let win = editor.window_mgr.focused_window();
-    // Anchor position, not the live cursor — matches the GUI hover popup's
-    // correct behavior (the TUI hover popup's live-cursor positioning is a
-    // known bug, not replicated here; see `crates/renderer/src/
-    // popup_render.rs::render_kb_preview_popup` for the anchor-based fix
-    // applied there too).
-    let anchor_screen_row = frame_layout
-        .and_then(|fl| fl.display_row_of(popup.anchor_row))
-        .unwrap_or_else(|| popup.anchor_row.saturating_sub(win.scroll_offset));
-
-    let max_popup_cols = area_width.saturating_sub(4).max(40);
-    let wrap_width = max_popup_cols.saturating_sub(2);
-
-    let lines = mae_core::render_common::hover::compute_hover_lines(&popup.contents, wrap_width);
-    if lines.is_empty() {
-        return;
-    }
-
-    let max_visible = editor.kb_preview_max_lines;
-    let visible_count = lines.len().min(max_visible);
-    let popup_width = lines
-        .iter()
-        .take(visible_count)
-        .map(|l| l.len())
-        .max()
-        .unwrap_or(20)
-        .min(max_popup_cols)
-        + 2;
-    let popup_height = (visible_count + 2).min(area_height.saturating_sub(2));
-
-    let abs_anchor_row = win_row_offset + anchor_screen_row;
-    let popup_top = if anchor_screen_row + 2 + popup_height < win_height {
-        abs_anchor_row + 2
-    } else if anchor_screen_row > popup_height {
-        abs_anchor_row.saturating_sub(popup_height + 1)
-    } else {
-        abs_anchor_row.saturating_sub(popup_height)
-    };
-    let popup_top = popup_top.clamp(
-        area_row,
-        area_row + area_height.saturating_sub(popup_height),
-    );
-
-    let abs_anchor_col = win_col_offset + popup.anchor_col;
-    let popup_left = if abs_anchor_col + popup_width <= area_width {
-        abs_anchor_col
-    } else {
-        area_width.saturating_sub(popup_width)
-    };
-
-    let border_fg = theme::ts_fg(editor, "ui.window.border");
-    let text_fg = theme::ts_fg(editor, "ui.popup.text");
-    let bg = theme::ts_bg(editor, "ui.popup")
-        .or_else(|| theme::ts_bg(editor, "ui.popup.text"))
-        .or_else(|| theme::ts_bg(editor, "ui.background"))
-        .unwrap_or(theme::DEFAULT_BG);
-
-    canvas.draw_rect_fill(popup_top, popup_left, popup_width, popup_height, bg);
-    draw_border_titled(
+    render_anchored_popup(
         canvas,
-        popup_top,
-        popup_left,
-        popup_width,
-        popup_height,
-        border_fg,
+        editor,
+        area_row,
+        area_width,
+        area_height,
+        frame_layout,
+        win_col_offset,
+        win_row_offset,
+        win_height,
+        &popup.contents,
+        popup.anchor_row,
+        popup.anchor_col,
+        popup.scroll_offset,
+        editor.kb_preview_max_lines,
         " KB Preview ",
     );
-
-    let inner_top = popup_top + 1;
-    let inner_left = popup_left + 1;
-    let inner_width = popup_width.saturating_sub(2);
-
-    let scroll = popup.scroll_offset;
-    for (i, line) in lines.iter().skip(scroll).take(visible_count).enumerate() {
-        let display: String = line.chars().take(inner_width).collect();
-        canvas.draw_text_at(inner_top + i, inner_left, &display, text_fg);
-    }
-
-    if lines.len() > max_visible {
-        let indicator = format!("[{}/{}]", scroll + visible_count, lines.len());
-        let x = popup_left + popup_width.saturating_sub(indicator.len() + 1);
-        canvas.draw_rect_fill(popup_top + popup_height - 1, x, indicator.len(), 1, bg);
-        canvas.draw_text_at(popup_top + popup_height - 1, x, &indicator, border_fg);
-    }
 }
 
 // ---------------------------------------------------------------------------

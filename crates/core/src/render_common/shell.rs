@@ -65,6 +65,36 @@ pub fn should_fallback_to_ui_background(name: AnsiName) -> bool {
     matches!(name, AnsiName::Background | AnsiName::Black)
 }
 
+/// Map xterm indexed color 0-15 (the "ANSI base 16") to the backend-agnostic
+/// [`AnsiName`], so an explicit `SGR 38;5;<0..16>` escape resolves through
+/// the theme exactly like the equivalent named-color escape does.
+///
+/// Both backends need this: a program can select the same 16 base colors
+/// either via the classic named SGR codes (30-37/90-97, alacritty's
+/// `NamedColor`) or via the 256-color indexed form (`38;5;0`..`38;5;15`,
+/// alacritty's `Color::Indexed`) — they must resolve identically.
+pub fn index_to_named(idx: u8) -> AnsiName {
+    match idx {
+        0 => AnsiName::Black,
+        1 => AnsiName::Red,
+        2 => AnsiName::Green,
+        3 => AnsiName::Yellow,
+        4 => AnsiName::Blue,
+        5 => AnsiName::Magenta,
+        6 => AnsiName::Cyan,
+        7 => AnsiName::White,
+        8 => AnsiName::BrightBlack,
+        9 => AnsiName::BrightRed,
+        10 => AnsiName::BrightGreen,
+        11 => AnsiName::BrightYellow,
+        12 => AnsiName::BrightBlue,
+        13 => AnsiName::BrightMagenta,
+        14 => AnsiName::BrightCyan,
+        15 => AnsiName::BrightWhite,
+        _ => AnsiName::Foreground,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

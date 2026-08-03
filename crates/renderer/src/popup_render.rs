@@ -471,48 +471,51 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
 // Hover popup
 // ---------------------------------------------------------------------------
 
-pub(crate) fn render_hover_popup(frame: &mut Frame, editor_area: Rect, editor: &Editor) {
-    let popup = match &editor.lsp.hover_popup {
-        Some(p) => p,
-        None => return,
-    };
-
-    let lines = mae_core::render_common::hover::compute_hover_lines(&popup.contents, 76);
+/// Shared implementation for both the LSP hover popup and the KB-link
+/// preview popup — see `mae_core::render_common::anchored_popup` for why
+/// these were merged (they were four byte-near-identical copies, one of
+/// which — this one, previously — had a live bug: positioning off the
+/// current cursor instead of the popup's saved anchor).
+#[allow(clippy::too_many_arguments)]
+fn render_anchored_popup(
+    frame: &mut Frame,
+    editor_area: Rect,
+    editor: &Editor,
+    contents: &str,
+    anchor_row: usize,
+    anchor_col: usize,
+    scroll_offset: usize,
+    max_visible: usize,
+    title: &str,
+) {
+    let lines = mae_core::render_common::hover::compute_hover_lines(contents, 76);
     if lines.is_empty() {
         return;
     }
 
     let win = editor.window_mgr.focused_window();
-    let cursor_screen_row = win.cursor_row.saturating_sub(win.scroll_offset) as u16;
+    let anchor_screen_row = anchor_row.saturating_sub(win.scroll_offset);
 
-    let max_visible = editor.hover_max_lines;
-    let visible_count = lines.len().min(max_visible) as u16;
-    let popup_width = lines
-        .iter()
-        .take(max_visible)
-        .map(|l| l.len())
-        .max()
-        .unwrap_or(20)
-        .min(76) as u16
-        + 2;
-    let popup_height = (visible_count + 2).min(editor_area.height.saturating_sub(2));
-
-    // Position below cursor with a 1-line gap so the trigger line stays visible.
-    let popup_top = if cursor_screen_row + 2 + popup_height < editor_area.height {
-        editor_area.y + cursor_screen_row + 2
-    } else if cursor_screen_row > popup_height {
-        editor_area.y + cursor_screen_row.saturating_sub(popup_height + 1)
-    } else {
-        editor_area.y + cursor_screen_row.saturating_sub(popup_height)
-    };
-    let popup_left = (editor_area.x + win.cursor_col as u16)
-        .min(editor_area.x + editor_area.width.saturating_sub(popup_width));
+    use mae_core::render_common::anchored_popup::{popup_position, popup_size};
+    let size = popup_size(&lines, max_visible, 76, editor_area.height as usize);
+    let pos = popup_position(
+        anchor_screen_row,
+        anchor_col,
+        size,
+        0, // win_row_offset: ratatui already positions `editor_area` per-widget
+        0, // win_col_offset
+        editor_area.height as usize, // flip_height: TUI has one area, no split offset
+        editor_area.x as usize,
+        editor_area.y as usize,
+        editor_area.width as usize,
+        editor_area.height as usize,
+    );
 
     let popup_area = Rect {
-        x: popup_left,
-        y: popup_top,
-        width: popup_width,
-        height: popup_height,
+        x: pos.left as u16,
+        y: pos.top as u16,
+        width: size.width as u16,
+        height: size.height as u16,
     };
 
     frame.render_widget(ratatui::widgets::Clear, popup_area);
@@ -523,16 +526,15 @@ pub(crate) fn render_hover_popup(frame: &mut Frame, editor_area: Rect, editor: &
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(border_style)
-        .title(" Hover ")
+        .title(title)
         .style(text_style);
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
-    let scroll = popup.scroll_offset;
     let content_lines: Vec<Line> = lines
         .iter()
-        .skip(scroll)
+        .skip(scroll_offset)
         .take(max_visible)
         .map(|l| Line::styled(l.as_str(), text_style))
         .collect();
@@ -541,86 +543,46 @@ pub(crate) fn render_hover_popup(frame: &mut Frame, editor_area: Rect, editor: &
     frame.render_widget(para, inner);
 }
 
+pub(crate) fn render_hover_popup(frame: &mut Frame, editor_area: Rect, editor: &Editor) {
+    let popup = match &editor.lsp.hover_popup {
+        Some(p) => p,
+        None => return,
+    };
+    // Anchor at the saved hover position, not the live cursor — matches the
+    // KB-preview popup and both GUI popups (see `render_anchored_popup`).
+    render_anchored_popup(
+        frame,
+        editor_area,
+        editor,
+        &popup.contents,
+        popup.anchor_row,
+        popup.anchor_col,
+        popup.scroll_offset,
+        editor.hover_max_lines,
+        " Hover ",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // KB-link hover preview popup (KB-graph-view plan, Part D)
 // ---------------------------------------------------------------------------
 
-/// Mirrors `render_hover_popup` above, with ONE deliberate correction: this
-/// positions off `popup.anchor_row`/`anchor_col` (where the preview was
-/// requested), not the live cursor. `render_hover_popup` above uses
-/// `win.cursor_row`/`cursor_col` directly — a known inconsistency with its
-/// GUI counterpart (which already anchors correctly) — and that bug is not
-/// propagated here: if the cursor has moved since the popup was requested
-/// (e.g. scrolled while the popup remains from a moment ago), the anchor
-/// still reflects where the link actually was, matching the GUI's behavior.
 pub(crate) fn render_kb_preview_popup(frame: &mut Frame, editor_area: Rect, editor: &Editor) {
     let popup = match editor.kb_preview_popup() {
         Some(p) => p,
         None => return,
     };
-
-    let lines = mae_core::render_common::hover::compute_hover_lines(&popup.contents, 76);
-    if lines.is_empty() {
-        return;
-    }
-
-    let win = editor.window_mgr.focused_window();
-    // Anchor position (not the live cursor — see doc comment above).
-    let anchor_screen_row = popup.anchor_row.saturating_sub(win.scroll_offset) as u16;
-
-    let max_visible = editor.kb_preview_max_lines;
-    let visible_count = lines.len().min(max_visible) as u16;
-    let popup_width = lines
-        .iter()
-        .take(max_visible)
-        .map(|l| l.len())
-        .max()
-        .unwrap_or(20)
-        .min(76) as u16
-        + 2;
-    let popup_height = (visible_count + 2).min(editor_area.height.saturating_sub(2));
-
-    let popup_top = if anchor_screen_row + 2 + popup_height < editor_area.height {
-        editor_area.y + anchor_screen_row + 2
-    } else if anchor_screen_row > popup_height {
-        editor_area.y + anchor_screen_row.saturating_sub(popup_height + 1)
-    } else {
-        editor_area.y + anchor_screen_row.saturating_sub(popup_height)
-    };
-    let popup_left = (editor_area.x + popup.anchor_col as u16)
-        .min(editor_area.x + editor_area.width.saturating_sub(popup_width));
-
-    let popup_area = Rect {
-        x: popup_left,
-        y: popup_top,
-        width: popup_width,
-        height: popup_height,
-    };
-
-    frame.render_widget(ratatui::widgets::Clear, popup_area);
-
-    let border_style = ts(editor, "ui.window.border");
-    let text_style = ts(editor, "ui.popup.text");
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(border_style)
-        .title(" KB Preview ")
-        .style(text_style);
-
-    let inner = block.inner(popup_area);
-    frame.render_widget(block, popup_area);
-
-    let scroll = popup.scroll_offset;
-    let content_lines: Vec<Line> = lines
-        .iter()
-        .skip(scroll)
-        .take(max_visible)
-        .map(|l| Line::styled(l.as_str(), text_style))
-        .collect();
-
-    let para = Paragraph::new(content_lines);
-    frame.render_widget(para, inner);
+    render_anchored_popup(
+        frame,
+        editor_area,
+        editor,
+        &popup.contents,
+        popup.anchor_row,
+        popup.anchor_col,
+        popup.scroll_offset,
+        editor.kb_preview_max_lines,
+        " KB Preview ",
+    );
 }
 
 // ---------------------------------------------------------------------------

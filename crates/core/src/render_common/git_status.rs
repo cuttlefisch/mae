@@ -38,50 +38,20 @@ pub fn git_line_theme_key(kind: &GitLineKind) -> &'static str {
 
 /// Compute highlight spans for a GitStatus buffer by iterating `lines`.
 /// Each non-blank line gets a full-line span with the theme key from
-/// `git_line_theme_key()`. This is the git-status equivalent of
-/// `compute_kb_spans()`.
+/// `git_line_theme_key()`. Delegates to the shared
+/// `line_kind_spans::compute_line_kind_spans` (also used by
+/// `compute_notif_spans` / `compute_kb_sharing_spans` — see that module for
+/// why `compute_agenda_spans` is deliberately NOT a fourth caller).
 pub fn compute_git_status_spans(buf: &Buffer) -> Vec<HighlightSpan> {
-    let view = match buf.git_status_view() {
-        Some(v) => v,
-        None => return Vec::new(),
+    let Some(view) = buf.git_status_view() else {
+        return Vec::new();
     };
-
-    let rope = buf.rope();
-    let mut spans = Vec::new();
-
-    for (line_idx, line) in view.lines.iter().enumerate() {
-        if matches!(line.kind, GitLineKind::Blank) {
-            continue;
-        }
-        let theme_key = git_line_theme_key(&line.kind);
-        if theme_key == "ui.text" {
-            continue; // default color, no span needed
-        }
-        if line_idx >= rope.len_lines() {
-            break;
-        }
-        let line_start_char = rope.line_to_char(line_idx);
-        let line = rope.line(line_idx);
-        let line_len = line.len_chars();
-        // Exclude trailing newline from span
-        let text_len = if line_idx + 1 < rope.len_lines() {
-            line_len.saturating_sub(1)
-        } else {
-            line_len
-        };
-        if text_len == 0 {
-            continue;
-        }
-        let byte_start = rope.char_to_byte(line_start_char);
-        let byte_end = rope.char_to_byte(line_start_char + text_len);
-        spans.push(HighlightSpan {
-            byte_start,
-            byte_end,
-            theme_key,
-        });
-    }
-
-    spans
+    crate::render_common::line_kind_spans::compute_line_kind_spans(
+        view.lines.iter().map(|l| &l.kind),
+        buf.rope(),
+        |k| matches!(k, GitLineKind::Blank),
+        git_line_theme_key,
+    )
 }
 
 #[cfg(test)]
