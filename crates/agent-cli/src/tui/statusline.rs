@@ -9,7 +9,7 @@ use ratatui::Frame;
 use super::AppState;
 
 pub fn render(frame: &mut Frame, area: Rect, app: &AppState) {
-    let mode_label = format!("{:?}", app.permission_mode);
+    let mode_label = app.policy.auto_approve_up_to.config_name();
     let trailer = match &app.last_diagnostics {
         Some(diag) => format!("  {diag}"),
         None => "  /help for commands".to_string(),

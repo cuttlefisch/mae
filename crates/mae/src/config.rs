@@ -693,33 +693,19 @@ pub fn resolve_ai_config(file_config: &Config) -> Option<ProviderConfig> {
 }
 
 /// The permission-tier spellings MAE accepts, for error messages and validation.
-pub const VALID_PERMISSION_TIERS: &[&str] = &[
-    "readonly",
-    "write",
-    "standard",
-    "shell",
-    "trusted",
-    "privileged",
-    "full",
-];
+///
+/// ADR-090 D4: an alias of `PermissionTier::VALID_SPELLINGS`, not a second
+/// list. The two used to drift (this one never accepted `read-only`, which
+/// `mae-agent`'s own parser did).
+pub const VALID_PERMISSION_TIERS: &[&str] = PermissionTier::VALID_SPELLINGS;
 
 /// Parse a permission-tier string, or `None` if it is not a recognised spelling.
 ///
-/// @ai-caution: [security] Callers MUST treat `None` as an error and refuse to
-/// start (ADR-084 D4). Resolving an unrecognised tier to *any* real tier —
-/// especially via `unwrap_or_default()`, whose default is Shell — is CWE-636
-/// ("using the most permissive access control restrictions"), and it means a
-/// typo silently widens access with nothing to notice it. The realistic source
-/// of an unknown value here is a typo in a local config written by the same
-/// person running the binary, not version skew, so leniency buys nothing.
+/// Thin alias of [`PermissionTier::parse`], the single tier vocabulary
+/// (ADR-090 D4). Kept as a free function because a dozen call sites and tests
+/// name it; it must never grow a match arm of its own.
 pub fn parse_permission_tier(s: &str) -> Option<PermissionTier> {
-    match s {
-        "readonly" => Some(PermissionTier::ReadOnly),
-        "write" | "standard" => Some(PermissionTier::Write),
-        "shell" | "trusted" => Some(PermissionTier::Shell),
-        "privileged" | "full" => Some(PermissionTier::Privileged),
-        _ => None,
-    }
+    PermissionTier::parse(s)
 }
 
 /// Resolve AI permission policy with precedence: env > file > default (trusted).

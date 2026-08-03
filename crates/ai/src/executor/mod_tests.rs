@@ -947,7 +947,10 @@ fn lsp_definition_returns_deferred() {
         }
         ExecuteResult::Immediate(r) => panic!("expected Deferred, got Immediate: {}", r.output),
         ExecuteResult::NeedsApproval(req) => {
-            panic!("expected Deferred, got an approval prompt for {}", req.tool_name)
+            panic!(
+                "expected Deferred, got an approval prompt for {}",
+                req.tool_name
+            )
         }
     }
     assert_eq!(editor.lsp.pending_requests.len(), 1);
@@ -1009,7 +1012,10 @@ fn lsp_definition_returns_immediate_error_for_scratch() {
         ExecuteResult::Immediate(r) => r,
         ExecuteResult::Deferred { .. } => panic!("expected Immediate error for scratch buffer"),
         ExecuteResult::NeedsApproval(req) => {
-            panic!("expected Immediate error, got an approval prompt for {}", req.tool_name)
+            panic!(
+                "expected Immediate error, got an approval prompt for {}",
+                req.tool_name
+            )
         }
     };
     assert!(!result.success);

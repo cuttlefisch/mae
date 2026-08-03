@@ -1,10 +1,10 @@
 mod ai_tools;
 pub mod authorization;
 mod categories;
-pub mod decision;
 mod collab_tools;
 mod core_tools;
 mod dap_tools;
+pub mod decision;
 #[cfg(test)]
 mod dispatch_contract_tests;
 pub mod dispatchability;

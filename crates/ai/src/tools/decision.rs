@@ -89,9 +89,9 @@ impl Decision {
 /// agent CLI.
 pub fn deny_message(tool_name: &str, tier: PermissionTier, reason: DenyReason) -> String {
     match reason {
-        DenyReason::Category => format!(
-            "Category denied: {tool_name} is not in this session's allowed tool categories"
-        ),
+        DenyReason::Category => {
+            format!("Category denied: {tool_name} is not in this session's allowed tool categories")
+        }
         DenyReason::HardCeiling(hc) => match hc.source {
             HardCeilingSource::SessionDeclared => format!(
                 "Permission denied: {tool_name} requires {tier:?} tier, above this session's \
@@ -129,7 +129,11 @@ pub fn ask_denied_message(
 }
 
 /// The prompt line shown to a human resolving a [`Decision::Ask`].
-pub fn ask_message(tool_name: &str, tier: PermissionTier, auto_approve_up_to: PermissionTier) -> String {
+pub fn ask_message(
+    tool_name: &str,
+    tier: PermissionTier,
+    auto_approve_up_to: PermissionTier,
+) -> String {
     format!(
         "AI wants to run {tool_name} ({tier:?} tier), above the auto-approval ceiling \
          ({auto_approve_up_to:?})."
