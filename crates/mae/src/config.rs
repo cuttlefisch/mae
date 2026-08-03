@@ -750,6 +750,10 @@ pub fn resolve_permission_policy(config: &Config) -> Result<PermissionPolicy, St
     })?;
     Ok(PermissionPolicy {
         auto_approve_up_to: tier,
+        // ADR-090 D2: a config-file/env ceiling is the AUTO-APPROVAL ceiling,
+        // so everything above it is askable. Only a *session's own* declared
+        // ceiling (ADR-051) and an unparseable declaration are hard.
+        hard_ceiling: None,
         allowed_categories: None,
     })
 }

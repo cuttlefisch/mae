@@ -789,7 +789,7 @@ pub(crate) async fn run_headless_self_test(
         };
 
         match event {
-            Some(AiEvent::ToolCallRequest { call, reply }) => {
+            Some(AiEvent::ToolCallRequest { call, reply, .. }) => {
                 debug!(tool = %call.name, call_id = %call.id, "self-test tool call");
                 eprintln!("  [tool] {}", call.name);
 
@@ -815,6 +815,19 @@ pub(crate) async fn run_headless_self_test(
                 );
 
                 match exec_result {
+                    // ADR-090 D3: `--self-test` is headless by definition —
+                    // no human, no prompt. `Ask` is denied explicitly, and
+                    // the self-test's own report shows it as a failed tool
+                    // call rather than a silent skip.
+                    ExecuteResult::NeedsApproval(req) => {
+                        let result = req.into_denied("--self-test runs headless, so");
+                        if let Some(conv) = find_conversation_buffer_mut(editor) {
+                            conv.push_tool_result(false, &result.output, None);
+                        }
+                        if reply.send(result).is_err() {
+                            warn!("self-test tool result channel closed");
+                        }
+                    }
                     ExecuteResult::Immediate(result) => {
                         if let Some(conv) = find_conversation_buffer_mut(editor) {
                             conv.push_tool_result(result.success, &result.output, None);

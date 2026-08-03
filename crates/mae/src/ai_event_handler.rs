@@ -97,6 +97,16 @@ pub type DeferredMcpReply = Vec<(
 pub enum PendingInteractiveEvent {
     AskUser(tokio::sync::oneshot::Sender<String>),
     ProposeChanges(tokio::sync::oneshot::Sender<bool>),
+    /// ADR-090 D3: the embedded editor's implementation of `Ask`. Resolved by
+    /// `:ai-accept` / `:ai-reject`, the same two commands that already resolve
+    /// `ProposeChanges` — a new permission prompt would have been a fourth
+    /// vocabulary (principle #15), so this reuses the one that exists.
+    ///
+    /// @ai-caution: [security] Every path that *drops* this without answering
+    /// must leave the sender un-signalled, not send `true`. The session treats
+    /// a closed channel as a refusal (`decide_and_present`), so dropping is
+    /// safe; sending `true` on a cancel would not be.
+    ConfirmToolCall(tokio::sync::oneshot::Sender<bool>),
 }
 
 /// Shared reference to the MCP client manager for external tool dispatch.
@@ -120,7 +130,11 @@ pub struct AiEventContext<'a> {
 /// Handle a single AI event. Shared between terminal and GUI loops.
 pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventContext) {
     match ai_event {
-        AiEvent::ToolCallRequest { call, reply } => {
+        AiEvent::ToolCallRequest {
+            call,
+            reply,
+            approved_tier,
+        } => {
             editor.ai.streaming = true;
             info!(tool = %call.name, call_id = %call.id, "executing AI tool call");
             // Update the existing Pending entry (created by ToolCallStarted) to Running,
@@ -183,20 +197,36 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                         output: reason,
                     })
                 }
-                crate::ai_residency::ResidencyDecision::Allow => execute_tool_with_requester(
-                    editor,
-                    &call,
-                    ctx.all_tools,
-                    ctx.permission_policy,
-                    Some(provider.as_str()),
-                    // No MCP session -- this is the embedded human/delegate
-                    // AI path (ADR-051 scopes per-session dispatch to real
-                    // external MCP clients only).
-                    None,
-                ),
+                crate::ai_residency::ResidencyDecision::Allow => {
+                    // ADR-090: `approved_tier` is set only when the session
+                    // already showed this exact call to a human at this exact
+                    // tier and got a yes. `with_one_time_approval` raises the
+                    // auto-approval ceiling and NOTHING else, so the hard
+                    // ceiling and the category allowlist re-decide here
+                    // regardless -- an approval cannot promote a `Deny`.
+                    let policy = match approved_tier {
+                        Some(tier) => ctx.permission_policy.with_one_time_approval(tier),
+                        None => ctx.permission_policy.clone(),
+                    };
+                    execute_tool_with_requester(
+                        editor,
+                        &call,
+                        ctx.all_tools,
+                        &policy,
+                        Some(provider.as_str()),
+                        // No MCP session -- this is the embedded human/delegate
+                        // AI path (ADR-051 scopes per-session dispatch to real
+                        // external MCP clients only).
+                        None,
+                    )
+                }
             };
             // Drain any pending Scheme evals queued by the tool (e.g. eval_scheme).
-            let scheme_output = drain_pending_scheme_evals(editor, ctx.scheme);
+            let scheme_output = drain_pending_scheme_evals(
+                editor,
+                ctx.scheme,
+                ctx.permission_policy.ambient_scheme_tier(),
+            );
             match exec_result {
                 ExecuteResult::Immediate(mut result) => {
                     // If the tool queued a Scheme eval, replace the output with the
@@ -223,6 +253,22 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                     // so they take effect immediately rather than batching with the next deferred.
                     if editor.has_pending_dap_intents() {
                         crate::dap_bridge::drain_dap_intents(editor, ctx.dap_command_tx);
+                    }
+                }
+                // ADR-090: the session pre-asks (see `decide_and_present`),
+                // so reaching here means the session's own gate said `Allow`
+                // while dispatch said `Ask` -- the two disagree only if a
+                // policy changed mid-turn, or if a caller bypassed the
+                // session. Either way nothing ran; deny explicitly rather
+                // than re-entering an async prompt from the main thread.
+                ExecuteResult::NeedsApproval(req) => {
+                    let result = req.into_denied(EMBEDDED_RACE_SURFACE);
+                    warn!(tool = %result.tool_name, "embedded AI tool call needed approval at dispatch time");
+                    if let Some(conv) = find_conversation_buffer_mut(editor) {
+                        conv.complete_last_tool_call(false, &result.output, None);
+                    }
+                    if reply.send(result).is_err() {
+                        warn!("AI tool result channel closed before reply");
                     }
                 }
                 ExecuteResult::Deferred { kind, .. } => {
@@ -454,6 +500,39 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             editor.ai.input_lock = InputLock::None;
             *ctx.pending_interactive_event = Some(PendingInteractiveEvent::AskUser(reply));
         }
+        AiEvent::ConfirmToolCall {
+            tool_name,
+            arguments,
+            tier,
+            auto_approve_up_to,
+            reply,
+        } => {
+            let prompt = mae_ai::ask_message(&tool_name, tier, auto_approve_up_to);
+            info!(tool = %tool_name, ?tier, "AI tool call awaiting approval");
+            // `auto-accept` mode is the human having pre-answered every
+            // prompt for this session -- the same opt-in `ProposeChanges`
+            // already honours. It is NOT a policy override: a `Deny` never
+            // reaches here (the session refuses it outright), so auto-accept
+            // can only ever auto-answer an `Ask`.
+            if editor.ai.mode == "auto-accept" {
+                if let Some(conv) = find_conversation_buffer_mut(editor) {
+                    conv.push_system(format!("{prompt} Auto-accepted (ai-mode=auto-accept)."));
+                }
+                let _ = reply.send(true);
+                return;
+            }
+            let args_preview = serde_json::to_string(&arguments).unwrap_or_default();
+            if let Some(conv) = find_conversation_buffer_mut(editor) {
+                conv.push_system(format!(
+                    "{prompt}\n  args: {args_preview}\n  Approve with :ai-accept, refuse with :ai-reject."
+                ));
+                conv.end_streaming();
+            }
+            editor.set_status(format!("{prompt} :ai-accept / :ai-reject"));
+            editor.ai.streaming = false;
+            editor.ai.input_lock = InputLock::None;
+            *ctx.pending_interactive_event = Some(PendingInteractiveEvent::ConfirmToolCall(reply));
+        }
         AiEvent::ProposeChanges { changes, reply } => {
             let count = if let Some(arr) = changes.as_array() {
                 arr.len()
@@ -630,8 +709,13 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
                 sub_prompt.push_str(hints);
             }
 
+            // ADR-084 D2: a `delegate()` sub-agent inherits the parent's
+            // policy verbatim. It is not a fresh principal -- it exists only
+            // because the parent asked for it, so it must not be able to
+            // reach an effect the parent could not.
             let sub_session = AgentSession::new(provider, tools, sub_prompt, proxy_tx, sub_cmd_rx)
                 .with_budget(config.model, config.budget)
+                .with_permission_policy(ctx.permission_policy.clone())
                 .with_target_buffer(target_buf_name.clone());
 
             // Spawn the sub-agent session.
@@ -818,6 +902,36 @@ fn parse_permission_tier(s: &str) -> Option<PermissionTier> {
     }
 }
 
+/// How the external-MCP dispatch path identifies itself when it maps
+/// ADR-090's `Ask` to a denial.
+///
+/// @ai-caution: [security] This path is **non-interactive by construction**
+/// (ADR-090 D3). An MCP tool request arrives on a reply channel the client is
+/// blocking on, from a client MAE cannot prompt — MAE implements no MCP
+/// elicitation, and the local human is not the principal making the request.
+/// So `Ask` becomes a denial that names the ceiling, never an allow. Wiring a
+/// real prompt here means parking the MCP reply (the `deferred_mcp_reply`
+/// machinery already supports parking) and resolving it from the event loop;
+/// until that exists, do not "temporarily" widen the policy here instead.
+const MCP_SURFACE: &str = "external MCP dispatch";
+
+/// The embedded path's `Ask` is implemented in `AgentSession::decide_and_present`
+/// (an `AiEvent::ConfirmToolCall` the human answers with `:ai-accept` /
+/// `:ai-reject`), *before* dispatch. Dispatch answering `Ask` therefore means
+/// the two saw different policies — a race, not a normal outcome — and the
+/// main thread cannot block on a prompt, so it denies.
+const EMBEDDED_RACE_SURFACE: &str =
+    "the tool was already past its approval prompt when the policy changed, so";
+
+/// The ambient Scheme tier for evaluation driven by a *human* keypress.
+///
+/// @ai-caution: [permission] The human is not the principal ADR-084's tiers
+/// bound — they already have a shell, and `:` + `(shell-command …)` was never
+/// gated. `Privileged` here is not a bypass; it is the statement that a
+/// keystroke-driven eval carries the user's own authority. Only the AI/MCP
+/// drains lower it, and they lower it from their own resolved policy.
+pub const HUMAN_AMBIENT_TIER: PermissionTier = PermissionTier::Privileged;
+
 /// Compute a session's effective permission policy (ADR-051 tier +
 /// ADR-056 category): the minimum tier and the intersected category set of
 /// the server's global policy and the session's own self-declared values
@@ -843,17 +957,30 @@ fn effective_permission_policy(
     // to the most restrictive value on its axis. It still cannot escalate: the
     // tier axis is a `min` against the global, and the category axis only ever
     // narrows.
-    let auto_approve_up_to = match declared_ceiling {
-        None => global.auto_approve_up_to,
+    //
+    // ADR-090 D2: a session-declared ceiling is a HARD ceiling, not an
+    // auto-approval ceiling. Exceeding the global auto-approval ceiling is
+    // askable; exceeding what the session asked to be limited to is not —
+    // prompting a human to undo the session's own declaration would make the
+    // declaration meaningless, and the same goes for a declaration that failed
+    // to parse.
+    let hard = match declared_ceiling {
+        None => None,
         Some(raw) => match parse_permission_tier(raw) {
-            Some(declared) => global.auto_approve_up_to.min(declared),
+            Some(declared) => Some(mae_ai::HardCeiling {
+                tier: declared,
+                source: mae_ai::HardCeilingSource::SessionDeclared,
+            }),
             None => {
                 warn!(
                     declared = %raw,
                     "unparseable session permission ceiling — falling back to the most \
                      restrictive tier, not to the global policy"
                 );
-                global.auto_approve_up_to.min(PermissionTier::ReadOnly)
+                Some(mae_ai::HardCeiling {
+                    tier: PermissionTier::ReadOnly,
+                    source: mae_ai::HardCeilingSource::UnparseableDeclaration,
+                })
             }
         },
     };
@@ -875,9 +1002,17 @@ fn effective_permission_policy(
             }
         }
     };
-    PermissionPolicy {
-        auto_approve_up_to,
+    let base = PermissionPolicy {
+        auto_approve_up_to: global.auto_approve_up_to,
+        hard_ceiling: global.hard_ceiling,
         allowed_categories,
+    };
+    match hard {
+        // `with_hard_ceiling` only ever lowers, on both axes, so a session
+        // declaring a ceiling ABOVE the global one changes nothing — the
+        // never-escalate property this function has always had.
+        Some(hc) => base.with_hard_ceiling(hc),
+        None => base,
     }
 }
 
@@ -990,25 +1125,34 @@ pub fn handle_mcp_request(
                     // exactly like the tier check already is. Check it here
                     // too, same fail-closed semantics (`execute_command` is
                     // itself uncategorized).
-                    if !effective_policy.is_allowed(PermissionTier::Write) {
+                    //
+                    // ADR-090: this bridge asks the same PDP, and gets the
+                    // same three answers. It is a non-interactive surface
+                    // (see the `Ask` arm below), so it maps `Ask` to a denial
+                    // explicitly rather than treating it as an allow.
+                    let bridge_decision =
+                        effective_policy.decide(&fake_call.name, PermissionTier::Write);
+                    if let mae_ai::Decision::Deny(reason) = bridge_decision {
                         ExecuteResult::Immediate(ToolResult {
                             tool_call_id: fake_call.id.clone(),
                             tool_name: fake_call.name.clone(),
                             success: false,
-                            output: format!(
-                                "Permission denied: {} requires {:?} tier",
-                                fake_call.name,
-                                PermissionTier::Write
+                            output: mae_ai::deny_message(
+                                &fake_call.name,
+                                PermissionTier::Write,
+                                reason,
                             ),
                         })
-                    } else if !effective_policy.is_category_allowed(&fake_call.name) {
+                    } else if bridge_decision.is_ask() {
                         ExecuteResult::Immediate(ToolResult {
                             tool_call_id: fake_call.id.clone(),
                             tool_name: fake_call.name.clone(),
                             success: false,
-                            output: format!(
-                                "Category denied: {} is not in this session's allowed tool categories",
-                                fake_call.name
+                            output: mae_ai::ask_denied_message(
+                                &fake_call.name,
+                                PermissionTier::Write,
+                                effective_policy.auto_approve_up_to,
+                                MCP_SURFACE,
                             ),
                         })
                     } else {
@@ -1058,7 +1202,8 @@ pub fn handle_mcp_request(
         }
     };
     // Drain any pending Scheme evals queued by the tool (e.g. eval_scheme).
-    let scheme_output = drain_pending_scheme_evals(editor, scheme);
+    let scheme_output =
+        drain_pending_scheme_evals(editor, scheme, effective_policy.ambient_scheme_tier());
     match exec_result {
         ExecuteResult::Immediate(mut result) => {
             // If the tool queued a Scheme eval, replace the output with the
@@ -1070,6 +1215,16 @@ pub fn handle_mcp_request(
             }
             let _ = mcp_req.reply.send(mae_mcp::McpToolResult {
                 success: result.success,
+                output: result.output,
+            });
+            true
+        }
+        // ADR-090 D3: the explicit non-interactive mapping for this surface.
+        ExecuteResult::NeedsApproval(req) => {
+            let result = req.into_denied(MCP_SURFACE);
+            warn!(tool = %result.tool_name, "MCP tool call denied — above the auto-approval ceiling and this surface cannot ask");
+            let _ = mcp_req.reply.send(mae_mcp::McpToolResult {
+                success: false,
                 output: result.output,
             });
             true
@@ -1506,9 +1661,23 @@ pub fn timeout_deferred_dap_reply(editor: &mut Editor, deferred_dap_reply: &mut 
 /// result when it is `true`. It comes from `eval_with_yield_handling`'s own
 /// `Result`, never from sniffing the formatted string for an "error" prefix
 /// (that prose is for the human-facing REPL transcript, not control flow).
+///
+/// `ambient_tier` is ADR-084 D2/D7's missing wire: it is passed straight to
+/// [`mae_scheme::SchemeRuntime::with_ambient_tier`], which is what makes
+/// D3's per-primitive tier declarations do anything at all. Without a caller
+/// lowering it, the VM's ambient tier stays at its `Privileged` default and
+/// every classified primitive passes its check trivially.
+///
+/// @ai-caution: [permission] `ambient_tier` MUST come from the caller's
+/// resolved `PermissionPolicy` (`PermissionPolicy::ambient_scheme_tier`), or
+/// from [`HUMAN_AMBIENT_TIER`] on a keypress-driven path — never from
+/// anything the evaluated program or the tool arguments supplied. A
+/// caller-derived tier turns the check into the confused deputy it exists to
+/// prevent.
 pub fn drain_pending_scheme_evals(
     editor: &mut Editor,
     scheme: &mut mae_scheme::SchemeRuntime,
+    ambient_tier: PermissionTier,
 ) -> Option<(String, bool)> {
     if editor.pending_scheme_eval.is_empty() {
         return None;
@@ -1518,7 +1687,9 @@ pub fn drain_pending_scheme_evals(
     let mut all_ok = true;
     for code in &exprs {
         scheme.inject_editor_state(editor);
-        let (ok, output) = eval_with_yield_handling(editor, scheme, code);
+        let (ok, output) = scheme.with_ambient_tier(ambient_tier, |scheme| {
+            eval_with_yield_handling(editor, scheme, code)
+        });
         all_ok = all_ok && ok;
         let formatted = format!("> {}\n{}\n", code.trim(), output);
         editor.append_to_scheme_repl(&formatted);
@@ -1816,6 +1987,7 @@ mod tests {
         let global_policy = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Shell,
             allowed_categories: None,
+            ..PermissionPolicy::default()
         };
         let (req, mut rx) = mcp_request_with_ceiling(
             "execute_command",
@@ -1997,6 +2169,7 @@ mod tests {
         let global = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Shell,
             allowed_categories: None,
+            ..PermissionPolicy::default()
         };
         let effective = effective_permission_policy(&global, None, None);
         assert_eq!(effective.auto_approve_up_to, PermissionTier::Shell);
@@ -2007,6 +2180,7 @@ mod tests {
         let global = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Shell,
             allowed_categories: None,
+            ..PermissionPolicy::default()
         };
         let effective = effective_permission_policy(&global, Some("ReadOnly"), None);
         assert_eq!(effective.auto_approve_up_to, PermissionTier::ReadOnly);
@@ -2020,6 +2194,7 @@ mod tests {
         let global = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Write,
             allowed_categories: None,
+            ..PermissionPolicy::default()
         };
         let effective = effective_permission_policy(&global, Some("Privileged"), None);
         assert_eq!(
@@ -2038,6 +2213,7 @@ mod tests {
         let global = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Shell,
             allowed_categories: None,
+            ..PermissionPolicy::default()
         };
         for bad in ["not-a-real-tier", "readonly", "read-only", "", "SHELL"] {
             let effective = effective_permission_policy(&global, Some(bad), None);
@@ -2056,6 +2232,7 @@ mod tests {
         let global = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Shell,
             allowed_categories: None,
+            ..PermissionPolicy::default()
         };
         let effective = effective_permission_policy(&global, None, None);
         assert_eq!(effective.auto_approve_up_to, PermissionTier::Shell);
@@ -2069,6 +2246,7 @@ mod tests {
         let global = PermissionPolicy {
             auto_approve_up_to: PermissionTier::ReadOnly,
             allowed_categories: None,
+            ..PermissionPolicy::default()
         };
         let effective = effective_permission_policy(&global, Some("Privileged!!"), None);
         assert_eq!(effective.auto_approve_up_to, PermissionTier::ReadOnly);
@@ -2081,6 +2259,7 @@ mod tests {
         let global = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Shell,
             allowed_categories: None,
+            ..PermissionPolicy::default()
         };
         let effective = effective_permission_policy(&global, None, Some("not-a-category"));
         let cats = effective
@@ -2154,6 +2333,7 @@ mod tests {
         let global_policy = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Shell,
             allowed_categories: None,
+            ..PermissionPolicy::default()
         };
         let mut editor = Editor::new();
         let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
@@ -2194,6 +2374,7 @@ mod tests {
         let global_policy = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Shell,
             allowed_categories: None,
+            ..PermissionPolicy::default()
         };
         for tool in ["shell_exec", "git_push", "buffer_write"] {
             let mut editor = Editor::new();
@@ -2235,6 +2416,7 @@ mod tests {
         let global_policy = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Shell,
             allowed_categories: None,
+            ..PermissionPolicy::default()
         };
         for tool in ["kb_search", "kb_export_guidance", "help_open"] {
             let mut editor = Editor::new();
@@ -2279,6 +2461,7 @@ mod tests {
         let global_policy = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Shell,
             allowed_categories: Some([mae_ai::ToolCategory::Knowledge].into_iter().collect()),
+            ..PermissionPolicy::default()
         };
         let mut editor = Editor::new();
         let mut scheme = mae_scheme::SchemeRuntime::new().unwrap();
@@ -2328,6 +2511,7 @@ mod tests {
         let global_policy = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Shell,
             allowed_categories: None,
+            ..PermissionPolicy::default()
         };
         let (req, mut rx) = mcp_request_with_categories(
             "execute_command",
@@ -2378,6 +2562,7 @@ mod tests {
         let global_policy = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Write,
             allowed_categories: None,
+            ..PermissionPolicy::default()
         };
 
         // Session 1: no declared ceiling -- Write-tier (untiered default)
@@ -2456,6 +2641,7 @@ mod tests {
         let global_policy = PermissionPolicy {
             auto_approve_up_to: PermissionTier::Write,
             allowed_categories: None,
+            ..PermissionPolicy::default()
         };
         let mut editor = Editor::new();
         editor.buffers[0].name = "*AI:claude*".to_string();
