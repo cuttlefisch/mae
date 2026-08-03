@@ -214,6 +214,10 @@ impl Editor {
                         .position(|b| b.kb_view().is_some_and(|hv| hv.current == cap.node_id))
                     {
                         self.buffers.remove(hi);
+                        // Audit #605.2 — pairs with every `buffers.remove()`;
+                        // without it the Editor's index-keyed maps (syntax, AI
+                        // target, shell viewports) keep stale indices.
+                        self.notify_buffer_removed(hi);
                         for win in self.window_mgr.iter_windows_mut() {
                             if win.buffer_idx > hi {
                                 win.buffer_idx = win.buffer_idx.saturating_sub(1);
@@ -240,6 +244,10 @@ impl Editor {
                         .position(|b| b.kb_view().is_some_and(|hv| hv.current == cap.node_id))
                     {
                         self.buffers.remove(hi);
+                        // Audit #605.2 — pairs with every `buffers.remove()`;
+                        // without it the Editor's index-keyed maps (syntax, AI
+                        // target, shell viewports) keep stale indices.
+                        self.notify_buffer_removed(hi);
                         for win in self.window_mgr.iter_windows_mut() {
                             if win.buffer_idx > hi {
                                 win.buffer_idx = win.buffer_idx.saturating_sub(1);

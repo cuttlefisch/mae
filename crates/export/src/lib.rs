@@ -279,12 +279,39 @@ fn skip_drawer(lines: &[&str], mut i: usize) -> usize {
 
 /// Parse an org-mode document into metadata and a flat list of elements.
 pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
+    let (meta, elements, _lines) = parse_org_document_with_lines(source);
+    (meta, elements)
+}
+
+/// [`parse_org_document`], plus the 0-based source line each element starts on.
+///
+/// The third tuple element is parallel to the second (same length, same order).
+/// Callers that need to map a *cursor position* to an element — `org-export-subtree`
+/// being the one that exists — must use this rather than treating the element
+/// index as a line number, which is what audit #596.2 found
+/// (`elements.iter().enumerate().enumerate()` produced two copies of the same
+/// index, so a cursor anywhere past the element count selected the document's
+/// LAST heading regardless of where it actually was).
+///
+/// Deliberately the same single parse, not a second implementation
+/// (principle #8): `parse_org_document` delegates here and drops the lines.
+pub fn parse_org_document_with_lines(source: &str) -> (OrgMeta, Vec<OrgElement>, Vec<usize>) {
     let mut meta = OrgMeta::default();
-    let mut elements = Vec::new();
+    let mut elements: Vec<OrgElement> = Vec::new();
+    // Parallel to `elements`; backfilled at the top of the next iteration
+    // (every arm of the loop body ends in `continue`, so there is no single
+    // tail hook — and threading a line through all 11 `elements.push` sites
+    // would be 11 chances to forget one).
+    let mut element_lines: Vec<usize> = Vec::new();
+    let mut iter_start = 0usize;
     let lines: Vec<&str> = source.lines().collect();
     let mut i = 0;
 
     while i < lines.len() {
+        while element_lines.len() < elements.len() {
+            element_lines.push(iter_start);
+        }
+        iter_start = i;
         let line = lines[i];
         let trimmed = line.trim();
 
@@ -590,8 +617,16 @@ pub fn parse_org_document(source: &str) -> (OrgMeta, Vec<OrgElement>) {
         }
         elements.push(OrgElement::Paragraph(para_lines.join("\n")));
     }
+    while element_lines.len() < elements.len() {
+        element_lines.push(iter_start);
+    }
 
-    (meta, elements)
+    debug_assert_eq!(
+        element_lines.len(),
+        elements.len(),
+        "element_lines must stay parallel to elements"
+    );
+    (meta, elements, element_lines)
 }
 
 /// A heading requires a space directly after the leading `*` run (or

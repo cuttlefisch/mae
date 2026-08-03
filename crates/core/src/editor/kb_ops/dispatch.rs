@@ -327,9 +327,18 @@ impl Editor {
         }
 
         // Update in the CozoDB store if available.
+        //
+        // @ai-caution: [data-loss] Widening CLOSES the narrowed buffer, so a
+        // failed persist takes the user's edits with it — there is no window
+        // left to retry from. The store result must therefore gate the "changes
+        // saved" claim (audit #605.3: this was `let _ = store.save_all(..)`
+        // followed by an unconditional success message, ADR-086 class).
+        let mut save_error: Option<String> = None;
         if let Some(ref store) = self.kb.store {
             if let Some(node) = self.kb.primary.get(&member_id) {
-                let _ = store.save_all(&[node]);
+                if let Err(e) = store.save_all(&[node]) {
+                    save_error = Some(e.to_string());
+                }
             }
             // Recompose the meta-node body.
             if let Ok(composed) = store.compose_meta_body(&meta_id) {
@@ -339,8 +348,22 @@ impl Editor {
             }
         }
 
+        // A persist failure keeps the narrowed buffer open so the edits are
+        // still recoverable, and says what went wrong.
+        if let Some(e) = save_error {
+            self.set_status(format!(
+                "kb-widen: NOT saved — '{member_id}' could not be written ({e}). \
+                 Buffer left open so your edits are not lost."
+            ));
+            return;
+        }
+
         // Close the narrow buffer and return.
         self.buffers.remove(idx);
+        // Audit #605.2 — every `buffers.remove()` must be paired with this, or
+        // every Editor-owned index-keyed map (syntax, AI target, shell
+        // viewports, pending queues) keeps pointing at the wrong buffer.
+        self.notify_buffer_removed(idx);
         for win in self.window_mgr.iter_windows_mut() {
             if win.buffer_idx >= idx {
                 win.buffer_idx = win.buffer_idx.saturating_sub(1);

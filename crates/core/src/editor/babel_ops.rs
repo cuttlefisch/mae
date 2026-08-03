@@ -460,19 +460,23 @@ impl Editor {
         let source = self.buffers[buf_idx].rope().to_string();
         let cursor_line = self.ai_cursor_row();
 
-        let (mut meta, elements) = export::parse_org_document(&source);
+        let (mut meta, elements, element_lines) = export::parse_org_document_with_lines(&source);
         meta.options.allow_raw_html_export_blocks = self.org_export_allow_raw_html_blocks;
 
-        // Find the heading at or before cursor
-        let mut heading_idx = None;
-        for (current_line, (i, _el)) in elements.iter().enumerate().enumerate() {
-            if current_line > cursor_line {
-                break;
-            }
-            if matches!(&elements[i], export::OrgElement::Heading { .. }) {
-                heading_idx = Some(i);
-            }
-        }
+        // The last heading starting at or before the cursor's line.
+        //
+        // Audit #596.2: this read `elements.iter().enumerate().enumerate()`,
+        // which yields the SAME index twice — so `current_line` was an element
+        // ordinal, not a line. Any cursor past the element count therefore fell
+        // through the whole document and exported its last subtree instead of
+        // the one under the cursor.
+        let heading_idx = elements
+            .iter()
+            .enumerate()
+            .take_while(|(i, _)| element_lines[*i] <= cursor_line)
+            .filter(|(_, el)| matches!(el, export::OrgElement::Heading { .. }))
+            .map(|(i, _)| i)
+            .last();
 
         let subtree = match heading_idx {
             Some(idx) => export::extract_subtree(&elements, idx),
@@ -901,6 +905,64 @@ mod tests {
             !text.contains(DEFAULT_OUT),
             "a non-matching trust pattern must not grant execution — got:\n{text}"
         );
+    }
+
+    // --- org-export-subtree cursor mapping (audit #596.2) ---
+
+    /// Audit #596.2 — `elements.iter().enumerate().enumerate()` yields the same
+    /// index twice, so the "current line" the loop compared against the cursor
+    /// was really an ELEMENT ORDINAL. Any cursor line past the element count
+    /// fell through the whole document and exported its LAST subtree, whatever
+    /// the cursor was actually on. The bug is invisible in a document with more
+    /// elements than lines, so the fixture below is deliberately line-heavy:
+    /// three sections, each with padding, cursor placed in the FIRST one.
+    #[test]
+    fn export_subtree_picks_the_heading_at_the_cursor_not_the_last_one() {
+        let src = "\
+* Alpha
+alpha body one
+alpha body two
+
+* Beta
+beta body one
+beta body two
+
+* Gamma
+gamma body one
+gamma body two
+";
+        let dir = std::env::temp_dir().join("mae-export-subtree-cursor");
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // Each cursor line and the heading whose subtree must be exported.
+        // Covers the heading line itself, a body line under it, and the final
+        // section — so a "first heading always" regression fails too.
+        for (cursor_row, expected, forbidden) in [
+            (0usize, "Alpha", "Gamma"),
+            (1, "Alpha", "Gamma"),
+            (2, "Alpha", "Beta"),
+            (4, "Beta", "Gamma"),
+            (6, "Beta", "Alpha"),
+            (8, "Gamma", "Alpha"),
+            (10, "Gamma", "Beta"),
+        ] {
+            let out = dir.join(format!("row{cursor_row}.org"));
+            let mut editor = editor_with_block(src);
+            editor.buffers[0].set_file_path(out.clone());
+            editor.window_mgr.focused_window_mut().cursor_row = cursor_row;
+            editor.org_export_subtree();
+
+            let html = std::fs::read_to_string(out.with_extension("subtree.html"))
+                .unwrap_or_else(|e| panic!("row {cursor_row}: no export written ({e})"));
+            assert!(
+                html.contains(expected),
+                "cursor on row {cursor_row} must export the '{expected}' subtree, got:\n{html}"
+            );
+            assert!(
+                !html.contains(forbidden),
+                "cursor on row {cursor_row} must NOT export '{forbidden}', got:\n{html}"
+            );
+        }
     }
 
     #[test]
