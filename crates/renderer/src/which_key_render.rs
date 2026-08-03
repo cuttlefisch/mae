@@ -5,7 +5,7 @@
 //! turns the computed cells into ratatui `Span`/`Line`.
 
 use mae_core::render_common::which_key::compute_which_key_layout;
-use mae_core::text_utils::{display_width, format_keypress, WK_BREADCRUMB_SEP};
+use mae_core::text_utils::{format_keypress, WK_BREADCRUMB_SEP};
 use mae_core::Editor;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Paragraph};
@@ -49,7 +49,7 @@ pub(crate) fn render_which_key_popup(
 
     let separator = editor.which_key_separator.clone();
     let max_desc: usize = editor.which_key_max_desc_length;
-    let sep_width = display_width(&separator);
+    let sep_width = mae_core::grapheme::display_width_with(&separator, editor.width_policy());
 
     let layout = compute_which_key_layout(
         entries,
