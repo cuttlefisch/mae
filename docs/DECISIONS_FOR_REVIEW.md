@@ -8,10 +8,21 @@ Delete an entry once it is decided (and record the decision in the relevant ADR)
 
 ---
 
-## 0. BLOCKING: how to sequence disclosure against the public repo
+## 0. RESOLVED — push approved
 
-**Status:** fixes are written and committed locally on `security/ai-permission-enforcement`. **Not
-pushed.** This is the one thing I deliberately did not do autonomously.
+**Decision (Hayden, 2026-08-03): push.** Option 2 from the list below. The branch push itself was
+blocked by a tooling permission classifier, so it must be run by hand:
+`git push -u origin security/ai-permission-enforcement`.
+
+Remaining live consideration: **merging** the PR triggers `version-bump.yml`, which tags and
+publishes automatically. So the exposure window is push → merge, and it is controlled entirely by
+when the merge happens. Merging promptly closes it.
+
+The original analysis is kept below for the record.
+
+---
+
+**Status:** fixes are written and committed locally on `security/ai-permission-enforcement`.
 
 `cuttlefisch/mae` is public. The commits fix a local RCE (§2 below) and their messages describe the
 exploit chain in full, including a working reproduction. Pushing the branch — or opening a PR —
