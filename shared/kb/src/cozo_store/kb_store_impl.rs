@@ -161,24 +161,49 @@ impl KbStore for CozoKbStore {
             }
         }
 
+        // Verification terms must be tokenized the SAME way the index tokenized
+        // the document, or this guard silently deletes correct results.
+        //
+        // @ai-caution: [kb-search] Do NOT revert this to
+        // `query.to_lowercase().split_whitespace()`. That treats FTS query
+        // syntax as literal text: the prefix query `buffer*` tokenizes to the
+        // single term `buffer*`, which no document text ever `contains`, so
+        // EVERY candidate the index correctly returned was dropped and the
+        // caller saw zero hits (verified: `buffer*` matched 1 row in
+        // `nodes:fts` and `fts_search` returned 0). Same for any query carrying
+        // `:`/`-`/`*` that cozo's parser does accept. Splitting on
+        // `!is_alphanumeric` mirrors cozo's `Simple` tokenizer, so the guard
+        // now checks exactly what was indexed.
         let query_lower = query.to_lowercase();
-        let query_terms: Vec<&str> = query_lower.split_whitespace().collect();
+        let query_terms: Vec<&str> = query_lower
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|t| !t.is_empty())
+            .collect();
         let mut hits = Vec::new();
         for row in &result.rows {
             let Some(id) = row.first().and_then(|v| v.get_str()) else {
                 continue;
             };
             let score = row.get(1).and_then(|v| v.get_float()).unwrap_or(0.0);
-            if let Some((title, body)) = content.get(id) {
+            // A candidate with no row in `nodes` is a stale index entry — drop
+            // it, which is what this guard exists for. A candidate whose row IS
+            // present passes when it still contains a query term; a query with
+            // no alphanumeric content leaves nothing to check, so trust the
+            // index rather than vetoing every row.
+            let Some((title, body)) = content.get(id) else {
+                continue;
+            };
+            let verified = query_terms.is_empty() || {
                 let text = format!("{title} {body}").to_lowercase();
-                if query_terms.iter().any(|term| text.contains(term)) {
-                    hits.push(SearchHit {
-                        id: id.to_string(),
-                        score,
-                    });
-                    if hits.len() >= limit {
-                        break;
-                    }
+                query_terms.iter().any(|term| text.contains(term))
+            };
+            if verified {
+                hits.push(SearchHit {
+                    id: id.to_string(),
+                    score,
+                });
+                if hits.len() >= limit {
+                    break;
                 }
             }
         }
