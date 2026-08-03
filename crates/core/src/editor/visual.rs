@@ -164,7 +164,7 @@ impl Editor {
         let final_line_count = self.buffers[idx].line_count();
         for (row, col) in &mut new_positions {
             *row = (*row).min(final_line_count.saturating_sub(1));
-            *col = (*col).min(self.buffers[idx].line_len(*row));
+            *col = (*col).min(self.buffers[idx].line_byte_len(*row));
         }
         new_positions.sort();
         // Collapsed ranges (e.g. deleting the entire buffer) can leave
@@ -511,7 +511,7 @@ impl Editor {
         let final_line_count = self.buffers[idx].line_count();
         for (row, col) in &mut new_positions {
             *row = (*row).min(final_line_count.saturating_sub(1));
-            *col = (*col).min(self.buffers[idx].line_len(*row));
+            *col = (*col).min(self.buffers[idx].line_byte_len(*row));
         }
         new_positions.sort();
         new_positions.dedup();

@@ -653,7 +653,7 @@ pub fn render_buffer_content(
                     canvas.draw_wavy_underline_at_pixel(x, ll.pixel_y, w, diag_color);
 
                     // Virtual text at end of line (if enabled).
-                    let line_len = buf.line_len(ds.line);
+                    let line_len = buf.line_byte_len(ds.line);
                     let vt_col = text_col + line_len + 2;
                     let available = text_width.saturating_sub(line_len + 2);
                     if available > 10 {

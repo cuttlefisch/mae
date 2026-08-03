@@ -2794,7 +2794,7 @@ impl super::Editor {
             if self.vi.visual_anchor_row > max_row {
                 self.vi.visual_anchor_row = max_row;
             }
-            let max_col = self.buffers[idx].line_len(self.vi.visual_anchor_row);
+            let max_col = self.buffers[idx].line_byte_len(self.vi.visual_anchor_row);
             if self.vi.visual_anchor_col > max_col {
                 self.vi.visual_anchor_col = max_col;
             }
@@ -2812,11 +2812,11 @@ impl super::Editor {
                 if *ar > max_row {
                     *ar = max_row;
                 }
-                *ac = (*ac).min(self.buffers[idx].line_len(*ar));
+                *ac = (*ac).min(self.buffers[idx].line_byte_len(*ar));
                 if *cr > max_row {
                     *cr = max_row;
                 }
-                *cc = (*cc).min(self.buffers[idx].line_len(*cr));
+                *cc = (*cc).min(self.buffers[idx].line_byte_len(*cr));
             }
         }
     }

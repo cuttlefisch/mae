@@ -380,7 +380,7 @@ impl Editor {
         let buf = &self.buffers[win.buffer_idx];
         let max_row = buf.display_line_count().saturating_sub(1);
         let target_row = buf_row.min(max_row);
-        let line_len = buf.line_len(target_row);
+        let line_len = buf.line_byte_len(target_row);
         let target_col = char_col.min(if line_len > 0 { line_len - 1 } else { 0 });
         let win = self.window_mgr.focused_window_mut();
         win.cursor_row = target_row;

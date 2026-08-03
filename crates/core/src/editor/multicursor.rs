@@ -27,7 +27,7 @@ pub(crate) fn mc_add_cursor_below(editor: &mut Editor) {
         .unwrap_or(win.cursor_row);
     let new_row = max_row + 1;
     if new_row < buf.line_count() {
-        let line_len = buf.line_len(new_row);
+        let line_len = buf.line_byte_len(new_row);
         let col = primary_col.min(if line_len > 0 { line_len - 1 } else { 0 });
         win.cursor_set.add(new_row, col);
     }
@@ -48,7 +48,7 @@ pub(crate) fn mc_add_cursor_above(editor: &mut Editor) {
         .unwrap_or(win.cursor_row);
     if min_row > 0 {
         let new_row = min_row - 1;
-        let line_len = buf.line_len(new_row);
+        let line_len = buf.line_byte_len(new_row);
         let col = primary_col.min(if line_len > 0 { line_len - 1 } else { 0 });
         win.cursor_set.add(new_row, col);
     }
@@ -219,7 +219,7 @@ pub(crate) fn mc_align(editor: &mut Editor) {
     let target_col = win.cursor_col;
     let buf = &editor.buffers[win.buffer_idx];
     for cursor in win.cursor_set.iter_mut() {
-        let line_len = buf.line_len(cursor.row);
+        let line_len = buf.line_byte_len(cursor.row);
         cursor.col = target_col.min(if line_len > 0 { line_len - 1 } else { 0 });
     }
 }
@@ -423,7 +423,7 @@ fn replay_edit_at_secondaries(editor: &mut Editor, name: &str) {
                 let win = editor.window_mgr.focused_window();
                 let row = win.cursor_row;
                 let col = win.cursor_col;
-                let line_len = editor.buffers[buf_idx].line_len(row);
+                let line_len = editor.buffers[buf_idx].line_byte_len(row);
                 if col < line_len {
                     let offset = editor.buffers[buf_idx].char_offset_at(row, col);
                     let ch = editor.buffers[buf_idx].rope().char(offset);
@@ -435,7 +435,7 @@ fn replay_edit_at_secondaries(editor: &mut Editor, name: &str) {
                     editor.buffers[buf_idx].delete_range(offset, offset + 1);
                     editor.buffers[buf_idx].insert_text_at(offset, &toggled);
                     let win = editor.window_mgr.focused_window_mut();
-                    let new_line_len = editor.buffers[buf_idx].line_len(row);
+                    let new_line_len = editor.buffers[buf_idx].line_byte_len(row);
                     if col + 1 < new_line_len {
                         win.cursor_col = col + 1;
                     }

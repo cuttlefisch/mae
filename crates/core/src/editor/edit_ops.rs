@@ -231,7 +231,7 @@ impl Editor {
         let win = self.window_mgr.focused_window();
         let row = win.cursor_row;
         let col = win.cursor_col;
-        let line_len = self.buffers[idx].line_len(row);
+        let line_len = self.buffers[idx].line_byte_len(row);
         if col >= line_len {
             return;
         }
@@ -248,7 +248,7 @@ impl Editor {
         self.buffers[idx].end_undo_group();
         // Advance cursor
         let win = self.window_mgr.focused_window_mut();
-        let new_line_len = self.buffers[idx].line_len(row);
+        let new_line_len = self.buffers[idx].line_byte_len(row);
         if col + 1 < new_line_len {
             win.cursor_col = col + 1;
         }

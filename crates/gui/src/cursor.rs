@@ -580,7 +580,7 @@ pub fn render_remote_selections(
             }
 
             let (vis_start, vis_end) =
-                selection_col_range(row, sr, sc, er, ec, buf.line_len(row), win.col_offset);
+                selection_col_range(row, sr, sc, er, ec, buf.line_byte_len(row), win.col_offset);
             let width = vis_end.saturating_sub(vis_start);
 
             if width == 0 {

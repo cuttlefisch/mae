@@ -114,7 +114,7 @@ impl super::Editor {
                 // --- Shift-click: extend or start selection ---
                 if shift_held {
                     let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
-                    let line_len = buf.line_len(target_row);
+                    let line_len = buf.line_byte_len(target_row);
                     let target_col = text_col.min(if line_len > 0 { line_len - 1 } else { 0 });
 
                     if !matches!(self.mode, crate::Mode::Visual(_)) {
@@ -152,7 +152,7 @@ impl super::Editor {
                     // the rope and panic in word_start_backward.
                     let click_col = {
                         let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
-                        let line_len = buf.line_len(target_row);
+                        let line_len = buf.line_byte_len(target_row);
                         text_col.min(if line_len > 0 { line_len - 1 } else { 0 })
                     };
 
@@ -182,7 +182,7 @@ impl super::Editor {
 
                 // Single-click: just position cursor
                 let buf = &self.buffers[self.window_mgr.focused_window().buffer_idx];
-                let line_len = buf.line_len(target_row);
+                let line_len = buf.line_byte_len(target_row);
                 let target_col = text_col.min(if line_len > 0 { line_len - 1 } else { 0 });
                 // Exit visual mode on single click
                 if matches!(self.mode, crate::Mode::Visual(_)) {
@@ -331,7 +331,7 @@ impl super::Editor {
         let buf_row = win.scroll_offset + row.saturating_sub(1);
         let max_row = buf.display_line_count().saturating_sub(1);
         let target_row = buf_row.min(max_row);
-        let line_len = buf.line_len(target_row);
+        let line_len = buf.line_byte_len(target_row);
         let target_col = text_col.min(if line_len > 0 { line_len - 1 } else { 0 });
 
         // Enter Visual mode on first drag if not already in it.

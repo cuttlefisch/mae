@@ -751,7 +751,7 @@ pub(crate) fn render_remote_cursors(
                 }
 
                 let (vis_start, vis_end) =
-                    selection_col_range(row, sr, sc, er, ec, buf.line_len(row), win.col_offset);
+                    selection_col_range(row, sr, sc, er, ec, buf.line_byte_len(row), win.col_offset);
 
                 for col in vis_start..vis_end {
                     let x = area.x + gutter_w as u16 + col as u16;

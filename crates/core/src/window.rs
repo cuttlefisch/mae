@@ -156,7 +156,7 @@ impl Window {
     }
 
     pub fn move_right(&mut self, buf: &crate::buffer::Buffer) {
-        if self.cursor_col < buf.line_len(self.cursor_row) {
+        if self.cursor_col < buf.line_byte_len(self.cursor_row) {
             self.cursor_col += 1;
         }
     }
@@ -167,7 +167,7 @@ impl Window {
     }
 
     pub fn move_to_line_end(&mut self, buf: &crate::buffer::Buffer) {
-        self.cursor_col = buf.line_len(self.cursor_row);
+        self.cursor_col = buf.line_byte_len(self.cursor_row);
         self.sync_primary();
     }
 
@@ -347,7 +347,7 @@ impl Window {
         if self.cursor_row > max_row {
             self.cursor_row = max_row;
         }
-        let line_len = buf.line_len(self.cursor_row);
+        let line_len = buf.line_byte_len(self.cursor_row);
         if self.cursor_col > line_len {
             self.cursor_col = line_len;
         }

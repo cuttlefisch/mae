@@ -9,7 +9,7 @@ impl Editor {
             let win = self.window_mgr.focused_window();
             let row = win.cursor_row;
             let col = win.cursor_col;
-            let line_len = self.buffers[idx].line_len(row);
+            let line_len = self.buffers[idx].line_byte_len(row);
             if col < line_len {
                 let offset = self.buffers[idx].char_offset_at(row, col);
                 self.buffers[idx].begin_undo_group();

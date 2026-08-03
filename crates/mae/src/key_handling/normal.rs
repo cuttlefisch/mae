@@ -473,7 +473,7 @@ pub(super) fn handle_normal_mode(
                 KeyCode::Char('a') if !ctrl => {
                     // Append: move cursor right by 1 (past current char).
                     let row = editor.window_mgr.focused_window().cursor_row;
-                    let line_len = editor.buffers[idx].line_len(row);
+                    let line_len = editor.buffers[idx].line_byte_len(row);
                     let win = editor.window_mgr.focused_window_mut();
                     if win.cursor_col < line_len {
                         win.cursor_col += 1;
@@ -492,7 +492,7 @@ pub(super) fn handle_normal_mode(
                 KeyCode::Char('A') if !ctrl => {
                     // Append at end of line.
                     let row = editor.window_mgr.focused_window().cursor_row;
-                    let line_len = editor.buffers[idx].line_len(row);
+                    let line_len = editor.buffers[idx].line_byte_len(row);
                     editor.window_mgr.focused_window_mut().cursor_col = line_len;
                     editor.set_mode(Mode::ConversationInput);
                     editor.vi.count_prefix = None;
@@ -501,7 +501,7 @@ pub(super) fn handle_normal_mode(
                 KeyCode::Char('o') if !ctrl => {
                     // Open line below.
                     let row = editor.window_mgr.focused_window().cursor_row;
-                    let line_len = editor.buffers[idx].line_len(row);
+                    let line_len = editor.buffers[idx].line_byte_len(row);
                     let win = editor.window_mgr.focused_window_mut();
                     win.cursor_col = line_len;
                     editor.buffers[idx].insert_char(editor.window_mgr.focused_window_mut(), '\n');

@@ -256,7 +256,7 @@ pub(super) fn handle_conversation_input(
         KeyCode::Char('e') if ctrl => {
             let idx = editor.active_buffer_idx();
             let row = editor.window_mgr.focused_window().cursor_row;
-            let len = editor.buffers[idx].line_len(row);
+            let len = editor.buffers[idx].line_byte_len(row);
             editor.window_mgr.focused_window_mut().cursor_col = len;
         }
         KeyCode::Char('b') if ctrl => {
@@ -268,7 +268,7 @@ pub(super) fn handle_conversation_input(
         KeyCode::Char('f') if ctrl => {
             let idx = editor.active_buffer_idx();
             let row = editor.window_mgr.focused_window().cursor_row;
-            let len = editor.buffers[idx].line_len(row);
+            let len = editor.buffers[idx].line_byte_len(row);
             let win = editor.window_mgr.focused_window_mut();
             if win.cursor_col < len {
                 win.cursor_col += 1;
@@ -283,7 +283,7 @@ pub(super) fn handle_conversation_input(
         KeyCode::Right => {
             let idx = editor.active_buffer_idx();
             let row = editor.window_mgr.focused_window().cursor_row;
-            let len = editor.buffers[idx].line_len(row);
+            let len = editor.buffers[idx].line_byte_len(row);
             let win = editor.window_mgr.focused_window_mut();
             if win.cursor_col < len {
                 win.cursor_col += 1;
@@ -295,7 +295,7 @@ pub(super) fn handle_conversation_input(
         KeyCode::End => {
             let idx = editor.active_buffer_idx();
             let row = editor.window_mgr.focused_window().cursor_row;
-            let len = editor.buffers[idx].line_len(row);
+            let len = editor.buffers[idx].line_byte_len(row);
             editor.window_mgr.focused_window_mut().cursor_col = len;
         }
 
@@ -315,7 +315,7 @@ pub(super) fn handle_conversation_input(
             let idx = editor.active_buffer_idx();
             let row = editor.window_mgr.focused_window().cursor_row;
             let col = editor.window_mgr.focused_window().cursor_col;
-            let line_len = editor.buffers[idx].line_len(row);
+            let line_len = editor.buffers[idx].line_byte_len(row);
             if col < line_len {
                 let start = editor.buffers[idx].char_offset_at(row, col);
                 let end = editor.buffers[idx].char_offset_at(row, line_len);
