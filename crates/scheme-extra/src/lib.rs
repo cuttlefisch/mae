@@ -37,7 +37,6 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use mae_scheme::permission::tier;
 use mae_scheme::runtime::SharedState;
 use mae_scheme::vm::Vm;
 
@@ -52,6 +51,7 @@ pub fn register_all(_vm: &mut Vm, _shared: &Arc<Mutex<SharedState>>) {
 mod tests {
     use super::*;
     use mae_scheme::lisp_error::Arity;
+    use mae_scheme::permission::tier;
     use mae_scheme::value::Value;
 
     /// Compile-time-only assertion that `register_all` genuinely has the
