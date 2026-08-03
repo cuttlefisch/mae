@@ -16,71 +16,12 @@
 
 #![cfg(target_os = "linux")]
 
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use tokio::net::UnixStream;
 
-fn isolated_env(cmd: &mut Command, xdg_config: &Path, xdg_data: &Path, home: &Path) {
-    cmd.env("XDG_CONFIG_HOME", xdg_config)
-        .env("XDG_DATA_HOME", xdg_data)
-        .env("HOME", home)
-        .env("SHELL", "/bin/sh")
-        .env("MAE_SKIP_WIZARD", "1");
-}
-
-fn send_sigterm(child: &Child) {
-    unsafe {
-        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
-    }
-}
-
-fn wait_for_exit(child: &mut Child, timeout: Duration) -> Option<std::process::ExitStatus> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Ok(Some(status)) = child.try_wait() {
-            return Some(status);
-        }
-        if Instant::now() >= deadline {
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-fn socket_is_live(path: &Path) -> bool {
-    std::os::unix::net::UnixStream::connect(path).is_ok()
-}
-
-fn wait_for_socket_live(path: &Path, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if socket_is_live(path) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
-}
-
-struct HeadlessGuard {
-    child: Option<Child>,
-}
-
-impl Drop for HeadlessGuard {
-    fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
-            if child.try_wait().ok().flatten().is_none() {
-                send_sigterm(&child);
-                if wait_for_exit(&mut child, Duration::from_secs(3)).is_none() {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                }
-            }
-        }
-    }
-}
+mod headless_test_support;
+use headless_test_support::spawn_isolated_headless;
 
 async fn mcp_roundtrip(
     stream: &mut tokio::io::BufReader<UnixStream>,
@@ -109,36 +50,8 @@ async fn propose_changes_schema_has_a_real_items_sub_schema_over_the_real_wire()
     std::fs::create_dir_all(&xdg_config).unwrap();
     std::fs::create_dir_all(&xdg_data).unwrap();
 
-    let mae = env!("CARGO_BIN_EXE_mae");
-
-    let mut print_cmd = Command::new(mae);
-    print_cmd
-        .args(["--headless", "--print-socket-path"])
-        .current_dir(&project_root);
-    isolated_env(&mut print_cmd, &xdg_config, &xdg_data, tmp.path());
-    let print_output = print_cmd.output().expect("print-socket-path failed");
-    assert!(print_output.status.success());
-    let socket_path = PathBuf::from(
-        String::from_utf8_lossy(&print_output.stdout)
-            .trim()
-            .to_string(),
-    );
-
-    let mut spawn_cmd = Command::new(mae);
-    spawn_cmd
-        .args(["--headless"])
-        .current_dir(&project_root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    isolated_env(&mut spawn_cmd, &xdg_config, &xdg_data, tmp.path());
-    let child = spawn_cmd.spawn().expect("failed to spawn mae --headless");
-    let mut guard = HeadlessGuard { child: Some(child) };
-
-    assert!(
-        wait_for_socket_live(&socket_path, Duration::from_secs(30)),
-        "headless instance never bound its stable socket at {}",
-        socket_path.display()
-    );
+    let (socket_path, mut guard) =
+        spawn_isolated_headless(&project_root, &xdg_config, &xdg_data, tmp.path(), None);
 
     let stream = UnixStream::connect(&socket_path).await.unwrap();
     let mut stream = tokio::io::BufReader::new(stream);
@@ -203,9 +116,7 @@ async fn propose_changes_schema_has_a_real_items_sub_schema_over_the_real_wire()
     }
 
     drop(stream);
-    let mut child = guard.child.take().unwrap();
-    send_sigterm(&child);
-    wait_for_exit(&mut child, Duration::from_secs(10));
+    guard.shutdown(Duration::from_secs(10));
 }
 
 /// The nested-schema coverage that used to run over the socket, kept against
