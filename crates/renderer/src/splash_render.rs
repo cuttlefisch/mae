@@ -7,7 +7,7 @@
 use mae_core::render_common::splash::{
     resolve_active_splash_art, should_show_splash, MAE_LOGO, QUICK_ACTIONS,
 };
-use mae_core::Editor;
+use mae_core::{display_width, Editor};
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
@@ -43,7 +43,13 @@ fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
     // Art lines with two-tone coloring (TUI always uses ASCII, no images).
     let has_image = image_path.is_some();
     let art_lines: Vec<&str> = art_str.lines().collect();
-    let art_width = art_lines.iter().map(|l| l.len()).max().unwrap_or(0);
+    // ADR-087: measure in display columns, not bytes — a custom art
+    // registered via a module isn't guaranteed to be ASCII-only.
+    let art_width = art_lines
+        .iter()
+        .map(|l| display_width(l))
+        .max()
+        .unwrap_or(0);
     // When art_width is 0 (image-only art, TUI can't render images),
     // use the dismiss hint width as fallback so text centers properly.
     let art_width = if art_width > 0 { art_width } else { 58 };
@@ -63,7 +69,11 @@ fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
     // MAE logo (auto-hide when image art is selected — the image IS the logo).
     if editor.splash_show_logo && !has_image {
         let logo_lines: Vec<&str> = MAE_LOGO.lines().collect();
-        let logo_width = logo_lines.iter().map(|l| l.len()).max().unwrap_or(0);
+        let logo_width = logo_lines
+            .iter()
+            .map(|l| display_width(l))
+            .max()
+            .unwrap_or(0);
         let logo_pad = center_block_pad(logo_width);
         for line in &logo_lines {
             let padded = format!(
@@ -78,14 +88,19 @@ fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
     }
 
     // Subtitle.
+    // ADR-087: the em dash "—" is 3 bytes / 1 display column — byte length
+    // (a prior version of this line) overcounts it by 2, mis-centering the
+    // subtitle relative to the art block by a couple of columns. The GUI
+    // backend's equivalent (`SplashSection::max_width`) already measured in
+    // display columns; this brings the TUI copy in line with it.
     let subtitle = "Modern AI Editor — ai-native lisp machine";
-    let sub_pad = art_width.saturating_sub(subtitle.len()) / 2;
+    let sub_pad = art_width.saturating_sub(display_width(subtitle)) / 2;
     lines.push(Line::styled(
         format!("{:>width$}{}", "", subtitle, width = sub_pad),
         subtitle_style,
     ));
     let version = concat!("v", env!("CARGO_PKG_VERSION"));
-    let ver_pad = center_block_pad(version.len());
+    let ver_pad = center_block_pad(display_width(version));
     lines.push(Line::styled(
         format!("{:>w$}{}", "", version, w = ver_pad),
         subtitle_style,
@@ -95,7 +110,7 @@ fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
     // Quick actions.
     let qa_width = QUICK_ACTIONS
         .iter()
-        .map(|(k, d, _)| format!("{:<10}{}", k, d).len())
+        .map(|(k, d, _)| display_width(&format!("{:<10}{}", k, d)))
         .max()
         .unwrap_or(0);
     let qa_pad = center_block_pad(qa_width);
@@ -127,8 +142,10 @@ fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
     lines.push(Line::raw(""));
 
     // Dismiss hint.
+    // ADR-087: "·" (middle dot) is 2 bytes / 1 display column — same
+    // byte-vs-column fix as the subtitle above.
     let dismiss = "j/k navigate · Enter select";
-    let dismiss_pad = art_width.saturating_sub(dismiss.len()) / 2;
+    let dismiss_pad = art_width.saturating_sub(display_width(dismiss)) / 2;
     lines.push(Line::styled(
         format!("{:>width$}{}", "", dismiss, width = dismiss_pad),
         subtitle_style,
