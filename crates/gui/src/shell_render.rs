@@ -1,6 +1,7 @@
 //! Shell buffer rendering: translates alacritty_terminal grid cells into
 //! Skia drawing calls with full color and attribute support.
 
+use mae_core::render_common::shell::AnsiName;
 use mae_core::{Editor, Window};
 use mae_shell::grid_types::{CellFlags, Color as AColor, Colors, NamedColor};
 use mae_shell::ShellTerminal;
@@ -102,6 +103,9 @@ fn render_shell_grid(
         bg: Color4f,
         ch: char,
         bold: bool,
+        italic: bool,
+        underline: bool,
+        strikeout: bool,
     }
 
     // Build a sparse grid of visible cells.
@@ -128,6 +132,12 @@ fn render_shell_grid(
         if flags.contains(CellFlags::INVERSE) {
             std::mem::swap(&mut fg_color, &mut bg_color);
         }
+        // Dim: fade the (post-inverse) foreground rather than adding a new
+        // per-attribute draw path — matches the dimming convention already
+        // used for the which-key doc color (`popup_render.rs`).
+        if flags.contains(CellFlags::DIM) {
+            fg_color.a *= 0.6;
+        }
 
         // Wide-char spacers: record bg for coalescing but render as space.
         if flags.contains(CellFlags::WIDE_CHAR_SPACER)
@@ -138,6 +148,9 @@ fn render_shell_grid(
                 bg: bg_color,
                 ch: ' ',
                 bold: false,
+                italic: false,
+                underline: false,
+                strikeout: false,
             });
             continue;
         }
@@ -149,6 +162,14 @@ fn render_shell_grid(
             bg: bg_color,
             ch: if hidden { ' ' } else { indexed.cell.c },
             bold: flags.contains(CellFlags::BOLD),
+            // Attributes below were previously dropped entirely by this
+            // backend (WS5 finding: TUI's shell renderer already applies
+            // all of these via ratatui `Modifier`s; this backend tracked
+            // only `bold`). `hidden` already blanks the glyph above, same
+            // as the TUI's `Modifier::HIDDEN`.
+            italic: flags.contains(CellFlags::ITALIC),
+            underline: flags.intersects(CellFlags::ALL_UNDERLINES),
+            strikeout: flags.contains(CellFlags::STRIKEOUT),
         });
     }
 
@@ -180,6 +201,8 @@ fn render_shell_grid(
             }
         }
     }
+
+    let (_, cell_h) = canvas.cell_size();
 
     // Render: coalesce adjacent cells with same bg into wide rectangles.
     for (line_idx, row_cells) in grid.iter().enumerate() {
@@ -218,18 +241,19 @@ fn render_shell_grid(
             let mut run_start = 0usize;
             let mut run_fg = default_fg;
             let mut run_bold = false;
+            let mut run_italic = false;
 
             for (col_idx, cell_opt) in row_cells.iter().enumerate() {
-                let (ch, fg, bold) = if let Some(cell) = cell_opt {
-                    (cell.ch, cell.fg, cell.bold)
+                let (ch, fg, bold, italic) = if let Some(cell) = cell_opt {
+                    (cell.ch, cell.fg, cell.bold, cell.italic)
                 } else {
-                    (' ', default_fg, false)
+                    (' ', default_fg, false, false)
                 };
 
                 let style_match = if run_buf.is_empty() {
                     true
                 } else {
-                    theme::color4f_eq(fg, run_fg) && bold == run_bold
+                    theme::color4f_eq(fg, run_fg) && bold == run_bold && italic == run_italic
                 };
 
                 if ch.is_ascii() && style_match {
@@ -237,6 +261,7 @@ fn render_shell_grid(
                         run_start = col_idx;
                         run_fg = fg;
                         run_bold = bold;
+                        run_italic = italic;
                     }
                     run_buf.push(ch);
                 } else {
@@ -248,7 +273,7 @@ fn render_shell_grid(
                             &run_buf,
                             run_fg,
                             run_bold,
-                            false,
+                            run_italic,
                             1.0,
                         );
                         run_buf.clear();
@@ -257,10 +282,11 @@ fn render_shell_grid(
                         run_start = col_idx;
                         run_fg = fg;
                         run_bold = bold;
+                        run_italic = italic;
                         run_buf.push(ch);
                     } else if ch != ' ' {
                         // Non-ASCII — per-char fallback.
-                        canvas.draw_char(row, area_col + col_idx, ch, fg, bold, false, 1.0);
+                        canvas.draw_char(row, area_col + col_idx, ch, fg, bold, italic, 1.0);
                     }
                 }
             }
@@ -272,11 +298,46 @@ fn render_shell_grid(
                     &run_buf,
                     run_fg,
                     run_bold,
-                    false,
+                    run_italic,
                     1.0,
                 );
             }
         }
+
+        // Underline / strikethrough: coalesce into runs and draw one line
+        // per contiguous, same-color run — previously dropped entirely by
+        // this backend (see `CellInfo` comment above).
+        let pixel_y = row as f32 * cell_h;
+        let underline_cells: Vec<(bool, Color4f)> = row_cells
+            .iter()
+            .map(|c| {
+                c.as_ref()
+                    .map(|c| (c.underline, c.fg))
+                    .unwrap_or((false, default_fg))
+            })
+            .collect();
+        draw_flag_runs(
+            canvas,
+            &underline_cells,
+            pixel_y,
+            area_col,
+            |c, y, x, w, fg| c.draw_underline_at_y(y, x, w, fg),
+        );
+        let strikeout_cells: Vec<(bool, Color4f)> = row_cells
+            .iter()
+            .map(|c| {
+                c.as_ref()
+                    .map(|c| (c.strikeout, c.fg))
+                    .unwrap_or((false, default_fg))
+            })
+            .collect();
+        draw_flag_runs(
+            canvas,
+            &strikeout_cells,
+            pixel_y,
+            area_col,
+            |c, y, x, w, fg| c.draw_strikethrough_at_y(y, x, w, fg),
+        );
     }
 
     // Cursor.
@@ -293,6 +354,56 @@ fn render_shell_grid(
     trace!("render_shell_grid exit");
 }
 
+/// Coalesce a per-column boolean flag (underline / strikethrough) into
+/// contiguous, same-color runs and draw one line per run — the same
+/// coalescing shape already used for background fill and text runs above,
+/// applied to the two line-decoration attributes.
+fn draw_flag_runs(
+    canvas: &mut SkiaCanvas,
+    cells: &[(bool, Color4f)],
+    pixel_y: f32,
+    area_col: usize,
+    draw_line: impl Fn(&mut SkiaCanvas, f32, usize, usize, Color4f),
+) {
+    let mut run_start = 0usize;
+    let mut run_fg: Option<Color4f> = None;
+    let mut run_len = 0usize;
+
+    for (col_idx, &(active, fg)) in cells.iter().enumerate() {
+        if active && run_fg.is_some_and(|rf| theme::color4f_eq(rf, fg)) {
+            run_len += 1;
+        } else {
+            if run_len > 0 {
+                if let Some(rf) = run_fg {
+                    draw_line(canvas, pixel_y, area_col + run_start, run_len, rf);
+                }
+            }
+            if active {
+                run_start = col_idx;
+                run_fg = Some(fg);
+                run_len = 1;
+            } else {
+                run_fg = None;
+                run_len = 0;
+            }
+        }
+    }
+    if run_len > 0 {
+        if let Some(rf) = run_fg {
+            draw_line(canvas, pixel_y, area_col + run_start, run_len, rf);
+        }
+    }
+}
+
+fn rgb_to_color4f(rgb: mae_shell::grid_types::Rgb) -> Color4f {
+    Color4f::new(
+        rgb.r as f32 / 255.0,
+        rgb.g as f32 / 255.0,
+        rgb.b as f32 / 255.0,
+        1.0,
+    )
+}
+
 /// Convert an alacritty_terminal Color to a Skia Color4f.
 ///
 /// Resolution order for named colors:
@@ -302,32 +413,21 @@ fn render_shell_grid(
 fn convert_color(
     color: AColor,
     colors: &Colors,
-    _default: Color4f,
+    default_fg: Color4f,
     theme: &mae_core::Theme,
 ) -> Color4f {
     match color {
-        AColor::Spec(rgb) => Color4f::new(
-            rgb.r as f32 / 255.0,
-            rgb.g as f32 / 255.0,
-            rgb.b as f32 / 255.0,
-            1.0,
-        ),
+        AColor::Spec(rgb) => rgb_to_color4f(rgb),
         AColor::Indexed(idx) => {
             if let Some(rgb) = colors[idx as usize] {
-                Color4f::new(
-                    rgb.r as f32 / 255.0,
-                    rgb.g as f32 / 255.0,
-                    rgb.b as f32 / 255.0,
-                    1.0,
-                )
+                rgb_to_color4f(rgb)
             } else if idx < 16 {
-                // ANSI base colors (0-15) → resolve through theme, same as Named.
-                let named = index_to_named(idx);
-                if let Some(color) = resolve_named_from_theme(named, theme) {
-                    color
-                } else {
-                    named_color_to_skia(named)
-                }
+                // ANSI base colors (0-15) → resolve through theme, same as Named
+                // (shared `index_to_named`/`AnsiName` — see TUI's
+                // `crates/renderer/src/shell_render.rs::convert_color` for the
+                // symmetric implementation).
+                let ansi = mae_core::render_common::shell::index_to_named(idx);
+                resolve_ansi_from_theme(ansi, theme).unwrap_or_else(|| ansi_default_color(ansi))
             } else if idx < 232 {
                 // xterm 6×6×6 color cube (indices 16-231).
                 let ci = idx - 16;
@@ -347,51 +447,61 @@ fn convert_color(
         }
         AColor::Named(named) => {
             if let Some(rgb) = colors[named] {
-                Color4f::new(
-                    rgb.r as f32 / 255.0,
-                    rgb.g as f32 / 255.0,
-                    rgb.b as f32 / 255.0,
-                    1.0,
-                )
-            } else if let Some(color) = resolve_named_from_theme(named, theme) {
-                color
+                rgb_to_color4f(rgb)
             } else {
-                named_color_to_skia(named)
+                match named_to_ansi(named) {
+                    Some(ansi) => resolve_ansi_from_theme(ansi, theme)
+                        .unwrap_or_else(|| ansi_default_color(ansi)),
+                    // No AnsiName equivalent (e.g. a cursor-only NamedColor
+                    // variant) — fall back to the caller's default text color
+                    // rather than a hardcoded near-white RGB.
+                    None => default_fg,
+                }
             }
         }
     }
 }
 
-/// Try to resolve a NamedColor via the editor theme palette.
+/// Map alacritty's `NamedColor` to the backend-agnostic `AnsiName` (shared
+/// with the TUI backend and with `index_to_named`, which handles the
+/// indexed-color form of the same 16 base colors). `NamedColor` lives in
+/// `mae_shell`/alacritty and can't be a `mae-core` type, so this mapping
+/// itself is necessarily backend-local — but everything downstream of it
+/// (theme resolution, default fallback colors) is shared via `AnsiName`.
+fn named_to_ansi(named: NamedColor) -> Option<AnsiName> {
+    use AnsiName::*;
+    Some(match named {
+        NamedColor::Black | NamedColor::DimBlack => Black,
+        NamedColor::Red | NamedColor::DimRed => Red,
+        NamedColor::Green | NamedColor::DimGreen => Green,
+        NamedColor::Yellow | NamedColor::DimYellow => Yellow,
+        NamedColor::Blue | NamedColor::DimBlue => Blue,
+        NamedColor::Magenta | NamedColor::DimMagenta => Magenta,
+        NamedColor::Cyan | NamedColor::DimCyan => Cyan,
+        NamedColor::White | NamedColor::DimWhite => White,
+        NamedColor::BrightBlack => BrightBlack,
+        NamedColor::BrightRed => BrightRed,
+        NamedColor::BrightGreen => BrightGreen,
+        NamedColor::BrightYellow => BrightYellow,
+        NamedColor::BrightBlue => BrightBlue,
+        NamedColor::BrightMagenta => BrightMagenta,
+        NamedColor::BrightCyan => BrightCyan,
+        NamedColor::BrightWhite => BrightWhite,
+        NamedColor::Foreground | NamedColor::BrightForeground => Foreground,
+        NamedColor::DimForeground => DimForeground,
+        NamedColor::Background => Background,
+        _ => return None,
+    })
+}
+
+/// Try to resolve an `AnsiName` via the editor theme palette.
 ///
 /// Themes use different naming conventions (gruvbox: "purple"/"aqua",
 /// dracula: "pink"/"cyan", catppuccin: "mauve"/"teal"). We try the
 /// canonical ANSI name first, then common aliases.
-fn resolve_named_from_theme(named: NamedColor, theme: &mae_core::Theme) -> Option<Color4f> {
-    use mae_core::render_common::shell::{self, AnsiName};
+fn resolve_ansi_from_theme(ansi: AnsiName, theme: &mae_core::Theme) -> Option<Color4f> {
+    use mae_core::render_common::shell;
 
-    let ansi = match named {
-        NamedColor::Black | NamedColor::DimBlack => AnsiName::Black,
-        NamedColor::Red | NamedColor::DimRed => AnsiName::Red,
-        NamedColor::Green | NamedColor::DimGreen => AnsiName::Green,
-        NamedColor::Yellow | NamedColor::DimYellow => AnsiName::Yellow,
-        NamedColor::Blue | NamedColor::DimBlue => AnsiName::Blue,
-        NamedColor::Magenta | NamedColor::DimMagenta => AnsiName::Magenta,
-        NamedColor::Cyan | NamedColor::DimCyan => AnsiName::Cyan,
-        NamedColor::White | NamedColor::DimWhite => AnsiName::White,
-        NamedColor::BrightBlack => AnsiName::BrightBlack,
-        NamedColor::BrightRed => AnsiName::BrightRed,
-        NamedColor::BrightGreen => AnsiName::BrightGreen,
-        NamedColor::BrightYellow => AnsiName::BrightYellow,
-        NamedColor::BrightBlue => AnsiName::BrightBlue,
-        NamedColor::BrightMagenta => AnsiName::BrightMagenta,
-        NamedColor::BrightCyan => AnsiName::BrightCyan,
-        NamedColor::BrightWhite => AnsiName::BrightWhite,
-        NamedColor::Foreground | NamedColor::BrightForeground => AnsiName::Foreground,
-        NamedColor::DimForeground => AnsiName::DimForeground,
-        NamedColor::Background => AnsiName::Background,
-        _ => return None,
-    };
     for key in shell::palette_candidates(ansi) {
         if let Some(c) = theme.palette.get(*key) {
             return Some(theme::theme_color_to_skia(c));
@@ -405,53 +515,30 @@ fn resolve_named_from_theme(named: NamedColor, theme: &mae_core::Theme) -> Optio
     None
 }
 
-fn named_color_to_skia(named: NamedColor) -> Color4f {
-    let (r, g, b) = match named {
-        NamedColor::Black | NamedColor::DimBlack => (0, 0, 0),
-        NamedColor::Red | NamedColor::DimRed => (205, 0, 0),
-        NamedColor::Green | NamedColor::DimGreen => (0, 205, 0),
-        NamedColor::Yellow | NamedColor::DimYellow => (205, 205, 0),
-        NamedColor::Blue | NamedColor::DimBlue => (0, 0, 238),
-        NamedColor::Magenta | NamedColor::DimMagenta => (205, 0, 205),
-        NamedColor::Cyan | NamedColor::DimCyan => (0, 205, 205),
-        NamedColor::White | NamedColor::DimWhite => (229, 229, 229),
-        NamedColor::BrightBlack => (127, 127, 127),
-        NamedColor::BrightRed => (255, 0, 0),
-        NamedColor::BrightGreen => (0, 255, 0),
-        NamedColor::BrightYellow => (255, 255, 0),
-        NamedColor::BrightBlue => (92, 92, 255),
-        NamedColor::BrightMagenta => (255, 0, 255),
-        NamedColor::BrightCyan => (0, 255, 255),
-        NamedColor::BrightWhite => (255, 255, 255),
-        NamedColor::Foreground | NamedColor::BrightForeground => (229, 229, 229),
-        NamedColor::DimForeground => (192, 192, 192),
-        NamedColor::Background => (0, 0, 0),
-        _ => (229, 229, 229),
+/// Hardcoded xterm-ish default for an `AnsiName` when no theme match exists.
+fn ansi_default_color(ansi: AnsiName) -> Color4f {
+    let (r, g, b) = match ansi {
+        AnsiName::Black => (0, 0, 0),
+        AnsiName::Red => (205, 0, 0),
+        AnsiName::Green => (0, 205, 0),
+        AnsiName::Yellow => (205, 205, 0),
+        AnsiName::Blue => (0, 0, 238),
+        AnsiName::Magenta => (205, 0, 205),
+        AnsiName::Cyan => (0, 205, 205),
+        AnsiName::White => (229, 229, 229),
+        AnsiName::BrightBlack => (127, 127, 127),
+        AnsiName::BrightRed => (255, 0, 0),
+        AnsiName::BrightGreen => (0, 255, 0),
+        AnsiName::BrightYellow => (255, 255, 0),
+        AnsiName::BrightBlue => (92, 92, 255),
+        AnsiName::BrightMagenta => (255, 0, 255),
+        AnsiName::BrightCyan => (0, 255, 255),
+        AnsiName::BrightWhite => (255, 255, 255),
+        AnsiName::Foreground => (229, 229, 229),
+        AnsiName::DimForeground => (192, 192, 192),
+        AnsiName::Background => (0, 0, 0),
     };
     Color4f::new(r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0)
-}
-
-/// Map xterm indexed color 0-15 to a NamedColor for theme resolution.
-fn index_to_named(idx: u8) -> NamedColor {
-    match idx {
-        0 => NamedColor::Black,
-        1 => NamedColor::Red,
-        2 => NamedColor::Green,
-        3 => NamedColor::Yellow,
-        4 => NamedColor::Blue,
-        5 => NamedColor::Magenta,
-        6 => NamedColor::Cyan,
-        7 => NamedColor::White,
-        8 => NamedColor::BrightBlack,
-        9 => NamedColor::BrightRed,
-        10 => NamedColor::BrightGreen,
-        11 => NamedColor::BrightYellow,
-        12 => NamedColor::BrightBlue,
-        13 => NamedColor::BrightMagenta,
-        14 => NamedColor::BrightCyan,
-        15 => NamedColor::BrightWhite,
-        _ => NamedColor::Foreground,
-    }
 }
 
 // color4f_eq moved to crate::theme — re-import via `theme::color4f_eq`.
@@ -462,22 +549,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn named_color_black() {
-        let c = named_color_to_skia(NamedColor::Black);
+    fn ansi_default_black() {
+        let c = ansi_default_color(AnsiName::Black);
         assert!(c.r < 0.01);
         assert!(c.g < 0.01);
         assert!(c.b < 0.01);
     }
 
     #[test]
-    fn named_color_bright_white() {
-        let c = named_color_to_skia(NamedColor::BrightWhite);
+    fn ansi_default_bright_white() {
+        let c = ansi_default_color(AnsiName::BrightWhite);
         assert!(c.r > 0.99);
     }
 
     #[test]
-    fn named_color_red() {
-        let c = named_color_to_skia(NamedColor::Red);
+    fn ansi_default_red() {
+        let c = ansi_default_color(AnsiName::Red);
         assert!(c.r > 0.7);
         assert!(c.g < 0.01);
     }
@@ -497,7 +584,7 @@ mod tests {
             "ui.background" = { bg = "base03" }
             "##,
         );
-        let color = resolve_named_from_theme(NamedColor::Background, &theme);
+        let color = resolve_ansi_from_theme(AnsiName::Background, &theme);
         assert!(color.is_some());
         let c = color.unwrap();
         assert!(c.r < 0.01, "expected near-zero red for solarized base03");
@@ -516,10 +603,44 @@ mod tests {
             "ui.background" = { bg = "mybg" }
             "##,
         );
-        let color = resolve_named_from_theme(NamedColor::Black, &theme);
+        let color = resolve_ansi_from_theme(AnsiName::Black, &theme);
         assert!(color.is_some(), "Black should fall back to ui.background");
         let c = color.unwrap();
         // #282c34 → r=0.157, g=0.173, b=0.204
         assert!(c.r > 0.1 && c.r < 0.2);
+    }
+
+    #[test]
+    fn indexed_ansi_base_16_resolves_through_theme_like_named() {
+        // Both entry points into the ANSI base 16 (classic named SGR vs.
+        // the 256-color indexed form) must agree.
+        let theme = make_test_theme(
+            r##"
+            [palette]
+            red = "#ff0000"
+            "##,
+        );
+        let colors = Colors::default();
+        let default_fg = Color4f::new(1.0, 1.0, 1.0, 1.0);
+
+        let via_named = convert_color(AColor::Named(NamedColor::Red), &colors, default_fg, &theme);
+        let via_indexed_1 = convert_color(AColor::Indexed(1), &colors, default_fg, &theme);
+        assert!(theme::color4f_eq(via_named, via_indexed_1));
+    }
+
+    #[test]
+    fn unmapped_named_color_falls_back_to_caller_default() {
+        // A NamedColor with no AnsiName equivalent (Cursor et al.) must use
+        // the caller-supplied default text color, not a hardcoded RGB.
+        let theme = make_test_theme("");
+        let colors = Colors::default();
+        let default_fg = Color4f::new(0.25, 0.5, 0.75, 1.0);
+        let color = convert_color(
+            AColor::Named(NamedColor::Cursor),
+            &colors,
+            default_fg,
+            &theme,
+        );
+        assert!(theme::color4f_eq(color, default_fg));
     }
 }

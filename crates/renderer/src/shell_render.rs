@@ -1,6 +1,7 @@
 //! Shell buffer rendering: translates alacritty_terminal grid cells into
 //! ratatui widgets with full color and attribute support.
 
+use mae_core::render_common::shell::AnsiName;
 use mae_core::{Editor, Window};
 use mae_shell::grid_types::{CellFlags, Color as AColor, Colors, NamedColor};
 use mae_shell::ShellTerminal;
@@ -182,79 +183,86 @@ fn render_shell_grid(
 /// 1. alacritty_terminal's own color overrides (from `colors`)
 /// 2. Editor theme palette (e.g. gruvbox's `red = "#cc241d"`)
 /// 3. Standard ANSI terminal colors
+///
+/// `AColor::Indexed(idx)` for `idx < 16` (the "ANSI base 16" sent via the
+/// 256-color escape form, `38;5;0`..`38;5;15`, instead of the classic named
+/// SGR codes) now goes through the same theme resolution as
+/// `AColor::Named` — previously it fell straight through to
+/// `Color::Indexed(idx)`, silently ignoring the MAE theme and deferring to
+/// the host terminal's own palette (a real TUI/GUI divergence: the GUI
+/// backend already theme-resolves this case, since it owns its cell grid
+/// and has no "host terminal palette" to defer to).
 fn convert_color(color: AColor, colors: &Colors, theme: &mae_core::Theme) -> Color {
     match color {
         AColor::Spec(rgb) => Color::Rgb(rgb.r, rgb.g, rgb.b),
         AColor::Indexed(idx) => {
             if let Some(rgb) = colors[idx as usize] {
                 Color::Rgb(rgb.r, rgb.g, rgb.b)
+            } else if idx < 16 {
+                let ansi = mae_core::render_common::shell::index_to_named(idx);
+                resolve_ansi_from_theme(ansi, theme).unwrap_or_else(|| ansi_default_color(ansi))
             } else {
+                // 16-255: no MAE theme opinion here, defer to the host
+                // terminal's own 256-color palette (unlike the GUI, the TUI
+                // has one to defer to).
                 Color::Indexed(idx)
             }
         }
         AColor::Named(named) => {
             if let Some(rgb) = colors[named] {
                 Color::Rgb(rgb.r, rgb.g, rgb.b)
-            } else if let Some(color) = resolve_named_from_theme(named, theme) {
-                color
             } else {
-                match named {
-                    NamedColor::Black | NamedColor::DimBlack => Color::Black,
-                    NamedColor::Red | NamedColor::DimRed => Color::Red,
-                    NamedColor::Green | NamedColor::DimGreen => Color::Green,
-                    NamedColor::Yellow | NamedColor::DimYellow => Color::Yellow,
-                    NamedColor::Blue | NamedColor::DimBlue => Color::Blue,
-                    NamedColor::Magenta | NamedColor::DimMagenta => Color::Magenta,
-                    NamedColor::Cyan | NamedColor::DimCyan => Color::Cyan,
-                    NamedColor::White | NamedColor::DimWhite => Color::White,
-                    NamedColor::BrightBlack => Color::DarkGray,
-                    NamedColor::BrightRed => Color::LightRed,
-                    NamedColor::BrightGreen => Color::LightGreen,
-                    NamedColor::BrightYellow => Color::LightYellow,
-                    NamedColor::BrightBlue => Color::LightBlue,
-                    NamedColor::BrightMagenta => Color::LightMagenta,
-                    NamedColor::BrightCyan => Color::LightCyan,
-                    NamedColor::BrightWhite => Color::White,
-                    NamedColor::Foreground | NamedColor::BrightForeground => Color::Reset,
-                    NamedColor::DimForeground => Color::Gray,
-                    NamedColor::Background => Color::Reset,
-                    _ => Color::Reset,
+                match named_to_ansi(named) {
+                    Some(ansi) => resolve_ansi_from_theme(ansi, theme)
+                        .unwrap_or_else(|| ansi_default_color(ansi)),
+                    None => Color::Reset,
                 }
             }
         }
     }
 }
 
-/// Try to resolve a NamedColor via the editor theme palette.
+/// Map alacritty's `NamedColor` to the backend-agnostic `AnsiName` (shared
+/// with the GUI backend and with `index_to_named`, which handles the
+/// indexed-color form of the same 16 base colors). `NamedColor` lives in
+/// `mae_shell`/alacritty and can't be a `mae-core` type, so this mapping
+/// itself is necessarily backend-local (renderer and gui each have their
+/// own copy) — but everything downstream of it (theme resolution, default
+/// fallback colors) is shared via `AnsiName`.
+fn named_to_ansi(named: NamedColor) -> Option<AnsiName> {
+    use AnsiName::*;
+    Some(match named {
+        NamedColor::Black | NamedColor::DimBlack => Black,
+        NamedColor::Red | NamedColor::DimRed => Red,
+        NamedColor::Green | NamedColor::DimGreen => Green,
+        NamedColor::Yellow | NamedColor::DimYellow => Yellow,
+        NamedColor::Blue | NamedColor::DimBlue => Blue,
+        NamedColor::Magenta | NamedColor::DimMagenta => Magenta,
+        NamedColor::Cyan | NamedColor::DimCyan => Cyan,
+        NamedColor::White | NamedColor::DimWhite => White,
+        NamedColor::BrightBlack => BrightBlack,
+        NamedColor::BrightRed => BrightRed,
+        NamedColor::BrightGreen => BrightGreen,
+        NamedColor::BrightYellow => BrightYellow,
+        NamedColor::BrightBlue => BrightBlue,
+        NamedColor::BrightMagenta => BrightMagenta,
+        NamedColor::BrightCyan => BrightCyan,
+        NamedColor::BrightWhite => BrightWhite,
+        NamedColor::Foreground | NamedColor::BrightForeground => Foreground,
+        NamedColor::DimForeground => DimForeground,
+        NamedColor::Background => Background,
+        _ => return None,
+    })
+}
+
+/// Try to resolve an `AnsiName` via the editor theme palette.
 ///
 /// Themes use different naming conventions (gruvbox: "purple"/"aqua",
 /// dracula: "pink"/"cyan", catppuccin: "mauve"/"teal"). We try the
 /// canonical ANSI name first, then common aliases.
-fn resolve_named_from_theme(named: NamedColor, theme: &mae_core::Theme) -> Option<Color> {
-    use mae_core::render_common::shell::{self, AnsiName};
+fn resolve_ansi_from_theme(ansi: AnsiName, theme: &mae_core::Theme) -> Option<Color> {
+    use mae_core::render_common::shell;
 
-    let ansi = match named {
-        NamedColor::Black | NamedColor::DimBlack => AnsiName::Black,
-        NamedColor::Red | NamedColor::DimRed => AnsiName::Red,
-        NamedColor::Green | NamedColor::DimGreen => AnsiName::Green,
-        NamedColor::Yellow | NamedColor::DimYellow => AnsiName::Yellow,
-        NamedColor::Blue | NamedColor::DimBlue => AnsiName::Blue,
-        NamedColor::Magenta | NamedColor::DimMagenta => AnsiName::Magenta,
-        NamedColor::Cyan | NamedColor::DimCyan => AnsiName::Cyan,
-        NamedColor::White | NamedColor::DimWhite => AnsiName::White,
-        NamedColor::BrightBlack => AnsiName::BrightBlack,
-        NamedColor::BrightRed => AnsiName::BrightRed,
-        NamedColor::BrightGreen => AnsiName::BrightGreen,
-        NamedColor::BrightYellow => AnsiName::BrightYellow,
-        NamedColor::BrightBlue => AnsiName::BrightBlue,
-        NamedColor::BrightMagenta => AnsiName::BrightMagenta,
-        NamedColor::BrightCyan => AnsiName::BrightCyan,
-        NamedColor::BrightWhite => AnsiName::BrightWhite,
-        NamedColor::Foreground | NamedColor::BrightForeground => AnsiName::Foreground,
-        NamedColor::DimForeground => AnsiName::DimForeground,
-        NamedColor::Background => AnsiName::Background,
-        _ => return None,
-    };
     for key in shell::palette_candidates(ansi) {
         if let Some(c) = theme.palette.get(*key) {
             return Some(crate::theme_convert::to_ratatui_color(*c));
@@ -266,4 +274,122 @@ fn resolve_named_from_theme(named: NamedColor, theme: &mae_core::Theme) -> Optio
         }
     }
     None
+}
+
+/// Hardcoded xterm-ish default for an `AnsiName` when no theme match exists.
+fn ansi_default_color(ansi: AnsiName) -> Color {
+    match ansi {
+        AnsiName::Black => Color::Black,
+        AnsiName::Red => Color::Red,
+        AnsiName::Green => Color::Green,
+        AnsiName::Yellow => Color::Yellow,
+        AnsiName::Blue => Color::Blue,
+        AnsiName::Magenta => Color::Magenta,
+        AnsiName::Cyan => Color::Cyan,
+        AnsiName::White => Color::White,
+        AnsiName::BrightBlack => Color::DarkGray,
+        AnsiName::BrightRed => Color::LightRed,
+        AnsiName::BrightGreen => Color::LightGreen,
+        AnsiName::BrightYellow => Color::LightYellow,
+        AnsiName::BrightBlue => Color::LightBlue,
+        AnsiName::BrightMagenta => Color::LightMagenta,
+        AnsiName::BrightCyan => Color::LightCyan,
+        AnsiName::BrightWhite => Color::White,
+        AnsiName::Foreground => Color::Reset,
+        AnsiName::DimForeground => Color::Gray,
+        AnsiName::Background => Color::Reset,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_test_theme(toml: &str) -> mae_core::Theme {
+        mae_core::Theme::from_toml("test", toml).unwrap()
+    }
+
+    #[test]
+    fn ansi_falls_back_to_ui_background_style() {
+        // Theme with no "black"/"bg0"/"base"/"crust" palette key, but has
+        // ui.background style — Black should resolve to that bg color.
+        let theme = make_test_theme(
+            r##"
+            [palette]
+            mybg = "#282c34"
+            [styles]
+            "ui.background" = { bg = "mybg" }
+            "##,
+        );
+        let color = resolve_ansi_from_theme(AnsiName::Black, &theme);
+        assert!(color.is_some(), "Black should fall back to ui.background");
+    }
+
+    #[test]
+    fn indexed_ansi_base_16_resolves_through_theme_like_named() {
+        // Regression for the TUI/GUI divergence this module fixes: an
+        // explicit 256-color escape for one of the ANSI base 16 (e.g.
+        // `38;5;1` for red) must resolve through the MAE theme exactly like
+        // the equivalent named-color escape (`31`/red), not silently defer
+        // to the host terminal's own indexed palette.
+        let theme = make_test_theme(
+            r##"
+            [palette]
+            red = "#ff0000"
+            "##,
+        );
+        let colors = Colors::default();
+
+        let via_named = convert_color(AColor::Named(NamedColor::Red), &colors, &theme);
+        let via_indexed_1 = convert_color(AColor::Indexed(1), &colors, &theme);
+        assert_eq!(
+            via_named, via_indexed_1,
+            "indexed color 1 (red) must resolve identically to NamedColor::Red"
+        );
+        assert_eq!(via_indexed_1, Color::Rgb(0xff, 0x00, 0x00));
+    }
+
+    #[test]
+    fn indexed_256_color_defers_to_host_terminal_palette() {
+        // idx >= 16 (the 6x6x6 cube / grayscale ramp) has no MAE theme
+        // opinion — unlike the GUI (which must compute an RGB itself, no
+        // host terminal to defer to), the TUI passes it straight through.
+        let theme = make_test_theme("");
+        let colors = Colors::default();
+        let color = convert_color(AColor::Indexed(200), &colors, &theme);
+        assert_eq!(color, Color::Indexed(200));
+    }
+
+    #[test]
+    fn named_to_ansi_covers_every_ansi_variant_the_theme_can_resolve() {
+        // Every AnsiName the theme resolver knows about must be reachable
+        // from at least one NamedColor — otherwise a base color could
+        // silently lose theme resolution if alacritty's NamedColor ever
+        // gains new variants without updating this mapping too.
+        use AnsiName::*;
+        for ansi in [
+            Black,
+            Red,
+            Green,
+            Yellow,
+            Blue,
+            Magenta,
+            Cyan,
+            White,
+            BrightBlack,
+            BrightRed,
+            BrightGreen,
+            BrightYellow,
+            BrightBlue,
+            BrightMagenta,
+            BrightCyan,
+            BrightWhite,
+            Foreground,
+            DimForeground,
+            Background,
+        ] {
+            // ansi_default_color must be exhaustive and not panic for any variant.
+            let _ = ansi_default_color(ansi);
+        }
+    }
 }

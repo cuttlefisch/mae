@@ -4,7 +4,9 @@
 //! Shared constants and data live in `mae_core::render_common::splash`.
 //! This module handles ratatui-specific rendering.
 
-use mae_core::render_common::splash::{should_show_splash, ALL_ARTS, MAE_LOGO, QUICK_ACTIONS};
+use mae_core::render_common::splash::{
+    resolve_active_splash_art, should_show_splash, MAE_LOGO, QUICK_ACTIONS,
+};
 use mae_core::Editor;
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
@@ -23,22 +25,11 @@ pub(crate) fn render_splash_if_needed(frame: &mut Frame, area: Rect, editor: &Ed
 }
 
 fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
-    let selected = editor.splash_art.as_deref().unwrap_or("bat");
-
-    // Look up art: custom first, then built-in.
-    let custom = editor
-        .custom_splash_arts
-        .iter()
-        .find(|a| a.name == selected);
-    let (art_str, accent_lines): (&str, &[usize]) = if let Some(c) = custom {
-        (c.art.as_str(), &c.accent_lines)
-    } else {
-        let splash = ALL_ARTS
-            .iter()
-            .find(|a| a.name == selected)
-            .unwrap_or(&ALL_ARTS[0]);
-        (splash.art, splash.accent_lines)
-    };
+    // Art lookup (custom vs. built-in) is shared with the GUI backend —
+    // see `resolve_active_splash_art`'s doc comment for why the rest of the
+    // layout isn't (the two backends' centering models have genuinely
+    // diverged).
+    let (art_str, accent_lines, image_path) = resolve_active_splash_art(editor);
 
     let art_primary = ts(editor, "keyword");
     let art_accent = ts(editor, "string");
@@ -50,7 +41,7 @@ fn render_splash(frame: &mut Frame, area: Rect, editor: &Editor) {
     let mut lines: Vec<Line> = Vec::new();
 
     // Art lines with two-tone coloring (TUI always uses ASCII, no images).
-    let has_image = custom.is_some_and(|c| c.image_path.is_some());
+    let has_image = image_path.is_some();
     let art_lines: Vec<&str> = art_str.lines().collect();
     let art_width = art_lines.iter().map(|l| l.len()).max().unwrap_or(0);
     // When art_width is 0 (image-only art, TUI can't render images),

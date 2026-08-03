@@ -1,9 +1,14 @@
-//! Shared splash screen data: ASCII art, logo, quick actions, layout.
+//! Shared splash screen data: ASCII art, logo, quick actions.
 //!
-//! Backends call [`should_show_splash`] and [`build_splash_lines`] to get
-//! pre-laid-out lines, then just draw them with their native draw calls.
+//! Backends call [`should_show_splash`] to decide whether to render the
+//! fullscreen dashboard at all, and [`resolve_active_splash_art`] to look up
+//! which art (custom or built-in) is selected. Each backend then lays out
+//! and draws it with its own native primitives (`Line`/`Span` for the TUI,
+//! direct Skia calls for the GUI) — the two layout models have genuinely
+//! diverged (the GUI supports per-section centering and inline images; the
+//! TUI does not), so layout itself is not shared, only the art lookup.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::{BufferKind, Editor};
 
@@ -105,132 +110,39 @@ pub fn should_show_splash(editor: &Editor) -> bool {
     editor.active_buffer().kind == BufferKind::Dashboard && editor.window_mgr.window_count() == 1
 }
 
-/// A pre-laid-out splash line ready for rendering.
-pub struct SplashLine {
-    pub text: String,
-    /// Theme key for the foreground color.
-    pub theme_key: &'static str,
-    pub is_selected: bool,
-}
-
-/// Build all splash lines with centering padding pre-applied.
+/// Resolve the active splash art by name (a custom registered art wins over
+/// a built-in of the same name, falling back to `ALL_ARTS[0]` if the
+/// selected name matches neither), returning `(art_text, accent_lines,
+/// custom_image_path)`.
 ///
-/// Returns `(lines, art_width)` — backends use art_width to compute left padding.
-pub fn build_splash_lines(editor: &Editor) -> (Vec<SplashLine>, usize) {
+/// This was previously duplicated identically in both backends'
+/// `render_splash` (`crates/renderer/src/splash_render.rs` and
+/// `crates/gui/src/splash_render.rs`) — now the one implementation.
+///
+/// `custom_image_path` is `None` for every built-in art and for any custom
+/// art with no image registered; it's a GUI-only feature (inline image
+/// rendering) and TUI callers can ignore it.
+///
+/// @ai-caution: [rendering] Splash art image paths resolve relative to module
+/// dir. Relative-to-CWD paths will silently fail. Always use absolute paths.
+pub fn resolve_active_splash_art(editor: &Editor) -> (&str, &[usize], Option<&Path>) {
     let selected = editor.splash_art.as_deref().unwrap_or("bat");
 
-    // @ai-caution: [rendering] Splash art image paths resolve relative to module
-    // dir. Relative-to-CWD paths will silently fail. Always use absolute paths.
     // Custom arts come from modules; built-in arts are compiled-in constants.
     // Look up art: first check custom, then built-in.
     let custom = editor
         .custom_splash_arts
         .iter()
         .find(|a| a.name == selected);
-    let (art_str, accent_lines): (&str, &[usize]) = if let Some(c) = custom {
-        (c.art.as_str(), &c.accent_lines)
+    if let Some(c) = custom {
+        (c.art.as_str(), &c.accent_lines, c.image_path.as_deref())
     } else {
         let splash = ALL_ARTS
             .iter()
             .find(|a| a.name == selected)
             .unwrap_or(&ALL_ARTS[0]);
-        (splash.art, splash.accent_lines)
-    };
-
-    let mut lines: Vec<SplashLine> = Vec::new();
-
-    // Art (ASCII lines — for image-only arts these may be empty).
-    let art_lines: Vec<&str> = art_str.lines().collect();
-    let art_text_width = art_lines.iter().map(|l| l.len()).max().unwrap_or(0);
-    for (i, line) in art_lines.iter().enumerate() {
-        let key = if accent_lines.contains(&i) {
-            "string"
-        } else {
-            "keyword"
-        };
-        lines.push(SplashLine {
-            text: line.to_string(),
-            theme_key: key,
-            is_selected: false,
-        });
+        (splash.art, splash.accent_lines, None)
     }
-
-    // When art_text_width is 0 (image-only art, TUI can't render images),
-    // use a fallback width so text elements center properly.
-    let art_width = if art_text_width > 0 {
-        art_text_width
-    } else {
-        58 // fallback for image-only art (approx QA block width)
-    };
-
-    // Logo: auto-hide when image art is selected (image IS the logo).
-    let has_image = custom.is_some_and(|c| c.image_path.is_some());
-    if editor.splash_show_logo && !has_image {
-        let logo_lines: Vec<&str> = MAE_LOGO.lines().collect();
-        let logo_width = logo_lines.iter().map(|l| l.len()).max().unwrap_or(0);
-        let logo_pad = art_width.saturating_sub(logo_width) / 2;
-        for line in &logo_lines {
-            lines.push(SplashLine {
-                text: format!("{:>pad$}{}", "", line, pad = logo_pad),
-                theme_key: "function",
-                is_selected: false,
-            });
-        }
-    }
-
-    // Subtitle.
-    let subtitle = "Modern AI Editor -- ai-native lisp machine";
-    let sub_pad = art_width.saturating_sub(subtitle.len()) / 2;
-    lines.push(SplashLine {
-        text: format!("{:>w$}{}", "", subtitle, w = sub_pad),
-        theme_key: "comment",
-        is_selected: false,
-    });
-    let version = concat!("v", env!("CARGO_PKG_VERSION"));
-    let ver_pad = art_width.saturating_sub(version.len()) / 2;
-    lines.push(SplashLine {
-        text: format!("{:>w$}{}", "", version, w = ver_pad),
-        theme_key: "comment",
-        is_selected: false,
-    });
-    lines.push(SplashLine {
-        text: String::new(),
-        theme_key: "comment",
-        is_selected: false,
-    });
-
-    // Quick actions.
-    let qa_width = QUICK_ACTIONS
-        .iter()
-        .map(|(k, d, _)| format!("{:<10}{}", k, d).len())
-        .max()
-        .unwrap_or(0);
-    let qa_pad = art_width.saturating_sub(qa_width + 2) / 2;
-    for (i, &(key, desc, _cmd)) in QUICK_ACTIONS.iter().enumerate() {
-        let is_selected = i == editor.splash_selection;
-        let prefix = if is_selected { "▸ " } else { "  " };
-        lines.push(SplashLine {
-            text: format!("{:>pad$}{}{:<10}{}", "", prefix, key, desc, pad = qa_pad),
-            theme_key: "type",
-            is_selected,
-        });
-    }
-    lines.push(SplashLine {
-        text: String::new(),
-        theme_key: "comment",
-        is_selected: false,
-    });
-
-    // Dismiss hint.
-    let dismiss = "j/k navigate · Enter select";
-    let dismiss_pad = art_width.saturating_sub(dismiss.len()) / 2;
-    lines.push(SplashLine {
-        text: format!("{:>w$}{}", "", dismiss, w = dismiss_pad),
-        theme_key: "comment",
-        is_selected: false,
-    });
-
-    (lines, art_width)
 }
 
 #[cfg(test)]
@@ -283,15 +195,57 @@ mod tests {
         editor.custom_splash_arts.push(CustomSplashArt {
             name: "test-art".to_string(),
             art: "HELLO\nWORLD".to_string(),
-            accent_lines: vec![],
+            accent_lines: vec![1],
             image_path: None,
         });
         editor.splash_art = Some("test-art".to_string());
         editor.install_dashboard();
-        let (lines, _width) = build_splash_lines(&editor);
-        // First lines should be from our custom art
-        assert!(lines.iter().any(|l| l.text.contains("HELLO")));
-        assert!(lines.iter().any(|l| l.text.contains("WORLD")));
+        let (art, accent_lines, image_path) = resolve_active_splash_art(&editor);
+        assert!(art.contains("HELLO"));
+        assert!(art.contains("WORLD"));
+        assert_eq!(accent_lines, &[1]);
+        assert!(image_path.is_none());
+    }
+
+    #[test]
+    fn custom_art_wins_over_built_in_of_the_same_name() {
+        // A custom-registered art named "bat" must shadow the built-in
+        // "bat" art — the "additive-only, contributor override always wins"
+        // precedent used elsewhere in MAE (bundled KBs, guidance KB).
+        let mut editor = Editor::default();
+        editor.custom_splash_arts.push(CustomSplashArt {
+            name: "bat".to_string(),
+            art: "CUSTOM BAT".to_string(),
+            accent_lines: vec![],
+            image_path: None,
+        });
+        editor.splash_art = Some("bat".to_string());
+        let (art, _, _) = resolve_active_splash_art(&editor);
+        assert_eq!(art, "CUSTOM BAT");
+    }
+
+    #[test]
+    fn unknown_selection_falls_back_to_first_built_in_art() {
+        let editor = Editor {
+            splash_art: Some("does-not-exist".to_string()),
+            ..Editor::default()
+        };
+        let (art, _, _) = resolve_active_splash_art(&editor);
+        assert_eq!(art, ALL_ARTS[0].art);
+    }
+
+    #[test]
+    fn custom_art_image_path_is_surfaced() {
+        let mut editor = Editor::default();
+        editor.custom_splash_arts.push(CustomSplashArt {
+            name: "img-art".to_string(),
+            art: String::new(),
+            accent_lines: vec![],
+            image_path: Some(PathBuf::from("logo.svg")),
+        });
+        editor.splash_art = Some("img-art".to_string());
+        let (_, _, image_path) = resolve_active_splash_art(&editor);
+        assert_eq!(image_path, Some(Path::new("logo.svg")));
     }
 
     #[test]
