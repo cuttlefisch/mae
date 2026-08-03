@@ -778,22 +778,14 @@ impl SchemeRuntime {
         debug!(code_len = code.len(), "scheme eval");
         let result = self.vm.eval(code).map_err(|e| {
             let err = SchemeError::from(e);
-            // ADR-087 / audit #594: Scheme source is arbitrary UTF-8 (string
-            // literals, comments -- MAE's own style uses em dashes); a fixed
-            // byte cut can land mid-character and panic.
+            // ADR-087 / audit #594 (and #604.6, which is why this now calls
+            // the shared `record_error` instead of re-inlining its own copy
+            // of the history-recording logic): Scheme source is arbitrary
+            // UTF-8 (string literals, comments -- MAE's own style uses em
+            // dashes); a fixed byte cut can land mid-character and panic.
             let preview_end = mae_core::grapheme::checked_byte_boundary(code, code.len().min(100));
             error!(error = %err.message, code_preview = &code[..preview_end], "scheme eval error");
-            self.error_seq += 1;
-            let expr_end = mae_core::grapheme::checked_byte_boundary(code, code.len().min(200));
-            let snapshot = SchemeErrorSnapshot {
-                expression: code[..expr_end].to_string(),
-                error_message: err.message.clone(),
-                seq: self.error_seq,
-            };
-            self.error_history.push(snapshot);
-            if self.error_history.len() > self.max_errors {
-                self.error_history.remove(0);
-            }
+            self.record_error(code, &err);
             err
         })?;
         self.sync_gc_stats();
@@ -975,8 +967,14 @@ impl SchemeRuntime {
     /// Record an error in the error history.
     fn record_error(&mut self, code: &str, err: &SchemeError) {
         self.error_seq += 1;
+        // ADR-087 / audit #604.2: Scheme source is arbitrary UTF-8 (string
+        // literals, comments -- MAE's own style uses em dashes); a fixed
+        // byte cut can land mid-character and panic. This is the AI/MCP
+        // `eval_scheme` path (via `eval_yielding`), so an erroring non-ASCII
+        // expression over 200 bytes previously panicked the whole session.
+        let expr_end = mae_core::grapheme::checked_byte_boundary(code, code.len().min(200));
         let snapshot = SchemeErrorSnapshot {
-            expression: code[..code.len().min(200)].to_string(),
+            expression: code[..expr_end].to_string(),
             error_message: err.message.clone(),
             seq: self.error_seq,
         };
