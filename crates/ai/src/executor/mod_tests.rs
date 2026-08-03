@@ -18,6 +18,22 @@ fn all_tools() -> Vec<ToolDefinition> {
     tools
 }
 
+/// The ceiling the tool-behaviour tests in this file run under.
+///
+/// They assert what each tool *does* (does `buffer_write` insert, does
+/// `close_buffer` refuse a modified buffer), not what the policy decides, so
+/// they state a permissive ceiling explicitly. Inheriting
+/// `PermissionPolicy::default()` would couple every one of them to ADR-090's
+/// shipped default and turn them into approval-prompt tests the moment it
+/// moves. The tests that ARE about permissions build their policies by hand
+/// and say so; ADR-090's own live in `approval_tests.rs`.
+fn tool_behaviour_policy() -> PermissionPolicy {
+    PermissionPolicy {
+        auto_approve_up_to: PermissionTier::Privileged,
+        ..PermissionPolicy::default()
+    }
+}
+
 fn unwrap_immediate(result: ExecuteResult) -> ToolResult {
     match result {
         ExecuteResult::Immediate(r) => r,
@@ -54,7 +70,7 @@ fn buffer_read_full() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     assert!(result.output.contains("hello"));
@@ -72,7 +88,7 @@ fn buffer_read_range() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     assert!(result.output.contains("bbb"));
@@ -88,7 +104,7 @@ fn buffer_read_empty() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
 }
@@ -101,7 +117,7 @@ fn cursor_info_returns_json() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     let info: serde_json::Value = serde_json::from_str(&result.output).unwrap();
@@ -119,7 +135,7 @@ fn registry_command_move_down() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     assert_eq!(editor.window_mgr.focused_window().cursor_row, 1);
@@ -133,20 +149,35 @@ fn registry_command_unknown() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(!result.success);
     assert!(result.output.contains("Unknown command"));
 }
 
 #[test]
-fn permission_denied_for_privileged() {
+fn a_privileged_tool_above_the_ceiling_asks_rather_than_running() {
     let mut editor = Editor::new();
     let call = make_call("command_quit", serde_json::json!({}));
-    let policy = PermissionPolicy::default(); // allows up to Shell
-    let result = unwrap_immediate(execute_tool(&mut editor, &call, &all_tools(), &policy));
-    assert!(!result.success);
-    assert!(result.output.contains("Permission denied"));
+    // Explicitly Shell, which is what this test always meant by "the default".
+    // ADR-090 changed the answer's *shape*, not the outcome that matters:
+    // `command_quit` is Privileged, so it does not run. It now comes back as
+    // an approval request instead of a flat denial — the editor must not
+    // silently quit, and a human gets the chance to say yes.
+    let policy = PermissionPolicy {
+        auto_approve_up_to: PermissionTier::Shell,
+        ..PermissionPolicy::default()
+    };
+    match execute_tool(&mut editor, &call, &all_tools(), &policy) {
+        ExecuteResult::NeedsApproval(req) => {
+            assert_eq!(req.tier, PermissionTier::Privileged);
+            assert!(!req.clone().into_denied("a headless surface").success);
+        }
+        ExecuteResult::Immediate(r) => {
+            panic!("a Privileged tool must not resolve immediately: {}", r.output)
+        }
+        ExecuteResult::Deferred { .. } => panic!("unexpected deferral"),
+    }
 }
 
 #[test]
@@ -157,7 +188,7 @@ fn unknown_tool_returns_error() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(!result.success);
     assert!(result.output.contains("Unknown tool"));
@@ -171,7 +202,7 @@ fn list_buffers_returns_metadata() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     let buffers: Vec<serde_json::Value> = serde_json::from_str(&result.output).unwrap();
@@ -191,7 +222,7 @@ fn buffer_write_insert() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     let text = editor.active_buffer().text();
@@ -209,7 +240,7 @@ fn buffer_write_replace() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     let text = editor.active_buffer().text();
@@ -225,7 +256,7 @@ fn editor_state_returns_valid_json() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     let info: serde_json::Value = serde_json::from_str(&result.output).unwrap();
@@ -243,7 +274,7 @@ fn window_layout_returns_valid_json() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     let out: serde_json::Value = serde_json::from_str(&result.output).unwrap();
@@ -263,7 +294,7 @@ fn kb_sync_status_returns_valid_json() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     let out: serde_json::Value = serde_json::from_str(&result.output).unwrap();
@@ -289,7 +320,7 @@ fn window_layout_flags_windows_sharing_a_buffer() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     let out: serde_json::Value = serde_json::from_str(&result.output).unwrap();
@@ -312,7 +343,7 @@ fn command_list_includes_expected_commands() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success, "command_list failed: {}", result.output);
     let commands: Vec<serde_json::Value> = serde_json::from_str(&result.output).unwrap();
@@ -333,7 +364,7 @@ fn debug_state_no_session() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     assert_eq!(result.output, "No active debug session");
@@ -348,7 +379,7 @@ fn debug_state_with_self_debug() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     let info: serde_json::Value = serde_json::from_str(&result.output).unwrap();
@@ -372,7 +403,7 @@ fn file_read_temp_file() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     assert!(result.output.contains("hello"));
@@ -398,7 +429,7 @@ fn open_file_creates_buffer() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success, "open_file failed: {}", result.output);
     assert_eq!(editor.buffers.len(), 2);
@@ -424,13 +455,13 @@ fn open_file_deduplicates() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     let result = unwrap_immediate(execute_tool(
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     assert!(result.output.contains("already open"));
@@ -451,7 +482,7 @@ fn switch_buffer_by_name() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     let target_idx = editor.ai.target_buffer_idx.expect("should have AI target");
@@ -466,7 +497,7 @@ fn switch_buffer_nonexistent() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(!result.success);
     assert!(result.output.contains("No buffer named"));
@@ -485,7 +516,7 @@ fn close_buffer_by_name() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success, "close_buffer failed: {}", result.output);
     assert_eq!(editor.buffers.len(), 1);
@@ -502,7 +533,7 @@ fn close_buffer_modified_fails() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(!result.success);
     assert!(result.output.contains("unsaved"));
@@ -521,7 +552,7 @@ fn close_buffer_modified_with_force() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(
         result.success,
@@ -538,7 +569,7 @@ fn self_test_suite_lsp_has_readiness_check() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     let plan: serde_json::Value = serde_json::from_str(&result.output).unwrap();
@@ -594,7 +625,7 @@ fn buffer_read_by_name() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     assert!(result.output.contains("X"));
@@ -615,7 +646,7 @@ fn buffer_write_by_name() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     assert!(editor.buffers[1].text().contains("hello"));
@@ -639,7 +670,7 @@ fn create_file_and_open() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success, "create_file failed: {}", result.output);
     assert_eq!(editor.buffers.len(), 2);
@@ -660,7 +691,7 @@ fn project_files_returns_results() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success, "project_files failed: {}", result.output);
     assert!(result.output.contains("Cargo.toml"));
@@ -674,7 +705,7 @@ fn project_files_with_pattern() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     assert!(result.output.contains("Cargo.toml"));
@@ -693,7 +724,7 @@ fn project_search_finds_pattern() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success, "project_search failed: {}", result.output);
     assert!(result.output.contains("mae-core"));
@@ -710,7 +741,7 @@ fn project_search_with_max_results() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     // Should have at most 3 result lines (not counting truncation message)
@@ -759,7 +790,7 @@ fn lsp_diagnostics_tool_returns_structured_json() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success, "lsp_diagnostics failed: {}", result.output);
     let v: serde_json::Value = serde_json::from_str(&result.output).unwrap();
@@ -787,7 +818,7 @@ fn syntax_tree_tool_returns_sexp() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success, "syntax_tree failed: {}", result.output);
     let v: serde_json::Value = serde_json::from_str(&result.output).unwrap();
@@ -843,13 +874,14 @@ fn dap_start_tool_is_allowed_at_shell_tier() {
         "dap_start",
         serde_json::json!({"adapter": "lldb", "program": "/bin/ls"}),
     );
-    // Default policy allows up to Shell — should be allowed.
-    let result = unwrap_immediate(execute_tool(
-        &mut editor,
-        &call,
-        &all_tools(),
-        &PermissionPolicy::default(),
-    ));
+    // `dap_start` launches an arbitrary program under a debug adapter, so it
+    // is Shell tier. Under an explicit Shell ceiling it is auto-approved; the
+    // point of the test is that it is not classified *above* Shell.
+    let policy = PermissionPolicy {
+        auto_approve_up_to: PermissionTier::Shell,
+        ..PermissionPolicy::default()
+    };
+    let result = unwrap_immediate(execute_tool(&mut editor, &call, &all_tools(), &policy));
     assert!(result.success);
 }
 
@@ -864,7 +896,7 @@ fn dap_set_breakpoint_tool_returns_json() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(
         result.success,
@@ -884,7 +916,7 @@ fn dap_continue_tool_errors_without_session() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(!result.success);
     assert!(result.output.contains("No active"));
@@ -902,7 +934,7 @@ fn dap_step_tool_rejects_unknown_direction() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(!result.success);
     // Validation catches the bad enum value before the DAP executor
@@ -921,7 +953,7 @@ fn dap_inspect_variable_tool_errors_without_session() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(!result.success);
     assert!(result.output.contains("No active"));
@@ -939,7 +971,7 @@ fn lsp_definition_returns_deferred() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     );
     match result {
         ExecuteResult::Deferred { kind, .. } => {
@@ -966,7 +998,7 @@ fn lsp_references_returns_deferred() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     );
     assert!(matches!(
         result,
@@ -987,7 +1019,7 @@ fn lsp_hover_returns_deferred() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     );
     assert!(matches!(
         result,
@@ -1006,7 +1038,7 @@ fn lsp_definition_returns_immediate_error_for_scratch() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     );
     let result = match result {
         ExecuteResult::Immediate(r) => r,
@@ -1030,7 +1062,7 @@ fn ai_permissions_tool_returns_tier_info() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     assert!(result.output.contains("trusted"));
@@ -1067,7 +1099,7 @@ fn self_test_suite_returns_all_categories() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     let plan: serde_json::Value = serde_json::from_str(&result.output).unwrap();
@@ -1089,7 +1121,7 @@ fn self_test_plan_v3_has_setup_and_instructions() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     let plan: serde_json::Value = serde_json::from_str(&result.output).unwrap();
     // Top-level instructions
@@ -1126,7 +1158,7 @@ fn self_test_suite_filters_categories() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     let plan: serde_json::Value = serde_json::from_str(&result.output).unwrap();
@@ -1153,7 +1185,7 @@ fn self_test_suite_unknown_action_reports_failure() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     // Two layers can reject this, and both must agree it's a failure:
     // schema validation (the "action" prop declares an enum of
@@ -1179,7 +1211,7 @@ fn self_test_suite_grade_without_results_reports_failure() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(
         !result.success,
@@ -1199,7 +1231,7 @@ fn self_test_suite_valid_plan_action_still_succeeds() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
 }
@@ -1214,7 +1246,7 @@ fn model_exam_unknown_action_reports_failure() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     // See self_test_suite_unknown_action_reports_failure's comment: schema
     // validation's enum check on "action" intercepts this before dispatch,
@@ -1234,7 +1266,7 @@ fn model_exam_grade_without_results_reports_failure() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(
         !result.success,
@@ -1263,7 +1295,7 @@ fn self_test_suite_auto_saves_state() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     assert!(editor.self_test_active, "self_test_active should be set");
@@ -1275,7 +1307,7 @@ fn self_test_suite_auto_saves_state() {
         &mut editor,
         &call2,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert_eq!(editor.state_stack.len(), 1, "should not double-save");
 }
@@ -1311,7 +1343,7 @@ fn self_test_plan_has_performance_category() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     let plan: serde_json::Value = serde_json::from_str(&result.output).unwrap();
@@ -1327,7 +1359,7 @@ fn perf_stats_returns_valid_json() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     let stats: serde_json::Value = serde_json::from_str(&result.output).unwrap();
@@ -1347,7 +1379,7 @@ fn perf_benchmark_buffer_insert_measures_time() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     let bench: serde_json::Value = serde_json::from_str(&result.output).unwrap();
@@ -1371,7 +1403,7 @@ fn trigger_hook_queues_hooks() {
         &mut editor,
         &call,
         &all_tools(),
-        &PermissionPolicy::default(),
+        &tool_behaviour_policy(),
     ));
     assert!(result.success);
     assert_eq!(editor.pending_hook_evals.len(), 1);

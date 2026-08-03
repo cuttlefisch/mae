@@ -1158,7 +1158,13 @@ mod tests {
             name: "definitely_not_a_real_tool_name".into(),
             arguments: serde_json::json!({}),
         };
-        let policy = PermissionPolicy::default();
+        // An unknown tool has no registered tier, so dispatch falls back to
+        // `Write` — above the shipped default. State the ceiling explicitly so
+        // this stays a routing test, not a permission one.
+        let policy = PermissionPolicy {
+            auto_approve_up_to: PermissionTier::Privileged,
+            ..PermissionPolicy::default()
+        };
         let result = execute_tool(&mut editor, &call, &[], &policy);
         match result {
             ExecuteResult::Immediate(r) => {
