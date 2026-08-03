@@ -179,7 +179,9 @@ fn clamp_all_cursors_clamps_visual_anchor_past_eof() {
 
     editor.clamp_all_cursors();
     assert!(editor.vi.visual_anchor_row < editor.buffers[0].display_line_count());
-    assert!(editor.vi.visual_anchor_col <= editor.buffers[0].line_len(editor.vi.visual_anchor_row));
+    assert!(
+        editor.vi.visual_anchor_col <= editor.buffers[0].line_byte_len(editor.vi.visual_anchor_row)
+    );
 }
 
 #[test]
@@ -201,8 +203,8 @@ fn clamp_all_cursors_clamps_last_visual_past_eof() {
     let (ar, ac, cr, cc, _) = editor.vi.last_visual.unwrap();
     assert!(ar < editor.buffers[0].display_line_count());
     assert!(cr < editor.buffers[0].display_line_count());
-    assert!(ac <= editor.buffers[0].line_len(ar));
-    assert!(cc <= editor.buffers[0].line_len(cr));
+    assert!(ac <= editor.buffers[0].line_byte_len(ar));
+    assert!(cc <= editor.buffers[0].line_byte_len(cr));
 }
 
 // ---------------------------------------------------------------------------

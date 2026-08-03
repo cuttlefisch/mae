@@ -67,6 +67,8 @@ pub fn compute_cursor_position(
 ) -> Option<CursorPos> {
     let win = editor.window_mgr.focused_window();
     let buf = &editor.buffers[win.buffer_idx];
+    // ADR-087 Rule 3: the user's width options reach every width computation.
+    let policy = editor.width_policy();
 
     match editor.mode {
         Mode::Command => {
@@ -141,6 +143,7 @@ pub fn compute_cursor_position(
                         text_width,
                         editor.break_indent,
                         show_break_w,
+                        policy,
                     );
 
                     let base_display_row = display_row?;
@@ -148,7 +151,7 @@ pub fn compute_cursor_position(
 
                     let indent_len = if editor.break_indent && row_off > 0 {
                         let chars: Vec<char> = display_line_text.chars().collect();
-                        mae_core::wrap::content_indent_len(&chars)
+                        mae_core::wrap::content_indent_len(&chars, policy)
                     } else {
                         0
                     };
@@ -159,7 +162,8 @@ pub fn compute_cursor_position(
                     };
                     let target = prefix_w + col;
                     let glyph_advance = layout.glyph_advance_for_row(win.cursor_row);
-                    let scaled_col = FrameLayout::scaled_col(&display_line_text, target, scale);
+                    let scaled_col =
+                        FrameLayout::scaled_col(&display_line_text, target, scale, policy);
                     // Compute pixel X using the font's actual glyph advance.
                     let pixel_x_abs = if scale != 1.0 {
                         let text_start_px = layout.text_col as f32 * layout.cell_width;
@@ -169,6 +173,7 @@ pub fn compute_cursor_position(
                                     &display_line_text,
                                     target,
                                     glyph_advance,
+                                    policy,
                                 ),
                         )
                     } else {
@@ -206,20 +211,47 @@ pub fn compute_cursor_position(
                     // col_offset through the same display_map before
                     // subtracting, or the two operands are in different units
                     // whenever this line has an active display region.
+                    // #353 + ADR-087 Rule 4: `win.col_offset` and
+                    // `win.cursor_col` are BYTE columns into the rope line;
+                    // `display_map` maps those to DISPLAY CHAR columns, and
+                    // `display_cursor_col` above is a display BYTE offset.
+                    // Normalise both operands to display CHAR indices before
+                    // `skip`/`take`, which count chars.
+                    let cursor_char_col = match cursor_layout.and_then(|ll| ll.display_map.as_ref())
+                    {
+                        Some(dm) => {
+                            mae_core::display_region::rope_col_to_display_col(win.cursor_col, dm)
+                        }
+                        None => display_line_text[..mae_core::grapheme::floor_char_boundary(
+                            &display_line_text,
+                            win.cursor_col,
+                        )]
+                            .chars()
+                            .count(),
+                    };
                     let visible_start = match cursor_layout.and_then(|ll| ll.display_map.as_ref()) {
                         Some(dm) => {
                             mae_core::display_region::rope_col_to_display_col(win.col_offset, dm)
                         }
-                        None => win.col_offset,
+                        None => display_line_text[..mae_core::grapheme::floor_char_boundary(
+                            &display_line_text,
+                            win.col_offset,
+                        )]
+                            .chars()
+                            .count(),
                     };
-                    let cursor_char_in_visible = display_cursor_col.saturating_sub(visible_start);
+                    let cursor_char_in_visible = cursor_char_col.saturating_sub(visible_start);
                     let visible_text: String = display_line_text
                         .chars()
                         .skip(visible_start)
                         .take(cursor_char_in_visible)
                         .collect();
-                    let scaled_col =
-                        FrameLayout::scaled_col(&visible_text, cursor_char_in_visible, scale);
+                    let scaled_col = FrameLayout::scaled_col(
+                        &visible_text,
+                        cursor_char_in_visible,
+                        scale,
+                        policy,
+                    );
                     let glyph_advance = layout.glyph_advance_for_row(win.cursor_row);
                     // Compute pixel X using the font's actual glyph advance.
                     let pixel_x_abs = if scale != 1.0 {
@@ -230,6 +262,7 @@ pub fn compute_cursor_position(
                                     &visible_text,
                                     cursor_char_in_visible,
                                     glyph_advance,
+                                    policy,
                                 ),
                         )
                     } else {
@@ -259,13 +292,20 @@ pub fn compute_cursor_position(
                     buf.display_text_and_col(win.cursor_row, win.cursor_col);
                 let (_, fallback_scroll_col) =
                     buf.display_text_and_col(win.cursor_row, win.col_offset);
-                let display_col = mae_core::grapheme::display_width_up_to_grapheme(
+                // ADR-087 Rule 1: `display_text_and_col` returns a BYTE
+                // offset into the display text. Feeding it to
+                // `display_width_up_to_grapheme` (a GRAPHEME index) was one of
+                // the four domains `cursor_col` was silently read as -- the
+                // correct conversion is the prefix's display width.
+                let display_col = mae_core::grapheme::display_width_of_prefix_with(
                     &fallback_text,
                     fallback_display_col,
+                    policy,
                 );
-                let scroll_col = mae_core::grapheme::display_width_up_to_grapheme(
+                let scroll_col = mae_core::grapheme::display_width_of_prefix_with(
                     &fallback_text,
                     fallback_scroll_col,
+                    policy,
                 );
                 let visible_col = display_col.saturating_sub(scroll_col);
 
@@ -326,10 +366,15 @@ pub fn render_cursor(
                     let win = editor.window_mgr.focused_window();
                     let buf = &editor.buffers[win.buffer_idx];
                     if win.cursor_row < buf.line_count() {
-                        let line = buf.rope().line(win.cursor_row);
-                        let line_str: String = line.chars().collect();
-                        let chars: Vec<char> = line_str.trim_end_matches('\n').chars().collect();
-                        chars.get(win.cursor_col).copied()
+                        // ADR-087 Rule 4: cursor_col is a BYTE offset, so the
+                        // glyph under the cursor is the char *starting at*
+                        // that byte -- not `chars[cursor_col]`.
+                        let line_str = buf.line_text_no_newline(win.cursor_row);
+                        let at = mae_core::grapheme::floor_char_boundary(
+                            &line_str,
+                            win.cursor_col.min(line_str.len()),
+                        );
+                        line_str[at..].chars().next()
                     } else {
                         None
                     }
@@ -580,7 +625,7 @@ pub fn render_remote_selections(
             }
 
             let (vis_start, vis_end) =
-                selection_col_range(row, sr, sc, er, ec, buf.line_len(row), win.col_offset);
+                selection_col_range(row, sr, sc, er, ec, buf.line_byte_len(row), win.col_offset);
             let width = vis_end.saturating_sub(vis_start);
 
             if width == 0 {
@@ -844,17 +889,26 @@ mod tests {
         // Verify FrameLayout::scaled_col produces correct results.
         let line = "** Heading text";
         let scale = 1.3;
-        let col5 = FrameLayout::scaled_col(line, 5, scale);
+        let col5 =
+            FrameLayout::scaled_col(line, 5, scale, mae_core::grapheme::WidthPolicy::default());
         let mut expected = 0.0f32;
         for ch in line.chars().take(5) {
-            expected += char_width(ch) as f32 * scale;
+            expected += char_width(ch, mae_core::grapheme::WidthPolicy::default()) as f32 * scale;
         }
         assert_eq!(col5, expected.round() as usize);
     }
 
     #[test]
     fn scaled_col_at_zero_is_zero() {
-        assert_eq!(FrameLayout::scaled_col("* Heading", 0, 1.5), 0);
+        assert_eq!(
+            FrameLayout::scaled_col(
+                "* Heading",
+                0,
+                1.5,
+                mae_core::grapheme::WidthPolicy::default()
+            ),
+            0
+        );
     }
 
     #[test]
@@ -899,7 +953,7 @@ mod tests {
     }
 
     /// Regression: cursor pixel_x must use the same formula as text rendering
-    /// pixel_offsets. Both use `char_width(ch) * glyph_advance` accumulated
+    /// pixel_offsets. Both use `char_width(ch, mae_core::grapheme::WidthPolicy::default()) * glyph_advance` accumulated
     /// without intermediate rounding. This ensures cursor tracks text exactly
     /// on multi-run scaled lines (org headings with tags).
     #[test]
@@ -910,13 +964,21 @@ mod tests {
 
         // Cursor uses pixel_x_for_col:
         for target_col in 0..line.len() {
-            let cursor_px = FrameLayout::pixel_x_for_col(line, target_col, glyph_advance);
+            let cursor_px = FrameLayout::pixel_x_for_col(
+                line,
+                target_col,
+                glyph_advance,
+                mae_core::grapheme::WidthPolicy::default(),
+            );
 
             // Text rendering uses the same accumulation in pixel_offsets:
             let text_px: f32 = line
                 .chars()
                 .take(target_col)
-                .map(|ch| char_width(ch) as f32 * glyph_advance)
+                .map(|ch| {
+                    char_width(ch, mae_core::grapheme::WidthPolicy::default()) as f32
+                        * glyph_advance
+                })
                 .sum();
 
             assert_eq!(

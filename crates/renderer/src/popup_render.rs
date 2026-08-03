@@ -1,7 +1,7 @@
 //! Popup overlays: file picker, file browser, command palette, LSP completion,
 //! hover popup, code action menu.
 
-use mae_core::text_utils::{centered_popup_dims, truncate_end, truncate_start};
+use mae_core::text_utils::{centered_popup_dims, truncate_end_with, truncate_start_with};
 use mae_core::Editor;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
@@ -193,7 +193,7 @@ pub(crate) fn render_file_picker(frame: &mut Frame, area: Rect, editor: &Editor)
         // mismatched unit. Panics on a CJK/multi-byte path component.
         // `truncate_start` keeps the distinctive end of the path, safely.
         let max_w = inner.width as usize - 1;
-        let display = truncate_start(path, max_w);
+        let display = truncate_start_with(path, max_w, editor.width_policy());
 
         lines.push(Line::from(Span::styled(display, style)));
     }
@@ -276,7 +276,7 @@ pub(crate) fn render_file_browser(frame: &mut Frame, area: Rect, editor: &Editor
         // See the file-picker site above: same byte-length-vs-column-budget bug.
         let name = entry.display();
         let max_w = inner.width as usize - 1;
-        let name = truncate_start(&name, max_w);
+        let name = truncate_start_with(&name, max_w, editor.width_policy());
         lines.push(Line::from(Span::styled(name, style)));
     }
 
@@ -391,7 +391,9 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
         .iter()
         .skip(start)
         .take(results_height)
-        .map(|&i| mae_core::display_width(&palette.entries[i].name))
+        .map(|&i| {
+            mae_core::grapheme::display_width_with(&palette.entries[i].name, editor.width_policy())
+        })
         .max()
         .unwrap_or(0)
         .min(max_name_width);
@@ -423,12 +425,20 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
         // mismatched unit, panicking on a multi-byte name (CJK, accented
         // paths, etc). `truncate_start`/`byte_offset_for_max_width` cut on
         // grapheme-cluster boundaries in display-column space instead.
-        let name_display = if mae_core::display_width(&entry.name) > name_col {
+        let name_display = if mae_core::grapheme::display_width_with(
+            &entry.name,
+            editor.width_policy(),
+        ) > name_col
+        {
             if full_width_name {
                 // For paths, show the end (most distinctive part).
-                truncate_start(&entry.name, name_col)
+                truncate_start_with(&entry.name, name_col, editor.width_policy())
             } else {
-                let cut = mae_core::grapheme::byte_offset_for_max_width(&entry.name, name_col);
+                let cut = mae_core::grapheme::byte_offset_for_max_width_with(
+                    &entry.name,
+                    name_col,
+                    editor.width_policy(),
+                );
                 format!("{:<w$}", &entry.name[..cut], w = name_col)
             }
         } else {
@@ -443,13 +453,15 @@ pub(crate) fn render_command_palette(frame: &mut Frame, area: Rect, editor: &Edi
         } else {
             // Same byte-length-vs-column-budget bug as above.
             let available_for_doc = (inner.width as usize).saturating_sub(name_col + 3);
-            let doc_display = if mae_core::display_width(&entry.doc) > available_for_doc
-                && available_for_doc > 1
-            {
-                truncate_end(&entry.doc, available_for_doc)
-            } else {
-                entry.doc.clone()
-            };
+            let doc_display =
+                if mae_core::grapheme::display_width_with(&entry.doc, editor.width_policy())
+                    > available_for_doc
+                    && available_for_doc > 1
+                {
+                    truncate_end_with(&entry.doc, available_for_doc, editor.width_policy())
+                } else {
+                    entry.doc.clone()
+                };
 
             lines.push(Line::from(vec![
                 Span::styled(format!(" {}  ", name_display), row_style),

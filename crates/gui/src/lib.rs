@@ -643,13 +643,15 @@ impl Renderer for GuiRenderer {
 
             let separator = editor.which_key_separator.clone();
             let max_desc: usize = editor.which_key_max_desc_length;
-            let sep_width = mae_core::text_utils::display_width(&separator);
+            let sep_width =
+                mae_core::grapheme::display_width_with(&separator, editor.width_policy());
             let inner_width = cols.saturating_sub(2);
             let (_col_w, num_cols) = mae_core::text_utils::which_key_column_layout(
                 &entries,
                 inner_width,
                 sep_width,
                 max_desc,
+                editor.width_policy(),
             );
             let entry_rows = entries.len().div_ceil(num_cols);
             // `editor.which_key_max_height_pct` is already clamped to

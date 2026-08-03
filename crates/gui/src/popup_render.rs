@@ -1,8 +1,7 @@
 //! Popup overlays: file picker, file browser, command palette, LSP completion.
 
 use mae_core::text_utils::{
-    centered_popup_dims, display_width, format_keypress, truncate_end, truncate_start,
-    WK_BREADCRUMB_SEP,
+    centered_popup_dims, format_keypress, truncate_end_with, truncate_start_with, WK_BREADCRUMB_SEP,
 };
 use mae_core::Editor;
 use skia_safe::Color4f;
@@ -221,8 +220,9 @@ pub fn render_file_picker(canvas: &mut SkiaCanvas, editor: &Editor, cols: usize,
 
         let fg = if is_selected { selection_fg } else { text_fg };
         let max_w = inner.width.saturating_sub(1);
-        let display = if display_width(path) > max_w {
-            truncate_start(path, max_w)
+        let display = if mae_core::grapheme::display_width_with(path, editor.width_policy()) > max_w
+        {
+            truncate_start_with(path, max_w, editor.width_policy())
         } else {
             path.clone()
         };
@@ -303,8 +303,8 @@ pub fn render_file_browser(canvas: &mut SkiaCanvas, editor: &Editor, cols: usize
 
         let mut name = entry.display();
         let max_w = inner.width.saturating_sub(1);
-        if display_width(&name) > max_w {
-            name = truncate_start(&name, max_w);
+        if mae_core::grapheme::display_width_with(&name, editor.width_policy()) > max_w {
+            name = truncate_start_with(&name, max_w, editor.width_policy());
         }
         canvas.draw_text_at(row, inner.col, &name, fg);
     }
@@ -443,12 +443,16 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
         let fg = if is_selected { selection_fg } else { text_fg };
         let dfg = if is_selected { selection_fg } else { doc_fg };
 
-        let name_display = if display_width(&entry.name) > name_col {
+        let name_display = if mae_core::grapheme::display_width_with(
+            &entry.name,
+            editor.width_policy(),
+        ) > name_col
+        {
             if full_width_name {
                 // For paths, show the end (most distinctive part)
-                truncate_start(&entry.name, name_col)
+                truncate_start_with(&entry.name, name_col, editor.width_policy())
             } else {
-                truncate_end(&entry.name, name_col)
+                truncate_end_with(&entry.name, name_col, editor.width_policy())
             }
         } else {
             format!("{:<w$}", entry.name, w = name_col)
@@ -459,8 +463,11 @@ pub fn render_command_palette(canvas: &mut SkiaCanvas, editor: &Editor, cols: us
         if !full_width_name {
             let available_for_doc = inner.width.saturating_sub(name_col + 3);
             let doc_display =
-                if display_width(&entry.doc) > available_for_doc && available_for_doc > 1 {
-                    truncate_end(&entry.doc, available_for_doc)
+                if mae_core::grapheme::display_width_with(&entry.doc, editor.width_policy())
+                    > available_for_doc
+                    && available_for_doc > 1
+                {
+                    truncate_end_with(&entry.doc, available_for_doc, editor.width_policy())
                 } else {
                     entry.doc.clone()
                 };
@@ -529,7 +536,7 @@ pub fn render_which_key_popup(
     let inner_width = cols.saturating_sub(2);
     let inner_height = height.saturating_sub(2);
 
-    let sep_width = display_width(&separator);
+    let sep_width = mae_core::grapheme::display_width_with(&separator, editor.width_policy());
     let layout = mae_core::render_common::which_key::compute_which_key_layout(
         entries,
         inner_width,
@@ -537,6 +544,7 @@ pub fn render_which_key_popup(
         sep_width,
         max_desc,
         editor.which_key_scroll,
+        editor.width_policy(),
     );
 
     let mut draw_row = 0usize;
@@ -682,7 +690,11 @@ fn render_anchored_popup(
         // fit `inner_width`, but this defends against off-by-one rounding
         // without risking a mid-cluster cut, unlike the previous
         // `.chars().take(inner_width)` (char count, not display columns).
-        let byte_idx = mae_core::grapheme::byte_offset_for_max_width(line, inner_width);
+        let byte_idx = mae_core::grapheme::byte_offset_for_max_width_with(
+            line,
+            inner_width,
+            editor.width_policy(),
+        );
         canvas.draw_text_at(inner_top + i, inner_left, &line[..byte_idx], text_fg);
     }
 
@@ -948,7 +960,6 @@ fn render_mini_dialog(
     // and wraps long content (e.g. the host-key fingerprint) instead of clipping.
     // Shared with the TUI via `render_common::dialog` so the two can't diverge.
     use mae_core::render_common::dialog::{mini_dialog_layout, DialogLine};
-    use mae_core::text_utils::display_width;
     let layout = mini_dialog_layout(dialog, cols, rows);
     let (col, row, width, height) = (layout.col, layout.row, layout.width, layout.height);
 
@@ -985,8 +996,11 @@ fn render_mini_dialog(
                 }
                 let label_s = format!("{label}: ");
                 canvas.draw_text_at(line_row, inner_col, &label_s, prompt_fg);
-                let value_col = inner_col + display_width(&label_s);
-                let max_value_len = inner_width.saturating_sub(display_width(&label_s));
+                let value_col = inner_col
+                    + mae_core::grapheme::display_width_with(&label_s, editor.width_policy());
+                let max_value_len = inner_width.saturating_sub(
+                    mae_core::grapheme::display_width_with(&label_s, editor.width_policy()),
+                );
                 let (display_value, fg) = if value.is_empty() {
                     (placeholder.as_str(), dim_fg)
                 } else {

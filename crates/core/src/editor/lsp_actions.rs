@@ -30,13 +30,18 @@ impl Editor {
         };
         let suffix = self.lsp_starting_suffix(&lang_id);
         let win = self.window_mgr.focused_window();
+        // ADR-087 Rule 1: byte col -> LSP `character` via the named conversion.
+        let character = crate::lsp_position::byte_col_to_lsp_character(
+            &self.active_buffer().line_text_no_newline(win.cursor_row),
+            win.cursor_col,
+        );
         self.lsp
             .pending_requests
             .push(crate::LspIntent::CodeAction {
                 uri,
                 language_id: lang_id,
                 line: win.cursor_row as u32,
-                character: win.cursor_col as u32,
+                character,
             });
         self.set_status(format!(
             "LSP code-action: awaiting server response{}",
@@ -142,10 +147,20 @@ impl Editor {
                     .then(b.start_character.cmp(&a.start_character))
             });
             for edit in sorted_edits {
-                let start = self.buffers[idx]
-                    .char_offset_at(edit.start_line as usize, edit.start_character as usize);
-                let end = self.buffers[idx]
-                    .char_offset_at(edit.end_line as usize, edit.end_character as usize);
+                // ADR-087 Rule 1: an INBOUND LSP `character` is not a byte
+                // column — convert (and clamp; the server is untrusted).
+                let start_row = edit.start_line as usize;
+                let end_row = edit.end_line as usize;
+                let start_col = crate::lsp_position::lsp_character_to_byte_col(
+                    &self.buffers[idx].line_text_no_newline(start_row),
+                    edit.start_character,
+                );
+                let end_col = crate::lsp_position::lsp_character_to_byte_col(
+                    &self.buffers[idx].line_text_no_newline(end_row),
+                    edit.end_character,
+                );
+                let start = self.buffers[idx].char_offset_at(start_row, start_col);
+                let end = self.buffers[idx].char_offset_at(end_row, end_col);
                 if start < end {
                     self.buffers[idx].delete_range(start, end);
                 }
@@ -213,9 +228,15 @@ impl Editor {
                     uri,
                     language_id: lang_id,
                     start_line: start_row as u32,
-                    start_char: start_col as u32,
+                    start_char: crate::lsp_position::byte_col_to_lsp_character(
+                        &self.buffers[idx].line_text_no_newline(start_row),
+                        start_col,
+                    ),
                     end_line: end_row as u32,
-                    end_char: end_col as u32,
+                    end_char: crate::lsp_position::byte_col_to_lsp_character(
+                        &self.buffers[idx].line_text_no_newline(end_row),
+                        end_col,
+                    ),
                 });
             self.set_status("LSP range format: awaiting server response");
         } else {

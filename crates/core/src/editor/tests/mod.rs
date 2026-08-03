@@ -21,6 +21,7 @@ mod project_tests;
 mod search_tests;
 mod shell_tests;
 mod table_tests;
+mod text_index_domain_tests;
 mod text_object_tests;
 mod visual_tests;
 

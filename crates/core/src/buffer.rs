@@ -519,13 +519,19 @@ impl Buffer {
     /// sequence `buffer_render.rs` already uses for drawing — one place this
     /// logic lives, not reimplemented per call site (CLAUDE.md principle #8).
     ///
-    /// Fast path: returns the raw line text + `rope_col` unchanged when no
-    /// active region overlaps this line (the common case — most lines have
+    /// Fast path: returns the raw line text + `rope_byte_col` unchanged when
+    /// no active region overlaps this line (the common case — most lines have
     /// no tabs, links, or images).
-    pub fn display_text_and_col(&self, line_idx: usize, rope_col: usize) -> (String, usize) {
+    ///
+    /// ADR-087 Rule 4: `rope_byte_col` in and the returned column out are both
+    /// **byte** offsets — the first into the rope line, the second into the
+    /// returned display string. Take the display width of the prefix
+    /// (`display_width_with(&text[..col], policy)`); do **not** feed the
+    /// result to `display_width_up_to_grapheme`, which wants a grapheme index.
+    pub fn display_text_and_col(&self, line_idx: usize, rope_byte_col: usize) -> (String, usize) {
         let rope = self.rope();
         if line_idx >= rope.len_lines() {
-            return (String::new(), rope_col);
+            return (String::new(), rope_byte_col);
         }
         let line_str: String = rope
             .line(line_idx)
@@ -533,7 +539,7 @@ impl Buffer {
             .filter(|c| *c != '\n' && *c != '\r')
             .collect();
         if self.display_regions.is_empty() {
-            return (line_str, rope_col);
+            return (line_str, rope_byte_col);
         }
 
         let effective_regions = crate::display_region::regions_with_cursor_reveal(
@@ -548,7 +554,7 @@ impl Buffer {
             .get(start_idx)
             .is_some_and(|r| r.byte_start < line_byte_end);
         if !has_regions {
-            return (line_str, rope_col);
+            return (line_str, rope_byte_col);
         }
 
         let chars: Vec<char> = line_str.chars().collect();
@@ -559,8 +565,13 @@ impl Buffer {
             &effective_regions,
         );
         let display_str: String = display_chars.iter().collect();
-        let display_col = crate::display_region::rope_col_to_display_col(rope_col, &rope_col_map);
-        (display_str, display_col)
+        // Rule 1: rope byte col -> display CHAR col -> display BYTE col. Two
+        // domain crossings, each an explicit named conversion.
+        let display_char_col =
+            crate::display_region::rope_col_to_display_col(rope_byte_col, &rope_col_map);
+        let display_byte_col =
+            crate::grapheme::char_idx_to_byte_idx(&display_str, display_char_col);
+        (display_str, display_byte_col)
     }
 
     /// Create a dashboard buffer (startup splash screen).
@@ -976,8 +987,36 @@ impl Buffer {
         }
     }
 
-    /// Length of a line in characters, excluding the trailing newline.
-    pub fn line_len(&self, line: usize) -> usize {
+    /// Length of a line in **bytes**, excluding the trailing newline.
+    ///
+    /// ADR-087 Rule 4: this is the bound for `Window::cursor_col`, which is a
+    /// byte offset from the start of its line. Callers that genuinely want a
+    /// *character* count (a Scheme/MCP surface that documents chars, a
+    /// ropey 1.x char-offset computation) must call [`Buffer::line_char_len`]
+    /// instead — the two differ on every non-ASCII line, and picking the wrong
+    /// one is exactly the domain-mixing bug class ADR-087 exists to close.
+    pub fn line_byte_len(&self, line: usize) -> usize {
+        if line >= self.rope.len_lines() {
+            return 0;
+        }
+        let line_slice = self.rope.line(line);
+        let len_chars = line_slice.len_chars();
+        if len_chars == 0 {
+            return 0;
+        }
+        let bytes = line_slice.len_bytes();
+        if line_slice.char(len_chars - 1) == '\n' {
+            // '\n' is one byte in UTF-8.
+            bytes - 1
+        } else {
+            bytes
+        }
+    }
+
+    /// Length of a line in **characters** (Unicode scalar values), excluding
+    /// the trailing newline. The ropey-1.x-address-space counterpart to
+    /// [`Buffer::line_byte_len`]; not a cursor column (ADR-087 Rule 4).
+    pub fn line_char_len(&self, line: usize) -> usize {
         if line >= self.rope.len_lines() {
             return 0;
         }
@@ -988,6 +1027,20 @@ impl Buffer {
         } else {
             len
         }
+    }
+
+    /// The line's text with any trailing `\n`/`\r` stripped — the string whose
+    /// byte offsets `Window::cursor_col` indexes into.
+    ///
+    /// (`line_text` keeps the newline; this one does not. Cursor-column math
+    /// must use *this* one, because `cursor_col == line_byte_len(row)` is the
+    /// valid one-past-the-end position and the newline must not be part of it.)
+    pub fn line_text_no_newline(&self, line: usize) -> String {
+        if line >= self.rope.len_lines() {
+            return String::new();
+        }
+        let s: String = self.rope.line(line).into();
+        s.trim_end_matches('\n').trim_end_matches('\r').to_string()
     }
 
     /// Check if a line is inside a folded range (hidden).
@@ -1042,23 +1095,167 @@ impl Buffer {
         self.folded_ranges.clear();
     }
 
-    /// Char offset in the rope for a given (row, col) position.
-    pub fn char_offset_at(&self, row: usize, col: usize) -> usize {
-        if self.rope.len_chars() == 0 {
+    // -----------------------------------------------------------------
+    // ADR-087 Rule 4 — (row, byte_col) <-> rope offset conversions.
+    //
+    // `byte_col` is always a byte offset from the start of `row`, on a
+    // grapheme-cluster boundary (see `snap_col_to_grapheme`). It is the
+    // domain of `Window::cursor_col`, `Cursor::col`, `Vi::visual_anchor_col`
+    // and every persisted column. Rope offsets come in two flavours because
+    // ropey 1.x's editing API is char-addressed while everything MAE stores
+    // or slices is byte-addressed; both conversions live here so no call site
+    // reimplements `line_to_char(row) + col`, which was the pre-ADR-087 idiom
+    // and is wrong the moment the line contains a non-ASCII character.
+    // -----------------------------------------------------------------
+
+    /// Absolute **byte** offset in the rope for `(row, byte_col)`.
+    pub fn byte_offset_at(&self, row: usize, byte_col: usize) -> usize {
+        if self.rope.len_bytes() == 0 {
             return 0;
         }
         let row = row.min(self.line_count().saturating_sub(1));
-        let line_start = self.rope.line_to_char(row);
-        line_start + col
+        let line_start = self.rope.line_to_byte(row);
+        let line_end = line_start + self.rope.line(row).len_bytes();
+        (line_start + byte_col)
+            .min(line_end)
+            .min(self.rope.len_bytes())
     }
 
-    /// Convert a char offset back to (row, col).
+    /// Absolute **char** offset in the rope for `(row, byte_col)`.
+    ///
+    /// The bridge from MAE's byte-domain cursor columns into ropey 1.x's
+    /// char-addressed API (`Rope::insert`, `Rope::remove`, `Rope::slice`).
+    /// Note the asymmetry in the name: the *input* column is bytes, the
+    /// *output* offset is chars.
+    pub fn char_offset_at(&self, row: usize, byte_col: usize) -> usize {
+        if self.rope.len_chars() == 0 {
+            return 0;
+        }
+        let byte_off = self.byte_offset_at(row, byte_col);
+        self.rope.byte_to_char(self.floor_rope_byte(byte_off))
+    }
+
+    /// Convert an absolute **char** offset back to `(row, byte_col)`.
     pub fn row_col_from_offset(&self, offset: usize) -> (usize, usize) {
         let offset = offset.min(self.rope.len_chars().saturating_sub(1));
         let row = self.rope.char_to_line(offset);
-        let line_start = self.rope.line_to_char(row);
-        let col = offset - line_start;
-        (row, col)
+        let line_start_byte = self.rope.line_to_byte(row);
+        let byte = self.rope.char_to_byte(offset);
+        (row, byte.saturating_sub(line_start_byte))
+    }
+
+    /// Byte column, within `row`, of the absolute **char** offset
+    /// `char_offset`.
+    ///
+    /// Replaces the pre-ADR-087 idiom `char_offset - rope.line_to_char(row)`,
+    /// which silently produced a *char* column that then got stored in a byte
+    /// field. Unlike [`Buffer::row_col_from_offset`] this does not re-derive
+    /// the row, so it keeps working at the very end of the buffer where that
+    /// one clamps to `len_chars() - 1`.
+    pub fn byte_col_of_char_offset(&self, row: usize, char_offset: usize) -> usize {
+        let char_offset = char_offset.min(self.rope.len_chars());
+        let byte = self.rope.char_to_byte(char_offset);
+        let row = row.min(self.rope.len_lines().saturating_sub(1));
+        byte.saturating_sub(self.rope.line_to_byte(row))
+    }
+
+    /// Convert an absolute **byte** offset back to `(row, byte_col)`.
+    pub fn row_col_from_byte_offset(&self, byte_offset: usize) -> (usize, usize) {
+        let byte_offset = self.floor_rope_byte(byte_offset.min(self.rope.len_bytes()));
+        let row = self.rope.byte_to_line(byte_offset);
+        let line_start_byte = self.rope.line_to_byte(row);
+        (row, byte_offset.saturating_sub(line_start_byte))
+    }
+
+    /// Round an absolute rope byte offset down to the nearest char boundary.
+    /// The rope-level counterpart of `grapheme::floor_char_boundary`.
+    ///
+    /// ropey's `byte_to_char` already rounds a mid-sequence byte down to the
+    /// char containing it, so the round trip through the char domain *is* the
+    /// floor operation — no byte-by-byte walk needed.
+    fn floor_rope_byte(&self, byte: usize) -> usize {
+        let b = byte.min(self.rope.len_bytes());
+        self.rope.char_to_byte(self.rope.byte_to_char(b))
+    }
+
+    /// The next grapheme-cluster boundary at or after `byte_col` on `row`,
+    /// clamped to the line's byte length. One "move right".
+    pub fn next_grapheme_col(&self, row: usize, byte_col: usize) -> usize {
+        let text = self.line_text_no_newline(row);
+        let from = crate::grapheme::floor_char_boundary(&text, byte_col);
+        crate::grapheme::next_grapheme_boundary(&text, from)
+    }
+
+    /// The previous grapheme-cluster boundary strictly before `byte_col` on
+    /// `row`, clamped at 0. One "move left".
+    pub fn prev_grapheme_col(&self, row: usize, byte_col: usize) -> usize {
+        let text = self.line_text_no_newline(row);
+        let from = crate::grapheme::floor_char_boundary(&text, byte_col.min(text.len()));
+        crate::grapheme::prev_grapheme_boundary(&text, from)
+    }
+
+    /// Snap `byte_col` back to the grapheme-cluster boundary at or before it.
+    ///
+    /// The invariant enforcer for ADR-087 Rule 4: any column that came from
+    /// arithmetic, from an external protocol, or from a restored session file
+    /// passes through here before it becomes a cursor position, so
+    /// `&line[..cursor_col]` can never split a cluster (let alone a UTF-8
+    /// sequence).
+    pub fn snap_col_to_grapheme(&self, row: usize, byte_col: usize) -> usize {
+        let text = self.line_text_no_newline(row);
+        crate::grapheme::snap_to_grapheme_boundary(&text, byte_col)
+    }
+
+    /// Convert a **char** column on `row` (ropey 1.x address space, an LSP
+    /// `Position.character` under `utf-8`-less negotiation, or a legacy
+    /// persisted session column) into a byte column.
+    pub fn char_col_to_byte_col(&self, row: usize, char_col: usize) -> usize {
+        let text = self.line_text_no_newline(row);
+        crate::grapheme::char_idx_to_byte_idx(&text, char_col)
+    }
+
+    /// Convert a **display column** (terminal cells, e.g. a mouse click's
+    /// screen column) on `row` into a byte column, landing on the
+    /// grapheme-cluster boundary that *contains* that cell.
+    ///
+    /// The pre-ADR-087 idiom was `screen_col.min(line_len_in_chars)`, which
+    /// silently equated three domains at once; a click on the right half of a
+    /// CJK character resolved to the wrong character.
+    ///
+    /// @ai-caution: [rendering] This measures the RAW line, so a line with an
+    /// active display region (tab expansion, link concealment) still resolves
+    /// approximately — the same pre-existing gap the char-based version had.
+    /// Fixing it needs the inverse of `display_text_and_col`, which is
+    /// `display_region::display_col_to_rope_col` plus the region lookup;
+    /// deliberately not folded in here with the ADR-087 Rule 4 migration.
+    pub fn byte_col_for_display_col(
+        &self,
+        row: usize,
+        display_col: usize,
+        policy: crate::grapheme::WidthPolicy,
+    ) -> usize {
+        let text = self.line_text_no_newline(row);
+        crate::grapheme::byte_offset_for_max_width_with(&text, display_col, policy)
+    }
+
+    /// Display width (terminal cells) of `row`'s text up to `byte_col`.
+    /// The inverse direction of [`Buffer::byte_col_for_display_col`].
+    pub fn display_col_for_byte_col(
+        &self,
+        row: usize,
+        byte_col: usize,
+        policy: crate::grapheme::WidthPolicy,
+    ) -> usize {
+        let text = self.line_text_no_newline(row);
+        let b = crate::grapheme::floor_char_boundary(&text, byte_col);
+        crate::grapheme::display_width_with(&text[..b], policy)
+    }
+
+    /// Convert a byte column on `row` into a **char** column.
+    pub fn byte_col_to_char_col(&self, row: usize, byte_col: usize) -> usize {
+        let text = self.line_text_no_newline(row);
+        let b = crate::grapheme::floor_char_boundary(&text, byte_col);
+        text[..b].chars().count()
     }
 
     /// Maximum number of undo entries to retain.
@@ -1307,7 +1504,14 @@ impl Buffer {
             win.cursor_col = 0;
             self.changed_lines.insert(win.cursor_row);
         } else {
-            win.cursor_col += 1;
+            // ADR-087 Rule 4: cursor_col is a byte offset, so advance by the
+            // inserted char's UTF-8 length, not by 1. (A single `char` is
+            // never a partial grapheme cluster's *start*, so the result is
+            // still a cluster boundary except when the user typed a combining
+            // mark onto a base — where sitting after it is what an editor
+            // does anyway, and clamp_cursor's snap would otherwise walk the
+            // cursor backwards over their own keystroke.)
+            win.cursor_col += ch.len_utf8();
         }
         self.modified = true;
         self.bump_generation();
@@ -1326,10 +1530,13 @@ impl Buffer {
         }
         let ch = self.rope.char(pos - 1);
         let prev_line_len = if ch == '\n' {
-            self.line_len(win.cursor_row - 1)
+            self.line_byte_len(win.cursor_row - 1)
         } else {
             0
         };
+        // ADR-087 Rule 4: the new byte column is the old one minus the
+        // deleted char's UTF-8 length, not minus 1.
+        let new_col = win.cursor_col.saturating_sub(ch.len_utf8());
         self.rope.remove(pos - 1..pos);
         self.sync_delete(pos - 1, 1);
         self.push_undo(EditAction::DeleteChar { pos: pos - 1, ch });
@@ -1338,7 +1545,7 @@ impl Buffer {
             win.cursor_row -= 1;
             win.cursor_col = prev_line_len;
         } else {
-            win.cursor_col -= 1;
+            win.cursor_col = new_col;
         }
         self.changed_lines.insert(win.cursor_row);
         self.modified = true;
@@ -1423,7 +1630,7 @@ impl Buffer {
         self.redo_stack.clear();
         self.modified = true;
         self.bump_generation();
-        win.cursor_col = pos - line_start;
+        win.cursor_col = self.byte_col_of_char_offset(win.cursor_row, pos);
     }
 
     /// Delete from the cursor to the beginning of the current line (C-u).
@@ -1730,12 +1937,13 @@ impl Buffer {
         win.clamp_cursor(self);
     }
 
-    /// Set cursor row/col from a char offset in the rope.
+    /// Set cursor row + **byte** col from an absolute char offset in the rope
+    /// (ADR-087 Rule 4).
     fn set_cursor_from_char_pos(rope: &Rope, win: &mut Window, pos: usize) {
         let pos = pos.min(rope.len_chars());
         win.cursor_row = rope.char_to_line(pos);
-        let line_start = rope.line_to_char(win.cursor_row);
-        win.cursor_col = pos - line_start;
+        let line_start_byte = rope.line_to_byte(win.cursor_row);
+        win.cursor_col = rope.char_to_byte(pos).saturating_sub(line_start_byte);
     }
 
     /// Rebuild the buffer's rope from the flattened conversation text.
@@ -2069,7 +2277,7 @@ mod tests {
     #[test]
     fn move_left_at_start_is_noop() {
         let (_buf, mut win) = new_buf_win();
-        win.move_left();
+        win.move_left(&_buf);
         assert_eq!(win.cursor_col, 0);
     }
 
@@ -2085,7 +2293,7 @@ mod tests {
     fn move_left_and_right() {
         let (mut buf, mut win) = new_buf_win();
         insert_str(&mut buf, &mut win, "ab");
-        win.move_left();
+        win.move_left(&buf);
         assert_eq!(win.cursor_col, 1);
         win.move_right(&buf);
         assert_eq!(win.cursor_col, 2);
@@ -2350,8 +2558,8 @@ mod tests {
     fn line_len_excludes_newline() {
         let (mut buf, mut win) = new_buf_win();
         insert_str(&mut buf, &mut win, "hello\nworld");
-        assert_eq!(buf.line_len(0), 5);
-        assert_eq!(buf.line_len(1), 5);
+        assert_eq!(buf.line_byte_len(0), 5);
+        assert_eq!(buf.line_byte_len(1), 5);
     }
 
     #[test]

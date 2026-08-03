@@ -63,8 +63,9 @@ impl Editor {
                 }
             }
             "move-left" => {
+                let buf = &self.buffers[self.active_buffer_idx()];
                 for _ in 0..n {
-                    self.window_mgr.focused_window_mut().move_left();
+                    self.window_mgr.focused_window_mut().move_left(buf);
                 }
                 // With org-appear, cursor moves through revealed text — no snapping.
             }
@@ -92,17 +93,31 @@ impl Editor {
                 } else {
                     let sb_w = self.show_break.chars().count();
                     let bi = self.break_indent;
+                    let policy = self.width_policy();
                     let win = self.window_mgr.focused_window_mut();
                     for _ in 0..n {
                         let line = buf.rope().line(win.cursor_row);
                         let lt: String = line.chars().collect();
                         let lt = lt.trim_end_matches('\n');
-                        let (wrap_row, _) =
-                            crate::wrap::wrap_cursor_position(lt, win.cursor_col, tw, bi, sb_w);
-                        let total_rows = crate::wrap::wrap_line_display_rows(lt, tw, bi, sb_w);
+                        let (wrap_row, _) = crate::wrap::wrap_cursor_position(
+                            lt,
+                            win.cursor_col,
+                            tw,
+                            bi,
+                            sb_w,
+                            policy,
+                        );
+                        let total_rows =
+                            crate::wrap::wrap_line_display_rows(lt, tw, bi, sb_w, policy);
                         if wrap_row + 1 < total_rows {
-                            let next_start =
-                                crate::wrap::wrap_row_start_col(lt, wrap_row + 1, tw, bi, sb_w);
+                            let next_start = crate::wrap::wrap_row_start_col(
+                                lt,
+                                wrap_row + 1,
+                                tw,
+                                bi,
+                                sb_w,
+                                policy,
+                            );
                             win.cursor_col = next_start;
                         } else {
                             win.move_down(buf);
@@ -122,23 +137,37 @@ impl Editor {
                 } else {
                     let sb_w = self.show_break.chars().count();
                     let bi = self.break_indent;
+                    let policy = self.width_policy();
                     let win = self.window_mgr.focused_window_mut();
                     for _ in 0..n {
                         let line = buf.rope().line(win.cursor_row);
                         let lt: String = line.chars().collect();
                         let lt = lt.trim_end_matches('\n');
-                        let (wrap_row, _) =
-                            crate::wrap::wrap_cursor_position(lt, win.cursor_col, tw, bi, sb_w);
+                        let (wrap_row, _) = crate::wrap::wrap_cursor_position(
+                            lt,
+                            win.cursor_col,
+                            tw,
+                            bi,
+                            sb_w,
+                            policy,
+                        );
                         if wrap_row > 0 {
-                            let prev_start =
-                                crate::wrap::wrap_row_start_col(lt, wrap_row - 1, tw, bi, sb_w);
+                            let prev_start = crate::wrap::wrap_row_start_col(
+                                lt,
+                                wrap_row - 1,
+                                tw,
+                                bi,
+                                sb_w,
+                                policy,
+                            );
                             win.cursor_col = prev_start;
                         } else if win.cursor_row > 0 {
                             win.move_up(buf);
                             let prev_line = buf.rope().line(win.cursor_row);
                             let plt: String = prev_line.chars().collect();
                             let plt = plt.trim_end_matches('\n');
-                            let prev_rows = crate::wrap::wrap_line_display_rows(plt, tw, bi, sb_w);
+                            let prev_rows =
+                                crate::wrap::wrap_line_display_rows(plt, tw, bi, sb_w, policy);
                             if prev_rows > 1 {
                                 let last_start = crate::wrap::wrap_row_start_col(
                                     plt,
@@ -146,6 +175,7 @@ impl Editor {
                                     tw,
                                     bi,
                                     sb_w,
+                                    policy,
                                 );
                                 win.cursor_col = last_start;
                             }
@@ -161,13 +191,15 @@ impl Editor {
                     let buf = &self.buffers[self.active_buffer_idx()];
                     let sb_w = self.show_break.chars().count();
                     let bi = self.break_indent;
+                    let policy = self.width_policy();
                     let win = self.window_mgr.focused_window_mut();
                     let line = buf.rope().line(win.cursor_row);
                     let lt: String = line.chars().collect();
                     let lt = lt.trim_end_matches('\n');
                     let (wrap_row, _) =
-                        crate::wrap::wrap_cursor_position(lt, win.cursor_col, tw, bi, sb_w);
-                    win.cursor_col = crate::wrap::wrap_row_start_col(lt, wrap_row, tw, bi, sb_w);
+                        crate::wrap::wrap_cursor_position(lt, win.cursor_col, tw, bi, sb_w, policy);
+                    win.cursor_col =
+                        crate::wrap::wrap_row_start_col(lt, wrap_row, tw, bi, sb_w, policy);
                 }
             }
             "move-display-line-end" => {
@@ -178,19 +210,23 @@ impl Editor {
                 } else {
                     let sb_w = self.show_break.chars().count();
                     let bi = self.break_indent;
+                    let policy = self.width_policy();
                     let win = self.window_mgr.focused_window_mut();
                     let line = buf.rope().line(win.cursor_row);
                     let lt: String = line.chars().collect();
                     let lt = lt.trim_end_matches('\n');
-                    let line_len = lt.chars().count();
+                    let line_len = lt.len();
                     let (wrap_row, _) =
-                        crate::wrap::wrap_cursor_position(lt, win.cursor_col, tw, bi, sb_w);
-                    let total_rows = crate::wrap::wrap_line_display_rows(lt, tw, bi, sb_w);
+                        crate::wrap::wrap_cursor_position(lt, win.cursor_col, tw, bi, sb_w, policy);
+                    let total_rows = crate::wrap::wrap_line_display_rows(lt, tw, bi, sb_w, policy);
+                    // ADR-087 Rule 4: these are BYTE columns, so "one before"
+                    // is the previous grapheme boundary, not `- 1`.
                     let end = if wrap_row + 1 < total_rows {
-                        crate::wrap::wrap_row_start_col(lt, wrap_row + 1, tw, bi, sb_w)
-                            .saturating_sub(1)
+                        let next =
+                            crate::wrap::wrap_row_start_col(lt, wrap_row + 1, tw, bi, sb_w, policy);
+                        crate::grapheme::prev_grapheme_boundary(lt, next)
                     } else {
-                        line_len.saturating_sub(1)
+                        crate::grapheme::prev_grapheme_boundary(lt, line_len)
                     };
                     win.cursor_col = end;
                 }

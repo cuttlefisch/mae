@@ -143,7 +143,7 @@ impl Editor {
         // Clamp to the buffer's current dimensions.
         let line_count = self.buffers[target_idx].display_line_count();
         let row = entry.row.min(line_count.saturating_sub(1));
-        let col_max = self.buffers[target_idx].line_len(row);
+        let col_max = self.buffers[target_idx].line_byte_len(row);
         let col = entry.col.min(col_max);
 
         let vh = self.focused_viewport_height();

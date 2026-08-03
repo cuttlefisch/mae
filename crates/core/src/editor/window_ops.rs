@@ -158,7 +158,7 @@ impl Editor {
         if win.cursor_row >= line_count {
             win.cursor_row = line_count.saturating_sub(1);
         }
-        let line_len = self.buffers[idx].line_len(win.cursor_row);
+        let line_len = self.buffers[idx].line_byte_len(win.cursor_row);
         if win.cursor_col > line_len {
             win.cursor_col = line_len;
         }

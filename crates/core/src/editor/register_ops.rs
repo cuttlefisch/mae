@@ -146,10 +146,10 @@ impl Editor {
         let end = offset + text.chars().count();
         let rope = self.buffers[idx].rope();
         let new_row = rope.char_to_line(end);
-        let line_start = rope.line_to_char(new_row);
+        let new_col = self.buffers[idx].byte_col_of_char_offset(new_row, end);
         let win = self.window_mgr.focused_window_mut();
         win.cursor_row = new_row;
-        win.cursor_col = end - line_start;
+        win.cursor_col = new_col;
     }
 
     /// `:reg` / `:registers` — render all non-empty registers into the

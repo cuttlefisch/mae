@@ -168,6 +168,90 @@ pub fn display_width_up_to_grapheme(s: &str, grapheme_idx: usize) -> usize {
         .sum()
 }
 
+/// Display width (terminal cells) of `s`'s first `byte_idx` bytes, under
+/// `policy`.
+///
+/// **This is the byte-column -> screen-column conversion** (ADR-087 Rule 1),
+/// and the replacement for feeding a cursor column to
+/// [`display_width_up_to_grapheme`] — which takes a *grapheme index* and was
+/// one of the four domains `Window::cursor_col` was silently read as.
+/// `byte_idx` is floored to a char boundary, so a column that drifted
+/// mid-sequence measures short rather than panicking.
+pub fn display_width_of_prefix_with(s: &str, byte_idx: usize, policy: WidthPolicy) -> usize {
+    let b = floor_char_boundary(s, byte_idx);
+    display_width_with(&s[..b], policy)
+}
+
+// ---------------------------------------------------------------------------
+// ADR-087 Rule 4 — byte offsets that sit on grapheme-cluster boundaries.
+//
+// These are the *only* sanctioned way to step or clamp a cursor column, which
+// is a byte offset from the start of a line. `+ 1` / `- 1` on such an offset
+// is a bug on any non-ASCII line; these functions are the named conversions
+// Rule 1 requires in its place.
+// ---------------------------------------------------------------------------
+
+/// Byte offset of the first grapheme-cluster boundary strictly after
+/// `byte_idx`, or `s.len()` if there is none. One "move right".
+pub fn next_grapheme_boundary(s: &str, byte_idx: usize) -> usize {
+    let from = floor_char_boundary(s, byte_idx);
+    s.grapheme_indices(true)
+        .map(|(i, g)| i + g.len())
+        .find(|&end| end > from)
+        .unwrap_or(s.len())
+}
+
+/// Byte offset of the last grapheme-cluster boundary strictly before
+/// `byte_idx`, or 0 if there is none. One "move left".
+pub fn prev_grapheme_boundary(s: &str, byte_idx: usize) -> usize {
+    let from = floor_char_boundary(s, byte_idx);
+    let mut last = 0;
+    for (i, _) in s.grapheme_indices(true) {
+        if i >= from {
+            break;
+        }
+        last = i;
+    }
+    last
+}
+
+/// Round `byte_idx` down to the grapheme-cluster boundary at or before it,
+/// clamped to `s.len()`. `s.len()` is itself always a boundary.
+///
+/// This is the chokepoint every externally-sourced or arithmetic-derived
+/// cursor column passes through (`Buffer::snap_col_to_grapheme`). Unlike
+/// [`checked_byte_boundary`] it does not assert: landing mid-cluster is the
+/// *expected* case for a restored session file, an LSP position, or a mouse
+/// click, not evidence of an upstream bug.
+pub fn snap_to_grapheme_boundary(s: &str, byte_idx: usize) -> usize {
+    if byte_idx >= s.len() {
+        return s.len();
+    }
+    let target = floor_char_boundary(s, byte_idx);
+    let mut last = 0;
+    for (i, _) in s.grapheme_indices(true) {
+        if i > target {
+            break;
+        }
+        last = i;
+    }
+    last
+}
+
+/// Convert a **char** (Unicode scalar) index into a byte offset. Saturates at
+/// `s.len()` when `char_idx` runs past the end.
+///
+/// The `char -> byte` half of Rule 1's named conversions: used wherever a
+/// legacy char-domain column (a pre-migration session file, an LSP
+/// `Position.character` under the spec's default encoding, a ropey 1.x
+/// computation) crosses into MAE's byte domain.
+pub fn char_idx_to_byte_idx(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(i, _)| i)
+        .unwrap_or(s.len())
+}
+
 // ---------------------------------------------------------------------------
 // ADR-087 chokepoint validator (enforcement item 3)
 // ---------------------------------------------------------------------------

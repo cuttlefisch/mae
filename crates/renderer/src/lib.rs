@@ -345,12 +345,13 @@ fn render_frame(frame: &mut Frame, editor: &mut Editor, shells: &HashMap<usize, 
             .get_option("which-key-max-desc-length")
             .and_then(|(v, _)| v.parse().ok())
             .unwrap_or(40);
-        let sep_width = mae_core::text_utils::display_width(&separator);
+        let sep_width = mae_core::grapheme::display_width_with(&separator, editor.width_policy());
         let (_col_w, num_cols) = mae_core::text_utils::which_key_column_layout(
             &entries,
             area.width as usize - 2,
             sep_width,
             max_desc,
+            editor.width_policy(),
         );
         let entry_rows = entries.len().div_ceil(num_cols);
         // `editor.which_key_max_height_pct` is already clamped to

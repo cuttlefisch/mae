@@ -11,6 +11,9 @@ use mae_core::render_common::gutter::gutter_width;
 pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, cmd_area: Rect) {
     let focused_win = editor.window_mgr.focused_window();
     let focused_buf = &editor.buffers[focused_win.buffer_idx];
+    // ADR-087 Rule 3: the user's width options must reach every width
+    // computation, not just the status bar.
+    let policy = editor.width_policy();
 
     let wa = mae_core::WinRect {
         x: window_area.x,
@@ -52,8 +55,12 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
             } else {
                 String::new()
             };
+            // ADR-087 Rule 1: cursor_col is a BYTE column; converting it to a
+            // screen column is `display_width_of_prefix_with`, not
+            // `display_width_up_to_grapheme` (which wants a grapheme index --
+            // one of the four domains this field used to be read as).
             let display_col =
-                grapheme::display_width_up_to_grapheme(&line_text, focused_win.cursor_col);
+                grapheme::display_width_of_prefix_with(&line_text, focused_win.cursor_col, policy);
             let cursor_x = inner.x + gutter_w as u16 + display_col as u16;
             let cursor_y = inner.y
                 + focused_win
@@ -95,6 +102,7 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
                             text_width,
                             editor.break_indent,
                             show_break_w,
+                            policy,
                         );
                         screen_row += rows as u16;
                     } else {
@@ -108,6 +116,7 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
                     text_width,
                     editor.break_indent,
                     show_break_w,
+                    policy,
                 );
                 screen_row += wrap_row as u16;
                 // Continuation lines have indent+showbreak prefix.
@@ -143,9 +152,17 @@ pub(crate) fn set_cursor(frame: &mut Frame, editor: &Editor, window_area: Rect, 
                 // sides of the subtraction below are in the same unit.
                 let (_, scroll_display_col) = focused_buf
                     .display_text_and_col(focused_win.cursor_row, focused_win.col_offset);
+                // Both operands must be SCREEN columns. `display_col` and
+                // `scroll_display_col` are byte offsets into the display text
+                // (ADR-087 Rule 4), so each gets its own explicit conversion
+                // -- subtracting a byte offset from a width was the shape of
+                // the bug this rule exists to close.
+                let cursor_screen_col =
+                    grapheme::display_width_of_prefix_with(&line_text, display_col, policy);
                 let scroll_col =
-                    grapheme::display_width_up_to_grapheme(&line_text, scroll_display_col);
-                let screen_col = gutter_w as u16 + (display_col.saturating_sub(scroll_col)) as u16;
+                    grapheme::display_width_of_prefix_with(&line_text, scroll_display_col, policy);
+                let screen_col =
+                    gutter_w as u16 + (cursor_screen_col.saturating_sub(scroll_col)) as u16;
                 if screen_row < inner.height {
                     frame.set_cursor_position(Position::new(
                         inner.x + screen_col,

@@ -42,10 +42,10 @@ impl SplashSection {
         });
     }
 
-    fn max_width(&self) -> usize {
+    fn max_width(&self, policy: mae_core::grapheme::WidthPolicy) -> usize {
         self.lines
             .iter()
-            .map(|l| mae_core::display_width(&l.text))
+            .map(|l| mae_core::grapheme::display_width_with(&l.text, policy))
             .max()
             .unwrap_or(0)
     }
@@ -231,7 +231,7 @@ pub fn render_splash(
         if section.is_empty() {
             continue;
         }
-        let section_width = section.max_width();
+        let section_width = section.max_width(editor.width_policy());
         let section_left = area_width.saturating_sub(section_width) / 2;
 
         for line in &section.lines {

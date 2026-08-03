@@ -14,8 +14,11 @@ pub type WindowId = u32;
 #[derive(Clone, Debug)]
 pub struct BufferViewState {
     pub cursor_row: usize,
+    /// **Byte** offset from the start of `cursor_row` — same domain as
+    /// [`Window::cursor_col`]. See that field's doc comment (ADR-087 Rule 4).
     pub cursor_col: usize,
     pub scroll_offset: usize,
+    /// **Byte** column — same domain as [`Window::col_offset`].
     pub col_offset: usize,
 }
 
@@ -29,8 +32,41 @@ pub struct Window {
     pub id: WindowId,
     pub buffer_idx: usize,
     pub cursor_row: usize,
+    /// **Byte offset from the start of `cursor_row`**, always sitting on a
+    /// grapheme-cluster boundary. ADR-087 Rule 4: every stored position
+    /// declares its domain, and it is byte.
+    ///
+    /// This is the one field the ADR names explicitly, because it used to be
+    /// a bare undeclared `usize` read as four different domains (grapheme
+    /// index, char index at two sites, and a raw cast into an LSP
+    /// `Position.character`) *and* persisted to disk undeclared. Rules for
+    /// touching it:
+    ///
+    /// - Never `+= 1` / `-= 1`. Step with [`Buffer::next_grapheme_col`] /
+    ///   [`Buffer::prev_grapheme_col`].
+    /// - Its upper bound is [`Buffer::line_byte_len`], **not**
+    ///   `line_char_len` and not a display width.
+    /// - Crossing into ropey 1.x's char address space goes through
+    ///   [`Buffer::char_offset_at`] / [`Buffer::row_col_from_offset`]; into
+    ///   an LSP `Position.character` through
+    ///   `lsp_position::byte_col_to_utf16`; into a screen column through
+    ///   `Buffer::display_text_and_col` + a width helper.
+    /// - Anything arriving from outside (a session file, a protocol message,
+    ///   a mouse click) is snapped with [`Buffer::snap_col_to_grapheme`]
+    ///   before it lands here.
+    ///
+    /// [`Buffer::next_grapheme_col`]: crate::buffer::Buffer::next_grapheme_col
+    /// [`Buffer::prev_grapheme_col`]: crate::buffer::Buffer::prev_grapheme_col
+    /// [`Buffer::line_byte_len`]: crate::buffer::Buffer::line_byte_len
+    /// [`Buffer::char_offset_at`]: crate::buffer::Buffer::char_offset_at
+    /// [`Buffer::row_col_from_offset`]: crate::buffer::Buffer::row_col_from_offset
+    /// [`Buffer::snap_col_to_grapheme`]: crate::buffer::Buffer::snap_col_to_grapheme
     pub cursor_col: usize,
     pub scroll_offset: usize,
+    /// Horizontal scroll position, in the **same byte-column domain** as
+    /// `cursor_col` (`ensure_scroll_horizontal` assigns one to the other).
+    /// Renderers convert it to a screen column the same way they convert
+    /// `cursor_col`.
     pub col_offset: usize,
     /// Multi-cursor set. Index 0 = primary (synced with cursor_row/cursor_col).
     pub cursor_set: crate::cursor::CursorSet,
@@ -148,16 +184,22 @@ impl Window {
         }
     }
 
-    pub fn move_left(&mut self) {
+    /// Move one **grapheme cluster** left (ADR-087 Rule 4: `cursor_col` is a
+    /// byte offset, so `-= 1` would land mid-UTF-8 on any non-ASCII line).
+    ///
+    /// Takes `&Buffer` because a byte step is only meaningful against the
+    /// text; the old signature took none.
+    pub fn move_left(&mut self, buf: &crate::buffer::Buffer) {
         if self.cursor_col > 0 {
-            self.cursor_col -= 1;
+            self.cursor_col = buf.prev_grapheme_col(self.cursor_row, self.cursor_col);
         }
         self.sync_primary();
     }
 
+    /// Move one **grapheme cluster** right.
     pub fn move_right(&mut self, buf: &crate::buffer::Buffer) {
-        if self.cursor_col < buf.line_len(self.cursor_row) {
-            self.cursor_col += 1;
+        if self.cursor_col < buf.line_byte_len(self.cursor_row) {
+            self.cursor_col = buf.next_grapheme_col(self.cursor_row, self.cursor_col);
         }
     }
 
@@ -167,7 +209,7 @@ impl Window {
     }
 
     pub fn move_to_line_end(&mut self, buf: &crate::buffer::Buffer) {
-        self.cursor_col = buf.line_len(self.cursor_row);
+        self.cursor_col = buf.line_byte_len(self.cursor_row);
         self.sync_primary();
     }
 
@@ -186,7 +228,7 @@ impl Window {
 
     // --- Word motions ---
 
-    /// Helper: convert a char offset back to (row, col) and set cursor.
+    /// Helper: convert a **char** offset back to (row, byte_col) and set cursor.
     fn set_cursor_from_offset(&mut self, buf: &crate::buffer::Buffer, char_pos: usize) {
         let rope = buf.rope();
         if rope.len_chars() == 0 {
@@ -196,9 +238,12 @@ impl Window {
             return;
         }
         let pos = char_pos.min(rope.len_chars().saturating_sub(1));
-        self.cursor_row = rope.char_to_line(pos);
-        let line_start = rope.line_to_char(self.cursor_row);
-        self.cursor_col = pos - line_start;
+        let (row, col) = buf.row_col_from_offset(pos);
+        self.cursor_row = row;
+        // ADR-087 Rule 4: a char offset lands on a *char* boundary, which is
+        // not necessarily a *cluster* boundary — a word motion can stop
+        // between a base character and its combining mark. Snap.
+        self.cursor_col = buf.snap_col_to_grapheme(row, col);
         self.sync_primary();
     }
 
@@ -252,7 +297,8 @@ impl Window {
 
     /// vi `^` — move to first non-blank column on the current line.
     pub fn move_to_first_non_blank(&mut self, buf: &crate::buffer::Buffer) {
-        self.cursor_col = crate::word::first_non_blank_col(buf.rope(), self.cursor_row);
+        let col = crate::word::first_non_blank_col(buf.rope(), self.cursor_row);
+        self.cursor_col = buf.snap_col_to_grapheme(self.cursor_row, col);
     }
 
     pub fn move_matching_bracket(&mut self, buf: &crate::buffer::Buffer) {
@@ -280,7 +326,7 @@ impl Window {
         if let Some(col) =
             crate::word::find_char_forward(buf.rope(), self.cursor_row, self.cursor_col, ch)
         {
-            self.cursor_col = col;
+            self.cursor_col = buf.snap_col_to_grapheme(self.cursor_row, col);
         }
     }
 
@@ -288,7 +334,7 @@ impl Window {
         if let Some(col) =
             crate::word::find_char_backward(buf.rope(), self.cursor_row, self.cursor_col, ch)
         {
-            self.cursor_col = col;
+            self.cursor_col = buf.snap_col_to_grapheme(self.cursor_row, col);
         }
     }
 
@@ -296,7 +342,7 @@ impl Window {
         if let Some(col) =
             crate::word::find_char_forward_till(buf.rope(), self.cursor_row, self.cursor_col, ch)
         {
-            self.cursor_col = col;
+            self.cursor_col = buf.snap_col_to_grapheme(self.cursor_row, col);
         }
     }
 
@@ -304,7 +350,7 @@ impl Window {
         if let Some(col) =
             crate::word::find_char_backward_till(buf.rope(), self.cursor_row, self.cursor_col, ch)
         {
-            self.cursor_col = col;
+            self.cursor_col = buf.snap_col_to_grapheme(self.cursor_row, col);
         }
     }
 
@@ -347,9 +393,17 @@ impl Window {
         if self.cursor_row > max_row {
             self.cursor_row = max_row;
         }
-        let line_len = buf.line_len(self.cursor_row);
+        let line_len = buf.line_byte_len(self.cursor_row);
         if self.cursor_col > line_len {
             self.cursor_col = line_len;
+        } else if self.cursor_col > 0 {
+            // ADR-087 Rule 4 invariant enforcer: whatever produced this column
+            // (arithmetic, a restored session, a protocol message, a click) it
+            // ends up on a grapheme-cluster boundary before anything slices
+            // the line with it. `clamp_cursor` is called after every
+            // structural change, so this is the one chokepoint that has to
+            // hold rather than every one of the ~70 assignment sites.
+            self.cursor_col = buf.snap_col_to_grapheme(self.cursor_row, self.cursor_col);
         }
         self.sync_primary();
     }

@@ -697,7 +697,7 @@ impl Editor {
         let idx = self.active_buffer_idx();
         let row = self.window_mgr.focused_window().cursor_row;
         let line_start = self.buffers[idx].rope().line_to_char(row);
-        let line_len = self.buffers[idx].line_len(row);
+        let line_len = self.buffers[idx].line_byte_len(row);
         if line_len > 0 {
             let text = self.buffers[idx].text_range(line_start, line_start + line_len);
             let transformed = f(&text);

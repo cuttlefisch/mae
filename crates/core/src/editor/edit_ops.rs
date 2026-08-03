@@ -125,7 +125,7 @@ impl Editor {
             .chars()
             .filter(|c| *c != '\n' && *c != '\r')
             .collect();
-        let content_indent = crate::wrap::content_indent_len(&first_chars);
+        let content_indent = crate::wrap::content_indent_len(&first_chars, self.width_policy());
         let leading_ws: usize = first_chars
             .iter()
             .take_while(|c| **c == ' ' || **c == '\t')
@@ -231,7 +231,7 @@ impl Editor {
         let win = self.window_mgr.focused_window();
         let row = win.cursor_row;
         let col = win.cursor_col;
-        let line_len = self.buffers[idx].line_len(row);
+        let line_len = self.buffers[idx].line_byte_len(row);
         if col >= line_len {
             return;
         }
@@ -248,7 +248,7 @@ impl Editor {
         self.buffers[idx].end_undo_group();
         // Advance cursor
         let win = self.window_mgr.focused_window_mut();
-        let new_line_len = self.buffers[idx].line_len(row);
+        let new_line_len = self.buffers[idx].line_byte_len(row);
         if col + 1 < new_line_len {
             win.cursor_col = col + 1;
         }
@@ -370,10 +370,10 @@ impl Editor {
                     let rope = self.buffers[idx].rope();
                     let new_row =
                         rope.char_to_line(new_offset.min(rope.len_chars().saturating_sub(1)));
-                    let line_start = rope.line_to_char(new_row);
+                    let new_col = self.buffers[idx].byte_col_of_char_offset(new_row, new_offset);
                     let win = self.window_mgr.focused_window_mut();
                     win.cursor_row = new_row;
-                    win.cursor_col = new_offset.saturating_sub(line_start);
+                    win.cursor_col = new_col;
                 }
                 // Exit insert mode without recording (would overwrite the repeat record)
                 self.set_mode(Mode::Normal);
@@ -394,10 +394,10 @@ impl Editor {
                     let rope = self.buffers[idx].rope();
                     let new_row =
                         rope.char_to_line(new_offset.min(rope.len_chars().saturating_sub(1)));
-                    let line_start = rope.line_to_char(new_row);
+                    let new_col = self.buffers[idx].byte_col_of_char_offset(new_row, new_offset);
                     let win = self.window_mgr.focused_window_mut();
                     win.cursor_row = new_row;
-                    win.cursor_col = new_offset.saturating_sub(line_start);
+                    win.cursor_col = new_col;
                 }
                 self.set_mode(Mode::Normal);
                 self.vi.insert_initiated_by = None;
@@ -486,10 +486,10 @@ impl Editor {
                 let rope = self.buffers[idx].rope();
                 let clamped = from.min(rope.len_chars().saturating_sub(1));
                 let new_row = rope.char_to_line(clamped);
-                let line_start = rope.line_to_char(new_row);
+                let new_col = self.buffers[idx].byte_col_of_char_offset(new_row, clamped);
                 let win = self.window_mgr.focused_window_mut();
                 win.cursor_row = new_row;
-                win.cursor_col = clamped.saturating_sub(line_start);
+                win.cursor_col = new_col;
                 win.clamp_cursor(&self.buffers[idx]);
                 self.record_edit("operator-delete");
             }
@@ -504,14 +504,10 @@ impl Editor {
                 } else {
                     rope.char_to_line(clamped.min(rope.len_chars().saturating_sub(1)))
                 };
-                let line_start = if rope.len_chars() == 0 {
-                    0
-                } else {
-                    rope.line_to_char(new_row)
-                };
+                let new_col = self.buffers[idx].byte_col_of_char_offset(new_row, clamped);
                 let win = self.window_mgr.focused_window_mut();
                 win.cursor_row = new_row;
-                win.cursor_col = clamped.saturating_sub(line_start);
+                win.cursor_col = new_col;
                 self.enter_insert_for_change("operator-change");
             }
             "y" => {
