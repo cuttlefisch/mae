@@ -269,19 +269,22 @@ pub fn big_word_end_backward(rope: &Rope, pos: usize) -> usize {
     }
 }
 
-/// vi `^` — column of the first non-blank character on the given line.
+/// The line's text with the trailing newline stripped — the string whose
+/// **byte** offsets are cursor columns (ADR-087 Rule 4).
+fn line_text(rope: &Rope, line: usize) -> String {
+    if line >= rope.len_lines() {
+        return String::new();
+    }
+    let s: String = rope.line(line).into();
+    s.trim_end_matches('\n').trim_end_matches('\r').to_string()
+}
+
+/// vi `^` — **byte** column of the first non-blank character on the given line.
 ///
 /// Returns 0 for empty or all-whitespace lines.
 pub fn first_non_blank_col(rope: &Rope, line: usize) -> usize {
-    if line >= rope.len_lines() {
-        return 0;
-    }
-    // Use a streaming char iterator (amortised O(1) per char) instead of
-    // indexed `.char(i)` access (O(log N) each).
-    for (i, ch) in rope.line(line).chars().enumerate() {
-        if ch == '\n' {
-            break;
-        }
+    let text = line_text(rope, line);
+    for (i, ch) in text.char_indices() {
         if !ch.is_whitespace() {
             return i;
         }
@@ -331,51 +334,51 @@ pub fn big_word_end_forward(rope: &Rope, pos: usize) -> usize {
 
 /// vi `f` — find char forward on current line (inclusive).
 /// Returns the column (not char offset) of the target, or None.
+/// `col` in/out is a **byte** column (ADR-087 Rule 4).
 pub fn find_char_forward(rope: &Rope, line: usize, col: usize, target: char) -> Option<usize> {
-    if line >= rope.len_lines() {
+    let text = line_text(rope, line);
+    let from = crate::grapheme::next_grapheme_boundary(&text, col);
+    if from >= text.len() {
         return None;
     }
-    let line_slice = rope.line(line);
-    let line_len = line_slice.len_chars();
-    // Exclude trailing newline
-    let end = if line_len > 0 && line_slice.char(line_len - 1) == '\n' {
-        line_len - 1
-    } else {
-        line_len
-    };
-
-    ((col + 1)..end).find(|&c| line_slice.char(c) == target)
+    text[from..]
+        .char_indices()
+        .find(|(_, c)| *c == target)
+        .map(|(i, _)| from + i)
 }
 
 /// vi `F` — find char backward on current line (inclusive).
+/// `col` in/out is a **byte** column.
 pub fn find_char_backward(rope: &Rope, line: usize, col: usize, target: char) -> Option<usize> {
-    if line >= rope.len_lines() {
-        return None;
-    }
-    let line_slice = rope.line(line);
+    let text = line_text(rope, line);
     if col == 0 {
         return None;
     }
-
-    let search_end = col.min(line_slice.len_chars());
-    (0..search_end)
-        .rev()
-        .find(|&c| line_slice.char(c) == target)
+    let end = crate::grapheme::floor_char_boundary(&text, col);
+    text[..end]
+        .char_indices()
+        .filter(|(_, c)| *c == target)
+        .next_back()
+        .map(|(i, _)| i)
 }
 
-/// vi `t` — find char forward, stop one before (till).
+/// vi `t` — find char forward, stop one grapheme before (till).
 pub fn find_char_forward_till(rope: &Rope, line: usize, col: usize, target: char) -> Option<usize> {
-    find_char_forward(rope, line, col, target).map(|c| c.saturating_sub(1).max(col))
+    let text = line_text(rope, line);
+    find_char_forward(rope, line, col, target)
+        .map(|c| crate::grapheme::prev_grapheme_boundary(&text, c).max(col))
 }
 
-/// vi `T` — find char backward, stop one after (till).
+/// vi `T` — find char backward, stop one grapheme after (till).
 pub fn find_char_backward_till(
     rope: &Rope,
     line: usize,
     col: usize,
     target: char,
 ) -> Option<usize> {
-    find_char_backward(rope, line, col, target).map(|c| (c + 1).min(col))
+    let text = line_text(rope, line);
+    find_char_backward(rope, line, col, target)
+        .map(|c| crate::grapheme::next_grapheme_boundary(&text, c).min(col))
 }
 
 /// vi `%` — find matching bracket.

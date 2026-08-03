@@ -63,8 +63,9 @@ impl Editor {
                 }
             }
             "move-left" => {
+                let buf = &self.buffers[self.active_buffer_idx()];
                 for _ in 0..n {
-                    self.window_mgr.focused_window_mut().move_left();
+                    self.window_mgr.focused_window_mut().move_left(buf);
                 }
                 // With org-appear, cursor moves through revealed text — no snapping.
             }

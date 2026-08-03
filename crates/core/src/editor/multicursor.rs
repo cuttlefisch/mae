@@ -364,7 +364,7 @@ fn replay_motion_at_secondaries(editor: &mut Editor, name: &str) {
         match name {
             "move-up" => win.move_up(buf),
             "move-down" => win.move_down(buf),
-            "move-left" => win.move_left(),
+            "move-left" => win.move_left(buf),
             "move-right" => win.move_right(buf),
             "move-to-line-start" => win.move_to_line_start(),
             "move-to-line-end" => win.move_to_line_end(buf),

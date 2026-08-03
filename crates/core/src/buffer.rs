@@ -519,13 +519,19 @@ impl Buffer {
     /// sequence `buffer_render.rs` already uses for drawing — one place this
     /// logic lives, not reimplemented per call site (CLAUDE.md principle #8).
     ///
-    /// Fast path: returns the raw line text + `rope_col` unchanged when no
-    /// active region overlaps this line (the common case — most lines have
+    /// Fast path: returns the raw line text + `rope_byte_col` unchanged when
+    /// no active region overlaps this line (the common case — most lines have
     /// no tabs, links, or images).
-    pub fn display_text_and_col(&self, line_idx: usize, rope_col: usize) -> (String, usize) {
+    ///
+    /// ADR-087 Rule 4: `rope_byte_col` in and the returned column out are both
+    /// **byte** offsets — the first into the rope line, the second into the
+    /// returned display string. Take the display width of the prefix
+    /// (`display_width_with(&text[..col], policy)`); do **not** feed the
+    /// result to `display_width_up_to_grapheme`, which wants a grapheme index.
+    pub fn display_text_and_col(&self, line_idx: usize, rope_byte_col: usize) -> (String, usize) {
         let rope = self.rope();
         if line_idx >= rope.len_lines() {
-            return (String::new(), rope_col);
+            return (String::new(), rope_byte_col);
         }
         let line_str: String = rope
             .line(line_idx)
@@ -533,7 +539,7 @@ impl Buffer {
             .filter(|c| *c != '\n' && *c != '\r')
             .collect();
         if self.display_regions.is_empty() {
-            return (line_str, rope_col);
+            return (line_str, rope_byte_col);
         }
 
         let effective_regions = crate::display_region::regions_with_cursor_reveal(
@@ -548,7 +554,7 @@ impl Buffer {
             .get(start_idx)
             .is_some_and(|r| r.byte_start < line_byte_end);
         if !has_regions {
-            return (line_str, rope_col);
+            return (line_str, rope_byte_col);
         }
 
         let chars: Vec<char> = line_str.chars().collect();
@@ -559,8 +565,13 @@ impl Buffer {
             &effective_regions,
         );
         let display_str: String = display_chars.iter().collect();
-        let display_col = crate::display_region::rope_col_to_display_col(rope_col, &rope_col_map);
-        (display_str, display_col)
+        // Rule 1: rope byte col -> display CHAR col -> display BYTE col. Two
+        // domain crossings, each an explicit named conversion.
+        let display_char_col =
+            crate::display_region::rope_col_to_display_col(rope_byte_col, &rope_col_map);
+        let display_byte_col =
+            crate::grapheme::char_idx_to_byte_idx(&display_str, display_char_col);
+        (display_str, display_byte_col)
     }
 
     /// Create a dashboard buffer (startup splash screen).
@@ -2201,7 +2212,7 @@ mod tests {
     #[test]
     fn move_left_at_start_is_noop() {
         let (_buf, mut win) = new_buf_win();
-        win.move_left();
+        win.move_left(&_buf);
         assert_eq!(win.cursor_col, 0);
     }
 
@@ -2217,7 +2228,7 @@ mod tests {
     fn move_left_and_right() {
         let (mut buf, mut win) = new_buf_win();
         insert_str(&mut buf, &mut win, "ab");
-        win.move_left();
+        win.move_left(&buf);
         assert_eq!(win.cursor_col, 1);
         win.move_right(&buf);
         assert_eq!(win.cursor_col, 2);
