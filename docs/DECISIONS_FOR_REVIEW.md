@@ -189,3 +189,27 @@ owner-only operation; the tier table should agree with it.
 reach the enforced policy — but ADR-084 D7 changes exactly that, at which point a write-tier session
 could raise its own tier through `set_option`. Whichever way #1 is decided, `set_option` needs to
 refuse the permission-tier option specifically, or be raised.
+
+---
+
+## 7. Two ADR-087 follow-ups, both flagged rather than silently skipped
+
+**Status:** rules 1/2/3/7 landed. These two are the honest remainder.
+
+**(a) A third per-char width implementation survives.** `crates/core/src/wrap.rs`'s `char_width` /
+`slice_display_width` still do `ch.width().unwrap_or(0)` — the same per-char summation deleted from
+`text_utils`. It is *not* a Rule 7 violation (it lives inside `mae-core`), and word-wrap genuinely
+needs per-char increments over `&[char]`, so it structurally cannot use grapheme-cluster width. But
+it does not honour the new `WidthPolicy`, so the ambiguous-width and control-char options do not
+reach word wrap. Follow-up: route it through `char_width_with`.
+
+**(b) The width options are registered but only threaded into the status bar.** `ambiguous_width`
+and `control_char_width` are real options — registered, `:set`/Scheme-accessible, verified to change
+computed width — but only `render_common/status.rs` (TUI and GUI) consumes them. Which-key, popups
+and the other truncation call sites still use the hardcoded default policy. Threading the policy
+through every renderer entry point means changing many signatures across `mae-renderer`/`mae-gui`;
+that is the natural next increment, and it is why an East-Asian user setting `ambiguous_width=wide`
+would see it take effect in the status bar and nowhere else today.
+
+Neither is a correctness regression — both are "the fix is real but narrower than the option
+implies." Worth knowing before the option is documented as global.
