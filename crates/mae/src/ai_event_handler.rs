@@ -199,10 +199,12 @@ pub fn handle_ai_event(editor: &mut Editor, ai_event: AiEvent, ctx: AiEventConte
             let scheme_output = drain_pending_scheme_evals(editor, ctx.scheme);
             match exec_result {
                 ExecuteResult::Immediate(mut result) => {
-                    // If the tool queued a Scheme eval, replace the output with the result.
-                    if let Some(output) = scheme_output {
+                    // If the tool queued a Scheme eval, replace the output with the
+                    // result. ADR-086/#590.2: a queued eval that errored must not
+                    // clobber a prior refusal/failure with success:true.
+                    if let Some((output, all_ok)) = scheme_output {
                         result.output = output;
-                        result.success = true;
+                        result.success = all_ok;
                     }
                     let elapsed = tool_start.elapsed().as_millis() as u64;
                     info!(
@@ -1059,10 +1061,12 @@ pub fn handle_mcp_request(
     let scheme_output = drain_pending_scheme_evals(editor, scheme);
     match exec_result {
         ExecuteResult::Immediate(mut result) => {
-            // If the tool queued a Scheme eval, replace the output with the result.
-            if let Some(output) = scheme_output {
+            // If the tool queued a Scheme eval, replace the output with the
+            // result. ADR-086/#590.2: an errored eval must report failure,
+            // not clobber it with success:true.
+            if let Some((output, all_ok)) = scheme_output {
                 result.output = output;
-                result.success = true;
+                result.success = all_ok;
             }
             let _ = mcp_req.reply.send(mae_mcp::McpToolResult {
                 success: result.success,
@@ -1496,50 +1500,66 @@ pub fn timeout_deferred_dap_reply(editor: &mut Editor, deferred_dap_reply: &mut 
 /// - `yield-tick`: drains hooks and side effects, then resumes
 /// - `await-hook`: drains hooks each tick until the target fires or timeout
 /// - `flush!`: same as tick (apply + inject)
+///
+/// Returns `(joined transcript, whether every eval succeeded)`. The bool is
+/// the ADR-086 signal: callers must only force `success = true` on the tool
+/// result when it is `true`. It comes from `eval_with_yield_handling`'s own
+/// `Result`, never from sniffing the formatted string for an "error" prefix
+/// (that prose is for the human-facing REPL transcript, not control flow).
 pub fn drain_pending_scheme_evals(
     editor: &mut Editor,
     scheme: &mut mae_scheme::SchemeRuntime,
-) -> Option<String> {
+) -> Option<(String, bool)> {
     if editor.pending_scheme_eval.is_empty() {
         return None;
     }
     let exprs: Vec<String> = std::mem::take(&mut editor.pending_scheme_eval);
     let mut results = Vec::new();
+    let mut all_ok = true;
     for code in &exprs {
         scheme.inject_editor_state(editor);
-        let output = eval_with_yield_handling(editor, scheme, code);
+        let (ok, output) = eval_with_yield_handling(editor, scheme, code);
+        all_ok = all_ok && ok;
         let formatted = format!("> {}\n{}\n", code.trim(), output);
         editor.append_to_scheme_repl(&formatted);
         results.push(formatted);
     }
-    Some(results.join("\n"))
+    Some((results.join("\n"), all_ok))
 }
 
 /// Evaluate scheme code with inline yield handling for synchronous contexts
 /// (MCP, AI tools). Handles yield-tick and await-hook by draining hooks
 /// and side effects without returning to the event loop.
+///
+/// Returns `(succeeded, formatted transcript line)`. `succeeded` is `false`
+/// for every path that previously formatted an `"; error: ..."` string —
+/// per ADR-086/audit #590.2, a tool-result caller must use this bool to
+/// decide `success`, not re-parse the formatted text for the word "error".
 fn eval_with_yield_handling(
     editor: &mut Editor,
     scheme: &mut mae_scheme::SchemeRuntime,
     code: &str,
-) -> String {
+) -> (bool, String) {
     use mae_scheme::vm::YieldRequest;
     use mae_scheme::SchemeEvalResult;
 
     let mut eval_result = match scheme.eval_yielding(code) {
         Ok(r) => r,
-        Err(e) => return format!("; error: {}", e.message),
+        Err(e) => return (false, format!("; error: {}", e.message)),
     };
 
     loop {
         match eval_result {
             SchemeEvalResult::Done(s) => {
                 scheme.apply_to_editor(editor);
-                return if s.is_empty() {
-                    "; => (void)".to_string()
-                } else {
-                    format!("; => {}", s)
-                };
+                return (
+                    true,
+                    if s.is_empty() {
+                        "; => (void)".to_string()
+                    } else {
+                        format!("; => {}", s)
+                    },
+                );
             }
             SchemeEvalResult::Yield(ref req) => {
                 match req {
@@ -1563,7 +1583,7 @@ fn eval_with_yield_handling(
                         eval_result =
                             match scheme.resume_yield(mae_scheme::value::Value::Bool(fired)) {
                                 Ok(r) => r,
-                                Err(e) => return format!("; error: {}", e.message),
+                                Err(e) => return (false, format!("; error: {}", e.message)),
                             };
                         continue;
                     }
@@ -1582,7 +1602,7 @@ fn eval_with_yield_handling(
                 }
                 eval_result = match scheme.resume_yield(mae_scheme::value::Value::Bool(true)) {
                     Ok(r) => r,
-                    Err(e) => return format!("; error: {}", e.message),
+                    Err(e) => return (false, format!("; error: {}", e.message)),
                 };
             }
         }

@@ -1118,6 +1118,102 @@ fn self_test_suite_filters_categories() {
     assert!(!names.contains(&"introspection"));
 }
 
+/// ADR-086 / audit #590.2: an unrecognised `action` is a refusal — the
+/// requested postcondition (a plan or a grade report) does not hold — and
+/// must report `success: false`. Previously this returned `success: true`
+/// with the error text buried in `output`, which a stagnation-scoring AI
+/// loop (`crates/ai/src/session/progress.rs`) would count as forward
+/// progress. This is the failure path, per principle #14 — not the
+/// already-covered happy path above.
+#[test]
+fn self_test_suite_unknown_action_reports_failure() {
+    let mut editor = Editor::new();
+    let call = make_call("self_test_suite", serde_json::json!({"action": "bogus"}));
+    let result = unwrap_immediate(execute_tool(
+        &mut editor,
+        &call,
+        &all_tools(),
+        &PermissionPolicy::default(),
+    ));
+    assert!(
+        !result.success,
+        "an unrecognised action must not report success"
+    );
+    assert!(result.output.contains("Invalid action"));
+}
+
+/// Same ADR-086 class: `grade` with no `results` array is a refusal, not a
+/// successful (empty) grade report.
+#[test]
+fn self_test_suite_grade_without_results_reports_failure() {
+    let mut editor = Editor::new();
+    let call = make_call("self_test_suite", serde_json::json!({"action": "grade"}));
+    let result = unwrap_immediate(execute_tool(
+        &mut editor,
+        &call,
+        &all_tools(),
+        &PermissionPolicy::default(),
+    ));
+    assert!(
+        !result.success,
+        "grade with no results array must not report success"
+    );
+    assert!(result.output.contains("Missing 'results'"));
+}
+
+/// Round-trip / idempotent-retry guard (ADR-086 D2): the happy path for
+/// `action: "plan"` must still report success after the refusal fix above,
+/// so the fix doesn't over-correct into breaking the common case.
+#[test]
+fn self_test_suite_valid_plan_action_still_succeeds() {
+    let mut editor = Editor::new();
+    let call = make_call("self_test_suite", serde_json::json!({"action": "plan"}));
+    let result = unwrap_immediate(execute_tool(
+        &mut editor,
+        &call,
+        &all_tools(),
+        &PermissionPolicy::default(),
+    ));
+    assert!(result.success);
+}
+
+/// Same ADR-086 class applied to the (deprecated but still dispatchable)
+/// `model_exam` tool: an unrecognised action must not report success.
+#[test]
+fn model_exam_unknown_action_reports_failure() {
+    let mut editor = Editor::new();
+    let call = make_call("model_exam", serde_json::json!({"action": "bogus"}));
+    let result = unwrap_immediate(execute_tool(
+        &mut editor,
+        &call,
+        &all_tools(),
+        &PermissionPolicy::default(),
+    ));
+    assert!(
+        !result.success,
+        "an unrecognised model_exam action must not report success"
+    );
+    assert!(result.output.contains("Invalid action"));
+}
+
+/// Same class: `model_exam` `grade` with no `results` array is a refusal.
+#[test]
+fn model_exam_grade_without_results_reports_failure() {
+    let mut editor = Editor::new();
+    let call = make_call("model_exam", serde_json::json!({"action": "grade"}));
+    let result = unwrap_immediate(execute_tool(
+        &mut editor,
+        &call,
+        &all_tools(),
+        &PermissionPolicy::default(),
+    ));
+    assert!(
+        !result.success,
+        "model_exam grade with no results array must not report success"
+    );
+    assert!(result.output.contains("Missing 'results'"));
+}
+
 #[test]
 fn self_test_suite_exists_in_definitions() {
     let tools = ai_specific_tools(&mae_core::OptionRegistry::new());

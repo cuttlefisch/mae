@@ -191,7 +191,11 @@ fn execute_tool_dispatch_body(
             .and_then(|v| v.as_str())
             .unwrap_or("plan");
 
-        let output = match action {
+        // ADR-086: an unrecognised `action` or a `grade` call missing its
+        // `results` array is a refusal — the requested postcondition (a
+        // plan or a grade report) does not hold — and must report
+        // `success: false`, not `true`. See audit #590.2.
+        let (success, output) = match action {
             "plan" => {
                 if !editor.self_test_active {
                     editor.save_state();
@@ -235,7 +239,14 @@ fn execute_tool_dispatch_body(
                     .active_project_root()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default();
-                super::self_test::build_self_test_plan(filter, &sandbox_path, &project_root_str)
+                (
+                    true,
+                    super::self_test::build_self_test_plan(
+                        filter,
+                        &sandbox_path,
+                        &project_root_str,
+                    ),
+                )
             }
             "grade" => {
                 let model = call
@@ -316,17 +327,23 @@ fn execute_tool_dispatch_body(
                                 ));
                             }
                         }
-                        output
+                        (true, output)
                     }
-                    None => "Missing 'results' array for grade action".to_string(),
+                    None => (
+                        false,
+                        "Missing 'results' array for grade action".to_string(),
+                    ),
                 }
             }
-            _ => "Invalid action: use 'plan' or 'grade'".to_string(),
+            _ => (
+                false,
+                format!("Invalid action: use 'plan' or 'grade' (got {action:?})"),
+            ),
         };
         return ExecuteResult::Immediate(ToolResult {
             tool_call_id: call.id.clone(),
             tool_name: call.name.clone(),
-            success: true,
+            success,
             output,
         });
     }
@@ -363,12 +380,17 @@ fn execute_tool_dispatch_body(
             .get("action")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let output = match action {
+        // ADR-086: see the identical comment on self_test_suite above — an
+        // unrecognised action or a missing `results` array is a refusal.
+        let (success, output) = match action {
             "plan" => {
                 // Delegate to self_test_suite with exam-only categories.
                 let exam_cats =
                     "tool_selection,parameter_accuracy,output_interpretation,multi_step,pushback";
-                super::self_test::build_self_test_plan(exam_cats, "", "")
+                (
+                    true,
+                    super::self_test::build_self_test_plan(exam_cats, "", ""),
+                )
             }
             "grade" => {
                 // Legacy grading path — use original exam grading.
@@ -440,17 +462,23 @@ fn execute_tool_dispatch_body(
                                 ));
                             }
                         }
-                        output
+                        (true, output)
                     }
-                    None => "Missing 'results' array for grade action".to_string(),
+                    None => (
+                        false,
+                        "Missing 'results' array for grade action".to_string(),
+                    ),
                 }
             }
-            _ => "Invalid action: use 'plan' or 'grade'".to_string(),
+            _ => (
+                false,
+                format!("Invalid action: use 'plan' or 'grade' (got {action:?})"),
+            ),
         };
         return ExecuteResult::Immediate(ToolResult {
             tool_call_id: call.id.clone(),
             tool_name: call.name.clone(),
-            success: true,
+            success,
             output,
         });
     }

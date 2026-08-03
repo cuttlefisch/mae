@@ -158,6 +158,57 @@ all.
 
 ---
 
+## 5. `dispatch_builtin` returns "name recognised", and two bridges read that as "succeeded"
+
+**Status:** found while landing ADR-086 (commit 9007bf28 references this entry; it was never
+actually written here until the pre-v0.15 audit tail pass found the gap). Not changed; needs a call.
+
+`Editor::dispatch_builtin` (`crates/core/src/commands.rs`) returns `bool` meaning "this command name
+was recognised and routed" — not "the command did what was asked". Two bridges treat that recognition
+signal as success:
+
+- `crates/ai/src/executor/tool_dispatch.rs::execute_registry_command` (the generic handler behind
+  every `command_*` MCP tool — roughly 559 of them, one per registered editor command):
+  ```rust
+  if editor.dispatch_builtin(&cmd_name) {
+      Ok(format!("Executed: {}", cmd_name))
+  } else {
+      Err(format!("Unknown command: {}", cmd_name))
+  }
+  ```
+  A command that is recognised but silently no-ops (wrong mode, no active selection, nothing to
+  operate on, an internal refusal that isn't `Unknown command`) still returns `Ok("Executed: ...")`.
+- A second bridge with the same shape exists in the interactive/Scheme dispatch path (see
+  `crates/mae/src/ai_event_handler.rs`'s `dispatch_command_by_name` call site, which builds an
+  `ExecuteResult::Immediate` with `success: true` unconditionally once the name resolves).
+
+This is the same ADR-086 defect class (refusal reported as success) as the ~15 findings that
+commit fixed — but an order of magnitude larger in surface area, because it's the generic fallback
+behind the entire `command_*` tool namespace rather than 15 individually-named tools. ADR-086's own
+commit explicitly deferred it for this reason: "The class is far larger than the 15 sampled findings,
+and the fix needs an architectural call rather than a guess."
+
+**The call:** what does "success" mean for a `command_*` MCP tool? Options considered:
+1. Change `dispatch_builtin`'s signature to return a richer outcome (e.g. an enum distinguishing
+   "unknown", "routed and something changed", "routed but no-op") — correct, but touches every one of
+   the ~559 command implementations to determine which arm applies, a large mechanical pass.
+2. Leave `dispatch_builtin` as a pure "was this name routed" signal, and push postcondition-checking
+   down to individual command implementations that already know whether they changed anything
+   (mirrors how ADR-086's ~15 fixes worked — each fix lived at the specific operation, not at the
+   generic dispatcher). Cheaper per-command, but means the generic bridge can never fully close this
+   on its own; it only helps for commands someone deliberately hardens.
+3. Accept the current "recognised = success" semantics for `command_*` specifically, document it
+   plainly (the MCP tool description should say "reports whether the command name was valid and
+   routed, not whether it changed anything measurable"), and rely on the AI checking buffer/editor
+   state afterward if it needs to confirm effect.
+
+**My recommendation:** option 3 as an immediate, honest stopgap (a one-line doc-string change, ships
+today), with option 2 as the real fix — applied opportunistically whenever a specific command is
+touched for other reasons, rather than as one large mechanical PR. Option 1 is the "correct" answer
+but is a genuinely large, separate initiative and shouldn't block v0.15.
+
+---
+
 ## 6. KB sharing/membership MCP tools are Write tier — that is an authorization change
 
 **Status:** found while classifying the Scheme surface (ADR-084 D3). Not changed; needs your call.
@@ -213,3 +264,113 @@ would see it take effect in the status bar and nowhere else today.
 
 Neither is a correctness regression — both are "the fix is real but narrower than the option
 implies." Worth knowing before the option is documented as global.
+
+---
+
+## 8. `checked_byte_boundary`'s debug_assert fires on legitimate flat truncation, in every debug build
+
+**Status:** found while adding an adversarial test for #604.2/#604.6 (pre-v0.15 audit tail pass).
+Not changed; needs a call from whoever owns ADR-087's chokepoint validator.
+
+`mae_core::grapheme::checked_byte_boundary` (`crates/core/src/grapheme.rs:192-214`) is the shared
+ADR-087 chokepoint: any call site that needs to slice a string at a byte offset that *might* not be a
+char boundary is supposed to route through it instead of raw indexing. Its actual behaviour, though:
+
+```rust
+if byte_idx <= s.len() && s.is_char_boundary(byte_idx) {
+    return byte_idx;
+}
+debug_assert!(false, "checked_byte_boundary: offset {byte_idx} is not a valid char boundary ...");
+// clamp and log, only reached when debug_assertions is off
+```
+
+This is by design per ADR-087 Rule 5 ("clamps and logs in release") — but the corollary is that it
+**panics in every debug build** (`cargo test`, `cargo run` without `--release`, any contributor's
+local dev binary) the moment it's asked to clamp a genuinely non-boundary offset. For a fixed-length
+truncation of arbitrary content (`&content[..8000]`, `&stdout[..10_000]`, `&code[..200]` — exactly
+the shape of every "ADR-087-fixed" call site: `guidance.rs`, `run_loop.rs`, `handle_prompt.rs`,
+`shell_exec.rs`, and now `runtime.rs`'s `record_error`), landing mid-character at the cut point is not
+a bug, it's the expected steady state for real non-ASCII input. So the validator's debug/test-mode
+behaviour is: abort the process on the exact input its release-mode behaviour was built to survive.
+
+**Verified this affects every "fixed" site equally, and none of them have a test that would catch
+it**: `guidance.rs`'s own regression test constructs its fixture as `"x".repeat(PROJECT_CONTEXT_MAX_CHARS
++ 500)` — all-ASCII filler, so it can never land off-boundary and never exercises the debug_assert.
+The same is true of every other site's tests (or absence of one). This is not a hypothetical: while
+writing an adversarial test for #604.2, constructing a *real* mid-character trigger at the fixed cut
+length caused an immediate `debug_assert` panic — in effect, an unwritten test would have been the
+first thing to reproduce the same debug-build crash that a real user's non-ASCII content could
+trigger during local development.
+
+**The call:** the validator conflates two different use cases under one name:
+1. **True chokepoint / "should never happen" positions** — e.g. an LSP `Position` that MAE itself
+   computed and is passing back into a slice; landing off-boundary here really would indicate an
+   upstream bug, and panicking loudly in debug is the right, ADR-087-intended behaviour.
+2. **Flat truncation of arbitrary, untrusted-length content** — landing off-boundary is the *expected*
+   outcome for real non-ASCII input at an arbitrary fixed cut length, not a bug signal.
+
+Options:
+1. Split into two functions: keep `checked_byte_boundary`'s debug-panic behaviour for case 1, and add
+   a silently-clamping sibling (no `debug_assert`) for case 2 — every currently-"fixed" truncation
+   call site would switch to the new sibling.
+2. Leave it as one function, and accept that dev/debug builds may abort on this path — since release
+   builds (what ships) are unaffected, and treat any debug-build abort here as a signal to add an
+   adversarial test with a *boundary-respecting* fixture instead (the workaround this pass used for
+   #604.2's own test, documented in its doc comment).
+3. Change `debug_assert!` to a `tracing::debug!` + always-clamp, dropping the loud-in-dev behaviour
+   entirely — simplest, but gives up the "catch it in CI" property ADR-087 explicitly wanted.
+
+**My recommendation:** option 1. The two use cases have different correct behaviour and conflating
+them under one name is exactly the kind of "one function, two jobs" shape CLAUDE.md principle #8
+warns against once you notice it — a debug_assert that fires on expected, common input isn't a bug
+detector at that point, it's a landmine sitting in every contributor's local dev build, and it will
+eventually be hit by someone typing genuinely accented text into a project they're testing MAE on.
+
+---
+
+## 9. Nine AI tools are advertised over MCP but structurally undispatchable there
+
+**Status:** found while triaging issue #590 (pre-v0.15 audit tail pass). Not changed; needs a call.
+
+`ask_user`, `delegate`, `ai_set_mode`, `ai_set_profile`, `ai_set_budget`, `propose_changes`,
+`log_activity`, `read_transcript`, and `web_fetch` are all registered in `ai_specific_tools`
+(`crates/ai/src/tools/mod.rs`) and therefore appear in an external MCP client's `tools/list` —
+`ask_user` specifically at the default Core tier, so it's in the *first* `tools/list` any paired
+external agent (VS Code Copilot, Claude Code via the shim — v0.15's headline use case) sees.
+
+None of the nine are reachable through `crates/ai/src/executor/tool_dispatch.rs::dispatch_tool`,
+confirmed by direct inspection — none of the nine names appear anywhere in that function's dispatcher
+chain, so an external MCP call for any of them falls through to `Err("Unknown tool: {name}")`. All
+nine are handled *only* inside the embedded `AgentSession`'s own event loop
+(`crates/ai/src/session/handle_prompt.rs`), which has session-scoped state `dispatch_tool` structurally
+cannot see: `self.transcript_path`, `self.budget`, `self.current_mode`/`self.current_profile`, and —
+for `ask_user`/`propose_changes` — a `tokio::sync::oneshot` channel that pauses the session's own task
+waiting for a human UI reply. `dispatch_tool`'s signature (`editor: &mut Editor, call: &ToolCall,
+requester_provider: Option<&str>`) has no session handle at all.
+
+**The call:** this genuinely needs an architectural decision, not a quick patch, because the nine
+tools split into two different problems:
+- `ai_set_mode`/`ai_set_profile`/`ai_set_budget`/`log_activity`/`read_transcript`/`web_fetch` are not
+  *inherently* interactive — they mutate or read session-local state, which could in principle be
+  threaded through if `dispatch_tool` gained a session handle (a real feature: per-session state
+  reachable from the MCP dispatch path, which doesn't exist today for anything).
+- `ask_user`/`propose_changes`/`delegate` are inherently interactive or spawn sub-agents; making them
+  reachable over MCP means deciding what "pause and wait for a human reply" even means for an
+  external client mid-`tools/call` — a UX question, not just a wiring one.
+
+Options:
+1. Build real MCP-facing dispatch for the six non-inherently-interactive tools (the smaller, more
+   tractable half), and explicitly exclude the three interactive ones from external MCP tool discovery
+   until/unless a real answer exists for what "ask the human" means over MCP.
+2. Exclude all nine from every external-MCP discovery surface (`tools/list`, `search_tools`,
+   `request_tools`) — matching ADR-085's own stated shape ("the fix is that they are not offered, not
+   that they are offered and then refused") — and keep them embedded-session-only, full stop, until a
+   design exists.
+3. Leave as-is and treat the `Unknown tool` response as an acceptable outcome for a tool an external
+   client shouldn't have called in the first place, documenting it in each tool's description.
+
+**My recommendation:** option 2 as an immediate fix (cheap — a discovery-surface filter, touches no
+dispatch logic, and matches the precedent ADR-085 already established for a structurally-identical
+"advertised but not actually reachable this way" gap), with option 1 as a real follow-up feature once
+someone decides the UX for interactive tools over MCP. Option 3 leaves a paired external agent
+discovering this by trial and error, which is a worse experience than not offering the tool.

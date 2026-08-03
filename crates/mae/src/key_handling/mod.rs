@@ -383,8 +383,12 @@ pub fn handle_key(
         // interactive-only `eval_for_repl` used the non-yielding `vm.eval`,
         // which could not drain hooks fired mid-eval (e.g. `option-change` from
         // `set-option!`) and failed with "expected procedure, got void".
-        if let Some(output) = crate::ai_event_handler::drain_pending_scheme_evals(editor, scheme) {
+        if let Some((output, _all_ok)) =
+            crate::ai_event_handler::drain_pending_scheme_evals(editor, scheme)
+        {
             // Surface the last result/error to the status bar for interactive use.
+            // (This is a human-facing status message, not control flow — the
+            // `_all_ok` bool is what an AI-facing caller must use instead.)
             if let Some(line) = output
                 .lines()
                 .rev()
