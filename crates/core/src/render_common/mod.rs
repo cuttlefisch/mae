@@ -5,6 +5,7 @@
 //! converts these shared types into Skia draw calls or ratatui Spans.
 
 pub mod agenda;
+pub mod anchored_popup;
 pub mod collab_colors;
 pub mod collab_cursor;
 pub mod color;
@@ -24,3 +25,4 @@ pub mod shell;
 pub mod spans;
 pub mod splash;
 pub mod status;
+pub mod which_key;
