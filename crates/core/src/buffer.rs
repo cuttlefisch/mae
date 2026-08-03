@@ -1142,6 +1142,21 @@ impl Buffer {
         (row, byte.saturating_sub(line_start_byte))
     }
 
+    /// Byte column, within `row`, of the absolute **char** offset
+    /// `char_offset`.
+    ///
+    /// Replaces the pre-ADR-087 idiom `char_offset - rope.line_to_char(row)`,
+    /// which silently produced a *char* column that then got stored in a byte
+    /// field. Unlike [`Buffer::row_col_from_offset`] this does not re-derive
+    /// the row, so it keeps working at the very end of the buffer where that
+    /// one clamps to `len_chars() - 1`.
+    pub fn byte_col_of_char_offset(&self, row: usize, char_offset: usize) -> usize {
+        let char_offset = char_offset.min(self.rope.len_chars());
+        let byte = self.rope.char_to_byte(char_offset);
+        let row = row.min(self.rope.len_lines().saturating_sub(1));
+        byte.saturating_sub(self.rope.line_to_byte(row))
+    }
+
     /// Convert an absolute **byte** offset back to `(row, byte_col)`.
     pub fn row_col_from_byte_offset(&self, byte_offset: usize) -> (usize, usize) {
         let byte_offset = self.floor_rope_byte(byte_offset.min(self.rope.len_bytes()));
@@ -1450,7 +1465,14 @@ impl Buffer {
             win.cursor_col = 0;
             self.changed_lines.insert(win.cursor_row);
         } else {
-            win.cursor_col += 1;
+            // ADR-087 Rule 4: cursor_col is a byte offset, so advance by the
+            // inserted char's UTF-8 length, not by 1. (A single `char` is
+            // never a partial grapheme cluster's *start*, so the result is
+            // still a cluster boundary except when the user typed a combining
+            // mark onto a base — where sitting after it is what an editor
+            // does anyway, and clamp_cursor's snap would otherwise walk the
+            // cursor backwards over their own keystroke.)
+            win.cursor_col += ch.len_utf8();
         }
         self.modified = true;
         self.bump_generation();
@@ -1473,6 +1495,9 @@ impl Buffer {
         } else {
             0
         };
+        // ADR-087 Rule 4: the new byte column is the old one minus the
+        // deleted char's UTF-8 length, not minus 1.
+        let new_col = win.cursor_col.saturating_sub(ch.len_utf8());
         self.rope.remove(pos - 1..pos);
         self.sync_delete(pos - 1, 1);
         self.push_undo(EditAction::DeleteChar { pos: pos - 1, ch });
@@ -1481,7 +1506,7 @@ impl Buffer {
             win.cursor_row -= 1;
             win.cursor_col = prev_line_len;
         } else {
-            win.cursor_col -= 1;
+            win.cursor_col = new_col;
         }
         self.changed_lines.insert(win.cursor_row);
         self.modified = true;
@@ -1566,7 +1591,7 @@ impl Buffer {
         self.redo_stack.clear();
         self.modified = true;
         self.bump_generation();
-        win.cursor_col = pos - line_start;
+        win.cursor_col = self.byte_col_of_char_offset(win.cursor_row, pos);
     }
 
     /// Delete from the cursor to the beginning of the current line (C-u).
@@ -1873,12 +1898,13 @@ impl Buffer {
         win.clamp_cursor(self);
     }
 
-    /// Set cursor row/col from a char offset in the rope.
+    /// Set cursor row + **byte** col from an absolute char offset in the rope
+    /// (ADR-087 Rule 4).
     fn set_cursor_from_char_pos(rope: &Rope, win: &mut Window, pos: usize) {
         let pos = pos.min(rope.len_chars());
         win.cursor_row = rope.char_to_line(pos);
-        let line_start = rope.line_to_char(win.cursor_row);
-        win.cursor_col = pos - line_start;
+        let line_start_byte = rope.line_to_byte(win.cursor_row);
+        win.cursor_col = rope.char_to_byte(pos).saturating_sub(line_start_byte);
     }
 
     /// Rebuild the buffer's rope from the flattened conversation text.
