@@ -191,6 +191,10 @@ use self_test::build_self_test_plan;
 mod tests;
 
 #[cfg(test)]
+#[path = "approval_tests.rs"]
+mod approval_tests;
+
+#[cfg(test)]
 #[path = "authorization_tests.rs"]
 mod authorization_tests;
 

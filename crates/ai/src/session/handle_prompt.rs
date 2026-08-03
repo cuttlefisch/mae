@@ -59,7 +59,7 @@ impl AgentSession {
                         &call.name,
                         tier,
                         self.policy.auto_approve_up_to,
-                        "this session's event channel is closed, so",
+                        "this session (its event channel is closed)",
                     ));
                 }
                 match reply_rx.await {
@@ -72,7 +72,7 @@ impl AgentSession {
                         &call.name,
                         tier,
                         self.policy.auto_approve_up_to,
-                        "the approval prompt was dropped without an answer, so",
+                        "this session (the approval prompt was dropped unanswered)",
                     )),
                 }
             }

@@ -6,6 +6,8 @@ mod core_tools;
 mod dap_tools;
 pub mod decision;
 #[cfg(test)]
+mod decision_tests;
+#[cfg(test)]
 mod dispatch_contract_tests;
 pub mod dispatchability;
 mod kb_tools;

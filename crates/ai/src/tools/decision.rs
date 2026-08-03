@@ -122,9 +122,9 @@ pub fn ask_denied_message(
 ) -> String {
     format!(
         "Permission denied: {tool_name} requires {tier:?} tier, above the auto-approval \
-         ceiling ({auto_approve_up_to:?}). {surface} has no human to confirm this, so the \
-         call is denied rather than queued for approval — raise the ceiling explicitly if \
-         this call is expected."
+         ceiling ({auto_approve_up_to:?}). There is no human to confirm this on {surface}, \
+         so the call is denied rather than queued for approval — raise the ceiling \
+         explicitly if this call is expected."
     )
 }
 

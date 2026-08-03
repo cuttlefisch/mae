@@ -820,7 +820,7 @@ pub(crate) async fn run_headless_self_test(
                     // the self-test's own report shows it as a failed tool
                     // call rather than a silent skip.
                     ExecuteResult::NeedsApproval(req) => {
-                        let result = req.into_denied("--self-test runs headless, so");
+                        let result = req.into_denied("--self-test, which runs headless");
                         if let Some(conv) = find_conversation_buffer_mut(editor) {
                             conv.push_tool_result(false, &result.output, None);
                         }

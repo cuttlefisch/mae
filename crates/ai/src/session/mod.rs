@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use tokio::sync::mpsc;
 
 mod context_mgmt;
-mod handle_prompt;
+pub(crate) mod handle_prompt;
 pub(crate) mod progress;
 mod run_loop;
 pub(crate) mod workflow;
@@ -22,6 +22,8 @@ pub(super) enum DegradationLevel {
     Minimal,
 }
 
+#[cfg(test)]
+mod permission_gate_tests;
 #[cfg(test)]
 mod tests;
 
