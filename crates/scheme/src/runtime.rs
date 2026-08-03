@@ -741,6 +741,37 @@ impl SchemeRuntime {
         st.gc_stats_snapshot = self.vm.gc_stats.clone();
     }
 
+    /// The permission tier currently in force for evaluated Scheme (ADR-084 D3).
+    pub fn ambient_tier(&self) -> crate::permission::PermissionTier {
+        self.vm.ambient_tier()
+    }
+
+    /// Evaluate guest code with the ambient tier lowered to
+    /// `min(current, tier)`.
+    ///
+    /// This is the host-side entry point an AI/MCP session wraps its
+    /// evaluation in. It cannot raise the tier — see
+    /// [`crate::vm::Vm::with_ambient_tier`].
+    ///
+    /// @ai-caution: [permission] The tier passed here must come from the
+    /// session's resolved `PermissionPolicy`, never from anything the guest
+    /// program supplied. A caller-derived tier turns the check into the
+    /// confused-deputy antipattern it exists to prevent.
+    pub fn with_ambient_tier<R>(
+        &mut self,
+        tier: crate::permission::PermissionTier,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        // Reuses the VM's own lower/restore pair, so the monotone `min` rule
+        // has exactly one implementation. Not expressed as
+        // `self.vm.with_ambient_tier(..)` because `f` needs the whole runtime,
+        // which is already mutably borrowed by the VM.
+        let previous = self.vm.lower_ambient_tier(tier);
+        let result = f(self);
+        self.vm.restore_ambient_tier(previous);
+        result
+    }
+
     /// Evaluate a Scheme expression and return the result as a string.
     /// Errors are recorded in the error history for debugger introspection.
     pub fn eval(&mut self, code: &str) -> Result<String, SchemeError> {
@@ -1107,3 +1138,11 @@ impl SchemeRuntime {
 #[cfg(test)]
 #[path = "runtime_tests.rs"]
 mod tests;
+
+// ADR-084 D3 enforcement tests. A child of this module so they can read the
+// VM's registered globals and the pending-command queues directly — the
+// oracles are the shipped registry and the real queue, not a restatement of
+// what the tests expect to find there.
+#[cfg(test)]
+#[path = "permission_tests.rs"]
+mod permission_tests;

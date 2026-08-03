@@ -18,6 +18,7 @@ use crate::compiler::{CodeObject, Compiler, MacroDef, Op, UpvalueDesc};
 use crate::env::Env;
 use crate::library::{self, LibraryRegistry};
 use crate::lisp_error::{Arity, LispError};
+use crate::permission::PermissionTier;
 use crate::reader;
 use crate::value::{CallFrame, Closure, Continuation, ForeignFn, Value, Winder};
 
@@ -176,6 +177,23 @@ pub struct Vm {
     /// Uses `Rc<RefCell<Env>>` so defines during body evaluation are visible
     /// to closures that already captured a reference to this env.
     library_env: Option<Rc<RefCell<Env>>>,
+    /// Permission tier in force for code this VM is currently running
+    /// (ADR-084 D3). Compared against each primitive's declared tier at the
+    /// single site where a `ForeignFn` is invoked.
+    ///
+    /// @ai-caution: [permission] Three invariants make this defensible as
+    /// ambient authority rather than a confused deputy, and all three are
+    /// structural, not conventional:
+    ///   1. It is only ever *lowered*, by [`Vm::with_ambient_tier`], which
+    ///      takes `min(current, requested)` and restores the outer value on
+    ///      the way out. There is no setter that raises it.
+    ///   2. It is never derived from anything the running program says — the
+    ///      host decides it before guest code starts, from the session's
+    ///      policy, not from an argument.
+    ///   3. No Scheme primitive reads or writes it. Exposing one would let
+    ///      evaluated code re-grant itself the authority this field exists to
+    ///      withhold (asserted by `ambient_tier_is_not_reachable_from_scheme`).
+    ambient_tier: PermissionTier,
 }
 
 /// GC observability metrics (Stage 1: Rc-based, monitors for cycle leaks).
@@ -212,6 +230,13 @@ impl Vm {
             last_break_line: None,
             debug_mode: false,
             library_env: None,
+            // A freshly constructed VM is the editor's own runtime, evaluating
+            // the human's `init.scm`, modules and REPL input — that is full
+            // user authority, and lowering it here would break config loading
+            // rather than bound an agent. Guest code (an AI session, an MCP
+            // client) is what must be dropped, at the entry point that knows
+            // whose code is about to run. See `with_ambient_tier`.
+            ambient_tier: PermissionTier::Privileged,
         }
     }
 
@@ -331,6 +356,53 @@ impl Vm {
         };
         self.globals
             .define(name.to_string(), Value::Foreign(Rc::new(foreign)));
+    }
+
+    /// The permission tier currently in force for evaluated code.
+    pub fn ambient_tier(&self) -> PermissionTier {
+        self.ambient_tier
+    }
+
+    /// Run `f` with the ambient tier lowered to `min(current, tier)`, restoring
+    /// the previous value afterwards.
+    ///
+    /// This is the ONLY way the ambient tier changes, and it is monotone
+    /// non-increasing by construction: asking for a *higher* tier than the one
+    /// in force is silently a no-op, not an escalation. A host that wraps guest
+    /// code in this can rely on nested calls never widening what an inner scope
+    /// may do.
+    ///
+    /// @ai-caution: [permission] Do not add a `set_ambient_tier`. The absence of
+    /// a raising setter is what makes this ambient authority auditable — the
+    /// `min` here is the whole guarantee (ADR-084 D3; Hardy 1988 on why the
+    /// ambient "switch hats" fix fails when either direction is reachable).
+    pub fn with_ambient_tier<R>(
+        &mut self,
+        tier: PermissionTier,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let previous = self.lower_ambient_tier(tier);
+        let result = f(self);
+        self.restore_ambient_tier(previous);
+        result
+    }
+
+    /// Lower the ambient tier to `min(current, tier)`, returning the previous
+    /// value for [`Vm::restore_ambient_tier`].
+    ///
+    /// The single implementation of the monotone rule. Crate-private: outside
+    /// this crate the only way to change the tier is the scoped
+    /// `with_ambient_tier`, so a caller cannot forget to restore, and cannot
+    /// hand `restore_ambient_tier` a value it never lowered from.
+    pub(crate) fn lower_ambient_tier(&mut self, tier: PermissionTier) -> PermissionTier {
+        let previous = self.ambient_tier;
+        self.ambient_tier = previous.min(tier);
+        previous
+    }
+
+    /// Restore a tier previously returned by [`Vm::lower_ambient_tier`].
+    pub(crate) fn restore_ambient_tier(&mut self, previous: PermissionTier) {
+        self.ambient_tier = previous;
     }
 
     /// Define a global variable (updates existing if present).
@@ -947,6 +1019,15 @@ impl Vm {
                         if e.is_yield() {
                             return self.convert_yield(e);
                         }
+                        // ADR-084 D5: a tier denial aborts the evaluation. It is
+                        // deliberately not offered to `guard` /
+                        // `with-exception-handler` — a catchable denial is one a
+                        // denied program can retry in a loop, and a program that
+                        // has already mutated buffers and files is better stopped
+                        // than resumed (Garfinkel, NDSS 2003 §4.5).
+                        if e.is_permission_denied() {
+                            return Err(e);
+                        }
                         self.handle_exception(e)?;
                     }
                 }
@@ -955,6 +1036,15 @@ impl Vm {
                     if let Err(e) = self.do_call(argc, true) {
                         if e.is_yield() {
                             return self.convert_yield(e);
+                        }
+                        // ADR-084 D5: a tier denial aborts the evaluation. It is
+                        // deliberately not offered to `guard` /
+                        // `with-exception-handler` — a catchable denial is one a
+                        // denied program can retry in a loop, and a program that
+                        // has already mutated buffers and files is better stopped
+                        // than resumed (Garfinkel, NDSS 2003 §4.5).
+                        if e.is_permission_denied() {
+                            return Err(e);
                         }
                         self.handle_exception(e)?;
                     }
@@ -1150,6 +1240,15 @@ impl Vm {
                     if let Err(e) = self.do_call(argc, false) {
                         if e.is_yield() {
                             return self.convert_yield(e);
+                        }
+                        // ADR-084 D5: a tier denial aborts the evaluation. It is
+                        // deliberately not offered to `guard` /
+                        // `with-exception-handler` — a catchable denial is one a
+                        // denied program can retry in a loop, and a program that
+                        // has already mutated buffers and files is better stopped
+                        // than resumed (Garfinkel, NDSS 2003 §4.5).
+                        if e.is_permission_denied() {
+                            return Err(e);
                         }
                         self.handle_exception(e)?;
                     }
@@ -1362,6 +1461,37 @@ impl Vm {
             }
 
             Value::Foreign(ff) => {
+                // ADR-084 D3: the chokepoint. This is the single site where any
+                // `ForeignFn` is ever invoked, which is why the check lives here
+                // and not at ~516 call sites (Saltzer & Schroeder: complete
+                // mediation without multiplying the decision logic).
+                //
+                // Absence — not binding a privileged primitive at a lower tier —
+                // is NOT sufficient on its own: Scheme procedures are
+                // first-class, so a `Value::Foreign` captured into a shared
+                // global outlives an environment swap and stays callable. The
+                // ambient check is what makes the captured reference useless.
+                //
+                // Deliberately ahead of the arity check: refusal must not depend
+                // on the shape of the call, so a denied primitive answers the
+                // same way whatever it is passed — and so an audit can probe
+                // every registered primitive uniformly without executing any of
+                // the permitted ones.
+                //
+                // @ai-caution: [permission] Exhaustive by construction — the
+                // `match` in `PrimitiveTier::required()` has no `_` arm, so a new
+                // classification variant fails the build here rather than
+                // silently falling through to "allowed".
+                if let Some(required) = ff.tier.required() {
+                    if self.ambient_tier < required {
+                        self.stack.truncate(fn_pos);
+                        return Err(LispError::permission_denied(
+                            &ff.name,
+                            required,
+                            self.ambient_tier,
+                        ));
+                    }
+                }
                 // Check arity before calling
                 match &ff.arity {
                     Arity::Fixed(n) if argc != *n => {
