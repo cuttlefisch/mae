@@ -402,6 +402,36 @@ mod tests {
         }
     }
 
+    /// Every registered tool must declare a `PermissionTier` explicitly.
+    ///
+    /// `execute_tool_dispatch_body` resolves an absent tier with
+    /// `.unwrap_or(PermissionTier::Write)` — so a tool added without
+    /// `.permission(...)` is not refused, it is silently granted write access.
+    /// That is the fail-open shape ADR-084 D4 removes elsewhere, and AOSP's
+    /// AIDL compiler is the precedent for the fix: an unannotated interface is
+    /// a build failure, and "no permission required" has to be *chosen* rather
+    /// than defaulted into. All 208 tools satisfy this today; this test is what
+    /// keeps the 209th from quietly not.
+    #[test]
+    fn every_registered_tool_declares_a_permission_tier() {
+        let tools = ai_specific_tools(&OptionRegistry::new());
+        assert!(
+            tools.len() > 100,
+            "sanity: expected hundreds of registered tools, got {}",
+            tools.len()
+        );
+        let undeclared: Vec<&str> = tools
+            .iter()
+            .filter(|t| t.permission.is_none())
+            .map(|t| t.name.as_str())
+            .collect();
+        assert!(
+            undeclared.is_empty(),
+            "these tools declare no PermissionTier and would default to Write at \
+             dispatch — declare one explicitly (ADR-084 D3): {undeclared:?}"
+        );
+    }
+
     #[test]
     fn kb_export_subgraph_html_requires_shell_tier() {
         // It shells out to `npx @mermaid-js/mermaid-cli` for #+begin_src

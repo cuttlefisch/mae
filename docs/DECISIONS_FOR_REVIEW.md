@@ -155,3 +155,37 @@ structurally. That is a large, invasive refactor across every rendering path.
 **My recommendation:** pending the enforcement research. Deferring the newtype question and fixing
 the helpers is the cheap correct move; the newtype refactor is a v0.16 conversation if it happens at
 all.
+
+---
+
+## 6. KB sharing/membership MCP tools are Write tier — that is an authorization change
+
+**Status:** found while classifying the Scheme surface (ADR-084 D3). Not changed; needs your call.
+
+Classifying all 516 Scheme primitives forced a per-effect judgment, and comparing the result against
+the MCP tool table surfaced a mismatch. These tools are declared `PermissionTier::Write`
+(`crates/ai/src/tools/kb_tools.rs`):
+
+- `kb_share`, `kb_add_member`, `kb_remove_member`, `kb_approve` — grant or revoke another
+  principal's access to a shared KB.
+- `kb_set_policy` — change the join policy (restrictive / invite / permissive).
+- `kb_set_ai_residency` — relax the ADR-048 residency restriction on a KB.
+
+Granting a third party access to your knowledge base is not an edit. A `write`-tier session — the
+tier an operator would pick precisely to allow buffer edits while withholding shell access — can
+today add a member to a shared KB, or open a restricted KB to AI residency.
+
+The equivalent Scheme primitives were classified `Privileged` in the D3 pass. Scheme being stricter
+than MCP for the same effect is not a bypass, but it is a sign the tool table is the one that is
+wrong.
+
+**The call:** raise these to `Privileged`. It is a behaviour change for any workflow driving KB
+sharing from a write-tier session, which is why I have not done it unilaterally.
+
+**My recommendation:** raise them. ADR-018's role model already treats membership as an
+owner-only operation; the tier table should agree with it.
+
+**Related, same shape:** `set_option` is Write. That is harmless today because `ai_tier` does not
+reach the enforced policy — but ADR-084 D7 changes exactly that, at which point a write-tier session
+could raise its own tier through `set_option`. Whichever way #1 is decided, `set_option` needs to
+refuse the permission-tier option specifically, or be raised.
