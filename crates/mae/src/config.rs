@@ -708,7 +708,19 @@ pub fn parse_permission_tier(s: &str) -> Option<PermissionTier> {
     PermissionTier::parse(s)
 }
 
-/// Resolve AI permission policy with precedence: env > file > default (trusted).
+/// Resolve AI permission policy with precedence: env > file > built-in default.
+///
+/// **ADR-090 D5 — breaking change.** The built-in default was `"trusted"`
+/// (Shell); it is now [`PermissionPolicy::default()`]'s tier, which
+/// auto-approves reads and *asks* for writes and shell. That was only
+/// affordable once `decide` gained the `Ask` state: with the old
+/// allow-or-deny check, a stricter default hard-denied `run_build`/`run_test`
+/// outright instead of prompting, which is why the permissive default was
+/// there in the first place (ADR-084 D4's finding).
+///
+/// The default is not spelled out here — it is taken from
+/// `PermissionPolicy::default()`, so `mae`, `mae-agent`, and the embedded
+/// session cannot disagree about what "unconfigured" means.
 ///
 /// Returns `Err` with a user-facing message when the configured tier is not a
 /// recognised value, so startup can refuse rather than guess. `make check-config`
@@ -718,11 +730,13 @@ pub fn resolve_permission_policy(config: &Config) -> Result<PermissionPolicy, St
         Some(v) => (v, "MAE_AI_PERMISSIONS"),
         None => match config.ai.auto_approve_tier.clone() {
             Some(v) => (v, "[ai] auto_approve_tier in config.toml"),
-            // NOTE: this default is permissive, and deliberately unchanged here.
-            // Lowering it is ADR-090's business, not this function's: `is_allowed`
-            // currently hard-denies rather than prompting, so a stricter default
-            // would break `run_build`/`run_test` outright instead of asking.
-            None => ("trusted".to_string(), "built-in default"),
+            None => (
+                PermissionPolicy::default()
+                    .auto_approve_up_to
+                    .config_name()
+                    .to_string(),
+                "built-in default",
+            ),
         },
     };
     let tier = parse_permission_tier(&tier_str).ok_or_else(|| {
@@ -1604,13 +1618,33 @@ mod tests {
 
     // --- Permission policy resolution tests ---
 
+    /// ADR-090 D5 (breaking change): unconfigured MAE auto-approves reads and
+    /// *asks* for everything else. The second assertion is the one that
+    /// matters — it pins the resolver to `PermissionPolicy::default()` rather
+    /// than to a literal, so `mae`, `mae-agent`, and the embedded session
+    /// cannot drift apart on what "unconfigured" means.
     #[test]
-    fn resolve_permission_default_is_trusted() {
+    fn resolve_permission_default_auto_approves_reads_and_asks_above() {
         let _lock = ENV_LOCK.lock().unwrap();
         std::env::remove_var("MAE_AI_PERMISSIONS");
         let cfg = Config::default();
         let policy = resolve_permission_policy(&cfg).expect("default tier must parse");
-        assert_eq!(policy.auto_approve_up_to, PermissionTier::Shell);
+        assert_eq!(policy.auto_approve_up_to, PermissionTier::ReadOnly);
+        assert_eq!(
+            policy.auto_approve_up_to,
+            PermissionPolicy::default().auto_approve_up_to,
+            "the resolver's built-in default must BE PermissionPolicy::default(), not a copy of it"
+        );
+        // ...and the change is only safe because the excess is askable, not
+        // denied. A `Deny` here is the regression that pushes users back to
+        // `auto_approve_tier = \"shell\"`.
+        assert_eq!(
+            policy.decide("run_build", PermissionTier::Shell),
+            mae_ai::Decision::Ask
+        );
+        // The resolver must never hand back a hard ceiling: a config-file value
+        // is an auto-approval line, not a prohibition.
+        assert!(policy.hard_ceiling.is_none());
     }
 
     #[test]
@@ -1726,19 +1760,27 @@ mod tests {
     fn near_miss_tier_spellings_are_all_rejected() {
         let _lock = ENV_LOCK.lock().unwrap();
         std::env::remove_var("MAE_AI_PERMISSIONS");
+        // ADR-090 D4 narrowed this list: `parse_permission_tier` is now an
+        // alias of `PermissionTier::parse`, the ONE tier vocabulary, which is
+        // case-insensitive, trims, and accepts the `read-only`/`read_only`
+        // spellings `mae-agent` has always taken. Those are documented
+        // aliases (asserted by `every_advertised_tier_spelling_parses`), not
+        // near-misses. What must still be rejected is anything that is not a
+        // spelling of a real tier — the genuine typos and the values a
+        // fail-open default used to swallow into Shell.
         for bad in [
-            "read-only",
-            "readOnly",
-            "READONLY",
             "shel",
-            "Shell",
-            " shell",
-            "shell ",
-            "read_only",
+            "sheell",
+            "read only",
+            "readonlyy",
+            "privelaged",
             "none",
             "off",
             "",
+            "   ",
             "no-shell",
+            "write-only",
+            "trust",
         ] {
             let cfg = Config {
                 ai: AiSection {

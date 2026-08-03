@@ -1116,7 +1116,7 @@ impl AgentSession {
                 // its answer -- refuse a `Deny` here (it never reaches the
                 // main thread), and for an `Ask`, park the turn on a human
                 // exactly as `ask_user`/`propose_changes` already do.
-                let approved_tier = match self.decide_and_present(&call).await {
+                let approved_tier = match self.decide_and_present(call).await {
                     ToolCallGate::Proceed(tier) => tier,
                     ToolCallGate::Refused(output) => {
                         let _ = self
