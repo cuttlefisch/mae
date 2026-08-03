@@ -125,7 +125,7 @@ impl Editor {
             .chars()
             .filter(|c| *c != '\n' && *c != '\r')
             .collect();
-        let content_indent = crate::wrap::content_indent_len(&first_chars);
+        let content_indent = crate::wrap::content_indent_len(&first_chars, self.width_policy());
         let leading_ws: usize = first_chars
             .iter()
             .take_while(|c| **c == ' ' || **c == '\t')

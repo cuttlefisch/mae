@@ -234,7 +234,7 @@ impl Editor {
         let text: String = chars_for_wrap.iter().collect();
         let sb_w = self.show_break.chars().count();
         let wrap_rows =
-            crate::wrap::wrap_line_display_rows(&text, wrap_width, self.break_indent, sb_w);
+            crate::wrap::wrap_line_display_rows(&text, wrap_width, self.break_indent, sb_w, self.width_policy());
 
         // Heading wrap correctness: first wrap segment gets heading scale,
         // continuation rows are normal height. Total cell rows =

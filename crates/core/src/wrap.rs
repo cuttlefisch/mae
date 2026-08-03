@@ -530,12 +530,81 @@ mod tests {
 
     #[test]
     fn wrap_cursor_position_cjk() {
-        // "你好世界" with text_width=5: first row fits "你好" (4 cols)
-        let (row, col) = wrap_cursor_position("你好世界", 0, 5, false, 0, WidthPolicy::default());
+        // "你好世界" with text_width=5: first row fits "你好" (4 cols).
+        // ADR-087 Rule 4: the cursor column argument is a BYTE offset, so
+        // "the second character" is byte 3, not char 1.
+        let p = WidthPolicy::default();
+        let (row, col) = wrap_cursor_position("你好世界", 0, 5, false, 0, p);
         assert_eq!(row, 0);
         assert_eq!(col, 0); // display col 0
-        let (row, col) = wrap_cursor_position("你好世界", 1, 5, false, 0, WidthPolicy::default());
+        let (row, col) = wrap_cursor_position("你好世界", 3, 5, false, 0, p);
         assert_eq!(row, 0);
         assert_eq!(col, 2); // "好" starts at display col 2
+        // Third character wraps onto row 1 at display col 0.
+        let (row, col) = wrap_cursor_position("你好世界", 6, 5, false, 0, p);
+        assert_eq!((row, col), (1, 0));
+    }
+
+    #[test]
+    fn wrap_cursor_position_snaps_a_mid_utf8_byte_column_left() {
+        // A byte column that lands inside a multi-byte sequence must resolve
+        // to the character it is inside — never panic, never skip forward.
+        let p = WidthPolicy::default();
+        for byte_col in 0..="你好世界".len() {
+            let (_, col) = wrap_cursor_position("你好世界", byte_col, 80, false, 0, p);
+            assert_eq!(col, (byte_col / 3) * 2, "byte {byte_col}");
+        }
+    }
+
+    #[test]
+    fn char_width_honours_the_ambiguous_width_policy() {
+        // ADR-087 follow-up (a): word wrap must see the user's option, not a
+        // hardcoded default. U+2192 (RIGHTWARDS ARROW) is EAW=Ambiguous.
+        let narrow = WidthPolicy {
+            ambiguous_wide: false,
+            control_char_width: 0,
+        };
+        let wide = WidthPolicy {
+            ambiguous_wide: true,
+            control_char_width: 0,
+        };
+        assert_eq!(char_width('\u{2192}', narrow), 1);
+        assert_eq!(char_width('\u{2192}', wide), 2);
+        let chars: Vec<char> = "→→→".chars().collect();
+        assert_eq!(slice_display_width(&chars, narrow), 3);
+        assert_eq!(slice_display_width(&chars, wide), 6);
+    }
+
+    #[test]
+    fn ambiguous_width_wide_changes_where_a_line_wraps() {
+        // The user-visible consequence: the same text wraps differently.
+        let narrow = WidthPolicy {
+            ambiguous_wide: false,
+            control_char_width: 0,
+        };
+        let wide = WidthPolicy {
+            ambiguous_wide: true,
+            control_char_width: 0,
+        };
+        let line = "→→→→→→→→→→";
+        assert_eq!(wrap_line_display_rows(line, 10, false, 0, narrow), 1);
+        assert_eq!(wrap_line_display_rows(line, 10, false, 0, wide), 2);
+        // And the cursor column follows the same policy.
+        assert_eq!(wrap_cursor_position(line, 6, 40, false, 0, narrow).1, 2);
+        assert_eq!(wrap_cursor_position(line, 6, 40, false, 0, wide).1, 4);
+    }
+
+    #[test]
+    fn control_char_width_policy_reaches_word_wrap() {
+        let zero = WidthPolicy {
+            ambiguous_wide: false,
+            control_char_width: 0,
+        };
+        let one = WidthPolicy {
+            ambiguous_wide: false,
+            control_char_width: 1,
+        };
+        assert_eq!(char_width('\u{0007}', zero), 0);
+        assert_eq!(char_width('\u{0007}', one), 1);
     }
 }
