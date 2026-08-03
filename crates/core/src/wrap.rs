@@ -1,6 +1,6 @@
 //! Word-wrap helpers shared between core (gj/gk dispatch) and renderer.
 
-use unicode_width::UnicodeWidthChar;
+use crate::grapheme::{char_width_with, WidthPolicy};
 
 /// Characters considered word boundaries for wrapping (neovim `breakat`).
 pub fn is_break_char(ch: char) -> bool {
@@ -29,20 +29,40 @@ pub fn is_break_char(ch: char) -> bool {
     )
 }
 
-/// Display width of a single character (CJK = 2, most others = 1).
-pub fn char_width(ch: char) -> usize {
-    ch.width().unwrap_or(0)
+/// Display width of a single character under `policy` (CJK = 2, most others
+/// = 1, ambiguous-width and control characters per the user's options).
+///
+/// ADR-087 follow-up (a): this used to be a **third** per-char width
+/// implementation (`ch.width().unwrap_or(0)`), a sibling of the one deleted
+/// from `text_utils`. It is not a Rule 7 violation — it lives inside
+/// `mae-core` — and word wrap genuinely needs per-`char` increments over a
+/// `&[char]`, so it structurally cannot use grapheme-cluster width. What it
+/// *was* missing is the `WidthPolicy`, which meant `ambiguous_width` and
+/// `control_char_width` silently did not reach word wrap. It now delegates to
+/// the one policy-aware per-char helper.
+///
+/// Note the accompanying behaviour change: control characters previously
+/// contributed 0 columns here unconditionally; they now contribute
+/// `policy.control_char_width` (still 0 by default, so the default rendering
+/// is unchanged).
+pub fn char_width(ch: char, policy: WidthPolicy) -> usize {
+    char_width_with(ch, policy)
 }
 
 /// Find the best wrap break point within `chars[start..]` that fits in `limit`
 /// display columns. Returns the char index where the next display line should start.
 /// Prefers breaking after a word-boundary char; falls back to hard break.
-pub fn find_wrap_break(chars: &[char], start: usize, limit: usize) -> usize {
+pub fn find_wrap_break(
+    chars: &[char],
+    start: usize,
+    limit: usize,
+    policy: WidthPolicy,
+) -> usize {
     // Walk forward accumulating display width to find the hard-break index.
     let mut width = 0;
     let mut end = start;
     for &ch in &chars[start..] {
-        let w = char_width(ch);
+        let w = char_width(ch, policy);
         if width + w > limit {
             break;
         }
@@ -66,19 +86,19 @@ pub fn find_wrap_break(chars: &[char], start: usize, limit: usize) -> usize {
 }
 
 /// Count leading whitespace display columns in a slice.
-pub fn leading_indent_len(chars: &[char]) -> usize {
+pub fn leading_indent_len(chars: &[char], policy: WidthPolicy) -> usize {
     chars
         .iter()
         .take_while(|c| **c == ' ' || **c == '\t')
-        .map(|c| char_width(*c))
+        .map(|c| char_width(*c, policy))
         .sum()
 }
 
 /// Count display columns to the start of content after a list marker.
 /// For `  - item text`, returns 4 (past the `- `).
 /// For non-list lines, falls back to `leading_indent_len`.
-pub fn content_indent_len(chars: &[char]) -> usize {
-    let ws = leading_indent_len(chars);
+pub fn content_indent_len(chars: &[char], policy: WidthPolicy) -> usize {
+    let ws = leading_indent_len(chars, policy);
     let ws_chars: usize = chars
         .iter()
         .take_while(|c| **c == ' ' || **c == '\t')
@@ -108,9 +128,9 @@ pub fn content_indent_len(chars: &[char]) -> usize {
     ws
 }
 
-/// Display width of a char slice.
-pub fn slice_display_width(chars: &[char]) -> usize {
-    chars.iter().map(|c| char_width(*c)).sum()
+/// Display width of a char slice under `policy`.
+pub fn slice_display_width(chars: &[char], policy: WidthPolicy) -> usize {
+    chars.iter().map(|c| char_width(*c, policy)).sum()
 }
 
 /// Compute the display row and column for a given buffer column within a wrapped line.
@@ -118,26 +138,37 @@ pub fn slice_display_width(chars: &[char]) -> usize {
 /// Returns `(display_row_offset, display_col)` where `display_row_offset` is how many
 /// display rows down from the first row of this line, and `display_col` is the column
 /// within that display row (not including gutter/indent/showbreak prefix).
+/// ADR-087 Rule 4: `cursor_byte_col` is a **byte** offset into `line_text`
+/// (what `Window::cursor_col` holds), not a char index. The returned
+/// `display_col` is in terminal cells.
 pub fn wrap_cursor_position(
     line_text: &str,
-    cursor_col: usize,
+    cursor_byte_col: usize,
     text_width: usize,
     break_indent: bool,
     show_break_width: usize,
+    policy: WidthPolicy,
 ) -> (usize, usize) {
-    if text_width == 0 {
-        return (0, cursor_col);
-    }
     let chars: Vec<char> = line_text
         .chars()
         .filter(|c| *c != '\n' && *c != '\r')
         .collect();
+    // Byte col -> char index over the SAME filtered sequence the wrap walk
+    // uses, so the two indices cannot drift (Rule 1: one named crossing).
+    let prefix_end = crate::grapheme::floor_char_boundary(line_text, cursor_byte_col);
+    let cursor_col = line_text[..prefix_end]
+        .chars()
+        .filter(|c| *c != '\n' && *c != '\r')
+        .count();
+    if text_width == 0 {
+        return (0, cursor_col);
+    }
     let full_count = chars.len();
     if full_count == 0 {
         return (0, 0);
     }
     let indent_len = if break_indent {
-        content_indent_len(&chars)
+        content_indent_len(&chars, policy)
     } else {
         0
     };
@@ -152,10 +183,10 @@ pub fn wrap_cursor_position(
     let mut row = 0;
     loop {
         let avail = if row == 0 { text_width } else { cont_text_w };
-        let end = find_wrap_break(&chars, pos, avail);
+        let end = find_wrap_break(&chars, pos, avail, policy);
         if cursor_col < end || end >= full_count {
             // Return display column (sum of char widths from pos to cursor_col)
-            let display_col = slice_display_width(&chars[pos..cursor_col.min(end)]);
+            let display_col = slice_display_width(&chars[pos..cursor_col.min(end)], policy);
             return (row, display_col);
         }
         pos = end;
@@ -169,6 +200,7 @@ pub fn wrap_line_display_rows(
     text_width: usize,
     break_indent: bool,
     show_break_width: usize,
+    policy: WidthPolicy,
 ) -> usize {
     if text_width == 0 {
         return 1;
@@ -187,7 +219,7 @@ pub fn wrap_line_display_rows(
         return 1;
     }
     let indent_len = if break_indent {
-        content_indent_len(&chars)
+        content_indent_len(&chars, policy)
     } else {
         0
     };
@@ -202,7 +234,7 @@ pub fn wrap_line_display_rows(
     let mut rows = 0;
     loop {
         let avail = if rows == 0 { text_width } else { cont_text_w };
-        let end = find_wrap_break(&chars, pos, avail);
+        let end = find_wrap_break(&chars, pos, avail, policy);
         rows += 1;
         if end >= full_count {
             return rows;
@@ -268,13 +300,15 @@ where
     last_fit
 }
 
-/// Compute the buffer column for the start of a given wrap display row.
+/// Compute the buffer **byte** column for the start of a given wrap display
+/// row (ADR-087 Rule 4 — the result is assigned to `Window::cursor_col`).
 pub fn wrap_row_start_col(
     line_text: &str,
     target_row: usize,
     text_width: usize,
     break_indent: bool,
     show_break_width: usize,
+    policy: WidthPolicy,
 ) -> usize {
     if text_width == 0 || target_row == 0 {
         return 0;
@@ -288,7 +322,7 @@ pub fn wrap_row_start_col(
         return 0;
     }
     let indent_len = if break_indent {
-        content_indent_len(&chars)
+        content_indent_len(&chars, policy)
     } else {
         0
     };
@@ -303,10 +337,12 @@ pub fn wrap_row_start_col(
     let mut row = 0;
     loop {
         let avail = if row == 0 { text_width } else { cont_text_w };
-        let end = find_wrap_break(&chars, pos, avail);
+        let end = find_wrap_break(&chars, pos, avail, policy);
         row += 1;
         if row > target_row || end >= full_count {
-            return pos;
+            // `pos` is a char index into `chars`; the caller wants a byte
+            // column (Rule 1: convert, never reuse across domains).
+            return chars[..pos].iter().map(|c| c.len_utf8()).sum();
         }
         pos = end;
     }
@@ -320,27 +356,27 @@ mod tests {
     fn word_boundary_break() {
         let chars: Vec<char> = "hello world foo bar".chars().collect();
         // Width 12: "hello world " fits, break after space at index 12
-        let brk = find_wrap_break(&chars, 0, 12);
+        let brk = find_wrap_break(&chars, 0, 12, WidthPolicy::default());
         assert_eq!(brk, 12); // after the space in "hello world "
     }
 
     #[test]
     fn hard_break_no_boundary() {
         let chars: Vec<char> = "abcdefghijklmnop".chars().collect();
-        let brk = find_wrap_break(&chars, 0, 10);
+        let brk = find_wrap_break(&chars, 0, 10, WidthPolicy::default());
         assert_eq!(brk, 10); // hard break, no word boundary
     }
 
     #[test]
     fn wrap_cursor_on_first_row() {
-        let (row, col) = wrap_cursor_position("hello world foo", 3, 80, false, 0);
+        let (row, col) = wrap_cursor_position("hello world foo", 3, 80, false, 0, WidthPolicy::default());
         assert_eq!(row, 0);
         assert_eq!(col, 3);
     }
 
     #[test]
     fn wrap_display_rows_short_line() {
-        assert_eq!(wrap_line_display_rows("short", 80, false, 0), 1);
+        assert_eq!(wrap_line_display_rows("short", 80, false, 0, WidthPolicy::default()), 1);
     }
 
     // --- last_visible_wrapped_line: the shared bottom-visible-row walk,
@@ -420,52 +456,52 @@ mod tests {
 
     #[test]
     fn wrap_display_rows_empty() {
-        assert_eq!(wrap_line_display_rows("", 80, false, 0), 1);
+        assert_eq!(wrap_line_display_rows("", 80, false, 0, WidthPolicy::default()), 1);
     }
 
     #[test]
     fn leading_indent() {
         let chars: Vec<char> = "    hello".chars().collect();
-        assert_eq!(leading_indent_len(&chars), 4);
+        assert_eq!(leading_indent_len(&chars, WidthPolicy::default()), 4);
     }
 
     #[test]
     fn content_indent_list_marker() {
         // "  - item text" → content starts at col 4 (past "  - ")
         let chars: Vec<char> = "  - item text".chars().collect();
-        assert_eq!(content_indent_len(&chars), 4);
+        assert_eq!(content_indent_len(&chars, WidthPolicy::default()), 4);
     }
 
     #[test]
     fn content_indent_numbered_list() {
         let chars: Vec<char> = "  1. item text".chars().collect();
-        assert_eq!(content_indent_len(&chars), 5); // "  1. "
+        assert_eq!(content_indent_len(&chars, WidthPolicy::default()), 5); // "  1. "
     }
 
     #[test]
     fn content_indent_no_marker() {
         let chars: Vec<char> = "    hello".chars().collect();
-        assert_eq!(content_indent_len(&chars), 4); // falls back to leading whitespace
+        assert_eq!(content_indent_len(&chars, WidthPolicy::default()), 4); // falls back to leading whitespace
     }
 
     #[test]
     fn content_indent_plus_marker() {
         let chars: Vec<char> = "+ item".chars().collect();
-        assert_eq!(content_indent_len(&chars), 2); // "+ "
+        assert_eq!(content_indent_len(&chars, WidthPolicy::default()), 2); // "+ "
     }
 
     #[test]
     fn content_indent_star_marker() {
         let chars: Vec<char> = "* item".chars().collect();
-        assert_eq!(content_indent_len(&chars), 2); // "* "
+        assert_eq!(content_indent_len(&chars, WidthPolicy::default()), 2); // "* "
     }
 
     #[test]
     fn cjk_char_width() {
         // CJK unified ideographs are 2 columns wide
-        assert_eq!(char_width('中'), 2);
-        assert_eq!(char_width('a'), 1);
-        assert_eq!(char_width(' '), 1);
+        assert_eq!(char_width('中', WidthPolicy::default()), 2);
+        assert_eq!(char_width('a', WidthPolicy::default()), 1);
+        assert_eq!(char_width(' ', WidthPolicy::default()), 1);
     }
 
     #[test]
@@ -473,7 +509,7 @@ mod tests {
         // "你好世界" = 4 CJK chars = 8 display columns
         let chars: Vec<char> = "你好世界".chars().collect();
         // limit=5 cols: "你好" = 4 cols fits, "你好世" = 6 cols doesn't → break at 2
-        let brk = find_wrap_break(&chars, 0, 5);
+        let brk = find_wrap_break(&chars, 0, 5, WidthPolicy::default());
         assert_eq!(brk, 2);
     }
 
@@ -482,23 +518,23 @@ mod tests {
         // "ab你好cd" = 2+4+2 = 8 display columns
         let chars: Vec<char> = "ab你好cd".chars().collect();
         // limit=6: "ab你好" = 2+4 = 6 cols → fits, break at 4
-        let brk = find_wrap_break(&chars, 0, 6);
+        let brk = find_wrap_break(&chars, 0, 6, WidthPolicy::default());
         assert_eq!(brk, 4);
     }
 
     #[test]
     fn slice_display_width_mixed() {
         let chars: Vec<char> = "a你b".chars().collect();
-        assert_eq!(slice_display_width(&chars), 4); // 1+2+1
+        assert_eq!(slice_display_width(&chars, WidthPolicy::default()), 4); // 1+2+1
     }
 
     #[test]
     fn wrap_cursor_position_cjk() {
         // "你好世界" with text_width=5: first row fits "你好" (4 cols)
-        let (row, col) = wrap_cursor_position("你好世界", 0, 5, false, 0);
+        let (row, col) = wrap_cursor_position("你好世界", 0, 5, false, 0, WidthPolicy::default());
         assert_eq!(row, 0);
         assert_eq!(col, 0); // display col 0
-        let (row, col) = wrap_cursor_position("你好世界", 1, 5, false, 0);
+        let (row, col) = wrap_cursor_position("你好世界", 1, 5, false, 0, WidthPolicy::default());
         assert_eq!(row, 0);
         assert_eq!(col, 2); // "好" starts at display col 2
     }
