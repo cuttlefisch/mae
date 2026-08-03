@@ -378,6 +378,46 @@ impl SchemeRuntime {
             }
         }
 
+        // Apply KB node CRUD from `(kb-create)`/`(kb-update)`/`(kb-delete)` —
+        // the SAME `Editor::kb_*_node` methods `execute_kb_create`/`_update`/
+        // `_delete` call for the AI, so seed protection, KB write policy
+        // (ADR-048 residency, epoch fencing) and federated-instance routing
+        // are decided in exactly one place (CLAUDE.md principles #3 + #15).
+        for op in state.pending_kb_node_ops.drain(..) {
+            let (label, result) = match op {
+                crate::runtime::kb_crud::KbNodeOp::Create {
+                    id,
+                    title,
+                    body,
+                    kind,
+                } => {
+                    let kind = mae_core::KbNodeKind::from_str_lossy(&kind);
+                    let r = editor.kb_create_node(&id, &title, &body, kind);
+                    (format!("kb-create {id}"), r)
+                }
+                crate::runtime::kb_crud::KbNodeOp::Update {
+                    id,
+                    title,
+                    body,
+                    tags,
+                } => {
+                    let r = editor.kb_update_node(&id, title.as_deref(), body.as_deref(), tags);
+                    (format!("kb-update {id}"), r)
+                }
+                crate::runtime::kb_crud::KbNodeOp::Delete { id } => {
+                    let r = editor.kb_delete_node(&id);
+                    (format!("kb-delete {id}"), r)
+                }
+            };
+            match result {
+                Ok(()) => debug!(op = %label, "kb node op applied from scheme"),
+                Err(e) => {
+                    warn!(op = %label, "kb node op error: {}", e);
+                    editor.set_status(format!("{label}: {e}"));
+                }
+            }
+        }
+
         // Apply typed link additions from (kb-add-link! SRC DST REL_TYPE)
         if let Some(ref store) = editor.kb.store {
             for (src, dst, rel_type) in state.pending_kb_links.drain(..) {
@@ -427,6 +467,27 @@ impl SchemeRuntime {
                 Err(e) => {
                     warn!(key = key.as_str(), "set-option! error: {}", e);
                     editor.set_status(e);
+                }
+            }
+        }
+
+        // Apply `(set-option-save! KEY VALUE)` — set THEN persist, the same
+        // order and the same two `Editor` methods `:set-save` and the
+        // `set_option` MCP tool's `persist` flag use. A failed set must not
+        // be followed by a persist: writing a value into `init.scm` that the
+        // registry just rejected would make the next startup fail too.
+        for (key, value) in state.pending_option_saves.drain(..) {
+            match editor.set_option(&key, &value) {
+                Ok(_) => match editor.save_option_to_init(&key) {
+                    Ok(msg) => editor.set_status(msg),
+                    Err(e) => {
+                        warn!(key = key.as_str(), "set-option-save! persist error: {}", e);
+                        editor.set_status(format!("set-option-save! {key}: {e}"));
+                    }
+                },
+                Err(e) => {
+                    warn!(key = key.as_str(), "set-option-save! error: {}", e);
+                    editor.set_status(format!("set-option-save! {key}: {e}"));
                 }
             }
         }

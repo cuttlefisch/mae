@@ -1673,6 +1673,52 @@ pub(crate) const SCHEME_API_FUNCTIONS: &[(&str, &str, &str, &str, &str)] = &[
             "(should-contain (test-status-message) \"Saved\")",
             "testing",
         ),
+
+        // --- Principle #3 parity pass: KB CRUD + option persistence ---
+        // Closes docs/CROSS_SURFACE_PARITY.md gaps #2 and #3 — capabilities
+        // that had Command + MCP surfaces but no Scheme counterpart.
+        (
+            "kb-search",
+            "(kb-search QUERY [SCOPE] [LIMIT])",
+            "Full-text search the knowledge base. SCOPE is \"primary\" (default) or \"all\" (primary plus every registered federated instance); LIMIT caps the hits (default 20). Returns a list of (id title kind instance) — instance is #f for a primary-KB hit. Scheme counterpart of the kb_search MCP tool.",
+            "(kb-search \"window group\" \"all\" 5)",
+            "kb-graph",
+        ),
+        (
+            "kb-get",
+            "(kb-get ID)",
+            "Fetch one KB node by ID from the primary KB or any registered federated instance. Returns (id title kind body tags), or #f when no node with that id exists. Signals an error if the store itself fails, so a storage failure never reads as \"node absent\". Scheme counterpart of the kb_get MCP tool.",
+            "(kb-get \"concept:buffer\")",
+            "kb-graph",
+        ),
+        (
+            "kb-create",
+            "(kb-create ID TITLE BODY [KIND])",
+            "Create a KB node. Signals an error for an empty or already-taken ID. KIND defaults to \"note\". Returns #t once queued; applied on the next editor tick via Editor::kb_create_node — the same method the kb_create MCP tool uses, which enforces seed protection and KB write policy.",
+            "(kb-create \"note:standup\" \"Standup\" \"* Notes\" \"note\")",
+            "kb-graph",
+        ),
+        (
+            "kb-update",
+            "(kb-update ID [TITLE] [BODY] [TAGS])",
+            "Update an existing KB node. Omit a field or pass #f to leave it unchanged; TAGS, when given, is a list of strings that replaces the node's tag set. Signals an error if the node does not exist, or if no field was given. Returns #t once queued; applied via Editor::kb_update_node — the same method the kb_update MCP tool uses.",
+            "(kb-update \"note:standup\" #f \"* Notes\\n- shipped\" '(\"work\"))",
+            "kb-graph",
+        ),
+        (
+            "kb-delete",
+            "(kb-delete ID)",
+            "Delete a KB node by ID. Signals an error if the node does not exist. Returns #t once queued; applied via Editor::kb_delete_node — the same method the kb_delete MCP tool uses, which refuses to delete a protected seed node.",
+            "(kb-delete \"note:standup\")",
+            "kb-graph",
+        ),
+        (
+            "set-option-save!",
+            "(set-option-save! KEY VALUE)",
+            "Set a global editor option AND persist it to ~/.config/mae/init.scm so it survives a restart — the Scheme counterpart of the `:set-save` command and of the set_option MCP tool's persist flag; all three call Editor::set_option then Editor::save_option_to_init. Signals an error for an unknown option name.",
+            "(set-option-save! \"theme\" \"dracula\")",
+            "options",
+        ),
     ];
 
 /// Discoverability aliases for a handful of `scheme:<name>` nodes whose
@@ -1939,6 +1985,10 @@ mod tests {
             include_str!("../../../scheme/src/runtime/io_packages.rs"),
         ),
         (
+            "scheme/runtime/kb_crud.rs",
+            include_str!("../../../scheme/src/runtime/kb_crud.rs"),
+        ),
+        (
             "scheme/runtime/kb_export.rs",
             include_str!("../../../scheme/src/runtime/kb_export.rs"),
         ),
@@ -1973,6 +2023,10 @@ mod tests {
         (
             "scheme/runtime/state_sync_apply.rs",
             include_str!("../../../scheme/src/runtime/state_sync_apply.rs"),
+        ),
+        (
+            "scheme/runtime/state_sync_apply2.rs",
+            include_str!("../../../scheme/src/runtime/state_sync_apply2.rs"),
         ),
         (
             "scheme/runtime/state_sync_apply2.rs",
@@ -2062,6 +2116,61 @@ mod tests {
     /// convention, any future addition here must cite the count and a
     /// tracking issue, and must only shrink over time.
     const KNOWN_UNDOCUMENTED_REGISTRATIONS: &[&str] = &[];
+
+    /// `RUNTIME_SOURCES` is hand-maintained, because `include_str!` cannot
+    /// glob a directory. That makes "add a new `crates/scheme/src/runtime/`
+    /// module" a silent way *around* the guard below: its registrations would
+    /// never be scanned, so its primitives could ship undocumented and the
+    /// doc-gap assertion would still read zero. This closes that door by
+    /// listing the directory at test time and requiring every `.rs` file in
+    /// it to appear in `RUNTIME_SOURCES` — including files that register
+    /// nothing today, since "registers nothing" is a property that changes
+    /// without anyone revisiting this list.
+    ///
+    /// @ai-caution: [architecture-debt] If you add a file under
+    /// `crates/scheme/src/runtime/`, add it to `RUNTIME_SOURCES` too. This
+    /// test will tell you; do not satisfy it by skipping the file.
+    #[test]
+    fn runtime_sources_covers_every_runtime_module() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../scheme/src/runtime");
+        let listed: std::collections::BTreeSet<String> = RUNTIME_SOURCES
+            .iter()
+            .filter_map(|(p, _)| p.strip_prefix("scheme/runtime/"))
+            .map(|p| p.to_string())
+            .collect();
+
+        let mut on_disk: Vec<String> = Vec::new();
+        for entry in std::fs::read_dir(&dir)
+            .unwrap_or_else(|e| panic!("cannot list {}: {e}", dir.display()))
+        {
+            let entry = entry.expect("readable dir entry");
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.ends_with(".rs") {
+                on_disk.push(name);
+            }
+        }
+        on_disk.sort();
+        assert!(
+            !on_disk.is_empty(),
+            "sanity check: {} yielded no .rs files",
+            dir.display()
+        );
+
+        let missing: Vec<&String> = on_disk.iter().filter(|n| !listed.contains(*n)).collect();
+        assert!(
+            missing.is_empty(),
+            "{} Scheme runtime module(s) exist on disk but are absent from RUNTIME_SOURCES, so \
+             any primitive they register escapes the doc-parity guard entirely: {:?}",
+            missing.len(),
+            missing
+        );
+
+        let stale: Vec<&String> = listed.iter().filter(|n| !on_disk.contains(n)).collect();
+        assert!(
+            stale.is_empty(),
+            "RUNTIME_SOURCES lists module(s) that no longer exist: {stale:?}"
+        );
+    }
 
     /// The primary guard (the WS6 deliverable): every Scheme-callable editor
     /// primitive `mae-scheme` actually registers must have a `scheme:<name>`

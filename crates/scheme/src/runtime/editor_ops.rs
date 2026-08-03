@@ -9,7 +9,7 @@ use std::sync::Arc;
 use parking_lot::Mutex;
 
 use crate::ffi::{arg_bool, arg_float, arg_int, arg_opt_string, arg_string};
-use crate::lisp_error::Arity;
+use crate::lisp_error::{Arity, LispError};
 use crate::value::Value;
 use crate::vm::Vm;
 
@@ -120,6 +120,63 @@ pub(super) fn register_editor_ops_fns(vm: &mut Vm, shared: &Arc<Mutex<SharedStat
             let value = arg_string(args, 1, "set-option!")?;
             s.lock().pending_options.push((key, value));
             Ok(Value::Void)
+        },
+    );
+
+    // (set-option-save! KEY VALUE) — set + persist to init.scm.
+    //
+    // Closes `docs/CROSS_SURFACE_PARITY.md` gap #3: persisting an option was
+    // a Command-surface (`:set-save`) + MCP-surface (`set_option` with
+    // `persist: true`) capability with no Scheme counterpart. Both of those
+    // route through `Editor::set_option` followed by
+    // `Editor::save_option_to_init`; so does this, drained in
+    // `state_sync_apply.rs`.
+    //
+    // @ai-caution: [permission] Classified `PRIVILEGED`, matching
+    // `set-option!` — but the reason is stronger here than there. This
+    // primitive writes the user's `init.scm`, which is *code the editor
+    // evaluates at next startup*, so it is a persistence primitive as much as
+    // a configuration one. Once ADR-084 D7 makes `ai_tier` a genuinely
+    // enforced option, any primitive that can set an arbitrary option is a
+    // self-escalation path; `Privileged` is the ceiling of the current
+    // lattice, so nothing weaker is available, but do NOT relax this to
+    // `WRITE` on the grounds that "it's just an option".
+    let s = shared.clone();
+    vm.register_fn(
+        "set-option-save!",
+        "Set an editor option AND persist it to ~/.config/mae/init.scm, so the value survives a \
+         restart. Equivalent to the `:set-save KEY VALUE` command and to the set_option MCP tool \
+         with persist: true — all three call Editor::set_option then \
+         Editor::save_option_to_init. Signals an error for an unknown option name; the write \
+         itself is applied on the next editor tick.",
+        Arity::Fixed(2),
+        tier::PRIVILEGED,
+        move |args: &[Value]| {
+            let key = arg_string(args, 0, "set-option-save!")?;
+            let value = arg_string(args, 1, "set-option-save!")?;
+            let mut state = s.lock();
+            // Fail fast on an unknown option so a config script gets a real,
+            // catchable Scheme error instead of a status-line message it
+            // cannot see. `option_values` is the same registry snapshot
+            // `(get-option)` reads; the authoritative validation (type
+            // coercion, allowed values, persistability) stays in
+            // `Editor::set_option`/`save_option_to_init`.
+            //
+            // Names are matched with `-`/`_` normalized, matching how the
+            // option registry itself accepts both spellings.
+            let norm = |n: &str| n.replace('-', "_");
+            let wanted = norm(&key);
+            if !state
+                .option_values
+                .iter()
+                .any(|(name, _)| norm(name) == wanted)
+            {
+                return Err(LispError::internal(format!(
+                    "set-option-save!: Unknown option: {key}"
+                )));
+            }
+            state.pending_option_saves.push((key, value));
+            Ok(Value::Bool(true))
         },
     );
 

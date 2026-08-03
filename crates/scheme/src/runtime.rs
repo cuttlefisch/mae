@@ -31,6 +31,7 @@ use crate::vm::Vm;
 
 mod editor_ops;
 mod io_packages;
+mod kb_crud;
 mod kb_export;
 mod kb_graph_view;
 mod kb_preview;
@@ -47,6 +48,7 @@ mod test_primitives;
 
 use editor_ops::register_editor_ops_fns;
 use io_packages::register_io_package_fns;
+use kb_crud::register_kb_crud_fns;
 use kb_export::register_kb_export_fns;
 use kb_graph_view::register_kb_graph_view_fns;
 use kb_preview::register_kb_preview_fns;
@@ -92,6 +94,12 @@ pub struct SharedState {
     pending_hook_removes: Vec<(String, String)>,
     /// Editor option changes: (key, value)
     pending_options: Vec<(String, String)>,
+    /// Editor option changes that must ALSO be persisted to `init.scm`, from
+    /// `(set-option-save! KEY VALUE)` — drained into `Editor::set_option`
+    /// followed by `Editor::save_option_to_init`, the same pair the
+    /// `:set-save` colon-command and the `set_option` MCP tool's `persist`
+    /// flag drive (`docs/CROSS_SURFACE_PARITY.md` gap #3).
+    pending_option_saves: Vec<(String, String)>,
     /// Theme name requested by Scheme code via `(set-theme "name")`
     theme_request: Option<String>,
 
@@ -171,6 +179,12 @@ pub struct SharedState {
     /// instance), so it doesn't fit the synchronous-return primitive shape
     /// either, same as `pending_kb_nodes`'s own reasoning.
     pending_kb_register_requests: Vec<(String, String)>,
+    /// Pending KB node CRUD ops from `(kb-create)`/`(kb-update)`/`(kb-delete)`
+    /// — drained in order into the matching `Editor::kb_*_node` method (the
+    /// same one the `kb_create`/`kb_update`/`kb_delete` MCP tools call), so
+    /// the human/Scheme surface and the AI surface share one implementation
+    /// rather than two that can drift (CLAUDE.md principles #3 + #15).
+    pending_kb_node_ops: Vec<kb_crud::KbNodeOp>,
     /// Pending KB typed links: (source, target, rel_type).
     pending_kb_links: Vec<(String, String, String)>,
     /// Pending KB link removals: (source, target).
@@ -551,6 +565,7 @@ impl SchemeRuntime {
         register_io_package_fns(&mut vm, &shared);
         register_kb_primitive_fns(&mut vm, &shared);
         register_kb_query_fns(&mut vm, &shared);
+        register_kb_crud_fns(&mut vm, &shared);
         register_kb_graph_view_fns(&mut vm, &shared);
         register_kb_preview_fns(&mut vm, &shared);
         register_kb_export_fns(&mut vm, &shared);
