@@ -6,6 +6,26 @@ obvious default. Work continued around each one; nothing here is blocking.
 
 Delete an entry once it is decided (and record the decision in the relevant ADR).
 
+
+## Decisions taken (Hayden, 2026-08-03)
+
+| # | Topic | Decision |
+|---|---|---|
+| 0 | Disclosure sequencing | **Push.** Done; #612 merged, #613 open. |
+| 1 | Default permission tier | **Three-state model (allow/ask/deny) is in v0.15 scope.** Build the ask state, then lower the default. |
+| 2 | RCE advisory / CVE | **None needed** — no other users today, so no separate advisory, no CVE, no v0.14 backport. The draft advisory stays unpublished. |
+| 3 | ADR-085 category split | **Ship as a breaking change** with release notes naming all eight relocated tools. |
+| 4 | `Window::cursor_col` | **Do the byte migration in v0.15**, not just the declaration. |
+| 5 | `dispatch_builtin` | **Change the contract properly** — a richer outcome across the ~559 command implementations. |
+| 6 | KB sharing/membership tiers | **Raise to Privileged.** |
+| 7 | ADR-087 follow-ups | Implied by #4 — `wrap.rs`'s third width impl and threading `WidthPolicy` past the status bar. |
+| 8 | Chokepoint assert | **Resolved** in `51158578`. |
+| 9 | Nine phantom MCP tools | **Wire up the six non-interactive ones** (session handle into `dispatch_tool` — new capability), and exclude the three interactive ones from external discovery. |
+| 10 | `fts_search` term miss | **Investigate before v0.15**, with a property test over a multi-term corpus. |
+
+Entries below are kept for their analysis; the Decision column above supersedes each one's
+"My recommendation".
+
 ---
 
 ## 0. RESOLVED — push approved
