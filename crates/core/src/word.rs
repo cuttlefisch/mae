@@ -357,8 +357,7 @@ pub fn find_char_backward(rope: &Rope, line: usize, col: usize, target: char) ->
     let end = crate::grapheme::floor_char_boundary(&text, col);
     text[..end]
         .char_indices()
-        .filter(|(_, c)| *c == target)
-        .next_back()
+        .rfind(|(_, c)| *c == target)
         .map(|(i, _)| i)
 }
 
