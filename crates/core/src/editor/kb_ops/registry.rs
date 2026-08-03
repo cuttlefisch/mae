@@ -144,11 +144,24 @@ impl Editor {
                     self.kb
                         .watcher_attach_errors
                         .insert(uuid.to_string(), msg.clone());
-                    if msg.contains("inotify") || msg.contains("No space left") {
+                    if msg.contains("inotify")
+                        || msg.contains("No space left")
+                        || msg.contains("Too many open files")
+                    {
+                        // Deliberately does NOT tell the user to raise
+                        // fs.inotify.max_user_instances/max_user_watches: MAE
+                        // now spends ONE instance per process no matter how
+                        // many KBs are registered (see mae_kb::watch's
+                        // @ai-caution), so hitting the cap means something
+                        // else on the machine is monopolising it — most often
+                        // leftover mae processes from a crashed session.
+                        // Raising the cap would hide that, and the cap exists
+                        // precisely to stop one application starving the rest.
                         self.set_status(
-                            "KB watcher failed: inotify limit reached. \
-                             Run `sysctl fs.inotify.max_user_watches=65536` \
-                             or set `kb_watcher_enabled=false`.",
+                            "KB watcher failed: the system inotify limit is exhausted. \
+                             Check for stray processes holding watches \
+                             (`ls -l /proc/*/fd | grep inotify`), \
+                             or set `kb_watcher_enabled=false` to run without live updates.",
                         );
                     } else {
                         self.set_status(format!(

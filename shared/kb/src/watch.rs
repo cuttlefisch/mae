@@ -122,17 +122,23 @@ struct SharedDirWatcher {
 
 /// The process-wide instance, created on first use.
 ///
-/// Deliberately re-tried on failure rather than memoized as a permanent error:
-/// the one failure mode that matters here (the per-user instance limit being
-/// momentarily exhausted by *other* processes) is transient, and a caller
-/// registering a KB minutes later should get a working watcher.
-static SHARED: Mutex<Option<Arc<SharedDirWatcher>>> = Mutex::new(None);
+/// A `Weak`, not an `Arc`: the OS watcher lives exactly as long as at least one
+/// handle holds it, so a process that watches nothing holds no instance at all
+/// (strictly better than the old design's zero-when-idle, never worse) and a
+/// test binary doesn't strand one for its whole run.
+///
+/// Creation is deliberately re-tried on failure rather than memoized as a
+/// permanent error: the one failure mode that matters here (the per-user
+/// instance limit being momentarily exhausted by *other* processes) is
+/// transient, and a caller registering a KB minutes later should get a working
+/// watcher.
+static SHARED: Mutex<std::sync::Weak<SharedDirWatcher>> = Mutex::new(std::sync::Weak::new());
 
 impl SharedDirWatcher {
     fn get() -> notify::Result<Arc<Self>> {
         let mut slot = SHARED.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(existing) = slot.as_ref() {
-            return Ok(Arc::clone(existing));
+        if let Some(existing) = slot.upgrade() {
+            return Ok(existing);
         }
         let (tx, rx) = mpsc::channel();
         let watcher = notify::recommended_watcher(move |res| {
@@ -143,7 +149,7 @@ impl SharedDirWatcher {
             rx: Mutex::new(rx),
             routes: Mutex::new(Routes::default()),
         });
-        *slot = Some(Arc::clone(&shared));
+        *slot = Arc::downgrade(&shared);
         Ok(shared)
     }
 
@@ -586,6 +592,106 @@ mod tests {
     use tempfile::TempDir;
 
     const SAMPLE: &str = ":PROPERTIES:\n:ID: abc-123\n:END:\n#+title: Test\nbody [[id:xyz]]\n";
+
+    /// Build a routing table directly, without touching the OS — the routing
+    /// decision is pure logic and deserves coverage that doesn't depend on
+    /// scarce kernel resources (and that runs identically on macOS, where the
+    /// `/proc`-based instance oracle can't).
+    fn routes_over(roots: &[(&str, RegId)]) -> Routes {
+        let mut routes = Routes::default();
+        for (root, id) in roots {
+            let root = PathBuf::from(root);
+            routes.regs.insert(
+                *id,
+                Registration {
+                    depth: root.components().count(),
+                    root,
+                    queue: VecDeque::new(),
+                    errors: 0,
+                },
+            );
+        }
+        routes
+    }
+
+    /// Longest-prefix routing, adversarially: a nested registration must WIN
+    /// over its ancestor (not merely also-receive), a sibling whose name
+    /// shares a prefix must not match at all, and two registrations on the
+    /// same root must both receive — the three ways first-match or naive
+    /// string-prefix routing would misdeliver.
+    #[test]
+    fn routing_resolves_longest_prefix_not_first_match() {
+        // /kb, /kb/inner, /kb/inn (a sibling whose name is a string prefix of
+        // "inner"), and a second registration on /kb/inner (a tie).
+        let routes = routes_over(&[
+            ("/kb", 1),
+            ("/kb/inner", 2),
+            ("/kb/inn", 3),
+            ("/kb/inner", 4),
+        ]);
+        // Sanity: ids 2 and 4 both registered /kb/inner (a tie, not an
+        // overwrite) — otherwise the tie assertion below would be vacuous.
+        assert_eq!(routes.regs.len(), 4);
+
+        let mut deep = SharedDirWatcher::targets(&routes, &[PathBuf::from("/kb/inner/a.org")]);
+        deep.sort_unstable();
+        assert_eq!(
+            deep,
+            vec![2, 4],
+            "a file under the inner root belongs to BOTH inner registrations \
+             and to neither the ancestor (/kb) nor the string-prefix sibling (/kb/inn)"
+        );
+
+        let shallow = SharedDirWatcher::targets(&routes, &[PathBuf::from("/kb/top.org")]);
+        assert_eq!(shallow, vec![1], "a file only under /kb stays with /kb");
+
+        let sibling = SharedDirWatcher::targets(&routes, &[PathBuf::from("/kb/inn/x.org")]);
+        assert_eq!(sibling, vec![3], "/kb/inn owns its own file");
+
+        let outside = SharedDirWatcher::targets(&routes, &[PathBuf::from("/elsewhere/x.org")]);
+        assert!(outside.is_empty(), "unwatched paths route nowhere");
+    }
+
+    /// A rename event carries two paths that can belong to two different
+    /// registrations; both must be notified, each resolved independently.
+    #[test]
+    fn routing_unions_targets_across_an_events_paths() {
+        let routes = routes_over(&[("/a", 1), ("/b", 2), ("/b/deep", 3)]);
+        let mut t = SharedDirWatcher::targets(
+            &routes,
+            &[
+                PathBuf::from("/a/from.org"),
+                PathBuf::from("/b/deep/to.org"),
+            ],
+        );
+        t.sort_unstable();
+        assert_eq!(t, vec![1, 3]);
+    }
+
+    /// A watched file (`StoreWatcher`) inside a watched directory must keep
+    /// its own events: the exact path is a strictly longer prefix match. This
+    /// is what makes folding the store/registry watchers onto the same
+    /// instance safe.
+    #[test]
+    fn an_exact_file_registration_beats_a_containing_directory() {
+        let routes = routes_over(&[("/data", 1), ("/data/kb-registry.toml", 2)]);
+        assert_eq!(
+            SharedDirWatcher::targets(&routes, &[PathBuf::from("/data/kb-registry.toml")]),
+            vec![2]
+        );
+        assert_eq!(
+            SharedDirWatcher::targets(&routes, &[PathBuf::from("/data/other.org")]),
+            vec![1]
+        );
+    }
+
+    #[test]
+    fn component_wise_prefix_never_matches_a_partial_name() {
+        assert!(is_prefix_of(Path::new("/a/bc"), Path::new("/a/bc/d.org")));
+        assert!(is_prefix_of(Path::new("/a/bc"), Path::new("/a/bc")));
+        assert!(!is_prefix_of(Path::new("/a/bc"), Path::new("/a/bcd/e.org")));
+        assert!(!is_prefix_of(Path::new("/a/bc/d"), Path::new("/a/bc")));
+    }
 
     #[test]
     fn store_watcher_detects_external_modification() {
