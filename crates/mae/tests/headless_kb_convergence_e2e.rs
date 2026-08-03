@@ -34,6 +34,11 @@ use tokio::net::UnixStream;
 mod collab_tcp_e2e_support;
 use collab_tcp_e2e_support::find_daemon_binary;
 
+mod headless_test_support;
+use headless_test_support::{
+    isolated_env, send_sigterm, wait_for_exit, wait_for_socket_live, HeadlessGuard,
+};
+
 /// Spawn a real `mae-daemon` fully isolated from any daemon already running
 /// on this machine -- unlike `collab_tcp_e2e_support::spawn_server`, this
 /// ALSO isolates `XDG_RUNTIME_DIR` (so the daemon's KB control socket,
@@ -85,48 +90,6 @@ async fn spawn_isolated_daemon() -> (tokio::process::Child, String, tempfile::Te
     panic!("mae-daemon did not start within 5s on {addr}");
 }
 
-fn isolated_env(cmd: &mut Command, xdg_config: &Path, xdg_data: &Path, home: &Path) {
-    cmd.env("XDG_CONFIG_HOME", xdg_config)
-        .env("XDG_DATA_HOME", xdg_data)
-        .env("HOME", home)
-        .env("SHELL", "/bin/sh")
-        .env("MAE_SKIP_WIZARD", "1");
-}
-
-fn send_sigterm(child: &Child) {
-    unsafe {
-        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
-    }
-}
-
-fn wait_for_exit(child: &mut Child, timeout: Duration) -> Option<std::process::ExitStatus> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Ok(Some(status)) = child.try_wait() {
-            return Some(status);
-        }
-        if Instant::now() >= deadline {
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-fn socket_is_live(path: &Path) -> bool {
-    std::os::unix::net::UnixStream::connect(path).is_ok()
-}
-
-fn wait_for_socket_live(path: &Path, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if socket_is_live(path) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
-}
-
 struct HeadlessInstance {
     child: Child,
     stream: tokio::io::BufReader<UnixStream>,
@@ -170,6 +133,15 @@ impl HeadlessInstance {
             .stderr(Stdio::null());
         isolated_env(&mut spawn_cmd, xdg_config, xdg_data, home);
         let child = spawn_cmd.spawn().expect("failed to spawn mae --headless");
+        // Guard constructed the instant spawn() returns, before ANY fallible
+        // operation -- previously `child` stayed a bare, unguarded local
+        // through the socket-live wait AND the full MCP handshake below (all
+        // `.unwrap()`/`assert!` calls), so a panic anywhere in that window
+        // leaked the process. `guard.into_child()` at the bottom hands
+        // ownership to the final `HeadlessInstance`, which has its own
+        // combined child+stream `Drop` -- there is no gap where the child is
+        // unowned by something with a `Drop` impl.
+        let guard = HeadlessGuard::new(child);
 
         assert!(
             wait_for_socket_live(&socket_path, Duration::from_secs(30)),
@@ -210,7 +182,7 @@ impl HeadlessInstance {
         .unwrap();
 
         HeadlessInstance {
-            child,
+            child: guard.into_child(),
             stream,
             next_id: 2,
         }

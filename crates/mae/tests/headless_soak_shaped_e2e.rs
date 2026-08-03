@@ -14,53 +14,13 @@
 
 #![cfg(target_os = "linux")]
 
-use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 use tokio::net::UnixStream;
 
-fn isolated_env(cmd: &mut Command, xdg_config: &Path, xdg_data: &Path, home: &Path) {
-    cmd.env("XDG_CONFIG_HOME", xdg_config)
-        .env("XDG_DATA_HOME", xdg_data)
-        .env("HOME", home)
-        .env("SHELL", "/bin/sh")
-        .env("MAE_SKIP_WIZARD", "1");
-}
-
-fn send_sigterm(child: &Child) {
-    unsafe {
-        libc::kill(child.id() as libc::pid_t, libc::SIGTERM);
-    }
-}
-
-fn wait_for_exit(child: &mut Child, timeout: Duration) -> Option<std::process::ExitStatus> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if let Ok(Some(status)) = child.try_wait() {
-            return Some(status);
-        }
-        if Instant::now() >= deadline {
-            return None;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-fn socket_is_live(path: &Path) -> bool {
-    std::os::unix::net::UnixStream::connect(path).is_ok()
-}
-
-fn wait_for_socket_live(path: &Path, timeout: Duration) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if socket_is_live(path) {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    false
-}
+mod headless_test_support;
+use headless_test_support::spawn_isolated_headless;
 
 fn read_vm_rss_kb(pid: u32) -> u64 {
     let content = std::fs::read_to_string(format!("/proc/{pid}/status"))
@@ -144,36 +104,10 @@ async fn sustained_connect_disconnect_churn_shows_bounded_rss_and_fd_growth() {
     std::fs::create_dir_all(&xdg_config).unwrap();
     std::fs::create_dir_all(&xdg_data).unwrap();
 
-    let mae = env!("CARGO_BIN_EXE_mae");
+    let (socket_path, mut guard) =
+        spawn_isolated_headless(&project_root, &xdg_config, &xdg_data, tmp.path(), None);
+    let pid = guard.pid();
 
-    let mut print_cmd = Command::new(mae);
-    print_cmd
-        .args(["--headless", "--print-socket-path"])
-        .current_dir(&project_root);
-    isolated_env(&mut print_cmd, &xdg_config, &xdg_data, tmp.path());
-    let print_output = print_cmd.output().expect("print-socket-path failed");
-    assert!(print_output.status.success());
-    let socket_path = PathBuf::from(
-        String::from_utf8_lossy(&print_output.stdout)
-            .trim()
-            .to_string(),
-    );
-
-    let mut spawn_cmd = Command::new(mae);
-    spawn_cmd
-        .args(["--headless"])
-        .current_dir(&project_root)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    isolated_env(&mut spawn_cmd, &xdg_config, &xdg_data, tmp.path());
-    let child = spawn_cmd.spawn().expect("failed to spawn mae --headless");
-    let pid = child.id();
-
-    assert!(
-        wait_for_socket_live(&socket_path, Duration::from_secs(30)),
-        "headless instance never bound its stable socket at {}",
-        socket_path.display()
-    );
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     const TOTAL_DURATION: Duration = Duration::from_secs(70);
@@ -200,9 +134,7 @@ async fn sustained_connect_disconnect_churn_shows_bounded_rss_and_fd_growth() {
     rss_samples.push(read_vm_rss_kb(pid));
     fd_samples.push(read_fd_count(pid));
 
-    let mut child_guard = child;
-    send_sigterm(&child_guard);
-    wait_for_exit(&mut child_guard, Duration::from_secs(10));
+    guard.shutdown(Duration::from_secs(10));
 
     assert!(
         rss_samples.len() >= 3,
