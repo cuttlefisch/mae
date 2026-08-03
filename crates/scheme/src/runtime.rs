@@ -362,7 +362,7 @@ pub struct SharedState {
     pending_async_requests: Vec<(u64, String, serde_json::Value)>,
     /// Snapshot of `Editor::scheme_async` (id, kind, outcome), refreshed each
     /// eval — what `(lsp-result ID)` reads.
-    async_results: Vec<(u64, String, Option<Result<String, String>>)>,
+    async_results: Vec<mae_core::SchemeAsyncSlot>,
     /// `execute_lsp_diagnostics(editor, scope="all")`'s payload, snapshotted
     /// only while the diagnostic store is non-empty (so a session with no
     /// language server pays nothing).

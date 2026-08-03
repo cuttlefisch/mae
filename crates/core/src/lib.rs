@@ -128,7 +128,9 @@ pub use options::{OptionDef, OptionKind, OptionRegistry};
 pub use project::{
     detect_project_root, Project, ProjectConfig, ProjectList, RecentFiles, RecentProjects,
 };
-pub use scheme_async::{SchemeAsyncRegistry, SchemeAsyncRequest, SCHEME_ASYNC_RETAINED};
+pub use scheme_async::{
+    SchemeAsyncRegistry, SchemeAsyncRequest, SchemeAsyncSlot, SCHEME_ASYNC_RETAINED,
+};
 pub use search::{SearchDirection, SearchMatch, SearchState};
 pub mod redraw;
 pub use display_policy::{DisplayAction, DisplayPolicy};

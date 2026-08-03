@@ -63,6 +63,15 @@ pub struct SchemeAsyncRequest {
     pub outcome: Option<Result<String, String>>,
 }
 
+/// One slot as the Scheme side sees it: `(id, kind, outcome)`.
+///
+/// A tuple alias rather than a struct because the consumer
+/// (`mae-scheme`'s `SharedState`) stores it verbatim and matches on the
+/// `Option<Result<…>>` directly — naming the three cases is what
+/// `(lsp-result ID)` branches on, and a struct would only add a layer of
+/// field access over the same three values.
+pub type SchemeAsyncSlot = (u64, String, Option<Result<String, String>>);
+
 /// Pending + recently-completed Scheme-initiated async requests.
 #[derive(Debug, Default)]
 pub struct SchemeAsyncRegistry {
@@ -143,7 +152,7 @@ impl SchemeAsyncRegistry {
     }
 
     /// Snapshot for the Scheme side: `(id, kind, outcome)` per slot.
-    pub fn snapshot(&self) -> Vec<(u64, String, Option<Result<String, String>>)> {
+    pub fn snapshot(&self) -> Vec<SchemeAsyncSlot> {
         self.requests
             .iter()
             .map(|r| (r.id, r.kind.clone(), r.outcome.clone()))
