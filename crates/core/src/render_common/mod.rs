@@ -18,6 +18,7 @@ pub mod gutter;
 pub mod hover;
 pub mod kb;
 pub mod kb_sharing;
+pub mod line_kind_spans;
 pub mod messages;
 pub mod notifications;
 pub mod overlay;

@@ -52,6 +52,16 @@ pub fn compute_diagnostic_spans(
 
 /// Format a diagnostic message for virtual text display at end of line.
 /// Returns (truncated_message, theme_key) for rendering.
+///
+/// ADR-087: `max_width` is a **display-column** budget, not a byte count.
+/// A prior version compared `first_line.len()` (bytes) against
+/// `max_width.saturating_sub(prefix.len())` (byte length of the prefix used
+/// as if it were a column count) and hard-sliced `&first_line[..n]` — a
+/// byte index with no guarantee of landing on a char boundary, which panics
+/// on any multi-byte content long enough to need truncation (the exact
+/// panic class ADR-087 exists to close). This now measures in display
+/// columns and truncates via `text_utils::truncate_end`, which is
+/// grapheme-boundary-safe.
 pub fn format_virtual_text(
     severity: DiagnosticSeverity,
     message: &str,
@@ -66,18 +76,9 @@ pub fn format_virtual_text(
         DiagnosticSeverity::Information => "ℹ ",
         DiagnosticSeverity::Hint => "💡",
     };
-    let available = max_width.saturating_sub(prefix.len());
-    let truncated = if first_line.len() > available {
-        format!(
-            "{}{}{}",
-            prefix,
-            &first_line[..available.saturating_sub(1)],
-            "…"
-        )
-    } else {
-        format!("{}{}", prefix, first_line)
-    };
-    (truncated, theme_key)
+    let available = max_width.saturating_sub(crate::grapheme::display_width(prefix));
+    let body = crate::text_utils::truncate_end(first_line, available);
+    (format!("{}{}", prefix, body), theme_key)
 }
 
 #[cfg(test)]
@@ -156,8 +157,33 @@ mod tests {
             "this is a very long error message that should be truncated",
             30,
         );
-        assert!(text.len() <= 32); // prefix + content (might be slightly over due to prefix chars)
+        // `max_width` is a display-column budget (ADR-087) — assert on
+        // display width, not byte length, which is what this function
+        // actually promises.
+        assert!(
+            crate::grapheme::display_width(&text) <= 30,
+            "text {:?} must fit the 30-column budget",
+            text
+        );
         assert_eq!(key, "diagnostic.error");
+    }
+
+    #[test]
+    fn virtual_text_non_ascii_does_not_panic_and_fits_budget() {
+        // A prior version hard-sliced `&first_line[..n]` at a byte index —
+        // this must not panic on multi-byte content that needs truncating,
+        // and the result must still respect the display-column budget.
+        let message = "エラー: 予期しないトークンが見つかりました、修正してください";
+        let (text, _) = format_virtual_text(DiagnosticSeverity::Warning, message, 20);
+        assert!(crate::grapheme::display_width(&text) <= 20);
+    }
+
+    #[test]
+    fn virtual_text_zwj_emoji_does_not_panic() {
+        let zwj_family =
+            "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}\u{200D}\u{1F466} family status update";
+        let (text, _) = format_virtual_text(DiagnosticSeverity::Hint, zwj_family, 12);
+        assert!(crate::grapheme::display_width(&text) <= 12);
     }
 
     #[test]

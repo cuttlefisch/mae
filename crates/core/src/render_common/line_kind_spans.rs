@@ -108,24 +108,26 @@ mod tests {
     #[test]
     fn full_line_spans_for_themed_lines() {
         let rope = Rope::from_str("Header\nitem one\n\n");
-        let kinds = vec![TestKind::Header, TestKind::Item, TestKind::Blank];
-        let spans = compute_line_kind_spans(
-            kinds.iter(),
-            &rope,
-            |k| *k == TestKind::Blank,
-            theme_key,
-        );
+        let kinds = [TestKind::Header, TestKind::Item, TestKind::Blank];
+        let spans =
+            compute_line_kind_spans(kinds.iter(), &rope, |k| *k == TestKind::Blank, theme_key);
         assert_eq!(spans.len(), 2);
         assert_eq!(spans[0].theme_key, "git.header");
-        assert_eq!(&"Header\nitem one\n\n"[spans[0].byte_start..spans[0].byte_end], "Header");
+        assert_eq!(
+            &"Header\nitem one\n\n"[spans[0].byte_start..spans[0].byte_end],
+            "Header"
+        );
         assert_eq!(spans[1].theme_key, "diagnostic.warn");
-        assert_eq!(&"Header\nitem one\n\n"[spans[1].byte_start..spans[1].byte_end], "item one");
+        assert_eq!(
+            &"Header\nitem one\n\n"[spans[1].byte_start..spans[1].byte_end],
+            "item one"
+        );
     }
 
     #[test]
     fn muted_ui_text_lines_produce_no_span() {
         let rope = Rope::from_str("plain\n");
-        let kinds = vec![TestKind::Muted];
+        let kinds = [TestKind::Muted];
         let spans = compute_line_kind_spans(kinds.iter(), &rope, |_| false, theme_key);
         assert!(spans.is_empty());
     }
@@ -134,13 +136,9 @@ mod tests {
     fn out_of_range_line_index_stops_without_panicking() {
         // More kinds than actual rope lines — must break, not panic.
         let rope = Rope::from_str("only one line\n");
-        let kinds = vec![TestKind::Header, TestKind::Item, TestKind::Item];
-        let spans = compute_line_kind_spans(
-            kinds.iter(),
-            &rope,
-            |k| *k == TestKind::Blank,
-            theme_key,
-        );
+        let kinds = [TestKind::Header, TestKind::Item, TestKind::Item];
+        let spans =
+            compute_line_kind_spans(kinds.iter(), &rope, |k| *k == TestKind::Blank, theme_key);
         assert_eq!(spans.len(), 1);
     }
 
@@ -150,15 +148,14 @@ mod tests {
         // land on exact byte boundaries (ADR-087).
         let text = "日本語ヘッダー\nsecond line\n";
         let rope = Rope::from_str(text);
-        let kinds = vec![TestKind::Header, TestKind::Item];
-        let spans = compute_line_kind_spans(
-            kinds.iter(),
-            &rope,
-            |k| *k == TestKind::Blank,
-            theme_key,
-        );
+        let kinds = [TestKind::Header, TestKind::Item];
+        let spans =
+            compute_line_kind_spans(kinds.iter(), &rope, |k| *k == TestKind::Blank, theme_key);
         assert_eq!(spans.len(), 2);
-        assert_eq!(&text[spans[0].byte_start..spans[0].byte_end], "日本語ヘッダー");
+        assert_eq!(
+            &text[spans[0].byte_start..spans[0].byte_end],
+            "日本語ヘッダー"
+        );
         assert_eq!(&text[spans[1].byte_start..spans[1].byte_end], "second line");
     }
 }
