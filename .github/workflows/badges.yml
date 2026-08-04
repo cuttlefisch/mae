@@ -101,9 +101,15 @@ jobs:
           # doesn't converge, so the final addition came from an exhaustive
           # sweep of every crates/mae/tests/*.rs file for this signature
           # (see .config/nextest.toml's comment for the full methodology and
-          # the two look-alikes explicitly ruled out) -- this list should now
-          # be exhaustive for the default suite.
-          HEAVY_FILTER='binary(headless_e2e) + binary(guidance_delivery_e2e) + binary(headless_kb_convergence_e2e) + binary(headless_soak_shaped_e2e) + binary(headless_idle_cpu_e2e) + binary(mcp_tool_tiering_e2e) + binary(tool_schema_nested_e2e)'
+          # the two look-alikes explicitly ruled out).
+          #
+          # This list is NOT self-maintaining: it is duplicated in three places
+          # (.config/nextest.toml's heavy-subprocess-e2e group, ci.yml, here)
+          # and a new heavy test binary must be added to all three. It drifted
+          # exactly that way once already -- headless_guard_leak_regression_e2e
+          # arrived with #613 and was added to none of them. Keep the three in
+          # sync; `make heavy-e2e-check` verifies it.
+          HEAVY_FILTER='binary(headless_e2e) + binary(guidance_delivery_e2e) + binary(headless_kb_convergence_e2e) + binary(headless_soak_shaped_e2e) + binary(headless_idle_cpu_e2e) + binary(mcp_tool_tiering_e2e) + binary(tool_schema_nested_e2e) + binary(headless_guard_leak_regression_e2e)'
           # PIPESTATUS[0], not $? -- `$?` after `cmd | tee file` reflects
           # `tee`'s own exit code unless the shell has `pipefail` set, and this
           # step deliberately doesn't assume that (explicit is safer than
@@ -122,9 +128,26 @@ jobs:
           # overrides the env var for just these two counting invocations
           # (confirmed) -- the fix is to never colorize output this script is
           # about to machine-parse, not to teach the regex about ANSI codes.
-          cargo nextest run --workspace --features gui --color never -E "$HEAVY_FILTER" 2>&1 | tee /tmp/nextest-badge-output-heavy.log
+          # --release: MUST match ci.yml's `stable / test` (ci.yml:216-217).
+          # This job previously ran the workspace in DEBUG while building the
+          # daemon in release -- an asymmetry that went unnoticed until #613
+          # landed, when this job failed twice on two DIFFERENT tests with the
+          # same `headless instance never bound its stable socket` signature.
+          #
+          # Measured, single test alone on an idle machine (not inferred):
+          #
+          #   debug   26.911s   <-- against wait_for_socket_live's 30s budget
+          #   release  3.129s
+          #
+          # The test's own logic contributes one 100ms sleep, so that ~27s is
+          # essentially all debug startup. A 3s margin cannot survive a runner
+          # sharing CPU with the other ~8000 tests, which is exactly what was
+          # observed. Raising the timeout instead would have hidden a
+          # 27-second startup rather than fixing anything -- and would have
+          # left the badge counting a build CI never validates.
+          cargo nextest run --workspace --release --features gui --color never -E "$HEAVY_FILTER" 2>&1 | tee /tmp/nextest-badge-output-heavy.log
           RC_HEAVY=${PIPESTATUS[0]}
-          cargo nextest run --workspace --features gui --color never -E "not ($HEAVY_FILTER)" 2>&1 | tee /tmp/nextest-badge-output-rest.log
+          cargo nextest run --workspace --release --features gui --color never -E "not ($HEAVY_FILTER)" 2>&1 | tee /tmp/nextest-badge-output-rest.log
           RC_REST=${PIPESTATUS[0]}
           set -e
           if [ "$RC_HEAVY" -ne 0 ] || [ "$RC_REST" -ne 0 ]; then

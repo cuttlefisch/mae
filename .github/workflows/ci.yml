@@ -174,15 +174,27 @@ jobs:
       # Safety net for a version-bump-only push (see the `changes` job's own
       # comment for the full rationale): the bump commit can't have broken
       # anything the actual test suite exercises (it never touches code),
-      # but a plain `cargo build` still catches the one thing genuinely
-      # worth re-checking post-merge -- does the merged tree still compile
-      # -- for a fraction of the real nextest run's cost. `--all-targets`
-      # (unlike the real test step's plain `--workspace`) also compiles
-      # test/bench targets without RUNNING them, so this is a strictly
-      # broader compile check than skipping straight to nothing.
-      - name: cargo build (version-bump-only safety net, no test run)
+      # but a compile check still catches the one thing genuinely worth
+      # re-checking post-merge -- does the merged tree still compile.
+      # `--all-targets` also covers test/bench targets without RUNNING them.
+      #
+      # `cargo check`, NOT `cargo build --release`. This step used to be a
+      # full release build and its comment claimed it cost "a fraction of the
+      # real nextest run's cost". Measured on v0.14.90, that was false:
+      #
+      #   PR   stable/test  (build + 8048 tests + clippy + fmt)  23m42s
+      #   main stable/test  (this step alone, zero tests)        20m47s
+      #
+      # i.e. 88% of the cost for none of the coverage. The bump rewrites
+      # `version =` in 6 Cargo.toml files, which changes every workspace
+      # crate's fingerprint and forces a full first-party recompile (third-
+      # party deps are fine -- skia did not rebuild, the cache works).
+      # `--release --all-targets` then maximised that. Dropping codegen keeps
+      # the property worth keeping and removes the LLVM pass over every crate
+      # and every test binary.
+      - name: cargo check (version-bump-only safety net, no test run)
         if: matrix.step == 'test' && needs.changes.outputs.version-bump-only == 'true'
-        run: cargo build --workspace --release --features gui --all-targets
+        run: cargo check --workspace --all-targets --features gui
 
       - name: cargo test
         if: matrix.step == 'test' && needs.changes.outputs.version-bump-only != 'true'
@@ -212,13 +224,25 @@ jobs:
         # addition came from an exhaustive sweep, not another one-off
         # reaction -- see .config/nextest.toml for the full methodology.
         run: |
-          HEAVY_FILTER='binary(headless_e2e) + binary(guidance_delivery_e2e) + binary(headless_kb_convergence_e2e) + binary(headless_soak_shaped_e2e) + binary(headless_idle_cpu_e2e) + binary(mcp_tool_tiering_e2e) + binary(tool_schema_nested_e2e)'
+          # Duplicated in .config/nextest.toml (heavy-subprocess-e2e group) and
+          # badges.yml. A new heavy binary must be added to all three; verified
+          # by `make heavy-e2e-check`.
+          HEAVY_FILTER='binary(headless_e2e) + binary(guidance_delivery_e2e) + binary(headless_kb_convergence_e2e) + binary(headless_soak_shaped_e2e) + binary(headless_idle_cpu_e2e) + binary(mcp_tool_tiering_e2e) + binary(tool_schema_nested_e2e) + binary(headless_guard_leak_regression_e2e)'
           cargo nextest run --workspace --release --features gui -E "$HEAVY_FILTER"
           cargo nextest run --workspace --release --features gui -E "not ($HEAVY_FILTER)"
           cargo test --doc --workspace --release --features gui
 
+      # Also gated on version-bump-only. Every OTHER gate in this matrix job is
+      # scoped to `matrix.step == 'test'`, so the clippy leg used to run a full
+      # workspace lint on a commit that changed only version strings: 13m53s on
+      # v0.14.90, against 1m15s for the same lint on the PR minutes earlier (the
+      # bump invalidates every workspace crate's fingerprint, so nothing is
+      # cached). It was not the critical path only because the test leg's own
+      # safety net was slower still -- fix that alone and this becomes the floor.
+      # A lint cannot newly fail on a version-string change, and the test leg's
+      # `cargo check` already proves the tree compiles.
       - name: cargo clippy
-        if: matrix.step == 'clippy'
+        if: matrix.step == 'clippy' && needs.changes.outputs.version-bump-only != 'true'
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: cargo fmt
@@ -1210,6 +1234,15 @@ jobs:
       # counts change on nearly every commit, so that would churn every PR.
       - name: Check structural ceilings
         run: make audit-metrics-check
+      # A test binary that spawns a real `mae --headless` must appear in all
+      # three heavy-subprocess filters (.config/nextest.toml, ci.yml,
+      # badges.yml). Omitting one does not fail loudly here -- it surfaces
+      # later as an intermittent 30s socket-bind timeout in a DIFFERENT test,
+      # which is how headless_guard_leak_regression_e2e slipped through in
+      # #613 and broke the badges job twice. Pure shell + grep, so it needs
+      # no build and adds a couple of seconds to an already-cheap job.
+      - name: Check heavy-e2e filter lists agree
+        run: make heavy-e2e-check
 
   adr-kb-sync:
     name: ADR KB staleness gate (ADR-059 Phase E)

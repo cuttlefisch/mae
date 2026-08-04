@@ -101,10 +101,17 @@ jobs:
           sed -i "s/^VERSION=\".*\"/VERSION=\"$VERSION\"/" assets/install.sh
           echo "Updated assets/install.sh to $VERSION"
 
+      # Prebuilt binary from GitHub Releases, not `cargo install git-cliff`,
+      # which compiled it from source on every single release: 4m13s of the
+      # v0.14.90 bump job. Same action the repo already uses for nextest.
+      - uses: taiki-e/install-action@v2
+        if: steps.bump-type.outputs.bump != 'none'
+        with:
+          tool: git-cliff
+
       - name: Generate changelog
         if: steps.bump-type.outputs.bump != 'none'
         run: |
-          cargo install git-cliff
           # --tag tells git-cliff to label commits since the last real tag
           # as belonging to this version NOW, even though the actual git
           # tag isn't created until the later "Tag release" step (after the

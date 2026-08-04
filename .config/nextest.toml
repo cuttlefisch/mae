@@ -60,6 +60,7 @@ filter = '''
   + binary(headless_idle_cpu_e2e)
   + binary(mcp_tool_tiering_e2e)
   + binary(tool_schema_nested_e2e)
+  + binary(headless_guard_leak_regression_e2e)
 '''
 test-group = "heavy-subprocess-e2e"
 # The group above serializes these files AGAINST EACH OTHER, but not

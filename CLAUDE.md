@@ -99,7 +99,7 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 
 2. **Modular display layer.** Emacs's `xdisp.c` is 38,605 lines and the most bug-prone file in the codebase. Our renderer is a separate crate with a clean trait-based HAL. Platform-specific code lives in the rendering backend library (crossterm/Skia), not in our codebase.
 
-3. **The AI is a peer, not a plugin.** The AI agent calls the same Scheme functions as the user's keybindings. `(buffer-insert ...)`, `(lsp-references ...)`, `(dap-inspect-variable ...)` — same API surface for human and AI. No separate "AI mode" or simulated keystrokes.
+3. **The AI is a peer, not a plugin.** The AI agent calls the same Scheme functions as the user's keybindings. `(buffer-insert ...)`, `(lsp-references ...)`, `(dap-inspect-variable ...)` — same API surface for human and AI. No separate "AI mode" or simulated keystrokes. **Exception: the controls that bound the agent — see principle #16.**
 
 4. **LSP and DAP are first-class.** Not bolted-on packages. The AI gets structured semantic knowledge (types, references, diagnostics from LSP) and runtime debug state (call stacks, variables from DAP) as part of its reasoning context.
 
@@ -107,7 +107,9 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
 
 6. **Runtime redefinability is sacred.** Users must be able to redefine any function while the editor is running. This is the property that makes Emacs irreplaceable. The Scheme layer provides `defadvice`-equivalent, live REPL, and hot reload.
 
-7. **No hardcoding — Scheme-first configurability.** Every user-visible behavior that could reasonably differ between users MUST be exposed as a configurable option via the OptionRegistry. This means:
+    **Known tension, unresolved:** in a single shared Scheme image, redefinability *is* an escalation primitive — code at a lower tier can redefine a function that privileged code later calls. PostgreSQL solves the equivalent problem by running trusted and untrusted PL in **separate interpreter instances**, and still ships a warning that the mechanism may not hold. MAE does not separate them. Until it does, per-primitive tiers (ADR-084 D3) bound *direct* calls only. Do not treat redefinability and lower-tier eval in one image as independently safe; see the `@ai-caution` at the VM.
+
+7. **No hardcoding — Scheme-first configurability.** Every user-visible behavior that could reasonably differ between users MUST be exposed as a configurable option via the OptionRegistry. **Exception: values that bound the agent's own authority are not freely settable — see principle #16.** This means:
    - Register in `options.rs` with a `config_key` (enables `:set-save` persistence)
    - Automatically accessible via `(set-option!)` / `(get-option)` in Scheme
    - Automatically accessible via `:set` command at runtime
@@ -144,6 +146,21 @@ These are derived from analysis of 35 years of Emacs git history. They are non-n
     - **Per-phase adversarial review.** Every lettered phase / PR gets a review pass that asks "what did these tests *not* try to break?" — and the gap becomes the next test. The goal is software that is correct *because we tried hard to falsify it and couldn't*. (This is the standing testing discipline; it supersedes any habit of writing only confirmation tests.)
 
 15. **Bugs are drift signals, not just defects.** Before fixing a bug, check whether its root cause traces to a place where implementation fell behind an already-decided ADR or a tracked epic issue. If it does, fix the drift for that whole feature area — or explicitly scope a bounded down payment and cross-link the owning epic issue so the remainder stays visibly tracked — rather than patching the local symptom and leaving the same drift to regenerate similar bugs later. If no relevant ADR/epic applies but the bug reveals duplicated logic or an ad-hoc workaround, resolve it by consolidation (principle #8), not by adding a third parallel implementation. Concretely: before writing a fix plan, check `docs/adr/` for a governing ADR and `gh issue list`/the KB for a tracked epic in that feature area.
+
+16. **Controls that bound the agent are not part of the peer surface.** Principle #3 makes the AI a peer for *doing work*. It does not extend to the controls that decide **what the agent is allowed to do** — permission tiers, workspace trust, KB membership and residency. Those must be reachable by the human and **not** by the agent, because a control the agent can change is not a control. Concretely, and each of these is a deliberate, evidenced exception rather than an oversight:
+    - **Workspace trust has no Scheme primitive, no command, and no MCP tool.** Trust is granted only by editing `~/.config/mae/trusted-projects`. An agent able to grant trust could then write `.mae/init.scm` and escalate across a restart — the shape of CVE-2025-53773, where GitHub Copilot was induced to write `chat.tools.autoApprove` into `.vscode/settings.json`.
+    - **The permission-tier option is not settable at the tier it governs**, on either surface — `set_option`, `set-option!` and `set-option-save!` all require the privileged tier for it specifically, while staying ordinary for every other option.
+    - **MAE's own configuration is not agent-writable.** `~/.config/mae/**` and any `.mae/**` are refused across `create_file`, `rename_file` and AI-originated buffer saves; the human's own editing, including `:set-save`, is untouched.
+    - **A tool may be withheld from a surface it cannot serve.** `ask_user`, `propose_changes` and `delegate` are filtered from external MCP discovery rather than advertised and then refused (ADR-085's shape: *not offered* beats *offered and denied*).
+
+    The general rule when this bites: a security control is the one place where **asymmetry between human and AI is the feature**. Prefer removing the capability from the agent's surface over adding a check the agent could reach.
+
+17. **These principles are amendable, and drift in them is a bug like any other.** When following a principle produces a worse outcome, the correct response is to change the principle here — with the evidence — not to violate it silently or to follow it off a cliff. Two rules make that safe:
+    - **Amend in the open.** A principle changes by editing this file in the same PR as the work that motivated it, with the concrete case named. Principle #16 exists because three separate security fixes each quietly contradicted #3 and #7; the contradictions were right and unwritten, which is the worst of both.
+    - **Evidence over taste.** Prefer published prior art to intuition when a principle is under revision (see the *Prior-Art Review Before Deciding* practice). Grounding ADR-084/085 that way reversed one decision outright, corrected two more, and surfaced two defects the codebase audit had missed — including a live RCE.
+
+    A principle that has never been revised is not proven; it is untested.
+
 
 ### Rendering Pipeline
 The GUI renderer uses a three-phase pipeline: `compute_layout()` produces

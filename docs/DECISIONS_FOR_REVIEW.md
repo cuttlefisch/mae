@@ -571,9 +571,37 @@ Pinned by two tests so a future fix has to update them consciously.
 
 ## 12. `sandbox_guard` protects only one of `shell_exec`'s two implementations
 
-**Status:** confirmed against current source while fixing audit #590.3. Not fixed — the fix lands
-in `crates/ai/src/executor/tool_dispatch.rs`, which the concurrent ADR-090 three-state permission
-work owns, so editing it underneath that workstream would conflict.
+**Status:** CORRECTED 2026-08-04. The finding below is real but was filed under a **wrong premise**,
+and the recommendation it produced would have made things worse. Re-verified against source once
+ADR-090 merged and `tool_dispatch.rs` was free to read.
+
+**The correction:** this is not a security boundary. `sandbox_guard` fires only when
+`editor.test_sandbox_dir` is `Some`, and that field is assigned in exactly **one** place in the
+whole workspace — the `model_exam` tool's `"plan"` action
+(`crates/ai/src/executor/tool_dispatch.rs:232`), via `create_test_sandbox`, which makes
+`/tmp/mae-test-{pid}-{ts}`. Outside a running model exam the field is `None` and the guard is
+**inert**. There is no production sandbox for the embedded session to bypass.
+
+So the real defect is narrower and much less severe than described: during a *model exam*, shell
+commands routed through the embedded `AgentSession` are not confined to the exam's sandbox, so an
+exam can write outside the directory meant to contain it. That is a **test-isolation** bug, not an
+authorization one.
+
+**Do NOT apply the original recommendation.** Option 3 was to document the gap in SECURITY.md "next
+to the existing *the shell blocklist is not a sandbox* language". That would state a security
+boundary MAE does not have, in the one file users read to understand what protects them — strictly
+worse than saying nothing. The pre-existing "the shell blocklist is not a sandbox" sentence is
+already accurate and already covers the actual posture.
+
+**Revised call:** low priority, and it is exam hygiene, not hardening. The clean fix is to give
+`execute_shell` the exam sandbox and call `sandbox::filter_shell_command` there too, but it is a
+static `async fn` taking only `&ToolCall` (`crates/ai/src/session/run_loop.rs:17`) with no editor
+access, and ADR-046 froze that surface — so threading state through it costs more than the bug does.
+Worth doing only if the embedded session stops being frozen, or if an exam is ever observed writing
+outside its sandbox.
+
+**Original filing, retained for the record — its *mechanism* is accurate, only its severity and
+framing were wrong:**
 
 `shell_exec` has two implementations, and they exist for a real reason: the embedded `AgentSession`
 runs commands on tokio (`session/run_loop.rs`), while MCP and other non-session callers run them
@@ -610,11 +638,15 @@ facts the permission workstream owns:
    the existing "the shell blocklist is not a sandbox" language, and gate the session behind an
    explicit opt-in that says so.
 
-**My recommendation: option 3 for v0.15, with option 1 as the follow-up.** The embedded chat is
-already off by default and frozen; adding a second enforcement path to a surface being wound down
-buys little, whereas an honest SECURITY.md sentence closes the *documentation* gap immediately.
-Option 1 becomes worthwhile the moment anything else grows a second dispatch path — at which point
-the enforcement point, not just the rule table, should be the shared thing.
+~~**My recommendation: option 3 for v0.15, with option 1 as the follow-up.**~~ **Withdrawn** — see
+the correction at the top of this entry. Option 3 would have documented a non-existent security
+control in SECURITY.md. Option 1 remains the right shape *if* this is ever worth fixing, but the
+trigger is "the embedded session stops being frozen", not "before v0.15".
+
+The general lesson, which outlives this entry: a guard that is only armed under a `Some(_)` config
+is not a control until you have checked who sets that config. I filed this as an authorization gap
+without tracing the single assignment site of `test_sandbox_dir`; the `test_` in the field's own
+name was the clue.
 
 **What I did do:** the commit for #590.3 names this gap explicitly so it is not lost, and
 `shell_policy`'s module doc carries an `@ai-caution` saying policy belongs in one place.

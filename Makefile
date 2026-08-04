@@ -62,7 +62,7 @@ DEBUG_BIN    := $(TARGET_DIR)/debug/$(BINARY)
 DESKTOP_FILE := assets/mae.desktop
 ICON_FILE    := assets/mae.svg
 
-.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean clean-cache ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check audit-metrics audit-metrics-check audit-metrics-bless gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual practices-kb install-practices adr-kb install-adr devpractices-kb install-devpractices verify-adr-kb-sync install-vscode
+.PHONY: all build build-tui dev install install-tui install-all install-upgrade uninstall run test test-tui check fmt fmt-check clippy clean clean-cache ci ci-extended ci-docker-e2e ci-complete audit setup-hooks setup-dev self-test check-config code-map code-map-check heavy-e2e-check audit-metrics audit-metrics-check audit-metrics-bless gen-fixtures doctor help docker-ci docker-new-user docker-smoke docker-dev docker-clean docs-tangle docs-tangle-check install-daemon install-daemon-service bench bench-save bench-compare manual-kb install-manual practices-kb install-practices adr-kb install-adr devpractices-kb install-devpractices verify-adr-kb-sync install-vscode
 
 # Default target: release build
 all: build
@@ -404,6 +404,13 @@ code-map:
 ## code-map-check: verify code map is up to date (for CI)
 code-map-check:
 	cd tools/code-map && $(CARGO) run --release -- --workspace-root ../.. --check
+
+## heavy-e2e-check: every test binary that spawns a real `mae --headless` must be
+## listed in all THREE heavy-subprocess filters (.config/nextest.toml, ci.yml,
+## badges.yml). Omitting one does not fail loudly -- it surfaces as an
+## intermittent 30s socket-bind timeout, usually in a DIFFERENT test.
+heavy-e2e-check:
+	./scripts/check-heavy-e2e-lists.sh
 
 ## audit-metrics: regenerate docs/AUDIT_METRICS.json (structural metrics + marker cross-refs)
 audit-metrics:
