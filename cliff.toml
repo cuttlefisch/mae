@@ -14,6 +14,23 @@ body = """
     ## [Unreleased]
 {% endif -%}
 
+{# Breaking changes lead the release. A change to a default -- especially a
+   security default -- is the one thing a reader must not have to find by
+   scanning a hundred bullets. Sourced from `type!:` markers and BREAKING
+   CHANGE footers, both of which git-cliff already parses. #}
+{%- set breaking = commits | filter(attribute="breaking", value=true) %}
+{% if breaking | length > 0 %}
+    ### ⚠ Breaking Changes
+    {% for commit in breaking %}
+        {#- Take only the first paragraph: a blank line inside a list item ends
+            the item, so the rest of a long BREAKING CHANGE body would render as
+            loose prose outside the bullet. The full text stays in the commit. -#}
+        - {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
+            {{ commit.breaking_description | default(value=commit.message) | split(pat="\n\n") | first | replace(from="\n", to=" ") | trim | upper_first }} \
+            ([{{ commit.id | truncate(length=7, end="") }}]({{ self::remote_url() }}/commit/{{ commit.id }}))\
+    {% endfor %}
+{% endif %}
+
 {% for group, commits in commits | group_by(attribute="group") %}
     ### {{ group | striptags | trim | upper_first }}
     {% for commit in commits %}
@@ -29,16 +46,38 @@ footer = ""
 conventional_commits = true
 filter_unconventional = true
 split_commits = false
+# The `<!-- N -->` prefixes are stripped by the template's `striptags` filter and
+# exist only to order the sections deliberately (Tera's group_by sorts by key, so
+# without them the sections come out alphabetically and Security lands near the
+# bottom). Security first: these are the entries a reader is scanning for.
 commit_parsers = [
-    { message = "^feat", group = "Features" },
-    { message = "^fix", group = "Bug Fixes" },
-    { message = "^refactor", group = "Refactor" },
-    { message = "^doc", group = "Documentation" },
-    { message = "^test", group = "Testing" },
-    { message = "^perf", group = "Performance" },
-    { message = "^ci", group = "CI" },
-    { message = "^chore", group = "Miscellaneous" },
+    # Internal integration noise -- never user-facing. `protect_breaking_commits`
+    # keeps a breaking change from being dropped even if it wears one of these.
+    { message = "^merge", skip = true },
+    { message = "^Merge ", skip = true },
+    { message = "^wip", skip = true },
+    # NB: a parser's `scope` key is a *setter* (it overrides the commit's scope),
+    # not a matcher -- `{ scope = "security" }` silently matches nothing. Security
+    # commits must therefore be matched on the message, and the character class
+    # catches compound scopes like `fix(babel,keystore,oauth)`.
+    { message = "^security", group = "<!-- 00 -->Security" },
+    { message = "^\\w+\\([^)]*security[^)]*\\)", group = "<!-- 00 -->Security" },
+    { message = "^feat", group = "<!-- 01 -->Features" },
+    { message = "^fix", group = "<!-- 02 -->Bug Fixes" },
+    { message = "^perf", group = "<!-- 03 -->Performance" },
+    { message = "^refactor", group = "<!-- 04 -->Refactor" },
+    { message = "^doc", group = "<!-- 05 -->Documentation" },
+    { message = "^test", group = "<!-- 06 -->Testing" },
+    # `build` and `style` previously matched no parser at all, so those commits
+    # landed in an unnamed group -- including the build-system fixes that stop a
+    # dependency's build script rewriting this repo's git remote.
+    { message = "^build", group = "<!-- 07 -->Build System" },
+    { message = "^ci", group = "<!-- 08 -->CI" },
+    { message = "^style", group = "<!-- 09 -->Styling" },
+    { message = "^chore", group = "<!-- 10 -->Miscellaneous" },
 ]
+# A breaking change must never be dropped by a filter, whatever its type prefix.
+protect_breaking_commits = true
 filter_commits = false
 tag_pattern = "v[0-9].*"
 sort_commits = "oldest"
