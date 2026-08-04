@@ -144,9 +144,7 @@ async fn kb_query_get_cannot_read_a_node_belonging_to_another_kb() {
                 use base64::Engine as _;
                 if let Ok(raw) = base64::engine::general_purpose::STANDARD.decode(b64) {
                     assert!(
-                        !raw
-                            .windows(secret.len())
-                            .any(|w| w == secret.as_bytes()),
+                        !raw.windows(secret.len()).any(|w| w == secret.as_bytes()),
                         "case {case}: secret leaked as base64 inside ciphertext_b64 \
                          while labelled encryption=e2e"
                     );
