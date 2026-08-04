@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.92] - 2026-08-04
+
+
+
+
+### Documentation
+
+- Correct security claims and ADR statuses that contradicted reality ([6768645](https://github.com/cuttlefisch/mae/commit/676864599d43fc2890463346758dda38efc59373))
+
 ## [0.14.91] - 2026-08-04
 
 
@@ -19,6 +28,10 @@ All notable changes to this project will be documented in this file.
 
 - Principles 16 and 17 — the agent-bounding carve-out, and amendability ([b2bfb21](https://github.com/cuttlefisch/mae/commit/b2bfb2154c04ff0ab0353c57c42ed73e7202835d))
 - Correct decision 12 — the sandbox guard is exam-only, not a security control ([b360d86](https://github.com/cuttlefisch/mae/commit/b360d86d8fbb4613cc689caa2dc22b516eaf17c7))
+
+### Miscellaneous
+
+- Bump version to 0.14.91 ([f9b9b53](https://github.com/cuttlefisch/mae/commit/f9b9b53e3c76007d89fc5f3d6c8002832d306fcc))
 
 ## [0.14.90] - 2026-08-04
 
