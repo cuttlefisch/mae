@@ -1,12 +1,65 @@
 //! Results formatting and insertion for babel execution.
 
+use std::borrow::Cow;
+
 use super::{find_results_block, ResultsFormat, ResultsType};
+
+/// Normalize captured subprocess output before it becomes org buffer text.
+///
+/// Every babel backend -- shell, compiled, session, internal, script -- funnels
+/// its captured output through [`format_results`] on the way into the user's
+/// org file, so this is the one place that can guarantee what lands in the rope
+/// is well-formed org text (principle #8: normalize once at the shared choke
+/// point, not separately at each capture site). Two classes of corruption are
+/// stripped:
+///
+/// * **Carriage returns.** A child process on Windows terminates its lines with
+///   CRLF, and cross-platform tools emit bare CR (progress redraws) everywhere.
+///   Inserted verbatim, every `: ` result line ends up carrying a trailing `\r`
+///   that is invisible in the editor but real in the file on disk -- and it
+///   silently breaks any `\n`-anchored consumer of the results block.
+/// * **NUL bytes.** A child whose output is not UTF-8 at all decodes through
+///   `String::from_utf8_lossy` into text with an interleaved `\0` after every
+///   ASCII character. This is not hypothetical: on Windows `#+begin_src sh`
+///   reached `C:\Windows\System32\bash.exe` (the WSL launcher), whose "no
+///   installed distributions" complaint is emitted as UTF-16 and landed in the
+///   buffer as NUL-riddled mojibake. `resolve_posix_shell` fixes that specific
+///   source; this keeps *any* non-UTF-8 child from corrupting a document, since
+///   a NUL has no meaning in org and no business in a rope.
+///
+/// Deliberately narrow: ANSI escape sequences are left alone. Stripping those
+/// is a user-visible formatting decision, not a correctness one.
+pub fn normalize_output(output: &str) -> Cow<'_, str> {
+    if !output.as_bytes().iter().any(|&b| b == b'\r' || b == b'\0') {
+        return Cow::Borrowed(output);
+    }
+    let mut out = String::with_capacity(output.len());
+    let mut chars = output.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '\0' => {}
+            // CRLF collapses to LF. A lone CR also becomes LF so that output a
+            // terminal would have overprinted stays readable, rather than
+            // corrupting a single org line with an embedded control character.
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                out.push('\n');
+            }
+            _ => out.push(c),
+        }
+    }
+    Cow::Owned(out)
+}
 
 /// Format execution output according to the `:results` directive.
 pub fn format_results(output: &str, results_type: &ResultsType) -> String {
     let format = match results_type {
         ResultsType::Output(f) | ResultsType::Value(f) => f,
     };
+    let normalized = normalize_output(output);
+    let output = normalized.as_ref();
 
     match format {
         ResultsFormat::Scalar => format_scalar(output),
@@ -234,6 +287,98 @@ mod tests {
     fn format_raw_passthrough() {
         let r = format_results("raw text\n", &ResultsType::Output(ResultsFormat::Raw));
         assert_eq!(r, "raw text\n");
+    }
+
+    // --- subprocess output normalization (principle #13) ---
+
+    /// The defect these guard is a *data* defect, not a test artifact: whatever
+    /// `format_results` returns is inserted verbatim into the user's org file.
+    /// Pinning "no `\r` and no `\0` survives, in any `:results` format" here
+    /// means removing the normalization fails on Linux too, rather than only on
+    /// a Windows runner nobody can iterate against.
+    #[test]
+    fn no_results_format_ever_emits_carriage_returns_or_nuls() {
+        // Varied inputs rather than one unicorn value: CRLF, bare CR, the
+        // UTF-16-decoded-lossy NUL interleaving that the WSL launcher actually
+        // produced, multibyte content, table/list shapes, and empty-ish edges.
+        let hostile = [
+            "hi\r\n",
+            "a\r\nb\r\nc\r\n",
+            "overwrite\rfinal\n",
+            "h\0i\0 \0t\0h\0e\0r\0e\0\n",
+            "W\0i\0n\0d\0o\0w\0s\0 \0S\0u\0b\0s\0y\0s\0t\0e\0m\0\r\n",
+            "Caf\u{e9} \u{2014} \u{2713}\r\n",
+            "x,y\r\n1,2\r\n",
+            "\r\n\r\n",
+            "\0",
+            "trailing\r",
+        ];
+        for raw in hostile {
+            for fmt in [
+                ResultsFormat::Scalar,
+                ResultsFormat::Drawer,
+                ResultsFormat::Table,
+                ResultsFormat::List,
+                ResultsFormat::Raw,
+                ResultsFormat::Html,
+                ResultsFormat::Org,
+            ] {
+                let out = format_results(raw, &ResultsType::Output(fmt));
+                assert!(
+                    !out.contains('\r'),
+                    "a carriage return reached the org buffer from {raw:?} -> {out:?}"
+                );
+                assert!(
+                    !out.contains('\0'),
+                    "a NUL byte reached the org buffer from {raw:?} -> {out:?}"
+                );
+            }
+        }
+    }
+
+    /// Selective oracle: normalization must preserve the payload, not merely
+    /// delete offending bytes. A function returning `""` would satisfy the
+    /// no-`\r`/no-`\0` check above on its own.
+    #[test]
+    fn normalization_preserves_content_while_removing_corruption() {
+        let scalar = ResultsType::Output(ResultsFormat::Scalar);
+        assert_eq!(format_results("hi\r\n", &scalar), ": hi");
+        // UTF-16-decoded-lossy text still yields the readable string.
+        assert_eq!(format_results("h\0i\0\r\n", &scalar), ": hi");
+        // CRLF between lines becomes a real multi-line org scalar block.
+        assert_eq!(format_results("a\r\nb\r\n", &scalar), ": a\n: b");
+        // A bare CR is preserved as a line break, not silently dropped.
+        assert_eq!(
+            format_results("first\rsecond\n", &scalar),
+            ": first\n: second"
+        );
+        // Multibyte content is untouched (the offsets bug this file also
+        // guards would otherwise resurface through the normalizer).
+        assert_eq!(
+            format_results("Caf\u{e9} \u{2713}\r\n", &scalar),
+            ": Caf\u{e9} \u{2713}"
+        );
+    }
+
+    /// The negative half: well-formed output must pass through byte-identically
+    /// and without reallocating, so normalization cannot quietly rewrite
+    /// results that were already correct.
+    #[test]
+    fn clean_output_is_passed_through_untouched() {
+        for clean in [
+            "42\n",
+            "a\nb\n",
+            "Caf\u{e9} \u{2014} \u{2713}\n",
+            "",
+            "no trailing newline",
+        ] {
+            let normalized = normalize_output(clean);
+            assert_eq!(normalized.as_ref(), clean);
+            assert!(
+                std::ptr::eq(normalized.as_ref(), clean),
+                "clean output must take the zero-copy path: {clean:?}"
+            );
+        }
     }
 
     #[test]
