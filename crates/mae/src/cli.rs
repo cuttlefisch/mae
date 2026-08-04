@@ -617,7 +617,38 @@ pub(crate) fn handle_ensure_guidance_config(args: &[String]) -> Option<io::Resul
         .get_option("ai_guidance_kb")
         .map(|(v, _)| v)
         .unwrap_or_default();
-    if current_guidance_kb.is_empty() {
+    // "Already chosen" means the user (or the shipped template) wrote a
+    // `(set-option! "ai_guidance_kb" ...)` line into init.scm -- NOT merely
+    // that `get_option` returns something non-empty.
+    //
+    // This was previously `current_guidance_kb.is_empty()`, which worked only
+    // while the option's registry default was `""`: "empty" and "unchosen"
+    // happened to coincide. Once `ai_guidance_kb` gained a real default of
+    // "DevPractices" the value is never empty, so that gate would treat every
+    // fresh config as already-chosen and silently ignore `--guidance-kb`.
+    //
+    // Reading init.scm restores the actual distinction the contract needs:
+    // `never_overwrites_an_already_explicit_ai_guidance_kb` requires that a
+    // value written there wins over the flag, while a config that has simply
+    // never chosen one must still be settable.
+    let explicitly_configured = {
+        let config_dir = std::env::var("XDG_CONFIG_HOME")
+            .map(|x| std::path::PathBuf::from(x).join("mae"))
+            .or_else(|_| {
+                std::env::var("HOME")
+                    .map(|h| std::path::PathBuf::from(h).join(".config").join("mae"))
+            });
+        config_dir
+            .ok()
+            .and_then(|d| std::fs::read_to_string(d.join("init.scm")).ok())
+            .is_some_and(|c| {
+                c.lines()
+                    .filter(|l| !l.trim_start().starts_with(';'))
+                    .any(|l| l.contains("\"ai_guidance_kb\"") || l.contains("\"ai-guidance-kb\""))
+            })
+    };
+
+    if !explicitly_configured {
         match &guidance_kb_arg {
             Some(name) => {
                 if let Err(e) = editor.set_option("ai_guidance_kb", name) {
@@ -635,9 +666,9 @@ pub(crate) fn handle_ensure_guidance_config(args: &[String]) -> Option<io::Resul
                 }
             }
             None => println!(
-                "mae: ai_guidance_kb is unset and no --guidance-kb given -- leaving unset \
-                 (a fresh install's shipped init.scm template already defaults to \
-                 \"DevPractices\"; nothing to do for an existing config with no KB chosen)"
+                "mae: ai_guidance_kb not explicitly configured and no --guidance-kb given -- \
+                 leaving it at the registry default ('{current_guidance_kb}'), which already \
+                 resolves at read time"
             ),
         }
     } else {
