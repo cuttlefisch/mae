@@ -252,7 +252,7 @@ fn resolve_command(language: &str, args: &HeaderArgs) -> (String, Vec<String>) {
         "python2" => ("python2".to_string(), Vec::new()),
         "ruby" => ("ruby".to_string(), Vec::new()),
         "perl" => ("perl".to_string(), Vec::new()),
-        "bash" | "sh" => ("bash".to_string(), Vec::new()),
+        "bash" | "sh" => (resolve_posix_shell(), Vec::new()),
         "zsh" => ("zsh".to_string(), Vec::new()),
         "fish" => ("fish".to_string(), Vec::new()),
         "node" | "javascript" | "js" => ("node".to_string(), Vec::new()),
@@ -261,6 +261,279 @@ fn resolve_command(language: &str, args: &HeaderArgs) -> (String, Vec<String>) {
         // NOTE: compiled languages (rust/go/c/c++) are handled by CompiledBackend
         // before reaching execute_shell — they never resolve here.
         _ => (language.to_string(), Vec::new()),
+    }
+}
+
+/// True when `candidate` lives inside the Windows system directory.
+///
+/// @ai-caution: [cross-platform] `C:\Windows\System32\bash.exe` is **not** a
+/// POSIX shell -- it is the Windows Subsystem for Linux launcher. It sits in the
+/// system directory, which precedes the Git-for-Windows directories on the
+/// default `PATH`, so a bare `Command::new("bash")` finds it before any real
+/// shell. On a machine with no WSL distribution installed it never runs the
+/// block at all: it prints "Windows Subsystem for Linux has no installed
+/// distributions" encoded as **UTF-16**, which `from_utf8_lossy` then turns into
+/// NUL-riddled mojibake inside the user's org file. Never resolve `sh`/`bash` to
+/// a binary under the system root.
+///
+/// Kept compiled on every platform (not `#[cfg(windows)]`) so the rule stays
+/// unit-testable on the machines MAE is actually developed on -- principle #13:
+/// a Windows-only code path nobody can iterate against is exactly how this class
+/// of bug survives.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn is_under_windows_system_root(candidate: &Path, system_root: &Path) -> bool {
+    let norm = |p: &Path| p.to_string_lossy().to_lowercase().replace('/', "\\");
+    let candidate = norm(candidate);
+    let root = norm(system_root);
+    let root = root.trim_end_matches('\\');
+    !root.is_empty() && (candidate == root || candidate.starts_with(&format!("{root}\\")))
+}
+
+/// Derive a Git for Windows install root from the location of `git.exe`.
+///
+/// Git for Windows puts `git.exe` in `<root>\cmd` (and `<root>\bin`) and its
+/// POSIX shell in `<root>\bin\bash.exe`. Deriving the root from wherever `git`
+/// actually is covers custom install locations that a hardcoded
+/// `C:\Program Files\Git` list would miss.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn git_install_root(git_exe: &Path) -> Option<PathBuf> {
+    let parent = git_exe.parent()?;
+    let dir = parent.file_name()?.to_string_lossy().to_lowercase();
+    matches!(dir.as_str(), "cmd" | "bin" | "mingw64")
+        .then(|| parent.parent())?
+        .map(PathBuf::from)
+}
+
+/// Pick a real POSIX shell for `sh`/`bash` blocks on Windows.
+///
+/// Pure over its inputs (the `PATH` entries, where `git.exe` was found, the
+/// candidate install roots, the system root, and an `exists` probe) so the
+/// ordering rules can be unit-tested off Windows.
+///
+/// `PATH` is consulted first, minus the WSL stub, so `PATH` remains the user's
+/// override mechanism exactly as it is on Unix -- we only refuse the one entry
+/// that is a launcher rather than a shell. Git-derived and well-known install
+/// roots follow, since Git for Windows does not put `bash.exe` on `PATH` by
+/// default even though it ships one.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn select_windows_posix_shell(
+    path_entries: &[PathBuf],
+    git_exe: Option<&Path>,
+    install_roots: &[PathBuf],
+    system_root: Option<&Path>,
+    exists: &dyn Fn(&Path) -> bool,
+) -> Option<PathBuf> {
+    for dir in path_entries {
+        let candidate = dir.join("bash.exe");
+        if let Some(root) = system_root {
+            if is_under_windows_system_root(&candidate, root) {
+                continue;
+            }
+        }
+        if exists(&candidate) {
+            return Some(candidate);
+        }
+    }
+    let roots = git_exe
+        .and_then(git_install_root)
+        .into_iter()
+        .chain(install_roots.iter().cloned());
+    for root in roots {
+        for sub in [["bin"].as_slice(), ["usr", "bin"].as_slice()] {
+            let candidate = sub
+                .iter()
+                .fold(root.clone(), |acc, part| acc.join(part))
+                .join("bash.exe");
+            if exists(&candidate) {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+/// Resolve the shell that `sh`/`bash` blocks are executed with.
+///
+/// On Unix this is plain `bash`, resolved from `PATH` by the OS exactly as
+/// before -- this function introduces no behavior change off Windows.
+///
+/// On Windows it searches for a genuine POSIX shell rather than trusting
+/// `PATH`'s first `bash`, which is the WSL launcher (see
+/// [`is_under_windows_system_root`]). If nothing is found we still fall back to
+/// `bash`: that keeps the previous behavior instead of hard-failing a user who
+/// has some shell we did not anticipate, and the WSL launcher's complaint now
+/// arrives as legible text rather than NUL corruption thanks to
+/// `results::normalize_output`. A per-block `:cmd` remains the explicit override
+/// on every platform.
+fn resolve_posix_shell() -> String {
+    #[cfg(windows)]
+    {
+        let path_entries: Vec<PathBuf> = std::env::var_os("PATH")
+            .map(|p| std::env::split_paths(&p).collect())
+            .unwrap_or_default();
+        let git_exe = path_entries
+            .iter()
+            .map(|dir| dir.join("git.exe"))
+            .find(|p| p.is_file());
+        let install_roots: Vec<PathBuf> = ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"]
+            .iter()
+            .filter_map(|key| std::env::var_os(key))
+            .map(|root| PathBuf::from(root).join("Git"))
+            .chain(
+                std::env::var_os("LOCALAPPDATA")
+                    .map(|root| PathBuf::from(root).join("Programs").join("Git")),
+            )
+            .collect();
+        let system_root = std::env::var_os("SystemRoot").map(PathBuf::from);
+        if let Some(shell) = select_windows_posix_shell(
+            &path_entries,
+            git_exe.as_deref(),
+            &install_roots,
+            system_root.as_deref(),
+            &|p| p.is_file(),
+        ) {
+            return shell.to_string_lossy().into_owned();
+        }
+    }
+    "bash".to_string()
+}
+
+#[cfg(test)]
+mod posix_shell_tests {
+    use super::*;
+
+    /// Windows paths, exercised on whatever platform CI/the developer is on --
+    /// the rule is pure string/patch logic, so there is no reason to make it
+    /// only observable on a runner we cannot iterate against.
+    #[test]
+    fn the_wsl_launcher_is_recognized_under_the_system_root() {
+        let root = Path::new(r"C:\Windows");
+        for stub in [
+            r"C:\Windows\System32\bash.exe",
+            r"C:\WINDOWS\system32\bash.exe", // case-insensitive filesystem
+            r"c:/windows/system32/bash.exe", // forward slashes are legal on Windows
+            r"C:\Windows\bash.exe",
+        ] {
+            assert!(
+                is_under_windows_system_root(Path::new(stub), root),
+                "{stub} must be refused as the WSL launcher"
+            );
+        }
+        // The negative half: a real shell must NOT be mistaken for the stub.
+        for real in [
+            r"C:\Program Files\Git\bin\bash.exe",
+            r"C:\msys64\usr\bin\bash.exe",
+            r"C:\Windows-Tools\bin\bash.exe", // prefix-only match must not fire
+            r"D:\Windows\System32\bash.exe",  // different volume
+        ] {
+            assert!(
+                !is_under_windows_system_root(Path::new(real), root),
+                "{real} is a real shell and must not be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn git_install_root_is_derived_from_where_git_actually_is() {
+        assert_eq!(
+            git_install_root(Path::new(r"C:\Program Files\Git\cmd\git.exe")),
+            Some(PathBuf::from(r"C:\Program Files\Git"))
+        );
+        assert_eq!(
+            git_install_root(Path::new(r"D:\tools\Git\bin\git.exe")),
+            Some(PathBuf::from(r"D:\tools\Git"))
+        );
+        // A `git.exe` somewhere unrecognized must not invent a root.
+        assert_eq!(git_install_root(Path::new(r"C:\odd\git.exe")), None);
+    }
+
+    /// The whole point of the fix: given a `PATH` whose first `bash.exe` is the
+    /// WSL stub, resolution must skip it and land on the real shell. This is the
+    /// exact shape of the GitHub Windows runner that produced the CI failure.
+    #[test]
+    fn path_resolution_skips_the_wsl_stub_and_finds_the_real_shell() {
+        let system32 = PathBuf::from(r"C:\Windows\System32");
+        let git_bin = PathBuf::from(r"C:\Program Files\Git\bin");
+        let present = [
+            PathBuf::from(r"C:\Windows\System32\bash.exe"), // the trap
+            git_bin.join("bash.exe"),
+        ];
+        let exists = |p: &Path| present.iter().any(|q| q == p);
+
+        let picked = select_windows_posix_shell(
+            &[system32.clone(), git_bin.clone()],
+            None,
+            &[],
+            Some(Path::new(r"C:\Windows")),
+            &exists,
+        );
+        assert_eq!(picked, Some(git_bin.join("bash.exe")));
+
+        // Without the system-root exclusion the stub would win -- proving the
+        // assertion above is actually testing the exclusion and not the
+        // incidental ordering of the PATH entries.
+        let unguarded = select_windows_posix_shell(&[system32, git_bin], None, &[], None, &exists);
+        assert_eq!(
+            unguarded,
+            Some(PathBuf::from(r"C:\Windows\System32\bash.exe")),
+            "precondition: the stub is what a naive PATH scan picks"
+        );
+    }
+
+    /// Git for Windows does not put `bash.exe` on `PATH`, so the common real
+    /// case is: PATH yields only the stub, and the shell has to come from an
+    /// install root -- derived from `git.exe`, or from a well-known location.
+    #[test]
+    fn falls_back_to_install_roots_when_path_has_only_the_stub() {
+        let usr_bin_shell = PathBuf::from(r"C:\Program Files\Git\usr\bin\bash.exe");
+        let exists = |p: &Path| p == usr_bin_shell;
+        let path_entries = [PathBuf::from(r"C:\Windows\System32")];
+        let system_root = Some(Path::new(r"C:\Windows"));
+
+        // Derived from where git.exe lives.
+        assert_eq!(
+            select_windows_posix_shell(
+                &path_entries,
+                Some(Path::new(r"C:\Program Files\Git\cmd\git.exe")),
+                &[],
+                system_root,
+                &exists,
+            ),
+            Some(usr_bin_shell.clone())
+        );
+        // Or from a well-known install root when git.exe was not on PATH.
+        assert_eq!(
+            select_windows_posix_shell(
+                &path_entries,
+                None,
+                &[PathBuf::from(r"C:\Program Files\Git")],
+                system_root,
+                &exists,
+            ),
+            Some(usr_bin_shell)
+        );
+        // And nothing is invented when no shell is installed at all.
+        assert_eq!(
+            select_windows_posix_shell(
+                &path_entries,
+                None,
+                &[PathBuf::from(r"C:\Program Files\Git")],
+                system_root,
+                &|_| false,
+            ),
+            None
+        );
+    }
+
+    /// Off Windows nothing changes: `sh`/`bash` still resolve to plain `bash`
+    /// from `PATH`, so this fix cannot regress the platforms it is not for.
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_shell_resolution_is_unchanged() {
+        let (cmd, args) = resolve_command("sh", &HeaderArgs::default());
+        assert_eq!(cmd, "bash");
+        assert!(args.is_empty());
+        assert_eq!(resolve_command("bash", &HeaderArgs::default()).0, "bash");
     }
 }
 

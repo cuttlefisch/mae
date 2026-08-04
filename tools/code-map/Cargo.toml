@@ -1,3 +1,13 @@
+# Standalone: this crate is `exclude`d from the root workspace, so declaring an
+# empty workspace here stops cargo walking further up the directory tree looking
+# for one. Without it the crate is unbuildable from a git worktree created under
+# the repo (`.claude/worktrees/<name>/tools/code-map`): cargo skips the worktree's
+# own excluded-here root and then finds the OUTER checkout's workspace, whose
+# `exclude` list does not match the nested path. That made `.githooks/pre-commit`
+# report "Code-map is stale" for every commit made from a worktree, since the
+# freshness check's real error was swallowed by its `>/dev/null 2>&1`.
+[workspace]
+
 [package]
 name = "mae-code-map"
 version = "0.1.0"
