@@ -339,23 +339,56 @@ fn enable_daemon_p2p(relay: &str) -> io::Result<std::path::PathBuf> {
 /// produced -- no re-encoding, no truncation. Otherwise falls back to today's bare
 /// pointer sentence, never a truncated partial inline (a cut-off guidance payload could
 /// mislead an agent worse than no guidance at all).
+/// Build the `instructions` guidance fragment, budgeting the KB content and the
+/// project context **separately and in that order of priority**.
+///
+/// @ai-caution: [guidance-delivery] Do NOT go back to budgeting one concatenated
+/// blob. This previously received `build_guidance_context()`'s combined output —
+/// project context (`CLAUDE.md`, capped at `PROJECT_CONTEXT_MAX_CHARS` = 8000)
+/// followed by the KB section — and compared the total against
+/// `ai_guidance_inline_budget_chars` (default 8000). The project section alone
+/// therefore met the entire budget, so the over-budget branch fired for **any**
+/// project with a `CLAUDE.md` of ~8k chars or more, and every such client got the
+/// bare pointer instead of the practices. MAE's own `CLAUDE.md` is ~62k. The
+/// projects that care most about agent guidance were exactly the ones guaranteed
+/// not to receive it.
+///
+/// KB content goes first because it is the part the client does *not* already
+/// have: Claude Code reads `CLAUDE.md` natively, and VS Code Copilot reads
+/// `.github/copilot-instructions.md` (which `kb_export_guidance` writes). The
+/// KB guidance has no such independent path.
 fn guidance_instructions_fragment(
     guidance_kb: &str,
-    guidance_content: Option<&str>,
+    kb_content: Option<&str>,
+    project_content: Option<&str>,
     budget_chars: usize,
 ) -> String {
     if guidance_kb.is_empty() {
         return String::new();
     }
-    match guidance_content {
-        Some(content) if content.chars().count() <= budget_chars => {
-            format!(
-                "The following are required practices from KB '{guidance_kb}' -- read \
-                 them before acting:\n\n{content}\n\n"
-            )
+    let Some(kb) = kb_content.filter(|c| c.chars().count() <= budget_chars) else {
+        // Either no KB content resolved, or it alone exceeds the budget. Never
+        // truncate mid-content -- a half-delivered practice can be worse than a
+        // pointer to the whole thing.
+        return format!("Before acting, consult KB '{guidance_kb}' for required practices. ");
+    };
+
+    let mut out = format!(
+        "The following are required practices from KB '{guidance_kb}' -- read them \
+         before acting. Any `[[id:...]]` reference below is a KB node: fetch it with \
+         the `kb_get` tool.\n\n{kb}\n\n"
+    );
+
+    // Project context is a bonus, not a competitor. Append only if it fits in
+    // what the KB content left behind.
+    if let Some(proj) = project_content {
+        let used = out.chars().count();
+        if budget_chars.saturating_sub(used) >= proj.chars().count() {
+            out.push_str(proj);
+            out.push_str("\n\n");
         }
-        _ => format!("Before acting, consult KB '{guidance_kb}' for required practices. "),
     }
+    out
 }
 
 /// ADR-063 Phase B: the effective `ai_guidance_export_live_sync` value for this
@@ -912,18 +945,23 @@ fn main() -> io::Result<()> {
                         // payload could be worse than no guidance at all).
                         let cwd = std::env::current_dir().unwrap_or_default();
                         let data_dir = mae_ai::guidance::default_data_dir();
-                        let guidance_content = mae_ai::guidance::build_guidance_context(
-                            &cwd,
-                            data_dir.as_deref(),
-                            &guidance_kb,
-                        );
+                        // The two sources are read SEPARATELY, not via
+                        // build_guidance_context()'s concatenation, so the budget can
+                        // prioritise the KB content. See guidance_instructions_fragment's
+                        // @ai-caution for why combining them silently disabled delivery
+                        // for every project with a substantial CLAUDE.md.
+                        let kb_content = data_dir.as_deref().and_then(|d| {
+                            mae_ai::guidance::read_guidance_kb_context(d, &guidance_kb)
+                        });
+                        let project_content = mae_ai::guidance::read_project_context(&cwd);
                         let budget: usize = editor
                             .get_option("ai_guidance_inline_budget_chars")
                             .and_then(|(v, _)| v.parse().ok())
                             .unwrap_or(8000);
                         s.push_str(&guidance_instructions_fragment(
                             &guidance_kb,
-                            guidance_content.as_deref(),
+                            kb_content.as_deref(),
+                            project_content.as_deref(),
                             budget,
                         ));
                     }
@@ -1273,14 +1311,14 @@ mod tests {
     #[test]
     fn guidance_fragment_empty_kb_is_empty_regardless_of_content() {
         assert_eq!(
-            guidance_instructions_fragment("", Some("some content"), 8000),
+            guidance_instructions_fragment("", Some("some content"), None, 8000),
             ""
         );
     }
 
     #[test]
     fn guidance_fragment_no_content_falls_back_to_pointer() {
-        let frag = guidance_instructions_fragment("MaePractices", None, 8000);
+        let frag = guidance_instructions_fragment("MaePractices", None, None, 8000);
         assert!(frag.contains("consult KB 'MaePractices'"));
         assert!(!frag.contains("required practices from KB"));
     }
@@ -1291,7 +1329,7 @@ mod tests {
         // char to prove this isn't silently measuring UTF-8 byte length instead).
         let content = "é".repeat(10);
         assert_eq!(content.chars().count(), 10);
-        let frag = guidance_instructions_fragment("MaePractices", Some(&content), 10);
+        let frag = guidance_instructions_fragment("MaePractices", Some(&content), None, 10);
         assert!(
             frag.contains(&content),
             "at-budget content must be inlined byte-identical to build_guidance_context()'s \
@@ -1306,14 +1344,65 @@ mod tests {
     #[test]
     fn guidance_fragment_one_under_budget_inlines() {
         let content = "x".repeat(9);
-        let frag = guidance_instructions_fragment("MaePractices", Some(&content), 10);
+        let frag = guidance_instructions_fragment("MaePractices", Some(&content), None, 10);
         assert!(frag.contains(&content));
+    }
+
+    /// REGRESSION (2026-08-04): a large project context must never crowd out the
+    /// KB guidance.
+    ///
+    /// This is the defect that silently disabled MCP guidance delivery for every
+    /// project that had a substantial `CLAUDE.md`. The fragment used to receive
+    /// `build_guidance_context()`'s CONCATENATION of project context and KB
+    /// content and budget the total; `PROJECT_CONTEXT_MAX_CHARS` (8000) equals
+    /// the default `ai_guidance_inline_budget_chars` (8000), so the project half
+    /// alone met the budget and the pointer branch fired unconditionally. MAE's
+    /// own `CLAUDE.md` is ~62k chars — the projects most invested in agent
+    /// guidance were precisely the ones guaranteed never to receive it.
+    ///
+    /// Fixture sizes mirror the real numbers rather than convenient small ones,
+    /// so the test fails against the old behaviour for the real reason.
+    #[test]
+    fn guidance_fragment_large_project_context_never_crowds_out_the_kb() {
+        let kb = "REQUIRED PRACTICE: always verify the mechanism.";
+        let project = "P".repeat(8000); // == PROJECT_CONTEXT_MAX_CHARS
+        let frag = guidance_instructions_fragment("DevPractices", Some(kb), Some(&project), 8000);
+
+        assert!(
+            frag.contains(kb),
+            "KB guidance must survive a budget-filling project context — it is the \
+             part the client does NOT already have: {frag}"
+        );
+        assert!(
+            !frag.contains("consult KB 'DevPractices'"),
+            "must inline, not degrade to the pointer, just because project context is large"
+        );
+        assert!(
+            !frag.contains(&project),
+            "project context must be dropped when it does not fit, rather than \
+             displacing the KB content or blowing the budget"
+        );
+    }
+
+    /// The delivered text must tell the agent HOW to follow the `[[id:...]]`
+    /// references it contains. The KB's index node is a navigation menu; without
+    /// naming the retrieval tool, an agent has to guess that `kb_get` resolves
+    /// them — and nothing measured whether any agent ever did.
+    #[test]
+    fn guidance_fragment_names_the_tool_that_resolves_kb_references() {
+        let kb = "Start at [[id:hub:start-here][Start Here]]";
+        let frag = guidance_instructions_fragment("DevPractices", Some(kb), None, 8000);
+        assert!(
+            frag.contains("kb_get"),
+            "inlined guidance contains [[id:...]] references, so it must name the \
+             tool that resolves them: {frag}"
+        );
     }
 
     #[test]
     fn guidance_fragment_one_over_budget_falls_back_cleanly_never_truncates() {
         let content = "x".repeat(11);
-        let frag = guidance_instructions_fragment("MaePractices", Some(&content), 10);
+        let frag = guidance_instructions_fragment("MaePractices", Some(&content), None, 10);
         assert!(
             !frag.contains('x'),
             "over-budget content must never appear even partially/truncated: {frag}"
