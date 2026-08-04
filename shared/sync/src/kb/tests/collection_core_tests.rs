@@ -28,6 +28,45 @@ fn collection_add_remove_nodes() {
     assert_eq!(coll.node_count(), 1);
 }
 
+/// #571: `has_node` is the belongs-to predicate the daemon's node-scope guard
+/// relies on, so its edges matter more than the happy path.
+///
+/// The tombstone case is the one a naive implementation gets wrong: after
+/// `remove_node`, yrs keeps a deleted entry, and a check written as
+/// `get(..).is_some()` would still report the node as present — re-opening the
+/// cross-KB read for any node that was ever removed from the victim's manifest.
+#[test]
+fn has_node_is_true_only_for_current_manifest_members() {
+    let mut coll = KbCollectionDoc::new("Test", "alice");
+    coll.add_node("concept:buffer", "Buffer");
+
+    assert!(coll.has_node("concept:buffer"), "a node that was added");
+    assert!(!coll.has_node("concept:window"), "a node never added");
+    assert!(!coll.has_node(""), "the empty node id");
+    assert!(
+        !coll.has_node("concept:buf"),
+        "a prefix of a real id must not match — this is a key lookup, not a scan"
+    );
+
+    // A blanked title (what an E2E KB's manifest actually holds) must not be
+    // mistaken for absence: membership is keyed on the id, not the value.
+    coll.add_node("concept:e2e", "");
+    assert!(
+        coll.has_node("concept:e2e"),
+        "a manifest entry with a blank title is still a member"
+    );
+
+    coll.remove_node("concept:buffer");
+    assert!(
+        !coll.has_node("concept:buffer"),
+        "a removed node must read as absent despite its yrs tombstone"
+    );
+
+    // An empty collection contains nothing — fail-closed, not fail-open.
+    let empty = KbCollectionDoc::new("Empty", "alice");
+    assert!(!empty.has_node("concept:anything"));
+}
+
 /// #156 F5: the enable-time manifest-title scrub. Blanks every cleartext title in
 /// ONE delta, preserves the node ids, leaves already-blank titles alone, and is
 /// idempotent (a second call has nothing to do → empty delta). The delta, applied to

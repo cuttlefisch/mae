@@ -1637,6 +1637,72 @@ async fn deny_collection_smuggling(
     }
 }
 
+/// The single denial message for a node-scope refusal. One function so every
+/// call site is byte-identical — see [`require_node_in_kb`] for why that matters.
+fn node_scope_denial(kb_id: &str, node_id: &str) -> String {
+    format!("node '{node_id}' is not in KB '{kb_id}'")
+}
+
+/// Complete-mediation for a CALLER-SUPPLIED `node_id` (#571).
+///
+/// The `DocStore` doc namespace is FLAT — `kb:{node_id}`, with no `kb_id`
+/// component — so gating on `kb_id` authorizes a *KB* while the read then hits
+/// a *globally addressed document*. Without this check, a principal with Read
+/// on any one KB can read nodes of any other KB co-hosted on the daemon by
+/// passing `kb_id = <theirs>, node_id = <someone else's>`.
+///
+/// The `kbc:{kb_id}` manifest is the authoritative belongs-to relation, and
+/// `kb/join` already scopes itself with it (`kb_membership.rs`, "Fetch only the
+/// nodes listed in the collection"). The single-node read paths simply never
+/// consulted it.
+///
+/// **MUST be called BEFORE the doc store is touched.** Reading a node also
+/// `get_or_create`s it (`doc_store.rs`), so a check placed after the fetch
+/// would still let a caller materialize — and pre-squat — arbitrary node ids;
+/// and on `kb/node_fetch` the read additionally subscribes the session to that
+/// doc's future updates.
+///
+/// Fail-CLOSED and NON-DISCRIMINATING: a node in another KB, a node that does
+/// not exist at all, and a collection that fails to load all produce the SAME
+/// message via the SAME error variant the KB gate already uses. Distinguishing
+/// them would hand the caller an oracle for probing node ids elsewhere on this
+/// daemon. The real reason is logged server-side.
+pub async fn require_node_in_kb(
+    doc_store: &DocStore,
+    kb_id: &str,
+    node_id: &str,
+    coll: Option<&KbCollectionDoc>,
+) -> Result<(), String> {
+    let loaded;
+    let coll = match coll {
+        Some(c) => c,
+        None => match load_collection(doc_store, kb_id).await {
+            Ok(c) => {
+                loaded = c;
+                &loaded
+            }
+            Err(e) => {
+                warn!(
+                    kb_id,
+                    node_id,
+                    error = %e,
+                    "node-scope check: collection load failed — refusing (fail-closed)"
+                );
+                return Err(node_scope_denial(kb_id, node_id));
+            }
+        },
+    };
+    if coll.has_node(node_id) {
+        Ok(())
+    } else {
+        warn!(
+            kb_id,
+            node_id, "node-scope check: node is not in this KB's manifest — refused"
+        );
+        Err(node_scope_denial(kb_id, node_id))
+    }
+}
+
 /// Complete-mediation for RAW doc READS (`sync/full_state`, `sync/state_vector`). These
 /// generic sync methods otherwise return a doc's yrs state for ANY caller-supplied name,
 /// bypassing the `kb_access(Read)` gate that `kb/node_fetch`/`kb/join` enforce — a
