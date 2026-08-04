@@ -2,6 +2,24 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.14.91] - 2026-08-04
+
+
+
+
+### Bug Fixes
+
+- *(ci)* Badges ran the suite in debug, where headless startup nearly times out ([93634af](https://github.com/cuttlefisch/mae/commit/93634af741ecb86e55c2189ba60b34391c4f054f))
+
+### Performance
+
+- *(ci)* Cut the version-bump CI wait — it was 88% of a full test job ([446e464](https://github.com/cuttlefisch/mae/commit/446e4641195e6aa398d6da83b816034f27b379be))
+
+### Documentation
+
+- Principles 16 and 17 — the agent-bounding carve-out, and amendability ([b2bfb21](https://github.com/cuttlefisch/mae/commit/b2bfb2154c04ff0ab0353c57c42ed73e7202835d))
+- Correct decision 12 — the sandbox guard is exam-only, not a security control ([b360d86](https://github.com/cuttlefisch/mae/commit/b360d86d8fbb4613cc689caa2dc22b516eaf17c7))
+
 ## [0.14.90] - 2026-08-04
 
 
@@ -71,6 +89,7 @@ All notable changes to this project will be documented in this file.
 - Fmt + drop a now-unused import ([05e5b57](https://github.com/cuttlefisch/mae/commit/05e5b578bdf41f9b4fcc024cc0dca99beac10b3f))
 - *(kb)* Drop the temporary inotify measurement probe ([e6982ed](https://github.com/cuttlefisch/mae/commit/e6982ed0c9b72157d0afd9f96f4e7bd7bf6241a3))
 - *(changelog)* Surface breaking changes and security fixes in release notes ([7624591](https://github.com/cuttlefisch/mae/commit/76245919bad81fd6cb553db7afcfb7d7fab52365))
+- Bump version to 0.14.90 ([5eadf54](https://github.com/cuttlefisch/mae/commit/5eadf5422bdf3b1acd859a16bb3d62d1f22bb35f))
 
 ## [0.14.89] - 2026-08-03
 
