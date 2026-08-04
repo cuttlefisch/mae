@@ -1,6 +1,15 @@
 # MAE Roadmap
 
-**Current version:** v0.13.12 (v0.14.0 pending) · **Status:** Alpha — Phases 1-13 complete. v0.13.x: binary architecture split into editor + daemon workspaces with separate `Cargo.lock` files (ADR-014), `mae-daemon` for persistent KB + collaborative editing. v0.14.0 (pending): collaborative **KB sharing** is user-ready — trusted-peer mTLS, per-KB roles/policy/membership, mDNS discovery.
+**Current version:** see `VERSION` (the 0.14.x line; ~90 patch releases have shipped since this
+header last named a number — it said "v0.13.12 (v0.14.0 pending)" until 2026-08-04, long after
+v0.14.0 shipped and was iterated on). **Do not restate the version here**; releases are automated
+on every merge to `main`, so any number written into prose is wrong within a day.
+
+**Status:** Alpha. v0.13.x split the binary architecture into editor + daemon workspaces with
+separate `Cargo.lock` files (ADR-014). v0.14.x made collaborative **KB sharing** user-ready
+(trusted-peer mTLS, per-KB roles/policy/membership, mDNS discovery) and closed the pre-v0.15
+security audit — AI permission tiers enforced at the effect (ADR-084/085/090, default tier lowered
+to `readonly`) and workspace trust for project-local init files (ADR-089).
 
 ---
 
