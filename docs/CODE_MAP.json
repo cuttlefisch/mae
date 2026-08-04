@@ -92,6 +92,10 @@
           "kind": "mod"
         },
         {
+          "name": "shell_policy",
+          "kind": "mod"
+        },
+        {
           "name": "token_estimate",
           "kind": "mod"
         },
@@ -591,6 +595,10 @@
         },
         {
           "name": "parse_org_document",
+          "kind": "fn"
+        },
+        {
+          "name": "parse_org_document_with_lines",
           "kind": "fn"
         },
         {

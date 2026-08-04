@@ -96,6 +96,7 @@ Source: `crates/ai/src/lib.rs`
 | `pricing` | mod |
 | `provider` | mod |
 | `session` | mod |
+| `shell_policy` | mod |
 | `token_estimate` | mod |
 | `tools` | mod |
 | `types` | mod |
@@ -245,6 +246,7 @@ Source: `crates/export/src/lib.rs`
 | `ListItem` | struct |
 | `Exporter` | trait |
 | `parse_org_document` | fn |
+| `parse_org_document_with_lines` | fn |
 | `InlineTarget` | enum |
 | `convert_inline_markup_str` | fn |
 | `CheckboxState` | enum |

@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+# Refuse to push anywhere that is not this project's remote.
+#
+# skia-bindings builds Skia from source when no prebuilt binary is available,
+# and skia's `git-sync-deps` runs git commands without pinning a working
+# directory. Inside a build tree under `target/`, those commands walk UP and
+# find THIS repository, then run `git remote set-url origin <skia mirror>`.
+#
+# The visible symptom is a credential prompt for skia.googlesource.com on an
+# ordinary `git push origin`: the command is right, the remote was rewritten
+# underneath it. It has also left `origin/main` pointing at an unrelated
+# project's history.
+#
+# This hook does not prevent the rewrite — it makes the rewrite harmless, by
+# refusing the push instead of sending credentials to a host that will never
+# accept them. Prevention is tracked separately (see docs/INOTIFY... no:
+# see the sync-deps.disable setting in `make setup-hooks`).
+set -euo pipefail
+
+remote_url="${2:-}"
+case "$remote_url" in
+    *github.com[:/]cuttlefisch/mae*) exit 0 ;;
+    "") exit 0 ;;   # no URL supplied (e.g. some porcelain paths) — don't block
+esac
+
+cat >&2 <<MSG
+✋ push refused: '$remote_url' is not this project's remote.
+
+   Expected: git@github.com:cuttlefisch/mae.git
+
+   This almost certainly means a Skia build rewrote 'origin'. Restore it with:
+
+       git remote set-url origin git@github.com:cuttlefisch/mae.git
+
+   and re-run your push. (Pushing as-is would prompt for credentials on a host
+   that will never accept them.)
+MSG
+exit 1

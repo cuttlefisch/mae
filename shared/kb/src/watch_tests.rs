@@ -1,9 +1,8 @@
 //! Tests for [`super`] — the shared inotify watcher.
 //!
 //! Extracted under CLAUDE.md's file-ceiling remedy (910 lines, ~321 of them
-//! inline tests) after the one-instance-per-process rework. Declared with
-//! `#[path]` from the parent; the indirection adds a module level, so the
-//! inner `mod tests` uses `use super::super::*`.
+//! inline tests) after the one-instance-per-process rework. `#[path]` adds a
+//! module level, so the inner `mod tests` uses `use super::super::*`.
 
 #[cfg(test)]
 mod tests {
